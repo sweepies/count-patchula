@@ -38,3 +38,55 @@ jobs:
           printf 'mbx key=%s exact-hit=%s save=%s (%s)\n' "$CACHE_KEY" "$CACHE_HIT" "$CACHE_SAVE_ELIGIBLE" "$CACHE_SAVE_REASON"
           mise run cache:doctor
       - run: mise run ci
+
+  benchmarks:
+    name: Benchmarks (report only)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          cache: false
+      - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
+        with:
+          backend: github
+          github-cache-mode: objects
+          isolate-objects-cache: true
+          cache-generation: v2-objects
+          save-on-pull-request: false
+      # No Valgrind entry in mise's registry; host installation is CI-only.
+      # If unavailable, tak still reports wall time. Nothing here gates CI.
+      - name: Install optional instruction counter
+        continue-on-error: true
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y valgrind
+      - name: Measure and record locally (no notes push)
+        env:
+          GIT_AUTHOR_NAME: rustovate benchmarks
+          GIT_AUTHOR_EMAIL: noreply@rustovate.invalid
+          GIT_COMMITTER_NAME: rustovate benchmarks
+          GIT_COMMITTER_EMAIL: noreply@rustovate.invalid
+        run: mise run benchmarks:record
+      - name: Export portable measurement artifact
+        run: mise run benchmarks:export
+      - name: Publish timing summary
+        if: always()
+        run: |
+          if [ -f benchmark-results/summary.txt ]; then
+            printf '<pre>\n' >> "$GITHUB_STEP_SUMMARY"
+            mise exec -- cat benchmark-results/summary.txt >> "$GITHUB_STEP_SUMMARY"
+            printf '</pre>\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Publish report-only results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tak-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: benchmark-results/
+          if-no-files-found: warn
+          retention-days: 14

@@ -5,3 +5,4 @@
 *.sqlite-wal
 *.sqlite-shm
 /conformance-results/
+/benchmark-results/

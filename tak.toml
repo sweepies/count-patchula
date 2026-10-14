@@ -1,0 +1,50 @@
+#:schema https://tak.jdx.dev/schema/tak.json
+# Report-only. Build release binaries with mise run benchmarks:build first.
+[defaults]
+runs = 10
+warmup = 2
+
+[bench.startup]
+cmd = ["./target/release/rustovate", "--version"]
+
+[bench.config-cafeteria-order-tracker]
+cmd = ["./target/release/rustovate", "config", "check", "examples/cafeteria-order-tracker.pkl"]
+
+[bench.config-clips-sweepy-dev]
+cmd = ["./target/release/rustovate", "config", "check", "examples/clips.sweepy.dev.pkl"]
+
+[bench.config-devops-minter]
+cmd = ["./target/release/rustovate", "config", "check", "examples/devops-minter.pkl"]
+
+[bench.config-fnox]
+cmd = ["./target/release/rustovate", "config", "check", "examples/fnox.pkl"]
+
+[bench.config-immich-forge-cli]
+cmd = ["./target/release/rustovate", "config", "check", "examples/immich-forge-cli.pkl"]
+
+[bench.config-immich-go]
+cmd = ["./target/release/rustovate", "config", "check", "examples/immich-go.pkl"]
+
+[bench.config-maccrae-infra]
+cmd = ["./target/release/rustovate", "config", "check", "examples/maccrae-infra.pkl"]
+
+[bench.config-maccrae-wiki]
+cmd = ["./target/release/rustovate", "config", "check", "examples/maccrae-wiki.pkl"]
+
+[bench.config-remote-agent]
+cmd = ["./target/release/rustovate", "config", "check", "examples/remote-agent.pkl"]
+
+[bench.config-renovate-ce]
+cmd = ["./target/release/rustovate", "config", "check", "examples/renovate-ce.pkl"]
+
+[bench.config-renovate-runner]
+cmd = ["./target/release/rustovate", "config", "check", "examples/renovate-runner.pkl"]
+
+[bench.config-sweepy-dev]
+cmd = ["./target/release/rustovate", "config", "check", "examples/sweepy.dev.pkl"]
+
+[bench.github-cache-replay]
+cmd = ["./target/release/examples/replay_bench"]
+# The worker's thread scheduling and SQLite I/O make counters noisy; this is
+# end-to-end offline wall time, including temp DB and replay fixture setup.
+counters = false

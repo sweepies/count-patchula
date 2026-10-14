@@ -24,6 +24,24 @@ run = "mbx doctor"
 description = "Compare Renovate JSON output with a versioned rustovate report"
 run = "cargo run --quiet --locked -p rustovate-conformance --"
 
+[tasks."benchmarks:build"]
+description = "Build release subjects outside tak's measured commands"
+run = ["cargo build --release --locked -p rustovate-cli", "cargo build --release --locked -p rustovate-github --example replay_bench"]
+
+[tasks."benchmarks:run"]
+description = "Report tak timings and optional instruction counts; accepts tak run flags"
+depends = ["benchmarks:build"]
+run = ["mkdir -p benchmark-results", "tak run --export-json benchmark-results/results.json > benchmark-results/summary.txt"]
+
+[tasks."benchmarks:record"]
+description = "Record report-only tak results in local git notes; never push"
+depends = ["benchmarks:build"]
+run = ["mkdir -p benchmark-results", "tak run --record --export-json benchmark-results/results.json > benchmark-results/summary.txt"]
+
+[tasks."benchmarks:export"]
+description = "Export local HEAD benchmark notes as a portable artifact"
+run = ["mkdir -p benchmark-results", "tak artifact export --output benchmark-results/tak-artifact.json"]
+
 [tasks.test]
 description = "Test the workspace through mbx"
 run = "cargo test --workspace --locked"

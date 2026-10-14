@@ -50,7 +50,9 @@ restore prefixes. An exact-hit re-run restores but does not overwrite its
 immutable entry. `mise run cache:doctor` checks the local setup; Actions logs
 also show the key and save eligibility. Archive traffic is reported by the
 action, not mbx's per-command remote byte counters.
-Tak is pinned for later benchmarking; there are no benchmark gates yet.
+Tak benchmarks are [report-only](docs/benchmarks.md); `mise run benchmarks:run`
+measures release CLI startup, all config examples and an offline GitHub/cache
+workload. CI publishes results as artifacts without benchmark gates.
 
 ## Configuration commands
 
