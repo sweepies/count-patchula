@@ -115,22 +115,11 @@ fn migration_preserves_critical_intent() {
     assert_eq!(config.rules[3].apply.active, Some(false));
     assert_eq!(config.files.len(), 3);
     let config = load(&workspace().join("examples/fnox.pkl")).unwrap();
-    assert!(
-        config.defaults.merge
-            && config.submodules
-            && config.lockfiles.refresh
-            && config.lockfiles.tidy_go
-    );
-    assert_eq!(config.defaults.wait_hours, 168);
-    assert_eq!(config.prs.per_hour, Some(10));
-    assert_eq!(config.defaults.windows[0].zone, "America/Chicago");
-    assert!(
-        config
-            .rules
-            .iter()
-            .any(|rule| rule.apply.wait_hours == Some(0)
-                && rule.select.packages.contains(&"pklr".into()))
-    );
+    assert_eq!(config.defaults.versions, VersionPolicy::Preserve);
+    let (_directory, path) = fixture("");
+    let mut defaults = serde_json::to_value(load(&path).unwrap()).unwrap();
+    defaults["defaults"]["versions"] = serde_json::json!("preserve");
+    assert_eq!(serde_json::to_value(config).unwrap(), defaults);
 }
 
 #[test]
