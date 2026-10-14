@@ -2,7 +2,9 @@
 
 This workspace binary reads **only Renovate's output**, never its source, preset
 data or fixtures. Its fixtures are small JSON-lines examples written by hand;
-`demo/rustovate-sample` is fictional. No private repository has been queried.
+`demo/rustovate-sample` and `example/lookup` are fictional. The adapter was also
+verified against a caller-supplied private Renovate 44.155.6 lookup log; that log
+and its triage outputs stay outside this repository.
 
 Run an offline sample:
 
@@ -41,25 +43,70 @@ mise run conformance:compare --report batch.json --renovate-log renovate.jsonl \
   --output conformance-results owner/repo-one owner/repo-two
 ```
 
-The optional repo list selects an exact subset and requires it on both sides.
-Without a list, differences in repository/file coverage are included, even for
-empty repositories. Missing snapshots, malformed comparison data, logged errors,
-unsupported report versions and ambiguous identities fail the command. The
-parser tolerates non-JSON runtime banners but never echoes raw input. Live
-execution and compatibility with real 44.155.6 output are not yet verified;
-parser tests currently cover the hand-written shapes only.
+The mise task uses [`raw_args = true`](https://mise.jdx.dev/tasks/task-configuration.html#raw_args)
+to forward arguments, including `--help`, to the binary. For example:
 
-The parser takes each repository's latest `packageFiles with updates` snapshot
-(manager-keyed files with `deps` and `updates`) and enriches updates from
-`branches[].upgrades` or `branch.upgrades` summaries when present. Summaries need
-an unambiguous extracted dependency. It keeps package aliases, current value,
-version/digest, proposed value/version/digest, update type and group name. It
-normalizes `gomod`, `pip_requirements`, `docker-compose`, `custom.regex` and
-`pinDigest` to rustovate's independent vocabulary. Unknown manager/type names
-remain literal. This is a format adapter, not a dependency extractor.
+```sh
+mise run conformance:compare --help
+```
+
+The optional repo list selects an exact subset; a requested repository must exist
+on at least one side. Missing repositories/files emit one difference per contained
+dependency, including dependencies without updates. Empty files/repositories still
+emit coverage differences. An empty rustovate report is valid and makes every
+included Renovate dependency `rustovate-missing`:
+
+```sh
+mise run conformance:compare --report /path/to/empty.json \
+  --renovate-log /path/to/private-renovate.jsonl --output /path/to/private-triage \
+  owner/repo-one owner/repo-two
+# empty.json: {"schemaVersion":1,"repositories":[]}
+```
+
+The parser takes each repository's latest `packageFiles with updates` snapshot.
+Real 44.155.6 output puts the manager-keyed object under **`config`**, with an array
+of files per manager and a `deps` array per file. File metadata such as `lockFiles`
+and `packageFileVersion` is optional. The older hand-written `packageFiles` object
+shape is accepted with a warning. Identical occurrences sharing file/manager/name,
+package identity and current fields merge, and identical proposals deduplicate.
+Conflicting identities fail rather than silently discarding a dependency.
+
+The adapter keeps aliases, current value/version/digest, proposed
+value/version/digest, update type and group name. `packageName` defaults to
+`depName`; a missing `depName` falls back to `packageName`, with warnings. Skipped
+lookups remain dependencies, including entries without current values. It
+recognizes `datasource`, `skipReason`, and other lookup metadata without expanding
+the v1 report's comparison fields. `skipReason` and upstream warning presence are
+reported as diagnostics without copying their payloads. An absent current version
+is warned about; absent optional digest/group/target components mean null.
+
+Missing/non-array optional `updates` becomes an empty list with a warning;
+malformed optional string fields become null. A missing update type is retained as
+`unknown`; proposals with no value/version/digest target are omitted with warnings.
+Unknown file/dependency/update fields are ignored with line/field warnings, and
+unknown manager/type names remain literal with warnings. Metadata keys observed
+in the real output are recognized and ignored deliberately. This is a format
+adapter, not a dependency extractor.
+
+Optional `branches[].upgrades` or `branch.upgrades` summaries enrich only
+unambiguous extracted dependencies/proposals. Malformed or unmatched/ambiguous
+summaries warn and are ignored. A diagnostic `branches` object or a string branch
+name is not an upgrade summary. The adapter normalizes `gomod`,
+`pip_requirements`, `docker-compose`, `custom.regex` and `pinDigest` to rustovate's
+independent vocabulary.
+
+Missing snapshots, invalid JSON-looking lines, absent required repository/manager
+map/file path/dependency array/identity, conflicting duplicate identities, logged
+errors, and unsupported report versions fail the command. Non-JSON runtime banners
+are tolerated; errors never echo raw input. Parsing the supplied real lookup log is
+verified; invoking the harness's live installation/execution path is still unverified.
 
 Outputs are `triage.md` and `triage.json`. JSON includes both normalized inputs
-using the [v1 batch report](../docs/report.md), plus differences. Classification
+using the [v1 batch report](../docs/report.md), plus differences, parser `warnings`
+and audited `exclusions`. Markdown includes warnings and exclusion counts too.
+The fixed `renovate-config-manager` scope rule excludes Renovate's own configuration
+manager (snapshots and upgrade summaries) under [departure 19](../docs/departures.md#departure-19);
+rustovate has no equivalent. Every other manager remains in comparison. Classification
 is `rustovate-missing`, `rustovate-extra`, `field-mismatch`, or
 `deliberate-departure`; mapped entries retain `originalClassification` and a
 rule/row/link. Equal updates match as sets; a unique identical target exposes

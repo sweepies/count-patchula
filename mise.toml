@@ -21,7 +21,8 @@ description = "Inspect mbx toolchain, local store and remote configuration"
 run = "mbx doctor"
 
 [tasks."conformance:compare"]
-description = "Compare Renovate JSON output with a versioned rustovate report"
+description = "Compare Renovate JSON output with a versioned rustovate report; forwards CLI arguments"
+raw_args = true
 run = "cargo run --quiet --locked -p rustovate-conformance --"
 
 [tasks."benchmarks:build"]

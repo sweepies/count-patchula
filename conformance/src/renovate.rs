@@ -2,23 +2,90 @@ use crate::{Error, Result};
 use rustovate_report::{
     Current, Dependency, PackageFile, Report, Repository, SCHEMA_VERSION, Status, Update,
 };
+use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-fn text(value: &Value, field: &str) -> Result<Option<String>> {
-    match value.get(field) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(s)) => Ok(Some(s.clone())),
-        _ => Err(Error::Input(format!(
-            "Renovate field {field} must be a string or null"
-        ))),
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Warning {
+    pub line: usize,
+    pub repository: Option<String>,
+    pub field: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Exclusion {
+    pub repository: String,
+    pub manager: String,
+    pub package_files: usize,
+    pub dependencies: usize,
+    pub updates: usize,
+    pub rule: String,
+    pub departure: u32,
+    pub link: String,
+}
+
+#[derive(Debug)]
+pub struct ParsedLogs {
+    pub report: Report,
+    pub warnings: Vec<Warning>,
+    pub exclusions: Vec<Exclusion>,
+}
+
+struct Context<'a> {
+    line: usize,
+    repository: Option<&'a str>,
+    field: String,
+    warnings: &'a mut Vec<Warning>,
+}
+
+impl Context<'_> {
+    fn warn(&mut self, field: &str, message: &str) {
+        self.warnings.push(Warning {
+            line: self.line,
+            repository: self.repository.map(str::to_owned),
+            field: format!("{}.{field}", self.field),
+            message: message.into(),
+        });
+    }
+
+    fn text(&mut self, value: &Value, field: &str) -> Option<String> {
+        match value.get(field) {
+            None | Some(Value::Null) => None,
+            Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+            _ => {
+                self.warn(
+                    field,
+                    "expected a nonempty string or null; treated as absent",
+                );
+                None
+            }
+        }
+    }
+
+    fn unknown_fields(&mut self, value: &Value, known: &[&str]) {
+        if let Some(object) = value.as_object() {
+            for key in object.keys().filter(|k| !known.contains(&k.as_str())) {
+                self.warn(key, "unrecognized output field; ignored");
+            }
+        }
     }
 }
 
 fn required(value: &Value, field: &str) -> Result<String> {
-    text(value, field)?
+    value
+        .get(field)
+        .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| Error::Input(format!("Renovate comparison record is missing {field}")))
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            Error::Input(format!(
+                "Renovate comparison record needs a nonempty {field}"
+            ))
+        })
 }
 
 fn manager(name: &str) -> String {
@@ -32,51 +99,216 @@ fn manager(name: &str) -> String {
     .into()
 }
 
-fn update(value: &Value, inherited_group: Option<String>) -> Result<Update> {
-    let kind = required(value, "updateType")?;
-    Ok(Update {
-        new_value: text(value, "newValue")?,
-        new_version: text(value, "newVersion")?,
-        new_digest: text(value, "newDigest")?,
+// Observed output metadata has no equivalent in the v1 comparison report.
+// Recognize keys, never interpret templates or config/preset contents.
+const DEP_METADATA: &[&str] = &[
+    "depName",
+    "packageName",
+    "currentValue",
+    "currentVersion",
+    "currentDigest",
+    "updates",
+    "groupName",
+    "datasource",
+    "skipReason",
+    "warnings",
+    "depType",
+    "versioning",
+    "managerData",
+    "currentVersionAgeInDays",
+    "currentVersionTimestamp",
+    "dependencyUrl",
+    "fixedVersion",
+    "homepage",
+    "isAbandoned",
+    "isSingleVersion",
+    "lockedVersion",
+    "mostRecentTimestamp",
+    "registryUrl",
+    "sourceDirectory",
+    "sourceUrl",
+    "target",
+    "autoReplaceStringTemplate",
+    "commitMessageTopic",
+    "extractVersion",
+    "replaceString",
+    "skipStage",
+    "prettyDepType",
+    "deprecationMessage",
+];
+const UPDATE_METADATA: &[&str] = &[
+    "newValue",
+    "newVersion",
+    "newDigest",
+    "updateType",
+    "groupName",
+    "branchName",
+    "bucket",
+    "isBreaking",
+    "isLockfileUpdate",
+    "isRange",
+    "libYears",
+    "newMajor",
+    "newMinor",
+    "newPatch",
+    "newVersionAgeInDays",
+    "pendingVersions",
+    "releaseTimestamp",
+    "downloadUrl",
+    "hasAttestation",
+    "isPin",
+    "pendingChecks",
+    "manager",
+    "packageFile",
+    "depName",
+    "packageName",
+    "currentValue",
+    "currentVersion",
+    "currentDigest",
+    "datasource",
+];
+const FILE_METADATA: &[&str] = &[
+    "packageFile",
+    "deps",
+    "lockFiles",
+    "packageFileVersion",
+    "extractedConstraints",
+    "managerData",
+    "skipInstalls",
+    "extractVersionTemplate",
+    "matchStrings",
+];
+
+fn update(value: &Value, inherited_group: Option<String>, ctx: &mut Context<'_>) -> Option<Update> {
+    if !value.is_object() {
+        ctx.warn("update", "expected an object; proposal ignored");
+        return None;
+    }
+    ctx.unknown_fields(value, UPDATE_METADATA);
+    let kind = ctx.text(value, "updateType").unwrap_or_else(|| {
+        ctx.warn("updateType", "missing update type; retained as unknown");
+        "unknown".into()
+    });
+    if !matches!(
+        kind.as_str(),
+        "major" | "minor" | "patch" | "digest" | "pin" | "pinDigest"
+    ) {
+        ctx.warn("updateType", "unrecognized update type; retained literally");
+    }
+    let proposed = Update {
+        new_value: ctx.text(value, "newValue"),
+        new_version: ctx.text(value, "newVersion"),
+        new_digest: ctx.text(value, "newDigest"),
         update_type: if kind == "pinDigest" {
             "pin".into()
         } else {
             kind
         },
-        group: text(value, "groupName")?.or(inherited_group),
-    })
+        group: ctx.text(value, "groupName").or(inherited_group),
+    };
+    if proposed.new_value.is_none()
+        && proposed.new_version.is_none()
+        && proposed.new_digest.is_none()
+    {
+        ctx.warn(
+            "target",
+            "missing value/version/digest target; proposal ignored",
+        );
+        return None;
+    }
+    Some(proposed)
 }
 
-fn dependency(value: &Value, source_manager: &str) -> Result<Dependency> {
-    let name = required(value, "depName")?;
-    let group = text(value, "groupName")?;
-    let updates = match value.get("updates") {
-        None | Some(Value::Null) => Vec::new(),
-        Some(Value::Array(updates)) => updates
-            .iter()
-            .map(|u| update(u, group.clone()))
-            .collect::<Result<_>>()?,
-        _ => return Err(Error::Input("Renovate updates must be an array".into())),
+fn dependency(value: &Value, source_manager: &str, ctx: &mut Context<'_>) -> Result<Dependency> {
+    ctx.unknown_fields(value, DEP_METADATA);
+    let package = ctx.text(value, "packageName");
+    let name = match ctx.text(value, "depName") {
+        Some(name) => name,
+        None => {
+            ctx.warn("depName", "missing dependency name; using packageName");
+            package
+                .clone()
+                .ok_or_else(|| Error::Input("dependency needs depName or packageName".into()))?
+        }
     };
+    let package = package.unwrap_or_else(|| {
+        ctx.warn("packageName", "missing registry identity; using depName");
+        name.clone()
+    });
+    // Datasource is metadata in report v1, but malformed values still diagnose.
+    let _datasource = ctx.text(value, "datasource");
+    let group = ctx.text(value, "groupName");
+    let current = Current {
+        value: ctx.text(value, "currentValue"),
+        version: ctx.text(value, "currentVersion"),
+        digest: ctx.text(value, "currentDigest"),
+    };
+    if current.version.is_none() {
+        ctx.warn(
+            "currentVersion",
+            "lookup did not supply a resolved current version",
+        );
+    }
+    // A digest-only dependency and an unspecified version are both real output.
+    if current.value.is_none() && current.version.is_none() && current.digest.is_none() {
+        ctx.warn("current", "no current value/version/digest available");
+    }
+    if ctx.text(value, "skipReason").is_some() {
+        ctx.warn(
+            "skipReason",
+            "Renovate skipped lookup; dependency retained with available fields",
+        );
+    }
+    if let Some(warnings) = value.get("warnings") {
+        match warnings {
+            Value::Array(items) if items.is_empty() => (),
+            Value::Null => (),
+            _ => ctx.warn(
+                "warnings",
+                "Renovate supplied dependency warnings; payload omitted",
+            ),
+        }
+    }
+    let mut updates = Vec::new();
+    match value.get("updates") {
+        Some(Value::Array(items)) => {
+            let parent = ctx.field.clone();
+            for (i, item) in items.iter().enumerate() {
+                ctx.field = format!("{parent}.updates[{i}]");
+                if let Some(proposed) = update(item, group.clone(), ctx) {
+                    updates.push(proposed);
+                }
+            }
+            ctx.field = parent;
+        }
+        _ => ctx.warn(
+            "updates",
+            "missing or non-array optional updates; treated as empty",
+        ),
+    }
     Ok(Dependency {
         manager: manager(source_manager),
-        package: text(value, "packageName")?.unwrap_or_else(|| name.clone()),
+        package,
         name,
-        current: Current {
-            value: text(value, "currentValue")?,
-            version: text(value, "currentVersion")?,
-            digest: text(value, "currentDigest")?,
-        },
+        current,
         updates,
     })
 }
 
-/// Non-JSON runtime banners are ignored. Broken JSON-looking lines and comparison
-/// records fail with a line number, without echoing potentially sensitive log text.
+/// Compatibility helper for callers needing only the normalized report. Use
+/// parse_logs_with_diagnostics when emitting triage so warnings aren't discarded.
 pub fn parse_logs(logs: &str) -> Result<Report> {
+    Ok(parse_logs_with_diagnostics(logs)?.report)
+}
+
+/// Read output only. Required snapshot structure/identity failures carry a line
+/// number; diagnostics never include raw records or ignored field values.
+pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
     let mut repositories = BTreeMap::<String, BTreeMap<String, Vec<Dependency>>>::new();
-    let mut summaries = Vec::new();
+    let mut summaries = Vec::<(Option<String>, Value, Option<String>, usize)>::new();
     let mut failures = Vec::new();
+    let mut warnings = Vec::new();
+    let mut exclusions = Vec::new();
     for (index, line) in logs.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() || !line.starts_with('{') {
@@ -91,56 +323,126 @@ pub fn parse_logs(logs: &str) -> Result<Report> {
         {
             failures.push(index + 1);
         }
+        let repo = record.get("repository").and_then(Value::as_str);
+        let mut ctx = Context {
+            line: index + 1,
+            repository: repo,
+            field: "record".into(),
+            warnings: &mut warnings,
+        };
+        if record.get("level").and_then(Value::as_u64) == Some(40) {
+            ctx.warn("level", "Renovate logged a warning; payload omitted");
+        }
         let result = (|| {
             if record["msg"] == "packageFiles with updates" {
                 let repo = required(&record, "repository")?;
-                let files = record
-                    .get("packageFiles")
-                    .and_then(Value::as_object)
-                    .ok_or_else(|| {
-                        Error::Input("packageFiles must be a manager-keyed object".into())
-                    })?;
-                // Latest snapshot wins, including a valid empty extraction.
+                let (field, files) = if let Some(files) =
+                    record.get("config").and_then(Value::as_object)
+                {
+                    ("config", files)
+                } else if let Some(files) = record.get("packageFiles").and_then(Value::as_object) {
+                    ctx.warn(
+                        "packageFiles",
+                        "legacy snapshot shape; expected manager map under config",
+                    );
+                    ("packageFiles", files)
+                } else {
+                    return Err(Error::Input(
+                        "config (or legacy packageFiles) must be a manager-keyed object".into(),
+                    ));
+                };
                 let mut snapshot = BTreeMap::<String, Vec<Dependency>>::new();
-                for (manager, files) in files {
+                exclusions.retain(|e: &Exclusion| e.repository != repo);
+                for (source_manager, files) in files {
+                    ctx.field = field.into();
                     let files = files.as_array().ok_or_else(|| {
-                        Error::Input("manager packageFiles must be an array".into())
+                        Error::Input("manager package files must be an array".into())
                     })?;
-                    for file in files {
+                    if source_manager == "renovate-config" {
+                        exclusions.push(Exclusion {
+                            repository: repo.clone(),
+                            manager: source_manager.clone(),
+                            package_files: files.len(),
+                            dependencies: files
+                                .iter()
+                                .filter_map(|f| f["deps"].as_array())
+                                .map(Vec::len)
+                                .sum(),
+                            updates: files
+                                .iter()
+                                .filter_map(|f| f["deps"].as_array())
+                                .flatten()
+                                .filter_map(|d| d["updates"].as_array())
+                                .map(Vec::len)
+                                .sum(),
+                            rule: "renovate-config-manager".into(),
+                            departure: 19,
+                            link: "docs/departures.md#departure-19".into(),
+                        });
+                        continue;
+                    }
+                    if !matches!(
+                        manager(source_manager).as_str(),
+                        "cargo"
+                            | "bun"
+                            | "terraform"
+                            | "kubernetes"
+                            | "kustomize"
+                            | "flux"
+                            | "helm-values"
+                            | "github-actions"
+                            | "mise"
+                            | "npm"
+                            | "go"
+                            | "requirements"
+                            | "compose"
+                            | "regex"
+                            | "dockerfile"
+                    ) {
+                        ctx.warn(source_manager, "unrecognized manager; retained literally");
+                    }
+                    for (i, file) in files.iter().enumerate() {
+                        ctx.field = format!("{field}.{source_manager}[{i}]");
+                        ctx.unknown_fields(file, FILE_METADATA);
                         let path = required(file, "packageFile")?;
                         let deps = file.get("deps").and_then(Value::as_array).ok_or_else(|| {
                             Error::Input("package file deps must be an array".into())
                         })?;
                         let target = snapshot.entry(path).or_default();
-                        for dep in deps {
-                            target.push(dependency(dep, manager)?);
+                        for (j, dep) in deps.iter().enumerate() {
+                            ctx.field = format!("{field}.{source_manager}[{i}].deps[{j}]");
+                            target.push(dependency(dep, source_manager, &mut ctx)?);
                         }
                     }
                 }
-                summaries.retain(|(name, _, _)| name != &repo);
+                summaries.retain(|(name, _, _, _)| name.as_deref() != Some(repo.as_str()));
                 repositories.insert(repo, snapshot);
             }
-            // Branch metadata is output too; use it only to enrich extracted deps.
-            if let Some(branches) = record.get("branches").and_then(Value::as_array) {
-                let repo = required(&record, "repository")?;
-                for branch in branches {
-                    if let Some(upgrades) = branch.get("upgrades").and_then(Value::as_array) {
-                        for upgrade in upgrades {
-                            summaries.push((
-                                repo.clone(),
-                                upgrade.clone(),
-                                text(branch, "groupName")?,
-                            ));
-                        }
-                    }
-                }
+            // Only array branches/object branch with an upgrades array are
+            // summaries. Diagnostic branches maps and branch names are ordinary logs.
+            let mut branches = Vec::new();
+            if let Some(items) = record.get("branches").and_then(Value::as_array) {
+                branches.extend(items.iter());
             }
-            if let Some(branch) = record.get("branch").filter(|b| b.is_object())
-                && let Some(upgrades) = branch.get("upgrades").and_then(Value::as_array)
-            {
-                let repo = required(&record, "repository")?;
-                for upgrade in upgrades {
-                    summaries.push((repo.clone(), upgrade.clone(), text(branch, "groupName")?));
+            if let Some(branch) = record.get("branch").filter(|b| b.is_object()) {
+                branches.push(branch);
+            }
+            ctx.field = "branch".into();
+            for branch in branches {
+                if let Some(items) = branch.get("upgrades") {
+                    match items.as_array() {
+                        Some(upgrades) => {
+                            for upgrade in upgrades {
+                                summaries.push((
+                                    repo.map(str::to_owned),
+                                    upgrade.clone(),
+                                    ctx.text(branch, "groupName"),
+                                    index + 1,
+                                ));
+                            }
+                        }
+                        None => ctx.warn("upgrades", "non-array optional branch upgrades; ignored"),
+                    }
                 }
             }
             Ok(())
@@ -157,14 +459,36 @@ pub fn parse_logs(logs: &str) -> Result<Report> {
     if repositories.is_empty() {
         return Err(Error::Input("no 'packageFiles with updates' records; use LOG_LEVEL=debug LOG_FORMAT=json and a successful lookup/full dry run".into()));
     }
-    for (repo, value, group) in summaries {
-        let Some(files) = repositories.get_mut(&repo) else {
+    for (repo, value, group, line) in summaries {
+        let mut ctx = Context {
+            line,
+            repository: repo.as_deref(),
+            field: "branch.upgrades".into(),
+            warnings: &mut warnings,
+        };
+        let Some(files) = repo.as_ref().and_then(|repo| repositories.get_mut(repo)) else {
+            ctx.warn(
+                "repository",
+                "branch summary has no matching repository snapshot; ignored",
+            );
             continue;
         };
-        let name = required(&value, "depName")?;
-        let path = text(&value, "packageFile")?;
-        let source_manager = text(&value, "manager")?.map(|m| manager(&m));
-        let current = text(&value, "currentValue")?;
+        if value["manager"] == "renovate-config" {
+            continue;
+        }
+        let Some(name) = ctx
+            .text(&value, "depName")
+            .or_else(|| ctx.text(&value, "packageName"))
+        else {
+            ctx.warn(
+                "depName",
+                "branch summary has no dependency identity; ignored",
+            );
+            continue;
+        };
+        let path = ctx.text(&value, "packageFile");
+        let source_manager = ctx.text(&value, "manager").map(|m| manager(&m));
+        let current = ctx.text(&value, "currentValue");
         let mut candidates = files
             .iter_mut()
             .filter(|(file, _)| path.as_ref().is_none_or(|path| path == *file))
@@ -177,14 +501,21 @@ pub fn parse_logs(logs: &str) -> Result<Report> {
                         .is_none_or(|v| dep.current.value.as_ref() == Some(v))
             });
         let Some(dep) = candidates.next() else {
-            return Err(Error::Input(
-                "branch upgrade does not match an extracted dependency".into(),
-            ));
+            ctx.warn(
+                "identity",
+                "branch summary does not match an extracted dependency; ignored",
+            );
+            continue;
         };
+        // Duplicate occurrences with the same identity will be merged later.
+        // Avoid guessing enrichment when a summary has multiple candidates.
         if candidates.next().is_some() {
-            return Err(Error::Input("ambiguous branch upgrade; include packageFile/manager/currentValue in the captured output".into()));
+            ctx.warn("identity", "ambiguous branch summary; enrichment ignored");
+            continue;
         }
-        let proposed = update(&value, group)?;
+        let Some(proposed) = update(&value, group, &mut ctx) else {
+            continue;
+        };
         let matching: Vec<_> =
             dep.updates
                 .iter_mut()
@@ -202,7 +533,11 @@ pub fn parse_logs(logs: &str) -> Result<Report> {
                 })
                 .collect();
         if matching.len() > 1 {
-            return Err(Error::Input("ambiguous branch update target".into()));
+            ctx.warn(
+                "target",
+                "ambiguous branch update target; enrichment ignored",
+            );
+            continue;
         }
         if let Some(existing) = matching.into_iter().next() {
             existing.new_value = proposed.new_value.or(existing.new_value.take());
@@ -254,5 +589,9 @@ pub fn parse_logs(logs: &str) -> Result<Report> {
         });
     }
     report.validate()?;
-    Ok(report)
+    Ok(ParsedLogs {
+        report,
+        warnings,
+        exclusions,
+    })
 }

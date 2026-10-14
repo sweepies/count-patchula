@@ -6,7 +6,7 @@ mod renovate;
 mod run;
 
 pub use diff::{Classification, Difference, Rules, Triage, compare};
-pub use renovate::parse_logs;
+pub use renovate::{Exclusion, ParsedLogs, Warning, parse_logs, parse_logs_with_diagnostics};
 pub use run::run_renovate;
 
 #[derive(Debug, thiserror::Error)]

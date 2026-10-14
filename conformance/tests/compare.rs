@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
-use rustovate_conformance::{Classification as Class, Rules, compare, parse_logs};
+use rustovate_conformance::{
+    Classification as Class, Rules, compare, parse_logs, parse_logs_with_diagnostics,
+};
 use rustovate_report::{Report, Status};
 use serde_json::json;
 use std::{path::Path, process::Command};
@@ -215,4 +217,249 @@ fn cli_writes_both_outputs_offline_and_rejects_missing_requested_repository() {
         .output()
         .unwrap();
     assert!(!run.status.success());
+}
+
+#[test]
+fn real_lookup_shape_retains_skipped_and_digest_only_deps_and_audits_exclusion() {
+    let parsed = parse_logs_with_diagnostics(include_str!("fixtures/lookup.jsonl")).unwrap();
+    let repo = &parsed.report.repositories[0];
+    assert_eq!(repo.package_files.len(), 4);
+    assert_eq!(
+        repo.package_files
+            .iter()
+            .map(|f| f.dependencies.len())
+            .sum::<usize>(),
+        6
+    );
+    let cargo = repo
+        .package_files
+        .iter()
+        .find(|f| f.path == "Cargo.toml")
+        .unwrap();
+    assert_eq!(cargo.dependencies.len(), 1);
+    assert_eq!(cargo.dependencies[0].updates.len(), 1);
+    let actions = repo
+        .package_files
+        .iter()
+        .find(|f| f.path.ends_with("ci.yml"))
+        .unwrap();
+    assert_eq!(actions.dependencies[0].current.value, None);
+    assert_eq!(
+        actions.dependencies[0].current.digest.as_deref(),
+        Some("aaaa")
+    );
+    assert_eq!(
+        actions.dependencies[0].updates[0].new_digest.as_deref(),
+        Some("bbbb")
+    );
+    assert_eq!(
+        actions.dependencies[0].updates[0].group.as_deref(),
+        Some("actions")
+    );
+    assert!(actions.dependencies[1].updates.is_empty());
+    let mise = repo
+        .package_files
+        .iter()
+        .find(|f| f.path == "mise.toml")
+        .unwrap();
+    assert_eq!(mise.dependencies[0].package, "example/tool");
+    assert_eq!(
+        mise.dependencies[0].updates[0].group.as_deref(),
+        Some("tools")
+    );
+    assert_eq!(parsed.exclusions.len(), 1);
+    let excluded = &parsed.exclusions[0];
+    assert_eq!(
+        (
+            excluded.package_files,
+            excluded.dependencies,
+            excluded.updates
+        ),
+        (1, 1, 0)
+    );
+    assert_eq!(excluded.link, "docs/departures.md#departure-19");
+    assert_eq!(
+        parsed
+            .warnings
+            .iter()
+            .filter(|w| w.field.ends_with("skipReason"))
+            .count(),
+        2
+    );
+    let empty = Report {
+        schema_version: 1,
+        repositories: vec![],
+    };
+    let triage = compare(&parsed.report, &empty, &rules()).unwrap();
+    assert_eq!(triage.differences.len(), 6);
+    assert!(
+        triage
+            .differences
+            .iter()
+            .all(|d| d.classification == Class::RustovateMissing && d.field == "dependency")
+    );
+    let reverse = compare(&empty, &parsed.report, &rules()).unwrap();
+    assert!(
+        reverse
+            .differences
+            .iter()
+            .all(|d| d.classification == Class::RustovateExtra)
+    );
+    let mut missing_file = parsed.report.clone();
+    missing_file.repositories[0]
+        .package_files
+        .retain(|f| f.path != "Cargo.toml");
+    let triage = compare(&parsed.report, &missing_file, &rules()).unwrap();
+    assert_eq!(triage.differences.len(), 1);
+    assert_eq!(
+        triage.differences[0].dependency.as_deref(),
+        Some("sample-crate")
+    );
+}
+
+#[test]
+fn optional_output_changes_warn_without_echoing_ignored_payloads() {
+    let log = json!({"repository":"example/optional","msg":"packageFiles with updates","config":{
+        "future-manager":[{"packageFile":"manifest","futureFile":{"private":"not-echoed"},"deps":[
+            {"packageName":"fallback","currentValue":42,"currentVersion":false,"currentDigest":{},
+             "groupName":[],"datasource":{},"futureDep":"not-echoed","updates":[
+                {"newValue":"2","newVersion":7,"newDigest":false,"groupName":{},"futureUpdate":"not-echoed"},
+                {"newDigest":"abc","updateType":"future-type"}, {}, null
+             ]},
+            {"depName":"without-updates"}, {"depName":"bad-updates","updates":{}},
+            {"depName":"null-updates","updates":null}
+        ]}]
+    }}).to_string();
+    let summaries = r#"
+{"repository":"example/optional","branch":{"upgrades":42}}
+{"branch":{"upgrades":[{"depName":"fallback"}]}}
+{"repository":"example/optional","branches":[{"upgrades":[{}, {"depName":"unextracted"}, {"depName":"fallback","updates":null}]}]}
+"#;
+    let parsed = parse_logs_with_diagnostics(&format!("{log}\n{summaries}")).unwrap();
+    let deps = &parsed.report.repositories[0].package_files[0].dependencies;
+    assert_eq!(deps.len(), 4);
+    let fallback = deps.iter().find(|d| d.name == "fallback").unwrap();
+    assert_eq!(fallback.manager, "future-manager");
+    assert_eq!(fallback.updates.len(), 2);
+    assert!(fallback.updates.iter().any(|u| u.update_type == "unknown"));
+    assert!(
+        fallback
+            .updates
+            .iter()
+            .any(|u| u.update_type == "future-type")
+    );
+    for field in [
+        "futureFile",
+        "futureDep",
+        "futureUpdate",
+        "datasource",
+        "currentValue",
+        "currentVersion",
+        "currentDigest",
+        "newVersion",
+        "newDigest",
+        "updateType",
+        "upgrades",
+    ] {
+        assert!(
+            parsed.warnings.iter().any(|w| w.field.ends_with(field)),
+            "{field}"
+        );
+    }
+    let mut triage = compare(&parsed.report, &parsed.report, &rules()).unwrap();
+    triage.warnings = parsed.warnings;
+    let markdown = triage.markdown();
+    assert!(markdown.contains("Parser warnings:"));
+    assert!(!markdown.contains("not-echoed"));
+    assert!(
+        !serde_json::to_string(&triage)
+            .unwrap()
+            .contains("not-echoed")
+    );
+}
+
+#[test]
+fn required_snapshot_structure_and_ambiguous_dependency_identities_still_fail() {
+    for config in [
+        json!([]),
+        json!({"npm":null}),
+        json!({"npm":[{"packageFile":"package.json"}]}),
+        json!({"npm":[{"packageFile":"package.json","deps":{}}]}),
+        json!({"npm":[{"deps":[]}]}),
+        json!({"npm":[{"packageFile":"package.json","deps":[{},null]}]}),
+        json!({"npm":[{"packageFile":"package.json","deps":[
+            {"depName":"same","currentValue":"1"}, {"depName":"same","currentValue":"2"}
+        ]}]}),
+    ] {
+        assert!(
+            parse_logs(
+                &json!({"repository":"x/y","msg":"packageFiles with updates","config":config})
+                    .to_string()
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn cli_accepts_one_sided_repo_coverage_and_writes_diagnostics() {
+    let dir = tempfile::tempdir().unwrap();
+    let report = dir.path().join("empty report.json");
+    std::fs::write(&report, r#"{"schemaVersion":1,"repositories":[]}"#).unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_rustovate-conformance"))
+        .arg("--report")
+        .arg(report)
+        .arg("--renovate-log")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/lookup.jsonl"))
+        .arg("--output")
+        .arg(dir.path())
+        .arg("example/lookup")
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let triage: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("triage.json")).unwrap()).unwrap();
+    assert_eq!(triage["differences"].as_array().unwrap().len(), 6);
+    assert!(!triage["warnings"].as_array().unwrap().is_empty());
+    assert_eq!(triage["exclusions"][0]["departure"], 19);
+    let md = std::fs::read_to_string(dir.path().join("triage.md")).unwrap();
+    assert!(md.contains("departure-19"));
+    assert!(md.contains("Parser warnings:"));
+}
+
+#[test]
+fn ambiguous_optional_summaries_warn_and_new_snapshots_replace_exclusions() {
+    let log = r#"{"repository":"x/y","msg":"packageFiles with updates","config":{"npm":[{"packageFile":"one.json","deps":[{"depName":"same","updates":[{"updateType":"major","newValue":"2"}]}]},{"packageFile":"two.json","deps":[{"depName":"same","updates":[]}]}],"renovate-config":[{"packageFile":"renovate.json","deps":[{"depName":"config-only"}]}]}}
+{"repository":"x/y","branches":[{"upgrades":[{"depName":"same","newValue":"2","updateType":"major"},{"manager":"renovate-config","depName":"config-only","newValue":"3","updateType":"major"}]}]}"#;
+    let parsed = parse_logs_with_diagnostics(log).unwrap();
+    assert!(
+        parsed
+            .warnings
+            .iter()
+            .any(|w| w.message == "ambiguous branch summary; enrichment ignored")
+    );
+    assert!(
+        !parsed
+            .warnings
+            .iter()
+            .any(|w| w.message == "branch summary does not match an extracted dependency; ignored")
+    );
+    assert_eq!(
+        parsed.report.repositories[0].package_files[0].dependencies[0]
+            .updates
+            .len(),
+        1
+    );
+    assert_eq!(parsed.exclusions.len(), 1);
+    let parsed = parse_logs_with_diagnostics(&format!(
+        "{log}\n{}",
+        r#"{"repository":"x/y","msg":"packageFiles with updates","config":{}}"#
+    ))
+    .unwrap();
+    assert!(parsed.exclusions.is_empty());
+    assert!(parsed.report.repositories[0].package_files.is_empty());
 }

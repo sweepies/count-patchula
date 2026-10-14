@@ -1,7 +1,7 @@
 //! Comparison CLI; lookup/run themselves remain Phase 1 work.
 #![forbid(unsafe_code)]
 
-use rustovate_conformance::{Error, Rules, compare, parse_logs, run_renovate};
+use rustovate_conformance::{Error, Rules, compare, parse_logs_with_diagnostics, run_renovate};
 use rustovate_report::Report;
 use std::{path::PathBuf, process::ExitCode};
 use usage_rs::Cli;
@@ -31,15 +31,16 @@ fn run(app: App) -> Result<(), Error> {
         Some(path) => std::fs::read_to_string(path)?,
         None => run_renovate(&app.repositories)?,
     };
-    let mut renovate = parse_logs(&logs)?;
+    let parsed = parse_logs_with_diagnostics(&logs)?;
+    let mut renovate = parsed.report;
     let mut report = Report::from_json(&std::fs::read(&app.report)?)?;
     if !app.repositories.is_empty() {
         for name in &app.repositories {
             if !renovate.repositories.iter().any(|r| &r.repository == name)
-                || !report.repositories.iter().any(|r| &r.repository == name)
+                && !report.repositories.iter().any(|r| &r.repository == name)
             {
                 return Err(Error::Input(format!(
-                    "requested repository {name} needs complete inputs on both sides"
+                    "requested repository {name} is absent from both inputs"
                 )));
             }
         }
@@ -55,7 +56,22 @@ fn run(app: App) -> Result<(), Error> {
         None => include_bytes!("../departures.json").to_vec(),
     };
     let rules = Rules::from_json(&bytes)?;
-    let triage = compare(&renovate, &report, &rules)?;
+    let mut triage = compare(&renovate, &report, &rules)?;
+    triage.warnings = parsed
+        .warnings
+        .into_iter()
+        .filter(|w| {
+            app.repositories.is_empty()
+                || w.repository
+                    .as_ref()
+                    .is_none_or(|r| app.repositories.contains(r))
+        })
+        .collect();
+    triage.exclusions = parsed
+        .exclusions
+        .into_iter()
+        .filter(|e| app.repositories.is_empty() || app.repositories.contains(&e.repository))
+        .collect();
     std::fs::create_dir_all(&app.output)?;
     // Local reports may be written anywhere; use an absolute documentation link.
     let docs = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

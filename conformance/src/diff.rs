@@ -1,5 +1,5 @@
-use crate::{Error, Result};
-use rustovate_report::{Dependency, Report, Status, Update};
+use crate::{Error, Exclusion, Result, Warning};
+use rustovate_report::{Dependency, PackageFile, Report, Status, Update};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -154,6 +154,8 @@ pub struct Triage {
     pub renovate: Report,
     pub rustovate: Report,
     pub differences: Vec<Difference>,
+    pub warnings: Vec<Warning>,
+    pub exclusions: Vec<Exclusion>,
 }
 
 fn label(class: Classification) -> &'static str {
@@ -192,6 +194,35 @@ impl Triage {
             out.push_str(&format!("- {}: {count}\n", label(class)));
         }
         out.push_str("\nRepository coverage and normalized inputs are in the accompanying JSON. Departure links are relative to the repository root.\n\n");
+        if !self.exclusions.is_empty() {
+            out.push_str("Excluded Renovate output (outside rustovate's manager scope):\n\n");
+            for e in &self.exclusions {
+                out.push_str(&format!(
+                    "- {} / {}: {} files, {} dependencies, {} updates ([departure {}]({})).\n",
+                    cell(&e.repository),
+                    cell(&e.manager),
+                    e.package_files,
+                    e.dependencies,
+                    e.updates,
+                    e.departure,
+                    e.link
+                ));
+            }
+            out.push('\n');
+        }
+        out.push_str(&format!("Parser warnings: {}\n\n", self.warnings.len()));
+        for w in &self.warnings {
+            out.push_str(&format!(
+                "- Line {} / {} / {}: {}\n",
+                w.line,
+                cell(w.repository.as_deref().unwrap_or("")),
+                cell(&w.field),
+                cell(&w.message)
+            ));
+        }
+        if !self.warnings.is_empty() {
+            out.push('\n');
+        }
         if self.differences.is_empty() {
             out.push_str("No differences.\n");
             return out;
@@ -359,6 +390,39 @@ fn updates(out: &mut Vec<Difference>, location: &Location<'_>, a: &[Update], b: 
     }
 }
 
+// Emit dependency differences even when the containing repository/file is
+// absent. Keep coverage differences for empty files and repositories too.
+fn missing_file(
+    out: &mut Vec<Difference>,
+    location: &Location<'_>,
+    file: &PackageFile,
+    class: Classification,
+) {
+    let location = Location {
+        path: Some(&file.path),
+        ..location.clone()
+    };
+    let values = |value| {
+        if class == Classification::RustovateMissing {
+            (value, Value::Null)
+        } else {
+            (Value::Null, value)
+        }
+    };
+    if file.dependencies.is_empty() {
+        let (a, b) = values(json!(file));
+        out.push(difference(&location, "packageFile", a, b, class));
+    }
+    for dep in &file.dependencies {
+        let location = Location {
+            dep: Some(dep),
+            ..location.clone()
+        };
+        let (a, b) = values(json!(dep));
+        out.push(difference(&location, "dependency", a, b, class));
+    }
+}
+
 pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<Triage> {
     renovate.validate()?;
     rustovate.validate()?;
@@ -394,13 +458,23 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
             } else {
                 Classification::RustovateExtra
             };
-            differences.push(difference(
-                &location,
-                "repository",
-                json!(a.get(repo)),
-                json!(b.get(repo)),
-                class,
-            ));
+            let present = a
+                .get(repo)
+                .or_else(|| b.get(repo))
+                .expect("repository exists");
+            if present.package_files.is_empty() {
+                differences.push(difference(
+                    &location,
+                    "repository",
+                    json!(a.get(repo)),
+                    json!(b.get(repo)),
+                    class,
+                ));
+            } else {
+                for file in &present.package_files {
+                    missing_file(&mut differences, &location, file, class);
+                }
+            }
             continue;
         };
         let a: BTreeMap<_, _> = left.package_files.iter().map(|f| (&f.path, f)).collect();
@@ -416,13 +490,12 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
                 } else {
                     Classification::RustovateExtra
                 };
-                differences.push(difference(
+                missing_file(
+                    &mut differences,
                     &location,
-                    "packageFile",
-                    json!(a.get(path)),
-                    json!(b.get(path)),
+                    a.get(path).or_else(|| b.get(path)).expect("file exists"),
                     class,
-                ));
+                );
                 continue;
             };
             let a: BTreeMap<_, _> = left
@@ -493,5 +566,7 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
         renovate: renovate.clone(),
         rustovate: rustovate.clone(),
         differences,
+        warnings: Vec::new(),
+        exclusions: Vec::new(),
     })
 }

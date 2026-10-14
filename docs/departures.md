@@ -27,3 +27,13 @@ Stable comparison link: <a id="departure-7"></a>**Departure 7: default policy**
 | 16 | Branches and commit messages | Existing configs choose Renovate names or semanticCommits switches | Default rustovate/ branch prefix and explicit chore(deps): commit prefix, both overridable | Independent identity and predictable messages |
 | 17 | Maintenance and ancillary policy | Config migration, abandonment and post-update options | No migration or inferred abandonment policy; lockfile refresh and Go tidy are explicit fields | Pkl-only configuration and deliberate, reviewable maintenance |
 | 18 | Group identifiers | Separate groupName and groupSlug fields | One group string identifies the update group; branch slug derivation belongs to the updater | Avoid two configuration identities for the same grouping intent |
+| 19 | Configuration dependencies | The renovate-config manager treats Renovate configuration as package files | No equivalent manager: the comparison adapter excludes only renovate-config snapshots and summaries | rustovate uses Pkl and does not resolve Renovate configuration or presets |
+
+<a id="departure-19"></a>**Departure 19: configuration dependency scope.**
+The fixed comparison rule `renovate-config-manager` excludes only Renovate's own
+`renovate-config` manager before normalization. Triage records the repository,
+manager, file/dependency/update counts and this link under `exclusions`, separately
+from actionable differences. No config-file contents or preset data are read or
+interpreted. All other managers, including unknown names, remain in comparison.
+This adapter scope rule also applies to branch upgrade summaries and is independent
+of the optional update classification rules in `conformance/departures.json`.
