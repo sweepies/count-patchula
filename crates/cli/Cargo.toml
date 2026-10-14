@@ -12,3 +12,8 @@ workspace = true
 [[bin]]
 name = "rustovate"
 path = "src/main.rs"
+
+[dependencies]
+rustovate-config = { path = "../config" }
+usage-rs = "7.0.1"
+serde_json = "1"

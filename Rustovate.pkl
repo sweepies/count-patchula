@@ -1,0 +1,2 @@
+/// Rustovate configuration. The typed configuration model follows in SWE-83.
+module Rustovate
