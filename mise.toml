@@ -12,6 +12,10 @@ MBX_DISPLAY = "plain"
 description = "Build the workspace through mbx"
 run = "cargo build --workspace --locked"
 
+[tasks."cache:doctor"]
+description = "Inspect mbx toolchain, local store and remote configuration"
+run = "mbx doctor"
+
 [tasks.test]
 description = "Test the workspace through mbx"
 run = "cargo test --workspace --locked"

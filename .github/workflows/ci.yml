@@ -18,9 +18,23 @@ jobs:
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
           cache: false
-      # Uses the mise-installed mbx. Default-branch pushes publish; PRs only restore.
+      # Transport mbx objects, predictions and build-script state between runners.
+      # Default-branch pushes publish in the post step; PRs only restore.
       - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
+        id: mbx
         with:
           backend: github
+          github-cache-mode: objects
+          isolate-objects-cache: true
+          cache-generation: v2-objects
           save-on-pull-request: false
+      - name: Inspect cache configuration
+        env:
+          CACHE_KEY: ${{ steps.mbx.outputs.cache-primary-key }}
+          CACHE_HIT: ${{ steps.mbx.outputs.cache-hit }}
+          CACHE_SAVE_ELIGIBLE: ${{ steps.mbx.outputs.cache-save-eligible }}
+          CACHE_SAVE_REASON: ${{ steps.mbx.outputs.cache-save-reason }}
+        run: |
+          printf 'mbx key=%s exact-hit=%s save=%s (%s)\n' "$CACHE_KEY" "$CACHE_HIT" "$CACHE_SAVE_ELIGIBLE" "$CACHE_SAVE_REASON"
+          mise run cache:doctor
       - run: mise run ci

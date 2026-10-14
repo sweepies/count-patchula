@@ -39,6 +39,13 @@ minimal images without system development packages.
 The Rust mise option `mr_boxington = true` wraps Cargo with mbx. Use mise tasks
 or `mise exec -- cargo …` so builds share that cache. GitHub CI restores the
 mbx GitHub Actions cache on PRs and publishes it on successful pushes to main.
+CI explicitly uses isolated `objects` bundles: the action imports the previous
+compatible bundle, then exports the closure of all build commands in its post
+step. The generated keys include the Rust toolchain and commit, with shared
+restore prefixes. An exact-hit re-run restores but does not overwrite its
+immutable entry. `mise run cache:doctor` checks the local setup; Actions logs
+also show the key and save eligibility. Archive traffic is reported by the
+action, not mbx's per-command remote byte counters.
 Tak is pinned for later benchmarking; there are no benchmark gates yet.
 
 ## Configuration commands
