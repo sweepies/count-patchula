@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use rustovate_config::{Manager, SCHEMA, Update, VersionPolicy, discover, load};
+use rustovate_config::{DependencyKind, Manager, SCHEMA, Update, VersionPolicy, discover, load};
 use std::path::Path;
 
 fn workspace() -> &'static Path {
@@ -42,6 +42,49 @@ fn defaults_are_explicit_safe_and_unlimited() {
 }
 
 #[test]
+fn unknown_field_path_contains_leaf_once() {
+    for (body, field) in [
+        ("surprise = true", "surprise"),
+        ("prs { dashbord = true }", "prs.dashbord"),
+        (
+            "rules = new Listing { new Rule { apply { typo = true } } }",
+            "rules[0].apply.typo",
+        ),
+    ] {
+        let (_directory, path) = fixture(body);
+        let message = load(&path).unwrap_err().to_string();
+        assert!(
+            message.contains(&format!("{field}: unknown field")),
+            "{message}"
+        );
+        let leaf = field.rsplit('.').next().unwrap();
+        assert!(!message.contains(&format!("{field}.{leaf}")), "{message}");
+    }
+}
+
+#[test]
+fn dependency_kinds_are_closed_and_typed() {
+    let (_directory, path) = fixture(
+        "rules = new Listing { new Rule { select { kinds = new Listing { \"development\"; \"reusable-workflow\"; \"go-directive\" } } } }",
+    );
+    assert_eq!(
+        load(&path).unwrap().rules[0].select.kinds,
+        [
+            DependencyKind::Development,
+            DependencyKind::ReusableWorkflow,
+            DependencyKind::GoDirective
+        ]
+    );
+    for kind in ["developmnt", "regex:.*", "*"] {
+        let (_directory, path) = fixture(&format!(
+            "rules = new Listing {{ new Rule {{ select {{ kinds = new Listing {{ \"{kind}\" }} }} }} }}"
+        ));
+        assert!(load(&path).is_err(), "accepted {kind}");
+    }
+    assert!(serde_json::from_str::<DependencyKind>("\"developmnt\"").is_err());
+}
+
+#[test]
 fn migration_preserves_critical_intent() {
     let config = load(&workspace().join("examples/renovate-runner.pkl")).unwrap();
     assert_eq!(
@@ -62,6 +105,10 @@ fn migration_preserves_critical_intent() {
         ["sweepies/ops-workflows"]
     );
     assert_eq!(config.rules[1].apply.digest, Some(false));
+    assert_eq!(
+        config.rules[1].select.kinds,
+        [DependencyKind::ReusableWorkflow]
+    );
     assert_eq!(config.extractors.len(), 2);
     let config = load(&workspace().join("examples/maccrae-infra.pkl")).unwrap();
     assert_eq!(config.rules[3].select.updates, [Update::Major]);

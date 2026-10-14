@@ -144,7 +144,6 @@ impl Config {
                 ("packages", &rule.select.packages),
                 ("dependencies", &rule.select.dependencies),
                 ("files", &rule.select.files),
-                ("kinds", &rule.select.kinds),
             ] {
                 patterns(&format!("{field}.select.{name}"), values)?;
             }

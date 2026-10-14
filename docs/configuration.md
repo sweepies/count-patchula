@@ -70,8 +70,14 @@ An empty list is unrestricted. Patterns are case-sensitive path-aware globs
 `semver:` (Cargo semver requirement syntax) or `regex:`, with optional `!`.
 Package identifiers and dependency identifiers are separate selectors. Manager
 names, datasources, update types and version schemes are closed enumerations.
-`kinds` identifies manager-defined dependency roles; `go-directive` is the
-minimum Go version in a go.mod file.
+`kinds` is a closed list of exact dependency roles: `production`, `development`,
+`peer`, `optional`, `build`, `action`, `reusable-workflow`, `container-image`,
+`tool`, `go-directive`, `provider`, `module`, and `chart`. npm/bun distinguish
+the first four; Cargo uses production/development/build. Go/Python and default
+regex extraction use production; `go-directive` is the minimum Go version.
+Actions steps and reusable workflows are distinct. Container managers use
+container-image, mise uses tool, Terraform uses provider/module, and Helm uses
+chart. Unlike package/file selectors these values do not accept globs or regexes.
 
 Rules distinguish major/minor/patch/digest/pin; both adding a version pin and
 adding an integrity digest are classified as pin. Refreshing a lockfile is a

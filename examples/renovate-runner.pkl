@@ -16,6 +16,7 @@ rules = new Listing {
     select {
       managers = new Listing { "github-actions" }
       dependencies = new Listing { "sweepies/ops-workflows" }
+      kinds = new Listing { "reusable-workflow" }
     }
     apply { digest = false }
   }

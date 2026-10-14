@@ -7,6 +7,12 @@ typealias Source = "npm"|"github-releases"|"github-tags"|"docker"|"crates"|"go"|
 typealias Update = "major"|"minor"|"patch"|"digest"|"pin"
 typealias VersionPolicy = "exact"|"preserve"|"widen"
 typealias Scheme = "semver"|"docker"|"pep440"|"go"|"hashicorp"|"loose"
+/// Dependency roles emitted by first-release managers. npm/bun use the first
+/// four roles; Cargo also uses build. Ordinary Go/Python/regex packages use
+/// production. Actions distinguish steps from reusable workflows; containers,
+/// mise tools, Go language directives, Terraform providers/modules and Helm
+/// charts have explicit roles. These are exact values, not match patterns.
+typealias DependencyKind = "production"|"development"|"peer"|"optional"|"build"|"action"|"reusable-workflow"|"container-image"|"tool"|"go-directive"|"provider"|"module"|"chart"
 
 /// Match lists are OR; populated selector fields are AND. Empty means any.
 /// Patterns are path-aware globs, or `regex:...`; prefix `!` excludes a match.
@@ -18,7 +24,7 @@ class Selector {
   files: Listing<String> = new {}
   updates: Listing<Update> = new {}
   sources: Listing<Source> = new {}
-  kinds: Listing<String> = new {}
+  kinds: Listing<DependencyKind> = new {}
   current: String? = null
 }
 

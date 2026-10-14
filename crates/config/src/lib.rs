@@ -68,6 +68,8 @@ pub fn load(path: &Path) -> miette::Result<Config> {
         {
             field = if field == "." {
                 unknown.to_owned()
+            } else if field.rsplit('.').next() == Some(unknown) {
+                field
             } else {
                 format!("{field}.{unknown}")
             };
