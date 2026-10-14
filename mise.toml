@@ -1,0 +1,38 @@
+[tools]
+rust = { version = "1.99.0", profile = "minimal", components = "clippy,rustfmt", mr_boxington = true }
+mr-boxington = "1.24.0"
+usage = "7.0.1"
+tak = "0.0.15"
+zig = "0.17.0"
+
+[env]
+MBX_DISPLAY = "plain"
+
+[tasks.build]
+description = "Build the workspace through mbx"
+run = "cargo build --workspace --locked"
+
+[tasks.test]
+description = "Test the workspace through mbx"
+run = "cargo test --workspace --locked"
+
+[tasks.lint]
+description = "Check formatting and reject all Clippy warnings"
+run = ["cargo fmt --all --check", "cargo clippy --workspace --all-targets --locked -- -D warnings"]
+
+[tasks.ci]
+description = "Run the same checks locally and on GitHub"
+run = ["mise run lint", "mise run test", "mise run build"]
+
+[tasks.docs]
+description = "Generate CLI Markdown, man page and bash/zsh/fish completions from usage derive"
+run = '''
+mkdir -p generated/completions
+cargo run --quiet --locked -p rustovate-cli -- __usage_spec__ > generated/rustovate.usage.kdl
+usage lint generated/rustovate.usage.kdl
+usage generate markdown --file generated/rustovate.usage.kdl --out-file docs/cli.md
+usage generate manpage --file generated/rustovate.usage.kdl --out-file generated/rustovate.1
+for shell in bash zsh fish; do
+  usage generate completion "$shell" rustovate --file generated/rustovate.usage.kdl > "generated/completions/rustovate.$shell"
+done
+'''

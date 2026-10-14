@@ -1,4 +1,6 @@
-/target
+/target/
+/generated/
+/.research/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm

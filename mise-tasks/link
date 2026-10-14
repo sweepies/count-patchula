@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+#MISE description="Link Rust binaries with the mise-pinned C toolchain"
+exec zig cc "$@"
