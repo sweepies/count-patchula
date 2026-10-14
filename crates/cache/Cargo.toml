@@ -8,3 +8,16 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+zstd = { version = "0.14.2", default-features = false }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing = "0.1"
+url = "2"
+
+[dev-dependencies]
+tempfile = "3"
