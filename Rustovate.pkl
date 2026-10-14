@@ -1,2 +1,128 @@
-/// Rustovate configuration. The typed configuration model follows in SWE-83.
+/// Rustovate's explicit defaults. Vendor with `rustovate config schema` and amend
+/// this module, or amend an organisation module that itself amends this one.
 module Rustovate
+
+typealias Manager = "npm"|"bun"|"github-actions"|"mise"|"cargo"|"dockerfile"|"compose"|"go"|"terraform"|"kubernetes"|"kustomize"|"flux"|"helm-values"|"requirements"|"regex"
+typealias Source = "npm"|"github-releases"|"github-tags"|"docker"|"crates"|"go"|"terraform"|"pypi"|"helm"|"oci"|"mise"
+typealias Update = "major"|"minor"|"patch"|"digest"|"pin"
+typealias VersionPolicy = "exact"|"preserve"|"widen"
+typealias Scheme = "semver"|"docker"|"pep440"|"go"|"hashicorp"|"loose"
+
+/// Match lists are OR; populated selector fields are AND. Empty means any.
+/// Patterns are path-aware globs, or `regex:...`; prefix `!` excludes a match.
+/// Version filters are `semver:...`, `regex:...`, or their `!` negations.
+class Selector {
+  packages: Listing<String> = new {}
+  dependencies: Listing<String> = new {}
+  managers: Listing<Manager> = new {}
+  files: Listing<String> = new {}
+  updates: Listing<Update> = new {}
+  sources: Listing<Source> = new {}
+  kinds: Listing<String> = new {}
+  current: String? = null
+}
+
+class Window {
+  /// Five-field cron expressions, interpreted in the named IANA timezone.
+  cron: Listing<String> = new {}
+  zone: String = "UTC"
+}
+
+/// Policy applied before rules. No implicit grouping or automatic merging.
+class Policy {
+  active: Boolean = true
+  versions: VersionPolicy = "exact"
+  actionDigests: Boolean = true
+  imageDigests: Boolean = true
+  merge: Boolean = false
+  /// Nonempty groups share a PR; an empty string forces individual PRs.
+  group: String? = null
+  labels: Listing<String> = new { "dependencies" }
+  commitPrefix: String = "chore(deps):"
+  releaseNotes: Boolean = true
+  bodyNotes: Listing<String> = new {}
+  permitted: String? = null
+  waitHours: Int = 0
+  /// An empty window list means updates may be proposed at any time.
+  windows: Listing<Window> = new {}
+}
+
+/// Null leaves an earlier policy unchanged. Rules apply in declaration order;
+/// scalars and lists replace earlier values. `digest` overrides source defaults.
+class Overrides {
+  active: Boolean? = null
+  versions: VersionPolicy? = null
+  digest: Boolean? = null
+  merge: Boolean? = null
+  group: String? = null
+  labels: Listing<String>? = null
+  commitPrefix: String? = null
+  releaseNotes: Boolean? = null
+  bodyNotes: Listing<String>? = null
+  permitted: String? = null
+  waitHours: Int? = null
+  windows: Listing<Window>? = null
+}
+
+class Rule {
+  note: String = ""
+  select: Selector = new {}
+  apply: Overrides = new {}
+}
+
+class FileSet {
+  manager: Manager
+  /// Replaces that manager's built-in file selection; empty is invalid.
+  paths: Listing<String>
+}
+
+/// Regex captures use Rust regex syntax: (?<current>...), (?<dependency>...).
+/// Templates substitute {capture} only; no expressions or executable helpers.
+class Extractor {
+  note: String = ""
+  paths: Listing<String>
+  patterns: Listing<String>
+  source: String = "{source}"
+  dependency: String = "{dependency}"
+  package: String = "{dependency}"
+  /// A Scheme name or a template such as "{scheme}".
+  scheme: String = "semver"
+  /// Optional tag regex with a required named `version` capture.
+  extract: String? = null
+}
+
+class PullRequests {
+  /// Null means unlimited; positive integers set a limit. Zero is invalid.
+  concurrent: Int? = null
+  perHour: Int? = null
+  dashboard: Boolean = false
+  branch: String = "rustovate/"
+  rebase: "conflicts"|"behind" = "conflicts"
+}
+
+class Lockfiles {
+  refresh: Boolean = false
+  waitHours: Int = 0
+  group: String = "lockfile refresh"
+  tidyGo: Boolean = false
+}
+
+/// All first-release managers are selected unless a repository replaces this list.
+managers: Listing<Manager> = new {
+  "npm"; "bun"; "github-actions"; "mise"; "cargo"; "dockerfile"; "compose"
+  "go"; "terraform"; "kubernetes"; "kustomize"; "flux"; "helm-values"
+  "requirements"; "regex"
+}
+defaults: Policy = new {}
+rules: Listing<Rule> = new {}
+files: Listing<FileSet> = new {}
+extractors: Listing<Extractor> = new {}
+/// Dependency identifiers to leave untouched, using the same pattern syntax.
+ignore: Listing<String> = new {}
+/// Generated and vendored directories are excluded; repos can replace the list.
+exclude: Listing<String> = new { "**/node_modules/**"; "**/vendor/**"; "**/.git/**" }
+prs: PullRequests = new {}
+lockfiles: Lockfiles = new {}
+submodules: Boolean = false
+/// Commits by these authors do not trigger a new extraction.
+ignoreAuthors: Listing<String> = new {}

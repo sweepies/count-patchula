@@ -1,0 +1,22 @@
+amends "../Rustovate.pkl"
+
+managers = new Listing { "npm"; "regex" }
+prs { dashboard = true }
+extractors = new Listing {
+  new Extractor {
+    note = "T3 nightly pin in remote-tools.toml."
+    paths = new Listing { "remote-tools.toml" }
+    patterns = new Listing { #""npm:t3"\s*=\s*"(?<current>[^"]+)""# }
+    source = "github-releases"
+    dependency = "pingdotgg/t3code"
+    package = "pingdotgg/t3code"
+    extract = #"^v?(?<version>.+)$"#
+  }
+}
+rules = new Listing {
+  new Rule {
+    note = "Nightlies get individual PRs for manual review; never batch."
+    select { dependencies = new Listing { "pingdotgg/t3code" } }
+    apply { group = ""; merge = false; permitted = #"regex:-nightly\."#; labels = new Listing { "dependencies"; "liv:no-batch" } }
+  }
+}

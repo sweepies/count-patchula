@@ -1,0 +1,81 @@
+amends "../Rustovate.pkl"
+
+// Explicit policy from jdx's organisation config; no opaque presets are evaluated.
+submodules = true
+ignoreAuthors = new Listing { "41898282+github-actions[bot]@users.noreply.github.com" }
+exclude = new Listing { "**/node_modules/**"; "**/bower_components/**"; "**/vendor/**"; "**/examples/**"; "**/__tests__/**"; "**/test/**"; "**/tests/**"; "**/__fixtures__/**"; "**/.mise/locks/**"; "**/.config/mise/locks/**" }
+prs { perHour = 10; dashboard = false; rebase = "conflicts" }
+defaults {
+  merge = true
+  versions = "preserve"
+  waitHours = 168
+  windows = new Listing { new Window { cron = new Listing { "* * * * 2" }; zone = "America/Chicago" } }
+}
+lockfiles { refresh = true; waitHours = 168; group = "lockfile maintenance"; tidyGo = true }
+rules = new Listing {
+  new Rule {
+    note = "Automerge non-major updates"
+    select { updates = new Listing { "minor"; "patch"; "digest"; "pin" } }
+    apply { merge = true }
+  }
+  new Rule {
+    note = "Group non-major updates into one PR per ecosystem; the rules below split them by manager"
+    select { updates = new Listing { "minor"; "patch"; "digest"; "pin" } }
+    apply { group = "non-major dependencies" }
+  }
+  new Rule {
+    note = "Group non-major Rust crate updates"
+    select { managers = new Listing { "cargo" }; updates = new Listing { "minor"; "patch"; "digest"; "pin" } }
+    apply { group = "rust crates" }
+  }
+  new Rule {
+    note = "Group non-major GitHub Actions updates"
+    select { managers = new Listing { "github-actions" }; updates = new Listing { "minor"; "patch"; "digest"; "pin" } }
+    apply { group = "github actions" }
+  }
+  new Rule {
+    note = "Group non-major mise tool updates"
+    select { managers = new Listing { "mise" }; updates = new Listing { "minor"; "patch"; "digest"; "pin" } }
+    apply { group = "mise tools" }
+  }
+  new Rule {
+    note = "Group non-major npm updates"
+    select { managers = new Listing { "npm" }; updates = new Listing { "minor"; "patch"; "digest"; "pin" } }
+    apply { group = "npm packages" }
+  }
+  new Rule {
+    note = "Group non-major Go module updates"
+    select { managers = new Listing { "go" }; updates = new Listing { "minor"; "patch"; "digest"; "pin" } }
+    apply { group = "go modules" }
+  }
+  new Rule {
+    note = "The go directive in go.mod is the minimum Go version for library users, not the toolchain; bump it by hand"
+    select { managers = new Listing { "go" }; kinds = new Listing { "go-directive" } }
+    apply { active = false }
+  }
+  new Rule {
+    note = "Group non-major container image updates"
+    select { managers = new Listing { "dockerfile"; "compose" }; updates = new Listing { "minor"; "patch"; "digest"; "pin" } }
+    apply { group = "docker images" }
+  }
+  new Rule {
+    note = "Do not delay jdx-owned crates"
+    select { packages = new Listing { "aqua-registry"; "asset-picker"; "aube"; "aube-codes"; "aube-linker"; "aube-lockfile"; "aube-manifest"; "aube-registry"; "aube-resolver"; "aube-runtime"; "aube-scripts"; "aube-settings"; "aube-store"; "aube-util"; "aube-workspace"; "cible"; "cible-core"; "clap-sort"; "clap_usage"; "clonedir"; "clonedir_lib"; "clx"; "communique"; "deepmerge"; "deepmerge-derive"; "demand"; "ensembler"; "entrepot"; "expr-lang"; "fnox"; "fnox-core"; "gabarit"; "garni"; "hk"; "jdx-csv-lint"; "jdx-tar"; "mise"; "mise-cache"; "mise-interactive-config"; "mise-sigstore"; "nd"; "nd_lib"; "osv-bloom"; "osv-bloom-build"; "pitchfork-cli"; "pklr"; "quick-bool"; "rpkl-jdx"; "rtx-cli"; "sigstore-verification"; "spinners-jdxcode"; "tak-cli"; "usage-cli"; "usage-lib"; "usage-rs"; "usage_example_rust_clap"; "vfox"; "wait-for-gh-rate-limit"; "xx" }; sources = new Listing { "crates" } }
+    apply { waitHours = 0; windows = new Listing {} }
+  }
+  new Rule {
+    note = "Group non-major jdx-owned crate updates so each release opens one PR per repo"
+    select { packages = new Listing { "aqua-registry"; "asset-picker"; "aube"; "aube-codes"; "aube-linker"; "aube-lockfile"; "aube-manifest"; "aube-registry"; "aube-resolver"; "aube-runtime"; "aube-scripts"; "aube-settings"; "aube-store"; "aube-util"; "aube-workspace"; "cible"; "cible-core"; "clap-sort"; "clap_usage"; "clonedir"; "clonedir_lib"; "clx"; "communique"; "deepmerge"; "deepmerge-derive"; "demand"; "ensembler"; "entrepot"; "expr-lang"; "fnox"; "fnox-core"; "gabarit"; "garni"; "hk"; "jdx-csv-lint"; "jdx-tar"; "mise"; "mise-cache"; "mise-interactive-config"; "mise-sigstore"; "nd"; "nd_lib"; "osv-bloom"; "osv-bloom-build"; "pitchfork-cli"; "pklr"; "quick-bool"; "rpkl-jdx"; "rtx-cli"; "sigstore-verification"; "spinners-jdxcode"; "tak-cli"; "usage-cli"; "usage-lib"; "usage-rs"; "usage_example_rust_clap"; "vfox"; "wait-for-gh-rate-limit"; "xx" }; sources = new Listing { "crates" }; updates = new Listing { "minor"; "patch"; "digest"; "pin" } }
+    apply { group = "jdx crates" }
+  }
+  new Rule {
+    note = "Do not delay jdx-owned CLI tool releases"
+    select { packages = new Listing { "aqua:jdx/aube"; "aqua:jdx/hk"; "aqua:jdx/pitchfork"; "aqua:jdx/usage"; "aube"; "cargo:aube"; "communique"; "fnox"; "ghcr.io/jdx/mise"; "github:jdx/aube"; "github:jdx/communique"; "github:jdx/fnox"; "github:jdx/wait-for-gh-rate-limit"; "hk"; "jdx/aube"; "jdx/communique"; "jdx/fnox"; "jdx/hk"; "jdx/mise"; "jdx/pitchfork"; "jdx/renovate-config"; "jdx/ubi"; "jdx/usage"; "jdx/wait-for-gh-rate-limit"; "jdx/workflows"; "mise"; "pitchfork"; "ubi"; "usage"; "wait-for-gh-rate-limit" } }
+    apply { waitHours = 0 }
+  }
+  new Rule {
+    note = "Dependency integrity exception."
+    select { packages = new Listing { "taiki-e/install-action" } }
+    apply { digest = false }
+  }
+}

@@ -1,0 +1,19 @@
+amends "../Rustovate.pkl"
+
+prs { branch = "renovate/" }
+extractors = new Listing {
+  new Extractor {
+    paths = new Listing { "package.json" }
+    patterns = new Listing { #""immichSpecVersion"\s*:\s*"(?<current>\d+\.\d+\.\d+)""# }
+    source = "github-releases"
+    dependency = "immich-app/immich"
+    package = "immich-app/immich"
+    extract = #"^v(?<version>\d+\.\d+\.\d+)$"#
+  }
+}
+rules = new Listing {
+  new Rule {
+    select { packages = new Listing { "immich-app/immich" } }
+    apply { merge = false }
+  }
+}

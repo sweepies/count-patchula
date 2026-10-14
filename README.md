@@ -8,7 +8,8 @@ requests. It is built to run a whole batch of repositories in one short-lived
 process, so it is designed around shared caching and concurrency rather than
 one repository at a time.
 
-Status: early development (Phase 0). Nothing here is usable yet.
+Status: early development (Phase 0). Configuration checking works; dependency
+scanning and updating are not implemented yet.
 
 - Design: [docs/design.md](docs/design.md)
 - Deliberate departures from Renovate: [docs/departures.md](docs/departures.md)
@@ -25,7 +26,7 @@ repository. Fixtures are recorded from real registries by rustovate itself.
 
 Install [mise](https://mise.jdx.dev), then run `mise trust` and `mise install`.
 All tool versions are pinned in `mise.toml`; Rust uses edition 2024. On x86_64
-Linux, the `link` mise task supplies the pinned Zig C linker, including in
+Linux, the `cc` mise task supplies the pinned Zig C linker, including in
 minimal images without system development packages.
 
 - `mise run build` builds the workspace.
@@ -39,3 +40,11 @@ The Rust mise option `mr_boxington = true` wraps Cargo with mbx. Use mise tasks
 or `mise exec -- cargo …` so builds share that cache. GitHub CI restores the
 mbx GitHub Actions cache on PRs and publishes it on successful pushes to main.
 Tak is pinned for later benchmarking; there are no benchmark gates yet.
+
+## Configuration commands
+
+`mise exec -- cargo run -p rustovate-cli -- config check examples/renovate-runner.pkl`
+validates a config. `config schema` prints the bundled typed Pkl schema.
+See [configuration](docs/configuration.md), [CLI reference](docs/cli.md), and
+[twelve repository examples](examples). Dependency lookup and update commands
+remain explicit Phase 1 stubs and exit with a runtime error.

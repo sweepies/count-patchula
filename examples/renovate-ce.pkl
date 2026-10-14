@@ -1,0 +1,14 @@
+amends "../Rustovate.pkl"
+
+managers = new Listing { "npm"; "regex" }
+prs { dashboard = true }
+extractors = new Listing {
+  new Extractor {
+    paths = new Listing { "alchemy.run.ts" }
+    patterns = new Listing { #"ghcr\.io/mend/renovate-ce:(?<current>[\d.]+)"# }
+    source = "docker"
+    dependency = "mend/renovate-ce"
+    package = "ghcr.io/mend/renovate-ce"
+    scheme = "docker"
+  }
+}

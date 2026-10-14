@@ -1,0 +1,3 @@
+amends "../Rustovate.pkl"
+
+// The repository adds no policy beyond the explicit rustovate defaults.

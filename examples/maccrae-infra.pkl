@@ -1,0 +1,53 @@
+amends "../Rustovate.pkl"
+
+prs { dashboard = true }
+defaults { bodyNotes = new Listing { "{releaseNotes}" } }
+ignore = new Listing { "sweepies/devops-minter" }
+files = new Listing {
+  new FileSet { manager = "kubernetes"; paths = new Listing { #"regex:\.yaml$"# } }
+  new FileSet {
+    manager = "flux"
+    paths = new Listing { #"regex:(^|/)apps/.+\.yaml$"#; #"regex:(^|/)infrastructure/.+\.yaml$"#; #"regex:(^|/)clusters/.+\.yaml$"# }
+  }
+  new FileSet { manager = "helm-values"; paths = new Listing { #"regex:\.yaml$"# } }
+}
+extractors = new Listing {
+  new Extractor {
+    paths = new Listing { #"regex:(^|/)infrastructure/system-upgrade/.+\.yaml$"# }
+    patterns = new Listing { #"# renovate: datasource=(?<source>\S+) depName=(?<dependency>\S+)\s+version: (?<current>\S+)"# }
+  }
+}
+rules = new Listing {
+  new Rule {
+    note = "Group Python dependencies."
+    select { managers = new Listing { "requirements" } }
+    apply { group = "python dependencies" }
+  }
+  new Rule {
+    select { packages = new Listing { "regex:^ghcr.io/immich-app/" } }
+    apply { group = "immich" }
+  }
+  new Rule {
+    select { packages = new Listing { "getmeili/meilisearch" } }
+    apply { active = false }
+  }
+  new Rule {
+    note = "Hold the Notifuse PostgreSQL major version."
+    select { files = new Listing { "apps/notifuse/deployment-database.yaml" }; packages = new Listing { "postgres" }; updates = new Listing { "major" } }
+    apply { active = false }
+  }
+  new Rule {
+    note = "Immich v3 requires PostgreSQL 14."
+    select { files = new Listing { "apps/immich/deployment-database.yaml" }; packages = new Listing { "ghcr.io/immich-app/postgres" }; updates = new Listing { "major" } }
+    apply { active = false }
+  }
+  new Rule {
+    select { managers = new Listing { "kubernetes"; "flux" }; packages = new Listing { "busybox" } }
+    apply { digest = false }
+  }
+  new Rule {
+    note = "Flux image automation owns these :latest images."
+    select { packages = new Listing { "ghcr.io/sweepies/maccrae-account-manager"; "ghcr.io/sweepies/stalwart-provisioner" } }
+    apply { active = false }
+  }
+}

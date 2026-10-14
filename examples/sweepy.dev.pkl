@@ -1,0 +1,9 @@
+amends "../Rustovate.pkl"
+
+prs { dashboard = true }
+rules = new Listing {
+  new Rule {
+    select { updates = new Listing { "minor"; "patch" }; current = "!regex:^0" }
+    apply { merge = false }
+  }
+}

@@ -17,3 +17,7 @@ path = "src/main.rs"
 rustovate-config = { path = "../config" }
 usage-rs = "7.0.1"
 serde_json = "1"
+miette = { version = "7", features = ["fancy-no-backtrace"] }
+
+[dev-dependencies]
+tempfile = "3"

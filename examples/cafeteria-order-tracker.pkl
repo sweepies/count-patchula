@@ -1,0 +1,9 @@
+amends "../Rustovate.pkl"
+
+rules = new Listing {
+  new Rule {
+    select { dependencies = new Listing { "1password/cli" } }
+    apply { active = false }
+  }
+}
+ignore = new Listing { "sweepies/devops-minter" }
