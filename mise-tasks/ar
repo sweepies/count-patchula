@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+#MISE description="Archive native dependencies with the mise-pinned toolchain"
+exec zig ar "$@"

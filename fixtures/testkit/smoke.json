@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "provenance": "Simulated rustovate transport boundary test; no external fixture source",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://offline.invalid/graphql",
+        "headers": { "content-type": ["application/json"] },
+        "body": { "format": "json", "value": { "query": "query { viewer { login } }", "variables": { "cursor": null } } }
+      },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": ["application/json"] },
+        "body": { "format": "json", "value": { "data": { "viewer": { "login": "offline" } } } }
+      }
+    }
+  ]
+}

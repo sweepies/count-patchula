@@ -1,3 +1,11 @@
 #!/usr/bin/env bash
-#MISE description="Link Rust binaries with the mise-pinned C toolchain"
-exec zig cc "$@"
+#MISE description="Compile and link native dependencies with the mise-pinned toolchain"
+# cc-rs detects clang and supplies Rust's triple, while Zig omits the vendor.
+args=()
+for arg in "$@"; do
+  case "$arg" in
+    --target=*-unknown-linux-*) arg="${arg/-unknown-linux-/-linux-}" ;;
+  esac
+  args+=("$arg")
+done
+exec zig cc "${args[@]}"

@@ -7,6 +7,8 @@ zig = "0.17.0"
 
 [env]
 MBX_DISPLAY = "plain"
+CC = "{{config_root}}/mise-tasks/cc"
+AR = "{{config_root}}/mise-tasks/ar"
 
 [tasks.build]
 description = "Build the workspace through mbx"
@@ -26,7 +28,16 @@ run = ["cargo fmt --all --check", "cargo clippy --workspace --all-targets --lock
 
 [tasks.ci]
 description = "Run the same checks locally and on GitHub"
-run = ["mise run lint", "mise run test", "mise run build"]
+run = ["mise run fixtures:check", "mise run lint", "mise run test", "mise run build"]
+
+[tasks."fixtures:check"]
+description = "Reject possible secrets in all HTTP cassettes"
+run = "cargo run --quiet --locked -p rustovate-testkit --bin fixtures -- fixtures"
+
+[tasks."fixtures:record"]
+description = "Opt in to live HTTP recording, then scan the resulting cassettes"
+env = { RUSTOVATE_RECORD = "1" }
+run = ["cargo test --workspace --locked", "mise run fixtures:check"]
 
 [tasks.docs]
 description = "Generate CLI Markdown, man page and bash/zsh/fish completions from usage derive"

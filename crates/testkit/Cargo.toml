@@ -1,0 +1,22 @@
+[package]
+name = "rustovate-testkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+rustovate-http = { path = "../http" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+regex = "1"
+tempfile = "3"
+
+[dev-dependencies]
+tokio.workspace = true
