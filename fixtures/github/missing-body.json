@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "provenance": "Simulated by rustovate for offline pagination/error tests; no external fixture source",
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/missing-body",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 304,
+        "headers": {},
+        "body": {
+          "format": "json",
+          "value": null
+        }
+      }
+    }
+  ]
+}

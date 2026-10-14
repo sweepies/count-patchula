@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "provenance": "Simulated by rustovate for offline behavior tests; not recorded from GitHub or copied from another bot",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ],
+          "content-type": [
+            "application/json"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "query": "query($cursor: String) { repository(owner: \"rustovate\", name: \"simulated\") { releases(first: 2, after: $cursor) { nodes { name } pageInfo { hasNextPage endCursor } } } }",
+            "variables": {
+              "cursor": null
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {},
+        "body": {
+          "format": "json",
+          "value": {
+            "data": {
+              "repository": {
+                "releases": {
+                  "nodes": [
+                    {
+                      "name": "v4"
+                    },
+                    {
+                      "name": "v3"
+                    }
+                  ],
+                  "pageInfo": {
+                    "hasNextPage": true,
+                    "endCursor": "cursor-1"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ],
+          "content-type": [
+            "application/json"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "query": "query($cursor: String) { repository(owner: \"rustovate\", name: \"simulated\") { releases(first: 2, after: $cursor) { nodes { name } pageInfo { hasNextPage endCursor } } } }",
+            "variables": {
+              "cursor": "cursor-1"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {},
+        "body": {
+          "format": "json",
+          "value": {
+            "data": {
+              "repository": {
+                "releases": {
+                  "nodes": [
+                    {
+                      "name": "v2"
+                    },
+                    {
+                      "name": "v1"
+                    }
+                  ],
+                  "pageInfo": {
+                    "hasNextPage": true,
+                    "endCursor": "cursor-2"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

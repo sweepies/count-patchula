@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "provenance": "Simulated by rustovate for offline behavior tests; not recorded from GitHub or copied from another bot",
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/no-store",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "etag": [
+            "\"not-cacheable\""
+          ],
+          "cache-control": [
+            "no-store"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "ok": true
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/no-store",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "cache-control": [
+            "no-store"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "ok": true
+          }
+        }
+      }
+    }
+  ]
+}

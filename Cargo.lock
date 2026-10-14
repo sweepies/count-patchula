@@ -605,6 +605,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
+name = "httpdate"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
+
+[[package]]
 name = "hybrid-array"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1571,6 +1577,19 @@ version = "0.1.0"
 [[package]]
 name = "rustovate-github"
 version = "0.1.0"
+dependencies = [
+ "httpdate",
+ "reqwest",
+ "rustovate-cache",
+ "rustovate-http",
+ "rustovate-testkit",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
 
 [[package]]
 name = "rustovate-http"
@@ -1592,6 +1611,7 @@ version = "0.1.0"
 name = "rustovate-testkit"
 version = "0.1.0"
 dependencies = [
+ "percent-encoding",
  "regex",
  "reqwest",
  "rustovate-http",

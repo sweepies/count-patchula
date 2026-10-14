@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use reqwest::{Method, Request, header::HeaderValue};
-use rustovate_http::{Error, Exchange, Response, Transport};
+use rustovate_http::{Exchange, Response, Transport};
 use rustovate_testkit::{Options, Recorder, Redactor, Replay, check_directory};
 use std::{
     path::{Path, PathBuf},
@@ -106,7 +106,7 @@ async fn recording_redacts_before_atomic_write_and_replays_with_other_credential
     request
         .headers_mut()
         .insert("cookie", HeaderValue::from_static("private-cookie"));
-    *request.body_mut() = Some(r#"{"authorization":"private-json","nested":["ghp_abc123","ghs_abc123","gho_abc123","github_pat_abc123","v1.abc123","custom-private-value","orgkey_secret"],"url":"https://example.com/?token=private-link"}"#.into());
+    *request.body_mut() = Some(r#"{"authorization":"private-json","nested":["ghp_abc123","ghs_123_eyJhbGci.payload-signature.last","gho_abc123","github_pat_abc123","v1.0123456789abcdef0123456789abcdef01234567","custom-private-value","orgkey_secret"],"url":"https://example.com/?token=private-link"}"#.into());
     recorder.send(request.try_clone().unwrap()).await.unwrap();
     let stored = std::fs::read_to_string(&path).unwrap();
     for private in [
@@ -119,10 +119,11 @@ async fn recording_redacts_before_atomic_write_and_replays_with_other_credential
         "custom-private-value",
         "orgkey_secret",
         "ghp_abc123",
-        "ghs_abc123",
+        "ghs_123_eyJhbGci",
+        "payload-signature",
         "gho_abc123",
         "github_pat_abc123",
-        "v1.abc123",
+        "v1.0123456789abcdef0123456789abcdef01234567",
         "user:password",
     ] {
         assert!(!stored.contains(private), "secret was written");
@@ -146,10 +147,13 @@ fn fixture_scanner_rejects_raw_escaped_url_and_custom_secrets() {
         r#"{"body":"ghp_secret"}"#,
         r#"{"body":"\u0067hp_secret"}"#,
         r#"{"body":"https://example.com/?access_token=anything"}"#,
+        r#"{"body":"https://example.com/?auth=anything&key=private"}"#,
+        r#"{"body":"https://example.com/path/%67hp%5Fsecret"}"#,
+        r#"{"body":"https://example.com/?safe=%67hs%5Fsecret"}"#,
         r#"{"authorization":["anything"]}"#,
         r#"{"set-cookie":["session=anything"]}"#,
         r#"{"body":"extra-secret"}"#,
-        r#"{"body":"v1.installation123"}"#,
+        r#"{"body":"v1.0123456789abcdef0123456789abcdef01234567"}"#,
     ] {
         assert!(
             redactor.check(json.as_bytes()).is_err(),
@@ -169,6 +173,14 @@ fn fixture_scanner_rejects_raw_escaped_url_and_custom_secrets() {
 }
 
 #[test]
-fn errors_never_echo_response_bodies() {
-    assert!(!format!("{:?}", Error::Network).contains("token"));
+fn redaction_preserves_release_versions_but_removes_complete_stateless_tokens() {
+    let redactor = Redactor::default();
+    assert_eq!(
+        redactor.text("release v1.24.0 https://example.com/v1.24.0"),
+        "release v1.24.0 https://example.com/v1.24.0"
+    );
+    assert_eq!(
+        redactor.text("ghs_1234_eyJhbGci.payload-with-dash.signature"),
+        "[REDACTED]"
+    );
 }

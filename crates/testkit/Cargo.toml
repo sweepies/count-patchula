@@ -16,6 +16,7 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 regex = "1"
+percent-encoding = "2"
 tempfile = "3"
 
 [dev-dependencies]

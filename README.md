@@ -8,7 +8,8 @@ requests. It is built to run a whole batch of repositories in one short-lived
 process, so it is designed around shared caching and concurrency rather than
 one repository at a time.
 
-Status: early development (Phase 0). Configuration checking works; dependency
+Status: early development (Phase 0). Configuration checking, offline HTTP
+fixtures, SQLite caching and the GitHub read client are implemented; dependency
 scanning and updating are not implemented yet.
 
 - Design: [docs/design.md](docs/design.md)
@@ -33,6 +34,9 @@ minimal images without system development packages.
 - `mise run test` runs offline unit and integration tests (Cargo may download dependencies).
 - `mise run lint` checks rustfmt and Clippy with warnings denied.
 - `mise run ci` runs lint, test and build in order.
+- `mise run fixtures:check` scans all HTTP cassettes for possible secrets (also in CI).
+- `mise run fixtures:record` opts into real GitHub recording with an existing
+  GITHUB_TOKEN or GH_TOKEN; ordinary tests replay offline. See [HTTP tests](docs/http-testing.md).
 - `mise run docs` exports the usage derive definition to KDL and generates
   `docs/cli.md`, `generated/rustovate.1` and bash/zsh/fish completions.
 
@@ -55,3 +59,5 @@ validates a config. `config schema` prints the bundled typed Pkl schema.
 See [configuration](docs/configuration.md), [CLI reference](docs/cli.md), and
 [twelve repository examples](examples). Dependency lookup and update commands
 remain explicit Phase 1 stubs and exit with a runtime error.
+
+Foundation APIs: [SQLite cache](docs/cache.md) and [GitHub client](docs/github.md).

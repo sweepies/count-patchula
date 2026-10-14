@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "provenance": "Simulated by rustovate for offline behavior tests; not recorded from GitHub or copied from another bot",
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/conditional",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "etag": [
+            "\"release-v2\""
+          ],
+          "last-modified": [
+            "Wed, 14 Oct 2026 00:00:00 GMT"
+          ],
+          "link": [
+            "<https://api.github.com/conditional?page=2>; rel=\"next\"",
+            "<https://api.github.com/conditional?page=10>; rel=\"last\""
+          ],
+          "vary": [
+            "Accept, Authorization, Accept-Encoding"
+          ],
+          "cache-control": [
+            "private, max-age=60"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": [
+            {
+              "tag_name": "v2"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/conditional",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ],
+          "if-none-match": [
+            "\"release-v2\""
+          ],
+          "if-modified-since": [
+            "Wed, 14 Oct 2026 00:00:00 GMT"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 304,
+        "headers": {
+          "etag": [
+            "\"release-v2\""
+          ],
+          "cache-control": [
+            "private, max-age=120"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      }
+    }
+  ]
+}

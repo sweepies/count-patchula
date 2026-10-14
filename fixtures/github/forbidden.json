@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "provenance": "Simulated by rustovate for offline behavior tests; not recorded from GitHub or copied from another bot",
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/forbidden",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 403,
+        "headers": {},
+        "body": {
+          "format": "json",
+          "value": {
+            "message": "Permission denied; do not echo body or credentials"
+          }
+        }
+      }
+    }
+  ]
+}

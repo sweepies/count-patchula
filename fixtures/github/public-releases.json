@@ -1,0 +1,1328 @@
+{
+  "schema_version": 1,
+  "provenance": "Recorded by rustovate from the request URLs; never imported from other bots",
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/repos/jdx/mr-boxington/releases?per_page=2",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "cache-control": [
+            "private, max-age=60, s-maxage=60"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Wed, 14 Oct 2026 22:08:14 GMT"
+          ],
+          "etag": [
+            "W/\"050d07bd49439c691e01b9bcd89fdcdf7ec47ea2b6d09aa25134f4af3ccd49e1\""
+          ],
+          "link": [
+            "<https://api.github.com/repositories/1340721957/releases?per_page=2&page=2>; rel=\"next\", <https://api.github.com/repositories/1340721957/releases?per_page=2&page=24>; rel=\"last\""
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            "repo"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-api-version-selected": [
+            "2022-11-28"
+          ],
+          "x-github-edge-region": [
+            "iad"
+          ],
+          "x-github-media-type": [
+            "github.v3; format=json"
+          ],
+          "x-github-request-id": [
+            "D3CA:154733:16BD0E7:4A73198:6ACFFD4E"
+          ],
+          "x-oauth-client-id": [
+            "178c6fc778ccc68e1d6a"
+          ],
+          "x-oauth-scopes": [
+            "gist, read:org, repo, workflow"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4963"
+          ],
+          "x-ratelimit-reset": [
+            "1792017924"
+          ],
+          "x-ratelimit-resource": [
+            "core"
+          ],
+          "x-ratelimit-used": [
+            "37"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": [
+            {
+              "assets": [
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx-aarch64-apple-darwin.tar.gz",
+                  "content_type": "application/x-gtar",
+                  "created_at": "2026-10-13T19:14:59Z",
+                  "digest": "sha256:60c646b7ce5ae9cfdb67b1565a4ec81ec3a07290f1e7000a026a6db7fa247440",
+                  "download_count": 667,
+                  "id": 637997810,
+                  "label": "",
+                  "name": "mbx-aarch64-apple-darwin.tar.gz",
+                  "node_id": "RA_kwDOT-nLJc4mBxLy",
+                  "size": 5991333,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:00Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637997810"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx-aarch64-pc-windows-msvc.zip",
+                  "content_type": "application/zip",
+                  "created_at": "2026-10-13T19:15:00Z",
+                  "digest": "sha256:635089d0dfea0fcdb12b5e4318120de01fd481dc0e122dafc89735a345b13205",
+                  "download_count": 99,
+                  "id": 637997814,
+                  "label": "",
+                  "name": "mbx-aarch64-pc-windows-msvc.zip",
+                  "node_id": "RA_kwDOT-nLJc4mBxL2",
+                  "size": 5530143,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:01Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637997814"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx-aarch64-unknown-linux-gnu.tar.gz",
+                  "content_type": "application/x-gtar",
+                  "created_at": "2026-10-13T19:14:59Z",
+                  "digest": "sha256:80a2909eff63aaf5b9901f923d68ab8b70056bb11d5fd025535614033e48dfcf",
+                  "download_count": 39,
+                  "id": 637997811,
+                  "label": "",
+                  "name": "mbx-aarch64-unknown-linux-gnu.tar.gz",
+                  "node_id": "RA_kwDOT-nLJc4mBxLz",
+                  "size": 6217427,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:00Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637997811"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx-aarch64-unknown-linux-musl.tar.gz",
+                  "content_type": "application/x-gtar",
+                  "created_at": "2026-10-13T19:14:59Z",
+                  "digest": "sha256:9e63b57eea37c97d1b1eb47801a92a73337e4a537d2678d761244fbc8434b123",
+                  "download_count": 34,
+                  "id": 637997809,
+                  "label": "",
+                  "name": "mbx-aarch64-unknown-linux-musl.tar.gz",
+                  "node_id": "RA_kwDOT-nLJc4mBxLx",
+                  "size": 6343172,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:00Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637997809"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx-x86_64-pc-windows-msvc.zip",
+                  "content_type": "application/zip",
+                  "created_at": "2026-10-13T19:15:00Z",
+                  "digest": "sha256:ced45f3dfd66649b2cea0b48ad01e13d1d7f7796c1182cc77d56ef4829af1d5b",
+                  "download_count": 450,
+                  "id": 637997838,
+                  "label": "",
+                  "name": "mbx-x86_64-pc-windows-msvc.zip",
+                  "node_id": "RA_kwDOT-nLJc4mBxMO",
+                  "size": 5919675,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:01Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637997838"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx-x86_64-unknown-linux-gnu.tar.gz",
+                  "content_type": "application/x-gtar",
+                  "created_at": "2026-10-13T19:15:00Z",
+                  "digest": "sha256:3e35b12dd105875fa0505c45224eaf7e2fd7103d86199ffca97c0cd4093e708f",
+                  "download_count": 522,
+                  "id": 637997849,
+                  "label": "",
+                  "name": "mbx-x86_64-unknown-linux-gnu.tar.gz",
+                  "node_id": "RA_kwDOT-nLJc4mBxMZ",
+                  "size": 6863021,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:01Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637997849"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx-x86_64-unknown-linux-musl.tar.gz",
+                  "content_type": "application/x-gtar",
+                  "created_at": "2026-10-13T19:15:00Z",
+                  "digest": "sha256:823626ca1246a6df1c20f83cfc49522f062bfa772b266f86614651483cea1c62",
+                  "download_count": 1354,
+                  "id": 637997848,
+                  "label": "",
+                  "name": "mbx-x86_64-unknown-linux-musl.tar.gz",
+                  "node_id": "RA_kwDOT-nLJc4mBxMY",
+                  "size": 6950680,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:01Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637997848"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx.bash",
+                  "content_type": "application/octet-stream",
+                  "created_at": "2026-10-13T19:15:13Z",
+                  "digest": "sha256:c60dd13ab68c5d2a06efb9bda4bd727951f43b5fb3935db228889c5cf11a4081",
+                  "download_count": 570,
+                  "id": 637998306,
+                  "label": "",
+                  "name": "mbx.bash",
+                  "node_id": "RA_kwDOT-nLJc4mBxTi",
+                  "size": 3985,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:13Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637998306"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx.fish",
+                  "content_type": "application/x-fishscript",
+                  "created_at": "2026-10-13T19:15:13Z",
+                  "digest": "sha256:75cf5ef6a5007d3ffa3e60857ace14c267f969e30811a62f150813affd522968",
+                  "download_count": 570,
+                  "id": 637998308,
+                  "label": "",
+                  "name": "mbx.fish",
+                  "node_id": "RA_kwDOT-nLJc4mBxTk",
+                  "size": 3115,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:13Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637998308"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx.powershell",
+                  "content_type": "application/octet-stream",
+                  "created_at": "2026-10-13T19:15:13Z",
+                  "digest": "sha256:12facc11a070963fbd2bf555830192bcc7ddbe03e7fcd2a123ae7205cb318404",
+                  "download_count": 570,
+                  "id": 637998307,
+                  "label": "",
+                  "name": "mbx.powershell",
+                  "node_id": "RA_kwDOT-nLJc4mBxTj",
+                  "size": 4615,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:13Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637998307"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx.usage.kdl",
+                  "content_type": "application/octet-stream",
+                  "created_at": "2026-10-13T19:15:13Z",
+                  "digest": "sha256:2f5ddbbbaaeaf82de6bd90921c1bcdfee86334619cb5833fd54a83d3a79cae35",
+                  "download_count": 604,
+                  "id": 637998309,
+                  "label": "",
+                  "name": "mbx.usage.kdl",
+                  "node_id": "RA_kwDOT-nLJc4mBxTl",
+                  "size": 51227,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:13Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637998309"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx.zsh",
+                  "content_type": "application/octet-stream",
+                  "created_at": "2026-10-13T19:15:13Z",
+                  "digest": "sha256:349c11069bee64e14b0c8a1f16a4f864df19efc5c975ec4515b321bf7f63ba6a",
+                  "download_count": 569,
+                  "id": 637998305,
+                  "label": "",
+                  "name": "mbx.zsh",
+                  "node_id": "RA_kwDOT-nLJc4mBxTh",
+                  "size": 4230,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:13Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637998305"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/packslip.sigstore.json",
+                  "content_type": "application/json",
+                  "created_at": "2026-10-13T19:15:21Z",
+                  "digest": "sha256:e881a0392a9175f8e6b16b485f84521fc8e2308b2f90d1a5492269cd2b2bb27b",
+                  "download_count": 1490,
+                  "id": 637998535,
+                  "label": "",
+                  "name": "packslip.sigstore.json",
+                  "node_id": "RA_kwDOT-nLJc4mBxXH",
+                  "size": 20781,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:21Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637998535"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/SHA256SUMS",
+                  "content_type": "application/octet-stream",
+                  "created_at": "2026-10-13T19:14:59Z",
+                  "digest": "sha256:5cabc52a5406e275230d49d7f7af100227783c1ebc39342ad74d3c973f071b10",
+                  "download_count": 50,
+                  "id": 637997807,
+                  "label": "",
+                  "name": "SHA256SUMS",
+                  "node_id": "RA_kwDOT-nLJc4mBxLv",
+                  "size": 705,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:00Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637997807"
+                }
+              ],
+              "assets_url": "https://api.github.com/repos/jdx/mr-boxington/releases/412008010/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/216188?v=4",
+                "events_url": "https://api.github.com/users/jdx/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/jdx/followers",
+                "following_url": "https://api.github.com/users/jdx/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/jdx/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/jdx",
+                "id": 216188,
+                "login": "jdx",
+                "node_id": "MDQ6VXNlcjIxNjE4OA==",
+                "organizations_url": "https://api.github.com/users/jdx/orgs",
+                "received_events_url": "https://api.github.com/users/jdx/received_events",
+                "repos_url": "https://api.github.com/users/jdx/repos",
+                "site_admin": false,
+                "starred_url": "https://api.github.com/users/jdx/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/jdx/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/jdx",
+                "user_view_type": "public"
+              },
+              "body": "With `scheduler.tests` on, `cargo nextest run` now runs each test under the machine-wide scheduler, and nextest's `-j` no longer caps the build. This release also fixes several causes of cache misses and bypasses: explicit linkers, `-L native` directories, and build scripts that declare `OUT_DIR`. Workspace `staticlib`/`cdylib` libraries now compile incrementally, and `HOST_CC` no longer changes between a symlinked `mbx` and its real path.\n\n## Added\n\n- **`cargo nextest run` tests are scheduled in the shared pool** ([#684](https://github.com/jdx/mr-boxington/pull/684), @jbellis). Before, only compilers and `cargo test` binaries waited for permits. So several agents on one machine could each start a full nextest run at once and run out of memory. With `scheduler.tests = true` (or `MBX_SCHEDULER_TESTS=1`), each nextest test process now waits for permits from the same machine-wide pool as compilers:\n\n  ```sh\n  MBX_SCHEDULER_TESTS=1 mbx nextest run --workspace\n  # or, for every run:\n  mbx settings set scheduler.tests true\n  ```\n\n  - mbx installs its runner through `CARGO_TARGET_<TRIPLE>_RUNNER`. Any runner you configured is still called. Cargo aliases such as `[alias] nt = \"nextest run\"` are scheduled too.\n  - mbx records each test's CPU and peak memory under `<cache>/scheduler/tests/` and uses them to size its permit request. A test with no history asks for 1 core and 2 permits of memory. `mbx gc` removes history that hasn't been used for 30 days.\n  - Listing tests never waits.\n  - **Timeouts:** nextest starts a test's `slow-timeout` clock, including `terminate-after`, when it starts the runner, so time spent waiting for a permit counts as test time. After a one-second wait, mbx writes a note to the test's stderr. If your profiles set `terminate-after`, leave room for queueing.\n  - These are still not scheduled: test binaries run directly, doctests, `--no-run`, commands with `--config`, `+toolchain` or `-C`, and `--archive-file` runs built for a triple that is neither the requested target nor the host.\n\n- **The `mbx doctor` archives check falls back to `llvm-ar` and `llvm-ranlib`** when `ar` or `ranlib` isn't on `PATH`, for example on Windows ([#699](https://github.com/jdx/mr-boxington/pull/699), @Veykril). Each tool falls back separately. If a tool runs but fails, mbx reports that error instead of trying the fallback. This changes only the host probe. It doesn't change which archiver build scripts use.\n\n## Fixed\n\n- **`mbx nextest run -j N` no longer limits the build to N compiler permits** ([#685](https://github.com/jdx/mr-boxington/pull/685), @jbellis). For nextest, `-j`, `--jobs` and `--test-threads` set how many tests run at once, so mbx now ignores them as build limits. It reads `--build-jobs N` instead, and still falls back to `CARGO_BUILD_JOBS`. This also works through Cargo aliases. Alias expansion no longer runs `cargo --list`, which saves one Cargo subprocess per external command.\n- **Setting an explicit linker no longer makes rlib and `cargo check` compilations skip the cache** ([#694](https://github.com/jdx/mr-boxington/pull/694), @jdx). A target `linker = \"clang\"` (for example, with `-C link-arg=-fuse-ld=mold`) made every library and check compilation report `unknown-codegen-option`, even though they never link. These compilations are now cached, and the linker is still part of the cache key. Outputs that actually link keep their existing restrictions.\n- **`-L native=` directories no longer cause misses across checkouts or target dirs** ([#692](https://github.com/jdx/mr-boxington/pull/692), @jdx). Build scripts such as `libz-sys` and `aws-lc-sys` leave files there that the linker never reads but that contain the absolute target path. mbx now skips `pkgconfig/`, `cmake/` and `*.dSYM/` directories, plus `.pc`, `.cmake` and C/C++ header files, when hashing these directories. Libraries are still hashed.\n- **A `-L native=` directory passed more than once now counts once against the 2 GiB native input limit** ([#691](https://github.com/jdx/mr-boxington/pull/691), @jdx). A build script that printed the same `rustc-link-search` line twice could double a 1.2 GiB directory past the limit, so the result wasn't stored (`rustc search path kind is not cacheable yet: native`). A directory nested inside another `-L native=` directory is also counted once now.\n- **Crates whose build script declares `rerun-if-env-changed=OUT_DIR` build again** ([#700](https://github.com/jdx/mr-boxington/pull/700), @jdx). This is what `build-rs` emits for `build_rs::input::out_dir()`. Crates that included generated sources from `OUT_DIR` failed with `compilation result was discarded: build-script inputs changed during compilation`. They now build and are cached, and two checkouts of the same project share the cache entry.\n- **Workspace libraries with a `staticlib`, `cdylib` or `dylib` crate type now compile incrementally** ([#695](https://github.com/jdx/mr-boxington/pull/695), @jdx). mbx doesn't cache these libraries, such as Tauri's `[\"staticlib\", \"cdylib\", \"rlib\"]` template, and until now it also rebuilt them from scratch on every edit. They now get learned incremental state on the first build and reuse it after that. They're still reported as `unsupported-crate-type` bypasses. `learned_incremental = false` (`MBX_LEARNED_INCREMENTAL=0`), `MBX_VERIFY`, or a user-set `-Cincremental` turns this off.\n- **Running `mbx` through a symlink and through its real path now gives the same `HOST_CC`** ([#693](https://github.com/jdx/mr-boxington/pull/693), @jdx). Before, the two paths used different C/C++ shim directories. So switching between `mbx build` and plain `cargo` (through the cargo shim) in the same target dir reran every build script that watches `HOST_CC`. Upgrading in place at the same real path still keeps the same shim directory. If you reach versioned installs through a moving `latest` symlink, each release now gets its own shim directory, so cc-based build scripts rerun once after each upgrade.\n\n## New Contributors\n\n* @Veykril made their first contribution in [#699](https://github.com/jdx/mr-boxington/pull/699)\n\n**Full Changelog**: https://github.com/jdx/mr-boxington/compare/v1.23.0...v1.24.0",
+              "created_at": "2026-10-13T18:57:53Z",
+              "draft": false,
+              "html_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.24.0",
+              "id": 412008010,
+              "immutable": true,
+              "mentions_count": 3,
+              "name": "v1.24.0: Schedule cargo-nextest tests in the shared pool, plus cache and incremental fixes",
+              "node_id": "RE_kwDOT-nLJc4Yjr5K",
+              "prerelease": false,
+              "published_at": "2026-10-13T19:15:26Z",
+              "reactions": {
+                "+1": 1,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 0,
+                "heart": 0,
+                "hooray": 0,
+                "laugh": 0,
+                "rocket": 0,
+                "total_count": 1,
+                "url": "https://api.github.com/repos/jdx/mr-boxington/releases/412008010/reactions"
+              },
+              "tag_name": "v1.24.0",
+              "tarball_url": "https://api.github.com/repos/jdx/mr-boxington/tarball/v1.24.0",
+              "target_commitish": "main",
+              "updated_at": "2026-10-13T19:15:26Z",
+              "upload_url": "https://uploads.github.com/repos/jdx/mr-boxington/releases/412008010/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/jdx/mr-boxington/releases/412008010",
+              "zipball_url": "https://api.github.com/repos/jdx/mr-boxington/zipball/v1.24.0"
+            },
+            {
+              "assets": [
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.23.0/mbx-aarch64-apple-darwin.tar.gz",
+                  "content_type": "application/x-gtar",
+                  "created_at": "2026-10-09T00:25:40Z",
+                  "digest": "sha256:e836ef3ef83b15f2fce52a1a9ea2a82ddd8d2b2c8e107152fdc28098c8b41c60",
+                  "download_count": 2323,
+                  "id": 623399598,
+                  "label": "",
+                  "name": "mbx-aarch64-apple-darwin.tar.gz",
+                  "node_id": "RA_kwDOT-nLJc4lKFKu",
+                  "size": 5978215,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-09T00:25:40Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/623399598"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.23.0/mbx-aarch64-pc-windows-msvc.zip",
+                  "content_type": "application/zip",
+                  "created_at": "2026-10-09T00:25:40Z",
+                  "digest": "sha256:7e85aba64a16cfed8e1b494f52d8016f11fe69d61786d9aa9aa0749be8728d24",
+                  "download_count": 319,
+                  "id": 623399597,
+                  "label": "",
+                  "name": "mbx-aarch64-pc-windows-msvc.zip",
+                  "node_id": "RA_kwDOT-nLJc4lKFKt",
+                  "size": 5509383,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-09T00:25:40Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/623399597"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.23.0/mbx-aarch64-unknown-linux-gnu.tar.gz",
+                  "content_type": "application/x-gtar",
+                  "created_at": "2026-10-09T00:25:40Z",
+                  "digest": "sha256:7278068e1aa0c2acc9be675eae07584201c4bcb67f2b05b9952dc05979f3ddeb",
+                  "download_count": 231,
+                  "id": 623399599,
+                  "label": "",
+                  "name": "mbx-aarch64-unknown-linux-gnu.tar.gz",
+                  "node_id": "RA_kwDOT-nLJc4lKFKv",
+                  "size": 6196125,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-09T00:25:40Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/623399599"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.23.0/mbx-aarch64-unknown-linux-musl.tar.gz",
+                  "content_type": "application/x-gtar",
+                  "created_at": "2026-10-09T00:25:39Z",
+                  "digest": "sha256:2f4b304445843cf2d9626ce68a7d7923cc31f2ac924d26632dd6702c71f6df04",
+                  "download_count": 89,
+                  "id": 623399596,
+                  "label": "",
+                  "name": "mbx-aarch64-unknown-linux-musl.tar.gz",
+                  "node_id": "RA_kwDOT-nLJc4lKFKs",
+                  "size": 6332100,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-09T00:25:40Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/623399596"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.23.0/mbx-x86_64-pc-windows-msvc.zip",
+                  "content_type": "application/zip",
+                  "created_at": "2026-10-09T00:25:40Z",
+                  "digest": "sha256:ecd9a657cacd3e179f91a0a04ef32c458740365cd82f5a29734f8a95bed80710",
+                  "download_count": 1309,
+                  "id": 623399604,
+                  "label": "",
+                  "name": "mbx-x86_64-pc-windows-msvc.zip",
+                  "node_id": "RA_kwDOT-nLJc4lKFK0",
+                  "size": 5896662,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-09T00:25:41Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/623399604"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.23.0/mbx-x86_64-unknown-linux-gnu.tar.gz",
+                  "content_type": "application/x-gtar",
+                  "created_at": "2026-10-09T00:25:40Z",
+                  "digest": "sha256:417766e3286c9d669ebf9415f82a78114ac599a4644fda36223258090953d43f",
+                  "download_count": 2468,
+                  "id": 623399613,
+                  "label": "",
+                  "name": "mbx-x86_64-unknown-linux-gnu.tar.gz",
+                  "node_id": "RA_kwDOT-nLJc4lKFK9",
+                  "size": 6830277,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-09T00:25:41Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/623399613"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.23.0/mbx-x86_64-unknown-linux-musl.tar.gz",
+                  "content_type": "application/x-gtar",
+                  "created_at": "2026-10-09T00:25:40Z",
+                  "digest": "sha256:f50a708e7e3e67b054596729c7035b61bc872e1fce869d8101f45f8ab355f296",
+                  "download_count": 3439,
+                  "id": 623399616,
+                  "label": "",
+                  "name": "mbx-x86_64-unknown-linux-musl.tar.gz",
+                  "node_id": "RA_kwDOT-nLJc4lKFLA",
+                  "size": 6922882,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-09T00:25:41Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/623399616"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.23.0/mbx.bash",
+                  "content_type": "application/octet-stream",
+                  "created_at": "2026-10-09T00:25:54Z",
+                  "digest": "sha256:c60dd13ab68c5d2a06efb9bda4bd727951f43b5fb3935db228889c5cf11a4081",
+                  "download_count": 3170,
+                  "id": 623400082,
+                  "label": "",
+                  "name": "mbx.bash",
+                  "node_id": "RA_kwDOT-nLJc4lKFSS",
+                  "size": 3985,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-09T00:25:54Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/623400082"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.23.0/mbx.fish",
+                  "content_type": "application/x-fishscript",
+                  "created_at": "2026-10-09T00:25:54Z",
+                  "digest": "sha256:75cf5ef6a5007d3ffa3e60857ace14c267f969e30811a62f150813affd522968",
+                  "download_count": 3170,
+                  "id": 623400087,
+                  "label": "",
+                  "name": "mbx.fish",
+                  "node_id": "RA_kwDOT-nLJc4lKFSX",
+                  "size": 3115,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-09T00:25:54Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/623400087"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.23.0/mbx.powershell",
+                  "content_type": "application/octet-stream",
+                  "created_at": "2026-10-09T00:25:54Z",
+                  "digest": "sha256:12facc11a070963fbd2bf555830192bcc7ddbe03e7fcd2a123ae7205cb318404",
+                  "download_count": 3170,
+                  "id": 623400084,
+                  "label": "",
+                  "name": "mbx.powershell",
+                  "node_id": "RA_kwDOT-nLJc4lKFSU",
+                  "size": 4615,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-09T00:25:54Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/623400084"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.23.0/mbx.usage.kdl",
+                  "content_type": "application/octet-stream",
+                  "created_at": "2026-10-09T00:25:54Z",
+                  "digest": "sha256:fff447ac79c7ba2d6fbcf2d0ca39a90faf814d4eecb9726b92079f1bcfbb66f3",
+                  "download_count": 3171,
+                  "id": 623400086,
+                  "label": "",
+                  "name": "mbx.usage.kdl",
+                  "node_id": "RA_kwDOT-nLJc4lKFSW",
+                  "size": 51114,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-09T00:25:54Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/623400086"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.23.0/mbx.zsh",
+                  "content_type": "application/octet-stream",
+                  "created_at": "2026-10-09T00:25:54Z",
+                  "digest": "sha256:349c11069bee64e14b0c8a1f16a4f864df19efc5c975ec4515b321bf7f63ba6a",
+                  "download_count": 3169,
+                  "id": 623400088,
+                  "label": "",
+                  "name": "mbx.zsh",
+                  "node_id": "RA_kwDOT-nLJc4lKFSY",
+                  "size": 4230,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-09T00:25:54Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/623400088"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.23.0/packslip.sigstore.json",
+                  "content_type": "application/json",
+                  "created_at": "2026-10-09T00:26:02Z",
+                  "digest": "sha256:18a9514324786121e5e3173a2c0d80c5f030a773023f6b19813da098162f5bcc",
+                  "download_count": 6636,
+                  "id": 623400369,
+                  "label": "",
+                  "name": "packslip.sigstore.json",
+                  "node_id": "RA_kwDOT-nLJc4lKFWx",
+                  "size": 20926,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-09T00:26:02Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/623400369"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.23.0/SHA256SUMS",
+                  "content_type": "application/octet-stream",
+                  "created_at": "2026-10-09T00:25:39Z",
+                  "digest": "sha256:e3ddaa69a0b0e0506705aaa5be006034253ec54c788e9a55e7938bcf5661eebd",
+                  "download_count": 118,
+                  "id": 623399595,
+                  "label": "",
+                  "name": "SHA256SUMS",
+                  "node_id": "RA_kwDOT-nLJc4lKFKr",
+                  "size": 705,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-09T00:25:40Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/623399595"
+                }
+              ],
+              "assets_url": "https://api.github.com/repos/jdx/mr-boxington/releases/407361219/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/216188?v=4",
+                "events_url": "https://api.github.com/users/jdx/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/jdx/followers",
+                "following_url": "https://api.github.com/users/jdx/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/jdx/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/jdx",
+                "id": 216188,
+                "login": "jdx",
+                "node_id": "MDQ6VXNlcjIxNjE4OA==",
+                "organizations_url": "https://api.github.com/users/jdx/orgs",
+                "received_events_url": "https://api.github.com/users/jdx/received_events",
+                "repos_url": "https://api.github.com/users/jdx/repos",
+                "site_admin": false,
+                "starred_url": "https://api.github.com/users/jdx/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/jdx/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/jdx",
+                "user_view_type": "public"
+              },
+              "body": "In a new worktree, the first `cargo check`, `cargo clippy`, or rust-analyzer check now copies dependency units from another checkout instead of starting cold. `mbx clean --under` cleans every workspace below a directory, and `mbx edit` opens the global config. This release also fixes two cases where the cache could restore stale output, and two scheduler problems that made builds wait for capacity they didn't need.\n\n## Added\n\n- **First checks in a new checkout start from another checkout's dependency units** ([#644](https://github.com/jdx/mr-boxington/pull/644), @jdx). Before, seeding applied only to `cargo build`. Now it also covers the [check lane](https://mr-boxington.jdx.dev/managed-targets (`target/check`) used by `check` and `clippy`, and editor checks under `target/rust-analyzer`. This helps most with git worktrees and coding agents, which usually run `cargo check` first. Each lane is seeded only from the same lane in the most recently used other checkout that has one.\n\n  ```text\n  $ git worktree add ../task-2 && cd ../task-2\n  $ cargo check --workspace\n  mbx[target]: copied 303 registry build units from /home/me/src/task-1\n  ```\n\n  The existing seeding rules still apply: only registry and Git dependencies are copied, Cargo 1.100 or later is required, and `target.seed = false` (`MBX_TARGET_SEED=0`) turns seeding off.\n\n- **`mbx clean --under <ROOT>`** removes the managed target and learned incremental state of every recorded workspace at or below `ROOT`, including nested worktrees ([#668](https://github.com/jdx/mr-boxington/pull/668), @jbellis). This is for tools that delete whole checkouts and would otherwise leave nested worktrees' targets until `target.max_age` expires.\n  - `ROOT` must be absolute and can't be a filesystem root. It doesn't need to exist anymore. Paths match on whole components, so `/workspace/abc` doesn't match `/workspace/abcd`.\n  - Cargo isn't invoked, and `.mbx.toml` policies are skipped. The option can't be combined with a positional workspace.\n  - Workspaces are cleaned in parallel, up to 8 at once. A workspace held by a running command is kept with a warning. The exit status is non-zero only if a removal fails, and mbx still tries to remove the other workspaces.\n\n- **`mbx edit` opens the global configuration file** in `$VISUAL`, then `$EDITOR`, and falls back to `nano` (or `notepad` on Windows) ([#665](https://github.com/jdx/mr-boxington/pull/665), @jdx, based on #404 by @Kemperino). If the file doesn't exist, mbx creates it first. The command runs before the config is loaded, so you can use it to fix invalid TOML. Editor values can include arguments and quoted paths, such as `EDITOR=\"code --wait\"`.\n\n- **Nix flake** ([#649](https://github.com/jdx/mr-boxington/pull/649), @theduke). The repository now provides `mbx` as a flake package and app for x86-64 and ARM64 on Linux and macOS. To run it without installing:\n\n  ```sh\n  nix run github:jdx/mr-boxington -- build\n  ```\n\n  In a dev shell, put the package's Cargo wrapper first on `PATH` so that plain `cargo` commands go through mbx:\n\n  ```nix\n  shellHook = ''\n    export PATH=\"${mbx.packages.${system}.mbx}/libexec/mbx:$PATH\"\n  '';\n  ```\n\n  The installation docs have a complete dev-shell example.\n\n## Fixed\n\n### Cache correctness\n\n- **Changes to build-script inputs now trigger a recompile of the package's Rust crates** ([#667](https://github.com/jdx/mr-boxington/pull/667), @jdx). This includes files that a proc macro reads but rustc's dep-info doesn't list. Before, a crate using `rust-embed` with `cargo::rerun-if-changed=../dist` could get an old cached list of embedded files after files were added to `dist/`. Now the files, directory contents, symlinks, and environment variables named in `rerun-if-changed` and `rerun-if-env-changed` are part of the compilation's cache key. Packages with no `rerun-if` directives use Cargo's implicit package inputs. Unchanged inputs can still be shared across checkouts. A watched path that overlaps compiler outputs, such as `rerun-if-changed=.` with the target directory inside the package, now skips the cache for that compilation. These bypasses are reported as `build-script-input-overlaps-outputs`.\n- **A file changed twice within one filesystem timestamp tick is now rehashed** ([#674](https://github.com/jdx/mr-boxington/pull/674), @jdx). Before, if a file was written, hashed, and written again within one tick, its size and timestamps stayed the same, so mbx could reuse the old digest. A cache key could then be computed from contents that were no longer on disk. Now mbx doesn't save a digest for reuse if the file was modified within the last 20 ms, or the last 2 s on filesystems that store whole-second timestamps.\n\n### Cache coverage\n\n- **Builds that pass `-Zuse-sync-unwind=yes` or `=no` to rustc are now cached** ([#655](https://github.com/jdx/mr-boxington/pull/655), @jdalton). The value is part of the cache key, so `yes` and `no` builds are stored separately.\n\n### Scheduler\n\n- **A release LTO link no longer slows dev links of the same binary** ([#670](https://github.com/jdx/mr-boxington/pull/670), @jdx). The memory scheduler recorded peak link memory by crate name only and never lowers a recorded peak. As a result, one `lto = true`, `codegen-units = 1` release link could make every later dev link reserve memory it didn't need and wait for it. Link peaks are now recorded separately for each combination of `opt-level`, `lto`, `codegen-units`, and debuginfo. Older link entries in `memory.json` are no longer read, so each profile learns its peak again on its next link.\n- **Test suites that finish in under a second no longer request half the compiler pool on every run** ([#661](https://github.com/jdx/mr-boxington/pull/661), @jdx). With `scheduler.tests = true`, a suite was measured only after a complete run of at least a second. Fast suites therefore kept the never-measured default and could wait behind memory-heavy compiles. In one reported case, a 41 s step took 340–390 s. Now a complete, unfiltered run under a second is recorded as one core. Windows is unchanged because mbx can't measure CPU time there.\n\n## Upgrade notes\n\nExpect some cache misses on the first builds after upgrading. Rust compilations of packages with build scripts now have different cache keys ([#667](https://github.com/jdx/mr-boxington/pull/667)). Also, file digests saved by earlier versions are discarded, so files are hashed once more ([#674](https://github.com/jdx/mr-boxington/pull/674)).\n\n## New Contributors\n\n* @theduke made their first contribution in [#649](https://github.com/jdx/mr-boxington/pull/649)\n* @jdalton made their first contribution in [#655](https://github.com/jdx/mr-boxington/pull/655)\n\n**Full Changelog**: https://github.com/jdx/mr-boxington/compare/v1.22.0...v1.23.0",
+              "created_at": "2026-10-09T00:04:28Z",
+              "draft": false,
+              "html_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.23.0",
+              "id": 407361219,
+              "immutable": true,
+              "mentions_count": 5,
+              "name": "v1.23.0: Seeded first checks in new worktrees, mbx clean --under, and mbx edit",
+              "node_id": "RE_kwDOT-nLJc4YR9bD",
+              "prerelease": false,
+              "published_at": "2026-10-09T00:26:14Z",
+              "reactions": {
+                "+1": 1,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 0,
+                "heart": 0,
+                "hooray": 0,
+                "laugh": 0,
+                "rocket": 0,
+                "total_count": 1,
+                "url": "https://api.github.com/repos/jdx/mr-boxington/releases/407361219/reactions"
+              },
+              "tag_name": "v1.23.0",
+              "tarball_url": "https://api.github.com/repos/jdx/mr-boxington/tarball/v1.23.0",
+              "target_commitish": "main",
+              "updated_at": "2026-10-09T00:26:14Z",
+              "upload_url": "https://uploads.github.com/repos/jdx/mr-boxington/releases/407361219/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/jdx/mr-boxington/releases/407361219",
+              "zipball_url": "https://api.github.com/repos/jdx/mr-boxington/zipball/v1.23.0"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/repos/jdx/mr-boxington/releases?per_page=2",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "if-none-match": [
+            "W/\"050d07bd49439c691e01b9bcd89fdcdf7ec47ea2b6d09aa25134f4af3ccd49e1\""
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 304,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "cache-control": [
+            "private, max-age=60, s-maxage=60"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "date": [
+            "Wed, 14 Oct 2026 22:08:14 GMT"
+          ],
+          "etag": [
+            "\"050d07bd49439c691e01b9bcd89fdcdf7ec47ea2b6d09aa25134f4af3ccd49e1\""
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-api-version-selected": [
+            "2022-11-28"
+          ],
+          "x-github-edge-region": [
+            "iad"
+          ],
+          "x-github-request-id": [
+            "D3CA:154733:16BD3D5:4A73BAE:6ACFFD4E"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4963"
+          ],
+          "x-ratelimit-reset": [
+            "1792017924"
+          ],
+          "x-ratelimit-resource": [
+            "core"
+          ],
+          "x-ratelimit-used": [
+            "37"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      }
+    }
+  ]
+}

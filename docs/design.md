@@ -72,6 +72,8 @@ crates/
   update/       branches, API commits, PRs, dashboard, lockfile-tool runner (Phase 2)
   github/       REST + GraphQL client, conditional requests, rate-limit governor
   cache/        SQLite: HTTP entries, release lists, extraction fingerprints
+  http/         reqwest transport boundary, shared network pool
+  testkit/      dev-dependency only: redacted recording and offline cassette replay
   cli/          `rustovate` binary, defined with usage
 conformance/    Renovate comparison harness (black box only)
 ```

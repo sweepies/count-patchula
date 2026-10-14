@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "provenance": "Simulated by rustovate for offline pagination/error tests; no external fixture source",
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/redirect",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 301,
+        "headers": {
+          "location": [
+            "/redirect-target"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {}
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/redirect-target",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {},
+        "body": {
+          "format": "json",
+          "value": {
+            "ok": true
+          }
+        }
+      }
+    }
+  ]
+}

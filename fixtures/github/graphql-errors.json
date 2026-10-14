@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "provenance": "Simulated by rustovate for offline pagination/error tests; no external fixture source",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ],
+          "content-type": [
+            "application/json"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "query": "query($cursor: String) { repository(owner: \"rustovate\", name: \"simulated\") { releases(first: 2, after: $cursor) { nodes { name } pageInfo { hasNextPage endCursor } } } }",
+            "variables": {
+              "cursor": null
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {},
+        "body": {
+          "format": "json",
+          "value": {
+            "errors": [
+              {
+                "message": "private response body",
+                "type": "FORBIDDEN"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

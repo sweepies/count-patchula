@@ -35,7 +35,12 @@ mise run test
 Redaction happens before writing: authorization and cookie headers; sensitive
 JSON keys; URL credentials and token/key/signature query parameters; GitHub
 `ghp_`, `ghs_`, `gho_`, `github_pat_` and `v1.` token values anywhere. Callers
-can add literal secret values or regex patterns through `Redactor`. The scanner
+also get `ghu_`/`ghr_` coverage and full stateless `ghs_` JWT suffix redaction,
+including dots and hyphens. Legacy `v1.` detection requires at least 20 suffix
+characters to retain ordinary version tags such as `v1.24.0`; the recording
+caller also adds its exact token as a literal. Regression tests cover both.
+GitHub documents the [stateless token format](https://github.blog/changelog/2026-04-24-notice-about-upcoming-new-format-for-github-app-installation-tokens/).
+Callers can add literal secret values or regex patterns through `Redactor`. The scanner
 also accepts comma-separated literal values in `RUSTOVATE_REDACT`. Redaction
 does not change the in-memory response returned to a recording test. Scanning
 checks raw and parsed JSON (including escaped tokens), all nested fields, and
@@ -55,5 +60,6 @@ API references read for this implementation:
 [serde](https://docs.rs/serde/latest/serde/),
 [serde_json](https://docs.rs/serde_json/latest/serde_json/),
 [regex](https://docs.rs/regex/latest/regex/),
+[percent-encoding](https://docs.rs/percent-encoding/latest/percent_encoding/),
 [tempfile](https://docs.rs/tempfile/latest/tempfile/),
 [thiserror](https://docs.rs/thiserror/latest/thiserror/).

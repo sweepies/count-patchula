@@ -16,8 +16,12 @@ impl Default for Redactor {
     fn default() -> Self {
         Self {
             patterns: vec![
-                Regex::new(r"(?:gh[pso]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|v1\.[A-Za-z0-9_]+)")
-                    .expect("static token regex"),
+                // Preserve v1.2.3 versions; legacy tokens have long suffixes.
+                // Stateless ghs_ tokens include JWT dots and hyphens.
+                Regex::new(
+                    r"(?:gh[psour]_[A-Za-z0-9_.-]+|github_pat_[A-Za-z0-9_.-]+|v1\.[A-Za-z0-9_]{20,})",
+                )
+                .expect("static token regex"),
                 Regex::new(r"(?i)(?:bearer|basic)\s+[A-Za-z0-9+/_.=-]+")
                     .expect("static authorization regex"),
             ],
@@ -41,7 +45,10 @@ impl Redactor {
 
     fn sensitive(name: &str) -> bool {
         let name = name.to_ascii_lowercase().replace('-', "_");
-        [
+        matches!(
+            name.as_str(),
+            "auth" | "key" | "apikey" | "jwt" | "session" | "session_id"
+        ) || [
             "authorization",
             "cookie",
             "token",
@@ -57,7 +64,9 @@ impl Redactor {
     }
 
     pub fn text(&self, text: &str) -> String {
-        let urls = Regex::new(r#"https?://[^\s<>\"\\]+"#).expect("static URL regex");
+        static URLS: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+        let urls =
+            URLS.get_or_init(|| Regex::new(r#"https?://[^\s<>\"\\]+"#).expect("static URL regex"));
         let text = urls.replace_all(text, |captures: &regex::Captures<'_>| {
             Url::parse(&captures[0])
                 .map(|url| self.url(&url))
@@ -94,6 +103,11 @@ impl Redactor {
             let _ = result.set_password(Some("redacted"));
         }
         result.set_fragment(None);
+        let decoded_path = percent_encoding::percent_decode_str(result.path()).decode_utf8_lossy();
+        let redacted_path = self.pattern_text(&decoded_path);
+        if redacted_path != decoded_path {
+            result.set_path(&redacted_path);
+        }
         let pairs: Vec<_> = result
             .query_pairs()
             .map(|(name, value)| (name.to_string(), self.field(&name, &value)))

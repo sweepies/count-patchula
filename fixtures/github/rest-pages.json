@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "provenance": "Simulated by rustovate for offline behavior tests; not recorded from GitHub or copied from another bot",
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/pages?per_page=2",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "link": [
+            "<https://api.github.com/pages?per_page=2&page=2>; rel=\"next\"; title=\"a,b\", <https://api.github.com/pages?per_page=2&page=10>; rel=\"last\""
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": [
+            {
+              "name": "v4"
+            },
+            {
+              "name": "v3"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/pages?per_page=2&page=2",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "link": [
+            "<https://api.github.com/pages?per_page=2&page=3>; rel=\"next\""
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": [
+            {
+              "name": "v2"
+            },
+            {
+              "name": "v1"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

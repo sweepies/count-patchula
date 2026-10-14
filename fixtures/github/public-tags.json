@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "provenance": "Recorded by rustovate from the request URLs; never imported from other bots",
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/repos/tokio-rs/bytes/tags?per_page=2",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "cache-control": [
+            "private, max-age=60, s-maxage=60"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Wed, 14 Oct 2026 22:08:14 GMT"
+          ],
+          "etag": [
+            "W/\"d6b2351120e516338593d11330aee61964d3c2f680a134e4d41da8aaf396a8b5\""
+          ],
+          "last-modified": [
+            "Tue, 13 Oct 2026 22:17:59 GMT"
+          ],
+          "link": [
+            "<https://api.github.com/repositories/30062547/tags?per_page=2&page=2>; rel=\"next\", <https://api.github.com/repositories/30062547/tags?per_page=2&page=22>; rel=\"last\""
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            ""
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-api-version-selected": [
+            "2022-11-28"
+          ],
+          "x-github-edge-region": [
+            "iad"
+          ],
+          "x-github-media-type": [
+            "github.v3; format=json"
+          ],
+          "x-github-request-id": [
+            "D3C4:1ABC4D:185B101:4F90C2E:6ACFFD4E"
+          ],
+          "x-oauth-client-id": [
+            "178c6fc778ccc68e1d6a"
+          ],
+          "x-oauth-scopes": [
+            "gist, read:org, repo, workflow"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4964"
+          ],
+          "x-ratelimit-reset": [
+            "1792017924"
+          ],
+          "x-ratelimit-resource": [
+            "core"
+          ],
+          "x-ratelimit-used": [
+            "36"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": [
+            {
+              "commit": {
+                "sha": "76c0fbb54ed4336caf9d2311658a2f4a5627c21d",
+                "url": "https://api.github.com/repos/tokio-rs/bytes/commits/76c0fbb54ed4336caf9d2311658a2f4a5627c21d"
+              },
+              "name": "v1.12.1",
+              "node_id": "MDM6UmVmMzAwNjI1NDc6cmVmcy90YWdzL3YxLjEyLjE=",
+              "tarball_url": "https://api.github.com/repos/tokio-rs/bytes/tarball/refs/tags/v1.12.1",
+              "zipball_url": "https://api.github.com/repos/tokio-rs/bytes/zipball/refs/tags/v1.12.1"
+            },
+            {
+              "commit": {
+                "sha": "91402cee605b21bf530ac07ede463599182b5d32",
+                "url": "https://api.github.com/repos/tokio-rs/bytes/commits/91402cee605b21bf530ac07ede463599182b5d32"
+              },
+              "name": "v1.12.0",
+              "node_id": "MDM6UmVmMzAwNjI1NDc6cmVmcy90YWdzL3YxLjEyLjA=",
+              "tarball_url": "https://api.github.com/repos/tokio-rs/bytes/tarball/refs/tags/v1.12.0",
+              "zipball_url": "https://api.github.com/repos/tokio-rs/bytes/zipball/refs/tags/v1.12.0"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

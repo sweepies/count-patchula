@@ -8,3 +8,19 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+rustovate-cache = { path = "../cache" }
+rustovate-http = { path = "../http" }
+reqwest.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2 = "0.11.1"
+httpdate = "1"
+
+[dev-dependencies]
+rustovate-testkit = { path = "../testkit" }
+tempfile = "3"
+tokio = { workspace = true, features = ["test-util"] }
