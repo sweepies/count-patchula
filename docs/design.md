@@ -92,10 +92,52 @@ Data sources: npm registry, GitHub releases and tags, Docker registries
 (Docker Hub, ghcr.io), crates.io sparse index, Go module proxy, Terraform
 registry, PyPI, Helm and OCI repositories, and mise's tool registry.
 
-Platform: GitHub only, authenticated by a token the caller provides.
+Platform: GitHub only. The CLI uses a token the caller provides; server mode
+mints installation tokens from GitHub App credentials.
 
 Out of scope: other platforms, onboarding PRs, hosted services, Docker-based
 tool installation, arbitrary post-upgrade commands, encrypted config.
+
+## Run modes
+
+One engine library runs every batch. The CLI and the server are thin front
+ends over it, so a batch behaves the same however it was started.
+
+- **CLI** (`rustovate run`, `rustovate lookup`): one batch per invocation,
+  with a token supplied by the caller. This is how renovate-runner uses it.
+- **Server** (`rustovate --server`): a long-running process that receives GitHub
+  webhooks (signatures verified before parsing), keeps one de-duplicated queue,
+  runs sweeps on a cron schedule, and drains work in batches with caches kept
+  warm. It serves the web UI and its JSON API.
+
+Checkboxes rustovate adds to issues and PRs say when a click takes effect:
+"re-check now" in server mode, "re-check on the next run" in CLI mode. Operators
+can override this with `--recheck now|next-run` (or `RUSTOVATE_RECHECK`) for
+setups like renovate-runner, where a webhook-driven Worker starts CLI runs
+immediately. A hidden marker, not the text, identifies rustovate's checkboxes.
+
+### Server settings
+
+Operator settings (sweep schedule, triggers, concurrency, paused state,
+re-check wording) are separate from repository configs. Two exclusive modes,
+chosen with `--settings`:
+
+- `file:<path>`: a Pkl file amending the published settings schema. The UI
+  shows it read-only. Changes are picked up when the file changes; an invalid
+  file keeps the last good settings and reports the error.
+- `managed`: stored in rustovate's state database and edited in the UI or the
+  API, with an audit record of each change. Managed settings can be exported
+  as a Pkl file to switch to file mode.
+
+Secrets (App private key, webhook secret, OAuth client secret) never appear in
+settings; they come from environment variables or files.
+
+### Web UI
+
+A static Svelte app compiled into the binary and served by the Rust HTTP
+server, so rustovate stays a single binary. The API and sessions are in Rust.
+Sign-in is GitHub OAuth, restricted to listed users or org members, with CSRF
+protection on every state-changing request.
 
 ## Tooling
 
@@ -112,4 +154,5 @@ rustovate itself.
 1. Read-only: `rustovate lookup` produces a dry-run report for all 12
    repositories, triaged against Renovate's dry-run output.
 2. Write side: branches, commits, PRs, dashboard, lockfile tools.
+   Then server mode: webhooks, queue, settings modes, web UI.
 3. Shadow mode next to Renovate in renovate-runner, then cutover.
