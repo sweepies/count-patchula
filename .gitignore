@@ -4,3 +4,4 @@
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+/conformance-results/

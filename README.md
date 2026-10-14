@@ -61,3 +61,7 @@ See [configuration](docs/configuration.md), [CLI reference](docs/cli.md), and
 remain explicit Phase 1 stubs and exit with a runtime error.
 
 Foundation APIs: [SQLite cache](docs/cache.md) and [GitHub client](docs/github.md).
+
+The [comparison harness](conformance/README.md) compares black-box Renovate JSON
+logs with the [v1 batch report](docs/report.md). Phase 0 includes a hand-written
+sample; dependency lookup is still unimplemented.

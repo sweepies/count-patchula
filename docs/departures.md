@@ -4,6 +4,9 @@ rustovate is not a Renovate clone. Each entry records a behaviour that differs
 on purpose, and why. The comparison harness links differences it finds to
 entries here; a difference with no entry is treated as a bug.
 
+Stable comparison link: <a id="departure-7"></a>**Departure 7: default policy**
+(table row 7 below). IDs are retained when descriptions change.
+
 | # | Area | Renovate | rustovate | Why |
 |---|---|---|---|---|
 | 1 | Config | JSON/JSON5 with presets, migrations | Pkl only, typed schema, unknown fields are errors | Typed, composable config with real diagnostics |

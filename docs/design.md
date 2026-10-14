@@ -74,6 +74,7 @@ crates/
   cache/        SQLite: HTTP entries, release lists, extraction fingerprints
   http/         reqwest transport boundary, shared network pool
   testkit/      dev-dependency only: redacted recording and offline cassette replay
+  report/       versioned batch JSON caller contract, shared with conformance
   cli/          `rustovate` binary, defined with usage
 conformance/    Renovate comparison harness (black box only)
 ```

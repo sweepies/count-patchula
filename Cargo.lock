@@ -1571,6 +1571,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustovate-conformance"
+version = "0.1.0"
+dependencies = [
+ "rustovate-report",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "usage-rs",
+]
+
+[[package]]
 name = "rustovate-datasource"
 version = "0.1.0"
 
@@ -1606,6 +1618,15 @@ version = "0.1.0"
 [[package]]
 name = "rustovate-manager"
 version = "0.1.0"
+
+[[package]]
+name = "rustovate-report"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
 
 [[package]]
 name = "rustovate-testkit"

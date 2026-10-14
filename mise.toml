@@ -4,6 +4,8 @@ mr-boxington = "1.24.0"
 usage = "7.0.1"
 tak = "0.0.15"
 zig = "0.17.0"
+bun = "1.4.3"
+node = "24.21.0"
 
 [env]
 MBX_DISPLAY = "plain"
@@ -17,6 +19,10 @@ run = "cargo build --workspace --locked"
 [tasks."cache:doctor"]
 description = "Inspect mbx toolchain, local store and remote configuration"
 run = "mbx doctor"
+
+[tasks."conformance:compare"]
+description = "Compare Renovate JSON output with a versioned rustovate report"
+run = "cargo run --quiet --locked -p rustovate-conformance --"
 
 [tasks.test]
 description = "Test the workspace through mbx"

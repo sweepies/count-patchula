@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "repositories": [{
+    "repository": "demo/rustovate-sample",
+    "status": "complete",
+    "reason": null,
+    "packageFiles": [
+      {
+        "path": "package.json",
+        "dependencies": [
+          {
+            "manager": "npm", "name": "library", "package": "actual-library",
+            "current": {"value": "^1.0.0", "version": "1.0.0", "digest": null},
+            "updates": [{"newValue": "^1.2.0", "newVersion": "1.2.0", "newDigest": null, "updateType": "minor", "group": "javascript"}]
+          },
+          {
+            "manager": "npm", "name": "extra-library", "package": "extra-library",
+            "current": {"value": "1", "version": null, "digest": null}, "updates": []
+          }
+        ]
+      },
+      {
+        "path": ".github/workflows/ci.yml",
+        "dependencies": [{
+          "manager": "github-actions", "name": "actions/checkout", "package": "actions/checkout",
+          "current": {"value": "v4", "version": "4.0.0", "digest": null},
+          "updates": [{"newValue": null, "newVersion": "4.0.0", "newDigest": "synthetic-action-digest", "updateType": "pin", "group": null}]
+        }]
+      },
+      {
+        "path": "compose.yml",
+        "dependencies": [{
+          "manager": "compose", "name": "redis", "package": "redis",
+          "current": {"value": "7.0", "version": "7.0.0", "digest": null},
+          "updates": [{"newValue": "7.2", "newVersion": "7.2.0", "newDigest": "sha256:synthetic", "updateType": "minor", "group": null}]
+        }]
+      }
+    ]
+  }]
+}

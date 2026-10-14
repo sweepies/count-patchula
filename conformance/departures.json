@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "rules": [
+    {
+      "id": "default-added-digest",
+      "departure": 7,
+      "classification": "field-mismatch",
+      "managers": ["github-actions", "dockerfile", "compose"],
+      "field": "updates.newDigest",
+      "predicate": "digest-added"
+    },
+    {
+      "id": "default-digest-only-pin",
+      "departure": 7,
+      "classification": "rustovate-extra",
+      "managers": ["github-actions", "dockerfile", "compose"],
+      "field": "updates",
+      "predicate": "digest-pin-only"
+    }
+  ]
+}
