@@ -92,6 +92,11 @@ fn add(
             "go" => (Source::GithubTags, "golang/go"),
             "zig" => (Source::GithubTags, "ziglang/zig"),
             "mise" => (Source::GithubReleases, "jdx/mise"),
+            "gh" => (Source::GithubReleases, "cli/cli"),
+            "fnox" => (Source::GithubReleases, "jdx/fnox"),
+            "tak" => (Source::GithubReleases, "jdx/tak"),
+            "hk" => (Source::GithubReleases, "jdx/hk"),
+            "prettier" => (Source::Npm, "prettier"),
             "usage" => (Source::GithubReleases, "jdx/usage"),
             "mr-boxington" => (Source::GithubReleases, "jdx/mr-boxington"),
             "terraform" => (Source::GithubReleases, "hashicorp/terraform"),
@@ -104,7 +109,11 @@ fn add(
         file: path.into(),
         location: Location::new(text, start, end, format!("/tools/{name}")),
         name: name.into(),
-        package: package.into(),
+        package: if matches!(source, Source::GithubReleases | Source::GithubTags) {
+            package.split('/').take(2).collect::<Vec<_>>().join("/")
+        } else {
+            package.into()
+        },
         kind: DependencyKind::Tool,
         current: version.into(),
         resolved: None,

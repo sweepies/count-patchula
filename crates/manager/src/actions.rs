@@ -174,7 +174,7 @@ fn add(
             Some(reference)
         };
         (
-            name.into(),
+            format!("{}/{}", parts[0], parts[1]),
             format!("{}/{}", parts[0], parts[1]),
             reference.into(),
             digest,

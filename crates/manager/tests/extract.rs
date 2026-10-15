@@ -97,3 +97,19 @@ fn mise_forms_and_custom_capture_locations() {
         assert!(files[&dep.file][dep.location.start..dep.location.end].contains(&dep.current));
     }
 }
+
+#[test]
+fn npm_is_strict_json_and_bun_lock_is_jsonc() {
+    let scanner = Scanner::new(&config()).unwrap();
+    for text in [
+        "{'dependencies':{'a':'1.0.0'}}",
+        "{\"dependencies\":{\"a\":\"1.0.0\",}}",
+        "{\"dependencies\":{\"a\":\"1.0.0\" \"b\":\"2.0.0\"}}",
+    ] {
+        assert!(
+            scanner
+                .extract(&Files::from([("package.json".into(), text.into())]))
+                .is_err()
+        );
+    }
+}

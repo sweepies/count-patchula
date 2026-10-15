@@ -4,8 +4,20 @@ use jsonc_parser::{
     common::Ranged,
 };
 
-fn ast(text: &str) -> Result<Value<'_>, String> {
-    jsonc_parser::parse_to_ast(text, &Default::default(), &Default::default())
+fn ast(text: &str, jsonc: bool) -> Result<Value<'_>, String> {
+    let options = jsonc_parser::ParseOptions {
+        allow_comments: jsonc,
+        allow_trailing_commas: jsonc,
+        allow_loose_object_property_names: false,
+        allow_missing_commas: false,
+        allow_single_quoted_strings: false,
+        allow_hexadecimal_numbers: false,
+        allow_unary_plus_numbers: false,
+        allow_bare_decimal_point_numbers: false,
+        allow_non_finite_numbers: false,
+        allow_extended_string_escapes: false,
+    };
+    jsonc_parser::parse_to_ast(text, &Default::default(), &options)
         .map_err(|e| e.to_string())?
         .value
         .ok_or_else(|| "empty JSON".into())
@@ -14,7 +26,7 @@ pub(super) fn locks(files: &Files) -> Result<BTreeMap<&str, Value<'_>>, String> 
     files
         .iter()
         .filter(|(path, _)| path.ends_with("package-lock.json") || path.ends_with("bun.lock"))
-        .map(|(path, text)| Ok((path.as_str(), ast(text)?)))
+        .map(|(path, text)| Ok((path.as_str(), ast(text, path.ends_with("bun.lock"))?)))
         .collect()
 }
 fn alias<'a>(name: &'a str, value: &'a str) -> (&'a str, &'a str) {
@@ -37,7 +49,7 @@ pub(super) fn extract(
     manager: Manager,
     files: &BTreeMap<&str, Value<'_>>,
 ) -> Result<Vec<Dependency>, String> {
-    let root = ast(text)?;
+    let root = ast(text, false)?;
     let object = root.as_object().ok_or("package.json must be an object")?;
     let mut deps = Vec::new();
     for (field, kind) in [
@@ -138,7 +150,7 @@ fn collect(
                 file: path.into(),
                 location: Location::new(text, value.start(), value.end(), ptr),
                 name: if nested {
-                    format!("override:{pointer}:{name}")
+                    override_name.into()
                 } else {
                     name.into()
                 },
