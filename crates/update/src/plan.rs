@@ -25,6 +25,8 @@ pub struct Plan {
     pub fingerprint: String,
     pub changes: Vec<Change>,
     pub retry: bool,
+    pub tree: Option<String>,
+    pub cached_pr: Option<serde_json::Value>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Change {
@@ -329,6 +331,8 @@ pub fn plan(
             fingerprint,
             changes: changes.into_iter().collect(),
             retry: false,
+            tree: None,
+            cached_pr: None,
         });
     }
     Ok(plans)

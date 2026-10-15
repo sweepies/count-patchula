@@ -28,7 +28,8 @@ fn ref_path(repo: &str, branch: &str) -> String {
     url.path().into()
 }
 async fn fresh(client: &Client, path: &str) -> Result<Value, String> {
-    client.get_fresh(path).await.map_err(|e| e.to_string())
+    let response = client.get(path).await.map_err(|e| e.to_string())?;
+    serde_json::from_slice(&response.body).map_err(|e| e.to_string())
 }
 
 /// Preconditions run before creating Git objects; atomic leases protect races.
@@ -248,11 +249,11 @@ async fn apply_inner(
             ));
         }
     }
-    let old = match client
-        .get_fresh(&ref_path(&repo, &plan.action.branch))
-        .await
-    {
-        Ok(value) => Some(field(&value["object"], "sha")?.to_owned()),
+    let old = match client.get(&ref_path(&repo, &plan.action.branch)).await {
+        Ok(response) => {
+            let value: Value = serde_json::from_slice(&response.body).map_err(|e| e.to_string())?;
+            Some(field(&value["object"], "sha")?.to_owned())
+        }
         Err(rustovate_github::Error::Status(404)) => None,
         Err(e) => return Err(e.to_string()),
     };
@@ -338,6 +339,7 @@ async fn apply_inner(
                 plan.action.status = ActionStatus::Unchanged;
                 plan.action.commit = Some(old.clone());
                 plan.action.verified = Some(true);
+                plan.tree = Some(existing_tree.into());
                 return Ok(());
             }
         }
@@ -353,6 +355,7 @@ async fn apply_inner(
         .await
         .map_err(|e| e.to_string())?;
     let tree = field(&tree, "sha")?;
+    plan.tree = Some(tree.into());
     let pending = if plan.action.lockfile_pending {
         "\n\nLockfile pending: manifest-only test branch; regenerate before merging (SWE-109)."
     } else {

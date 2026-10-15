@@ -15,7 +15,7 @@ const OBSOLETE: &str = "<!-- rustovate-closed:obsolete -->";
 pub const ENABLE_AUTO_MERGE: &str = "mutation($input:EnablePullRequestAutoMergeInput!){enablePullRequestAutoMerge(input:$input){pullRequest{id}}}";
 const DISABLE_AUTO_MERGE: &str = "mutation($input:DisablePullRequestAutoMergeInput!){disablePullRequestAutoMerge(input:$input){pullRequest{id}}}";
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Serialize)]
 pub enum Recheck {
     Now,
     #[default]
@@ -103,10 +103,10 @@ pub struct Lifecycle {
     repo: String,
     actor: String,
     base: String,
-    prs: Vec<Value>,
+    pub(crate) prs: Vec<Value>,
     pub actions: Vec<PullRequestAction>,
     notes: BTreeMap<(String, String), String>,
-    recheck: Recheck,
+    pub(crate) recheck: Recheck,
     merge_method: Option<String>,
 }
 impl Lifecycle {
@@ -285,6 +285,16 @@ impl Lifecycle {
 
     pub async fn publish(&mut self, client: &Client, plans: &mut [Plan]) {
         for plan in plans {
+            if let Some(pr) = &plan.cached_pr {
+                self.actions.push(action(
+                    &self.repo,
+                    &plan.action.branch,
+                    Some(pr),
+                    ActionStatus::Unchanged,
+                    None,
+                ));
+                continue;
+            }
             if !matches!(
                 plan.action.status,
                 ActionStatus::Created
@@ -377,6 +387,12 @@ impl Lifecycle {
                 )
                 .await
                 .map_err(|e| e.to_string())?;
+            pr["labels"] = json!(
+                labels
+                    .iter()
+                    .map(|name| json!({"name":name}))
+                    .collect::<Vec<_>>()
+            );
         }
         let merge = !plan.action.lockfile_pending
             && !plan.changes.is_empty()
@@ -422,6 +438,11 @@ impl Lifecycle {
                 .await
                 .map_err(|e| e.to_string())?;
         }
+        pr["auto_merge"] = if merge {
+            json!({"enabled":true})
+        } else {
+            Value::Null
+        };
         self.actions.push(action(
             &self.repo,
             &plan.action.branch,

@@ -308,14 +308,10 @@ impl Client {
         self.get_representation(path, None).await
     }
 
-    /// Uncached authoritative read used for write preconditions. Never falls
-    /// back to a cached representation or follows redirects.
+    /// Authoritative read used for write preconditions. Always revalidates with
+    /// the server; a 304 reuses only the representation the server validated.
     pub async fn get_fresh(&self, path: &str) -> Result<Value> {
-        let request = self.request(Method::GET, self.url(path)?);
-        let response = self.exchange(&request, false).await?;
-        if !response.status.is_success() {
-            return Err(Error::Status(response.status.as_u16()));
-        }
+        let response = self.get(path).await?;
         serde_json::from_slice(&response.body).map_err(|_| Error::Json)
     }
 

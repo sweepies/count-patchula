@@ -10,6 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+rustovate-cache = { path = "../cache" }
 rustovate-config = { path = "../config" }
 rustovate-manager = { path = "../manager" }
 rustovate-github = { path = "../github" }
@@ -28,6 +29,5 @@ cron = "0.17"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
-rustovate-cache = { path = "../cache" }
 rustovate-http = { path = "../http" }
 tempfile = "3"

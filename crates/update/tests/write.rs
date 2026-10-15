@@ -21,6 +21,7 @@ struct State {
     prs: BTreeMap<u64, Value>,
     pr_create_error: bool,
     pr_page_size: Option<usize>,
+    ref_page_size: Option<usize>,
     latency: std::time::Duration,
     refs: BTreeMap<String, String>,
     trees: BTreeMap<String, Value>,
@@ -55,7 +56,34 @@ impl Transport for Fake {
             .requests
             .push((request.method().to_string(), path.clone()));
         let reply = if path == "/graphql" {
-            if body["query"] == "query{viewer{login}}" {
+            if body["query"] == rustovate_update::INVENTORY_QUERY {
+                let nodes: Vec<_> = state.refs.iter().map(|(name, oid)| {
+                    let name = name.strip_prefix("refs/heads/").unwrap();
+                    let commit = &state.commits[oid];
+                    let prs: Vec<_> = state.prs.values().filter(|p|p["state"] == "open" && p["head"]["ref"] == name).map(|p|json!({
+                        "number":p["number"],"id":p["node_id"],"url":p["html_url"],"title":p["title"],"body":p["body"],
+                        "headRefName":p["head"]["ref"],"headRefOid":p["head"]["sha"],"baseRefName":p["base"]["ref"],"author":p["user"],
+                        "headRepository":{"nameWithOwner":p["head"]["repo"]["full_name"]},"baseRepository":{"nameWithOwner":p["base"]["repo"]["full_name"]},
+                        "labels":{"nodes":p["labels"],"pageInfo":{"hasNextPage":false}},"autoMergeRequest":p["auto_merge"]
+                    })).collect();
+                    json!({"name":name,"target":{"oid":oid,"tree":{"oid":commit["tree"]["sha"]},"message":commit["message"]},
+                        "associatedPullRequests":{"nodes":prs,"pageInfo":{"hasNextPage":false}}})
+                }).collect();
+                let offset = body["variables"]["cursor"]
+                    .as_str()
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .unwrap_or(0);
+                let size = state.ref_page_size.unwrap_or(100);
+                let more = offset + size < nodes.len();
+                let nodes: Vec<_> = nodes.into_iter().skip(offset).take(size).collect();
+                response(
+                    200,
+                    json!({"data":{"viewer":{"login":"rustovate[bot]"},"repository":{
+                        "defaultBranchRef":{"name":"main","target":{"oid":state.base}},
+                        "refs":{"nodes":nodes,"pageInfo":{"hasNextPage":more,"endCursor":(offset+size).to_string()}}
+                    }}}),
+                )
+            } else if body["query"] == "query{viewer{login}}" {
                 response(200, json!({"data":{"viewer":{"login":"rustovate[bot]"}}}))
             } else if body["query"]
                 .as_str()
@@ -1038,6 +1066,121 @@ async fn pr_cycle(
     rustovate_update::apply_all(client, plans, snapshot, "main", Rebase::Behind, false).await;
     state.publish(client, plans).await;
     state.actions
+}
+
+#[tokio::test(start_paused = true)]
+async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes() {
+    for case in [
+        "same", "pages", "human", "body", "title", "labels", "merge", "closed", "base", "plan",
+        "obsolete",
+    ] {
+        let (mut config, mut repo) = pr_config();
+        config.prs.rebase = Rebase::Behind;
+        let (mut p, snapshot) = make_plan("22.0.0");
+        p.changes[0].labels = vec!["dependencies".into()];
+        let server = fake(&snapshot);
+        let github = client(server.clone()).await;
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let mut lifecycle = rustovate_update::Lifecycle::prepare(
+            &github,
+            &repo,
+            std::slice::from_mut(&mut p),
+            &config,
+            chrono::Utc::now(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        rustovate_update::apply_all(
+            &github,
+            std::slice::from_mut(&mut p),
+            &snapshot,
+            "main",
+            config.prs.rebase,
+            false,
+        )
+        .await;
+        lifecycle
+            .publish(&github, std::slice::from_mut(&mut p))
+            .await;
+        rustovate_update::save_receipts(
+            &cache,
+            &repo,
+            &config,
+            std::slice::from_ref(&p),
+            &lifecycle,
+        )
+        .await
+        .unwrap();
+        let (mut next, _) = make_plan(if case == "plan" { "22.1.0" } else { "22.0.0" });
+        next.changes[0].labels = p.changes[0].labels.clone();
+        {
+            let mut s = server.0.lock().unwrap();
+            match case {
+                "pages" => s.ref_page_size = Some(1),
+                "human" => {
+                    let mut commit = s.commits[p.action.commit.as_ref().unwrap()].clone();
+                    commit["message"] = json!("Human work");
+                    s.commits.insert("human".into(), commit);
+                    s.refs
+                        .insert(format!("refs/heads/{}", p.action.branch), "human".into());
+                }
+                "body" => s.prs.get_mut(&1).unwrap()["body"] = json!("Human edited body"),
+                "title" => s.prs.get_mut(&1).unwrap()["title"] = json!("Human title"),
+                "labels" => s.prs.get_mut(&1).unwrap()["labels"] = json!([]),
+                "merge" => s.prs.get_mut(&1).unwrap()["auto_merge"] = json!({"enabled":true}),
+                "closed" => s.prs.get_mut(&1).unwrap()["state"] = json!("closed"),
+                "base" => {
+                    s.base = "base2".into();
+                    repo.commit = Some("base2".into());
+                    next.action.base_commit = "base2".into();
+                }
+                "obsolete" => {
+                    s.refs.insert(
+                        "refs/heads/rustovate/obsolete".into(),
+                        p.action.commit.clone().unwrap(),
+                    );
+                }
+                _ => {}
+            }
+            s.requests.clear();
+            s.latency = std::time::Duration::from_millis(200);
+        }
+        let started = tokio::time::Instant::now();
+        let all = rustovate_update::restore_unchanged(
+            &github,
+            &cache,
+            &repo,
+            &config,
+            std::slice::from_mut(&mut next),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        if case == "same" {
+            eprintln!(
+                "warm no-op: POST api.github.com/graphql; 1 query, 0 mutations, elapsed {:?} (200ms synthetic latency)",
+                started.elapsed()
+            );
+        }
+        assert_eq!(all, matches!(case, "same" | "pages"), "{case}");
+        assert_eq!(
+            next.action.status == ActionStatus::Unchanged,
+            matches!(case, "same" | "pages" | "obsolete"),
+            "{case}"
+        );
+        let s = server.0.lock().unwrap();
+        assert_eq!(
+            s.requests.len(),
+            if case == "pages" { 2 } else { 1 },
+            "{case}"
+        );
+        assert!(
+            s.requests
+                .iter()
+                .all(|(m, p)| m == "POST" && p == "/graphql")
+        );
+    }
 }
 #[tokio::test(start_paused = true)]
 async fn pr_create_repeat_update_labels_notes_and_checked_retry() {

@@ -202,6 +202,41 @@ impl Engine {
                     continue;
                 }
             };
+            if !dry_run {
+                match rustovate_update::restore_unchanged(
+                    &self.github,
+                    &self.cache,
+                    repo,
+                    &config,
+                    &mut plans,
+                    self.recheck,
+                )
+                .await
+                {
+                    Ok(true) => {
+                        pull_requests.extend(plans.iter().filter_map(|p| {
+                            p.cached_pr
+                                .as_ref()
+                                .map(|pr| rustovate_report::PullRequestAction {
+                                    repository: repo.repository.clone(),
+                                    branch: p.action.branch.clone(),
+                                    number: pr["number"].as_u64(),
+                                    url: pr["html_url"].as_str().map(str::to_owned),
+                                    status: rustovate_report::ActionStatus::Unchanged,
+                                    reason: None,
+                                })
+                        }));
+                        branches.extend(plans.into_iter().map(|p| p.action));
+                        continue;
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        repo.status = Status::Error;
+                        repo.reason = Some(error);
+                        continue;
+                    }
+                }
+            }
             let mut lifecycle = if dry_run {
                 pull_requests.extend(
                     plans
@@ -270,6 +305,11 @@ impl Engine {
             .await;
             if let Some(state) = &mut lifecycle {
                 state.publish(&self.github, &mut plans).await;
+                if let Err(error) =
+                    rustovate_update::save_receipts(&self.cache, repo, &config, &plans, state).await
+                {
+                    repo.warnings.push(format!("write receipt cache: {error}"));
+                }
                 if state.actions.iter().any(|a| {
                     matches!(
                         a.status,
