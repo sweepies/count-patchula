@@ -53,7 +53,9 @@ Wave 2 adds anonymous registry v2 authentication for Docker Hub and GHCR, bounde
 same-origin tag pagination, conditional pages, and lazy manifest/index digest
 resolution for current/proposed tags. Anonymous pull tokens coalesce in memory
 and persist in SQLite until their scoped expiry minus a safety margin. GitHub
-and private registry credentials are never persisted as tokens. A 429 reports Retry-After without retry storms. Lexically
+and private registry credentials are never persisted as tokens. Registry 429s share a host cooldown and retry at most three times, honoring
+Retry-After (up to 60 seconds per retry) or backing off 1/2/4 seconds when absent.
+Longer waits/exhaustion are explicit errors; failed pages are never cached. Lexically
 ordered tag pages cannot safely stop at a known version; full enumeration detects
 new historical tags. Numeric Docker updates keep the exact suffix variant.
 OCI charts use registry tags/manifests, translating SemVer build metadata to `_`.

@@ -55,7 +55,15 @@ async fn client(transport: Arc<Steps>, dir: &std::path::Path) -> Client {
     .unwrap();
     Client::new(
         github,
-        Cached::new(cache.clone(), transport, 4).unwrap(),
+        Cached::with_options(
+            cache.clone(),
+            transport,
+            rustovate_http::Options {
+                registry_retries: 0,
+                ..Default::default()
+            },
+        )
+        .unwrap(),
         cache,
     )
 }

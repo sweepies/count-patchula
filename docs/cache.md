@@ -112,7 +112,12 @@ REST/GraphQL requests, but concurrency alone does not guarantee avoiding its
 point/CPU secondary limits. `--host-concurrency api.github.com=8` overrides one
 host; repeat the flag for others. Limits must be 1–100. Catalog and digest work
 can start across hosts without waiting for a repository slot. The shared
-reqwest pool retains up to 32 idle connections per host.
+reqwest pool retains up to 32 idle connections per host. Registry 429s publish
+a shared host cooldown and retry at most three times. Numeric/date Retry-After
+is honored; absent headers use 1/2/4-second backoff. Waits above 60 seconds and
+exhausted retries fail explicitly, and queued callers do not bypass long
+cooldowns. Other hosts remain available. Only successful responses enter the
+cache, so a rate-limited pagination attempt cannot become a complete catalog.
 
 Two explicit freshness departures avoid redownloading validator-free catalogs:
 

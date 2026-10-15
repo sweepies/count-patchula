@@ -12,7 +12,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -25,6 +25,8 @@ pub struct Options {
     pub registry_freshness_secs: u64,
     /// Minimum freshness for public Go proxy lists/latest. Zero disables it.
     pub go_freshness_secs: u64,
+    /// Bounded OCI 429 retries; waits above 60 seconds are returned to the caller.
+    pub registry_retries: u32,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -33,6 +35,7 @@ impl Default for Options {
             host_concurrency: BTreeMap::new(),
             registry_freshness_secs: 3600,
             go_freshness_secs: 3600,
+            registry_retries: 3,
         }
     }
 }
@@ -44,7 +47,8 @@ impl Options {
             .unwrap_or(self.default_host_concurrency)
     }
     pub fn validate(&self) -> Result<(), Error> {
-        if !(1..=100).contains(&self.default_host_concurrency)
+        if self.registry_retries > 5
+            || !(1..=100).contains(&self.default_host_concurrency)
             || self.host_concurrency.iter().any(|(host, limit)| {
                 !(1..=100).contains(limit)
                     || !Url::parse(&format!("https://{host}/")).is_ok_and(|url| {
@@ -85,13 +89,17 @@ pub struct Stats {
 struct Inner {
     transport: Arc<dyn Transport>,
     cache: Cache,
-    hosts: Mutex<BTreeMap<String, Arc<Semaphore>>>,
+    hosts: Mutex<BTreeMap<String, Arc<Host>>>,
     options: Options,
     decoding: Arc<Semaphore>,
     requests: AtomicU64,
     not_modified: AtomicU64,
     cache_hits: AtomicU64,
     derived_reads: tokio::sync::Mutex<BTreeMap<String, Coalesced>>,
+}
+struct Host {
+    semaphore: Arc<Semaphore>,
+    cooldown: Mutex<Option<Instant>>,
 }
 type Coalesced = Arc<tokio::sync::Mutex<Option<(Instant, Response)>>>;
 type Derive = fn(&[u8]) -> Result<Vec<u8>, Error>;
@@ -134,20 +142,54 @@ impl Cached {
             derived_reads: Default::default(),
         })))
     }
-    async fn acquire(&self, url: &Url) -> Result<OwnedSemaphorePermit, Error> {
+    fn host(&self, url: &Url) -> Result<Arc<Host>, Error> {
         let host = url.host_str().ok_or(Error::Configuration)?;
-        let semaphore = self
+        Ok(self
             .0
             .hosts
             .lock()
             .map_err(|_| Error::Configuration)?
             .entry(host.to_owned())
-            .or_insert_with(|| Arc::new(Semaphore::new(self.0.options.host_limit(host))))
-            .clone();
-        semaphore
-            .acquire_owned()
-            .await
-            .map_err(|_| Error::Configuration)
+            .or_insert_with(|| {
+                Arc::new(Host {
+                    semaphore: Arc::new(Semaphore::new(self.0.options.host_limit(host))),
+                    cooldown: Mutex::new(None),
+                })
+            })
+            .clone())
+    }
+    async fn acquire(&self, url: &Url) -> Result<OwnedSemaphorePermit, Error> {
+        let host = self.host(url)?;
+        loop {
+            let permit = host
+                .semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| Error::Configuration)?;
+            let until = *host.cooldown.lock().map_err(|_| Error::Configuration)?;
+            if let Some(delay) =
+                until.and_then(|until| until.checked_duration_since(Instant::now()))
+            {
+                drop(permit);
+                if delay > Duration::from_secs(60) {
+                    return Err(Error::Status(429));
+                }
+                tokio::time::sleep(delay).await;
+            } else {
+                return Ok(permit);
+            }
+        }
+    }
+    fn cooldown(&self, url: &Url, delay: Duration) -> Result<(), Error> {
+        let host = self.host(url)?;
+        let mut until = host.cooldown.lock().map_err(|_| Error::Configuration)?;
+        let now = Instant::now();
+        let next = now
+            .checked_add(delay)
+            .unwrap_or(now + Duration::from_secs(3600));
+        *until = Some(until.map_or(next, |old| old.max(next)));
+        Ok(())
     }
     pub fn stats(&self) -> Stats {
         Stats {
@@ -293,7 +335,7 @@ impl Cached {
         if let Some((format, _)) = derived {
             key = key.representation(format);
         }
-        let trace = RequestTrace::new("GET", &url);
+        let mut trace = RequestTrace::new("GET", &url);
         let cached = self.0.cache.http_get(&key).await?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -397,18 +439,38 @@ impl Cached {
                 }
             }
         }
-        let queued = Instant::now();
-        let permit = self.acquire(&url).await?;
-        self.0.requests.fetch_add(1, Ordering::Relaxed);
-        let mut response = trace
-            .send(
-                self.0.transport.as_ref(),
-                request,
-                queued.elapsed(),
-                cached.is_some(),
-            )
-            .await?;
-        drop(permit);
+        let mut attempt = 0;
+        let mut response = loop {
+            let queued = Instant::now();
+            let permit = self.acquire(&url).await?;
+            self.0.requests.fetch_add(1, Ordering::Relaxed);
+            let response = trace
+                .send(
+                    self.0.transport.as_ref(),
+                    request.try_clone().ok_or(Error::Configuration)?,
+                    queued.elapsed(),
+                    cached.is_some(),
+                )
+                .await?;
+            if registry.is_some() && response.status == StatusCode::TOO_MANY_REQUESTS {
+                let delay = retry_delay(&response, attempt);
+                // Publish even an exhausted/long cooldown before releasing the
+                // permit, so unrelated queued requests to this host respect it.
+                if let Some(delay) = delay {
+                    self.cooldown(&url, delay)?;
+                }
+                drop(permit);
+                if attempt < self.0.options.registry_retries
+                    && delay.is_some_and(|delay| delay <= Duration::from_secs(60))
+                {
+                    attempt += 1;
+                    trace = RequestTrace::new("GET", &url);
+                    trace.cache_policy("rate-retry", ttl);
+                    continue;
+                }
+            }
+            break response;
+        };
         let not_modified = response.status == StatusCode::NOT_MODIFIED;
         if not_modified {
             let entry = cached.ok_or(Error::MissingBody)?;
@@ -518,6 +580,24 @@ impl Cached {
             }
         }
         Ok(response)
+    }
+}
+
+fn retry_delay(response: &Response, attempt: u32) -> Option<Duration> {
+    match response.headers.get("retry-after") {
+        None => Some(Duration::from_secs(1_u64 << attempt.min(5))),
+        Some(value) => {
+            let value = value.to_str().ok()?;
+            value
+                .parse::<u64>()
+                .ok()
+                .map(Duration::from_secs)
+                .or_else(|| {
+                    httpdate::parse_http_date(value)
+                        .ok()
+                        .map(|date| date.duration_since(SystemTime::now()).unwrap_or_default())
+                })
+        }
     }
 }
 
@@ -642,6 +722,82 @@ mod tests {
             client.registry_get(url, "text/plain", None).await.unwrap();
         }
         assert_eq!(transport.0.load(Ordering::Relaxed), 5);
+    }
+    struct Limited {
+        calls: std::sync::atomic::AtomicUsize,
+        retry_after: &'static str,
+    }
+    impl Transport for Limited {
+        fn send(&self, _: Request) -> crate::Exchange<'_> {
+            let attempt = self.calls.fetch_add(1, Ordering::Relaxed);
+            let retry_after = self.retry_after;
+            Box::pin(async move {
+                Ok(Response {
+                    status: if attempt < 2 {
+                        StatusCode::TOO_MANY_REQUESTS
+                    } else {
+                        StatusCode::OK
+                    },
+                    headers: [(header::RETRY_AFTER, HeaderValue::from_static(retry_after))]
+                        .into_iter()
+                        .collect(),
+                    body: b"new".to_vec(),
+                })
+            })
+        }
+    }
+    #[tokio::test]
+    async fn registry_retries_are_bounded_and_long_cooldowns_do_not_block_other_hosts() {
+        for (retry_after, retries, expected_status, expected_calls) in
+            [("0", 3, 200, 3), ("0", 1, 429, 2), ("3600", 3, 429, 1)]
+        {
+            let transport = Arc::new(Limited {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+                retry_after,
+            });
+            let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+            let client = Cached::with_options(
+                cache,
+                transport.clone(),
+                Options {
+                    registry_retries: retries,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let response = client
+                .registry_get("https://a.org/v2/p/tags/list", "text/plain", None)
+                .await
+                .unwrap();
+            assert_eq!(response.status.as_u16(), expected_status);
+            assert_eq!(transport.calls.load(Ordering::Relaxed), expected_calls);
+            if retry_after == "3600" {
+                assert!(matches!(
+                    client
+                        .registry_get("https://a.org/v2/q/tags/list", "text/plain", None)
+                        .await,
+                    Err(Error::Status(429))
+                ));
+                assert_eq!(
+                    transport.calls.load(Ordering::Relaxed),
+                    1,
+                    "queued callers respect the shared cooldown"
+                );
+                assert_eq!(
+                    client
+                        .registry_get("https://b.org/v2/q/tags/list", "text/plain", None)
+                        .await
+                        .unwrap()
+                        .status,
+                    429
+                );
+                assert_eq!(
+                    transport.calls.load(Ordering::Relaxed),
+                    2,
+                    "other hosts remain available"
+                );
+            }
+        }
     }
     struct Blocked {
         started: tokio::sync::mpsc::UnboundedSender<String>,
