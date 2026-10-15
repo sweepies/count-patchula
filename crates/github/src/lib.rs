@@ -1,6 +1,7 @@
 //! Batch-shared GitHub REST/GraphQL requests with conditional reads and rate limits.
 #![forbid(unsafe_code)]
 
+pub mod app;
 mod credentials;
 mod governor;
 mod pagination;

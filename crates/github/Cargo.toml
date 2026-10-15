@@ -19,8 +19,11 @@ serde_json.workspace = true
 thiserror.workspace = true
 sha2 = "0.11.1"
 httpdate = "1"
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto", "use_pem"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [dev-dependencies]
+rsa = { version = "0.9", features = ["pem"] }
 rustovate-testkit = { path = "../testkit" }
 tempfile = "3"
 tokio = { workspace = true, features = ["test-util"] }
