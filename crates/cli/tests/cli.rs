@@ -52,6 +52,46 @@ fn operator_settings_are_checked_offline_and_secret_diagnostics_are_sanitized() 
 }
 
 #[test]
+fn settings_diagnostics_reach_check_and_server_startup() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = dir.path().join("server.pkl");
+    std::fs::write(
+        &settings,
+        "amends \"RustovateServer.pkl\"\nconcurrency = 0\n",
+    )
+    .unwrap();
+    let checked = cli(&["config", "check-server", settings.to_str().unwrap()]);
+    assert_eq!(checked.status.code(), Some(2));
+    let diagnostic = String::from_utf8(checked.stderr).unwrap();
+    assert!(diagnostic.contains("server.pkl") && diagnostic.contains("concurrency"));
+    assert!(diagnostic.contains('│'), "{diagnostic}");
+    let output = Command::new(env!("CARGO_BIN_EXE_rustovate"))
+        .args(["--server", "--app-id", "1", "--settings"])
+        .arg(&settings)
+        .env(
+            "RUSTOVATE_APP_PRIVATE_KEY",
+            "test-private-key-must-not-appear",
+        )
+        .env(
+            "RUSTOVATE_WEBHOOK_SECRET",
+            "test-webhook-secret-must-not-appear",
+        )
+        .env_remove("RUSTOVATE_APP_PRIVATE_KEY_FILE")
+        .env_remove("RUSTOVATE_WEBHOOK_SECRET_FILE")
+        .env_remove("RUSTOVATE_RECHECK")
+        .env_remove("RUSTOVATE_LOG")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(!stderr.contains("must-not-appear"));
+    let log: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
+    let diagnostic = log["fields"]["error"].as_str().unwrap();
+    assert!(diagnostic.contains("server.pkl") && diagnostic.contains("concurrency"));
+    assert!(diagnostic.contains('│'), "{diagnostic}");
+}
+
+#[test]
 fn server_startup_errors_are_json_and_never_echo_secret_values() {
     let dir = tempfile::tempdir().unwrap();
     let settings = dir.path().join("server.pkl");

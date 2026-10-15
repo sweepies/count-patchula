@@ -32,13 +32,22 @@ pub struct Triggers {
     pub checks: bool,
 }
 impl Settings {
-    pub fn load(path: &Path) -> Result<Self, &'static str> {
-        // Pkl diagnostics can echo source. Never log source text from operator files.
-        let value = rustovate_config::evaluate_local(path, "RustovateServer.pkl", SCHEMA)
-            .map_err(|_| "server settings Pkl evaluation failed")?;
-        let settings: Self =
-            serde_json::from_value(value).map_err(|_| "unknown or invalid server setting")?;
-        settings.validate()?;
+    pub fn load(path: &Path) -> miette::Result<Self> {
+        Self::load_diagnostic(path).map_err(sanitize_diagnostic)
+    }
+    fn load_diagnostic(path: &Path) -> miette::Result<Self> {
+        use miette::{IntoDiagnostic, WrapErr};
+        let source = std::fs::read_to_string(path)
+            .into_diagnostic()
+            .wrap_err_with(|| format!("cannot read server settings {}", path.display()))?;
+        let value = rustovate_config::evaluate_local(path, "RustovateServer.pkl", SCHEMA)?;
+        let settings: Self = serde_path_to_error::deserialize(value).map_err(|error| {
+            rustovate_config::problem(path, &source, &error.path().to_string(), &error.to_string())
+        })?;
+        settings.validate().map_err(|message| {
+            let field = message.split_whitespace().next().unwrap_or("");
+            rustovate_config::problem(path, &source, field, message)
+        })?;
         Ok(settings)
     }
     pub fn validate(&self) -> Result<(), &'static str> {
@@ -53,9 +62,9 @@ impl Settings {
         }
         if let Some(cron) = &self.sweep_cron {
             cron::Schedule::from_str(cron)
-                .map_err(|_| "invalid sweepCron (six or seven fields)")?;
+                .map_err(|_| "sweepCron must be valid (six or seven fields)")?;
         }
-        chrono_tz::Tz::from_str(&self.sweep_timezone).map_err(|_| "invalid sweepTimezone")?;
+        chrono_tz::Tz::from_str(&self.sweep_timezone).map_err(|_| "sweepTimezone must be valid")?;
         if self
             .recheck
             .as_deref()
@@ -75,7 +84,7 @@ impl Settings {
             .iter()
             .any(|id| *id == 0 || *id > i64::MAX as u64)
         {
-            return Err("installation IDs must be positive");
+            return Err("allowedInstallations IDs must be positive");
         }
         if self
             .allowed_repositories
@@ -106,6 +115,65 @@ impl Settings {
             _ => rustovate_engine::Recheck::Now,
         }
     }
+}
+
+/// Operator source can accidentally contain secrets, even in rejected properties.
+/// Retain the evaluator's file and labels, but mask string contents in excerpts.
+fn sanitize_diagnostic(error: miette::Report) -> miette::Report {
+    let Some(contents) = error
+        .source_code()
+        .and_then(|source| source.read_span(&(0, 0).into(), 0, usize::MAX).ok())
+    else {
+        return error;
+    };
+    let source = String::from_utf8_lossy(contents.data());
+    let mut message = format!("{error:#}");
+    let mut labels = error
+        .labels()
+        .map(|labels| labels.collect::<Vec<_>>())
+        .unwrap_or_default();
+    let mut masked = source.as_bytes().to_vec();
+    let mut start = None;
+    let mut escaped = false;
+    for (index, byte) in source.bytes().enumerate() {
+        if let Some(begin) = start {
+            if byte == b'"' && !escaped {
+                let value = &source[begin..index];
+                if !value.is_empty() {
+                    message = message.replace(value, "[redacted]");
+                    for label in &mut labels {
+                        label
+                            .set_label(label.label().map(|text| text.replace(value, "[redacted]")));
+                    }
+                }
+                start = None;
+            } else if byte != b'\n' && byte != b'\r' {
+                masked[index] = b'*';
+            }
+            escaped = byte == b'\\' && !escaped;
+        } else if byte == b'"' {
+            start = Some(index + 1);
+            escaped = false;
+        }
+    }
+    let src = miette::NamedSource::new(
+        contents.name().unwrap_or("server settings"),
+        String::from_utf8(masked).expect("masked UTF-8"),
+    );
+    miette::Report::new(SettingsDiagnostic {
+        message,
+        src,
+        labels,
+    })
+}
+#[derive(Debug, thiserror::Error, miette::Diagnostic)]
+#[error("{message}")]
+struct SettingsDiagnostic {
+    message: String,
+    #[source_code]
+    src: miette::NamedSource<String>,
+    #[label(collection)]
+    labels: Vec<miette::LabeledSpan>,
 }
 pub fn valid_repo(repo: &str) -> bool {
     let parts: Vec<_> = repo.split('/').collect();
@@ -150,9 +218,9 @@ impl Reload {
                 state.settings = settings;
                 state.valid = true;
             }
-            Err(error) => {
+            Err(_) => {
                 if state.valid {
-                    tracing::error!(target: "rustovate_server", error, "server settings rejected; keeping last good settings");
+                    tracing::error!(target: "rustovate_server", "server settings rejected; keeping last good settings; run config check-server for diagnostics");
                 }
                 state.valid = false;
             }
@@ -163,6 +231,43 @@ impl Reload {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn local_absolute_imports_bundled_schema_and_diagnostics() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server.pkl");
+        let parent = dir.path().join("parent.pkl");
+        std::fs::write(&parent, "amends \"RustovateServer.pkl\"\nconcurrency = 3\n").unwrap();
+        std::fs::write(&path, format!("amends \"{}\"\n", parent.display())).unwrap();
+        assert_eq!(Settings::load(&path).unwrap().concurrency, 3);
+        // An absolute schema path works both with a real file and bundled fallback.
+        let schema = dir.path().join("RustovateServer.pkl");
+        for vendored in [false, true] {
+            if vendored {
+                std::fs::write(&schema, SCHEMA).unwrap();
+            }
+            std::fs::write(
+                &path,
+                format!("amends \"{}\"\nconcurrency = 4\n", schema.display()),
+            )
+            .unwrap();
+            assert_eq!(Settings::load(&path).unwrap().concurrency, 4);
+        }
+        for body in [
+            "concurrency = 0",
+            "concurrency =",
+            "unknownSetting = true",
+            "sweepCron = \"invalid\"",
+        ] {
+            std::fs::write(&path, format!("amends \"RustovateServer.pkl\"\n{body}\n")).unwrap();
+            let diagnostic = format!("{:?}", Settings::load(&path).unwrap_err());
+            assert!(diagnostic.contains("server.pkl"), "{diagnostic}");
+            assert!(
+                diagnostic.contains('╭'),
+                "missing source span: {diagnostic}"
+            );
+            assert!(!diagnostic.contains("server settings Pkl evaluation failed"));
+        }
+    }
     #[test]
     fn reload_keeps_last_good_settings_and_recovers() {
         let dir = tempfile::tempdir().unwrap();

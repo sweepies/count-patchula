@@ -45,11 +45,14 @@ Additional settings and defaults:
   errors cause the batch to be retried. Manage retention externally.
 
 Settings and local Pkl imports are reevaluated periodically (normally once per
-second). Local imports work; remote imports, environment reads and resource reads
+second). Relative and absolute local imports work; remote imports, environment reads and resource reads
 are disabled. Invalid edits keep the last good snapshot, emit a sanitized error,
 and make readiness fail until repaired. Edits apply between batches; an existing
 batch retains its snapshot. An invalid initial file prevents startup. Settings
 are operator-owned files; rustovate never rewrites them.
+`config check-server` and startup errors include the cause, file and available
+source span; string contents are masked in diagnostic excerpts. Reload errors
+direct operators to `config check-server` without logging source excerpts.
 
 ## Credentials and startup
 
@@ -118,6 +121,9 @@ failure or draining returns 503, allowing redelivery.
 `X-GitHub-Delivery` is deduplicated transactionally with enqueue and retained for
 seven days. Ignored events also return 202. Ignore rules cover this App's sender,
 disabled triggers, disallowed installations/repositories and unrelated events.
+Each delivery emits one INFO decision with event, action, delivery ID,
+installation, repository and outcome/reason. Invalid signatures emit only the
+decision, without delivery metadata.
 Triggers are:
 
 - A non-deletion push to the repository's default branch.
@@ -138,6 +144,11 @@ starts the coalescing window; additional events do not postpone it indefinitely.
 Events during a batch advance its generation and coalesce into one follow-up
 batch after completion. Failures retry after 60 seconds. At-least-once execution
 is intentional: engine ownership checks and verified receipts reconcile writes.
+Batch start logs list their persisted reasons (startup discovery, sweep, webhook
+trigger or retry) and coalesced delivery IDs. Discovery passes that attribution
+to the repository work it enqueues. Every batch that runs repositories emits a
+report; discovery-only batches and batches with no eligible repository runs log
+an explicit report skip with the reason.
 
 Queue rows stay persisted during execution. SIGTERM/Ctrl-C stops acceptance and
 new claims, drains the current batch within the deadline, then requeues unfinished
@@ -175,6 +186,10 @@ synthetic push using the actual installation ID:
 ```
 
 With the same secret file/env exported in the replay shell:
+
+Set **only one** of `RUSTOVATE_WEBHOOK_SECRET_FILE` and
+`RUSTOVATE_WEBHOOK_SECRET` for `mise run server:replay`. Unset the other variable;
+the task refuses to run when both are set, even if they contain the same secret.
 
 ```sh
 mise run server:replay /tmp/push.json push local-push-001

@@ -64,8 +64,7 @@ async fn run(app: &App, services: &Services) -> Result<u8, (u8, miette::Report)>
             .map(|_| 0)
             .map_err(|e| (1, miette::miette!("{e}"))),
             ConfigCommand::CheckServer(check) => {
-                rustovate_server::settings::Settings::load(&check.path)
-                    .map_err(|e| (2, miette::miette!("{e}")))?;
+                rustovate_server::settings::Settings::load(&check.path).map_err(|e| (2, e))?;
                 writeln!(
                     io::stdout().lock(),
                     "{}",
@@ -153,7 +152,12 @@ async fn main() -> ExitCode {
         Ok(code) => ExitCode::from(code),
         Err((code, error)) => {
             if app.server {
-                tracing::error!(target: "rustovate_server", error = %error, exit_code = code, "server stopped");
+                let diagnostic = if error.source_code().is_some() {
+                    format!("{error:?}")
+                } else {
+                    format!("{error:#}")
+                };
+                tracing::error!(target: "rustovate_server", error = %diagnostic, exit_code = code, "server stopped");
             } else if app.json {
                 println!(
                     "{}",

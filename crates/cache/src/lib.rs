@@ -29,7 +29,7 @@ pub enum Error {
     Worker,
     #[error("cache URL must be absolute HTTP(S) without credentials")]
     Url,
-    #[error("cache schema {0} is newer than supported schema 5")]
+    #[error("cache schema {0} is newer than supported schema 6")]
     FutureSchema(i64),
     #[error("cache integrity check failed")]
     Corrupt,

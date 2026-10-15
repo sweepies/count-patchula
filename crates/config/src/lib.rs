@@ -69,7 +69,8 @@ pub fn evaluate_local(
     let imports = regex::Regex::new(r#"(?:amends|extends|import\*?)\s*\(?\s*"([^"]+)""#)
         .expect("import regex");
     while let Some(module) = pending.pop() {
-        let virtual_path = virtual_files::local_path(&module)?;
+        let module = virtual_files::normalize(&module, true).map_err(miette::Report::new)?;
+        let virtual_path = module.to_string_lossy().into_owned();
         if files.contains_key(&virtual_path) {
             continue;
         }
@@ -92,16 +93,16 @@ pub fn evaluate_local(
         };
         for captures in imports.captures_iter(&text) {
             let relative = &captures[1];
-            if relative.contains(':') || relative.starts_with('/') {
+            if relative.contains(':') {
                 return Err(miette::miette!(
-                    "config imports must be relative local modules; remote imports are disabled"
+                    "config imports must be local modules; remote imports are disabled"
                 ));
             }
             pending.push(module.parent().expect("absolute file").join(relative));
         }
         files.insert(virtual_path, text);
     }
-    virtual_files::evaluate(&virtual_files::local_path(&absolute)?, files)
+    virtual_files::evaluate_modules(&absolute.to_string_lossy(), files, true)
 }
 
 fn decode(path: &Path, source: &str, json: serde_json::Value) -> miette::Result<Config> {
@@ -141,7 +142,7 @@ struct ConfigProblem {
     span: Option<SourceSpan>,
 }
 
-fn problem(path: &Path, source: &str, field: &str, message: &str) -> miette::Report {
+pub fn problem(path: &Path, source: &str, field: &str, message: &str) -> miette::Report {
     // Highlight only an unambiguous property assignment in this file. Inherited
     // properties have no source map after evaluation; never invent their location.
     let leaf = field.rsplit('.').next().unwrap_or(field);

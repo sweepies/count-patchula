@@ -2412,8 +2412,10 @@ dependencies = [
  "cron",
  "futures-util",
  "hmac 0.13.0",
+ "miette",
  "nix",
  "reqwest",
+ "rsa",
  "rustovate-cache",
  "rustovate-config",
  "rustovate-engine",
@@ -2423,12 +2425,14 @@ dependencies = [
  "rustovate-update",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "sha2 0.11.1",
  "tempfile",
  "thiserror",
  "tokio",
  "tower",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

@@ -23,7 +23,26 @@ impl Work {
 #[derive(Clone, Debug)]
 pub struct Claim {
     pub work: Work,
+    pub attribution: Attribution,
     generation: i64,
+}
+
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct Attribution {
+    pub reasons: BTreeSet<String>,
+    pub deliveries: BTreeSet<String>,
+}
+impl Attribution {
+    pub fn reason(reason: &str) -> Self {
+        Self {
+            reasons: BTreeSet::from([reason.into()]),
+            deliveries: BTreeSet::new(),
+        }
+    }
+    pub fn merge(&mut self, other: &Self) {
+        self.reasons.extend(other.reasons.iter().cloned());
+        self.deliveries.extend(other.deliveries.iter().cloned());
+    }
 }
 
 impl Cache {
@@ -35,6 +54,23 @@ impl Cache {
         work: Vec<Work>,
         now: i64,
         coalesce_ms: i64,
+    ) -> Result<bool> {
+        let mut attribution = Attribution::reason(if delivery.is_some() {
+            "webhook trigger"
+        } else {
+            "unspecified"
+        });
+        attribution.deliveries.extend(delivery.iter().cloned());
+        self.enqueue_attributed(delivery, work, now, coalesce_ms, attribution)
+            .await
+    }
+    pub async fn enqueue_attributed(
+        &self,
+        delivery: Option<String>,
+        work: Vec<Work>,
+        now: i64,
+        coalesce_ms: i64,
+        attribution: Attribution,
     ) -> Result<bool> {
         self.call(move |store| {
             let tx = store.conn.transaction()?;
@@ -56,6 +92,7 @@ impl Cache {
                 };
                 tx.execute("INSERT INTO server_work(installation,repo,available_at,check_prs) VALUES (?1,?2,?3,?4) ON CONFLICT(installation,repo) DO UPDATE SET generation=server_work.generation+1,check_prs=excluded.check_prs",
                     params![item.installation as i64, item.repo, now + coalesce_ms, checks])?;
+                tx.execute("INSERT INTO server_work_causes SELECT installation,repo,generation,?3 FROM server_work WHERE installation=?1 AND repo=?2", params![item.installation as i64, item.repo, serde_json::to_string(&attribution)?])?;
             }
             tx.commit()?;
             Ok(true)
@@ -71,10 +108,19 @@ impl Cache {
                 let mut query = tx.prepare("SELECT repo,generation,check_prs FROM server_work WHERE claimed IS NULL AND available_at<=?1 AND installation=?2 ORDER BY available_at,repo LIMIT ?3")?;
                 let rows = query.query_map(params![now, installation, limit as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, Option<String>>(2)?)))?.collect::<std::result::Result<Vec<_>, _>>()?;
                 rows.into_iter().map(|(repo, generation, checks)| Ok(Claim {
-                    work: Work { installation: installation as u64, repo, check_prs: checks.map(|text| serde_json::from_str(&text)).transpose()? }, generation,
+                    work: Work { installation: installation as u64, repo, check_prs: checks.map(|text| serde_json::from_str(&text)).transpose()? }, generation, attribution: Attribution::default(),
                 })).collect::<Result<Vec<_>>>()?
             };
-            for claim in &rows {
+            let mut rows = rows;
+            for claim in &mut rows {
+                let mut query = tx.prepare("SELECT attribution FROM server_work_causes WHERE installation=?1 AND repo=?2 AND generation<=?3")?;
+                let causes = query.query_map(params![installation, claim.work.repo, claim.generation], |r| r.get::<_, String>(0))?;
+                for cause in causes {
+                    claim.attribution.merge(&serde_json::from_str::<Attribution>(&cause?)?);
+                }
+                if claim.attribution.reasons.is_empty() {
+                    claim.attribution.reasons.insert("recovered work".into());
+                }
                 tx.execute("UPDATE server_work SET claimed=generation WHERE installation=?1 AND repo=?2", params![installation, claim.work.repo])?;
             }
             tx.commit()?;
@@ -92,7 +138,11 @@ impl Cache {
             let tx = store.conn.transaction()?;
             for claim in &claims {
                 if success {
+                    tx.execute("DELETE FROM server_work_causes WHERE installation=?1 AND repo=?2 AND generation<=?3", params![claim.work.installation as i64, claim.work.repo, claim.generation])?;
                     tx.execute("DELETE FROM server_work WHERE installation=?1 AND repo=?2 AND generation=?3 AND claimed=?3", params![claim.work.installation as i64, claim.work.repo, claim.generation])?;
+                }
+                else {
+                    tx.execute("INSERT INTO server_work_causes VALUES (?1,?2,?3,?4)", params![claim.work.installation as i64, claim.work.repo, claim.generation, serde_json::to_string(&Attribution::reason("retry"))?])?;
                 }
                 tx.execute("UPDATE server_work SET claimed=NULL,available_at=?4 WHERE installation=?1 AND repo=?2 AND claimed=?3", params![claim.work.installation as i64, claim.work.repo, claim.generation, now + delay_ms])?;
             }
@@ -105,7 +155,7 @@ impl Cache {
         self.call(|store| {
             store
                 .conn
-                .execute("UPDATE server_work SET claimed=NULL", [])?;
+                .execute_batch("INSERT INTO server_work_causes SELECT installation,repo,generation,'{\"reasons\":[\"retry\"],\"deliveries\":[]}' FROM server_work WHERE claimed IS NOT NULL; UPDATE server_work SET claimed=NULL;")?;
             Ok(())
         })
         .await
@@ -125,6 +175,59 @@ impl Cache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn attribution_survives_coalescing_followups_retries_and_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cache.sqlite");
+        let cache = Cache::open(&path, Default::default()).await.unwrap();
+        cache
+            .enqueue_attributed(None, work(), 0, 0, Attribution::reason("startup discovery"))
+            .await
+            .unwrap();
+        for delivery in ["first", "second"] {
+            cache
+                .enqueue(Some(delivery.into()), work(), 0, 0)
+                .await
+                .unwrap();
+        }
+        let claims = cache.claim_batch(0, 1).await.unwrap();
+        assert_eq!(
+            claims[0].attribution.deliveries,
+            BTreeSet::from(["first".into(), "second".into()])
+        );
+        assert!(claims[0].attribution.reasons.contains("startup discovery"));
+        cache
+            .enqueue(Some("followup".into()), work(), 0, 0)
+            .await
+            .unwrap();
+        cache.finish_work(claims, true, 0, 0).await.unwrap();
+        let claims = cache.claim_batch(0, 1).await.unwrap();
+        assert_eq!(
+            claims[0].attribution.deliveries,
+            BTreeSet::from(["followup".into()])
+        );
+        cache.finish_work(claims, false, 0, 0).await.unwrap();
+        drop(cache);
+        let cache = Cache::open(path, Default::default()).await.unwrap();
+        cache.recover_work().await.unwrap();
+        let claims = cache.claim_batch(0, 1).await.unwrap();
+        assert!(claims[0].attribution.reasons.contains("retry"));
+        assert_eq!(
+            claims[0].attribution.deliveries,
+            BTreeSet::from(["followup".into()])
+        );
+        cache.finish_work(claims, true, 0, 0).await.unwrap();
+        cache
+            .enqueue_attributed(None, work(), 0, 0, Attribution::reason("sweep"))
+            .await
+            .unwrap();
+        let claims = cache.claim_batch(0, 1).await.unwrap();
+        assert_eq!(
+            claims[0].attribution.reasons,
+            BTreeSet::from(["sweep".into()])
+        );
+        assert!(claims[0].attribution.deliveries.is_empty());
+    }
     fn work() -> Vec<Work> {
         vec![Work::repository(1, "owner/repo")]
     }

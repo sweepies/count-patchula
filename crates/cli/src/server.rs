@@ -96,5 +96,5 @@ pub async fn run(app: &App) -> Result<u8> {
     })
     .await
     .map(|()| 0)
-    .map_err(|e| (1, miette::miette!("{e}")))
+    .map_err(|e| (1, e))
 }

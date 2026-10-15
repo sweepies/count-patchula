@@ -10,7 +10,10 @@ use axum::{
 };
 use chrono::Utc;
 use futures_util::future::BoxFuture;
-use rustovate_cache::{Cache, queue::Work};
+use rustovate_cache::{
+    Cache,
+    queue::{Attribution, Work},
+};
 use rustovate_engine::Engine;
 use rustovate_github::{Client, app::App};
 use rustovate_http::Transport;
@@ -45,7 +48,14 @@ pub struct Options {
     pub shutdown_timeout: Duration,
 }
 
-pub async fn serve(options: Options) -> Result<(), Error> {
+pub async fn serve(options: Options) -> miette::Result<()> {
+    let settings = Reload::new(Settings::load(&options.settings)?);
+    serve_with_settings(options, settings)
+        .await
+        .map_err(miette::Report::msg)
+}
+
+async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), Error> {
     if options.webhook_secret.is_empty() {
         return Err(Error("webhook secret must be nonempty"));
     }
@@ -56,7 +66,6 @@ pub async fn serve(options: Options) -> Result<(), Error> {
     {
         return Err(Error("recheck must be now or next-run"));
     }
-    let settings = Reload::new(Settings::load(&options.settings).map_err(Error)?);
     if let Some(parent) = options.cache.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent).map_err(|_| Error("cannot create cache directory"))?;
     }
@@ -180,6 +189,7 @@ trait Batch: Send + Sync + 'static {
         &'a self,
         work: &'a [Work],
         settings: &'a Settings,
+        attribution: &'a Attribution,
     ) -> BoxFuture<'a, Result<(), Error>>;
 }
 struct Engines {
@@ -195,10 +205,12 @@ impl Batch for Engines {
         &'a self,
         work: &'a [Work],
         settings: &'a Settings,
+        attribution: &'a Attribution,
     ) -> BoxFuture<'a, Result<(), Error>> {
         Box::pin(async move {
             let id = work.first().ok_or(Error("empty batch"))?.installation;
             if !settings.installation_allowed(id) {
+                skip_report("installation not allowlisted", false);
                 return Ok(());
             }
             let credentials = self.app.installation(id);
@@ -239,11 +251,12 @@ impl Batch for Engines {
                     }
                 }
                 self.cache
-                    .enqueue(
+                    .enqueue_attributed(
                         None,
                         repos,
                         Utc::now().timestamp_millis(),
                         settings.coalescing_ms as i64,
+                        attribution.clone(),
                     )
                     .await
                     .map_err(|_| Error("cannot persist discovered repositories"))?;
@@ -267,6 +280,14 @@ impl Batch for Engines {
             // Empty repositories would mean discovery to the engine. Never pass that
             // through after filtering a queue batch: it could escape the allowlist.
             if repositories.is_empty() {
+                skip_report(
+                    if work.iter().all(|w| w.repo.is_empty()) {
+                        "discovery-only batch; no repository runs"
+                    } else {
+                        "no eligible repository runs"
+                    },
+                    work.iter().all(|w| w.repo.is_empty()),
+                );
                 return Ok(());
             }
             let mut engines = self.engines.lock().await;
@@ -348,6 +369,9 @@ impl Batch for Engines {
         })
     }
 }
+fn skip_report(reason: &str, discovery_only: bool) {
+    tracing::info!(target: "rustovate_server", reason, discovery_only, repository_runs = 0, "batch report skipped");
+}
 async fn output_report(report: &Report, directory: Option<&std::path::Path>) -> Result<(), Error> {
     if let Some(directory) = directory {
         let report = report.clone();
@@ -370,8 +394,11 @@ async fn output_report(report: &Report, directory: Option<&std::path::Path>) -> 
                 .map_err(|_| Error("cannot write batch report"))?;
             file.sync_all()
                 .map_err(|_| Error("cannot sync batch report"))?;
-            std::fs::rename(temporary, directory.join(name))
-                .map_err(|_| Error("cannot publish batch report"))
+            let path = directory.join(name);
+            std::fs::rename(temporary, &path)
+                .map_err(|_| Error("cannot publish batch report"))?;
+            tracing::info!(target: "rustovate_server", path = %path.display(), repository_runs = report.repositories.len(), "batch report written");
+            Ok::<(), Error>(())
         })
         .await
         .map_err(|_| Error("report writer failed"))??;
@@ -403,8 +430,12 @@ async fn worker(
             continue;
         }
         let work: Vec<_> = claims.iter().map(|c| c.work.clone()).collect();
-        tracing::info!(target: "rustovate_server", installation = work[0].installation, entries = work.len(), "batch started");
-        let result = runner.run(&work, &settings).await;
+        let mut attribution = Attribution::default();
+        for claim in &claims {
+            attribution.merge(&claim.attribution);
+        }
+        tracing::info!(target: "rustovate_server", installation = work[0].installation, entries = work.len(), reasons = ?attribution.reasons, delivery_ids = ?attribution.deliveries, "batch started");
+        let result = runner.run(&work, &settings, &attribution).await;
         if let Err(error) = &result {
             tracing::error!(target: "rustovate_server", %error, "batch failed");
         }
@@ -498,6 +529,7 @@ async fn maintenance(
 ) {
     let mut probe_at = tokio::time::Instant::now();
     let mut next_sweep = Some(Utc::now()); // Recover the installation inventory on startup.
+    let mut startup = true;
     let mut schedule = (
         settings.current().sweep_cron,
         settings.current().sweep_timezone,
@@ -533,7 +565,7 @@ async fn maintenance(
                 }
                 if sweep_due {
                     cache
-                        .enqueue(
+                        .enqueue_attributed(
                             None,
                             ids.iter()
                                 .copied()
@@ -541,6 +573,11 @@ async fn maintenance(
                                 .collect(),
                             Utc::now().timestamp_millis(),
                             current.coalescing_ms as i64,
+                            Attribution::reason(if startup {
+                                "startup discovery"
+                            } else {
+                                "sweep"
+                            }),
                         )
                         .await
                         .map_err(|_| Error("cannot persist cron sweep"))?;
@@ -562,6 +599,7 @@ async fn maintenance(
             probe_at = tokio::time::Instant::now() + Duration::from_secs(30);
             if sweep_due {
                 next_sweep = if success {
+                    startup = false;
                     sweep_after(&current, Utc::now())
                 } else {
                     Some(Utc::now() + chrono::Duration::seconds(60))

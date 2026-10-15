@@ -5,6 +5,226 @@ use serde_json::{Value, json};
 use sha2::Sha256;
 use tower::ServiceExt;
 
+#[derive(Clone, Default)]
+struct Logs(Arc<std::sync::Mutex<Vec<u8>>>);
+static LOG_TEST_LOCK: Mutex<()> = Mutex::const_new(());
+impl std::io::Write for Logs {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+impl Logs {
+    fn events(&self) -> Vec<Value> {
+        String::from_utf8(self.0.lock().unwrap().clone())
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap()["fields"].clone())
+            .collect()
+    }
+    fn subscriber(&self) -> impl tracing::Subscriber + Send + Sync + 'static {
+        let logs = self.clone();
+        tracing_subscriber::fmt()
+            .json()
+            .with_writer(move || logs.clone())
+            .finish()
+    }
+}
+
+#[tokio::test]
+async fn webhook_logs_one_decision_per_delivery_without_sensitive_data() {
+    let _capture = LOG_TEST_LOCK.lock().await;
+    use tracing::instrument::WithSubscriber;
+    let logs = Logs::default();
+    async {
+        let state = state().await;
+        let router = router(state.clone(), Arc::new(AtomicBool::new(true)));
+        let mut value = payload();
+        value["sensitive"] = json!("body-must-not-appear");
+        for (id, outcome) in [
+            ("delivery", "accepted/enqueued"),
+            ("delivery", "duplicate delivery ignored"),
+        ] {
+            router
+                .clone()
+                .oneshot(request(serde_json::to_vec(&value).unwrap(), "push", id))
+                .await
+                .unwrap();
+            let event = logs.events().pop().unwrap();
+            assert_eq!(event["outcome"], outcome);
+            assert_eq!(event["event"], "push");
+            assert_eq!(event["delivery_id"], id);
+            assert_eq!(event["repository"], "owner/repo");
+            assert_eq!(event["installation"], 1);
+        }
+        value["sender"]["login"] = json!("rustovate[bot]");
+        router
+            .clone()
+            .oneshot(request(serde_json::to_vec(&value).unwrap(), "push", "own"))
+            .await
+            .unwrap();
+        assert_eq!(logs.events().last().unwrap()["reason"], "own-bot ignored");
+        value["sender"]["login"] = json!("human");
+        let mut settings = state.settings.current();
+        settings.triggers.push = false;
+        let disabled = router_for_settings(&state, settings.clone());
+        disabled
+            .oneshot(request(
+                serde_json::to_vec(&value).unwrap(),
+                "push",
+                "disabled",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(logs.events().last().unwrap()["reason"], "trigger disabled");
+        settings.triggers.push = true;
+        settings.allowed_repositories = vec!["other/repo".into()];
+        router_for_settings(&state, settings)
+            .oneshot(request(
+                serde_json::to_vec(&value).unwrap(),
+                "push",
+                "disallowed",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(logs.events().last().unwrap()["reason"], "not allowlisted");
+        let mut bad = request(b"secret-body".to_vec(), "secret-event", "secret-delivery");
+        bad.headers_mut()
+            .insert("x-hub-signature-256", "secret-signature".parse().unwrap());
+        router.clone().oneshot(bad).await.unwrap();
+        assert_eq!(
+            router
+                .oneshot(request(vec![b'a'; BODY_LIMIT + 1], "push", "large"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+    }
+    .with_subscriber(logs.subscriber())
+    .await;
+    let events = logs.events();
+    assert_eq!(events.len(), 7);
+    assert_eq!(
+        events[5],
+        json!({"message":"webhook received", "outcome":"bad signature"})
+    );
+    assert_eq!(
+        events[6],
+        json!({"message":"webhook received", "outcome":"body rejected", "status":413})
+    );
+    let text = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    for forbidden in [
+        "secret-body",
+        "secret-event",
+        "secret-delivery",
+        "secret-signature",
+        "body-must-not-appear",
+        "test-only-secret",
+    ] {
+        assert!(!text.contains(forbidden), "{text}");
+    }
+}
+fn router_for_settings(state: &Webhook, settings: Settings) -> Router {
+    let mut state = state.clone();
+    state.settings = Reload::new(settings);
+    router(state, Arc::new(AtomicBool::new(true)))
+}
+
+#[tokio::test]
+async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
+    let _capture = LOG_TEST_LOCK.lock().await;
+    use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
+    use tracing::instrument::WithSubscriber;
+    let logs = Logs::default();
+    let directory = tempfile::tempdir().unwrap();
+    let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
+    let pem = key.to_pkcs1_pem(LineEnding::LF).unwrap();
+    let transport: Arc<dyn Transport> = Arc::new(DiscoveryAndMissingRepository);
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let runner = Engines {
+        app: App::new(1, pem.as_bytes(), transport.clone()).unwrap(),
+        transport,
+        cache: cache.clone(),
+        engines: Mutex::new(BTreeMap::new()),
+        recheck: None,
+        bot_login: "rustovate[bot]".into(),
+    };
+    let mut settings = settings();
+    settings.report_directory = Some(directory.path().to_owned());
+    let attribution = Attribution::reason("startup discovery");
+    runner
+        .run(&[Work::repository(1, "")], &settings, &attribution)
+        .with_subscriber(logs.subscriber())
+        .await
+        .unwrap();
+    let events = logs.events();
+    let skipped = events
+        .iter()
+        .find(|event| event["message"] == "batch report skipped")
+        .unwrap();
+    assert_eq!(skipped["discovery_only"], true);
+    assert_eq!(skipped["repository_runs"], 0);
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    let claims = cache.claim_batch(i64::MAX, 10).await.unwrap();
+    assert_eq!(claims.len(), 1);
+    assert!(claims[0].attribution.reasons.contains("startup discovery"));
+    for _ in 0..2 {
+        assert!(
+            runner
+                .run(&[claims[0].work.clone()], &settings, &claims[0].attribution)
+                .await
+                .is_err()
+        );
+    }
+    let paths = std::fs::read_dir(directory.path())
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(paths.len(), 2);
+    for path in paths {
+        let actual: Report = serde_json::from_slice(&std::fs::read(path.path()).unwrap()).unwrap();
+        assert_eq!(actual.repositories.len(), 1);
+        assert_eq!(actual.repositories[0].repository, "owner/repo");
+        assert_eq!(actual.repositories[0].status, Status::Error);
+    }
+}
+
+struct DiscoveryAndMissingRepository;
+impl Transport for DiscoveryAndMissingRepository {
+    fn send(&self, request: reqwest::Request) -> rustovate_http::Exchange<'_> {
+        let (status, value) = match request.url().path() {
+            "/app/installations/1/access_tokens" => (
+                reqwest::StatusCode::CREATED,
+                json!({"token":"offline-test-token", "expires_at":(Utc::now() + chrono::Duration::hours(1)).to_rfc3339()}),
+            ),
+            "/installation/repositories" => (
+                reqwest::StatusCode::OK,
+                json!({"repositories":[{"full_name":"owner/repo"}]}),
+            ),
+            "/graphql" => (
+                reqwest::StatusCode::NOT_FOUND,
+                json!({"message":"Not Found"}),
+            ),
+            path if path.starts_with("/repos/owner/repo") => (
+                reqwest::StatusCode::NOT_FOUND,
+                json!({"message":"Not Found"}),
+            ),
+            path => panic!("unexpected offline request: {path}"),
+        };
+        Box::pin(async move {
+            Ok(rustovate_http::Response {
+                status,
+                headers: Default::default(),
+                body: serde_json::to_vec(&value).unwrap(),
+            })
+        })
+    }
+}
+
 fn settings() -> Settings {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.pkl");
@@ -234,7 +454,12 @@ struct BlockingBatch {
     finish: tokio::sync::Notify,
 }
 impl Batch for BlockingBatch {
-    fn run<'a>(&'a self, _: &'a [Work], _: &'a Settings) -> BoxFuture<'a, Result<(), Error>> {
+    fn run<'a>(
+        &'a self,
+        _: &'a [Work],
+        _: &'a Settings,
+        _: &'a Attribution,
+    ) -> BoxFuture<'a, Result<(), Error>> {
         Box::pin(async move {
             self.started.notify_one();
             self.finish.notified().await;

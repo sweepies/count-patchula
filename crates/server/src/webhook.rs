@@ -2,7 +2,7 @@
 use crate::settings::{Reload, Settings};
 use axum::{
     body::Bytes,
-    extract::State,
+    extract::{State, rejection::BytesRejection},
     http::{HeaderMap, StatusCode},
 };
 use hmac::{Hmac, KeyInit, Mac};
@@ -59,29 +59,53 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     let value = values.next()?.to_str().ok()?;
     values.next().is_none().then_some(value)
 }
-pub async fn receive(State(state): State<Webhook>, headers: HeaderMap, body: Bytes) -> StatusCode {
+pub async fn receive(
+    State(state): State<Webhook>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> StatusCode {
+    let body = match body {
+        Ok(body) => body,
+        Err(error) => {
+            tracing::info!(target: "rustovate_server", outcome = "body rejected", status = error.status().as_u16(), "webhook received");
+            return error.status();
+        }
+    };
     if !state.accepting.load(Ordering::Acquire) {
+        tracing::info!(target: "rustovate_server", outcome = "draining", "webhook received");
         return StatusCode::SERVICE_UNAVAILABLE;
     }
     if !header(&headers, "x-hub-signature-256")
         .is_some_and(|signature| verify(&state.secret, signature, &body))
     {
+        tracing::info!(target: "rustovate_server", outcome = "bad signature", "webhook received");
         return StatusCode::UNAUTHORIZED;
     }
     let Some(delivery) = header(&headers, "x-github-delivery").filter(|s| {
         !s.is_empty() && s.len() <= 128 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
     }) else {
+        tracing::info!(target: "rustovate_server", outcome = "invalid delivery id", "webhook received");
         return StatusCode::BAD_REQUEST;
     };
-    let Some(event) = header(&headers, "x-github-event") else {
+    let Some(event) = header(&headers, "x-github-event").filter(|s| metadata_word(s)) else {
+        tracing::info!(target: "rustovate_server", outcome = "invalid event", "webhook received");
         return StatusCode::BAD_REQUEST;
     };
     let Ok(payload) = serde_json::from_slice::<Value>(&body) else {
+        tracing::info!(target: "rustovate_server", outcome = "invalid JSON", "webhook received");
         return StatusCode::BAD_REQUEST;
     };
     let settings = state.settings.current();
     let work = classify(event, &payload, &settings, &state.bot_login);
-    match state
+    let reason = if work.is_empty() {
+        ignored_reason(event, &payload, &settings, &state.bot_login)
+    } else if work.iter().any(|w| w.repo.is_empty()) {
+        "installation discovery"
+    } else {
+        "repository trigger"
+    };
+    let enqueued = !work.is_empty();
+    let result = state
         .cache
         .enqueue(
             Some(delivery.into()),
@@ -89,14 +113,73 @@ pub async fn receive(State(state): State<Webhook>, headers: HeaderMap, body: Byt
             chrono::Utc::now().timestamp_millis(),
             settings.coalescing_ms as i64,
         )
-        .await
-    {
-        Ok(_) => StatusCode::ACCEPTED,
-        Err(_) => {
-            tracing::error!(target: "rustovate_server", "webhook could not be persisted");
-            StatusCode::SERVICE_UNAVAILABLE
-        }
+        .await;
+    let outcome = match &result {
+        Ok(false) => "duplicate delivery ignored",
+        Ok(true) if enqueued => "accepted/enqueued",
+        Ok(true) => "accepted/ignored",
+        Err(_) => "persistence failed",
+    };
+    tracing::info!(target: "rustovate_server", event, action = payload["action"].as_str().filter(|s| metadata_word(s)).unwrap_or(""), delivery_id = delivery, installation = payload["installation"]["id"].as_u64(), repository = payload["repository"]["full_name"].as_str().filter(|s| crate::settings::valid_repo(s)), outcome, reason, "webhook received");
+    if result.is_ok() {
+        StatusCode::ACCEPTED
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
     }
+}
+fn metadata_word(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+pub(crate) fn ignored_reason(
+    event: &str,
+    payload: &Value,
+    settings: &Settings,
+    bot: &str,
+) -> &'static str {
+    if payload["sender"]["login"]
+        .as_str()
+        .is_some_and(|s| s.eq_ignore_ascii_case(bot))
+    {
+        return "own-bot ignored";
+    }
+    let Some(id) = payload["installation"]["id"]
+        .as_u64()
+        .filter(|id| settings.installation_allowed(*id))
+    else {
+        return "not allowlisted";
+    };
+    let enabled = match event {
+        "push" => settings.triggers.push,
+        "issues" => settings.triggers.dashboard,
+        "pull_request" if payload["action"] == "closed" => settings.triggers.pull_request_closed,
+        "pull_request" => settings.triggers.pull_request_edited,
+        "installation" | "installation_repositories" => settings.triggers.installation,
+        "check_suite" | "check_run" => settings.triggers.checks,
+        _ => return "unrelated event or action",
+    };
+    if !enabled {
+        return "trigger disabled";
+    }
+    if matches!(event, "installation" | "installation_repositories") {
+        return if (event == "installation" && payload["action"] == "created")
+            || (event == "installation_repositories" && payload["action"] == "added")
+        {
+            "not allowlisted"
+        } else {
+            "unrelated event or action"
+        };
+    }
+    if !payload["repository"]["full_name"]
+        .as_str()
+        .is_some_and(|repo| settings.allows(id, repo))
+    {
+        return "not allowlisted";
+    }
+    "unrelated event or action"
 }
 pub fn classify(event: &str, payload: &Value, settings: &Settings, bot: &str) -> Vec<Work> {
     if payload["sender"]["login"]
