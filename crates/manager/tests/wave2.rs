@@ -195,3 +195,12 @@ fn yaml_locations_follow_paths_with_identical_values_flow_maps_and_unicode() {
     );
     assert!(spec.location.start > text.find("spec:").unwrap());
 }
+
+#[test]
+fn flux_chart_refs_still_extract_embedded_image_pins() {
+    let files=Files::from([("apps/demo/release.yaml".into(),"apiVersion: helm.toolkit.fluxcd.io/v2\nkind: HelmRelease\nspec:\n  chartRef: {kind: OCIRepository, name: app}\n  values:\n    image: {repository: ghcr.io/example/app, tag: 1.2.3}\n".into())]);
+    let deps = extract(&files);
+    assert_eq!(deps.len(), 1);
+    assert_eq!(deps[0].manager, Manager::Flux);
+    assert_eq!(deps[0].package, "ghcr.io/example/app");
+}

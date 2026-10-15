@@ -23,8 +23,6 @@ pub enum Error {
     Invalid(String),
     #[error("cannot safely preserve this compound requirement: {0}; use exact or widen")]
     Compound(String),
-    #[error("version scheme {0} is not implemented (TODO)")]
-    Unsupported(String),
 }
 pub type Result<T> = std::result::Result<T, Error>;
 

@@ -21,7 +21,10 @@ impl Transport for Steps {
         if response.status == 304 {
             assert_eq!(request.headers()["if-none-match"], "\"tags\"");
         }
-        Box::pin(async { Ok(response) })
+        Box::pin(async {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            Ok(response)
+        })
     }
 }
 fn response(status: u16, body: &str, headers: &[(&str, &str)]) -> Response {
@@ -135,4 +138,40 @@ async fn rate_limit_and_foreign_pagination_are_explicit() {
                 .contains(expected)
         );
     }
+}
+
+#[tokio::test]
+async fn concurrent_charts_share_one_compact_index_but_later_calls_revalidate() {
+    let url = "https://charts.example.org/index.yaml";
+    let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
+        (
+            url.into(),
+            response(
+                200,
+                "apiVersion: v1\nentries:\n  first:\n    - version: 1.0.0\n  second:\n    - version: 2.0.0\n",
+                &[("etag", "\"tags\""), ("cache-control", "no-cache")],
+            ),
+        ),
+        (url.into(), response(304, "", &[])),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    let client = client(steps.clone(), dir.path()).await;
+    let (a, b) = tokio::join!(
+        client.lookup(Source::Helm, "https://charts.example.org|first"),
+        client.lookup(Source::Helm, "https://charts.example.org|second")
+    );
+    assert_eq!(a.unwrap().versions[0].version, "1.0.0");
+    assert_eq!(b.unwrap().versions[0].version, "2.0.0");
+    assert_eq!(
+        steps.0.lock().unwrap().len(),
+        1,
+        "overlapping callers share the original document"
+    );
+    assert!(
+        client
+            .lookup(Source::Helm, "https://charts.example.org|first")
+            .await
+            .is_ok()
+    );
+    assert!(steps.0.lock().unwrap().is_empty());
 }

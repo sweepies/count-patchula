@@ -36,8 +36,8 @@ summed. Trace phase boundaries show that overlap. No Pkl evaluation,
 tree/blob fetch or scanner work occurs on an unchanged cached repository config.
 
 Report metadata includes branch/commit, warnings, source/kinds/locations, per-update
-policy and request/cache counters plus phase timings. Unsupported managers and
-sources are explicit warnings; API/config/extraction failures are errors. The CLI
+policy and request/cache counters plus phase timings. Unavailable upstream
+identities produce warnings; API/config/extraction failures are errors. The CLI
 writes only the report to stdout with --json and always summarizes on stderr.
 It exits 1 for batch failures or any per-repo error, 2 for invalid config/options.
 `run` remains unimplemented. No writes to GitHub occur.

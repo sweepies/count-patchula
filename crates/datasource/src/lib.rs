@@ -25,8 +25,6 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error("invalid package identity or upstream payload")]
     Invalid,
-    #[error("data source {0:?} is not implemented in this wave")]
-    Unsupported(Source),
     #[error("registry rate limit reached; retry after {0} seconds")]
     RateLimit(u64),
 }

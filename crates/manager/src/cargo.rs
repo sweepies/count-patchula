@@ -27,21 +27,21 @@ pub(super) fn extract(
     let mut workspace = BTreeMap::new();
     // The nearest ancestor workspace supplies inherited declarations. Their
     // editable version location belongs to the workspace root, scanned once.
-    for (_, root) in files
+    if let Some(deps) = files
         .iter()
         .filter(|(p, _)| {
             p.ends_with("Cargo.toml") && base.starts_with(p.strip_suffix("Cargo.toml").unwrap())
         })
-        .rev()
+        .filter_map(|(p, root)| {
+            root.get("workspace")
+                .and_then(|v| v.get("dependencies"))
+                .and_then(Item::as_table_like)
+                .map(|deps| (p.len(), deps))
+        })
+        .max_by_key(|(length, _)| *length)
+        .map(|(_, deps)| deps)
     {
-        if let Some(deps) = root
-            .get("workspace")
-            .and_then(|v| v.get("dependencies"))
-            .and_then(Item::as_table_like)
-        {
-            workspace.extend(deps.iter().map(|(k, v)| (k.to_owned(), v.clone())));
-            break;
-        }
+        workspace.extend(deps.iter().map(|(k, v)| (k.to_owned(), v.clone())));
     }
     let mut out = Vec::new();
     walk(path, text, doc.as_table(), "", &workspace, &mut out);

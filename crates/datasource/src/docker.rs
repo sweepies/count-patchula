@@ -56,65 +56,80 @@ impl Client {
     ) -> Result<rustovate_http::Response> {
         let scope = format!("{host}/{path}");
         let token = self.tokens.lock().await.entry(scope).or_default().clone();
-        let mut token = token.lock().await;
         let bearer = token
+            .lock()
+            .await
             .as_ref()
             .filter(|(_, expiry)| *expiry > Instant::now())
-            .map(|(v, _)| v.as_str());
-        let mut response = self.http.registry_get(url, accept, bearer).await?;
+            .map(|(v, _)| v.clone());
+        let mut response = self
+            .http
+            .registry_get(url, accept, bearer.as_deref())
+            .await?;
         if response.status == 401 {
-            let challenge = response
-                .headers
-                .get("www-authenticate")
-                .and_then(|v| v.to_str().ok())
-                .ok_or(Error::Invalid)?;
-            let raw = challenge
-                .strip_prefix("Bearer ")
-                .or_else(|| challenge.strip_prefix("bearer "))
-                .ok_or(Error::Invalid)?;
-            let fields: BTreeMap<_, _> = raw
-                .split(',')
-                .filter_map(|v| v.trim().split_once('='))
-                .map(|(k, v)| (k, v.trim_matches('"')))
-                .collect();
-            let mut realm = Url::parse(fields.get("realm").ok_or(Error::Invalid)?)
-                .map_err(|_| Error::Invalid)?;
-            if realm.scheme() != "https"
-                || !realm.username().is_empty()
-                || realm.password().is_some()
-                || !(realm.host_str() == Some(host.split(':').next().unwrap_or(host))
-                    || (host == "registry-1.docker.io"
-                        && realm.host_str() == Some("auth.docker.io")))
-            {
-                return Err(Error::Invalid);
-            }
-            realm.set_query(None);
-            if let Some(service) = fields.get("service") {
-                realm.query_pairs_mut().append_pair("service", service);
-            }
-            realm
-                .query_pairs_mut()
-                .append_pair("scope", &format!("repository:{path}:pull"));
-            let auth = self.http.token_get(realm.as_str()).await?;
-            if !auth.status.is_success() {
-                return Err(rustovate_http::CacheError::Status(auth.status.as_u16()).into());
-            }
-            let value: Value = serde_json::from_slice(&auth.body)?;
-            let bearer = value["token"]
-                .as_str()
-                .or_else(|| value["access_token"].as_str())
-                .ok_or(Error::Invalid)?
-                .to_owned();
-            let expiry = Instant::now()
-                + Duration::from_secs(
-                    value["expires_in"]
-                        .as_u64()
-                        .unwrap_or(60)
-                        .saturating_sub(10)
-                        .min(3600),
-                );
-            response = self.http.registry_get(url, accept, Some(&bearer)).await?;
-            *token = Some((bearer, expiry));
+            let mut token = token.lock().await;
+            let refreshed = token
+                .as_ref()
+                .filter(|(v, expiry)| *expiry > Instant::now() && Some(v) != bearer.as_ref())
+                .map(|(v, _)| v.clone());
+            let next = if let Some(refreshed) = refreshed {
+                refreshed
+            } else {
+                let challenge = response
+                    .headers
+                    .get("www-authenticate")
+                    .and_then(|v| v.to_str().ok())
+                    .ok_or(Error::Invalid)?;
+                let raw = challenge
+                    .strip_prefix("Bearer ")
+                    .or_else(|| challenge.strip_prefix("bearer "))
+                    .ok_or(Error::Invalid)?;
+                let fields: BTreeMap<_, _> = raw
+                    .split(',')
+                    .filter_map(|v| v.trim().split_once('='))
+                    .map(|(k, v)| (k, v.trim_matches('"')))
+                    .collect();
+                let mut realm = Url::parse(fields.get("realm").ok_or(Error::Invalid)?)
+                    .map_err(|_| Error::Invalid)?;
+                if realm.scheme() != "https"
+                    || !realm.username().is_empty()
+                    || realm.password().is_some()
+                    || !(realm.host_str() == Some(host.split(':').next().unwrap_or(host))
+                        || (host == "registry-1.docker.io"
+                            && realm.host_str() == Some("auth.docker.io")))
+                {
+                    return Err(Error::Invalid);
+                }
+                realm.set_query(None);
+                if let Some(service) = fields.get("service") {
+                    realm.query_pairs_mut().append_pair("service", service);
+                }
+                realm
+                    .query_pairs_mut()
+                    .append_pair("scope", &format!("repository:{path}:pull"));
+                let auth = self.http.token_get(realm.as_str()).await?;
+                if !auth.status.is_success() {
+                    return Err(rustovate_http::CacheError::Status(auth.status.as_u16()).into());
+                }
+                let value: Value = serde_json::from_slice(&auth.body)?;
+                let bearer = value["token"]
+                    .as_str()
+                    .or_else(|| value["access_token"].as_str())
+                    .ok_or(Error::Invalid)?
+                    .to_owned();
+                let expiry = Instant::now()
+                    + Duration::from_secs(
+                        value["expires_in"]
+                            .as_u64()
+                            .unwrap_or(60)
+                            .saturating_sub(10)
+                            .min(3600),
+                    );
+                *token = Some((bearer.clone(), expiry));
+                bearer
+            };
+            drop(token);
+            response = self.http.registry_get(url, accept, Some(&next)).await?;
         }
         if response.status == 429 {
             return Err(Error::RateLimit(

@@ -46,6 +46,51 @@ fn catalog(values: &[&str]) -> Catalog {
         dist_tags: Default::default(),
     }
 }
+
+#[test]
+fn docker_policy_keeps_variants_and_python_epochs_use_pep440_order() {
+    let mut cfg = config("renovate-runner");
+    cfg.defaults.wait_hours = 0;
+    let eval = Evaluator::new(&cfg).unwrap();
+    let mut dep = dependency("image");
+    dep.manager = Manager::Compose;
+    dep.kind = DependencyKind::ContainerImage;
+    dep.source = Source::Docker;
+    dep.scheme = Scheme::Docker;
+    dep.current = "1.2-alpine".into();
+    dep.resolved = Some(dep.current.clone());
+    let proposals = eval
+        .propose(
+            &dep,
+            &catalog(&["1.3-alpine", "1.9-bookworm", "2.0-bookworm", "2.1-alpine"]),
+        )
+        .unwrap();
+    assert_eq!(proposals.len(), 2);
+    assert!(
+        proposals
+            .iter()
+            .all(|p| p.new_version.as_deref().unwrap().ends_with("-alpine"))
+    );
+    dep.manager = Manager::Requirements;
+    dep.kind = DependencyKind::Production;
+    dep.source = Source::Pypi;
+    dep.scheme = Scheme::Pep440;
+    dep.current = "==1.0".into();
+    dep.resolved = None;
+    let proposals = eval
+        .propose(&dep, &catalog(&["1.0rc1", "1.0.post1", "1!0.1"]))
+        .unwrap();
+    assert!(
+        proposals
+            .iter()
+            .any(|p| p.new_value.as_deref() == Some("==1!0.1") && p.update_type == "major")
+    );
+    assert!(
+        proposals
+            .iter()
+            .all(|p| !p.new_version.as_deref().unwrap().contains("rc"))
+    );
+}
 #[test]
 fn grouping_ops_workflow_opt_out_and_opaque_refs() {
     let eval = Evaluator::new(&config("renovate-runner")).unwrap();

@@ -85,4 +85,9 @@ async fn public_wave2_catalogs_and_index_digest() {
         http.stats().requests - before.requests,
         http.stats().not_modified - before.not_modified
     );
+    let cache_bytes: u64 = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().metadata().unwrap().len())
+        .sum();
+    eprintln!("wave2 cache_with_wal_bytes={cache_bytes}");
 }

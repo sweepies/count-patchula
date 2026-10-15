@@ -28,7 +28,13 @@ pub(super) fn parse(scheme: Ecosystem, value: &str) -> Result<Parsed> {
     if !suffix.is_empty() && !suffix.starts_with('-') {
         return Err(invalid());
     }
-    let mut parsed = Ecosystem::Loose.parse(number)?;
+    let numeric = pep440_rs::Version::from_str(number).map_err(|_| invalid())?;
+    let r = numeric.release();
+    let mut parsed = Parsed(
+        Version::new(r[0], *r.get(1).unwrap_or(&0), *r.get(2).unwrap_or(&0)),
+        Some(numeric),
+        None,
+    );
     // Docker variants are compatibility labels, not semver prereleases.
     parsed.2 = Some(suffix.into());
     Ok(parsed)
@@ -159,6 +165,13 @@ mod tests {
     #[test]
     fn docker_variants_and_hashicorp_pessimistic_constraints() {
         let d = Ecosystem::Docker;
+        assert!(
+            d.order(
+                &d.parse("10.0.20348.4052-windows").unwrap(),
+                &d.parse("10.0.20348.4000-windows").unwrap()
+            )
+            .is_gt()
+        );
         assert_eq!(
             d.parse("v3.21-alpine").unwrap().2.as_deref(),
             Some("-alpine")

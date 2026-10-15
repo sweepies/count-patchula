@@ -8,9 +8,10 @@ requests. It is built to run a whole batch of repositories in one short-lived
 process, so it is designed around shared caching and concurrency rather than
 one repository at a time.
 
-Status: Phase 1, wave 1. Read-only lookup supports npm/bun, GitHub Actions,
-mise and regex extraction, cached registries and ordered policy. Repository
-writes and the remaining ecosystem managers are not implemented yet.
+Status: Phase 1, wave 2. Read-only lookup covers the bundled managers and public
+sources, including Cargo, Docker/Compose, Go, Terraform, Kubernetes/Flux/Helm and
+Python requirements. Repository writes remain later-phase work. See
+[coverage, replay measurements and remaining limits](docs/wave2.md).
 Dated proposals default to a 24-hour release-age gate. GitHub-hosted runner
 labels and mise registry backends are supported by read-only lookup.
 
@@ -78,7 +79,7 @@ mise exec -- cargo run --locked -p rustovate-cli -- lookup \
 
 Omit repository arguments to discover accessible repositories. With no local
 override, `.github/rustovate.pkl` takes precedence over `rustovate.pkl`; repositories
-with neither are skipped. Unsupported managers/sources produce report warnings.
+with neither are skipped. Unavailable upstream identities produce report warnings.
 `-vv` or `RUSTOVATE_LOG=debug` enables sanitized per-request and phase diagnostics
 on stderr. See [live benchmarks](docs/benchmarks.md#live-network-investigation-2026-10-15)
 for fields, measured limits and cold/warm reproduction commands.

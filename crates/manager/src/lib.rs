@@ -63,8 +63,23 @@ pub struct Extraction {
 }
 pub type Files = BTreeMap<String, String>;
 pub fn supported(manager: Manager) -> bool {
-    let _ = manager;
-    true
+    match manager {
+        Manager::Npm
+        | Manager::Bun
+        | Manager::GithubActions
+        | Manager::Mise
+        | Manager::Cargo
+        | Manager::Dockerfile
+        | Manager::Compose
+        | Manager::Go
+        | Manager::Terraform
+        | Manager::Kubernetes
+        | Manager::Kustomize
+        | Manager::Flux
+        | Manager::HelmValues
+        | Manager::Requirements
+        | Manager::Regex => true,
+    }
 }
 
 pub struct Scanner {
@@ -182,14 +197,6 @@ impl Scanner {
                 ))
             })
             .collect::<Result<_, String>>()?;
-        for manager in &self.config.managers {
-            if !supported(*manager) {
-                result.warnings.push(format!(
-                    "manager {} is not implemented in this wave",
-                    word(manager)
-                ));
-            }
-        }
         // package.json shared by npm/bun is scanned once, preferring bun only
         // when npm is disabled. Lockfiles provide resolution, never transitive deps.
         let node = if self.config.managers.contains(&Manager::Npm) {

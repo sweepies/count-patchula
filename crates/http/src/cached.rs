@@ -47,7 +47,9 @@ struct Inner {
     requests: AtomicU64,
     not_modified: AtomicU64,
     cache_hits: AtomicU64,
+    derived_reads: tokio::sync::Mutex<BTreeMap<String, Coalesced>>,
 }
+type Coalesced = Arc<tokio::sync::Mutex<Option<(Instant, Response)>>>;
 type Derive = fn(&[u8]) -> Result<Vec<u8>, Error>;
 #[derive(Clone)]
 pub struct Cached(Arc<Inner>);
@@ -68,6 +70,7 @@ impl Cached {
             requests: AtomicU64::new(0),
             not_modified: AtomicU64::new(0),
             cache_hits: AtomicU64::new(0),
+            derived_reads: Default::default(),
         })))
     }
     pub fn stats(&self) -> Stats {
@@ -88,8 +91,29 @@ impl Cached {
         accept: &str,
         token: Option<&str>,
     ) -> Result<Response, Error> {
-        self.get_representation(url, accept, None, Some(token))
+        let started = Instant::now();
+        let key = format!("registry:{}:{url}\n{accept}", token.is_some());
+        let read = self
+            .0
+            .derived_reads
+            .lock()
             .await
+            .entry(key)
+            .or_default()
+            .clone();
+        let mut previous = read.lock().await;
+        if let Some((finished, response)) = &*previous
+            && *finished >= started
+        {
+            return Ok(response.clone());
+        }
+        let response = self
+            .get_representation(url, accept, None, Some(token))
+            .await?;
+        if response.status.is_success() {
+            *previous = Some((Instant::now(), response.clone()));
+        }
+        Ok(response)
     }
 
     /// Token responses must never enter SQLite.
@@ -125,8 +149,29 @@ impl Cached {
         format: &'static str,
         derive: Derive,
     ) -> Result<Response, Error> {
-        self.get_representation(url, accept, Some((format, derive)), None)
+        let started = Instant::now();
+        let key = format!("{url}\n{accept}\n{format}");
+        let read = self
+            .0
+            .derived_reads
+            .lock()
             .await
+            .entry(key)
+            .or_default()
+            .clone();
+        let mut previous = read.lock().await;
+        // Coalesce overlapping callers even when upstream requires revalidation.
+        // A later sequential call still observes normal HTTP freshness rules.
+        if let Some((finished, response)) = &*previous
+            && *finished >= started
+        {
+            return Ok(response.clone());
+        }
+        let response = self
+            .get_representation(url, accept, Some((format, derive)), None)
+            .await?;
+        *previous = Some((Instant::now(), response.clone()));
+        Ok(response)
     }
 
     async fn get_representation(

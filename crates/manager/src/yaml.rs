@@ -219,8 +219,19 @@ pub(super) fn extract(
                         {
                             scan.chart(
                                 &name,
-                                format!("{repo}|{name}"),
-                                Source::Helm,
+                                if repo.starts_with("oci://") {
+                                    format!(
+                                        "{}/{name}",
+                                        repo.trim_start_matches("oci://").trim_end_matches('/')
+                                    )
+                                } else {
+                                    format!("{repo}|{name}")
+                                },
+                                if repo.starts_with("oci://") {
+                                    Source::Oci
+                                } else {
+                                    Source::Helm
+                                },
                                 version,
                                 &format!("{pointer}/helmCharts/{i}/version"),
                             )?;
@@ -253,40 +264,41 @@ pub(super) fn extract(
                         .get("spec")
                         .and_then(|v| v.get("chart"))
                         .and_then(|v| v.get("spec"))
-                {
-                    if let (Some(name), Some(version), Some(source)) = (
+                    && let (Some(name), Some(version), Some(source)) = (
                         get(spec, "chart"),
                         spec.get("version"),
                         spec.get("sourceRef"),
-                    ) {
-                        let namespace = get(source, "namespace")
-                            .or_else(|| get(&doc["metadata"], "namespace"))
-                            .unwrap_or_default();
-                        let repository =
-                            get(source, "name").and_then(|n| repos.get(&(namespace, n)));
-                        if let Some((url, oci)) = repository {
-                            let package = if *oci {
-                                format!(
-                                    "{}/{}",
-                                    url.trim_start_matches("oci://").trim_end_matches('/'),
-                                    name
-                                )
-                            } else {
-                                format!("{url}|{name}")
-                            };
-                            scan.chart(
-                                &name,
-                                package,
-                                if *oci { Source::Oci } else { Source::Helm },
-                                version,
-                                &format!("{pointer}/spec/chart/spec/version"),
-                            )?;
-                        }
+                    )
+                {
+                    let namespace = get(source, "namespace")
+                        .or_else(|| get(&doc["metadata"], "namespace"))
+                        .unwrap_or_default();
+                    let repository = get(source, "name").and_then(|n| repos.get(&(namespace, n)));
+                    if let Some((url, oci)) = repository {
+                        let package = if *oci {
+                            format!(
+                                "{}/{}",
+                                url.trim_start_matches("oci://").trim_end_matches('/'),
+                                name
+                            )
+                        } else {
+                            format!("{url}|{name}")
+                        };
+                        scan.chart(
+                            &name,
+                            package,
+                            if *oci { Source::Oci } else { Source::Helm },
+                            version,
+                            &format!("{pointer}/spec/chart/spec/version"),
+                        )?;
                     }
-                    // Embedded values can contain additional image pins.
-                    if let Some(values) = doc.get("spec").and_then(|v| v.get("values")) {
-                        scan.images(values, &format!("{pointer}/spec/values"), true)?;
-                    }
+                }
+                // chartRef releases keep the chart version in OCIRepository,
+                // but still own image values here.
+                if kind == "HelmRelease"
+                    && let Some(values) = doc.get("spec").and_then(|v| v.get("values"))
+                {
+                    scan.images(values, &format!("{pointer}/spec/values"), true)?;
                 }
             }
             _ => {}
