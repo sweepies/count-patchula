@@ -572,6 +572,49 @@ fn held_back_summarizes_newest_but_keeps_earliest_eligibility() {
     assert_eq!(held.count, 3);
     assert_eq!(held.versions, ["1.0.2", "1.0.3", "1.0.4"]);
     assert_eq!(held.eligible_at, "2026-10-15T13:00:00Z");
+    assert_eq!(
+        held.target_eligible_at.as_deref(),
+        Some("2026-10-16T11:00:00Z")
+    );
+}
+
+#[test]
+fn manual_age_override_selects_only_its_version_and_class_and_preserves_disabled_policy() {
+    let mut cfg = config("renovate-runner");
+    let dep = dependency("plain");
+    let mut versions = catalog(&["1.0.2", "1.0.3", "2.0.0"]);
+    for version in &mut versions.versions {
+        version.published_at = Some("2026-10-15T11:00:00Z".into());
+    }
+    let now = instant("2026-10-15T12:00:00Z");
+    let overrides = std::collections::BTreeSet::from([("1.0.2".into(), "patch".into())]);
+    let result = Evaluator::new(&cfg)
+        .unwrap()
+        .evaluate_with_age_overrides(&dep, &versions, now, &overrides)
+        .unwrap();
+    assert!(
+        result
+            .updates
+            .iter()
+            .any(|u| u.new_version.as_deref() == Some("1.0.2"))
+    );
+    assert!(
+        result
+            .updates
+            .iter()
+            .all(|u| u.new_version.as_deref() != Some("1.0.3")
+                && u.new_version.as_deref() != Some("2.0.0"))
+    );
+    assert!(!result.held_back.is_empty());
+    cfg.defaults.active = false;
+    assert!(
+        Evaluator::new(&cfg)
+            .unwrap()
+            .evaluate_with_age_overrides(&dep, &versions, now, &overrides)
+            .unwrap()
+            .updates
+            .is_empty()
+    );
 }
 #[test]
 fn release_age_falls_back_and_reports_eligibility_without_hiding_current() {

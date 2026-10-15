@@ -333,6 +333,16 @@ impl Evaluator {
         catalog: &Catalog,
         now: DateTime<Utc>,
     ) -> Result<Evaluation> {
+        self.evaluate_with_age_overrides(dep, catalog, now, &Default::default())
+    }
+    /// An explicit dashboard click bypasses only the selected release-age gate.
+    pub fn evaluate_with_age_overrides(
+        &self,
+        dep: &Dependency,
+        catalog: &Catalog,
+        now: DateTime<Utc>,
+        overrides: &std::collections::BTreeSet<(String, String)>,
+    ) -> Result<Evaluation> {
         if self.ignored(dep) {
             return Ok(Evaluation::default());
         }
@@ -363,7 +373,10 @@ impl Evaluator {
                 }
             }
             // The gate chooses proposals; it never removes extracted/current releases.
-            if effective.policy.wait_hours == 0 || version.published_at.is_none() {
+            if effective.policy.wait_hours == 0
+                || version.published_at.is_none()
+                || overrides.contains(&(selected.into(), rustovate_manager::word(&kind)))
+            {
                 return Ok(true);
             }
             let published = published(version)?;
@@ -380,6 +393,7 @@ impl Evaluator {
                 update_type: rustovate_manager::word(&kind),
                 published_at: timestamp(published),
                 eligible_at: timestamp(until),
+                target_eligible_at: Some(timestamp(until)),
             });
             Ok(false)
         };
@@ -800,6 +814,7 @@ fn summarize(mut releases: Vec<HeldBack>, scheme: Ecosystem) -> Vec<HeldBack> {
                 .is_some_and(|(a, b)| scheme.order(&a, &b).is_gt())
             {
                 summary.version = release.version.clone();
+                summary.target_eligible_at = release.target_eligible_at.clone();
             }
             if release.eligible_at < summary.eligible_at {
                 summary.eligible_at = release.eligible_at;

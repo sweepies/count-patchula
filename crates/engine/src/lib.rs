@@ -64,6 +64,8 @@ struct Work {
     config: Option<Config>,
     dependencies: Vec<Dependency>,
     snapshot: rustovate_update::Snapshot,
+    inventory: Option<rustovate_update::Inventory>,
+    controls: rustovate_update::dashboard::Controls,
 }
 #[derive(Serialize, Deserialize)]
 struct CachedExtraction {
@@ -157,7 +159,7 @@ impl Engine {
         options: Options,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<Report> {
-        self.lookup_work_at(options, now)
+        self.lookup_work_at(options, now, false)
             .await
             .map(|(report, _)| report)
     }
@@ -178,7 +180,7 @@ impl Engine {
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<Report> {
         let started = Instant::now();
-        let (mut report, work) = self.lookup_work_at(options, now).await?;
+        let (mut report, work) = self.lookup_work_at(options, now, !dry_run).await?;
         let write_started = Instant::now();
         let before = self.github.stats().await;
         let mut branches = Vec::new();
@@ -195,20 +197,7 @@ impl Engine {
             if repo.status != Status::Complete {
                 continue;
             }
-            let inventory = if dry_run {
-                None
-            } else {
-                match rustovate_update::Inventory::read(&self.github, &self.cache, repo, &config)
-                    .await
-                {
-                    Ok(value) => Some(value),
-                    Err(error) => {
-                        repo.status = Status::Error;
-                        repo.reason = Some(error);
-                        continue;
-                    }
-                }
-            };
+            let inventory = work.inventory;
             let plans = rustovate_update::plan(
                 repo,
                 &config,
@@ -240,16 +229,21 @@ impl Engine {
                 plans.push(maintenance);
             }
             if !dry_run {
-                match rustovate_update::restore_inventory(
-                    &self.cache,
-                    repo,
-                    &config,
-                    &mut plans,
-                    self.recheck,
-                    inventory.as_ref().expect("write inventory"),
-                )
-                .await
-                {
+                work.controls.apply(&mut plans, &work.dependencies);
+                let restored = if work.controls.has_requests() {
+                    Ok(false)
+                } else {
+                    rustovate_update::restore_inventory(
+                        &self.cache,
+                        repo,
+                        &config,
+                        &mut plans,
+                        self.recheck,
+                        inventory.as_ref().expect("write inventory"),
+                    )
+                    .await
+                };
+                match restored {
                     Ok(true) => {
                         let inventory = inventory.as_ref().expect("write inventory");
                         if let Err(error) = rustovate_update::dashboard::reconcile(
@@ -311,13 +305,14 @@ impl Engine {
                 );
                 None
             } else {
-                match rustovate_update::Lifecycle::prepare(
+                match rustovate_update::Lifecycle::prepare_with_controls(
                     &self.github,
                     repo,
                     &mut plans,
                     &config,
                     now,
                     self.recheck,
+                    &work.controls,
                 )
                 .await
                 {
@@ -376,6 +371,10 @@ impl Engine {
             .await;
             if let Some(state) = &mut lifecycle {
                 state.publish(&self.github, &mut plans).await;
+                if let Err(error) = state.acknowledge_rechecks(&self.github).await {
+                    repo.warnings
+                        .push(format!("PR checkbox acknowledgement: {error}"));
+                }
                 if let Err(error) = rustovate_update::dashboard::reconcile(
                     &self.github,
                     &self.cache,
@@ -459,6 +458,7 @@ impl Engine {
         &self,
         options: Options,
         now: chrono::DateTime<chrono::Utc>,
+        read_controls: bool,
     ) -> Result<(Report, Vec<Work>)> {
         if options.config.is_some() && options.config_dir.is_some() {
             return Err(Error::Configuration(
@@ -514,7 +514,7 @@ impl Engine {
             let overrides = &overrides;
             let work: Vec<_> = stream::iter(repos)
                 .map(|repo| async move {
-                    match self
+                    let mut work = match self
                         .scan(&repo, overrides.get(&repo).or(override_config))
                         .await
                     {
@@ -524,13 +524,62 @@ impl Engine {
                             config: None,
                             dependencies: Vec::new(),
                             snapshot: Default::default(),
+                            inventory: None,
+                            controls: Default::default(),
                         },
+                    };
+                    if read_controls
+                        && work.report.status == Status::Complete
+                        && let Some(config) = &work.config
+                    {
+                        match rustovate_update::Inventory::read(
+                            &self.github,
+                            &self.cache,
+                            &work.report,
+                            config,
+                        )
+                        .await
+                        {
+                            Ok(inventory) => {
+                                match rustovate_update::dashboard::Controls::read(
+                                    &inventory,
+                                    &repo,
+                                    config.prs.dashboard,
+                                ) {
+                                    Ok(mut controls) => {
+                                        controls.age_permits.extend(
+                                            rustovate_update::dashboard::load_permits(
+                                                &self.cache,
+                                                &repo,
+                                                &inventory.actor,
+                                            )
+                                            .await
+                                            .map_err(Error::Invalid)?,
+                                        );
+                                        work.controls = controls;
+                                        work.inventory = Some(inventory);
+                                    }
+                                    Err(error) => {
+                                        work.report.status = Status::Error;
+                                        work.report.reason = Some(error);
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                work.report.status = Status::Error;
+                                work.report.reason = Some(error);
+                            }
+                        }
                     }
+                    Ok::<_, Error>(work)
                 })
                 .buffer_unordered(self.concurrency)
                 .collect()
                 .await;
-            (work, micros(started))
+            (
+                work.into_iter().collect::<Result<Vec<_>>>(),
+                micros(started),
+            )
         };
         let prefetch = async {
             let started = Instant::now();
@@ -538,12 +587,42 @@ impl Engine {
             let result = tokio::join!(self.catalogs(hint.catalogs), self.digests(hint.digests));
             (result, micros(started))
         };
-        let ((mut work, extraction_time), ((mut catalogs, mut digests), prefetch_time)) =
+        let ((work, extraction_time), ((mut catalogs, mut digests), prefetch_time)) =
             tokio::join!(scans, prefetch);
+        let mut work = work?;
         work.sort_by(|a, b| a.report.repository.cmp(&b.report.repository));
         let phase = PhaseTrace::new("lookup");
         let started = Instant::now();
         let mut keys = BTreeSet::new();
+        // Manual retries discard speculative results only for selected sources.
+        // Registry freshness is bypassed through a scoped client; quotas remain authoritative.
+        let retry_keys: BTreeSet<_> = work
+            .iter()
+            .flat_map(|repo| {
+                repo.dependencies
+                    .iter()
+                    .filter(|d| {
+                        repo.controls.recheck
+                            || repo
+                                .controls
+                                .retry
+                                .contains(&rustovate_update::dashboard::extracted_key(d))
+                    })
+                    .map(|d| (word(&d.source), d.package.clone()))
+            })
+            .collect();
+        let fresh_sources = self.sources.revalidating();
+        for (source, package) in &retry_keys {
+            let source: Source = serde_json::from_value(Value::String(source.clone()))?;
+            catalogs.insert(
+                (word(&source), package.clone()),
+                fresh_sources
+                    .lookup(source, package)
+                    .await
+                    .map_err(|e| e.to_string()),
+            );
+        }
+        // Digest retries use the same scoped HTTP client later in the batch.
         let evaluators: Vec<_> = work
             .iter()
             .map(|repo| {
@@ -639,7 +718,47 @@ impl Engine {
                 {
                     match catalogs.get(&(word(&dep.source), dep.package.clone())) {
                         Some(Ok(catalog)) => match eval.evaluate_at(dep, catalog, now) {
-                            Ok(p) => evaluation = p,
+                            Ok(p) => {
+                                let dep_key = rustovate_update::dashboard::extracted_key(dep);
+                                let overrides: BTreeSet<_> = p
+                                    .held_back
+                                    .iter()
+                                    .flat_map(|h| {
+                                        h.versions
+                                            .iter()
+                                            .chain(std::iter::once(&h.version))
+                                            .map(|v| (v.clone(), h.update_type.clone()))
+                                    })
+                                    .filter(|(v, k)| {
+                                        let target = rustovate_update::dashboard::held_target(
+                                            &dep_key, v, k,
+                                        );
+                                        repo.controls.create.contains(&target)
+                                            || repo.controls.age_permits.contains(&target)
+                                    })
+                                    .collect();
+                                if overrides.is_empty() {
+                                    evaluation = p;
+                                } else {
+                                    match eval
+                                        .evaluate_with_age_overrides(dep, catalog, now, &overrides)
+                                    {
+                                        Ok(p) => {
+                                            for (v, k) in overrides {
+                                                repo.controls.age_permits.insert(
+                                                    rustovate_update::dashboard::held_target(
+                                                        &dep_key, &v, &k,
+                                                    ),
+                                                );
+                                            }
+                                            evaluation = p;
+                                        }
+                                        Err(e) => {
+                                            repo.report.warnings.push(format!("{}: {e}", dep.name))
+                                        }
+                                    }
+                                }
+                            }
                             Err(e) => repo.report.warnings.push(format!("{}: {e}", dep.name)),
                         },
                         Some(Err(error)) => repo
@@ -689,6 +808,18 @@ impl Engine {
             proposals.push(deps);
         }
         let proposal_cpu_time = micros(started);
+        for repo in &work {
+            if let Some(inventory) = &repo.inventory {
+                rustovate_update::dashboard::save_permits(
+                    &self.cache,
+                    &repo.report.repository,
+                    &inventory.actor,
+                    repo.controls.age_permits.clone(),
+                )
+                .await
+                .map_err(Error::Invalid)?;
+            }
+        }
         drop(phase);
         // The revalidated complete tag namespace already carries peeled target
         // commits. Reuse those for both current and proposed action tags instead
@@ -708,10 +839,19 @@ impl Engine {
         let started = Instant::now();
         let phase = PhaseTrace::new("digest");
         digests.extend(self.digests(digest_keys).await);
+        let retry_keys = &retry_keys;
+        let fresh_sources = &fresh_sources;
         let image_digests: BTreeMap<_, _> = stream::iter(image_keys)
             .map(|(package, tag)| async move {
-                let result = self
-                    .sources
+                let sources = if retry_keys
+                    .iter()
+                    .any(|(s, p)| matches!(s.as_str(), "docker" | "oci") && p == &package)
+                {
+                    fresh_sources
+                } else {
+                    &self.sources
+                };
+                let result = sources
                     .registry_digest(&package, &tag)
                     .await
                     .map_err(|e| e.to_string());
@@ -1269,6 +1409,8 @@ impl Engine {
                 config: None,
                 dependencies: Vec::new(),
                 snapshot: Default::default(),
+                inventory: None,
+                controls: Default::default(),
             });
         };
         let key = ExtractionKey {
@@ -1342,6 +1484,8 @@ impl Engine {
             config: Some(config),
             dependencies: cached.extraction.dependencies,
             snapshot: cached.snapshot,
+            inventory: None,
+            controls: Default::default(),
         })
     }
     async fn config(&self, repo: &str, path: &str, entries: &[Entry]) -> Result<Config> {

@@ -65,6 +65,9 @@ dated updates' `releaseAge` (`publishedAt`, `evaluatedAt`); dependency metadata
 `heldBack` entries summarize each update type: `version` is the newest blocked
 release, `versions` contains every blocked release, and `count` counts them.
 `publishedAt` and `eligibleAt` describe the earliest release that becomes eligible.
+Optional `targetEligibleAt` gives the eligibility time of the displayed newest
+`version`, which can differ from the class's earliest eligible release. The
+dependency dashboard uses this exact target time.
 Registry rate-limit fallback adds `metadata.stale`, mapping `catalog` and
 `digest:<tag>` to the original cache fetch time (Unix seconds). These entries
 mean the data is stale because the registry could not be revalidated; they do

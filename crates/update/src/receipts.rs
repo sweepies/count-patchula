@@ -188,7 +188,7 @@ impl Inventory {
         let mut issue_cursor = Value::Null;
         let mut refs_done = false;
         let mut issues_done = false;
-        loop {
+        for _ in 0..1000 {
             let data = client.graphql(INVENTORY_QUERY, json!({"owner":owner,"name":name,
                 "prefix":"refs/heads/","closed":closed_ids,"cursor":cursor,"issueCursor":issue_cursor}))
                 .await.map_err(|e| e.to_string())?;
@@ -239,13 +239,13 @@ impl Inventory {
                 }
             }
             if refs_done && issues_done {
-                break;
+                return Ok(result);
             }
             if result.refs.len() + result.issues.len() > 100_000 {
                 return Err("inventory page budget exceeded".into());
             }
         }
-        Ok(result)
+        Err("inventory page budget exceeded".into())
     }
 }
 
@@ -257,17 +257,27 @@ pub async fn restore_inventory(
     recheck: Recheck,
     inventory: &Inventory,
 ) -> Result<bool, String> {
-    let Some(bytes) = cache
+    let bytes = cache
         .extraction_get(&key(&repository.repository, &config.prs.branch))
         .await
-        .map_err(|e| e.to_string())?
-    else {
-        return Ok(not_restored(repository, plans, "missing-receipt"));
+        .map_err(|e| e.to_string())?;
+    let pending = plans
+        .iter()
+        .any(|p| p.action.status == ActionStatus::Planned);
+    let receipts = match bytes {
+        None if pending => return Ok(not_restored(repository, plans, "missing-receipt")),
+        Some(bytes) => match serde_json::from_slice::<Receipts>(&bytes) {
+            Ok(receipts) => receipts,
+            Err(_) if pending => return Ok(not_restored(repository, plans, "invalid-receipts")),
+            Err(_) => Receipts::default(),
+        },
+        None => Receipts::default(),
     };
-    let Ok(receipts) = serde_json::from_slice::<Receipts>(&bytes) else {
-        return Ok(not_restored(repository, plans, "invalid-receipts"));
-    };
-    if receipts.writes.is_empty() && receipts.closed.is_empty() || receipts.closed.len() > 100 {
+    if (receipts.writes.is_empty() && receipts.closed.is_empty() || receipts.closed.len() > 100)
+        && plans
+            .iter()
+            .any(|p| p.action.status == ActionStatus::Planned)
+    {
         return Ok(not_restored(repository, plans, "unusable-receipts"));
     }
     let actor = inventory.actor.as_str();
@@ -341,6 +351,9 @@ fn restore_write(
     config: &Config,
     recheck: Recheck,
 ) -> Result<(), &'static str> {
+    if plan.retry {
+        return Err("checkbox-recheck");
+    }
     let receipt = receipts
         .writes
         .get(&plan.action.branch)

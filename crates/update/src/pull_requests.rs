@@ -97,11 +97,41 @@ fn limit(plan: &mut Plan, reason: &str) {
     plan.action.status = ActionStatus::Skipped;
     plan.action.reason = Some(reason.into());
 }
-fn checked(pr: &Value) -> bool {
-    let lines: Vec<_> = body(pr).lines().filter(|l| l.contains(RECHECK)).collect();
-    lines.len() == 1
-        && (lines[0].trim_start().starts_with("- [x]")
-            || lines[0].trim_start().starts_with("- [X]"))
+pub(crate) fn checked(pr: &Value) -> bool {
+    if body(pr).matches(RECHECK).count() != 1 {
+        return false;
+    }
+    let mut fence = None;
+    for line in body(pr).lines().map(str::trim) {
+        if line.starts_with("```") || line.starts_with("~~~") {
+            let kind = &line[..3];
+            if fence == Some(kind) {
+                fence = None;
+            } else if fence.is_none() {
+                fence = Some(kind);
+            }
+            continue;
+        }
+        if fence.is_none()
+            && line.ends_with(RECHECK)
+            && (line.starts_with("- [x] ") || line.starts_with("- [X] "))
+        {
+            return true;
+        }
+    }
+    false
+}
+fn untick(text: &str) -> String {
+    text.split_inclusive('\n')
+        .map(|line| {
+            if line.trim_end().ends_with(RECHECK) {
+                line.replacen("- [x]", "- [ ]", 1)
+                    .replacen("- [X]", "- [ ]", 1)
+            } else {
+                line.into()
+            }
+        })
+        .collect()
 }
 
 pub struct Lifecycle {
@@ -115,6 +145,7 @@ pub struct Lifecycle {
     merge_method: Option<String>,
     maintenance_policy: rustovate_config::Policy,
     maintenance_group: String,
+    branch_permits: BTreeMap<String, BTreeSet<String>>,
 }
 impl Lifecycle {
     pub fn dashboard_prs(&self) -> Vec<Value> {
@@ -143,6 +174,26 @@ impl Lifecycle {
         config: &Config,
         now: DateTime<Utc>,
         recheck: Recheck,
+    ) -> Result<Self, String> {
+        Self::prepare_with_controls(
+            client,
+            repository,
+            plans,
+            config,
+            now,
+            recheck,
+            &Default::default(),
+        )
+        .await
+    }
+    pub async fn prepare_with_controls(
+        client: &Client,
+        repository: &rustovate_report::Repository,
+        plans: &mut [Plan],
+        config: &Config,
+        now: DateTime<Utc>,
+        recheck: Recheck,
+        controls: &crate::dashboard::Controls,
     ) -> Result<Self, String> {
         let repo = repository.repository.as_str();
         let base = repository
@@ -178,6 +229,7 @@ impl Lifecycle {
             merge_method: None,
             maintenance_policy: config.defaults.clone(),
             maintenance_group: config.lockfiles.group.clone(),
+            branch_permits: controls.branch_permits.clone(),
         };
         let desired: BTreeSet<_> = plans.iter().map(|p| p.action.branch.as_str()).collect();
         for pr in &mut state.prs {
@@ -287,24 +339,28 @@ impl Lifecycle {
                 continue;
             }
             let key = update_key(plan);
-            if owned.iter().any(|p| {
-                p["state"] == "closed"
-                    && p["merged_at"].is_null()
-                    && !body(p).contains(OBSOLETE)
-                    && marker(body(p)).is_some_and(|m| m.update == key)
-            }) {
+            if existing.is_empty()
+                && !controls.recreate.contains(&key)
+                && owned.iter().any(|p| {
+                    p["state"] == "closed"
+                        && p["merged_at"].is_null()
+                        && !body(p).contains(OBSOLETE)
+                        && marker(body(p)).is_some_and(|m| m.update == key)
+                })
+            {
                 limit(plan, CLOSED_BY_OWNER);
                 continue;
             }
             if let Some(pr) = existing.first() {
-                plan.retry = checked(pr);
+                plan.retry |= checked(pr);
                 continue;
             }
-            if config.prs.concurrent.is_some_and(|n| active >= n) {
+            let bypass = controls.create.contains(&key) || controls.recreate.contains(&key);
+            if !bypass && config.prs.concurrent.is_some_and(|n| active >= n) {
                 limit(plan, "prs.concurrent limit reached");
                 continue;
             }
-            if config.prs.per_hour.is_some_and(|n| hourly >= n) {
+            if !bypass && config.prs.per_hour.is_some_and(|n| hourly >= n) {
                 limit(plan, "prs.perHour limit reached");
                 continue;
             }
@@ -346,7 +402,41 @@ impl Lifecycle {
             }
         }
     }
+    /// A failed branch attempt is acknowledged too; its diagnostic remains in
+    /// the report and the operator can explicitly request another attempt.
+    pub async fn acknowledge_rechecks(&mut self, client: &Client) -> Result<(), String> {
+        for pr in &mut self.prs {
+            if pr["state"] != "open" || !owned_pr(pr, &self.actor, &self.repo) || !checked(pr) {
+                continue;
+            }
+            let number = pr["number"].as_u64().ok_or("missing PR number")?;
+            let path = format!("repos/{}/pulls/{number}", self.repo);
+            let fresh = client.get_fresh(&path).await.map_err(|e| e.to_string())?;
+            if fresh["state"] != "open" || !owned_pr(&fresh, &self.actor, &self.repo) {
+                continue;
+            }
+            if checked(&fresh) {
+                *pr = client
+                    .patch(&path, json!({"body":untick(body(&fresh))}))
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(())
+    }
     async fn publish_one(&mut self, client: &Client, plan: &Plan) -> Result<(), String> {
+        if self
+            .branch_permits
+            .get(&plan.action.branch)
+            .is_some_and(|permits| {
+                crate::dashboard::permit_marker(permits).len() + 1000 > BODY_LIMIT
+            })
+        {
+            return Err(
+                "manual release-age evidence exceeds the PR body budget; split this update group"
+                    .into(),
+            );
+        }
         let existing = self
             .prs
             .iter()
@@ -621,6 +711,13 @@ impl Lifecycle {
                 ),
                 BODY_LIMIT - 1000,
             );
+        }
+        if let Some(permits) = self.branch_permits.get(&plan.action.branch) {
+            let marker = crate::dashboard::permit_marker(permits);
+            // Keep policy evidence with the PR even if its local cache is lost.
+            text = truncate(&text, BODY_LIMIT.saturating_sub(marker.len() + 1000));
+            text.push('\n');
+            text.push_str(&marker);
         }
         let timing = match self.recheck {
             Recheck::Now => "now",

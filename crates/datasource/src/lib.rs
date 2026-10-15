@@ -63,6 +63,11 @@ pub struct Client {
     stale_registry: std::sync::Arc<tokio::sync::Mutex<BTreeMap<String, BTreeMap<String, i64>>>>,
 }
 impl Client {
+    pub fn revalidating(&self) -> Self {
+        let mut client = self.clone();
+        client.http = client.http.revalidating();
+        client
+    }
     pub fn new(github: rustovate_github::Client, http: Cached, cache: Cache) -> Self {
         Self {
             github,

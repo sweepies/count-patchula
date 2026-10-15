@@ -24,3 +24,56 @@ Offline coverage uses synthetic GitHub transports, a checked-in rendering
 snapshot, receipt restoration and an engine run with a reopened SQLite cache.
 The warm engine test asserts one inventory query and zero mutations with the
 dashboard enabled, for both open and owner-closed updates.
+
+## Checkbox processing
+
+Live runs read controls after extraction and before policy evaluation; lookup
+and dry-run commands do not consume checkboxes. The same inventory is reused
+for write verification. Dashboard actions carry a strict versioned hidden
+action/target JSON marker. Dependency targets include manager, file, source,
+package and current declaration/digest; update targets use the PR's existing
+target identity. The repository re-check marker is bound to its repository.
+Visible wording is never parsed. Foreign authors, invalid ownership markers,
+duplicate actions and fenced examples do not authorize work.
+
+- **Re-check this repository:** revalidate its dependency lookups and force
+  regeneration/rebase of its existing owned PR branches. It preserves release
+  age, budgets and owner closures for new updates.
+- **Create this held-back/limited update now:** bypass release age for that
+  exact dependency/version/class, or the selected update's PR budget/schedule
+  hold. Other update policy, required digests, lockfile generation, signed
+  ownership checks and atomic ref leases remain authoritative.
+- **Recreate this owner-closed update:** create a new PR for the same target;
+  leave the old PR closed. The explicit request bypasses its budget/schedule
+  hold. An existing open replacement takes precedence over the old closure.
+- **Retry failed lookup:** revalidate the dependency's source despite local
+  HTTP freshness. Preserve validators, shared governors and upstream quota
+  refusals. A failed attempt is unticked and remains visible in diagnostics.
+- The existing PR **re-check** checkbox forces its own branch through write
+  verification/regeneration and clears in the rendered PR body. Failed attempts
+  are acknowledged with a body-only update, preserving fresh PR text.
+
+Every acknowledged action is unticked or disappears when its pending row is
+resolved. CLI wording says “on the next run”; `--recheck now` or
+`RUSTOVATE_RECHECK=now` changes it to “now” without adding a webhook listener.
+
+Accepted release-age targets are retained in the local cache for the same actor
+and declaration, and in a hidden marker on the resulting bot PR. The shared
+inventory recovers them after cache loss or dashboard disablement, preventing
+later runs from reverting the selected version while its age window is closed.
+
+## Sandbox exercise
+
+Run `mise run run -- OWNER/SANDBOX` with the sandbox's existing token and config.
+The first run creates/reconciles the marked dashboard; a second identical run
+should make no GitHub mutation. Rename the issue and rerun to verify discovery
+by marker. Tick each relevant row, save the issue/PR body and rerun the same
+command. Verify the requested action and the cleared checkbox. Use a young
+dated release, two competing updates with a PR limit of one, a closed schedule
+window, and a manually closed rustovate PR to exercise the policy holds. A
+failed/stale source lookup supplies its retry row. The offline suite covers
+these scenarios without requiring live upstream failures.
+
+Set `prs.dashboard = false` and rerun to close the owned issue. A human-authored
+copy of a marked issue is ignored and left untouched. No live sandbox run is
+part of the offline validation.

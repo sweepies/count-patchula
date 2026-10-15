@@ -27,17 +27,290 @@ pub enum Action {
 }
 pub fn dependency_key(file: &str, dep: &Dependency) -> String {
     hash(
-        serde_json::to_string(&(file, &dep.manager, &dep.name, &dep.package, &dep.current))
-            .expect("dependency identity")
+        serde_json::to_string(&(
+            file,
+            &dep.manager,
+            &dep.name,
+            &dep.package,
+            dep.metadata
+                .as_ref()
+                .map(|m| m.source.as_str())
+                .unwrap_or(""),
+            &dep.current.value,
+            &dep.current.digest,
+        ))
+        .expect("dependency identity")
+        .as_bytes(),
+    )
+}
+pub fn extracted_key(dep: &rustovate_manager::Dependency) -> String {
+    hash(
+        serde_json::to_string(&(
+            &dep.file,
+            rustovate_manager::word(&dep.manager),
+            &dep.name,
+            &dep.package,
+            rustovate_manager::word(&dep.source),
+            Some(&dep.current),
+            &dep.digest,
+        ))
+        .expect("dependency identity")
+        .as_bytes(),
+    )
+}
+pub fn held_target(dependency: &str, version: &str, kind: &str) -> String {
+    hash(
+        serde_json::to_string(&(dependency, version, kind))
+            .expect("held identity")
             .as_bytes(),
     )
 }
 pub fn held_key(file: &str, dep: &Dependency, version: &str, kind: &str) -> String {
-    hash(
-        serde_json::to_string(&(dependency_key(file, dep), version, kind))
-            .expect("held identity")
-            .as_bytes(),
+    held_target(&dependency_key(file, dep), version, kind)
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Controls {
+    pub recheck: bool,
+    pub branches: BTreeSet<String>,
+    pub create: BTreeSet<String>,
+    pub recreate: BTreeSet<String>,
+    pub retry: BTreeSet<String>,
+    /// Accepted release-age targets survive unticking and later process restarts.
+    pub age_permits: BTreeSet<String>,
+    pub branch_permits: BTreeMap<String, BTreeSet<String>>,
+}
+fn checked_actions(body: &str) -> BTreeSet<Action> {
+    let mut counts = BTreeMap::<Action, (usize, bool)>::new();
+    let mut fence = None;
+    for line in body.lines() {
+        let line = line.trim();
+        if line.starts_with("```") || line.starts_with("~~~") {
+            let kind = &line[..3];
+            if fence == Some(kind) {
+                fence = None;
+            } else if fence.is_none() {
+                fence = Some(kind);
+            }
+            continue;
+        }
+        if fence.is_some() {
+            continue;
+        }
+        let Some((state, rest)) = line.strip_prefix("- [").and_then(|s| s.split_once("] ")) else {
+            continue;
+        };
+        let checked = state == "x" || state == "X";
+        if !checked && state != " " {
+            continue;
+        }
+        let Some((_, marker)) = rest.split_once("<!-- rustovate-action:") else {
+            continue;
+        };
+        let Some(json) = marker.strip_suffix(" -->") else {
+            continue;
+        };
+        if json.len() > 256 {
+            continue;
+        }
+        let Ok(action) = serde_json::from_str::<Action>(json) else {
+            continue;
+        };
+        let target = match &action {
+            Action::Recheck(t) | Action::Create(t) | Action::Recreate(t) | Action::Retry(t) => t,
+        };
+        if target.len() != 64
+            || !target
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            continue;
+        }
+        let entry = counts.entry(action).or_default();
+        entry.0 += 1;
+        entry.1 |= checked;
+    }
+    counts
+        .into_iter()
+        .filter_map(|(a, (n, checked))| (n == 1 && checked).then_some(a))
+        .collect()
+}
+impl Controls {
+    pub fn has_requests(&self) -> bool {
+        self.recheck
+            || !self.branches.is_empty()
+            || !self.create.is_empty()
+            || !self.recreate.is_empty()
+            || !self.retry.is_empty()
+    }
+    pub fn apply(&mut self, plans: &mut [Plan], dependencies: &[rustovate_manager::Dependency]) {
+        for plan in plans {
+            let key = update_key(plan);
+            let permits: BTreeSet<_> = plan
+                .changes
+                .iter()
+                .flat_map(|c| {
+                    dependencies
+                        .iter()
+                        .filter(|d| {
+                            d.file == c.file
+                                && d.package == c.package
+                                && rustovate_manager::word(&d.source) == c.source
+                        })
+                        .filter_map(|d| {
+                            c.version
+                                .as_deref()
+                                .or(c.value.as_deref())
+                                .map(|v| held_target(&extracted_key(d), v, &c.kind))
+                        })
+                })
+                .filter(|target| self.age_permits.contains(target))
+                .collect();
+            if !permits.is_empty() {
+                self.branch_permits
+                    .insert(plan.action.branch.clone(), permits);
+            }
+            let age_click = plan.changes.iter().any(|c| {
+                dependencies
+                    .iter()
+                    .filter(|d| {
+                        d.file == c.file
+                            && d.package == c.package
+                            && rustovate_manager::word(&d.source) == c.source
+                    })
+                    .any(|d| {
+                        c.version
+                            .as_deref()
+                            .or(c.value.as_deref())
+                            .is_some_and(|v| {
+                                self.create
+                                    .contains(&held_target(&extracted_key(d), v, &c.kind))
+                            })
+                    })
+            });
+            if age_click {
+                self.create.insert(key.clone());
+            }
+            if (self.create.contains(&key)
+                || self.recreate.contains(&key)
+                || self.branches.contains(&plan.action.branch))
+                && plan.action.reason.as_deref() == Some("outside the configured update windows")
+            {
+                plan.action.status = rustovate_report::ActionStatus::Planned;
+                plan.action.reason = None;
+            }
+            if self.recheck || self.branches.contains(&plan.action.branch) {
+                plan.retry = true;
+            }
+        }
+    }
+    pub fn read(
+        inventory: &Inventory,
+        repo: &str,
+        dashboard_enabled: bool,
+    ) -> Result<Self, String> {
+        let mut result = Self::default();
+        if dashboard_enabled && let Some(issue) = issue(inventory)? {
+            for action in checked_actions(issue["body"].as_str().unwrap_or("")) {
+                match action {
+                    Action::Recheck(t) if t == hash(repo.as_bytes()) => result.recheck = true,
+                    Action::Recheck(_) => {}
+                    Action::Create(t) => {
+                        result.create.insert(t);
+                    }
+                    Action::Recreate(t) => {
+                        result.recreate.insert(t);
+                    }
+                    Action::Retry(t) => {
+                        result.retry.insert(t);
+                    }
+                }
+            }
+        }
+        for pr in inventory.pull_requests(repo) {
+            result
+                .age_permits
+                .extend(pr_permits(pr["body"].as_str().unwrap_or("")));
+            if (result.recheck || crate::pull_requests::checked(&pr))
+                && let Some(branch) = pr["head"]["ref"].as_str()
+            {
+                result.branches.insert(branch.into());
+            }
+        }
+        Ok(result)
+    }
+}
+const PERMIT_MARKER: &str = "<!-- rustovate-age-permits:v1 ";
+pub(crate) fn permit_marker(permits: &BTreeSet<String>) -> String {
+    format!(
+        "{PERMIT_MARKER}{} -->\n",
+        serde_json::to_string(permits).expect("permits")
     )
+}
+fn pr_permits(body: &str) -> BTreeSet<String> {
+    let mut lines = body.lines().filter_map(|l| l.strip_prefix(PERMIT_MARKER));
+    let Some(json) = lines.next().and_then(|l| l.strip_suffix(" -->")) else {
+        return BTreeSet::new();
+    };
+    if lines.next().is_some() || json.len() > 32_000 {
+        return BTreeSet::new();
+    }
+    let Ok(permits) = serde_json::from_str::<BTreeSet<String>>(json) else {
+        return BTreeSet::new();
+    };
+    if permits.iter().any(|t| {
+        t.len() != 64
+            || !t
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    }) {
+        return BTreeSet::new();
+    }
+    permits
+}
+#[derive(Serialize, Deserialize)]
+struct Permits {
+    actor: String,
+    targets: BTreeSet<String>,
+}
+fn permits_key(repo: &str) -> ExtractionKey {
+    ExtractionKey {
+        repo: repo.into(),
+        default_branch_commit: String::new(),
+        config_hash: "dashboard-age-permits-v1".into(),
+    }
+}
+pub async fn load_permits(
+    cache: &Cache,
+    repo: &str,
+    actor: &str,
+) -> Result<BTreeSet<String>, String> {
+    Ok(cache
+        .extraction_get(&permits_key(repo))
+        .await
+        .map_err(|e| e.to_string())?
+        .and_then(|b| serde_json::from_slice::<Permits>(&b).ok())
+        .filter(|p| p.actor == actor)
+        .map(|p| p.targets)
+        .unwrap_or_default())
+}
+pub async fn save_permits(
+    cache: &Cache,
+    repo: &str,
+    actor: &str,
+    targets: BTreeSet<String>,
+) -> Result<(), String> {
+    cache
+        .extraction_put(
+            &permits_key(repo),
+            &serde_json::to_vec(&Permits {
+                actor: actor.into(),
+                targets,
+            })
+            .map_err(|e| e.to_string())?,
+        )
+        .await
+        .map_err(|e| e.to_string())
 }
 fn safe(text: &str) -> String {
     text.replace('&', "&amp;")
@@ -143,7 +416,7 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
             if let Some(metadata) = &dep.metadata {
                 for held in &metadata.held_back {
                     sections.entry("Pending updates".into()).or_default().insert(checkbox(
-                        &format!("Create this held-back/limited update now: {} → {} ({}, {}; eligible at {})", safe(&dep.name), safe(&held.version), safe(&metadata.source), safe(&file.path), safe(&held.eligible_at)),
+                        &format!("Create this held-back/limited update now: {} → {} ({}, {}; eligible at {})", safe(&dep.name), safe(&held.version), safe(&metadata.source), safe(&file.path), safe(held.target_eligible_at.as_deref().unwrap_or(&held.eligible_at))),
                         Action::Create(held_key(&file.path, dep, &held.version, &held.update_type))));
                 }
                 let warnings: Vec<_> = repo

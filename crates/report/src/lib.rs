@@ -186,6 +186,9 @@ pub struct HeldBack {
     pub update_type: String,
     pub published_at: String,
     pub eligible_at: String,
+    /// Exact summary target's eligibility; eligibleAt remains the earliest in the class.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_eligible_at: Option<String>,
 }
 fn one() -> usize {
     1

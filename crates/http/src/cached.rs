@@ -105,8 +105,13 @@ struct Host {
 type Coalesced = Arc<tokio::sync::Mutex<Option<(Instant, Response)>>>;
 type Derive = fn(&[u8]) -> Result<Vec<u8>, Error>;
 #[derive(Clone)]
-pub struct Cached(Arc<Inner>);
+pub struct Cached(Arc<Inner>, bool);
 impl Cached {
+    /// A scoped manual retry revalidates cached documents, preserving validators,
+    /// shared governors and quotas without changing ordinary callers' freshness.
+    pub fn revalidating(&self) -> Self {
+        Self(self.0.clone(), true)
+    }
     pub fn new(
         cache: Cache,
         transport: Arc<dyn Transport>,
@@ -131,17 +136,20 @@ impl Cached {
         options: Options,
     ) -> Result<Self, Error> {
         options.validate()?;
-        Ok(Self(Arc::new(Inner {
-            transport,
-            cache,
-            hosts: Default::default(),
-            options,
-            decoding: Arc::new(Semaphore::new(4)),
-            requests: AtomicU64::new(0),
-            not_modified: AtomicU64::new(0),
-            cache_hits: AtomicU64::new(0),
-            derived_reads: Default::default(),
-        })))
+        Ok(Self(
+            Arc::new(Inner {
+                transport,
+                cache,
+                hosts: Default::default(),
+                options,
+                decoding: Arc::new(Semaphore::new(4)),
+                requests: AtomicU64::new(0),
+                not_modified: AtomicU64::new(0),
+                cache_hits: AtomicU64::new(0),
+                derived_reads: Default::default(),
+            }),
+            false,
+        ))
     }
     fn host(&self, url: &Url) -> Result<Arc<Host>, Error> {
         let host = url.host_str().ok_or(Error::Configuration)?;
@@ -260,9 +268,10 @@ impl Cached {
     ) -> Result<Response, Error> {
         let started = Instant::now();
         let key = format!(
-            "registry:{method}:{}:{url}\n{accept}\n{}",
+            "registry:{method}:{}:{url}\n{accept}\n{}:{}",
             token.is_some(),
-            derived.map_or("", |(format, _)| format)
+            derived.map_or("", |(format, _)| format),
+            self.1
         );
         let read = self
             .0
@@ -371,7 +380,7 @@ impl Cached {
         derive: Derive,
     ) -> Result<Response, Error> {
         let started = Instant::now();
-        let key = format!("{url}\n{accept}\n{format}");
+        let key = format!("{url}\n{accept}\n{format}:{}", self.1);
         let read = self
             .0
             .derived_reads
@@ -472,6 +481,7 @@ impl Cached {
         if let Some(entry) = &cached
             && ttl.is_some_and(|ttl| ttl > 0)
             && !no_cache
+            && !self.1
         {
             self.0.cache_hits.fetch_add(1, Ordering::Relaxed);
             let mut headers = header::HeaderMap::new();
@@ -818,6 +828,41 @@ fn retry_delay(response: &Response, attempt: u32) -> Option<Duration> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Revalidate(std::sync::atomic::AtomicUsize);
+    impl Transport for Revalidate {
+        fn send(&self, request: Request) -> crate::Exchange<'_> {
+            assert_eq!(request.headers()[header::IF_NONE_MATCH], "\"one\"");
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Box::pin(async {
+                Ok(Response {
+                    status: StatusCode::NOT_MODIFIED,
+                    headers: header::HeaderMap::from_iter([(
+                        header::CACHE_CONTROL,
+                        HeaderValue::from_static("max-age=3600"),
+                    )]),
+                    body: Vec::new(),
+                })
+            })
+        }
+    }
+    #[tokio::test]
+    async fn scoped_manual_retry_bypasses_freshness_preserves_validators_and_shares_stats() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let url = "https://registry.example/catalog";
+        cached_entry(&cache, url, Some("max-age=60"), 0, Some("\"one\"")).await;
+        let transport = Arc::new(Revalidate(Default::default()));
+        let client = Cached::new(cache, transport.clone(), 4).unwrap();
+        client.get(url, "text/plain").await.unwrap();
+        assert_eq!(transport.0.load(Ordering::Relaxed), 0);
+        let response = client.revalidating().get(url, "text/plain").await.unwrap();
+        assert_eq!(response.body, b"catalog");
+        assert_eq!(transport.0.load(Ordering::Relaxed), 1);
+        client.get(url, "text/plain").await.unwrap();
+        assert_eq!(transport.0.load(Ordering::Relaxed), 1);
+        assert_eq!(client.stats().requests, 1);
+        assert_eq!(client.stats().not_modified, 1);
+    }
 
     struct Never;
     impl Transport for Never {
