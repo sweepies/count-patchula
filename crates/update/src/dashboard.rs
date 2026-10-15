@@ -450,9 +450,15 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
     for file in &repo.package_files {
         for dep in &file.dependencies {
             if let Some(metadata) = &dep.metadata {
+                let catalog_age = metadata
+                    .lookup
+                    .as_ref()
+                    .and_then(|lookup| lookup.catalog.as_ref())
+                    .map(|catalog| format!("; catalog fetched at {}", safe(&catalog.fetched_at)))
+                    .unwrap_or_default();
                 for held in &metadata.held_back {
                     sections.entry("Pending updates".into()).or_default().insert((None, checkbox(
-                        &format!("Create this held-back/limited update now: {} → {} ({}, {}; eligible at {})", safe(&dep.name), safe(&held.version), safe(&metadata.source), safe(&file.path), safe(held.target_eligible_at.as_deref().unwrap_or(&held.eligible_at))),
+                        &format!("Create this held-back/limited update now: {} → {} ({}, {}; eligible at {}{})", safe(&dep.name), safe(&held.version), safe(&metadata.source), safe(&file.path), safe(held.target_eligible_at.as_deref().unwrap_or(&held.eligible_at)), catalog_age),
                         Action::Create(held_key(&file.path, dep, &held.version, &held.update_type)))));
                 }
                 let warnings: Vec<_> = repo

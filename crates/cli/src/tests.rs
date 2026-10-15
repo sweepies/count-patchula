@@ -286,10 +286,11 @@ async fn cli_run_reopens_disk_receipts_with_bot_authors_and_mixed_pr_inventory()
                 .position(|(_, _, b)| b["query"] == rustovate_update::INVENTORY_QUERY)
                 .unwrap();
             assert_eq!(requests.len(), 6, "{requests:?}");
-            assert_eq!(
-                inventory,
-                requests.len() - 1,
-                "the write phase must make only the inventory query: {requests:?}"
+            assert!(inventory > 0, "inventory follows repository discovery");
+            assert!(
+                requests.iter().all(|(method, _, body)| method == "GET"
+                    || body["query"] == rustovate_update::INVENTORY_QUERY),
+                "only the inventory query may use POST: {requests:?}"
             );
             assert!(fake.writes.lock().unwrap().is_empty());
         }

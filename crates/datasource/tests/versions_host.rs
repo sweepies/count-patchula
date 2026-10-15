@@ -245,3 +245,67 @@ async fn complete_index_resolves_many_tools_once_and_partial_index_uses_full_tom
             .any(|(path, _)| path.ends_with("age.toml"))
     );
 }
+
+#[tokio::test]
+async fn cached_catalogs_do_not_freeze_mutable_lightweight_or_annotated_tag_targets() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct Moving(AtomicUsize);
+    impl Transport for Moving {
+        fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+            Box::pin(async move {
+                assert_eq!(request.url().path(), "/graphql");
+                let body: serde_json::Value =
+                    serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
+                assert!(
+                    body["query"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("query FreshTagDigests(")
+                );
+                assert_eq!(body["variables"]["e0"], "refs/tags/v1");
+                assert_eq!(body["variables"]["e1"], "refs/tags/v2");
+                let phase = self.0.fetch_add(1, Ordering::SeqCst);
+                let sha = if phase == 0 {
+                    "a".repeat(40)
+                } else {
+                    "b".repeat(40)
+                };
+                Ok(Response {status:reqwest::StatusCode::OK,headers:Default::default(),body:serde_json::to_vec(&json!({"data":{
+                    "r0":{"t0":{"__typename":"Commit","oid":sha},
+                    "t1":{"__typename":"Tag","oid":"c".repeat(40),"target":{"__typename":"Commit","oid":sha}}}
+                }})).unwrap()})
+            })
+        }
+    }
+    let cache = memory().await;
+    let moving = Arc::new(Moving(AtomicUsize::new(0)));
+    let github = rustovate_github::Client::with_transport(
+        "offline",
+        cache.clone(),
+        Default::default(),
+        moving.clone(),
+    )
+    .unwrap();
+    let source = Client::new(
+        github,
+        Cached::new(cache.clone(), moving.clone(), 4).unwrap(),
+        cache,
+    );
+    let keys = vec![
+        ("example/tool".into(), "v1".into()),
+        ("example/tool".into(), "v2".into()),
+    ];
+    for (i, expected) in ["a".repeat(40), "b".repeat(40)].iter().enumerate() {
+        let digests = source.fresh_tag_digests(&keys).await;
+        assert!(
+            digests
+                .values()
+                .all(|value| value.as_ref().unwrap() == expected)
+        );
+        assert_eq!(
+            moving.0.load(Ordering::SeqCst),
+            i + 1,
+            "one query for both mutable tags per run"
+        );
+    }
+}

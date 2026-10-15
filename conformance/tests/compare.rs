@@ -311,6 +311,7 @@ fn release_age_departure_requires_newer_target_and_timestamp_evidence_inside_win
             .as_mut()
             .unwrap()
             .lookup = time.map(|time| rustovate_report::LookupEvidence {
+            catalog: None,
             evaluated_at: time.into(),
             disabled_updates: vec![],
             rejected: vec![],

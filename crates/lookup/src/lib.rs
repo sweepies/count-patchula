@@ -69,6 +69,23 @@ struct Effective<'a> {
     permitted: Option<&'a Filter>,
 }
 impl Evaluator {
+    /// Shared catalogs use the shortest active update-class wait. A zero-age
+    /// rule keeps normal freshness even if another class waits longer.
+    pub fn catalog_wait_hours(&self, dep: &Dependency) -> u32 {
+        [
+            Update::Major,
+            Update::Minor,
+            Update::Patch,
+            Update::Pin,
+            Update::Digest,
+        ]
+        .into_iter()
+        .map(|kind| self.effective(dep, kind))
+        .filter(|effective| effective.policy.active)
+        .map(|effective| effective.policy.wait_hours)
+        .min()
+        .unwrap_or(0)
+    }
     /// Effective class exclusions, including digest policy, are report evidence.
     pub fn disabled_updates(&self, dep: &Dependency) -> Vec<String> {
         [
@@ -137,6 +154,7 @@ impl Evaluator {
             evaluated_at: timestamp(now),
             disabled_updates: self.disabled_updates(dep),
             rejected,
+            catalog: None,
         }
     }
     pub fn new(config: &Config) -> Result<Self> {

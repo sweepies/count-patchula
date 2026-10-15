@@ -1,5 +1,41 @@
 # Benchmarks (SWE-88, report-only)
 
+## Release-age catalog reuse (2026-10-15, departure 50)
+
+The same release CLI and primed primary-host SQLite caches were reopened with
+the example configs' effective age rules. No remote writes or fixture recording
+were performed. Warm runs retained **345 proposals / 46 held-back groups** across
+twelve repositories and **30 proposals** in the sandbox.
+
+| Warm workload | Wall time | Total requests | GitHub requests | Mise-versions requests |
+|---|---:|---:|---:|---:|
+| Twelve repos, primary host before age reuse | 3.28 s | 244 | 71 | 38 |
+| Twelve repos, age reuse | 4.70 s | 85 | 26 | 1 |
+| Sandbox, actual zero-age config | 2.91 s | 26 | 6 | 6 |
+| Sandbox, local 24-hour config | 1.81 s | 16 | 3 | 0 |
+
+The twelve-repository run reused views for **450 dependency occurrences**.
+One zero-age source still revalidated; mutable action refs and image digests
+also kept their own freshness. Its preceding pass took 6.07 s / 163 requests,
+including expired independent registry freshness. This is not a cold catalog
+benchmark. An earlier age-reuse pass took 5.14 s / 86 requests before grouping
+mutable refs by repository; raw observations include both passes.
+
+The live sandbox explicitly sets `waitHours = 0`. Its 24-hour variant changes
+only a local config copy, reusing all 18 catalogs; the remote configuration was
+untouched. Zero-age request totals moved from 25 to 26 as upstream registry
+state changed. Builds were outside measured processes, but shared-host activity
+and live network latency remain uncontrolled. These single observations show
+fewer requests, not a guaranteed wall-time improvement; warm time across the
+twelve repositories remained dominated by cache decoding and mutable-ref reads.
+
+Reports include the unchanged catalog `fetchedAt`, per-dependency `reused` state,
+and current eligibility evaluation time. Offline clock-controlled tests verify
+known held-back releases become eligible without revalidation and checked
+controls bypass only the relevant cached views. Raw reports and traces are in
+`/tmp/rustovate-followup-bench/`, with summaries `item3-results.json` and
+`item3-final-results.json`. The cold primary-host comparison follows below.
+
 ## Mise-versions catalogs (2026-10-15, departure 49)
 
 Release CLI, concurrency 8, identical per-repository example overrides and an

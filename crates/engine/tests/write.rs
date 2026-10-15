@@ -1008,6 +1008,135 @@ fn checkbox_config() -> rustovate_config::Config {
     config.defaults.wait_hours = 0;
     config
 }
+
+#[tokio::test(start_paused = true)]
+async fn age_cached_catalogs_refresh_for_checked_pr_and_repository_controls_only() {
+    let mut fixture = Fake::new(false);
+    fixture.files.insert(
+        "package.json".into(),
+        json!({"dependencies":{"fixture":"1.0.0","other":"1.0.0"}}).to_string(),
+    );
+    *fixture.catalog.lock().unwrap() = json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}},"time":{"1.0.0":"2020-01-01T00:00:00Z","2.0.0":"2021-01-01T00:00:00Z"}});
+    let fake = Arc::new(fixture);
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    let mut config = checkbox_config();
+    config.defaults.wait_hours = 24;
+    let now: chrono::DateTime<chrono::Utc> = "2026-10-15T12:00:00Z".parse().unwrap();
+    checkbox_run(&engine, &config, now).await;
+    fake.requests.lock().unwrap().clear();
+    let warm = checkbox_run(&engine, &config, now + chrono::Duration::minutes(1)).await;
+    assert!(
+        warm.repositories[0].package_files[0]
+            .dependencies
+            .iter()
+            .all(|dep| dep
+                .metadata
+                .as_ref()
+                .unwrap()
+                .lookup
+                .as_ref()
+                .unwrap()
+                .catalog
+                .as_ref()
+                .unwrap()
+                .reused)
+    );
+    assert!(
+        !fake
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, path, _)| matches!(path.as_str(), "/fixture" | "/other"))
+    );
+    {
+        let mut prs = fake.prs.lock().unwrap();
+        let pr = prs
+            .iter_mut()
+            .find(|pr| pr["head"]["ref"].as_str().unwrap().contains("fixture-"))
+            .unwrap();
+        pr["body"] = json!(
+            pr["body"]
+                .as_str()
+                .unwrap()
+                .replace("- [ ] Created", "- [x] Created")
+        );
+    }
+    *fake.catalog.lock().unwrap() = json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}},"time":{"1.0.0":"2020-01-01T00:00:00Z","2.0.0":"2022-01-01T00:00:00Z"}});
+    fake.requests.lock().unwrap().clear();
+    let selected = checkbox_run(&engine, &config, now + chrono::Duration::minutes(2)).await;
+    for dep in &selected.repositories[0].package_files[0].dependencies {
+        let evidence = dep
+            .metadata
+            .as_ref()
+            .unwrap()
+            .lookup
+            .as_ref()
+            .unwrap()
+            .catalog
+            .as_ref()
+            .unwrap();
+        assert_eq!(evidence.reused, dep.name != "fixture");
+        assert_eq!(
+            dep.updates[0].release_age.as_ref().unwrap().published_at,
+            if dep.name == "fixture" {
+                "2022-01-01T00:00:00Z"
+            } else {
+                "2021-01-01T00:00:00Z"
+            }
+        );
+        assert!(
+            dep.updates
+                .iter()
+                .any(|update| update.new_version.as_deref() == Some("2.0.0"))
+        );
+    }
+    {
+        let reads = fake.requests.lock().unwrap();
+        assert_eq!(
+            reads
+                .iter()
+                .filter(|(_, path, _)| path == "/fixture")
+                .count(),
+            1
+        );
+        assert!(!reads.iter().any(|(_, path, _)| path == "/other"));
+    }
+    tick_dashboard(&fake, "recheck");
+    fake.requests.lock().unwrap().clear();
+    let all = checkbox_run(&engine, &config, now + chrono::Duration::minutes(3)).await;
+    assert!(
+        all.repositories[0].package_files[0]
+            .dependencies
+            .iter()
+            .all(|dep| !dep
+                .metadata
+                .as_ref()
+                .unwrap()
+                .lookup
+                .as_ref()
+                .unwrap()
+                .catalog
+                .as_ref()
+                .unwrap()
+                .reused)
+    );
+    for package in ["/fixture", "/other"] {
+        assert_eq!(
+            fake.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, path, _)| path == package)
+                .count(),
+            1
+        );
+    }
+    assert_unticked(&fake);
+}
 async fn checkbox_run(
     engine: &Engine,
     config: &rustovate_config::Config,
@@ -1081,6 +1210,12 @@ async fn dashboard_age_click_bypasses_only_the_selected_target_and_survives_unti
             .as_str()
             .unwrap()
             .contains("eligible at")
+    );
+    assert!(
+        fake.issues.lock().unwrap()[0]["body"]
+            .as_str()
+            .unwrap()
+            .contains("catalog fetched at")
     );
     fake.requests.lock().unwrap().clear();
     fake.writes.lock().unwrap().clear();
@@ -1408,7 +1543,7 @@ async fn failed_lookup_click_retries_the_source_and_unticks_even_when_it_still_f
             .iter()
             .filter(|(_, p, _)| p == "/fixture")
             .count(),
-        2
+        1
     );
     assert_unticked(&fake);
 }

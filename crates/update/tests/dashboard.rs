@@ -15,6 +15,25 @@ fn repository() -> Repository {
         }]}]})).unwrap()
 }
 #[test]
+fn held_back_dashboard_reports_the_reused_catalog_timestamp() {
+    let mut repo = repository();
+    let metadata = repo.package_files[0].dependencies[0]
+        .metadata
+        .as_mut()
+        .unwrap();
+    metadata.lookup = Some(
+        serde_json::from_value(json!({
+            "evaluatedAt":"2026-10-15T12:00:00Z", "disabledUpdates":[], "rejected":[],
+            "catalog":{"fetchedAt":"2026-10-15T09:00:00Z", "reused":true}
+        }))
+        .unwrap(),
+    );
+    let text = dashboard::render(&repo, &[], &[], Recheck::NextRun);
+    assert!(
+        text.contains("eligible at 2026-10-16T00:00:00Z; catalog fetched at 2026-10-15T09:00:00Z")
+    );
+}
+#[test]
 fn dashboard_snapshot_and_identity_do_not_depend_on_wording() {
     let repo = repository();
     let dep = &repo.package_files[0].dependencies[0];

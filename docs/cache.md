@@ -178,3 +178,40 @@ is `Bot`; ordinary users with the same name remain distinct. Receipts are saved
 per verified branch even when unrelated actions fail or are skipped. At `-vv`,
 receipt diagnostics report save/restore counts and the first failed condition
 for each branch requiring verification, without PR bodies or credentials.
+
+# Catalog views and release-age policy (departure 50)
+
+Successful catalog views are stored separately from HTTP bodies, scoped to the
+credential identity, source mode and mise registry mapping. A dependency with
+positive effective `waitHours` reuses a catalog younger than
+`clamp(waitHours - 1, 1, 24)` hours: 23 hours for the default 24-hour wait.
+Zero keeps the existing HTTP/validator freshness rules. The shortest active
+update-class wait is used; dependencies sharing a catalog use the shortest wait
+among them. Expiry is strict, and timestamps from the future are revalidated.
+
+Only the catalog is cached. Policy evaluation always uses the current run time,
+so an already known held-back release can become eligible during the reuse
+window. The versioned report records `metadata.lookup.catalog.fetchedAt` and
+`reused` next to the current `evaluatedAt` and held-back evidence. This describes
+the cached snapshot, not unseen upstream releases. Fetch time is the client's
+successful retrieval/validation time; publication times remain source evidence.
+Held-back dashboard rows also show the fetch time, retained across reuse.
+Aggregate cache-hit statistics include catalog-view hits.
+
+Repository rechecks, checked PR boxes and selected dashboard controls bypass
+reuse. Saved control-to-dependency identities let a checked PR refresh its own
+catalogs while unrelated dependencies retain their views. Missing control
+history conservatively revalidates the repository's catalogs. Failed lookups are
+not cached as views, and registry quota fallbacks do not reset an older
+snapshot's age. Catalog prefetch waits for current policy and checkbox state;
+speculative digest reads may still overlap extraction.
+
+Mutable Git tags and image digests keep their independent freshness. Reused tag
+catalogs never freeze target commits: bounded GraphQL reads resolve only the
+currently needed refs, including annotated tags, without revalidating version
+lists. Missing objects fall back to the existing per-ref lookup.
+
+Offline regressions cover reopen, expiry/clamping, zero-age rules, credential
+isolation, eligibility transitions, targeted PR/dashboard controls, failed
+refreshes, and mutable lightweight/annotated tags. Legacy conditional catalog
+replay explicitly uses `waitHours = 0`.

@@ -314,6 +314,7 @@ fn dependency(value: &Value, source_manager: &str, ctx: &mut Context<'_>) -> Res
             lookup: ctx
                 .evaluated_at
                 .map(|time| rustovate_report::LookupEvidence {
+                    catalog: None,
                     evaluated_at: time.into(),
                     disabled_updates: Vec::new(),
                     rejected: Vec::new(),

@@ -111,7 +111,7 @@ async fn discovered_config_precedence_skips_errors_and_cached_extraction() {
     for (sha, text) in [
         (
             "config",
-            "amends \"../Rustovate.pkl\"\nmanagers = new Listing { \"npm\" }\n",
+            "amends \"../Rustovate.pkl\"\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n",
         ),
         (
             "manifest",
@@ -324,34 +324,29 @@ async fn cold_snapshot_and_warm_branch_rename_reuse_identical_commit() {
 }
 
 #[tokio::test]
-async fn warm_sources_start_before_head_finishes_but_new_extraction_is_authoritative() {
+async fn warm_catalogs_wait_for_current_extraction_and_skip_removed_sources() {
     use rustovate_http::{Exchange, Transport};
     use std::sync::atomic::{AtomicBool, Ordering};
     struct Gate {
         replay: Arc<Replay>,
         warm: AtomicBool,
         prefetched: AtomicBool,
-        release: tokio::sync::Notify,
     }
     impl Transport for Gate {
         fn send(&self, request: reqwest::Request) -> Exchange<'_> {
             Box::pin(async move {
-                if self.warm.load(Ordering::SeqCst) {
-                    if request.url().path() == "/repos/demo/pipeline/branches/main" {
-                        self.release.notified().await;
-                    } else if request.url().host_str() == Some("registry.npmjs.org")
-                        && request.url().path() == "/old-dep"
-                    {
-                        self.prefetched.store(true, Ordering::SeqCst);
-                        self.release.notify_one();
-                    }
+                if self.warm.load(Ordering::SeqCst)
+                    && request.url().host_str() == Some("registry.npmjs.org")
+                    && request.url().path() == "/old-dep"
+                {
+                    self.prefetched.store(true, Ordering::SeqCst);
                 }
                 self.replay.send(request).await
             })
         }
     }
-    // No elapsed-time performance assertion: the blocked head cannot complete
-    // until the source read starts. New files must still replace the hint.
+    // Catalog reads must follow current extraction and policy. An obsolete
+    // speculative hint must neither cause a request nor enter the report.
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("pipeline.json");
     let mut interactions = vec![head("demo/pipeline", Some("main"))];
@@ -390,14 +385,6 @@ async fn warm_sources_start_before_head_finishes_but_new_extraction_is_authorita
         None,
         false,
     ));
-    interactions.push(get(
-        "old-dep",
-        json!(null),
-        304,
-        Some("old-dep"),
-        Some("old-dep"),
-        true,
-    ));
     rustovate_testkit::save(
         &path,
         &Cassette {
@@ -414,7 +401,6 @@ async fn warm_sources_start_before_head_finishes_but_new_extraction_is_authorita
         replay: replay.clone(),
         warm: AtomicBool::new(false),
         prefetched: AtomicBool::new(false),
-        release: Default::default(),
     });
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await
@@ -445,9 +431,9 @@ async fn warm_sources_start_before_head_finishes_but_new_extraction_is_authorita
     gate.warm.store(true, Ordering::SeqCst);
     let warm = tokio::time::timeout(std::time::Duration::from_secs(5), engine.lookup(options()))
         .await
-        .expect("head waited for a source read that never started")
+        .expect("current extraction and catalog lookup must finish")
         .unwrap();
-    assert!(gate.prefetched.load(Ordering::SeqCst));
+    assert!(!gate.prefetched.load(Ordering::SeqCst));
     let repo = &warm.repositories[0];
     assert_eq!(repo.status, rustovate_report::Status::Complete);
     assert_eq!(repo.commit.as_deref(), Some("head2"));

@@ -1,5 +1,6 @@
 //! Batch lookup and branch-writing engine shared by CLI and future server callers.
 #![forbid(unsafe_code)]
+mod catalogs;
 mod overrides;
 pub use rustovate_update::Recheck;
 
@@ -612,9 +613,8 @@ impl Engine {
         let discovery = micros(started);
         drop(phase);
         let override_config = options.config.as_ref();
-        // A hint only schedules reads. Freshly validated extraction/config is
-        // always authoritative for evaluation; unused speculative results are
-        // discarded. Overlap source revalidation with the repository head read.
+        // Hints overlap mutable digest reads with the repository head read.
+        // Catalogs wait for current policy, age-cache and checkbox decisions.
         let hint_hash = format!(
             "lookup-hint-v2:{}:{}:{}:{}",
             hash(&serde_json::to_vec(&(
@@ -715,10 +715,7 @@ impl Engine {
         let prefetch = async {
             let started = Instant::now();
             let _phase = PhaseTrace::new("lookup.prefetch");
-            let result = tokio::join!(
-                self.catalogs(hint.catalogs, &sources),
-                self.digests(hint.digests)
-            );
+            let result = tokio::join!(async { Catalogs::new() }, self.digests(hint.digests));
             (result, micros(started))
         };
         let ((work, extraction_time), ((mut catalogs, mut digests), prefetch_time)) =
@@ -728,27 +725,11 @@ impl Engine {
         let phase = PhaseTrace::new("lookup");
         let started = Instant::now();
         let mut keys = BTreeSet::new();
-        // Manual retries discard speculative results only for selected sources.
-        // Registry freshness is bypassed through a scoped client; quotas remain authoritative.
-        let retry_keys: BTreeSet<_> = work
-            .iter()
-            .flat_map(|repo| {
-                repo.dependencies
-                    .iter()
-                    .filter(|d| {
-                        repo.controls.recheck
-                            || repo
-                                .controls
-                                .retry
-                                .contains(&rustovate_update::dashboard::extracted_key(d))
-                    })
-                    .map(|d| self.catalog_key(d, repo.config.as_ref()))
-            })
-            .collect();
+        let mut waits = BTreeMap::<LookupKey, u32>::new();
+        // Catalog reads wait for authoritative policy and checkbox state. Only
+        // digest hints are speculative, so a warm cache hit sends no list read.
+        let retry_keys = self.forced_catalog_keys(&work).await?;
         let fresh_sources = sources.revalidating().catalog_batch();
-        for key in &retry_keys {
-            catalogs.insert(key.clone(), Self::lookup_key(&fresh_sources, key).await);
-        }
         // Digest retries use the same scoped HTTP client later in the batch.
         let evaluators: Vec<_> = work
             .iter()
@@ -764,7 +745,13 @@ impl Engine {
             if let Some(eval) = eval {
                 for dep in &repo.dependencies {
                     if eval.needs_lookup(dep) {
-                        keys.insert(self.catalog_key(dep, repo.config.as_ref()));
+                        let key = self.catalog_key(dep, repo.config.as_ref());
+                        keys.insert(key.clone());
+                        let hours = eval.catalog_wait_hours(dep);
+                        waits
+                            .entry(key)
+                            .and_modify(|wait| *wait = (*wait).min(hours))
+                            .or_insert(hours);
                     }
                 }
             }
@@ -826,8 +813,11 @@ impl Engine {
         current_refs.retain(|key| !digests.contains_key(key));
         // Revalidate current action refs alongside source heads. These network
         // reads used to serialize behind all catalogs inside the policy phase.
-        let (remaining, refs) =
-            tokio::join!(self.catalogs(keys, &sources), self.digests(current_refs));
+        let (remaining, refs) = tokio::join!(
+            self.age_catalogs(keys, &waits, &retry_keys, &sources, now),
+            self.digests(current_refs)
+        );
+        let (remaining, catalog_evidence) = remaining?;
         catalogs.extend(remaining);
         digests.extend(refs);
         let lookup_time = prefetch_time + micros(started);
@@ -954,7 +944,12 @@ impl Engine {
         // of adding a serial /commits/{tag} round trip after policy evaluation.
         for (package, reference) in &digest_keys {
             if let Some(Ok(catalog)) = catalogs.iter().find_map(|((source, pkg), result)| {
-                (source.ends_with(":github-tags") && pkg == package).then_some(result)
+                (source.ends_with(":github-tags")
+                    && pkg == package
+                    && catalog_evidence
+                        .get(&(source.clone(), pkg.clone()))
+                        .is_none_or(|e| !e.reused))
+                .then_some(result)
             }) && let Some(digest) = catalog
                 .versions
                 .iter()
@@ -967,6 +962,17 @@ impl Engine {
         digest_keys.retain(|key| !digests.contains_key(key));
         let started = Instant::now();
         let phase = PhaseTrace::new("digest");
+        let mutable_tags: Vec<_> = digest_keys
+            .iter()
+            .filter(|(package, _)| {
+                catalog_evidence.iter().any(|((source, pkg), e)| {
+                    source.ends_with(":github-tags") && pkg == package && e.reused
+                })
+            })
+            .cloned()
+            .collect();
+        digests.extend(self.sources.fresh_tag_digests(&mutable_tags).await);
+        digest_keys.retain(|key| !digests.contains_key(key));
         digests.extend(self.digests(digest_keys).await);
         let retry_keys = &retry_keys;
         let fresh_sources = &fresh_sources;
@@ -1208,9 +1214,13 @@ impl Engine {
                         }],
                         held_back: evaluation.held_back,
                         stale,
-                        lookup: eval
-                            .as_ref()
-                            .map(|eval| eval.lookup_evidence(dep, catalog, now)),
+                        lookup: eval.as_ref().map(|eval| {
+                            let mut evidence = eval.lookup_evidence(dep, catalog, now);
+                            evidence.catalog = catalog_evidence
+                                .get(&self.catalog_key(dep, repo.config.as_ref()))
+                                .cloned();
+                            evidence
+                        }),
                         resolution,
                     }),
                 };
@@ -1226,6 +1236,7 @@ impl Engine {
             repo.report.warnings.sort();
             repo.report.warnings.dedup();
         }
+        self.save_catalog_controls(&work, now).await?;
         let policy_time = proposal_cpu_time + micros(started);
         let after_g = self.github.stats().await;
         let after_h = self.http.stats();
@@ -1241,7 +1252,8 @@ impl Engine {
                     - before_g.not_modified
                     - before_h.not_modified,
                 cache_hits: after_h.cache_hits - before_h.cache_hits + after_g.not_modified
-                    - before_g.not_modified,
+                    - before_g.not_modified
+                    + catalog_evidence.values().filter(|e| e.reused).count() as u64,
                 extraction_hits: self.extraction_hits.load(Ordering::Relaxed) - before_hits,
                 lookups: catalogs.len() as u64,
                 phase_micros: BTreeMap::from([

@@ -161,6 +161,15 @@ pub struct LookupEvidence {
     pub evaluated_at: String,
     pub disabled_updates: Vec<String>,
     pub rejected: Vec<RejectedVersion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<CatalogEvidence>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CatalogEvidence {
+    /// Client retrieval/validation time, distinct from release publication time.
+    pub fetched_at: String,
+    pub reused: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

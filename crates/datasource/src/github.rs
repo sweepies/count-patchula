@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 
 const RELEASES: &str = "query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){releases(first:100,after:$cursor,orderBy:{field:CREATED_AT,direction:DESC}){nodes{tagName publishedAt isDraft isPrerelease}pageInfo{hasNextPage endCursor}}}}";
 const GIT_OBJECT_FIELDS: &str = "oid __typename ... on Tag{tagger{date} target{__typename ... on Commit{oid} ... on Tag{target{__typename ... on Commit{oid}}}}}";
+pub type TagDigests = BTreeMap<(String, String), std::result::Result<String, String>>;
 
 #[derive(Serialize, Deserialize)]
 struct ReleaseHead {
@@ -356,6 +357,71 @@ impl Client {
             .extraction_put(&catalog_key, &serde_json::to_vec(&catalog)?)
             .await?;
         Ok(with_release_dates(catalog, &releases))
+    }
+    /// Refresh only requested mutable tag targets while version lists are reused.
+    /// One missing/inaccessible object falls back to its ordinary ref lookup.
+    pub async fn fresh_tag_digests(&self, keys: &[(String, String)]) -> TagDigests {
+        let mut results = BTreeMap::new();
+        for chunk in keys.chunks(64) {
+            let mut declarations = Vec::new();
+            let mut fields = Vec::new();
+            let mut variables = serde_json::Map::new();
+            let mut repositories = BTreeMap::<&str, Vec<usize>>::new();
+            let mut locations = BTreeMap::new();
+            for (i, (package, _)) in chunk.iter().enumerate() {
+                repositories.entry(package).or_default().push(i);
+            }
+            for (r, (package, indices)) in repositories.into_iter().enumerate() {
+                let Some((owner, name)) = package.split_once('/') else {
+                    continue;
+                };
+                declarations.push(format!("$o{r}:String!,$n{r}:String!"));
+                variables.insert(format!("o{r}"), json!(owner));
+                variables.insert(format!("n{r}"), json!(name));
+                let mut objects = Vec::new();
+                for i in indices {
+                    declarations.push(format!("$e{i}:String!"));
+                    variables.insert(format!("e{i}"), json!(format!("refs/tags/{}", chunk[i].1)));
+                    objects.push(format!(
+                        "t{i}:object(expression:$e{i}){{{GIT_OBJECT_FIELDS}}}"
+                    ));
+                    locations.insert(i, r);
+                }
+                fields.push(format!(
+                    "r{r}:repository(owner:$o{r},name:$n{r}){{{}}}",
+                    objects.join(" ")
+                ));
+            }
+            let query = format!(
+                "query FreshTagDigests({}){{{}}}",
+                declarations.join(","),
+                fields.join(" ")
+            );
+            let data = self.github.graphql(&query, Value::Object(variables)).await;
+            for (i, (package, reference)) in chunk.iter().enumerate() {
+                let sha = data
+                    .as_ref()
+                    .ok()
+                    .and_then(|data| {
+                        locations
+                            .get(&i)
+                            .and_then(|r| peel(&data[format!("r{r}")][format!("t{i}")]))
+                    })
+                    .and_then(|commit| commit["oid"].as_str())
+                    .filter(|sha| {
+                        sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    });
+                let result = if let Some(sha) = sha {
+                    Ok(sha.into())
+                } else {
+                    self.digest(package, reference)
+                        .await
+                        .map_err(|error| error.to_string())
+                };
+                results.insert((package.clone(), reference.clone()), result);
+            }
+        }
+        results
     }
     /// Resolve moving refs separately: tags may be retargeted without a new head
     /// and branches such as main are not version releases. Conditional every run.
