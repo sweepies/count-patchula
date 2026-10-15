@@ -84,6 +84,41 @@ microbenchmarks are not substitutes for these measurements.
 | Date | Commit | Host | Repos | Mode | Cache | Runs | Median | Notes |
 |---|---|---|---:|---|---|---:|---|---|
 
+### Phase 1 exit round 3 input (2026-10-15)
+
+Caller-supplied live observations at `1fa827c`, release build, all twelve
+comparison repositories in one batch with an initially fresh SQLite cache:
+
+| Cache pass | Seconds | Requests | 304s | Proposals |
+|---|---:|---:|---:|---:|
+| Cold | 36.9 | 1,750 | 0 | 331 |
+| Warm | 4.2 | 163 | 76 | 331 |
+| Warm2 | 4.1 | 151 | 122 | 334 |
+
+Each is one sample, not a median; host/hardware were not supplied for these
+captures. The baseline lookup log predates evaluation by about one hour.
+Artifacts are `/root/rustovate-conf/r12-{cold,warm,warm2}.{json,err}` and
+`renovate12.jsonl`, outside the repository. Warm2 has 27 warnings, reviewed in
+[phase1-triage.md](phase1-triage.md). The 12 repositories are external test
+inputs; rustovate is developed independently of any runner in that set.
+
+The three extra proposals are two vaultwarden/server and one hashicorp/vault
+digest pins. Failed HEADs in cold/warm versus successful HEADs in warm2 account
+for all three; this is not an age crossing. A successful zero-pull response set
+an overly broad local cooldown, making later HEAD availability depend on order.
+Round 3 separates consuming manifest GET quota from HEAD/tag-list access and
+tests both orders across cold/warm caches. Equal-precedence version candidates
+also have a deterministic source-record tie-breaker, tested at a fixed clock.
+
+The final offline adapter replay of the unchanged warm2 report is **8 missing,
+6 extra, 21 field mismatches and 263 departures**, with one missing baseline.
+Eight digest differences carry rate-limit evidence. These counts include the
+old report's unfixed lookup/metadata outputs; they are not a live measurement
+of round 3. No new timing/proposal-count improvement is claimed. A new release
+build and contemporaneous baseline should verify lookup completeness, stable
+proposal sets for the same inputs/evaluation time and remaining source errors.
+Implementation `af88256` passed `CARGO_NET_OFFLINE=true mise run ci`.
+
 Historical Renovate baselines from [design.md](design.md), not remeasured here:
 Renovate 44.155.6, warm caches, one EC2 c7i.large.
 
