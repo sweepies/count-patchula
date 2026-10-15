@@ -8,12 +8,12 @@ macro_rules! words {
     };
 }
 words!(Manager { Npm => "npm", Bun => "bun", GithubActions => "github-actions", Mise => "mise", Cargo => "cargo", Dockerfile => "dockerfile", Compose => "compose", Go => "go", Terraform => "terraform", Kubernetes => "kubernetes", Kustomize => "kustomize", Flux => "flux", HelmValues => "helm-values", Requirements => "requirements", Regex => "regex" });
-words!(Source { Npm => "npm", GithubReleases => "github-releases", GithubTags => "github-tags", Docker => "docker", Crates => "crates", Go => "go", Terraform => "terraform", Pypi => "pypi", Helm => "helm", Oci => "oci", Mise => "mise" });
+words!(Source { Npm => "npm", GithubReleases => "github-releases", GithubTags => "github-tags", GithubRunners => "github-runners", Docker => "docker", Crates => "crates", Go => "go", Terraform => "terraform", Pypi => "pypi", Helm => "helm", Oci => "oci", Mise => "mise" });
 words!(Update { Major => "major", Minor => "minor", Patch => "patch", Digest => "digest", Pin => "pin" });
 words!(VersionPolicy { Exact => "exact", Preserve => "preserve", Widen => "widen" });
 words!(Scheme { Semver => "semver", Docker => "docker", Pep440 => "pep440", Go => "go", Hashicorp => "hashicorp", Loose => "loose" });
 words!(Rebase { Conflicts => "conflicts", Behind => "behind" });
-words!(DependencyKind { Production => "production", Development => "development", Peer => "peer", Optional => "optional", Build => "build", Action => "action", ReusableWorkflow => "reusable-workflow", ContainerImage => "container-image", Tool => "tool", GoDirective => "go-directive", Provider => "provider", Module => "module", Chart => "chart" });
+words!(DependencyKind { Production => "production", Development => "development", Peer => "peer", Optional => "optional", Build => "build", Action => "action", ReusableWorkflow => "reusable-workflow", Runner => "runner", ContainerImage => "container-image", Tool => "tool", GoDirective => "go-directive", Provider => "provider", Module => "module", Chart => "chart" });
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

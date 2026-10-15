@@ -77,6 +77,22 @@ pub struct DependencyMetadata {
     pub source: String,
     pub kinds: Vec<String>,
     pub locations: Vec<Location>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub held_back: Vec<HeldBack>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HeldBack {
+    pub version: String,
+    pub update_type: String,
+    pub published_at: String,
+    pub eligible_at: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReleaseAge {
+    pub published_at: String,
+    pub evaluated_at: String,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -118,11 +134,15 @@ pub struct Update {
     /// Additive v1 lookup metadata; absent in black-box comparison inputs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<UpdatePolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_age: Option<ReleaseAge>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdatePolicy {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub versions: Option<String>,
     pub wait_hours: u32,
     pub windows: Vec<Window>,
     pub merge: bool,
@@ -228,6 +248,9 @@ pub fn normalize_dependencies(dependencies: Vec<Dependency>) -> Vec<Dependency> 
                 a.kinds.append(&mut b.kinds);
                 a.kinds.sort();
                 a.kinds.dedup();
+                a.held_back.append(&mut b.held_back);
+                a.held_back.sort();
+                a.held_back.dedup();
             }
         } else {
             group.push(dep);

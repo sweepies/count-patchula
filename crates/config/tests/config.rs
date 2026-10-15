@@ -36,6 +36,7 @@ fn defaults_are_explicit_safe_and_unlimited() {
     assert!(config.defaults.action_digests && config.defaults.image_digests);
     assert!(!config.defaults.merge);
     assert_eq!(config.defaults.versions, VersionPolicy::Exact);
+    assert_eq!(config.defaults.wait_hours, 24);
     assert_eq!(config.prs.concurrent, None);
     assert_eq!(config.prs.per_hour, None);
     assert!(config.managers.contains(&Manager::GithubActions));

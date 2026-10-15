@@ -48,11 +48,21 @@ impl Versioning for Ecosystem {
         };
         let normalized;
         let value = if matches!(self, Self::Loose) && !value.contains(['-', '+']) {
-            let fields = value.split('.').count();
+            let components: Vec<_> = value
+                .split('.')
+                .map(|v| v.parse::<u64>())
+                .collect::<std::result::Result<_, _>>()
+                .map_err(|_| Error::Invalid(value.into()))?;
+            let fields = components.len();
+            let value = components
+                .iter()
+                .map(u64::to_string)
+                .collect::<Vec<_>>()
+                .join(".");
             normalized = match fields {
                 1 => format!("{value}.0.0"),
                 2 => format!("{value}.0"),
-                _ => value.into(),
+                _ => value,
             };
             normalized.as_str()
         } else {

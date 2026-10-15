@@ -29,8 +29,32 @@ Stable comparison link: <a id="departure-7"></a>**Departure 7: default policy**
 | 18 | Group identifiers | Separate groupName and groupSlug fields | One group string identifies the update group; branch slug derivation belongs to the updater | Avoid two configuration identities for the same grouping intent |
 | 19 | Configuration dependencies | The renovate-config manager treats Renovate configuration as package files | No equivalent manager: the comparison adapter excludes only renovate-config snapshots and summaries | rustovate uses Pkl and does not resolve Renovate configuration or presets |
 | 20 | Cargo compatibility | Numeric update levels may differ in black-box reports | A changed pre-1.0 Cargo compatibility boundary is major; exact Cargo uses = | Follow Cargo's documented compatibility rules |
-| 21 | Source refresh | Histories are exposed through registry/platform responses | Conditional head probes gate GraphQL; validator-free Go responses use declared freshness | Avoid unnecessary histories and respect actual upstream HTTP capabilities |
+| 21 | Source refresh | Histories are exposed through registry/platform responses | Conditional head probes gate GraphQL; registry bodies use declared freshness | Avoid unnecessary histories and respect actual upstream HTTP capabilities |
 | 22 | Repeated dependencies | Manager snapshots can contain repeated dependency names | Optional occurrence IDs preserve different current values, merging identical rows | Retain all manifest occurrences without ambiguous report identities |
+| 23 | Minimum release age | The compared run waits about three days | Follow mise's default minimum_release_age of 24 hours for dated releases; choose the newest eligible release and report held-back versions | A short explicit default with release-date evidence; undated releases have no delay |
+| 24 | npm integrity | Lookup reports npm integrity as newDigest | npm manifests do not pin integrity; compare targets without npm newDigest | Lockfile integrity belongs to lockfile tooling |
+| 25 | npm major range edits | The compared policy retains a range such as ^7.0.0 | versions = "exact" proposes the exact selected release, such as 7.0.2 | Apply explicit version policy consistently on major updates |
+
+<a id="departure-23"></a>**Departure 23: minimum release age.**
+The default follows [mise's minimum_release_age](https://mise.jdx.dev/configuration/settings.html#minimum_release_age):
+24 hours when a release timestamp is available. The comparison rule requires an
+explicit 24-hour policy and timestamp evidence that rustovate's proposal is at
+least 24 and less than 72 hours old, plus a strictly older Renovate target in
+the same update class. Reversed, undated, older-than-window, unrelated range,
+missing, and extra proposals are never excused. This is a narrow explanation of
+the observed three-day comparison window, not a claim about all Renovate defaults.
+
+<a id="departure-24"></a>**Departure 24: npm integrity normalization.**
+The adapter ignores only proposed newDigest for dependencies whose datasource is
+npm (falling back to npm/bun manager when source metadata is absent), including
+custom regex extraction of npm versions. Current digests, other sources, version
+targets and update types remain comparable. Triage counts normalized proposals.
+
+<a id="departure-25"></a>**Departure 25: exact npm major proposals.**
+The narrow rule requires identical resolved targets on both sides, a major
+upgrade from a caret/tilde current range, a rustovate exact target with policy
+metadata, and a Renovate caret/tilde range with the target's major/minor and a
+no-greater patch. Other target, update-type, or range differences stay actionable.
 
 <a id="departure-19"></a>**Departure 19: configuration dependency scope.**
 The fixed comparison rule `renovate-config-manager` excludes only Renovate's own
@@ -53,10 +77,12 @@ with identical update targets. It never excludes version or range differences.
 
 <a id="departure-21"></a>**Departure 21: explicit freshness and GitHub history gates.**
 GraphQL POSTs have no conditional HTTP validators, so a conditional REST head
-probe gates incremental GitHub history. The Go proxy's list/latest responses
-provide max-age but no validators; fresh bodies are reused and expired bodies
-are refreshed. Unchanged warm public source requests are therefore all 304, with
-Go served from its declared freshness window. Historical changes behind an
+probe gates incremental GitHub history. Registry responses honor declared
+max-age (unless no-cache), including npm/sparse responses with validators. The
+Go proxy's list/latest responses provide max-age without validators. Fresh bodies
+are reused; expired bodies are conditionally validated where supported.
+Unchanged warm network responses are 304; fresh registries need no request.
+Historical changes behind an
 unchanged GitHub head require future invalidation/reconciliation. This affects
 request strategy, not a confirmed proposal difference, so it has no comparison
 exemption.

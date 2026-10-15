@@ -319,7 +319,8 @@ impl Client {
                 url = self.url(target.as_str())?;
                 continue;
             }
-            if response.status == StatusCode::NOT_MODIFIED {
+            let not_modified = response.status == StatusCode::NOT_MODIFIED;
+            if not_modified {
                 let cached = cached.ok_or(Error::MissingBody)?;
                 self.0.governor.not_modified();
                 let mut headers = response.headers;
@@ -364,20 +365,36 @@ impl Client {
             } else {
                 let entry = cache_entry(&response);
                 let key = self.key(&request, vary)?;
-                self.0
-                    .cache
-                    .http_put(&key, &entry)
-                    .await
-                    .map_err(|_| Error::Cache)?;
+                if not_modified {
+                    self.0
+                        .cache
+                        .http_refresh(&key, &entry)
+                        .await
+                        .map_err(|_| Error::Cache)?;
+                } else {
+                    self.0
+                        .cache
+                        .http_put(&key, &entry)
+                        .await
+                        .map_err(|_| Error::Cache)?;
+                }
                 // The client sends a fixed request-header set. All dynamic Vary
                 // fields other than auth are absent/stable; the base copy keeps
                 // discovery and paginated Link headers intact.
                 if key != base_key {
-                    self.0
-                        .cache
-                        .http_put(&base_key, &entry)
-                        .await
-                        .map_err(|_| Error::Cache)?;
+                    if not_modified {
+                        self.0
+                            .cache
+                            .http_refresh(&base_key, &entry)
+                            .await
+                            .map_err(|_| Error::Cache)?;
+                    } else {
+                        self.0
+                            .cache
+                            .http_put(&base_key, &entry)
+                            .await
+                            .map_err(|_| Error::Cache)?;
+                    }
                 }
             }
             return Ok(response);

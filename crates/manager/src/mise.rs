@@ -76,54 +76,37 @@ fn add(
     {
         return;
     }
-    let (source, package) = if let Some(p) = name.strip_prefix("npm:") {
-        (Source::Npm, p)
-    } else if let Some(p) = name
-        .strip_prefix("github:")
-        .or_else(|| name.strip_prefix("aqua:"))
-    {
-        (Source::GithubReleases, p)
-    } else {
-        match name {
-            "bun" => (Source::GithubReleases, "oven-sh/bun"),
-            "node" => (Source::GithubTags, "nodejs/node"),
-            "rust" => (Source::GithubTags, "rust-lang/rust"),
-            "python" => (Source::GithubTags, "python/cpython"),
-            "go" => (Source::GithubTags, "golang/go"),
-            "zig" => (Source::GithubTags, "ziglang/zig"),
-            "mise" => (Source::GithubReleases, "jdx/mise"),
-            "gh" => (Source::GithubReleases, "cli/cli"),
-            "fnox" => (Source::GithubReleases, "jdx/fnox"),
-            "tak" => (Source::GithubReleases, "jdx/tak"),
-            "hk" => (Source::GithubReleases, "jdx/hk"),
-            "prettier" => (Source::Npm, "prettier"),
-            "usage" => (Source::GithubReleases, "jdx/usage"),
-            "mr-boxington" => (Source::GithubReleases, "jdx/mr-boxington"),
-            "terraform" => (Source::GithubReleases, "hashicorp/terraform"),
-            "opentofu" => (Source::GithubReleases, "opentofu/opentofu"),
-            _ => (Source::Mise, name),
-        }
-    };
+    let resolution = rustovate_mise::resolve(name);
+    let (source, package, extract) = resolution.map_or_else(
+        || (Source::Mise, name.into(), None),
+        |r| (r.source, r.package, r.extract),
+    );
+    // Mise versions are values, unlike npm ranges. A numeric extracted value
+    // is already known even before querying a source; floating selectors are not.
+    let resolved = (version
+        .trim_start_matches('v')
+        .split('.')
+        .all(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+        || version
+            .trim_start_matches('v')
+            .split_once('-')
+            .is_some_and(|(v, _)| {
+                v.split('.')
+                    .all(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+            }))
+    .then(|| version.to_owned());
     out.push(Dependency {
         manager: Manager::Mise,
         file: path.into(),
         location: Location::new(text, start, end, format!("/tools/{name}")),
         name: name.into(),
-        package: if matches!(source, Source::GithubReleases | Source::GithubTags) {
-            package.split('/').take(2).collect::<Vec<_>>().join("/")
-        } else {
-            package.into()
-        },
+        package,
         kind: DependencyKind::Tool,
         current: version.into(),
-        resolved: None,
+        resolved,
         digest: None,
         source,
         scheme: Scheme::Loose,
-        extract: if name == "go" {
-            Some("^go(?<version>.*)$".into())
-        } else {
-            None
-        },
+        extract,
     });
 }

@@ -6,11 +6,11 @@ use rustovate_config::{Config, Manager, Source};
 use rustovate_datasource::Client as Sources;
 use rustovate_github::{Client as Github, Options as GithubOptions};
 use rustovate_http::{Cached, Transport};
-use rustovate_lookup::Evaluator;
+use rustovate_lookup::{Evaluation, Evaluator};
 use rustovate_manager::{Dependency, Extraction, Files, Scanner, word};
 use rustovate_report::{
     Current, Dependency as ReportDependency, PackageFile, Report, Repository, SCHEMA_VERSION,
-    Status, Update,
+    Status,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -96,6 +96,13 @@ impl Engine {
         })
     }
     pub async fn lookup(&self, options: Options) -> Result<Report> {
+        self.lookup_at(options, chrono::Utc::now()).await
+    }
+    pub async fn lookup_at(
+        &self,
+        options: Options,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Report> {
         let total = Instant::now();
         let before_g = self.github.stats().await;
         let before_h = self.http.stats();
@@ -152,7 +159,24 @@ impl Engine {
         }
         // One lookup per source/package over the entire batch, even across
         // schemes and extractor-specific tag filters. Keep raw catalogs shared.
-        let catalogs: BTreeMap<_, _> = stream::iter(keys)
+        let mut current_refs = BTreeSet::new();
+        for (repo, eval) in work.iter().zip(&evaluators) {
+            if let Some(eval) = eval {
+                for dep in &repo.dependencies {
+                    if dep.manager == Manager::GithubActions
+                        && dep.source == Source::GithubTags
+                        && !(dep.digest.is_some() && dep.resolved.is_none())
+                        && eval.digest_proposal(dep, "probe").is_some()
+                    {
+                        current_refs.insert((
+                            dep.package.clone(),
+                            dep.resolved.as_deref().unwrap_or(&dep.current).to_owned(),
+                        ));
+                    }
+                }
+            }
+        }
+        let catalogs = stream::iter(keys)
             .map(|(source, package)| async move {
                 let parsed: Source =
                     serde_json::from_value(Value::String(source.clone())).expect("typed source");
@@ -164,22 +188,24 @@ impl Engine {
                 ((source, package), result)
             })
             .buffer_unordered(self.concurrency)
-            .collect()
-            .await;
+            .collect::<BTreeMap<_, _>>();
+        // Revalidate current action refs alongside source heads. These network
+        // reads used to serialize behind all catalogs inside the policy phase.
+        let (catalogs, mut digests) = tokio::join!(catalogs, self.digests(current_refs));
         let lookup_time = micros(started);
         let started = Instant::now();
-        let mut proposals: Vec<Vec<Vec<Update>>> = Vec::with_capacity(work.len());
+        let mut proposals: Vec<Vec<Evaluation>> = Vec::with_capacity(work.len());
         let mut digest_keys = BTreeSet::new();
         for (repo, eval) in work.iter_mut().zip(&evaluators) {
             let mut deps = Vec::with_capacity(repo.dependencies.len());
             for dep in &repo.dependencies {
-                let mut proposed = Vec::new();
+                let mut evaluation = Evaluation::default();
                 if let Some(eval) = eval
                     && !eval.ignored(dep)
                 {
                     match catalogs.get(&(word(&dep.source), dep.package.clone())) {
-                        Some(Ok(catalog)) => match eval.propose(dep, catalog) {
-                            Ok(p) => proposed = p,
+                        Some(Ok(catalog)) => match eval.evaluate_at(dep, catalog, now) {
+                            Ok(p) => evaluation = p,
                             Err(e) => repo.report.warnings.push(format!("{}: {e}", dep.name)),
                         },
                         Some(Err(error)) => repo
@@ -189,7 +215,7 @@ impl Engine {
                         None => {}
                     }
                     if dep.manager == Manager::GithubActions && dep.source == Source::GithubTags {
-                        for proposal in &proposed {
+                        for proposal in &evaluation.updates {
                             if eval.needs_digest(dep, proposal)
                                 && let Some(reference) = proposal.new_value.as_deref()
                             {
@@ -209,25 +235,20 @@ impl Engine {
                         }
                     }
                 }
-                deps.push(proposed);
+                deps.push(evaluation);
             }
             proposals.push(deps);
         }
-        let digests: BTreeMap<_, _> = stream::iter(digest_keys)
-            .map(|(package, reference)| async move {
-                let result = self
-                    .sources
-                    .digest(&package, &reference)
-                    .await
-                    .map_err(|e| e.to_string());
-                ((package, reference), result)
-            })
-            .buffer_unordered(self.concurrency)
-            .collect()
-            .await;
+        let proposal_cpu_time = micros(started);
+        digest_keys.retain(|key| !digests.contains_key(key));
+        let started = Instant::now();
+        digests.extend(self.digests(digest_keys).await);
+        let digest_time = micros(started);
+        let started = Instant::now();
         for ((repo, eval), dep_proposals) in work.iter_mut().zip(&evaluators).zip(proposals) {
             let mut files: BTreeMap<String, Vec<ReportDependency>> = BTreeMap::new();
-            for (dep, mut proposals) in repo.dependencies.iter().zip(dep_proposals) {
+            for (dep, evaluation) in repo.dependencies.iter().zip(dep_proposals) {
+                let mut proposals = evaluation.updates;
                 if let Some(eval) = eval
                     && dep.manager == Manager::GithubActions
                     && dep.source == Source::GithubTags
@@ -275,21 +296,23 @@ impl Engine {
                     package: dep.package.clone(),
                     current: Current {
                         value: Some(dep.current.clone()),
-                        version: dep.resolved.clone().or_else(|| {
-                            rustovate_lookup::scheme(dep)
-                                .ok()
-                                .filter(|s| {
-                                    matches!(
-                                        s,
-                                        rustovate_versioning::Ecosystem::Npm
-                                            | rustovate_versioning::Ecosystem::Go
-                                    )
-                                })
-                                .and_then(|s| {
-                                    rustovate_versioning::Versioning::parse(&s, &dep.current).ok()
-                                })
-                                .map(|v| v.0.to_string())
-                        }),
+                        version: catalogs
+                            .get(&(word(&dep.source), dep.package.clone()))
+                            .and_then(|c| c.as_ref().ok())
+                            .and_then(|c| rustovate_lookup::resolved_tool_version(dep, c))
+                            .or_else(|| dep.resolved.clone())
+                            .or_else(|| {
+                                rustovate_lookup::scheme(dep)
+                                    .ok()
+                                    .filter(|_| {
+                                        dep.kind != rustovate_config::DependencyKind::Runner
+                                    })
+                                    .and_then(|s| {
+                                        rustovate_versioning::Versioning::parse(&s, &dep.current)
+                                            .ok()
+                                    })
+                                    .map(|v| v.0.to_string())
+                            }),
                         digest: dep.digest.clone(),
                     },
                     updates: proposals,
@@ -303,6 +326,7 @@ impl Engine {
                             column: dep.location.column,
                             pointer: dep.location.pointer.clone(),
                         }],
+                        held_back: evaluation.held_back,
                     }),
                 };
                 files.entry(dep.file.clone()).or_default().push(value);
@@ -317,7 +341,7 @@ impl Engine {
             repo.report.warnings.sort();
             repo.report.warnings.dedup();
         }
-        let policy_time = micros(started);
+        let policy_time = proposal_cpu_time + micros(started);
         let after_g = self.github.stats().await;
         let after_h = self.http.stats();
         let report = Report {
@@ -339,12 +363,30 @@ impl Engine {
                     ("extraction".into(), extraction_time),
                     ("lookup".into(), lookup_time),
                     ("policy".into(), policy_time),
+                    ("digest".into(), digest_time),
                     ("total".into(), micros(total)),
                 ]),
             }),
         };
         report.validate()?;
         Ok(report)
+    }
+    async fn digests(
+        &self,
+        keys: BTreeSet<(String, String)>,
+    ) -> BTreeMap<(String, String), std::result::Result<String, String>> {
+        stream::iter(keys)
+            .map(|(package, reference)| async move {
+                let result = self
+                    .sources
+                    .digest(&package, &reference)
+                    .await
+                    .map_err(|e| e.to_string());
+                ((package, reference), result)
+            })
+            .buffer_unordered(self.concurrency)
+            .collect()
+            .await
     }
     async fn repositories(&self) -> Result<Vec<String>> {
         match self
@@ -422,20 +464,38 @@ impl Engine {
         String::from_utf8(bytes).map_err(|_| Error::Invalid("selected file is not UTF-8".into()))
     }
     async fn scan(&self, repo: &str, override_config: Option<&Config>) -> Result<Work> {
-        let metadata = self.json(&format!("repos/{repo}")).await?;
+        // The previous branch is only a speculation hint. Always revalidate
+        // metadata, and retry the branch read if the default changed.
+        let hint_key = ExtractionKey {
+            repo: format!("default-branch:{repo}"),
+            default_branch_commit: String::new(),
+            config_hash: "branch-v1".into(),
+        };
+        let hint = self
+            .cache
+            .extraction_get(&hint_key)
+            .await?
+            .and_then(|b| serde_json::from_slice::<String>(&b).ok());
+        let metadata_path = format!("repos/{repo}");
+        let (metadata, speculative_head) = if let Some(branch) = &hint {
+            let (metadata, head) = tokio::join!(self.json(&metadata_path), self.head(repo, branch));
+            (metadata?, Some(head))
+        } else {
+            (self.json(&metadata_path).await?, None)
+        };
         let branch = metadata["default_branch"]
             .as_str()
             .ok_or_else(|| Error::Invalid("repository has no default branch".into()))?
             .to_owned();
-        let mut branch_url =
-            reqwest::Url::parse(&format!("https://api.github.com/repos/{repo}/branches/"))
-                .expect("validated repository URL");
-        branch_url
-            .path_segments_mut()
-            .expect("https URL")
-            .pop_if_empty()
-            .push(&branch);
-        let head = self.json(branch_url.as_str()).await?;
+        let head = if hint.as_deref() == Some(&branch) {
+            speculative_head.expect("head started with hint")?
+        } else {
+            let head = self.head(repo, &branch).await?;
+            self.cache
+                .extraction_put(&hint_key, &serde_json::to_vec(&branch)?)
+                .await?;
+            head
+        };
         let commit = head["commit"]["sha"]
             .as_str()
             .ok_or_else(|| Error::Invalid("branch has no commit".into()))?
@@ -446,6 +506,28 @@ impl Engine {
         let mut report = repository(repo, Status::Complete, None);
         report.default_branch = Some(branch);
         report.commit = Some(commit.clone());
+        self.extract(repo, override_config, report, commit, tree_sha)
+            .await
+    }
+    async fn head(&self, repo: &str, branch: &str) -> Result<Value> {
+        let mut branch_url =
+            reqwest::Url::parse(&format!("https://api.github.com/repos/{repo}/branches/"))
+                .expect("validated repository URL");
+        branch_url
+            .path_segments_mut()
+            .expect("https URL")
+            .pop_if_empty()
+            .push(branch);
+        self.json(branch_url.as_str()).await
+    }
+    async fn extract(
+        &self,
+        repo: &str,
+        override_config: Option<&Config>,
+        mut report: Repository,
+        commit: String,
+        tree_sha: &str,
+    ) -> Result<Work> {
         let mut tree = None;
         let config = if let Some(config) = override_config {
             Some(config.clone())
@@ -490,7 +572,11 @@ impl Engine {
         let key = ExtractionKey {
             repo: repo.into(),
             default_branch_commit: commit,
-            config_hash: format!("extract-v1:{}", hash(&serde_json::to_vec(&config)?)),
+            config_hash: format!(
+                "extract-v2:{}:{}",
+                hash(&serde_json::to_vec(&config)?),
+                hash(rustovate_manager::MISE_REGISTRY.as_bytes())
+            ),
         };
         let extraction: Extraction = if let Some(bytes) = self.cache.extraction_get(&key).await? {
             self.extraction_hits.fetch_add(1, Ordering::Relaxed);

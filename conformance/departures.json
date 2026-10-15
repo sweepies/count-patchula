@@ -2,6 +2,30 @@
   "schemaVersion": 1,
   "rules": [
     {
+      "id": "release-age-new-value",
+      "departure": 23,
+      "classification": "field-mismatch",
+      "managers": ["npm", "bun", "mise", "regex", "github-actions", "cargo", "go", "requirements"],
+      "field": "updates.newValue",
+      "predicate": "release-age-window"
+    },
+    {
+      "id": "release-age-new-version",
+      "departure": 23,
+      "classification": "field-mismatch",
+      "managers": ["npm", "bun", "mise", "regex", "github-actions", "cargo", "go", "requirements"],
+      "field": "updates.newVersion",
+      "predicate": "release-age-window"
+    },
+    {
+      "id": "npm-exact-major",
+      "departure": 25,
+      "classification": "field-mismatch",
+      "managers": ["npm", "bun"],
+      "field": "updates.newValue",
+      "predicate": "npm-exact-major"
+    },
+    {
       "id": "cargo-pre1-breaking",
       "departure": 20,
       "classification": "field-mismatch",

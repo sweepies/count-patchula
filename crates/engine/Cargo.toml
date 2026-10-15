@@ -8,6 +8,7 @@ repository.workspace = true
 [lints]
 workspace = true
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 rustovate-cache = { path = "../cache" }
 rustovate-config = { path = "../config" }
 rustovate-http = { path = "../http" }

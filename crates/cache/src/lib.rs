@@ -176,6 +176,27 @@ impl Cache {
         self.call(move |store| store.http_put(&key, &entry)).await
     }
 
+    /// A 304 changes metadata, never the compressed body. Avoid recompressing
+    /// and rewriting large registry documents after conditional validation.
+    pub async fn http_refresh(&self, key: &HttpKey, entry: &HttpEntry) -> Result<()> {
+        let key = key.encoded()?;
+        let entry = HttpEntry {
+            status: entry.status,
+            etag: entry.etag.clone(),
+            last_modified: entry.last_modified.clone(),
+            headers: entry.headers.clone(),
+            body: Vec::new(),
+            fetched_at: entry.fetched_at,
+            expires_at: entry.expires_at,
+            cache_control: entry.cache_control.clone(),
+        };
+        self.call(move |store| {
+            store.conn.execute("UPDATE http SET etag=?2,last_modified=?3,headers=?4,fetched_at=?5,expires_at=?6,cache_control=?7 WHERE key=?1",
+                rusqlite::params![key,entry.etag,entry.last_modified,serde_json::to_string(&entry.headers)?,entry.fetched_at,entry.expires_at,entry.cache_control])?;
+            Ok(())
+        }).await
+    }
+
     pub async fn http_remove(&self, key: &HttpKey) -> Result<()> {
         let key = key.encoded()?;
         self.call(move |store| {

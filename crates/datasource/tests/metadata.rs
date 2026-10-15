@@ -10,7 +10,7 @@ use std::{collections::BTreeMap, sync::Arc};
 async fn registry_flags_tags_and_sparse_layout_are_preserved() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("metadata.json");
-    let interactions=[("https://registry.npmjs.org/spec-package","application/vnd.npm.install-v1+json",Body::Json(json!({"dist-tags":{"latest":"2.0.0","next":"3.0.0-beta.1"},"versions":{"1.0.0":{"deprecated":"use new API"},"2.0.0":{},"3.0.0-beta.1":{}}}))),
+    let interactions=[("https://registry.npmjs.org/spec-package","application/json",Body::Json(json!({"dist-tags":{"latest":"2.0.0","next":"3.0.0-beta.1"},"time":{"2.0.0":"2026-10-14T00:00:00Z"},"versions":{"1.0.0":{"deprecated":"use new API"},"2.0.0":{},"3.0.0-beta.1":{}}}))),
         ("https://index.crates.io/sp/ec/spec-package","text/plain",Body::Text("{\"vers\":\"1.0.0\",\"yanked\":false}\n{\"vers\":\"2.0.0\",\"yanked\":true}\n".into()))].into_iter().map(|(url,accept,body)|Interaction{request:RecordedRequest{method:"GET".into(),url:url.into(),headers:BTreeMap::from([("accept".into(),vec![accept.into()])]),body:Body::Text(String::new())},response:RecordedResponse{status:200,headers:Default::default(),body}}).collect();
     rustovate_testkit::save(&path,&Cassette{schema_version:1,provenance:"Simulated from npm metadata and Cargo sparse-index specifications, independently written".into(),interactions},&Default::default()).unwrap();
     let replay = Arc::new(Replay::open(&path, Default::default()).unwrap());
@@ -31,6 +31,15 @@ async fn registry_flags_tags_and_sparse_layout_are_preserved() {
     );
     let npm = client.lookup(Source::Npm, "spec-package").await.unwrap();
     assert_eq!(npm.dist_tags["next"], "3.0.0-beta.1");
+    assert_eq!(
+        npm.versions
+            .iter()
+            .find(|v| v.version == "2.0.0")
+            .unwrap()
+            .published_at
+            .as_deref(),
+        Some("2026-10-14T00:00:00Z")
+    );
     assert!(
         npm.versions
             .iter()

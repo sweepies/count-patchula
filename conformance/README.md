@@ -103,7 +103,9 @@ verified; invoking the harness's live installation/execution path is still unver
 
 Outputs are `triage.md` and `triage.json`. JSON includes both normalized inputs
 using the [v1 batch report](../docs/report.md), plus differences, parser `warnings`
-and audited `exclusions`. Markdown includes warnings and exclusion counts too.
+and audited `exclusions`. `normalizations` counts skipped group comparisons,
+npm digest normalization and ignored empty-file-only coverage. Markdown includes
+these counts, warnings and exclusions too.
 The fixed `renovate-config-manager` scope rule excludes Renovate's own configuration
 manager (snapshots and upgrade summaries) under [departure 19](../docs/departures.md#departure-19);
 rustovate has no equivalent. Every other manager remains in comparison. Classification
@@ -116,10 +118,23 @@ The command exits 0 after producing triage even when differences exist: this is
 report-only. Input or execution failures exit nonzero.
 
 [departures.json](departures.json) is a versioned, deliberately small rules file;
-`--rules PATH` selects a replacement. Only digest additions for actions/images
+`--rules PATH` selects a replacement. Digest additions for actions/images
 are mapped to [departure 7](../docs/departures.md#departure-7). An extra pin must
 keep the current value/version, add a digest to an unpinned dependency and have
-no group. Other version, identity and grouping differences remain actionable.
+no group. Release-age differences map to [departure 23](../docs/departures.md#departure-23)
+only when timestamp evidence places a newer rustovate target between 24 and 72
+hours old under an explicit 24-hour policy, with an older Renovate proposal in
+the same class. Exact npm major range edits map narrowly to
+[departure 25](../docs/departures.md#departure-25) with identical resolved targets
+and an explicit exact policy. Other version and identity differences remain actionable.
+
+Proposed npm integrity digests are ignored under
+[departure 24](../docs/departures.md#departure-24), including regex dependencies
+whose datasource is npm. Other-source and current digests remain comparable.
+Groups compare only when Renovate supplies a group on that update, including
+enrichment from unambiguous branch summaries. Missing group metadata is unknown.
+Empty package-file-only differences are ignored when no dependency is missing;
+missing repositories and dependencies still produce coverage differences.
 Rule validation checks row IDs against the bundled departures document. Adding
 new predicates requires reviewed Rust code, not unrestricted matching rules.
 Markdown links resolve to the local departures document; JSON keeps portable

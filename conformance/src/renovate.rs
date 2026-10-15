@@ -206,6 +206,7 @@ fn update(value: &Value, inherited_group: Option<String>, ctx: &mut Context<'_>)
         },
         group: ctx.text(value, "groupName").or(inherited_group),
         policy: None,
+        release_age: None,
     };
     if proposed.new_value.is_none()
         && proposed.new_version.is_none()
@@ -237,7 +238,7 @@ fn dependency(value: &Value, source_manager: &str, ctx: &mut Context<'_>) -> Res
         name.clone()
     });
     // Datasource is metadata in report v1, but malformed values still diagnose.
-    let _datasource = ctx.text(value, "datasource");
+    let datasource = ctx.text(value, "datasource");
     let group = ctx.text(value, "groupName");
     let current = Current {
         value: ctx.text(value, "currentValue"),
@@ -294,7 +295,12 @@ fn dependency(value: &Value, source_manager: &str, ctx: &mut Context<'_>) -> Res
         occurrence: None,
         current,
         updates,
-        metadata: None,
+        metadata: datasource.map(|source| rustovate_report::DependencyMetadata {
+            source,
+            kinds: Vec::new(),
+            locations: Vec::new(),
+            held_back: Vec::new(),
+        }),
     })
 }
 

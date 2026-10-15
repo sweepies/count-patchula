@@ -7,6 +7,59 @@ use rustovate_http::{Cached, Network};
 use rustovate_testkit::{Options, Redactor};
 use std::{path::Path, sync::Arc};
 
+/// Explicit public-only refresh when a GitHub recording credential is absent.
+/// Existing GitHub responses stay intact; npm bodies are real full metadata.
+#[tokio::test]
+#[ignore = "live public npm recording; use mise run fixtures:refresh-npm"]
+async fn refresh_public_npm_metadata() {
+    use rustovate_http::Transport;
+    use rustovate_testkit::{Cassette, Recorder};
+    assert_eq!(std::env::var("RUSTOVATE_RECORD").as_deref(), Ok("1"));
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    for relative in ["datasource/public-sources.json", "engine/public-batch.json"] {
+        let path = root.join(relative);
+        let mut cassette: Cassette =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let recorded = dir.path().join("npm.json");
+        let recorder = Recorder::new(
+            &recorded,
+            Options::default(),
+            Arc::new(Network::new().unwrap()),
+            "Full public npm metadata recorded by rustovate".into(),
+        );
+        for interaction in &mut cassette.interactions {
+            if interaction
+                .request
+                .url
+                .starts_with("https://registry.npmjs.org/")
+                && interaction.response.status == 200
+            {
+                let mut request = reqwest::Request::new(
+                    reqwest::Method::GET,
+                    reqwest::Url::parse(&interaction.request.url).unwrap(),
+                );
+                request.headers_mut().insert(
+                    "accept",
+                    reqwest::header::HeaderValue::from_static("application/json"),
+                );
+                assert!(recorder.send(request).await.unwrap().status.is_success());
+                let fresh: Cassette =
+                    serde_json::from_slice(&std::fs::read(&recorded).unwrap()).unwrap();
+                *interaction = fresh.interactions.last().unwrap().clone();
+            }
+        }
+        // Fresh aggregate registries no longer make these recorded warm reads.
+        cassette.interactions.retain(|i| {
+            !(i.response.status == 304
+                && (i.request.url.starts_with("https://registry.npmjs.org/")
+                    || i.request.url.starts_with("https://index.crates.io/")))
+        });
+        cassette.provenance.push_str("; npm full metadata refreshed from public registry by rustovate on 2026-10-15; unused warm registry 304 reads removed for HTTP freshness");
+        rustovate_testkit::save(&path, &cassette, &Redactor::default()).unwrap();
+    }
+}
+
 #[tokio::test]
 async fn public_sources_cold_and_conditional_warm() {
     let token = if std::env::var("RUSTOVATE_RECORD").as_deref() == Ok("1") {
@@ -85,15 +138,19 @@ async fn public_sources_cold_and_conditional_warm() {
         "warm GitHub only probes and ref, no GraphQL history"
     );
     assert_eq!(after_g.not_modified - before_g.not_modified, 3);
-    assert_eq!(
-        after_h.requests - before_h.requests,
-        2,
-        "Go .info history is cached"
+    assert!(
+        after_h.requests - before_h.requests <= 2,
+        "fresh registries and Go history are cached"
     );
-    assert_eq!(after_h.not_modified - before_h.not_modified, 2);
+    assert_eq!(
+        after_h.not_modified - before_h.not_modified,
+        after_h.requests - before_h.requests
+    );
     eprintln!(
-        "sources cold={cold:?} warm={:?} cold_requests={} warm_requests=5 warm_304=5",
+        "sources cold={cold:?} warm={:?} cold_requests={} warm_requests={} warm_304={}",
         start.elapsed(),
-        before_g.requests + before_h.requests
+        before_g.requests + before_h.requests,
+        after_g.requests + after_h.requests - before_g.requests - before_h.requests,
+        after_g.not_modified + after_h.not_modified - before_g.not_modified - before_h.not_modified,
     );
 }

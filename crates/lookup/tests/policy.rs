@@ -210,3 +210,173 @@ fn extracted_reusable_workflow_matches_runner_digest_opt_out() {
     assert!(eval.propose(dep, &catalog(&["v1.0.0"])).unwrap().is_empty());
     assert!(eval.digest_proposal(dep, &"a".repeat(40)).is_none());
 }
+
+fn instant(value: &str) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .unwrap()
+        .with_timezone(&chrono::Utc)
+}
+#[test]
+fn release_age_falls_back_and_reports_eligibility_without_hiding_current() {
+    let config = config("renovate-runner");
+    let eval = Evaluator::new(&config).unwrap();
+    let now = instant("2026-10-15T12:00:00Z");
+    let mut versions = catalog(&["1.0.0", "1.0.1", "1.0.2", "2.0.0", "3.0.0"]);
+    for (v, date) in versions.versions.iter_mut().zip([
+        "2026-10-15T11:00:00Z",      // current remains a valid baseline
+        "2026-10-14T12:00:00Z",      // eligible at exactly 24h
+        "2026-10-14T12:00:01Z",      // held by one second
+        "2026-10-15T13:00:00+01:00", // equivalent to now
+        "2026-10-01T12:00:00Z",
+    ]) {
+        v.published_at = Some(date.into());
+    }
+    let result = eval
+        .evaluate_at(&dependency("plain"), &versions, now)
+        .unwrap();
+    assert_eq!(result.updates.len(), 2);
+    assert!(
+        result
+            .updates
+            .iter()
+            .any(|p| p.new_version.as_deref() == Some("1.0.1"))
+    );
+    assert!(
+        result
+            .updates
+            .iter()
+            .any(|p| p.new_version.as_deref() == Some("3.0.0"))
+    );
+    assert_eq!(result.held_back.len(), 1); // 2.0.0 is superseded by eligible 3.0.0
+    assert_eq!(result.held_back[0].version, "1.0.2");
+    assert_eq!(result.held_back[0].eligible_at, "2026-10-15T12:00:01Z");
+    let patch = result
+        .updates
+        .iter()
+        .find(|p| p.update_type == "patch")
+        .unwrap();
+    assert_eq!(
+        patch.release_age.as_ref().unwrap().evaluated_at,
+        "2026-10-15T12:00:00Z"
+    );
+    let mut cfg = config;
+    cfg.defaults.wait_hours = 0;
+    let result = Evaluator::new(&cfg)
+        .unwrap()
+        .evaluate_at(&dependency("plain"), &versions, now)
+        .unwrap();
+    assert!(result.held_back.is_empty());
+    assert!(
+        result
+            .updates
+            .iter()
+            .any(|p| p.new_version.as_deref() == Some("1.0.2"))
+    );
+}
+
+#[test]
+fn missing_dates_all_held_and_rule_overrides_are_explicit() {
+    let mut cfg = config("renovate-runner");
+    let now = instant("2026-10-15T12:00:00Z");
+    let mut versions = catalog(&["1.0.1", "1.0.2"]);
+    for version in &mut versions.versions {
+        version.published_at = Some("2026-10-15T00:00:00Z".into());
+    }
+    let eval = Evaluator::new(&cfg).unwrap();
+    let result = eval
+        .evaluate_at(&dependency("plain"), &versions, now)
+        .unwrap();
+    assert!(result.updates.is_empty());
+    assert_eq!(result.held_back.len(), 2);
+    versions.versions[0].published_at = None;
+    assert_eq!(
+        eval.evaluate_at(&dependency("plain"), &versions, now)
+            .unwrap()
+            .updates[0]
+            .new_version
+            .as_deref(),
+        Some("1.0.1")
+    );
+    let mut rule = cfg.rules[0].clone();
+    rule.select.packages = vec!["plain".into()];
+    rule.apply.wait_hours = Some(12);
+    cfg.rules = vec![rule];
+    assert_eq!(
+        Evaluator::new(&cfg)
+            .unwrap()
+            .evaluate_at(&dependency("plain"), &versions, now)
+            .unwrap()
+            .updates[0]
+            .new_version
+            .as_deref(),
+        Some("1.0.2")
+    );
+}
+
+#[test]
+fn floating_targets_fall_back_and_existing_lock_pins_survive_age_gate() {
+    let eval = Evaluator::new(&config("renovate-runner")).unwrap();
+    let now = instant("2026-10-15T12:00:00Z");
+    let mut dep = dependency("plain");
+    dep.current = "latest".into();
+    dep.resolved = None;
+    let mut versions = catalog(&["1.0.0", "1.0.1"]);
+    versions.versions[1].published_at = Some("2026-10-15T11:00:00Z".into());
+    versions.dist_tags.insert("latest".into(), "1.0.1".into());
+    let result = eval.evaluate_at(&dep, &versions, now).unwrap();
+    assert_eq!(result.updates[0].new_value.as_deref(), Some("1.0.0"));
+    assert_eq!(result.held_back.len(), 1);
+    dep.current = "^1.0.0".into();
+    dep.resolved = Some("1.0.1".into());
+    let result = eval.evaluate_at(&dep, &versions, now).unwrap();
+    assert_eq!(result.updates[0].update_type, "pin");
+    assert_eq!(result.updates[0].new_value.as_deref(), Some("1.0.1"));
+    assert!(result.held_back.is_empty());
+}
+
+#[test]
+fn runner_latest_is_floating_and_versioned_images_never_get_digests() {
+    let config = config("renovate-runner");
+    let deps = rustovate_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&rustovate_manager::Files::from([(
+            ".github/workflows/ci.yml".into(),
+            "jobs:\n  a:\n    runs-on: ubuntu-latest\n  b:\n    runs-on: ubuntu-22.04\n".into(),
+        )]))
+        .unwrap()
+        .dependencies;
+    let eval = Evaluator::new(&config).unwrap();
+    assert!(!eval.needs_lookup(&deps[0]));
+    let p = eval
+        .propose(&deps[1], &catalog(&["24.04", "26.04"]))
+        .unwrap();
+    assert_eq!(p[0].new_value.as_deref(), Some("26.04"));
+    assert!(!eval.needs_digest(&deps[1], &p[0]));
+}
+
+#[test]
+fn mise_current_versions_follow_backend_tag_identity_without_proposal_filters() {
+    let cfg = config("renovate-runner");
+    let deps = rustovate_manager::Scanner::new(&cfg)
+        .unwrap()
+        .extract(&rustovate_manager::Files::from([(
+            "mise.toml".into(),
+            "[tools]\nage = \"1.2.3\"\nfnox = \"2.3.4\"\nbun = \"3.4.5\"\n".into(),
+        )]))
+        .unwrap()
+        .dependencies;
+    for (name, source_version, expected) in [
+        ("age", "v1.2.3", "1.2.3"),
+        ("fnox", "v2.3.4", "v2.3.4"),
+        ("bun", "bun-v3.4.5", "3.4.5"),
+    ] {
+        let dep = deps.iter().find(|d| d.name == name).unwrap();
+        let mut catalog = catalog(&[source_version]);
+        catalog.versions[0].published_at = Some("2099-01-01T00:00:00Z".into());
+        catalog.versions[0].yanked = true;
+        assert_eq!(
+            rustovate_lookup::resolved_tool_version(dep, &catalog).as_deref(),
+            Some(expected)
+        );
+    }
+}

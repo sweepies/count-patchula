@@ -3,7 +3,7 @@
 module Rustovate
 
 typealias Manager = "npm"|"bun"|"github-actions"|"mise"|"cargo"|"dockerfile"|"compose"|"go"|"terraform"|"kubernetes"|"kustomize"|"flux"|"helm-values"|"requirements"|"regex"
-typealias Source = "npm"|"github-releases"|"github-tags"|"docker"|"crates"|"go"|"terraform"|"pypi"|"helm"|"oci"|"mise"
+typealias Source = "npm"|"github-releases"|"github-tags"|"github-runners"|"docker"|"crates"|"go"|"terraform"|"pypi"|"helm"|"oci"|"mise"
 typealias Update = "major"|"minor"|"patch"|"digest"|"pin"
 typealias VersionPolicy = "exact"|"preserve"|"widen"
 typealias Scheme = "semver"|"docker"|"pep440"|"go"|"hashicorp"|"loose"
@@ -12,7 +12,7 @@ typealias Scheme = "semver"|"docker"|"pep440"|"go"|"hashicorp"|"loose"
 /// production. Actions distinguish steps from reusable workflows; containers,
 /// mise tools, Go language directives, Terraform providers/modules and Helm
 /// charts have explicit roles. These are exact values, not match patterns.
-typealias DependencyKind = "production"|"development"|"peer"|"optional"|"build"|"action"|"reusable-workflow"|"container-image"|"tool"|"go-directive"|"provider"|"module"|"chart"
+typealias DependencyKind = "production"|"development"|"peer"|"optional"|"build"|"action"|"reusable-workflow"|"runner"|"container-image"|"tool"|"go-directive"|"provider"|"module"|"chart"
 
 /// Match lists are OR; populated selector fields are AND. Empty means any.
 /// Patterns are path-aware globs, or `regex:...`; prefix `!` excludes a match.
@@ -48,7 +48,8 @@ class Policy {
   releaseNotes: Boolean = true
   bodyNotes: Listing<String> = new {}
   permitted: String? = null
-  waitHours: Int = 0
+  /// Minimum release age when the source reports a date. Current pins are retained.
+  waitHours: Int = 24
   /// An empty window list means updates may be proposed at any time.
   windows: Listing<Window> = new {}
 }

@@ -17,7 +17,7 @@ fn get(
         "accept".into(),
         vec![
             if registry {
-                "application/vnd.npm.install-v1+json"
+                "application/json"
             } else {
                 "application/vnd.github+json"
             }
@@ -233,5 +233,99 @@ async fn installation_tokens_use_installation_repository_listing() {
             .repositories
             .is_empty()
     );
+    replay.assert_finished().unwrap();
+}
+
+#[tokio::test]
+async fn changed_default_branch_retries_failed_hint_and_reuses_identical_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("branch.json");
+    let head = json!({"commit":{"sha":"head","commit":{"tree":{"sha":"tree"}}}});
+    let cassette = Cassette {
+        schema_version: 1,
+        provenance: "Independently simulated GitHub default-branch rename".into(),
+        interactions: vec![
+            get(
+                "repos/demo/renamed",
+                json!({"default_branch":"main"}),
+                200,
+                Some("meta"),
+                None,
+                false,
+            ),
+            get(
+                "repos/demo/renamed/branches/main",
+                head.clone(),
+                200,
+                Some("head"),
+                None,
+                false,
+            ),
+            get(
+                "repos/demo/renamed/git/trees/tree?recursive=1",
+                json!({"truncated":false,"tree":[]}),
+                200,
+                None,
+                None,
+                false,
+            ),
+            get(
+                "repos/demo/renamed",
+                json!({"default_branch":"next"}),
+                200,
+                Some("new-meta"),
+                Some("meta"),
+                false,
+            ),
+            get(
+                "repos/demo/renamed/branches/main",
+                json!({"message":"Not Found"}),
+                404,
+                None,
+                Some("head"),
+                false,
+            ),
+            get(
+                "repos/demo/renamed/branches/next",
+                head,
+                200,
+                Some("head"),
+                None,
+                false,
+            ),
+        ],
+    };
+    rustovate_testkit::save(&path, &cassette, &Default::default()).unwrap();
+    let replay = Arc::new(Replay::open(&path, Default::default()).unwrap());
+    let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
+        .await
+        .unwrap();
+    let engine = Engine::with_transport("offline", cache, 4, replay.clone()).unwrap();
+    let config = rustovate_config::load_files(
+        "/repo/config.pkl",
+        BTreeMap::from([
+            (
+                "/repo/config.pkl".into(),
+                "amends \"Rustovate.pkl\"\nmanagers = new Listing {}".into(),
+            ),
+            (
+                "/repo/Rustovate.pkl".into(),
+                rustovate_config::SCHEMA.into(),
+            ),
+        ]),
+    )
+    .unwrap();
+    let options = || Options {
+        repositories: vec!["demo/renamed".into()],
+        config: Some(config.clone()),
+    };
+    engine.lookup(options()).await.unwrap();
+    let warm = engine.lookup(options()).await.unwrap();
+    assert_eq!(
+        warm.repositories[0].status,
+        rustovate_report::Status::Complete
+    );
+    assert_eq!(warm.repositories[0].default_branch.as_deref(), Some("next"));
+    assert_eq!(warm.stats.unwrap().extraction_hits, 1);
     replay.assert_finished().unwrap();
 }

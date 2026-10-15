@@ -70,6 +70,7 @@ fn equal_proposals_are_order_independent_and_never_paired_by_position() {
         update_type: "major".into(),
         group: None,
         policy: None,
+        release_age: None,
     };
     dep.updates.push(u.clone());
     u.new_value = Some("6".into());
@@ -103,6 +104,7 @@ fn departures_do_not_hide_version_changes_or_other_managers() {
         update_type: "pin".into(),
         group: None,
         policy: None,
+        release_age: None,
     });
     assert_eq!(
         compare(&a, &b, &rules()).unwrap().differences[0].classification,
@@ -119,10 +121,7 @@ fn departures_do_not_hide_version_changes_or_other_managers() {
         .find(|f| f.path == "package.json")
         .unwrap();
     npm.dependencies[0].updates[0].new_digest = Some("digest".into());
-    assert_eq!(
-        compare(&a, &b, &rules()).unwrap().differences[0].classification,
-        Class::FieldMismatch
-    );
+    assert!(compare(&a, &b, &rules()).unwrap().differences.is_empty());
     let npm = b.repositories[0]
         .package_files
         .iter_mut()
@@ -132,6 +131,146 @@ fn departures_do_not_hide_version_changes_or_other_managers() {
     npm.dependencies[0].updates[0].update_type = "patch".into();
     let triage = compare(&a, &b, &rules()).unwrap();
     assert_eq!(triage.differences[0].field, "updates.updateType");
+}
+
+#[test]
+fn npm_integrity_unknown_groups_and_empty_files_are_counted_without_hiding_real_changes() {
+    let log = r#"{"repository":"x/y","msg":"packageFiles with updates","config":{"custom.regex":[{"packageFile":"versions.ts","deps":[{"depName":"spec","datasource":"npm","currentValue":"1.0.0","updates":[{"newValue":"1.0.1","newVersion":"1.0.1","newDigest":"sha512-example","updateType":"patch"}]}]}],"npm":[{"packageFile":"empty/package.json","deps":[]}]}}"#;
+    let a = parse_logs(log).unwrap();
+    let mut b = a.clone();
+    b.repositories[0]
+        .package_files
+        .retain(|f| !f.dependencies.is_empty());
+    let dep = &mut b.repositories[0].package_files[0].dependencies[0];
+    dep.updates[0].new_digest = None;
+    dep.updates[0].group = Some("grouped later".into());
+    let triage = compare(&a, &b, &rules()).unwrap();
+    assert!(triage.differences.is_empty());
+    assert_eq!(triage.normalizations["npm-newDigest-ignored"], 1);
+    assert_eq!(triage.normalizations["groups-unavailable-skipped"], 1);
+    assert_eq!(triage.normalizations["empty-package-file-ignored"], 1);
+    let mut grouped = a.clone();
+    grouped.repositories[0]
+        .package_files
+        .iter_mut()
+        .find(|f| !f.dependencies.is_empty())
+        .unwrap()
+        .dependencies[0]
+        .updates[0]
+        .group = Some("expected".into());
+    assert_eq!(
+        compare(&grouped, &b, &rules()).unwrap().differences[0].field,
+        "updates.group"
+    );
+    let dep = &mut b.repositories[0].package_files[0].dependencies[0];
+    dep.updates[0].new_value = Some("9.0.0".into());
+    assert_eq!(
+        compare(&a, &b, &rules()).unwrap().differences[0].classification,
+        Class::FieldMismatch
+    );
+    let mut non_npm = a.clone();
+    non_npm.repositories[0]
+        .package_files
+        .iter_mut()
+        .find(|f| !f.dependencies.is_empty())
+        .unwrap()
+        .dependencies[0]
+        .metadata
+        .as_mut()
+        .unwrap()
+        .source = "github-releases".into();
+    assert!(
+        compare(&non_npm, &b, &rules())
+            .unwrap()
+            .differences
+            .iter()
+            .any(|d| d.field == "updates.newDigest")
+    );
+}
+
+fn policy() -> rustovate_report::UpdatePolicy {
+    serde_json::from_value(json!({"versions":"exact","waitHours":24,"windows":[],"merge":false,"labels":[],"commitPrefix":"chore(deps):","releaseNotes":true,"bodyNotes":[]})).unwrap()
+}
+
+#[test]
+fn release_age_departure_requires_newer_target_and_timestamp_evidence_inside_window() {
+    let mut a = parse_logs(LOG).unwrap();
+    let dep = &mut a.repositories[0].package_files[0].dependencies[0];
+    dep.manager = "npm".into();
+    dep.current.value = Some("1.0.0".into());
+    dep.updates = vec![serde_json::from_value(json!({"newValue":"1.0.1","newVersion":"1.0.1","newDigest":null,"updateType":"patch","group":null})).unwrap()];
+    let mut b = a.clone();
+    let update = &mut b.repositories[0].package_files[0].dependencies[0].updates[0];
+    update.new_value = Some("1.0.2".into());
+    update.new_version = Some("1.0.2".into());
+    update.policy = Some(policy());
+    update.release_age = Some(rustovate_report::ReleaseAge {
+        published_at: "2026-10-14T00:00:00Z".into(),
+        evaluated_at: "2026-10-15T12:00:00Z".into(),
+    });
+    let diffs = compare(&a, &b, &rules()).unwrap().differences;
+    assert_eq!(diffs.len(), 2);
+    assert!(
+        diffs
+            .iter()
+            .all(|d| d.classification == Class::DeliberateDeparture
+                && d.departure.as_ref().unwrap().row == 23)
+    );
+    for date in ["2026-10-15T01:00:00Z", "2026-10-12T12:00:00Z", "malformed"] {
+        let mut changed = b.clone();
+        changed.repositories[0].package_files[0].dependencies[0].updates[0]
+            .release_age
+            .as_mut()
+            .unwrap()
+            .published_at = date.into();
+        assert!(
+            compare(&a, &changed, &rules())
+                .unwrap()
+                .differences
+                .iter()
+                .all(|d| d.classification == Class::FieldMismatch)
+        );
+    }
+    assert!(
+        compare(&b, &a, &rules())
+            .unwrap()
+            .differences
+            .iter()
+            .all(|d| d.classification == Class::FieldMismatch)
+    );
+    b.repositories[0].package_files[0].dependencies[0].updates[0].release_age = None;
+    assert!(
+        compare(&a, &b, &rules())
+            .unwrap()
+            .differences
+            .iter()
+            .all(|d| d.classification == Class::FieldMismatch)
+    );
+}
+
+#[test]
+fn npm_exact_major_departure_requires_identical_resolved_targets_and_explicit_policy() {
+    let mut a = parse_logs(LOG).unwrap();
+    let dep = &mut a.repositories[0].package_files[0].dependencies[0];
+    dep.manager = "npm".into();
+    dep.current.value = Some("^5.9.3".into());
+    dep.updates = vec![serde_json::from_value(json!({"newValue":"^7.0.0","newVersion":"7.0.2","newDigest":null,"updateType":"major","group":null})).unwrap()];
+    let mut b = a.clone();
+    let update = &mut b.repositories[0].package_files[0].dependencies[0].updates[0];
+    update.new_value = Some("7.0.2".into());
+    update.policy = Some(policy());
+    let diff = compare(&a, &b, &rules()).unwrap().differences;
+    assert_eq!(diff.len(), 1);
+    assert_eq!(diff[0].departure.as_ref().unwrap().row, 25);
+    b.repositories[0].package_files[0].dependencies[0].updates[0].new_version =
+        Some("7.0.3".into());
+    assert!(
+        compare(&a, &b, &rules())
+            .unwrap()
+            .differences
+            .iter()
+            .all(|d| d.classification == Class::FieldMismatch)
+    );
 }
 
 #[test]
@@ -508,6 +647,7 @@ fn cargo_pre1_departure_is_limited_to_identical_breaking_targets() {
         update_type: "minor".into(),
         group: None,
         policy: None,
+        release_age: None,
     }];
     let mut b = a.clone();
     b.repositories[0].package_files[0].dependencies[0].updates[0].update_type = "major".into();

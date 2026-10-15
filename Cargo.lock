@@ -1613,7 +1613,9 @@ dependencies = [
 name = "rustovate-conformance"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "rustovate-report",
+ "semver",
  "serde",
  "serde_json",
  "tempfile",
@@ -1631,6 +1633,7 @@ dependencies = [
  "rustovate-config",
  "rustovate-github",
  "rustovate-http",
+ "rustovate-mise",
  "rustovate-testkit",
  "rustovate-versioning",
  "serde",
@@ -1646,6 +1649,7 @@ name = "rustovate-engine"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "futures-util",
  "regex",
  "reqwest",
@@ -1699,6 +1703,7 @@ dependencies = [
 name = "rustovate-lookup"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "nodejs-semver",
  "regex",
  "rustovate-config",
@@ -1717,10 +1722,19 @@ dependencies = [
  "jsonc-parser",
  "regex",
  "rustovate-config",
+ "rustovate-mise",
  "serde",
  "serde_json",
  "serde_yaml_ng",
  "toml_edit",
+]
+
+[[package]]
+name = "rustovate-mise"
+version = "0.1.0"
+dependencies = [
+ "rustovate-config",
+ "serde_json",
 ]
 
 [[package]]

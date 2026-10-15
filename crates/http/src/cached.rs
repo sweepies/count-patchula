@@ -90,9 +90,11 @@ impl Cached {
             .unwrap_or_default()
             .as_secs() as i64;
         if let Some(entry) = &cached
-            && entry.etag.is_none()
-            && entry.last_modified.is_none()
             && entry.expires_at.is_some_and(|expiry| expiry > now)
+            && !entry.cache_control.as_deref().is_some_and(|c| {
+                c.split(',')
+                    .any(|p| p.trim().eq_ignore_ascii_case("no-cache"))
+            })
         {
             self.0.cache_hits.fetch_add(1, Ordering::Relaxed);
             let mut headers = header::HeaderMap::new();
@@ -144,7 +146,8 @@ impl Cached {
             .map_err(|_| Error::Configuration)?;
         self.0.requests.fetch_add(1, Ordering::Relaxed);
         let mut response = self.0.transport.send(request).await?;
-        if response.status == StatusCode::NOT_MODIFIED {
+        let not_modified = response.status == StatusCode::NOT_MODIFIED;
+        if not_modified {
             let entry = cached.ok_or(Error::MissingBody)?;
             self.0.not_modified.fetch_add(1, Ordering::Relaxed);
             response.status =
@@ -171,16 +174,16 @@ impl Cached {
                 .map(str::to_owned)
         };
         let control = text("cache-control");
-        let uncacheable = control
-            .as_ref()
-            .is_some_and(|c| c.split(',').any(|v| v.trim() == "no-store"))
-            || text("vary").is_some_and(|v| {
-                v.split(',').any(|n| {
-                    !["accept", "accept-encoding", "user-agent"]
-                        .iter()
-                        .any(|known| n.trim().eq_ignore_ascii_case(known))
-                })
-            });
+        let uncacheable = control.as_ref().is_some_and(|c| {
+            c.split(',')
+                .any(|v| v.trim().eq_ignore_ascii_case("no-store"))
+        }) || text("vary").is_some_and(|v| {
+            v.split(',').any(|n| {
+                !["accept", "accept-encoding", "user-agent"]
+                    .iter()
+                    .any(|known| n.trim().eq_ignore_ascii_case(known))
+            })
+        });
         if uncacheable {
             self.0.cache.http_remove(&key).await?;
         } else {
@@ -215,10 +218,20 @@ impl Cached {
                         })
                     })
                     .filter(|age| *age >= 0)
-                    .and_then(|age| now.checked_add(age)),
+                    .and_then(|age| {
+                        let elapsed = text("age")
+                            .and_then(|v| v.parse::<i64>().ok())
+                            .unwrap_or(0)
+                            .max(0);
+                        now.checked_add(age.saturating_sub(elapsed).max(0))
+                    }),
                 cache_control: control,
             };
-            self.0.cache.http_put(&key, &entry).await?;
+            if not_modified {
+                self.0.cache.http_refresh(&key, &entry).await?;
+            } else {
+                self.0.cache.http_put(&key, &entry).await?;
+            }
         }
         Ok(response)
     }

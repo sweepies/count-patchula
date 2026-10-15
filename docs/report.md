@@ -60,7 +60,9 @@ reports with these optional extensions; the original comparison fields remain.
 
 Additional optional fields: repository `warnings`, `defaultBranch`, `commit`;
 dependency `metadata` (`source`, `kinds`, byte/line/column/semantic `locations`);
-update `policy` (`waitHours`, `windows`, merge/labels/message settings); batch
+update `policy` (`versions`, `waitHours`, `windows`, merge/labels/message settings);
+dated updates' `releaseAge` (`publishedAt`, `evaluatedAt`); dependency metadata
+`heldBack` entries (`version`, `updateType`, `publishedAt`, `eligibleAt`); batch
 `stats` (requests, notModified, cacheHits, extractionHits, unique lookups and
 phaseMicros). Unknown fields are still rejected. Timing windows are reported
 without delaying lookup. Engine JSON errors remain error envelopes only for

@@ -11,6 +11,8 @@ one repository at a time.
 Status: Phase 1, wave 1. Read-only lookup supports npm/bun, GitHub Actions,
 mise and regex extraction, cached registries and ordered policy. Repository
 writes and the remaining ecosystem managers are not implemented yet.
+Dated proposals default to a 24-hour release-age gate. GitHub-hosted runner
+labels and mise registry backends are supported by read-only lookup.
 
 - Design: [docs/design.md](docs/design.md)
 - Deliberate departures from Renovate: [docs/departures.md](docs/departures.md)

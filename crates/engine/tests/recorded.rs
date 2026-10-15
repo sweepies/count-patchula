@@ -46,7 +46,8 @@ async fn public_multi_repo_report_cold_and_warm() {
         repositories: vec!["jdx/usage".into(), "jdx/mr-boxington".into()],
         config: Some(config()),
     };
-    let cold = engine.lookup(options()).await.unwrap();
+    let now = chrono::Utc::now();
+    let cold = engine.lookup_at(options(), now).await.unwrap();
     for repo in &cold.repositories {
         assert_eq!(repo.status, Status::Complete, "{repo:?}");
         assert!(repo.commit.is_some() && repo.default_branch.is_some());
@@ -60,7 +61,7 @@ async fn public_multi_repo_report_cold_and_warm() {
     }
     let bytes = serde_json::to_vec(&cold).unwrap();
     Report::from_json(&bytes).unwrap();
-    let warm = engine.lookup(options()).await.unwrap();
+    let warm = engine.lookup_at(options(), now).await.unwrap();
     assert_eq!(cold.repositories, warm.repositories);
     let stats = warm.stats.as_ref().unwrap();
     assert_eq!(stats.extraction_hits, 2);
@@ -107,5 +108,10 @@ async fn public_multi_repo_report_cold_and_warm() {
         stats.not_modified,
         stats.lookups,
         stats.extraction_hits
+    );
+    eprintln!(
+        "engine cold_phases={:?} warm_phases={:?}",
+        cold.stats.as_ref().unwrap().phase_micros,
+        stats.phase_micros
     );
 }

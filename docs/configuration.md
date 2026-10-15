@@ -83,7 +83,11 @@ Rules distinguish major/minor/patch/digest/pin; both adding a version pin and
 adding an integrity digest are classified as pin. Refreshing a lockfile is a
 separate operation configured under `lockfiles`, not a version update type.
 
-`waitHours` uses nonnegative whole hours. A window has at least one five-field
+`waitHours` uses nonnegative whole hours and defaults to 24 for dated releases.
+Undated releases have no wait. Set `defaults { waitHours = 0 }` to disable it,
+or override it in a matching rule. The gate selects proposals, retaining all
+extracted current versions and existing lockfile pins. See [lookup policy](lookup-policy.md).
+A window has at least one five-field
 cron expression and an IANA timezone. Weekdays use cron numbering (0/7 Sunday,
 2 Tuesday). Empty `windows` means unrestricted, including in a rule override.
 A window restricts when a proposal is created, not when an existing PR merges.

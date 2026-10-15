@@ -28,6 +28,8 @@ pub struct Difference {
     pub departure: Option<Departure>,
     #[serde(skip)]
     target_version: Option<String>,
+    #[serde(skip)]
+    paired: Option<(Update, Update)>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -62,6 +64,8 @@ enum Predicate {
     DigestAdded,
     DigestPinOnly,
     CargoPre1Breaking,
+    ReleaseAgeWindow,
+    NpmExactMajor,
 }
 
 impl Rules {
@@ -92,6 +96,14 @@ impl Rules {
                         Predicate::CargoPre1Breaking,
                         Classification::FieldMismatch,
                         "updates.updateType"
+                    ) | (
+                        Predicate::ReleaseAgeWindow,
+                        Classification::FieldMismatch,
+                        "updates.newValue" | "updates.newVersion"
+                    ) | (
+                        Predicate::NpmExactMajor,
+                        Classification::FieldMismatch,
+                        "updates.newValue"
                     )
                 )
             {
@@ -115,6 +127,40 @@ impl Rules {
                 continue;
             }
             let matches = match rule.predicate {
+                Predicate::ReleaseAgeWindow => difference.paired.as_ref().is_some_and(|(left, right)| {
+                    let versions = left.new_version.as_deref().and_then(parse_version)
+                        .zip(right.new_version.as_deref().and_then(parse_version));
+                    let age = right.release_age.as_ref().and_then(|age| {
+                        let published = chrono::DateTime::parse_from_rfc3339(&age.published_at).ok()?;
+                        let evaluated = chrono::DateTime::parse_from_rfc3339(&age.evaluated_at).ok()?;
+                        Some(evaluated.signed_duration_since(published))
+                    });
+                    right.policy.as_ref().is_some_and(|p| p.wait_hours == 24)
+                        && versions.is_some_and(|(a,b)| b.cmp_precedence(&a).is_gt())
+                        && age.is_some_and(|age| age >= chrono::Duration::hours(24) && age < chrono::Duration::hours(72))
+                        && left.update_type == right.update_type
+                        && matches!(right.update_type.as_str(), "major" | "minor" | "patch")
+                        // Range-policy differences need their own explanation.
+                        && if difference.field == "updates.newValue" {
+                            left.new_value == left.new_version && right.new_value == right.new_version
+                        } else { true }
+                }),
+                Predicate::NpmExactMajor => difference.paired.as_ref().is_some_and(|(left, right)| {
+                    let current = dependency.and_then(|d| d.current.value.as_deref());
+                    let target = right.new_version.as_deref().and_then(parse_version);
+                    let range = left.new_value.as_deref();
+                    let lower = range.and_then(|s| s.strip_prefix('^').or_else(|| s.strip_prefix('~'))).and_then(parse_version);
+                    let baseline = current.and_then(|s| s.strip_prefix('^').or_else(|| s.strip_prefix('~'))).and_then(parse_version);
+                    left.update_type == "major" && right.update_type == "major"
+                        && left.new_version == right.new_version
+                        && right.new_value == right.new_version
+                        && right.policy.as_ref().is_some_and(|p| p.versions.as_deref() == Some("exact"))
+                        && baseline.zip(lower).zip(target).is_some_and(|((old,lower), target)| {
+                            target.major > old.major && lower.major == target.major
+                                && lower.minor == target.minor && lower.patch <= target.patch
+                                && lower.pre.is_empty() && target.pre.is_empty()
+                        })
+                }),
                 Predicate::CargoPre1Breaking => {
                     difference.manager.as_deref() == Some("cargo")
                         && matches!(difference.renovate.as_str(), Some("minor" | "patch"))
@@ -183,6 +229,7 @@ pub struct Triage {
     pub differences: Vec<Difference>,
     pub warnings: Vec<Warning>,
     pub exclusions: Vec<Exclusion>,
+    pub normalizations: BTreeMap<String, usize>,
 }
 
 fn label(class: Classification) -> &'static str {
@@ -221,6 +268,12 @@ impl Triage {
             out.push_str(&format!("- {}: {count}\n", label(class)));
         }
         out.push_str("\nRepository coverage and normalized inputs are in the accompanying JSON. Departure links are relative to the repository root.\n\n");
+        for (rule, count) in &self.normalizations {
+            out.push_str(&format!("- Normalization {}: {count}\n", cell(rule)));
+        }
+        if !self.normalizations.is_empty() {
+            out.push('\n');
+        }
         if !self.exclusions.is_empty() {
             out.push_str("Excluded Renovate output (outside rustovate's manager scope):\n\n");
             for e in &self.exclusions {
@@ -308,6 +361,7 @@ fn difference(
         rustovate: b,
         departure: None,
         target_version: None,
+        paired: None,
     }
 }
 
@@ -323,16 +377,51 @@ fn mismatch(out: &mut Vec<Difference>, location: &Location<'_>, field: &str, a: 
     }
 }
 
-fn updates(out: &mut Vec<Difference>, location: &Location<'_>, a: &[Update], b: &[Update]) {
-    let a_set: BTreeSet<_> = a.iter().collect();
-    let b_set: BTreeSet<_> = b.iter().collect();
-    let mut a: Vec<_> = a_set.difference(&b_set).copied().collect();
-    let mut b: Vec<_> = b_set.difference(&a_set).copied().collect();
+fn updates(
+    out: &mut Vec<Difference>,
+    location: &Location<'_>,
+    a: &[Update],
+    b: &[Update],
+    npm: bool,
+    notes: &mut BTreeMap<String, usize>,
+) {
+    let normalize = |u: &Update| {
+        let mut u = u.clone();
+        if npm {
+            u.new_digest = None;
+        }
+        u
+    };
+    let a: Vec<_> = a.iter().map(normalize).collect();
+    let b: Vec<_> = b.iter().map(normalize).collect();
+    if npm {
+        *notes.entry("npm-newDigest-ignored".into()).or_default() += a.len();
+    }
+    *notes
+        .entry("groups-unavailable-skipped".into())
+        .or_default() += a.iter().filter(|u| u.group.is_none()).count();
+    let mut a: Vec<_> = a.iter().collect();
+    let mut b: Vec<_> = b.iter().collect();
     let same_target = |left: &Update, right: &Update| {
         left.new_value == right.new_value
             && left.new_version == right.new_version
             && left.new_digest == right.new_digest
     };
+    // Policy/age are evidence, not comparison fields. Missing upstream group
+    // metadata is unknown, rather than an assertion of ungrouped updates.
+    for left in a.clone() {
+        if let Some(index) = b.iter().position(|right| {
+            same_target(left, right)
+                && left.update_type == right.update_type
+                && left
+                    .group
+                    .as_ref()
+                    .is_none_or(|g| right.group.as_ref() == Some(g))
+        }) {
+            a.retain(|u| u != &left);
+            b.remove(index);
+        }
+    }
     // A unique identical target can expose a taxonomy mismatch independently
     // of the update type used to pair changed targets below.
     for left in a.clone() {
@@ -352,13 +441,15 @@ fn updates(out: &mut Vec<Difference>, location: &Location<'_>, a: &[Update], b: 
             for difference in &mut out[start..] {
                 difference.target_version = right.new_version.clone();
             }
-            mismatch(
-                out,
-                location,
-                "updates.group",
-                json!(left.group),
-                json!(right.group),
-            );
+            if left.group.is_some() {
+                mismatch(
+                    out,
+                    location,
+                    "updates.group",
+                    json!(left.group),
+                    json!(right.group),
+                );
+            }
             a.retain(|u| u != &left);
             b.retain(|u| u != right);
         }
@@ -378,6 +469,7 @@ fn updates(out: &mut Vec<Difference>, location: &Location<'_>, a: &[Update], b: 
             .copied()
             .collect();
         if let ([left], [right]) = (left.as_slice(), right.as_slice()) {
+            let start = out.len();
             for (field, av, bv) in [
                 (
                     "updates.newValue",
@@ -396,7 +488,14 @@ fn updates(out: &mut Vec<Difference>, location: &Location<'_>, a: &[Update], b: 
                 ),
                 ("updates.group", json!(left.group), json!(right.group)),
             ] {
+                if field == "updates.group" && left.group.is_none() {
+                    continue;
+                }
                 mismatch(out, location, field, av, bv);
+            }
+            // Attach the exact pair as evidence for narrow departure rules.
+            for d in &mut out[start..] {
+                d.paired = Some(((*left).clone(), (*right).clone()));
             }
             a.retain(|u| u != left);
             b.retain(|u| u != right);
@@ -441,10 +540,6 @@ fn missing_file(
             (Value::Null, value)
         }
     };
-    if file.dependencies.is_empty() {
-        let (a, b) = values(json!(file));
-        out.push(difference(&location, "packageFile", a, b, class));
-    }
     for dep in &file.dependencies {
         let location = Location {
             dep: Some(dep),
@@ -477,6 +572,7 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
         .map(|r| (&r.repository, r))
         .collect();
     let mut differences = Vec::new();
+    let mut normalizations = BTreeMap::new();
     let repos: BTreeSet<_> = a.keys().chain(b.keys()).copied().collect();
     for repo in repos {
         let location = Location {
@@ -494,7 +590,11 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
                 .get(repo)
                 .or_else(|| b.get(repo))
                 .expect("repository exists");
-            if present.package_files.is_empty() {
+            if present
+                .package_files
+                .iter()
+                .all(|f| f.dependencies.is_empty())
+            {
                 differences.push(difference(
                     &location,
                     "repository",
@@ -522,6 +622,16 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
                 } else {
                     Classification::RustovateExtra
                 };
+                if a.get(path)
+                    .or_else(|| b.get(path))
+                    .expect("file exists")
+                    .dependencies
+                    .is_empty()
+                {
+                    *normalizations
+                        .entry("empty-package-file-ignored".into())
+                        .or_default() += 1;
+                }
                 missing_file(
                     &mut differences,
                     &location,
@@ -586,13 +696,28 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
                 ] {
                     mismatch(&mut differences, &location, field, av, bv);
                 }
-                updates(&mut differences, &location, &left.updates, &right.updates);
+                let npm = left
+                    .metadata
+                    .as_ref()
+                    .or(right.metadata.as_ref())
+                    .map_or(matches!(left.manager.as_str(), "npm" | "bun"), |m| {
+                        m.source == "npm"
+                    });
+                updates(
+                    &mut differences,
+                    &location,
+                    &left.updates,
+                    &right.updates,
+                    npm,
+                    &mut normalizations,
+                );
                 for d in &mut differences[start..] {
                     rules.classify(d, Some(left));
                 }
             }
         }
     }
+    normalizations.retain(|_, count| *count > 0);
     Ok(Triage {
         schema_version: 1,
         renovate: renovate.clone(),
@@ -600,7 +725,11 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
         differences,
         warnings: Vec::new(),
         exclusions: Vec::new(),
+        normalizations,
     })
+}
+fn parse_version(value: &str) -> Option<semver::Version> {
+    semver::Version::parse(value.trim_start_matches('v')).ok()
 }
 
 fn numeric_version(value: &str) -> Option<(u64, u64, u64)> {

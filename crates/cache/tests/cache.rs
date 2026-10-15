@@ -42,6 +42,30 @@ async fn cache(directory: &tempfile::TempDir) -> Cache {
         .unwrap()
 }
 
+#[tokio::test]
+async fn conditional_refresh_preserves_compressed_body_and_updates_only_metadata() {
+    let directory = tempfile::tempdir().unwrap();
+    let cache = cache(&directory).await;
+    let key = key("large-registry");
+    let original = entry(vec![b'x'; 1024 * 1024]);
+    cache.http_put(&key, &original).await.unwrap();
+    let conn = rusqlite::Connection::open(directory.path().join("cache.sqlite")).unwrap();
+    let body = || {
+        conn.query_row("SELECT body FROM http", [], |row| row.get::<_, Vec<u8>>(0))
+            .unwrap()
+    };
+    let before = body();
+    let mut refreshed = original.clone();
+    refreshed.body = b"a 304 has no replacement body".to_vec();
+    refreshed.etag = Some("new-validator".into());
+    refreshed.fetched_at = 300;
+    refreshed.expires_at = Some(400);
+    cache.http_refresh(&key, &refreshed).await.unwrap();
+    assert_eq!(body(), before);
+    refreshed.body = original.body;
+    assert_eq!(cache.http_get(&key).await.unwrap(), Some(refreshed));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_readers_and_writers_share_persistent_wal() {
     let directory = tempfile::tempdir().unwrap();

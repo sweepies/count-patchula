@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "provenance": "Recorded by rustovate from the request URLs; never imported from other bots",
+  "provenance": "Recorded by rustovate from the request URLs; never imported from other bots; npm full metadata refreshed from public registry by rustovate on 2026-10-15; unused warm registry 304 reads removed for HTTP freshness",
   "interactions": [
     {
       "request": {
@@ -8,7 +8,7 @@
         "url": "https://registry.npmjs.org/tiny-tarball",
         "headers": {
           "accept": [
-            "application/vnd.npm.install-v1+json"
+            "application/json"
           ]
         },
         "body": {
@@ -22,26 +22,23 @@
           "access-control-allow-origin": [
             "*"
           ],
-          "age": [
-            "49"
-          ],
           "cache-control": [
             "public, max-age=300"
           ],
           "cf-cache-status": [
-            "HIT"
+            "REVALIDATED"
           ],
           "cf-ray": [
-            "a4aab597bbdc1447-YVR"
+            "a4ab87616b0430ff-YVR"
           ],
           "content-type": [
-            "application/vnd.npm.install-v1+json"
+            "application/json"
           ],
           "date": [
-            "Thu, 15 Oct 2026 00:29:25 GMT"
+            "Thu, 15 Oct 2026 02:52:38 GMT"
           ],
           "etag": [
-            "W/\"9cce9f64ae8724ea3544171f7ef935cb\""
+            "W/\"807f8137a38a30fd39a58c9233b51cc3\""
           ],
           "last-modified": [
             "Mon, 27 Jun 2022 07:01:32 GMT"
@@ -59,20 +56,65 @@
         "body": {
           "format": "json",
           "value": {
+            "_id": "tiny-tarball",
+            "_rev": "5-6e3e9084c69f16db2d53a953e67d0f9e",
+            "author": {
+              "email": "ben@npmjs.com",
+              "name": "Ben Coe"
+            },
+            "description": "tiny tarball used for health checks",
             "dist-tags": {
               "latest": "1.0.0"
             },
-            "modified": "2022-06-27T07:01:30.945Z",
+            "license": "ISC",
+            "maintainers": [
+              {
+                "email": "ben@npmjs.com",
+                "name": "bcoe"
+              }
+            ],
             "name": "tiny-tarball",
+            "readme": "# TinyTarball\n\ntiny-tarball used for health checks\n\n**don't unpublish me!**\n",
+            "readmeFilename": "README.md",
+            "time": {
+              "1.0.0": "2015-03-24T00:12:24.039Z",
+              "created": "2015-03-24T00:12:24.039Z",
+              "modified": "2022-06-27T07:01:30.945Z"
+            },
             "versions": {
               "1.0.0": {
+                "_from": ".",
+                "_id": "tiny-tarball@1.0.0",
+                "_nodeVersion": "1.5.0",
+                "_npmUser": {
+                  "email": "bencoe@gmail.com",
+                  "name": "bcoe"
+                },
+                "_npmVersion": "2.7.0",
+                "_shasum": "bbf102d5ae73afe2c553295e0fb02230216f65b1",
+                "author": {
+                  "email": "ben@npmjs.com",
+                  "name": "Ben Coe"
+                },
+                "description": "tiny tarball used for health checks",
                 "dist": {
                   "integrity": "sha512-SxmEuEiq4d9L2UjUCyP7g3KHND65MJnsFbEwCbaoMp9NYjHjufAzIUCRaRHB+FNTwzZ1e2xjBoYobBB8pqB5IQ==",
                   "shasum": "bbf102d5ae73afe2c553295e0fb02230216f65b1",
                   "signatures": "[REDACTED]",
                   "tarball": "https://registry.npmjs.org/tiny-tarball/-/tiny-tarball-1.0.0.tgz"
                 },
+                "license": "ISC",
+                "main": "index.js",
+                "maintainers": [
+                  {
+                    "email": "bencoe@gmail.com",
+                    "name": "bcoe"
+                  }
+                ],
                 "name": "tiny-tarball",
+                "scripts": {
+                  "test": "echo \"Error: no test specified\" && exit 1"
+                },
                 "version": "1.0.0"
               }
             }
@@ -2696,114 +2738,6 @@
             },
             "url": "https://api.github.com/repos/actions/hello-world-javascript-action/commits/79ac0da13ee392da3fdd151813d5ce4658cb7e27"
           }
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
-        "url": "https://registry.npmjs.org/tiny-tarball",
-        "headers": {
-          "accept": [
-            "application/vnd.npm.install-v1+json"
-          ],
-          "if-modified-since": [
-            "Mon, 27 Jun 2022 07:01:32 GMT"
-          ],
-          "if-none-match": [
-            "W/\"9cce9f64ae8724ea3544171f7ef935cb\""
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 304,
-        "headers": {
-          "access-control-allow-origin": [
-            "*"
-          ],
-          "age": [
-            "52"
-          ],
-          "cache-control": [
-            "public, max-age=300"
-          ],
-          "cf-cache-status": [
-            "HIT"
-          ],
-          "cf-ray": [
-            "a4aab5a9db781447-YVR"
-          ],
-          "date": [
-            "Thu, 15 Oct 2026 00:29:27 GMT"
-          ],
-          "etag": [
-            "\"9cce9f64ae8724ea3544171f7ef935cb\""
-          ],
-          "last-modified": [
-            "Mon, 27 Jun 2022 07:01:32 GMT"
-          ],
-          "server": [
-            "cloudflare"
-          ],
-          "set-cookie": [
-            "[REDACTED]"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
-        "url": "https://index.crates.io/he/ck/heck",
-        "headers": {
-          "accept": [
-            "text/plain"
-          ],
-          "if-modified-since": [
-            "Sun, 01 Feb 2026 12:00:12 GMT"
-          ],
-          "if-none-match": [
-            "\"7e0edc8a30cc76008afc4790e4001589\""
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 304,
-        "headers": {
-          "age": [
-            "124"
-          ],
-          "cache-control": [
-            "public,max-age=600"
-          ],
-          "date": [
-            "Thu, 15 Oct 2026 00:29:28 GMT"
-          ],
-          "etag": [
-            "\"7e0edc8a30cc76008afc4790e4001589\""
-          ],
-          "via": [
-            "1.1 varnish"
-          ],
-          "x-varnish": [
-            "3535125614"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
         }
       }
     },

@@ -84,6 +84,26 @@ description = "Run read-only lookup; forwards repository and lookup flags"
 raw_args = true
 run = "cargo run --quiet --locked -p rustovate-cli -- lookup"
 
+[tasks."lookup:release"]
+description = "Run read-only lookup in release mode; forwards repository and lookup flags"
+raw_args = true
+run = "cargo run --release --quiet --locked -p rustovate-cli -- lookup"
+
+[tasks."benchmarks:lookup-release"]
+description = "Measure release cold/warm source and engine fixtures offline"
+run = ["cargo test --release --locked -p rustovate-datasource --test recorded public_sources_cold_and_conditional_warm -- --nocapture", "cargo test --release --locked -p rustovate-engine --test recorded -- --nocapture"]
+
+[tasks."registry:update"]
+description = "Refresh backend identities from the installed mise published registry"
+run = '''
+mise registry --json | bun -e 'const entries = await Bun.stdin.json(); const registry = Object.fromEntries(entries.map(e => [e.short, e.backends])); process.stdout.write(JSON.stringify(registry, null, 2) + "\n")' > crates/mise/registry.json
+'''
+
+[tasks."fixtures:refresh-npm"]
+description = "Record full public npm metadata in existing cassettes without GitHub credentials"
+env = { RUSTOVATE_RECORD = "1" }
+run = ["cargo test --locked -p rustovate-datasource --test recorded refresh_public_npm_metadata -- --ignored", "mise run fixtures:check"]
+
 [tasks."fixtures:record-wave1"]
 description = "Record only Phase 1 public sources and multi-repo lookup fixtures"
 env = { RUSTOVATE_RECORD = "1" }

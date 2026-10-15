@@ -1,6 +1,10 @@
 //! Pure extraction: no tools, network, filesystem access or manifest rewriting.
 #![forbid(unsafe_code)]
 mod actions;
+pub use actions::replacement as action_replacement;
+pub use actions::runner_replacement;
+/// Included in persistent extraction fingerprints because backend mappings can change.
+pub const MISE_REGISTRY: &str = rustovate_mise::REGISTRY_JSON;
 mod custom;
 mod mise;
 mod npm;
