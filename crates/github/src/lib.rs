@@ -1,8 +1,10 @@
 //! Batch-shared GitHub REST/GraphQL requests with conditional reads and rate limits.
 #![forbid(unsafe_code)]
 
+mod credentials;
 mod governor;
 mod pagination;
+pub use credentials::{Credentials, Token};
 pub use governor::{PrimaryLimit, Stats};
 pub use pagination::GraphqlPage;
 pub use rustovate_http::{Network, Response, Transport};
@@ -77,6 +79,7 @@ impl Default for Options {
 }
 
 struct Inner {
+    credentials: Option<Arc<dyn Credentials>>,
     transport: Arc<dyn Transport>,
     cache: Cache,
     authorization: HeaderValue,
@@ -106,6 +109,25 @@ impl fmt::Display for Client {
 }
 
 impl Client {
+    /// Keep the connection pool, governor and cache namespace across token renewals.
+    pub fn with_credentials(
+        credentials: Arc<dyn Credentials>,
+        cache: Cache,
+        options: Options,
+        transport: Arc<dyn Transport>,
+    ) -> Result<Self> {
+        if credentials.scope().is_empty() {
+            return Err(Error::Configuration);
+        }
+        let mut client = Self::with_transport("installation", cache, options, transport)?;
+        let inner = Arc::get_mut(&mut client.0).expect("new client");
+        inner.credential_scope = Sha256::digest(credentials.scope().as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        inner.credentials = Some(credentials);
+        Ok(client)
+    }
     pub fn new(token: &str, cache: Cache, options: Options) -> Result<Self> {
         Self::with_transport(
             token,
@@ -146,6 +168,7 @@ impl Client {
             .collect();
         let governor = Governor::new(options.concurrency, options.max_rate_wait);
         Ok(Self(Arc::new(Inner {
+            credentials: None,
             decoding: Arc::new(tokio::sync::Semaphore::new(4)),
             transport,
             cache,
@@ -267,10 +290,18 @@ impl Client {
             };
             let permit = self.0.governor.acquire(resource).await?;
             self.0.governor.request();
+            let mut outgoing = request.try_clone().ok_or(Error::Configuration)?;
+            if let Some(credentials) = &self.0.credentials {
+                let mut value =
+                    HeaderValue::from_str(&format!("Bearer {}", credentials.token().await?))
+                        .map_err(|_| Error::Configuration)?;
+                value.set_sensitive(true);
+                outgoing.headers_mut().insert(header::AUTHORIZATION, value);
+            }
             let result = trace
                 .send(
                     self.0.transport.as_ref(),
-                    request.try_clone().ok_or(Error::Configuration)?,
+                    outgoing,
                     queued.elapsed(),
                     cached,
                 )

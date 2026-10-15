@@ -1,5 +1,5 @@
 use crate::{Plan, Snapshot, blob_sha};
-use futures_util::{StreamExt, stream};
+use futures_util::{FutureExt, StreamExt, stream};
 use rustovate_config::Rebase;
 use rustovate_github::Client;
 use rustovate_report::ActionStatus;
@@ -151,8 +151,11 @@ pub async fn apply_all(
         .filter(|p| p.action.status == ActionStatus::Planned)
         .map(|p| p.action.branch.clone())
         .collect();
-    stream::iter(plans.iter_mut())
-        .map(|plan| {
+    // Build the borrowed futures before awaiting the stream. This also keeps
+    // the engine future Send when a long-lived server spawns its batch worker.
+    let writes: Vec<_> = plans
+        .iter_mut()
+        .map(|plan: &mut Plan| {
             let base = &base;
             async move {
                 if plan.action.status != ActionStatus::Planned {
@@ -167,7 +170,10 @@ pub async fn apply_all(
                     plan.action.reason = Some(error);
                 }
             }
+            .boxed()
         })
+        .collect();
+    stream::iter(writes)
         .buffer_unordered(client.concurrency().min(4))
         .collect::<Vec<_>>()
         .await;

@@ -283,7 +283,7 @@ impl Client {
             }
         }
         let (owner, name) = package.split_once('/').ok_or(Error::Invalid)?;
-        let pages = stream::iter(missing.chunks(100))
+        let pages = stream::iter(missing.chunks(100).map(<[_]>::to_vec))
             .map(|chunk| async move {
                 // Resolve immutable Git objects under one repository, rather than
                 // global Ref nodes which repeat repository access/resolution work.

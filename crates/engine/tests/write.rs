@@ -29,6 +29,69 @@ struct Fake {
     merge_refused: std::sync::atomic::AtomicBool,
     deletion_race: std::sync::atomic::AtomicBool,
 }
+
+struct Rotating(std::sync::atomic::AtomicUsize);
+struct Authenticated(Arc<Fake>);
+impl Transport for Authenticated {
+    fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+        if request.url().host_str() == Some("api.github.com") {
+            let auth = &request.headers()["authorization"];
+            assert!(auth.is_sensitive());
+            assert!(auth.to_str().unwrap().starts_with("Bearer offline-token-"));
+        } else {
+            assert!(!request.headers().contains_key("authorization"));
+        }
+        self.0.send(request)
+    }
+}
+impl rustovate_github::Credentials for Rotating {
+    fn scope(&self) -> &str {
+        "offline-app:1/installation:10"
+    }
+    fn token(&self) -> rustovate_github::Token<'_> {
+        let count = self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Box::pin(async move { Ok(format!("offline-token-{count}")) })
+    }
+}
+#[tokio::test]
+async fn installation_and_caller_token_batches_match_and_token_rotation_keeps_receipts_warm() {
+    let now = chrono::DateTime::parse_from_rfc3339("2026-10-15T00:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let cli_fake = Arc::new(Fake::new(false));
+    let server_fake = Arc::new(Fake::new(false));
+    let cli_cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let server_cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let credentials = Arc::new(Rotating(Default::default()));
+    let cli = Engine::with_transport("offline-caller-token", cli_cache, 4, cli_fake)
+        .unwrap()
+        .with_recheck(rustovate_engine::Recheck::Now);
+    let server = Engine::with_credentials(
+        credentials.clone(),
+        server_cache,
+        4,
+        Arc::new(Authenticated(server_fake.clone())),
+    )
+    .unwrap()
+    .with_recheck(rustovate_engine::Recheck::Now);
+    let options = || Options {
+        repositories: vec!["demo/sandbox".into()],
+        ..Default::default()
+    };
+    let mut cli_report = cli.run_at(options(), false, false, now).await.unwrap();
+    let mut server_report = server.run_at(options(), false, false, now).await.unwrap();
+    cli_report.stats = None;
+    server_report.stats = None;
+    assert_eq!(cli_report, server_report);
+    server_fake.writes.lock().unwrap().clear();
+    let repeated = server.run_at(options(), false, false, now).await.unwrap();
+    assert_eq!(
+        repeated.actions.unwrap().branches[0].status,
+        ActionStatus::Unchanged
+    );
+    assert!(server_fake.writes.lock().unwrap().is_empty());
+    assert!(credentials.0.load(std::sync::atomic::Ordering::Relaxed) > 2);
+}
 impl Fake {
     fn new(lock: bool) -> Self {
         Self {

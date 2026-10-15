@@ -3,7 +3,7 @@
 mod overrides;
 pub use rustovate_update::Recheck;
 
-use futures_util::{StreamExt, stream};
+use futures_util::{FutureExt, StreamExt, stream};
 use rustovate_cache::{Cache, ExtractionKey};
 use rustovate_config::{Config, Manager, Source};
 use rustovate_datasource::Client as Sources;
@@ -95,6 +95,40 @@ struct LookupHint {
 }
 
 impl Engine {
+    /// Long-lived installation engine using the same batch path as caller-token runs.
+    pub fn with_credentials(
+        credentials: Arc<dyn rustovate_github::Credentials>,
+        cache: Cache,
+        concurrency: usize,
+        transport: Arc<dyn Transport>,
+    ) -> Result<Self> {
+        let mut engine = Self::with_transport(
+            "installation",
+            cache.clone(),
+            concurrency,
+            transport.clone(),
+        )?;
+        engine.github = Github::with_credentials(
+            credentials.clone(),
+            cache.clone(),
+            GithubOptions::default(),
+            transport,
+        )?;
+        engine.sources = Sources::new(engine.github.clone(), engine.http.clone(), cache.clone());
+        engine.lockfiles = cache.workspace_dir().map(|path| {
+            rustovate_update::lockfiles::Runner::new(path.into(), "").with_credentials(credentials)
+        });
+        Ok(engine)
+    }
+    /// Settings change only between batches; warm clients and receipts stay intact.
+    pub fn set_batch_options(&mut self, concurrency: usize, recheck: Recheck) -> Result<()> {
+        if !(1..=100).contains(&concurrency) {
+            return Err(Error::Invalid("concurrency must be 1..100".into()));
+        }
+        self.concurrency = concurrency;
+        self.recheck = recheck;
+        Ok(())
+    }
     pub fn with_recheck(mut self, recheck: Recheck) -> Self {
         self.recheck = recheck;
         self
@@ -1207,35 +1241,41 @@ impl Engine {
             .partition(|(source, _)| source == "github-releases");
         let packages: Vec<_> = releases.into_iter().map(|(_, package)| package).collect();
         let batched = async {
-            let groups = stream::iter(packages.chunks(16))
-                .map(|group| async move {
-                    match self.sources.release_catalogs(group).await {
-                        Ok(catalogs) => catalogs
-                            .into_iter()
-                            .map(|(package, catalog)| {
-                                (
-                                    ("github-releases".into(), package),
-                                    catalog.map_err(|e| e.to_string()),
-                                )
-                            })
-                            .collect(),
-                        Err(_) => {
-                            // One inaccessible repository must not poison a group.
-                            stream::iter(group)
-                                .map(|package| async move {
+            let groups = stream::iter(packages.chunks(16).map(<[String]>::to_vec))
+                .map(|group| {
+                    async move {
+                        match self.sources.release_catalogs(&group).await {
+                            Ok(catalogs) => catalogs
+                                .into_iter()
+                                .map(|(package, catalog)| {
                                     (
-                                        ("github-releases".into(), package.clone()),
-                                        self.sources
-                                            .lookup(Source::GithubReleases, package)
-                                            .await
-                                            .map_err(|e| e.to_string()),
+                                        ("github-releases".into(), package),
+                                        catalog.map_err(|e| e.to_string()),
                                     )
                                 })
-                                .buffer_unordered(100)
-                                .collect::<Catalogs>()
-                                .await
+                                .collect(),
+                            Err(_) => {
+                                // One inaccessible repository must not poison a group.
+                                stream::iter(group)
+                                    .map(|package: String| {
+                                        async move {
+                                            (
+                                                ("github-releases".into(), package.clone()),
+                                                self.sources
+                                                    .lookup(Source::GithubReleases, &package)
+                                                    .await
+                                                    .map_err(|e| e.to_string()),
+                                            )
+                                        }
+                                        .boxed()
+                                    })
+                                    .buffer_unordered(100)
+                                    .collect::<Catalogs>()
+                                    .await
+                            }
                         }
                     }
+                    .boxed()
                 })
                 .buffer_unordered(100)
                 .collect::<Vec<Catalogs>>()

@@ -32,11 +32,19 @@ impl Runner {
             "GIT_CONFIG_KEY_0".into(),
             "http.https://github.com/.extraheader".into(),
         );
+        let token = if let Some(credentials) = &self.credentials {
+            credentials
+                .token()
+                .await
+                .map_err(|_| "GitHub authentication failed".to_owned())?
+        } else {
+            self.token.clone()
+        };
         spec.env.insert(
             "GIT_CONFIG_VALUE_0".into(),
             format!(
                 "Authorization: Basic {}",
-                STANDARD.encode(format!("x-access-token:{}", self.token))
+                STANDARD.encode(format!("x-access-token:{token}"))
             )
             .into(),
         );

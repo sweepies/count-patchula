@@ -261,6 +261,7 @@ pub async fn record_refresh(
 }
 
 pub struct Runner {
+    credentials: Option<Arc<dyn rustovate_github::Credentials>>,
     cache: PathBuf,
     token: String,
     executor: Arc<dyn Executor>,
@@ -297,6 +298,7 @@ impl Runner {
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".rustup"));
         Self {
+            credentials: None,
             cache,
             token: token.into(),
             executor: Arc::new(SystemExecutor),
@@ -308,6 +310,10 @@ impl Runner {
     }
     pub fn with_executor(mut self, executor: Arc<dyn Executor>) -> Self {
         self.executor = executor;
+        self
+    }
+    pub fn with_credentials(mut self, credentials: Arc<dyn rustovate_github::Credentials>) -> Self {
+        self.credentials = Some(credentials);
         self
     }
     pub async fn prepare(&self, plan: &mut Plan, snapshot: &mut Snapshot, config: &Config) {
