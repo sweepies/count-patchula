@@ -37,3 +37,12 @@ from actionable differences. No config-file contents or preset data are read or
 interpreted. All other managers, including unknown names, remain in comparison.
 This adapter scope rule also applies to branch upgrade summaries and is independent
 of the optional update classification rules in `conformance/departures.json`.
+
+<a id="departure-20"></a>**Departure 20: ecosystem compatibility and range edits.**
+Cargo's pre-1.0 breaking boundaries use its documented leftmost-nonzero rule;
+npm classifications retain numeric SemVer components. Exact Cargo versions use
+`=`. npm widen retains the original range as a union with the target; Cargo
+uses a convex interval because Cargo requirements cannot express unions.
+Compound preserve edits with no safe operator-preserving representation report
+a warning instead of inventing a range. No black-box comparison difference has
+been established yet; no broad conformance exemption is added.

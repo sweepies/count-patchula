@@ -8,3 +8,9 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+nodejs-semver = "7.0.0"
+rustovate-config = { version = "0.1.0", path = "../config" }
+semver = "1.0.28"
+thiserror.workspace = true
