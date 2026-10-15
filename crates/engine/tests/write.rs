@@ -14,6 +14,7 @@ use std::{
 struct Fake {
     files: BTreeMap<String, String>,
     lock: bool,
+    lock_name: &'static str,
     writes: Mutex<Vec<(String, Value)>>,
     prs: Mutex<Vec<Value>>,
 }
@@ -23,7 +24,7 @@ impl Fake {
         files:BTreeMap::from([
             (".github/rustovate.pkl".into(),"amends \"../Rustovate.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n".into()),
             ("package.json".into(),"{\n  \"dependencies\": {\"fixture\": \"1.0.0\"}\n}\n".into()),
-        ]),lock,writes:Default::default(),prs:Default::default(),
+        ]),lock,lock_name:"yarn.lock",writes:Default::default(),prs:Default::default(),
     }
     }
     fn tree(&self) -> Value {
@@ -34,7 +35,7 @@ impl Fake {
             .collect();
         if self.lock {
             tree.push(
-                json!({"path":"bun.lock","sha":"unselected-lock","type":"blob","mode":"100644"}),
+                json!({"path":self.lock_name,"sha":"unselected-lock","type":"blob","mode":"100644"}),
             );
         }
         json!({"truncated":false,"tree":tree})
@@ -62,6 +63,11 @@ impl Transport for Fake {
                 )
             } else if body["query"] == "query{viewer{login}}" {
                 (200, json!({"data":{"viewer":{"login":"rustovate[bot]"}}}))
+            } else if body["query"] == rustovate_update::INVENTORY_QUERY {
+                (
+                    200,
+                    json!({"data":{"viewer":{"login":"rustovate[bot]"},"repository":{"defaultBranchRef":{"name":"main","target":{"oid":"base"}},"refs":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+                )
             } else {
                 assert_eq!(body["query"], rustovate_update::REF_UPDATE);
                 self.writes.lock().unwrap().push((path.into(), body));
@@ -198,4 +204,51 @@ async fn token_only_run_uses_repository_config_cold_and_cached_and_reports_actio
             }
         }
     }
+}
+
+struct FailTools;
+impl rustovate_update::lockfiles::Executor for FailTools {
+    fn run(
+        &self,
+        _: rustovate_update::lockfiles::CommandSpec,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + Send + '_>>
+    {
+        Box::pin(async { Err("fixture tool unavailable".into()) })
+    }
+}
+#[tokio::test(start_paused = true)]
+async fn lockfile_failure_is_a_branch_error_and_publishes_no_manifest_only_branch() {
+    let mut fake = Fake::new(true);
+    fake.lock_name = "bun.lock";
+    let fake = Arc::new(fake);
+    let temp = tempfile::tempdir().unwrap();
+    let runner =
+        rustovate_update::lockfiles::Runner::new(temp.path().into(), "offline-installation")
+            .with_executor(Arc::new(FailTools));
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_lockfile_runner(runner);
+    let report = engine
+        .run(
+            Options {
+                repositories: vec!["demo/sandbox".into()],
+                ..Default::default()
+            },
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(report.repositories[0].status, Status::Error, "{report:?}");
+    let branch = &report.actions.unwrap().branches[0];
+    assert_eq!(branch.status, ActionStatus::Error);
+    assert!(
+        branch
+            .reason
+            .as_ref()
+            .unwrap()
+            .contains("fixture tool unavailable")
+    );
+    assert!(fake.writes.lock().unwrap().is_empty());
 }

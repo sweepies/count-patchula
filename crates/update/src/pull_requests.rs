@@ -44,6 +44,9 @@ fn marker(body: &str) -> Option<Marker> {
 /// Target identity intentionally excludes current/base/file/message so a closed
 /// update stays closed after a rebase, policy wording change or new occurrence.
 pub fn update_key(plan: &Plan) -> String {
+    if plan.maintenance {
+        return hash(format!("maintenance:{}", plan.input_fingerprint).as_bytes());
+    }
     let targets: BTreeSet<_> = plan
         .changes
         .iter()
@@ -108,6 +111,8 @@ pub struct Lifecycle {
     notes: BTreeMap<(String, String), String>,
     pub(crate) recheck: Recheck,
     merge_method: Option<String>,
+    maintenance_policy: rustovate_config::Policy,
+    maintenance_group: String,
 }
 impl Lifecycle {
     /// Authoritative inventory includes closed history and all pages. No cached
@@ -152,6 +157,8 @@ impl Lifecycle {
             notes: BTreeMap::new(),
             recheck,
             merge_method: None,
+            maintenance_policy: config.defaults.clone(),
+            maintenance_group: config.lockfiles.group.clone(),
         };
         let desired: BTreeSet<_> = plans.iter().map(|p| p.action.branch.as_str()).collect();
         for pr in &mut state.prs {
@@ -371,6 +378,13 @@ impl Lifecycle {
             .changes
             .iter()
             .flat_map(|c| c.labels.iter().cloned())
+            .chain(
+                plan.maintenance
+                    .then_some(&self.maintenance_policy.labels)
+                    .into_iter()
+                    .flatten()
+                    .cloned(),
+            )
             .collect();
         let existing: BTreeSet<_> = pr["labels"]
             .as_array()
@@ -395,8 +409,11 @@ impl Lifecycle {
             );
         }
         let merge = !plan.action.lockfile_pending
-            && !plan.changes.is_empty()
-            && plan.changes.iter().all(|c| c.merge);
+            && if plan.maintenance {
+                self.maintenance_policy.merge
+            } else {
+                !plan.changes.is_empty() && plan.changes.iter().all(|c| c.merge)
+            };
         let enabled = !pr["auto_merge"].is_null();
         if merge && !enabled {
             if self.merge_method.is_none() {
@@ -462,6 +479,15 @@ impl Lifecycle {
     async fn render(&mut self, client: &Client, plan: &Plan) -> String {
         let mut text =
             String::from("| Package | Change | Type | File |\n| --- | --- | --- | --- |\n");
+        if plan.maintenance {
+            text.push_str(&format!(
+                "\nScheduled {} using the repository's mise tool versions.\n",
+                safe(&self.maintenance_group)
+            ));
+            for file in &plan.action.files {
+                append(&mut text, &format!("\n- {}", cell(&file.path)), 18_000);
+            }
+        }
         for c in &plan.changes {
             let target = format!(
                 "{}{}",

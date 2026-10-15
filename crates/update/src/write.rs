@@ -47,6 +47,12 @@ pub async fn apply(
     if dry_run {
         return;
     }
+    if !plan.lockfiles_ready {
+        plan.action.status = ActionStatus::Error;
+        plan.action.reason =
+            Some("lockfiles must be generated successfully before publication".into());
+        return;
+    }
     let result = match prepare(
         client,
         &plan.action.repository,
@@ -118,6 +124,14 @@ pub async fn apply_all(
 ) {
     if dry_run {
         return;
+    }
+    for plan in plans
+        .iter_mut()
+        .filter(|p| p.action.status == ActionStatus::Planned && !p.lockfiles_ready)
+    {
+        plan.action.status = ActionStatus::Error;
+        plan.action.reason =
+            Some("lockfiles must be generated successfully before publication".into());
     }
     let Some(first) = plans
         .iter()
@@ -234,6 +248,15 @@ async fn apply_inner(
             .files
             .get(&file.path)
             .ok_or("missing extracted blob")?;
+        if file.blob_sha.is_empty() {
+            if !blob.sha.is_empty() || entries.iter().any(|e| e["path"] == file.path) {
+                return Err(format!(
+                    "{}: expected new file is already present",
+                    file.path
+                ));
+            }
+            continue;
+        }
         if blob.sha != file.blob_sha
             || blob_sha(&blob.content) != blob.sha
             || !entries.iter().any(|e| {
@@ -332,6 +355,9 @@ async fn apply_inner(
                 .filter(|_| existing["truncated"] == false)
                 .ok_or("incomplete existing branch tree")?;
             if plan.contents.iter().all(|(p, c)| {
+                if plan.deleted.contains(p) {
+                    return !entries.iter().any(|e| e["path"] == *p);
+                }
                 entries
                     .iter()
                     .any(|e| e["path"] == *p && e["sha"] == blob_sha(c))
@@ -345,7 +371,8 @@ async fn apply_inner(
         }
     }
     let blobs: Vec<_> = plan.contents.iter().map(|(path, content)| {
-        json!({"path":path,"mode":snapshot.files[path].mode,"type":"blob","content":content})
+        if plan.deleted.contains(path) {json!({"path":path,"mode":snapshot.files[path].mode,"type":"blob","sha":null})}
+        else {json!({"path":path,"mode":snapshot.files[path].mode,"type":"blob","content":content})}
     }).collect();
     let tree = client
         .post(

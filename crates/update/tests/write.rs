@@ -178,7 +178,11 @@ impl Transport for Fake {
                     tree.as_array_mut()
                         .unwrap()
                         .retain(|e| e["path"] != entry["path"]);
-                    tree.as_array_mut().unwrap().push(entry.clone());
+                    if !(entry.get("sha").is_some_and(Value::is_null)
+                        && entry.get("content").is_none())
+                    {
+                        tree.as_array_mut().unwrap().push(entry.clone());
+                    }
                 }
                 let sha = format!("tree-{}", state.trees.len());
                 state.trees.insert(sha.clone(), tree);
@@ -400,6 +404,7 @@ fn fake(snapshot: &Snapshot) -> Arc<Fake> {
     let tree: Vec<_> = snapshot
         .files
         .iter()
+        .filter(|(_, b)| !b.sha.is_empty())
         .map(|(p, b)| json!({"path":p,"sha":b.sha,"mode":b.mode,"type":"blob"}))
         .collect();
     Arc::new(Fake(Mutex::new(State {
@@ -780,7 +785,7 @@ fn grouped_files_and_prefixes_are_stable_when_occurrence_order_changes() {
     assert_eq!(first.fingerprint, second.fingerprint);
 }
 #[test]
-fn lockfile_plans_skip_by_default_and_opt_in_marks_manifest_only_updates() {
+fn unsupported_lockfile_plans_skip_and_opt_in_marks_manifest_only_updates() {
     let (config, mut repo, _, mut snapshot) = setup("22.0.0", true);
     // Use a JSON manifest to exercise actual npm lock ownership gating.
     let text = "{\"dependencies\":{\"fixture\":\"1.0.0\"}}\n";
@@ -807,6 +812,8 @@ fn lockfile_plans_skip_by_default_and_opt_in_marks_manifest_only_updates() {
             content: text.into(),
         },
     )]);
+    snapshot.paths.remove("bun.lock");
+    snapshot.paths.insert("yarn.lock".into());
     for allow in [false, true] {
         let p = plan(&repo, &config, &deps, &snapshot, allow, chrono::Utc::now())
             .unwrap()
@@ -1071,13 +1078,38 @@ async fn pr_cycle(
 #[tokio::test(start_paused = true)]
 async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes() {
     for case in [
-        "same", "pages", "human", "body", "title", "labels", "merge", "closed", "base", "plan",
+        "same",
+        "generated",
+        "conflicts",
+        "pages",
+        "human",
+        "body",
+        "title",
+        "labels",
+        "merge",
+        "closed",
+        "base",
+        "plan",
         "obsolete",
     ] {
         let (mut config, mut repo) = pr_config();
         config.prs.rebase = Rebase::Behind;
+        if case == "conflicts" {
+            config.prs.rebase = Rebase::Conflicts;
+        }
         let (mut p, snapshot) = make_plan("22.0.0");
         p.changes[0].labels = vec!["dependencies".into()];
+        if case == "generated" {
+            p.fingerprint = "d".repeat(64);
+            p.lock_jobs.push(rustovate_update::lockfiles::Job {
+                ecosystem: rustovate_update::lockfiles::Ecosystem::Cargo,
+                directory: String::new(),
+                package: None,
+                current: None,
+                target: None,
+            });
+            p.lockfiles_ready = true;
+        }
         let server = fake(&snapshot);
         let github = client(server.clone()).await;
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
@@ -1114,6 +1146,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
         .unwrap();
         let (mut next, _) = make_plan(if case == "plan" { "22.1.0" } else { "22.0.0" });
         next.changes[0].labels = p.changes[0].labels.clone();
+        next.lock_jobs = p.lock_jobs.clone();
         {
             let mut s = server.0.lock().unwrap();
             match case {
@@ -1130,7 +1163,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
                 "labels" => s.prs.get_mut(&1).unwrap()["labels"] = json!([]),
                 "merge" => s.prs.get_mut(&1).unwrap()["auto_merge"] = json!({"enabled":true}),
                 "closed" => s.prs.get_mut(&1).unwrap()["state"] = json!("closed"),
-                "base" => {
+                "base" | "conflicts" => {
                     s.base = "base2".into();
                     repo.commit = Some("base2".into());
                     next.action.base_commit = "base2".into();
@@ -1163,10 +1196,17 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
                 started.elapsed()
             );
         }
-        assert_eq!(all, matches!(case, "same" | "pages"), "{case}");
+        assert_eq!(
+            all,
+            matches!(case, "same" | "generated" | "conflicts" | "pages"),
+            "{case}"
+        );
         assert_eq!(
             next.action.status == ActionStatus::Unchanged,
-            matches!(case, "same" | "pages" | "obsolete"),
+            matches!(
+                case,
+                "same" | "generated" | "conflicts" | "pages" | "obsolete"
+            ),
             "{case}"
         );
         let s = server.0.lock().unwrap();
@@ -1621,7 +1661,7 @@ async fn lookup_warnings_defer_obsolete_pr_closure() {
 }
 
 #[test]
-fn supplied_sandbox_targets_converge_to_sixteen_plans_and_blocked_pin_is_independent() {
+fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
     // Self-authored manifests and target facts from the owner's rustovate report;
     // no Renovate fixture, source or preset data is used.
     let (config, mut repo, _, _) = setup("22.0.0", false);
@@ -1783,15 +1823,17 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_and_blocked_pin_is_indepen
         .iter()
         .find(|p| p.action.branch == "rustovate/pin-dependencies")
         .unwrap();
-    assert_eq!(pins.changes.len(), 5);
+    assert_eq!(pins.changes.len(), 6);
     assert_eq!(pins.action.message, "chore(deps): pin dependencies");
-    assert!(!pins.contents.contains_key("package.json"));
+    assert!(pins.contents.contains_key("package.json"));
+    assert!(!pins.lockfiles_ready);
+    assert!(!pins.action.lockfile_pending);
     assert_eq!(
         plans
             .iter()
             .filter(|p| p.action.status == ActionStatus::Skipped)
             .count(),
-        1
+        0
     );
 }
 
@@ -1856,6 +1898,65 @@ async fn batch_ref_race_keeps_every_prepared_branch_unpublished() {
             .unwrap()
             .len(),
         3
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn generated_lockfile_additions_and_deletions_share_the_manifest_commit() {
+    let (mut p, mut snapshot) = make_plan("22.0.0");
+    let old = "obsolete checksum\n";
+    snapshot.files.insert(
+        "go.sum".into(),
+        Blob {
+            sha: blob_sha(old),
+            mode: "100644".into(),
+            content: old.into(),
+        },
+    );
+    snapshot.files.insert(
+        "Cargo.lock".into(),
+        Blob {
+            sha: String::new(),
+            mode: "100644".into(),
+            content: String::new(),
+        },
+    );
+    for (path, sha, content) in [
+        ("go.sum", blob_sha(old), ""),
+        ("Cargo.lock", String::new(), "version = 4\n"),
+    ] {
+        p.contents.insert(path.into(), content.into());
+        p.action.files.push(rustovate_report::FileAction {
+            path: path.into(),
+            blob_sha: sha,
+            diff: String::new(),
+        });
+    }
+    p.deleted.insert("go.sum".into());
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    apply(&github, &mut p, &snapshot, "main", Rebase::Behind, false).await;
+    assert_eq!(p.action.status, ActionStatus::Created, "{:?}", p.action);
+    let s = server.0.lock().unwrap();
+    let commit = &s.commits[p.action.commit.as_ref().unwrap()];
+    let tree = s.trees[commit["tree"]["sha"].as_str().unwrap()]
+        .as_array()
+        .unwrap();
+    assert!(!tree.iter().any(|f| f["path"] == "go.sum"));
+    assert!(
+        tree.iter()
+            .any(|f| f["path"] == "Cargo.lock" && f["sha"] == blob_sha("version = 4\n"))
+    );
+    assert!(
+        tree.iter()
+            .any(|f| f["path"] == "mise.toml" && f["sha"] == blob_sha(&p.contents["mise.toml"]))
+    );
+    assert_eq!(
+        s.writes
+            .iter()
+            .filter(|(path, _)| path.ends_with("/git/commits"))
+            .count(),
+        1
     );
 }
 

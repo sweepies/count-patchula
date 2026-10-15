@@ -31,19 +31,21 @@ struct Receipt {
     base: String,
     intent: String,
     pr: Value,
+    fingerprint: String,
+    files: Vec<rustovate_report::FileAction>,
 }
 fn key(repo: &str, prefix: &str) -> ExtractionKey {
     ExtractionKey {
         repo: repo.into(),
         default_branch_commit: prefix.into(),
-        config_hash: "verified-write-receipts-v1".into(),
+        config_hash: "verified-write-receipts-v2".into(),
     }
 }
 fn intent(plan: &Plan, config: &Config, recheck: Recheck) -> String {
     hash(
         serde_json::to_string(&(
             &plan.identity,
-            &plan.fingerprint,
+            &plan.input_fingerprint,
             &plan.changes,
             config,
             recheck,
@@ -166,7 +168,8 @@ pub async fn restore_unchanged(
             || r["target"]["tree"]["oid"] != receipt.tree
             || pr["head"]["sha"] != receipt.commit
             || pr_state(&pr) != receipt.pr
-            || (receipt.base != plan.action.base_commit && config.prs.rebase != Rebase::Conflicts)
+            || (receipt.base != plan.action.base_commit
+                && (config.prs.rebase != Rebase::Conflicts || !plan.lock_jobs.is_empty()))
         {
             continue;
         }
@@ -176,6 +179,9 @@ pub async fn restore_unchanged(
         plan.action.verified = Some(true);
         plan.tree = Some(receipt.tree.clone());
         plan.cached_pr = Some(pr);
+        plan.fingerprint = receipt.fingerprint.clone();
+        plan.action.files = receipt.files.clone();
+        plan.lockfiles_ready = true;
     }
     Ok(!obsolete
         && plans
@@ -228,6 +234,8 @@ pub async fn save_receipts(
                 base: plan.action.base_commit.clone(),
                 intent: intent(plan, config, lifecycle.recheck),
                 pr: pr_state(pr),
+                fingerprint: plan.fingerprint.clone(),
+                files: plan.action.files.clone(),
             },
         );
     }

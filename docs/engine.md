@@ -114,14 +114,14 @@ all surrounding text. Uneditable generated Flux bundles, expanded Docker ARG
 locations and missing separate YAML digest fields are reported as skipped rather
 than rewritten incorrectly. Required but unavailable target digests also skip.
 
-Before creating objects, the writer performs uncached reads of the default head
+Before creating objects, the writer revalidates reads of the default head
 and tree, comparing each extracted blob SHA and its actual content hash. A moved
-base or stale blob refuses publication and requires a rerun. Git Data blobs,
-trees and commits create one replacement commit with the default commit as its
+base or stale blob refuses publication and requires a rerun. Git Data trees
+include changed contents inline and create one replacement commit with the default commit as its
 sole parent. No custom author, committer or signature is supplied; GitHub must
 return `verification.verified = true` before a ref is published. See GitHub's
 [bot signing requirements](https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification#signature-verification-for-bots).
-Signing with the sandbox App token still needs live verification.
+The supplied wave-2 sandbox results confirmed verified App commits.
 
 Existing branches require authenticated-actor authorship, matching bot/GitHub
 committer, verified commits, and rustovate's version/full-identity trailers on
@@ -139,9 +139,16 @@ concurrent human pushes and base movements. Object writes never enter the read
 cache. Transport/server failures are not blindly retried; a later run reconciles
 the current ref. Rate-limit refusals retain the existing governor behavior.
 
-Until SWE-109, a matching ecosystem lockfile anywhere in a repository
-conservatively gates npm/bun, Cargo, Go or Terraform branch plans. An explicit
-`--allow-lockfile-pending` enables manifest-only testing and marks each affected
-report/commit. The default sandbox run can update Actions, mise and containers
-without producing inconsistent npm/Cargo/Go lockfiles. No PRs or dashboard writes
-occur. See [wave-1 evidence and sandbox commands](phase2-wave1.md).
+SWE-109 generates supported npm/Bun, Cargo, Go and Terraform lockfiles with real
+tools through mise, in disposable trees backed by a persistent partial clone.
+Tool success and target validation precede API commits; failures are reported per
+branch without publishing manifest-only work. Yarn, pnpm and binary Bun locks
+retain the explicit `--allow-lockfile-pending` testing escape hatch. Scheduled
+lock maintenance is opt-in. See [wave-3 behavior and prerequisites](phase2-wave3.md).
+
+Warm runs validate cached successful writes against a fresh GraphQL head/PR
+inventory. Exact commit, update and PR matches bypass history/tree/PR reads and
+tool execution. Changed inputs fall back to the full safety checks; tool-generated
+branches also regenerate on base changes in conflicts mode. PR lifecycle,
+closed-target suppression, labels and native auto-merge are documented in
+[wave 2](phase2-wave2.md). Dashboard writes remain unimplemented.

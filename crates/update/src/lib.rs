@@ -4,6 +4,7 @@ mod cleanup;
 mod receipts;
 pub use cleanup::{cleanup, delete_owned, owned};
 pub use receipts::{INVENTORY_QUERY, restore_unchanged, save_receipts};
+pub mod lockfiles;
 mod plan;
 mod write;
 pub use plan::{Blob, Change, Plan, Snapshot, blob_sha, branch_name, plan};

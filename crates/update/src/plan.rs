@@ -1,4 +1,4 @@
-use rustovate_config::{Config, Manager};
+use rustovate_config::Config;
 use rustovate_manager::{Dependency, Edit, word};
 use rustovate_report::{ActionStatus, BranchAction, FileAction, Repository, Update};
 use serde::{Deserialize, Serialize};
@@ -27,6 +27,11 @@ pub struct Plan {
     pub retry: bool,
     pub tree: Option<String>,
     pub cached_pr: Option<serde_json::Value>,
+    pub input_fingerprint: String,
+    pub lock_jobs: Vec<crate::lockfiles::Job>,
+    pub lockfiles_ready: bool,
+    pub deleted: BTreeSet<String>,
+    pub maintenance: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Change {
@@ -125,7 +130,7 @@ pub fn plan(
                         continue;
                     }
                     let (identity, label) = if update.update_type == "pin"
-                        && (allow_pending || !needs_lockfile(dep, snapshot))
+                        && (allow_pending || crate::lockfiles::job(dep, update, snapshot).is_ok())
                     {
                         ("pins".into(), "pin-dependencies".into())
                     } else if let Some(group) = &update.group {
@@ -194,6 +199,7 @@ pub fn plan(
         let mut changes = BTreeMap::<String, Vec<Edit>>::new();
         let mut reason = None;
         let mut pending = false;
+        let mut lock_jobs = BTreeSet::new();
         let mut prefixes = BTreeSet::new();
         let mut titles = BTreeSet::new();
         for item in &items {
@@ -211,7 +217,13 @@ pub fn plan(
                     reason = Some("outside the configured update windows".into());
                 }
             }
-            pending |= needs_lockfile(dep, snapshot);
+            match crate::lockfiles::job(dep, update, snapshot) {
+                Ok(Some(job)) => {
+                    lock_jobs.insert(job);
+                }
+                Ok(None) => {}
+                Err(_) => pending = true,
+            }
             let value = update.new_value.as_deref().unwrap_or(&dep.current);
             titles.insert(format!(
                 "{} to {}",
@@ -272,10 +284,10 @@ pub fn plan(
             );
         }
         if pending && !allow_pending {
-            reason = Some("lockfile pending: skipped until SWE-109; --allow-lockfile-pending permits manifest-only testing".into());
+            reason = Some("lockfile pending: unsupported yarn/pnpm or binary bun lockfile; --allow-lockfile-pending permits manifest-only testing".into());
         }
         let fingerprint = hash(
-            serde_json::to_string(&(&contents, &message, pending))
+            serde_json::to_string(&(&contents, &message, pending, &lock_jobs))
                 .expect("serializable plan")
                 .as_bytes(),
         );
@@ -332,37 +344,25 @@ pub fn plan(
             action,
             contents,
             identity: hash(identity.as_bytes()),
-            fingerprint,
+            fingerprint: fingerprint.clone(),
             changes: changes.into_iter().collect(),
             retry: false,
             tree: None,
             cached_pr: None,
+            input_fingerprint: fingerprint.clone(),
+            lockfiles_ready: lock_jobs.is_empty(),
+            lock_jobs: lock_jobs.into_iter().collect(),
+            deleted: BTreeSet::new(),
+            maintenance: false,
         });
     }
     Ok(plans)
 }
 
-fn needs_lockfile(dep: &Dependency, snapshot: &Snapshot) -> bool {
-    let locks: &[&str] = match dep.manager {
-        Manager::Npm | Manager::Bun => &[
-            "package-lock.json",
-            "npm-shrinkwrap.json",
-            "bun.lock",
-            "bun.lockb",
-            "pnpm-lock.yaml",
-            "yarn.lock",
-        ],
-        Manager::Cargo => &["Cargo.lock"],
-        Manager::Go => &["go.sum"],
-        Manager::Terraform => &[".terraform.lock.hcl"],
-        _ => return false,
-    };
-    snapshot
-        .paths
-        .iter()
-        .any(|p| locks.contains(&p.rsplit('/').next().unwrap_or(p)))
-}
-fn in_window(windows: &[rustovate_report::Window], now: chrono::DateTime<chrono::Utc>) -> bool {
+pub(crate) fn in_window(
+    windows: &[rustovate_report::Window],
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
     use std::str::FromStr;
     windows.is_empty()
         || windows.iter().any(|w| {
@@ -378,7 +378,7 @@ fn in_window(windows: &[rustovate_report::Window], now: chrono::DateTime<chrono:
             })
         })
 }
-fn unified(path: &str, old: &str, new: &str) -> String {
+pub(crate) fn unified(path: &str, old: &str, new: &str) -> String {
     let a: Vec<_> = old.split_inclusive('\n').collect();
     let b: Vec<_> = new.split_inclusive('\n').collect();
     let prefix = a.iter().zip(&b).take_while(|(a, b)| a == b).count();

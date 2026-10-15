@@ -6,6 +6,7 @@ tak = "0.0.15"
 zig = "0.17.0"
 bun = "1.4.3"
 node = "24.21.0"
+go = "1.27.2"
 
 [env]
 MBX_DISPLAY = "plain"

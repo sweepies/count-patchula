@@ -136,6 +136,7 @@ type Job = Box<dyn FnOnce(&mut Store) + Send>;
 /// Clone once per caller/task; a bounded queue prevents unlimited pending work.
 #[derive(Clone)]
 pub struct Cache {
+    workspace_dir: Option<std::path::PathBuf>,
     jobs: mpsc::Sender<Job>,
     readers: Arc<Vec<mpsc::Sender<Job>>>,
     next_reader: Arc<AtomicUsize>,
@@ -146,6 +147,14 @@ pub struct Cache {
 impl Cache {
     pub async fn open(path: impl AsRef<Path>, options: Options) -> Result<Self> {
         let path = path.as_ref().to_owned();
+        let workspace_dir = (path != Path::new(":memory:")).then(|| {
+            let absolute = if path.is_absolute() {
+                path.clone()
+            } else {
+                std::env::current_dir().unwrap_or_default().join(&path)
+            };
+            absolute.with_extension("worktrees")
+        });
         let reader_path = path.clone();
         let touches = Arc::new(Mutex::new(HashSet::new()));
         let writer_touches = touches.clone();
@@ -215,12 +224,18 @@ impl Cache {
             }
         }
         Ok(Self {
+            workspace_dir,
             jobs,
             readers: Arc::new(readers),
             next_reader: Arc::new(AtomicUsize::new(0)),
             readers_valid,
             touches,
         })
+    }
+
+    /// Persistent tool checkouts sit beside the SQLite cache, never in a repo.
+    pub fn workspace_dir(&self) -> Option<&Path> {
+        self.workspace_dir.as_deref()
     }
 
     async fn read<T: Send + 'static>(

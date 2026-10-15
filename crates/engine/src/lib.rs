@@ -50,6 +50,7 @@ pub struct Options {
     pub config_dir: Option<std::path::PathBuf>,
 }
 pub struct Engine {
+    lockfiles: Option<rustovate_update::lockfiles::Runner>,
     github: Github,
     http: Cached,
     sources: Sources,
@@ -130,7 +131,11 @@ impl Engine {
         let http = Cached::with_options(cache.clone(), transport, http_options)
             .map_err(|e| Error::Invalid(e.to_string()))?;
         let sources = Sources::new(github.clone(), http.clone(), cache.clone());
+        let lockfiles = cache
+            .workspace_dir()
+            .map(|path| rustovate_update::lockfiles::Runner::new(path.into(), token));
         Ok(Self {
+            lockfiles,
             github,
             http,
             sources,
@@ -139,6 +144,10 @@ impl Engine {
             extraction_hits: AtomicU64::new(0),
             recheck: Recheck::default(),
         })
+    }
+    pub fn with_lockfile_runner(mut self, runner: rustovate_update::lockfiles::Runner) -> Self {
+        self.lockfiles = Some(runner);
+        self
     }
     pub async fn lookup(&self, options: Options) -> Result<Report> {
         self.lookup_at(options, chrono::Utc::now()).await
@@ -174,7 +183,7 @@ impl Engine {
         let before = self.github.stats().await;
         let mut branches = Vec::new();
         let mut pull_requests = Vec::new();
-        for work in work {
+        for mut work in work {
             let Some(config) = work.config else {
                 continue;
             };
@@ -202,6 +211,20 @@ impl Engine {
                     continue;
                 }
             };
+            if let Some(mut maintenance) =
+                rustovate_update::lockfiles::maintenance(repo, &config, &work.snapshot, now)
+                    .map_err(Error::Invalid)?
+            {
+                rustovate_update::lockfiles::defer_completed_refresh(
+                    &self.cache,
+                    &mut maintenance,
+                    &config,
+                    now,
+                )
+                .await
+                .map_err(Error::Invalid)?;
+                plans.push(maintenance);
+            }
             if !dry_run {
                 match rustovate_update::restore_unchanged(
                     &self.github,
@@ -273,6 +296,21 @@ impl Engine {
                     }
                 }
             };
+            if !dry_run {
+                for plan in &mut plans {
+                    if let Some(runner) = &self.lockfiles {
+                        runner.prepare(plan, &mut work.snapshot, &config).await;
+                    } else if plan.action.status == rustovate_report::ActionStatus::Planned
+                        && !plan.lockfiles_ready
+                    {
+                        plan.action.status = rustovate_report::ActionStatus::Error;
+                        plan.action.reason = Some(
+                            "lockfile generation requires a disk cache or an injected runner"
+                                .into(),
+                        );
+                    }
+                }
+            }
             let cleanup = if repo.warnings.is_empty() {
                 rustovate_update::cleanup(
                     &self.github,
@@ -305,6 +343,16 @@ impl Engine {
             .await;
             if let Some(state) = &mut lifecycle {
                 state.publish(&self.github, &mut plans).await;
+                if let Err(error) = rustovate_update::lockfiles::record_refresh(
+                    &self.cache,
+                    &plans,
+                    &state.actions,
+                    now,
+                )
+                .await
+                {
+                    repo.warnings.push(format!("maintenance cache: {error}"));
+                }
                 if let Err(error) =
                     rustovate_update::save_receipts(&self.cache, repo, &config, &plans, state).await
                 {

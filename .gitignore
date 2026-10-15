@@ -4,5 +4,6 @@
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+*.worktrees/
 /conformance-results/
 /benchmark-results/
