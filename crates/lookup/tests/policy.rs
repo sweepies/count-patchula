@@ -231,6 +231,33 @@ fn held_back_versions_share_the_normalized_proposal_identity() {
     assert_eq!(result.updates[0].new_version.as_deref(), Some("1.0.1"));
     assert_eq!(result.held_back[0].version, "1.0.2");
 }
+
+#[test]
+fn held_back_summarizes_newest_but_keeps_earliest_eligibility() {
+    let eval = Evaluator::new(&config("renovate-runner")).unwrap();
+    let mut versions = catalog(&["1.0.2", "1.0.4", "1.0.3"]);
+    for (v, date) in versions.versions.iter_mut().zip([
+        "2026-10-14T13:00:00Z",
+        "2026-10-15T11:00:00Z",
+        "2026-10-14T18:00:00Z",
+    ]) {
+        v.published_at = Some(date.into());
+    }
+    let result = eval
+        .evaluate_at(
+            &dependency("plain"),
+            &versions,
+            chrono::DateTime::parse_from_rfc3339("2026-10-15T12:00:00Z")
+                .unwrap()
+                .to_utc(),
+        )
+        .unwrap();
+    let held = &result.held_back[0];
+    assert_eq!(held.version, "1.0.4");
+    assert_eq!(held.count, 3);
+    assert_eq!(held.versions, ["1.0.2", "1.0.3", "1.0.4"]);
+    assert_eq!(held.eligible_at, "2026-10-15T13:00:00Z");
+}
 #[test]
 fn release_age_falls_back_and_reports_eligibility_without_hiding_current() {
     let config = config("renovate-runner");
@@ -302,7 +329,8 @@ fn missing_dates_all_held_and_rule_overrides_are_explicit() {
         .evaluate_at(&dependency("plain"), &versions, now)
         .unwrap();
     assert!(result.updates.is_empty());
-    assert_eq!(result.held_back.len(), 2);
+    assert_eq!(result.held_back.len(), 1);
+    assert_eq!(result.held_back[0].count, 2);
     versions.versions[0].published_at = None;
     assert_eq!(
         eval.evaluate_at(&dependency("plain"), &versions, now)

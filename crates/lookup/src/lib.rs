@@ -246,6 +246,8 @@ impl Evaluator {
             }
             held_back.push(HeldBack {
                 version: selected.into(),
+                versions: vec![selected.into()],
+                count: 1,
                 update_type: rustovate_manager::word(&kind),
                 published_at: timestamp(published),
                 eligible_at: timestamp(until),
@@ -330,7 +332,7 @@ impl Evaluator {
                 let Some((version, target)) = selected else {
                     return Ok(Evaluation {
                         updates: Vec::new(),
-                        held_back,
+                        held_back: summarize(held_back, scheme),
                     });
                 };
                 let mut update = proposal(
@@ -347,7 +349,7 @@ impl Evaluator {
                 update.release_age = release_age(version, now);
                 return Ok(Evaluation {
                     updates: vec![update],
-                    held_back,
+                    held_back: summarize(held_back, scheme),
                 });
             }
             return Ok(Evaluation::default());
@@ -529,9 +531,35 @@ impl Evaluator {
         held_back.dedup();
         Ok(Evaluation {
             updates: result,
-            held_back,
+            held_back: summarize(held_back, scheme),
         })
     }
+}
+fn summarize(mut releases: Vec<HeldBack>, scheme: Ecosystem) -> Vec<HeldBack> {
+    releases.sort();
+    releases.dedup();
+    let mut groups = std::collections::BTreeMap::<String, HeldBack>::new();
+    for release in releases {
+        if let Some(summary) = groups.get_mut(&release.update_type) {
+            if scheme
+                .parse(&release.version)
+                .ok()
+                .zip(scheme.parse(&summary.version).ok())
+                .is_some_and(|(a, b)| scheme.order(&a, &b).is_gt())
+            {
+                summary.version = release.version.clone();
+            }
+            if release.eligible_at < summary.eligible_at {
+                summary.eligible_at = release.eligible_at;
+                summary.published_at = release.published_at;
+            }
+            summary.versions.push(release.version);
+            summary.count = summary.versions.len();
+        } else {
+            groups.insert(release.update_type.clone(), release);
+        }
+    }
+    groups.into_values().collect()
 }
 fn any<T: PartialEq>(values: &[T], value: T) -> bool {
     values.is_empty() || values.contains(&value)

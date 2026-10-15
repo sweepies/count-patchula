@@ -62,7 +62,10 @@ Additional optional fields: repository `warnings`, `defaultBranch`, `commit`;
 dependency `metadata` (`source`, `kinds`, byte/line/column/semantic `locations`);
 update `policy` (`versions`, `waitHours`, `windows`, merge/labels/message settings);
 dated updates' `releaseAge` (`publishedAt`, `evaluatedAt`); dependency metadata
-`heldBack` entries (`version`, `updateType`, `publishedAt`, `eligibleAt`); batch
+`heldBack` entries summarize each update type: `version` is the newest blocked
+release, `versions` contains every blocked release, and `count` counts them.
+`publishedAt` and `eligibleAt` describe the earliest release that becomes eligible.
+These entries also include `updateType`; batch
 `stats` (requests, notModified, cacheHits, extractionHits, unique lookups and
 phaseMicros). Unknown fields are still rejected. Timing windows are reported
 without delaying lookup. Engine JSON errors remain error envelopes only for

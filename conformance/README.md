@@ -129,7 +129,8 @@ the same class. Exact npm major range edits map narrowly to
 and an explicit exact policy. Other version and identity differences remain actionable.
 
 The reverse age difference is also departure 23 when Renovate's newer target
-exactly matches a rustovate `metadata.heldBack` version in the same update class.
+matches any version in a rustovate `metadata.heldBack.versions` summary in the same
+update class (legacy single-version entries remain accepted).
 The paired rustovate proposal must carry a 24-hour policy and an evaluation
 timestamp inside that held-back release's publication/eligibility interval,
 which must be exactly 24 hours. Future publication dates, expired eligibility,

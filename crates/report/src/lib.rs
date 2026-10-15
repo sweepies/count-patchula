@@ -84,9 +84,17 @@ pub struct DependencyMetadata {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HeldBack {
     pub version: String,
+    /// All blocked releases in this class, including the summary version.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub versions: Vec<String>,
+    #[serde(default = "one")]
+    pub count: usize,
     pub update_type: String,
     pub published_at: String,
     pub eligible_at: String,
+}
+fn one() -> usize {
+    1
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

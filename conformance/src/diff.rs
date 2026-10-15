@@ -144,7 +144,7 @@ impl Rules {
                         let times = chrono::DateTime::parse_from_rfc3339(&held.published_at).ok()
                             .zip(chrono::DateTime::parse_from_rfc3339(&held.eligible_at).ok())
                             .zip(right.release_age.as_ref().and_then(|age| chrono::DateTime::parse_from_rfc3339(&age.evaluated_at).ok()));
-                        left.new_version.as_deref() == Some(held.version.as_str())
+                        left.new_version.as_deref().is_some_and(|v| v == held.version || held.versions.iter().any(|blocked| blocked == v))
                             && held.update_type == left.update_type
                             && times.is_some_and(|((published, eligible), evaluated)| {
                                 eligible - published == chrono::Duration::hours(24)

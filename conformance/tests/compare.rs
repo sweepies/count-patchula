@@ -272,6 +272,22 @@ fn older_rustovate_target_requires_the_exact_held_back_release_and_24_hour_evide
             .all(|d| d.classification == Class::DeliberateDeparture
                 && d.departure.as_ref().unwrap().row == 23)
     );
+    let mut summarized = b.clone();
+    let held = &mut summarized.repositories[0].package_files[0].dependencies[0]
+        .metadata
+        .as_mut()
+        .unwrap()
+        .held_back[0];
+    held.version = "1.0.4".into();
+    held.versions = vec!["1.0.2".into(), "1.0.3".into(), "1.0.4".into()];
+    held.count = 3;
+    assert!(
+        compare(&a, &summarized, &rules())
+            .unwrap()
+            .differences
+            .iter()
+            .all(|d| d.classification == Class::DeliberateDeparture)
+    );
     for (field, value) in [
         ("version", "1.0.3"),
         ("updateType", "minor"),
