@@ -97,7 +97,7 @@ async fn public_note_sources_and_release_range() {
     )
     .unwrap();
     let http = Cached::new(cache.clone(), transport, 4).unwrap();
-    let client = Client::new(github.clone(), http.clone(), cache);
+    let client = Client::new(github.clone(), http.clone(), cache).with_versions_host(false);
     for (source, package, version, repo) in [
         (Source::Npm, "@babel/code-frame", "7.27.1", "babel/babel"),
         (Source::Crates, "heck", "0.5.0", "withoutboats/heck"),
@@ -243,7 +243,7 @@ async fn public_sandbox_note_ranges() {
         )
         .unwrap();
         let http = Cached::new(cache.clone(), transport, 4).unwrap();
-        let client = Client::new(github.clone(), http.clone(), cache);
+        let client = Client::new(github.clone(), http.clone(), cache).with_versions_host(false);
         for target in targets {
             let started = std::time::Instant::now();
             let notes = client

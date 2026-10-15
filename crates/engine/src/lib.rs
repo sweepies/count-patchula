@@ -3,7 +3,7 @@
 mod overrides;
 pub use rustovate_update::Recheck;
 
-use futures_util::{FutureExt, StreamExt, stream};
+use futures_util::{StreamExt, stream};
 use rustovate_cache::{Cache, ExtractionKey};
 use rustovate_config::{Config, Manager, Source};
 use rustovate_datasource::Client as Sources;
@@ -58,6 +58,7 @@ pub struct Engine {
     concurrency: usize,
     extraction_hits: AtomicU64,
     recheck: Recheck,
+    versions_host_override: Option<bool>,
 }
 struct Work {
     report: Repository,
@@ -179,11 +180,46 @@ impl Engine {
             concurrency,
             extraction_hits: AtomicU64::new(0),
             recheck: Recheck::default(),
+            versions_host_override: None,
         })
     }
     pub fn with_lockfile_runner(mut self, runner: rustovate_update::lockfiles::Runner) -> Self {
         self.lockfiles = Some(runner);
         self
+    }
+    pub fn with_versions_host(mut self, enabled: bool) -> Self {
+        self.versions_host_override = Some(enabled);
+        self
+    }
+    fn catalog_key(&self, dep: &Dependency, config: Option<&Config>) -> LookupKey {
+        let enabled = self
+            .versions_host_override
+            .unwrap_or(config.is_none_or(|config| config.use_versions_host));
+        let (source, package) = if dep.manager == Manager::Mise && enabled {
+            ("mise-tool".into(), dep.name.clone())
+        } else {
+            (word(&dep.source), dep.package.clone())
+        };
+        (format!("{enabled}:{source}"), package)
+    }
+    async fn lookup_key(
+        sources: &Sources,
+        key: &LookupKey,
+    ) -> std::result::Result<rustovate_datasource::Catalog, String> {
+        let (enabled, source) = key.0.split_once(':').ok_or("invalid catalog key")?;
+        let sources = sources.clone().with_versions_host(enabled == "true");
+        if source == "mise-tool" {
+            return sources
+                .mise_tool_catalog(&key.1)
+                .await
+                .map_err(|e| e.to_string());
+        }
+        let source: Source =
+            serde_json::from_value(Value::String(source.into())).map_err(|e| e.to_string())?;
+        sources
+            .lookup(source, &key.1)
+            .await
+            .map_err(|e| e.to_string())
     }
     pub async fn lookup(&self, options: Options) -> Result<Report> {
         self.lookup_at(options, chrono::Utc::now()).await
@@ -555,6 +591,7 @@ impl Engine {
                 "--config and --config-dir are mutually exclusive".into(),
             ));
         }
+        let sources = self.sources.catalog_batch();
         let total = Instant::now();
         let _total_span = PhaseTrace::new("total");
         let before_g = self.github.stats().await;
@@ -579,8 +616,12 @@ impl Engine {
         // always authoritative for evaluation; unused speculative results are
         // discarded. Overlap source revalidation with the repository head read.
         let hint_hash = format!(
-            "lookup-hint-v1:{}:{}:{}:{}",
-            hash(&serde_json::to_vec(&(&options.config, &overrides))?),
+            "lookup-hint-v2:{}:{}:{}:{}",
+            hash(&serde_json::to_vec(&(
+                &options.config,
+                &overrides,
+                self.versions_host_override
+            ))?),
             hash(rustovate_config::SCHEMA.as_bytes()),
             hash(rustovate_manager::MISE_REGISTRY.as_bytes()),
             self.github.credential_scope()
@@ -674,7 +715,10 @@ impl Engine {
         let prefetch = async {
             let started = Instant::now();
             let _phase = PhaseTrace::new("lookup.prefetch");
-            let result = tokio::join!(self.catalogs(hint.catalogs), self.digests(hint.digests));
+            let result = tokio::join!(
+                self.catalogs(hint.catalogs, &sources),
+                self.digests(hint.digests)
+            );
             (result, micros(started))
         };
         let ((work, extraction_time), ((mut catalogs, mut digests), prefetch_time)) =
@@ -698,19 +742,12 @@ impl Engine {
                                 .retry
                                 .contains(&rustovate_update::dashboard::extracted_key(d))
                     })
-                    .map(|d| (word(&d.source), d.package.clone()))
+                    .map(|d| self.catalog_key(d, repo.config.as_ref()))
             })
             .collect();
-        let fresh_sources = self.sources.revalidating();
-        for (source, package) in &retry_keys {
-            let source: Source = serde_json::from_value(Value::String(source.clone()))?;
-            catalogs.insert(
-                (word(&source), package.clone()),
-                fresh_sources
-                    .lookup(source, package)
-                    .await
-                    .map_err(|e| e.to_string()),
-            );
+        let fresh_sources = sources.revalidating().catalog_batch();
+        for key in &retry_keys {
+            catalogs.insert(key.clone(), Self::lookup_key(&fresh_sources, key).await);
         }
         // Digest retries use the same scoped HTTP client later in the batch.
         let evaluators: Vec<_> = work
@@ -727,7 +764,7 @@ impl Engine {
             if let Some(eval) = eval {
                 for dep in &repo.dependencies {
                     if eval.needs_lookup(dep) {
-                        keys.insert((word(&dep.source), dep.package.clone()));
+                        keys.insert(self.catalog_key(dep, repo.config.as_ref()));
                     }
                 }
             }
@@ -761,7 +798,7 @@ impl Engine {
                     .dependencies
                     .iter()
                     .filter(|dep| eval.needs_lookup(dep))
-                    .map(|dep| (word(&dep.source), dep.package.clone()))
+                    .map(|dep| self.catalog_key(dep, repo.config.as_ref()))
                     .collect();
                 let digests = current_refs
                     .iter()
@@ -789,7 +826,8 @@ impl Engine {
         current_refs.retain(|key| !digests.contains_key(key));
         // Revalidate current action refs alongside source heads. These network
         // reads used to serialize behind all catalogs inside the policy phase.
-        let (remaining, refs) = tokio::join!(self.catalogs(keys), self.digests(current_refs));
+        let (remaining, refs) =
+            tokio::join!(self.catalogs(keys, &sources), self.digests(current_refs));
         catalogs.extend(remaining);
         digests.extend(refs);
         let lookup_time = prefetch_time + micros(started);
@@ -806,7 +844,7 @@ impl Engine {
                 if let Some(eval) = eval
                     && !eval.ignored(dep)
                 {
-                    match catalogs.get(&(word(&dep.source), dep.package.clone())) {
+                    match catalogs.get(&self.catalog_key(dep, repo.config.as_ref())) {
                         Some(Ok(catalog)) => match eval.evaluate_at(dep, catalog, now) {
                             Ok(p) => {
                                 let dep_key = rustovate_update::dashboard::extracted_key(dep);
@@ -915,12 +953,13 @@ impl Engine {
         // commits. Reuse those for both current and proposed action tags instead
         // of adding a serial /commits/{tag} round trip after policy evaluation.
         for (package, reference) in &digest_keys {
-            if let Some(Ok(catalog)) = catalogs.get(&(word(&Source::GithubTags), package.clone()))
-                && let Some(digest) = catalog
-                    .versions
-                    .iter()
-                    .find(|version| &version.version == reference)
-                    .and_then(|version| version.digest.as_ref())
+            if let Some(Ok(catalog)) = catalogs.iter().find_map(|((source, pkg), result)| {
+                (source.ends_with(":github-tags") && pkg == package).then_some(result)
+            }) && let Some(digest) = catalog
+                .versions
+                .iter()
+                .find(|version| &version.version == reference)
+                .and_then(|version| version.digest.as_ref())
             {
                 digests.insert((package.clone(), reference.clone()), Ok(digest.clone()));
             }
@@ -935,7 +974,7 @@ impl Engine {
             .map(|(package, tag)| async move {
                 let sources = if retry_keys
                     .iter()
-                    .any(|(s, p)| matches!(s.as_str(), "docker" | "oci") && p == &package)
+                    .any(|(s, p)| (s.ends_with(":docker") || s.ends_with(":oci")) && p == &package)
                 {
                     fresh_sources
                 } else {
@@ -1023,7 +1062,7 @@ impl Engine {
                                     dep,
                                     sha,
                                     catalogs
-                                        .get(&(word(&dep.source), dep.package.clone()))
+                                        .get(&self.catalog_key(dep, repo.config.as_ref()))
                                         .and_then(|c| c.as_ref().ok()),
                                 ) {
                                     proposals.push(proposal);
@@ -1063,7 +1102,7 @@ impl Engine {
                     ));
                 }
                 let catalog = catalogs
-                    .get(&(word(&dep.source), dep.package.clone()))
+                    .get(&self.catalog_key(dep, repo.config.as_ref()))
                     .and_then(|c| c.as_ref().ok());
                 if dep.manager == Manager::GithubActions
                     && dep.source == Source::GithubTags
@@ -1122,7 +1161,7 @@ impl Engine {
                     current: Current {
                         value: Some(dep.current.clone()),
                         version: catalogs
-                            .get(&(word(&dep.source), dep.package.clone()))
+                            .get(&self.catalog_key(dep, repo.config.as_ref()))
                             .and_then(|c| c.as_ref().ok())
                             .and_then(|c| rustovate_lookup::resolved_current_version(dep, c))
                             .or_else(|| dep.resolved.clone())
@@ -1236,72 +1275,57 @@ impl Engine {
             .await
     }
 
-    async fn catalogs(&self, keys: BTreeSet<LookupKey>) -> Catalogs {
-        // The HTTP governors cap requests. A catalog walking several pages
-        // must not occupy a slot that prevents unrelated sources from starting.
+    async fn catalogs(&self, keys: BTreeSet<LookupKey>, sources: &Sources) -> Catalogs {
         let (releases, others): (Vec<_>, Vec<_>) = keys
             .into_iter()
-            .partition(|(source, _)| source == "github-releases");
-        let packages: Vec<_> = releases.into_iter().map(|(_, package)| package).collect();
-        let batched = async {
-            let groups = stream::iter(packages.chunks(16).map(<[String]>::to_vec))
-                .map(|group| {
-                    async move {
-                        match self.sources.release_catalogs(&group).await {
-                            Ok(catalogs) => catalogs
-                                .into_iter()
-                                .map(|(package, catalog)| {
-                                    (
-                                        ("github-releases".into(), package),
-                                        catalog.map_err(|e| e.to_string()),
-                                    )
-                                })
-                                .collect(),
-                            Err(_) => {
-                                // One inaccessible repository must not poison a group.
-                                stream::iter(group)
-                                    .map(|package: String| {
-                                        async move {
-                                            (
-                                                ("github-releases".into(), package.clone()),
-                                                self.sources
-                                                    .lookup(Source::GithubReleases, &package)
-                                                    .await
-                                                    .map_err(|e| e.to_string()),
-                                            )
-                                        }
-                                        .boxed()
-                                    })
-                                    .buffer_unordered(100)
-                                    .collect::<Catalogs>()
-                                    .await
-                            }
-                        }
+            .partition(|(source, _)| source.ends_with(":github-releases"));
+        let mut groups = Vec::new();
+        for enabled in [true, false] {
+            let packages: Vec<_> = releases
+                .iter()
+                .filter(|(source, _)| source.starts_with(&enabled.to_string()))
+                .map(|(_, package)| package.clone())
+                .collect();
+            groups.extend(packages.chunks(16).map(|chunk| (enabled, chunk.to_vec())));
+        }
+        let batched = stream::iter(groups)
+            .map(|(enabled, packages)| async move {
+                let client = sources.clone().with_versions_host(enabled);
+                match client.release_catalogs(&packages).await {
+                    Ok(results) => results
+                        .into_iter()
+                        .map(|(package, result)| {
+                            (
+                                (format!("{enabled}:github-releases"), package),
+                                result.map_err(|e| e.to_string()),
+                            )
+                        })
+                        .collect::<Catalogs>(),
+                    Err(_) => {
+                        stream::iter(packages)
+                            .map(|package| async move {
+                                let key = (format!("{enabled}:github-releases"), package);
+                                let result = Self::lookup_key(sources, &key).await;
+                                (key, result)
+                            })
+                            .buffer_unordered(16)
+                            .collect()
+                            .await
                     }
-                    .boxed()
-                })
-                .buffer_unordered(100)
-                .collect::<Vec<Catalogs>>()
-                .await;
-            groups.into_iter().flatten().collect::<Catalogs>()
-        };
-        let pending = others.len().max(1);
-        let other_catalogs = stream::iter(others)
-            .map(|(source, package)| async move {
-                let parsed: Source =
-                    serde_json::from_value(Value::String(source.clone())).expect("typed source");
-                let result = self
-                    .sources
-                    .lookup(parsed, &package)
-                    .await
-                    .map_err(|e| e.to_string());
-                ((source, package), result)
+                }
             })
-            .buffer_unordered(pending)
+            .buffer_unordered(16)
+            .collect::<Vec<_>>();
+        let others = stream::iter(others)
+            .map(|key| async move {
+                let result = Self::lookup_key(sources, &key).await;
+                (key, result)
+            })
+            .buffer_unordered(100)
             .collect::<Catalogs>();
-        let (mut catalogs, other_catalogs) = tokio::join!(batched, other_catalogs);
-        catalogs.extend(other_catalogs);
-        catalogs
+        let (groups, mut results) = tokio::join!(batched, others);
+        results.extend(groups.into_iter().flatten());
+        results
     }
     async fn repositories(&self) -> Result<Vec<String>> {
         match self

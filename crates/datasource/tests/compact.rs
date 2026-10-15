@@ -59,6 +59,7 @@ fn client(cache: Cache, transport: Arc<Queue>) -> Client {
         Cached::new(cache.clone(), transport, 4).unwrap(),
         cache,
     )
+    .with_versions_host(false)
 }
 fn document(version: &str, deprecated: &str) -> Value {
     json!({"dist-tags":{"latest":version},"time":{version:"2026-10-14T00:00:00Z","modified":"2026-10-15T00:00:00Z"},

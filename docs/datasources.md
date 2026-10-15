@@ -113,3 +113,27 @@ Tag enumeration follows [matching references](https://docs.github.com/en/rest/gi
 Additional specifications: [Node distribution index](https://nodejs.org/dist/index.json),
 [PyPI JSON API](https://docs.pypi.org/api/json/),
 [mise registry format](https://mise.jdx.dev/contributing/registry.html).
+# Mise versions host (departure 49)
+
+`useVersionsHost` defaults to `true` in repository configuration. Public GitHub
+repos in the bundled mise registry use lowercase mise-versions `releases.json`
+and `tags.json`, with ETag validation. Since rustovate's GitHub client is always
+authenticated, repos outside that registry go directly to GitHub, including
+private upstreams. A mirror transport failure, 429 or 5xx can use the API;
+403, 404 and empty lists cannot. A truncated list reports an incomplete lookup
+instead of silently treating the prefix as full history or falling back.
+
+Mise tools use `data/index.v1.json` once per batch where G4 guarantees a complete
+list, otherwise `data/<tool>.toml`. Rustovate needs every update class and held-back
+version, so the single-latest G1–G3 guarantees alone do not justify replacing a
+full catalog. Only tools whose declared first registry backend is supported use
+the tool feed. Dates come from its `created_at` (mise's collection provenance),
+and an authenticated tool absent from the index routes directly before a per-tool
+request. A 404 response itself never authorizes fallback. Dates are
+not an invented upstream publication time. Rolling and flagged prerelease entries
+are excluded. Node LTS membership still comes from Node's own index.
+
+Set `useVersionsHost = false` to use the previous upstream catalog paths.
+Legacy public cassettes explicitly exercise that mode; independent offline
+contract fixtures cover conditional mirror reads, batch index reuse, full-list
+fallback, private routing, errors and date provenance.

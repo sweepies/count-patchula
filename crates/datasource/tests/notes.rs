@@ -101,6 +101,7 @@ async fn client(routes: Arc<Routes>, cache: Cache) -> Client {
         Cached::new(cache.clone(), routes, 4).unwrap(),
         cache,
     )
+    .with_versions_host(false)
 }
 async fn memory() -> Cache {
     Cache::open(":memory:", Default::default()).await.unwrap()

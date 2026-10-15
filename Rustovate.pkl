@@ -134,6 +134,8 @@ ignore: Listing<String> = new {}
 exclude: Listing<String> = new { "**/node_modules/**"; "**/vendor/**"; "**/.git/**" }
 prs: PullRequests = new {}
 lockfiles: Lockfiles = new {}
+/// Prefer mise-versions for public catalogs; false uses the upstream sources.
+useVersionsHost: Boolean = true
 submodules: Boolean = false
 /// Commits by these authors do not trigger a new extraction.
 ignoreAuthors: Listing<String> = new {}

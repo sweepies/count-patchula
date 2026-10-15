@@ -1,5 +1,35 @@
 # Benchmarks (SWE-88, report-only)
 
+## Mise-versions catalogs (2026-10-15, departure 49)
+
+Release CLI, concurrency 8, identical per-repository example overrides and an
+independent new SQLite cache for each workload/mode. Builds and GitHub CLI
+authentication are outside wall time. `useVersionsHost` is the only config
+difference. No remote writes or fixture recording were performed. Requests below
+count `api.github.com` trace completions, including extraction and digest reads.
+
+- Twelve repositories, direct sources: cold **39.28 s / 590 GitHub requests**;
+  warm **5.29 s / 126 requests**, with **345 proposals** on both runs.
+- Twelve repositories, primary host: cold **49.36 s / 499 GitHub requests**;
+  first warm **87.83 s / 72 requests**; settled warm **3.28 s / 71 requests**.
+  There were 38 mise-versions requests per run. The cold run had **343 proposals**,
+  while both warm runs had **345**. GHCR throttled the large Immich machine-learning
+  catalog and a tool file temporarily answered 404; the first warm run completed
+  the missing registry history and incurred throttling delays. The 404 was
+  reported rather than retried on GitHub. An earlier cold run with an extraction
+  HTTP 500 was excluded, together with its partially cold warm run.
+- Sandbox, direct sources: cold **6.33 s / 27 GitHub requests**; warm
+  **1.78 s / 10 requests**. Primary host: cold **5.66 s / 17 requests**; warm
+  **1.53 s / 6 requests**, plus six mise-versions requests per run. All four
+  observations retained **30 proposals**.
+
+These are sequential single observations on changing, shared services, not
+controlled medians. The lower GitHub request count does not imply a guaranteed
+wall-time improvement during registry throttling. Raw reports, traces and
+summaries are under `/tmp/rustovate-followup-bench/`: `item2-results.json`,
+`item2-final-results.json` and `item2-steady-results.json`. The following
+release-age catalog reuse measurement builds on these baseline paths.
+
 ## Phase 1 final live check (2026-10-15)
 
 The supplied final twelve-repository batch at the Phase 1 implementation took

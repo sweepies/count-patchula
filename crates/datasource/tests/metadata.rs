@@ -28,7 +28,8 @@ async fn registry_flags_tags_and_sparse_layout_are_preserved() {
         github,
         Cached::new(cache.clone(), replay.clone(), 4).unwrap(),
         cache,
-    );
+    )
+    .with_versions_host(false);
     let npm = client.lookup(Source::Npm, "spec-package").await.unwrap();
     assert_eq!(npm.dist_tags["next"], "3.0.0-beta.1");
     assert_eq!(

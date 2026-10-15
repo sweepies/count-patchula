@@ -65,6 +65,7 @@ async fn installation_and_caller_token_batches_match_and_token_rotation_keeps_re
     let credentials = Arc::new(Rotating(Default::default()));
     let cli = Engine::with_transport("offline-caller-token", cli_cache, 4, cli_fake)
         .unwrap()
+        .with_versions_host(false)
         .with_recheck(rustovate_engine::Recheck::Now);
     let server = Engine::with_credentials(
         credentials.clone(),
@@ -392,8 +393,9 @@ async fn steady_runs_only_lookup_and_one_inventory_with_open_or_closed_updates()
         let cache = Cache::open(directory.path().join("cache.sqlite"), Default::default())
             .await
             .unwrap();
-        let engine =
-            Engine::with_transport("offline-installation", cache, 4, fake.clone()).unwrap();
+        let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+            .unwrap()
+            .with_versions_host(false);
         let run = || {
             engine.run(
                 Options {
@@ -422,8 +424,9 @@ async fn steady_runs_only_lookup_and_one_inventory_with_open_or_closed_updates()
         let cache = Cache::open(directory.path().join("cache.sqlite"), Default::default())
             .await
             .unwrap();
-        let engine =
-            Engine::with_transport("offline-installation", cache, 4, fake.clone()).unwrap();
+        let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+            .unwrap()
+            .with_versions_host(false);
         fake.requests.lock().unwrap().clear();
         fake.writes.lock().unwrap().clear();
         let started = tokio::time::Instant::now();
@@ -491,7 +494,9 @@ async fn steady_runs_only_lookup_and_one_inventory_with_open_or_closed_updates()
 async fn dashboard_renames_are_preserved_and_disabling_closes_only_the_owned_issue() {
     let fake = Arc::new(Fake::new(false));
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone()).unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
     let run = |config| {
         engine.run(
             Options {
@@ -553,7 +558,9 @@ async fn dashboard_renames_are_preserved_and_disabling_closes_only_the_owned_iss
 async fn owner_closure_during_publication_keeps_repository_successful() {
     let fake = Arc::new(Fake::new(false));
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone()).unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
     let run = || {
         engine.run(
             Options {
@@ -586,8 +593,9 @@ async fn token_only_run_uses_repository_config_cold_and_cached_and_reports_actio
     ] {
         let fake = Arc::new(Fake::new(lock));
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-        let engine =
-            Engine::with_transport("offline-installation", cache, 4, fake.clone()).unwrap();
+        let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+            .unwrap()
+            .with_versions_host(false);
         for repeat in 0..2 {
             let report = engine
                 .run(
@@ -678,8 +686,9 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
     ] {
         let fake = Arc::new(Fake::new(false));
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-        let engine =
-            Engine::with_transport("offline-installation", cache.clone(), 4, fake.clone()).unwrap();
+        let engine = Engine::with_transport("offline-installation", cache.clone(), 4, fake.clone())
+            .unwrap()
+            .with_versions_host(false);
         let mut config = checkbox_config();
         config.defaults.merge = true;
         let now = "2026-10-15T12:00:00Z".parse().unwrap();
@@ -877,8 +886,9 @@ async fn auto_merge_uses_inventory_methods_and_prefers_native_without_status_rea
             settings["deleteBranchOnMerge"] = json!(true);
         }
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-        let engine =
-            Engine::with_transport("offline-installation", cache, 4, fake.clone()).unwrap();
+        let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+            .unwrap()
+            .with_versions_host(false);
         let mut config = checkbox_config();
         config.defaults.merge = true;
         let now = chrono::Utc::now();
@@ -947,8 +957,9 @@ async fn manual_create_age_and_schedule_permits_do_not_authorize_fallback_mergin
     for hold in ["age", "schedule"] {
         let fake = Arc::new(Fake::new(false));
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-        let engine =
-            Engine::with_transport("offline-installation", cache, 4, fake.clone()).unwrap();
+        let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+            .unwrap()
+            .with_versions_host(false);
         let mut config = checkbox_config();
         config.defaults.merge = true;
         let now: chrono::DateTime<chrono::Utc> = "2026-10-15T12:00:00Z".parse().unwrap();
@@ -1058,7 +1069,9 @@ async fn dashboard_age_click_bypasses_only_the_selected_target_and_survives_unti
     let cache = Cache::open(directory.path().join("cache.sqlite"), Default::default())
         .await
         .unwrap();
-    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone()).unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
     let mut config = checkbox_config();
     config.defaults.wait_hours = 24;
     let first = checkbox_run(&engine, &config, now).await;
@@ -1097,7 +1110,9 @@ async fn dashboard_age_click_bypasses_only_the_selected_target_and_survives_unti
     )
     .await
     .unwrap();
-    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone()).unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
     let recovered = checkbox_run(&engine, &config, now).await;
     assert!(
         recovered.repositories[0].package_files[0].dependencies[0]
@@ -1127,8 +1142,9 @@ async fn dashboard_create_click_bypasses_concurrent_hourly_and_schedule_holds() 
         }
         let fake = Arc::new(fake);
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-        let engine =
-            Engine::with_transport("offline-installation", cache, 4, fake.clone()).unwrap();
+        let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+            .unwrap()
+            .with_versions_host(false);
         let mut config = checkbox_config();
         if reason == "concurrent" {
             config.prs.concurrent = Some(1);
@@ -1183,8 +1199,9 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
             );
             let fake = Arc::new(fake);
             let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-            let engine =
-                Engine::with_transport("offline-installation", cache, 4, fake.clone()).unwrap();
+            let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+                .unwrap()
+                .with_versions_host(false);
             let mut config = checkbox_config();
             if origin == "create" {
                 config.prs.concurrent = Some(dependencies - 1);
@@ -1303,7 +1320,9 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
 async fn dashboard_recreate_click_opens_a_new_pr_and_does_not_repeat_the_old_owner_hold() {
     let fake = Arc::new(Fake::new(false));
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone()).unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
     let config = checkbox_config();
     let now = chrono::Utc::now();
     checkbox_run(&engine, &config, now).await;
@@ -1326,8 +1345,9 @@ async fn repository_and_pr_recheck_clicks_force_branch_work_and_clear_the_checkb
     for origin in ["dashboard", "pr"] {
         let fake = Arc::new(Fake::new(false));
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-        let engine =
-            Engine::with_transport("offline-installation", cache, 4, fake.clone()).unwrap();
+        let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+            .unwrap()
+            .with_versions_host(false);
         let config = checkbox_config();
         let now = chrono::Utc::now();
         checkbox_run(&engine, &config, now).await;
@@ -1371,7 +1391,9 @@ async fn failed_lookup_click_retries_the_source_and_unticks_even_when_it_still_f
     fake.fail_lookup
         .store(true, std::sync::atomic::Ordering::Relaxed);
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone()).unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
     let config = checkbox_config();
     let now = chrono::Utc::now();
     checkbox_run(&engine, &config, now).await;
@@ -1395,7 +1417,9 @@ async fn failed_lookup_click_retries_the_source_and_unticks_even_when_it_still_f
 async fn human_authored_dashboard_checkboxes_never_request_branch_work() {
     let fake = Arc::new(Fake::new(false));
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone()).unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
     let config = checkbox_config();
     let now = chrono::Utc::now();
     checkbox_run(&engine, &config, now).await;
@@ -1440,6 +1464,7 @@ async fn lockfile_failure_is_a_branch_error_and_publishes_no_manifest_only_branc
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
         .unwrap()
+        .with_versions_host(false)
         .with_lockfile_runner(runner);
     let report = engine
         .run(

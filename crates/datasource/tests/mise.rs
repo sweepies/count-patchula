@@ -52,7 +52,8 @@ async fn setup_node_uses_node_lts_membership_without_replacing_github_release_da
         github,
         Cached::new(cache.clone(), transport, 2).unwrap(),
         cache,
-    );
+    )
+    .with_versions_host(false);
     for _ in 0..2 {
         let catalog = client
             .lookup(Source::GithubReleases, "actions/node-versions")
@@ -105,7 +106,7 @@ async fn core_node_and_pypi_use_real_metadata_shapes_and_fresh_bodies() {
     )
     .unwrap();
     let http = Cached::new(cache.clone(), replay.clone(), 4).unwrap();
-    let client = Client::new(github, http.clone(), cache);
+    let client = Client::new(github, http.clone(), cache).with_versions_host(false);
     let node = client.lookup(Source::Mise, "node").await.unwrap();
     assert_eq!(node.versions[0].version, "24.2.0");
     assert_eq!(node.dist_tags["lts"], "24.1.0");

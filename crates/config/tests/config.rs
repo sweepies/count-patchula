@@ -7,6 +7,14 @@ fn workspace() -> &'static Path {
     Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
 }
 
+#[test]
+fn versions_host_is_enabled_by_default_and_can_be_disabled() {
+    for (body, expected) in [("", true), ("useVersionsHost = false", false)] {
+        let (_directory, path) = fixture(body);
+        assert_eq!(load(&path).unwrap().use_versions_host, expected);
+    }
+}
+
 fn fixture(body: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(directory.path().join("Rustovate.pkl"), SCHEMA).unwrap();

@@ -22,6 +22,9 @@ fn compact_release_head(body: &[u8]) -> std::result::Result<Vec<u8>, serde_json:
 impl Client {
     pub(super) async fn github_versions(&self, source: Source, package: &str) -> Result<Catalog> {
         if source == Source::GithubTags {
+            if let Some(catalog) = self.mirror_catalog(source, package).await? {
+                return Ok(catalog);
+            }
             return self.github_tags(package).await;
         }
         self.release_catalogs(&[package.to_owned()])
@@ -34,6 +37,15 @@ impl Client {
     /// Only semantic release fields affect the refresh fingerprint, so asset
     /// download counters cannot cause history refetches.
     pub async fn release_catalogs(
+        &self,
+        packages: &[String],
+    ) -> Result<BTreeMap<String, Result<Catalog>>> {
+        if self.use_versions_host {
+            return self.mirror_release_catalogs(packages).await;
+        }
+        self.api_release_catalogs(packages).await
+    }
+    pub(super) async fn api_release_catalogs(
         &self,
         packages: &[String],
     ) -> Result<BTreeMap<String, Result<Catalog>>> {
@@ -204,7 +216,7 @@ impl Client {
         // Releases can be published after their tags. Revalidate release history
         // independently of the immutable object/namespace caches on every run.
         let releases = self
-            .release_catalogs(&[package.to_owned()])
+            .api_release_catalogs(&[package.to_owned()])
             .await?
             .remove(package)
             .ok_or(Error::Invalid)??;

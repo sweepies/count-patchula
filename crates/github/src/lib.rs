@@ -200,6 +200,9 @@ impl Client {
     pub fn cache(&self) -> Cache {
         self.0.cache.clone()
     }
+    pub fn versions_host_eligible(&self) -> bool {
+        self.0.options.api_url.host_str() == Some("api.github.com")
+    }
 
     /// One-way namespace for derived read hints; never the token itself.
     pub fn credential_scope(&self) -> &str {

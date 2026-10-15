@@ -27,6 +27,7 @@ sha2 = "0.11.1"
 thiserror.workspace = true
 tokio.workspace = true
 futures-util = "0.3"
+toml_edit = "0.25.17"
 
 [dev-dependencies]
 rustovate-testkit = { path = "../testkit" }

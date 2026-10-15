@@ -13,6 +13,7 @@ use rustovate_versioning::{Ecosystem, Versioning};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
+mod versions_host;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -66,6 +67,8 @@ pub struct Client {
     changelogs: notes::ChangelogCache,
     note_reads: Option<notes::ReadCache>,
     release_bodies: notes::BodyCache,
+    use_versions_host: bool,
+    versions_index: std::sync::Arc<tokio::sync::OnceCell<std::result::Result<Value, String>>>,
     stale_registry: std::sync::Arc<tokio::sync::Mutex<BTreeMap<String, BTreeMap<String, i64>>>>,
 }
 impl Client {
@@ -84,6 +87,8 @@ impl Client {
             changelogs: Default::default(),
             note_reads: None,
             release_bodies: Default::default(),
+            use_versions_host: true,
+            versions_index: Default::default(),
             stale_registry: Default::default(),
         }
     }

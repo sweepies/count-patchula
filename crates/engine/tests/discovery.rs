@@ -176,7 +176,9 @@ async fn discovered_config_precedence_skips_errors_and_cached_extraction() {
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await
         .unwrap();
-    let engine = Engine::with_transport("offline", cache, 4, replay.clone()).unwrap();
+    let engine = Engine::with_transport("offline", cache, 4, replay.clone())
+        .unwrap()
+        .with_versions_host(false);
     let now = chrono::Utc::now();
     let cold = engine.lookup_at(Options::default(), now).await.unwrap();
     let warm = engine.lookup_at(Options::default(), now).await.unwrap();
@@ -226,7 +228,9 @@ async fn installation_tokens_use_installation_repository_listing() {
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await
         .unwrap();
-    let engine = Engine::with_transport("offline", cache, 4, replay.clone()).unwrap();
+    let engine = Engine::with_transport("offline", cache, 4, replay.clone())
+        .unwrap()
+        .with_versions_host(false);
     assert!(
         engine
             .lookup(Options::default())
@@ -286,7 +290,9 @@ async fn cold_snapshot_and_warm_branch_rename_reuse_identical_commit() {
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await
         .unwrap();
-    let engine = Engine::with_transport("offline", cache, 4, replay.clone()).unwrap();
+    let engine = Engine::with_transport("offline", cache, 4, replay.clone())
+        .unwrap()
+        .with_versions_host(false);
     let config = rustovate_config::load_files(
         "/repo/config.pkl",
         BTreeMap::from([
@@ -413,7 +419,9 @@ async fn warm_sources_start_before_head_finishes_but_new_extraction_is_authorita
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await
         .unwrap();
-    let engine = Engine::with_transport("offline", cache, 4, gate.clone()).unwrap();
+    let engine = Engine::with_transport("offline", cache, 4, gate.clone())
+        .unwrap()
+        .with_versions_host(false);
     let config = rustovate_config::load_files(
         "/repo/config.pkl",
         BTreeMap::from([
@@ -552,7 +560,9 @@ async fn config_dir_maps_overrides_and_falls_back_with_batch_dedup() {
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await
         .unwrap();
-    let engine = Engine::with_transport("offline", cache, 4, replay.clone()).unwrap();
+    let engine = Engine::with_transport("offline", cache, 4, replay.clone())
+        .unwrap()
+        .with_versions_host(false);
     let report = engine
         .lookup(Options {
             config_dir: Some(configs),

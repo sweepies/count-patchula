@@ -23,6 +23,33 @@ pub fn resolve(name: &str) -> Option<Resolution> {
         REGISTRY.get(name)?.iter().find_map(|b| backend(b))
     }
 }
+
+/// The versions host publishes the declared first backend of registry tools.
+pub fn versions_tool(name: &str) -> Option<String> {
+    if REGISTRY.contains_key(name) {
+        backend(REGISTRY.get(name)?.first()?)?;
+        return Some(name.into());
+    }
+    let short = name.strip_prefix("core:")?;
+    REGISTRY
+        .get(short)?
+        .first()
+        .filter(|backend| backend.as_str() == name)?;
+    Some(short.into())
+}
+
+/// Route authenticated non-registry repositories directly, including private
+/// upstreams. Never discover that exception by retrying a mirror 404.
+pub fn listed_github_repository(package: &str) -> bool {
+    REGISTRY
+        .values()
+        .flatten()
+        .filter_map(|name| backend(name))
+        .any(|r| {
+            matches!(r.source, Source::GithubReleases | Source::GithubTags)
+                && r.package.eq_ignore_ascii_case(package)
+        })
+}
 fn backend(name: &str) -> Option<Resolution> {
     let (backend, package) = name.split_once(':')?;
     let mut extract = None;

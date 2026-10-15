@@ -23,7 +23,7 @@ async fn public_wave2_catalogs_and_index_digest() {
     )
     .unwrap();
     let http = Cached::new(cache.clone(), transport, 4).unwrap();
-    let client = Client::new(github, http.clone(), cache);
+    let client = Client::new(github, http.clone(), cache).with_versions_host(false);
     let packages = [
         (Source::Docker, "library/hello-world"),
         (Source::Oci, "ghcr.io/stefanprodan/charts/podinfo"),

@@ -28,6 +28,7 @@ pub struct Config {
     pub exclude: Vec<String>,
     pub prs: PullRequests,
     pub lockfiles: Lockfiles,
+    pub use_versions_host: bool,
     pub submodules: bool,
     pub ignore_authors: Vec<String>,
 }

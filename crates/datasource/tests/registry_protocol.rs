@@ -66,6 +66,7 @@ async fn client(transport: Arc<Steps>, dir: &std::path::Path) -> Client {
         .unwrap(),
         cache,
     )
+    .with_versions_host(false)
 }
 #[tokio::test]
 async fn lexical_pagination_is_complete_and_conditional_links_survive_304() {
@@ -519,6 +520,7 @@ async fn auth_client(steps: Arc<AuthSteps>, dir: &std::path::Path) -> Client {
         Cached::new(cache.clone(), steps, 4).unwrap(),
         cache,
     )
+    .with_versions_host(false)
 }
 
 #[tokio::test]
@@ -852,7 +854,8 @@ async fn manifest_heads_have_separate_validators_and_fall_back_only_when_needed(
             .unwrap(),
             Cached::new(cache.clone(), steps.clone(), 4).unwrap(),
             cache,
-        );
+        )
+        .with_versions_host(false);
         for _ in 0..3 {
             assert_eq!(
                 client

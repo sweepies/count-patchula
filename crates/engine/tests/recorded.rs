@@ -41,7 +41,9 @@ async fn public_multi_repo_report_cold_and_warm() {
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await
         .unwrap();
-    let engine = Engine::with_transport(&token, cache, 4, transport).unwrap();
+    let engine = Engine::with_transport(&token, cache, 4, transport)
+        .unwrap()
+        .with_versions_host(false);
     let options = || Options {
         repositories: vec!["jdx/usage".into(), "jdx/mr-boxington".into()],
         config: Some(config()),

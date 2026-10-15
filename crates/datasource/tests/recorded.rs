@@ -92,7 +92,7 @@ async fn public_sources_cold_and_conditional_warm() {
     )
     .unwrap();
     let http = Cached::new(cache.clone(), transport, 4).unwrap();
-    let client = Client::new(github.clone(), http.clone(), cache);
+    let client = Client::new(github.clone(), http.clone(), cache).with_versions_host(false);
     let packages = [
         (Source::Npm, "tiny-tarball"),
         (Source::Crates, "heck"),
