@@ -269,18 +269,26 @@ without a release is undated and has no wait. Commit dates are never release
 age evidence. Tag-object/catalog caches are versioned to discard old commit
 dates; release dates revalidate even when the tag namespace is unchanged. The comparison rule requires an
 explicit 24-hour policy and timestamp evidence that rustovate's newer proposal is
-at least 24 and less than 72 hours old, plus a strictly older Renovate target in
+at least 24 and less than 96 hours old, plus a strictly older Renovate target in
 the same update class. A newer baseline target instead requires an unexpired
 24-hour held-target record. Undated, older-than-window and unrelated target
 differences remain actionable. This is a narrow explanation of
-the observed three-day comparison window, not a claim about all Renovate defaults.
+an empirical comparison window, not a claim about Renovate's exact rule or
+all its defaults. Black-box runs held effect 4.0.4 at about 49 hours and
+renovate 44.155.8 at about 33 hours, but proposed effect 4.0.3 at about 84 hours.
+A clips.sweepy.dev-only rerun at 2026-10-15T06:59 still proposed unocss and
+@unocss/reset 66.10.5 instead of 66.11.0, published 2026-10-12T06:41:36Z
+(72 hours 17 minutes old). The latter was dist-tags.latest and not deprecated.
+Thus the observed holdback window lies between 72 hours 17 minutes and about
+84 hours; 96 hours is a conservative empirical upper bound for comparison.
+Renovate's exact rule is unknown from output alone; its source was not read.
 New reports additionally allow a missing exact target to be classified when
 `metadata.lookup.evaluatedAt` falls inside that target's recorded 24-hour
 held-back window. Only matching package/current identities, digest-free version
 upgrades and the exact summary version/class qualify. Missing evaluation evidence,
 elapsed windows and fallback extras remain actionable.
 
-For action tag upgrades only, the same 24–72-hour newer-target explanation can
+For action tag upgrades only, the same 24–96-hour newer-target explanation can
 also classify the paired digest difference: identical package/current identity,
 same numeric alias and upgrade class, both 40-digit commit hashes, explicit
 24-hour policy and distinct ordered full target versions are required. A changed

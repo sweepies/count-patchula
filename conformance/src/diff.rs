@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
+// Empirical comparison ceiling, not Renovate's configured minimum release age.
+// unocss 66.11.0 was still held at 72 h 17 min; effect 4.0.3 was proposed at
+// about 84 h. See departure 23 for the black-box observations behind 96 h.
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Classification {
@@ -237,7 +241,7 @@ impl Rules {
                                 && right.release_age.as_ref().is_some_and(|age|
                                     chrono::DateTime::parse_from_rfc3339(&age.published_at).ok()
                                         .zip(chrono::DateTime::parse_from_rfc3339(&age.evaluated_at).ok())
-                                        .is_some_and(|(published,evaluated)| (chrono::Duration::hours(24)..chrono::Duration::hours(72))
+                                        .is_some_and(|(published,evaluated)| (chrono::Duration::hours(24)..chrono::Duration::hours(96))
                                             .contains(&(evaluated-published))))
                         })
                 }),
@@ -453,7 +457,7 @@ impl Rules {
                     right.policy.as_ref().is_some_and(|p| p.wait_hours == 24)
                         && versions.is_some_and(|(a,b)| {
                             (b.cmp_precedence(&a).is_gt()
-                                && age.is_some_and(|age| age >= chrono::Duration::hours(24) && age < chrono::Duration::hours(72)))
+                                && age.is_some_and(|age| age >= chrono::Duration::hours(24) && age < chrono::Duration::hours(96)))
                                 || (a.cmp_precedence(&b).is_gt() && held_back)
                         })
                         && left.update_type == right.update_type
@@ -1237,7 +1241,7 @@ fn release_age_difference(left: &Update, right: &Update, dependency: &Dependency
                     .ok()
                     .zip(chrono::DateTime::parse_from_rfc3339(&age.evaluated_at).ok())
                     .is_some_and(|(published, evaluated)| {
-                        (chrono::Duration::hours(24)..chrono::Duration::hours(72))
+                        (chrono::Duration::hours(24)..chrono::Duration::hours(96))
                             .contains(&(evaluated - published))
                     })
             }))

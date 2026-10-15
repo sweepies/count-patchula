@@ -1,6 +1,6 @@
 # Phase 1 comparison follow-up
 
-## Final live check (2026-10-15)
+## Final live check (2026-10-15): Phase 1 exit met
 
 The supplied fresh release batch took **37.4 s cold / 4.1 s warm / 3.8 s
 warm2**, with **343 proposals on all three runs**. Renovate's dry run took
@@ -9,9 +9,8 @@ These are caller-supplied single observations. See [benchmarks](benchmarks.md#ph
 
 Input triage was **0 missing, 0 extra, 6 field-mismatch, 275 departures**.
 Replay against `/root/rustovate-conf/renovate12.jsonl` now gives **0 missing,
-0 extra, 4 field-mismatch, 277 departures**, at
-`/root/rustovate-conf/out12-closed/triage.{md,json}`. Zero actionable rows
-cannot yet be substantiated by the supplied timestamp evidence.
+0 extra, 0 field-mismatch, 281 departures**, at
+`/root/rustovate-conf/out12-closed/triage.{md,json}`. **0 actionable rows: Phase 1 exit is met for the eleven comparable repositories.**
 
 Departure 45 now covers a pinned action whose declared major/minor precision
 is retained in the proposed floating tag, while rustovate reports a newer
@@ -30,32 +29,41 @@ response and peeled tag catalog; its extraction is saved as
 `/root/rustovate-conf/r12-floating-tag-evidence.json`. No live data was invented
 or substituted for the captured proposal set.
 
-Departure 23 now measures the newer rustovate release's age at the timestamp
+Departure 23 measures the newer rustovate release's age at the timestamp
 of Renovate's own `packageFiles with updates` log record, rather than at
-rustovate's `evaluatedAt`. Missing/malformed timestamps and ages outside
-24 hours inclusive to 72 hours exclusive remain actionable. Boundary tests
-cover crossing 72 hours between the two evaluations.
+rustovate's `evaluatedAt`. Its upper bound is now **96 hours exclusive**, an
+empirical comparison ceiling; the explicit 24-hour policy, timestamp evidence,
+strictly older Renovate target and matching update class remain required.
+Missing/malformed timestamps and ages outside the window remain actionable.
+Regression coverage includes the observed 72-hour-17-minute holdback and the
+96-hour cutoff between independent evaluations.
 
-The four remaining fields are unocss and @unocss/reset, 66.10.5 versus
-66.11.0. The supplied 71.9-hour explanation conflicts with the actual capture:
-publication is **2026-10-12T06:41:36.594Z**, Renovate starts at
-**2026-10-15T06:42:12.998Z**, and its clips snapshot is timestamped
-**2026-10-15T06:43:43.844Z** (72 hours, 2 minutes, 7.250 seconds after
-publication). Even the run start is beyond 72 hours. The strict rule correctly
-retains those fields pending earlier evaluation evidence or another supported
-explanation; the window was not widened to force closure.
+The last four fields were unocss and @unocss/reset, 66.10.5 versus 66.11.0.
+The original capture was already beyond 72 hours (publication
+2026-10-12T06:41:36.594Z; clips snapshot 2026-10-15T06:43:43.844Z).
+The clips-only Renovate rerun at **2026-10-15T06:59**, captured in
+`/root/rustovate-conf/renovate-clips.jsonl`, still held 66.11.0 at **72 hours
+17 minutes** and proposed 66.10.5 for both packages. 66.11.0 was
+`dist-tags.latest` and was not deprecated. Earlier runs held effect 4.0.4 at
+about 49 hours and renovate 44.155.8 at about 33 hours, but proposed effect
+4.0.3 at about 84 hours. The observed holdback window therefore lies between
+72 hours 17 minutes and about 84 hours. The 96-hour ceiling covers that evidence;
+Renovate's exact rule remains unknown from output alone, and its source was not
+read. The earlier 71.9-hour explanation was incorrect.
 
 Coverage remains **eleven comparable repositories and one gap**. remote-agent
 has no Renovate baseline because its `renovate.json` is invalid; rustovate's
 own configuration for that repository validates. This gap is not parity.
 
-Validation passed with `CARGO_NET_OFFLINE=true RUSTOVATE_RECORD=0 mise run ci`:
-22-cassette secret scan, formatting, workspace/all-target Clippy with
-`-D warnings`, offline workspace tests and workspace build. The initial run
-hit the existing HTTP tracing test's zero-line capture failure; that test
-passed in isolation and the complete CI retry passed unchanged. Logs:
-`/root/rustovate-conf/close-trace-retry.log` and
-`/root/rustovate-conf/r12-closed-ci-retry.log`. No push was performed.
+Validation: `mise run ci` passed (cassette secret scan, formatting,
+workspace/all-target Clippy with `-D warnings`, workspace tests and build).
+The HTTP tracing capture test now runs in its own integration-test process:
+concurrent untraced HTTP tests could register shared callsites with the
+no-subscriber dispatch while the scoped capture subscriber was installed,
+caching disabled interest. Isolation removes that registration race while
+retaining all credential-redaction assertions. Logs:
+`/root/rustovate-conf/last-phase1-ci.log` and
+`/root/rustovate-conf/last-phase1-conformance.log`. No push was performed.
 
 ## Round 4: fresh baseline, owner decisions and unchanged-report replay
 

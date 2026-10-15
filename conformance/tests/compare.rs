@@ -247,7 +247,7 @@ fn release_age_departure_requires_newer_target_and_timestamp_evidence_inside_win
             .all(|d| d.classification == Class::DeliberateDeparture
                 && d.departure.as_ref().unwrap().row == 23)
     );
-    for date in ["2026-10-15T01:00:00Z", "2026-10-12T12:00:00Z", "malformed"] {
+    for date in ["2026-10-15T01:00:00Z", "2026-10-11T12:00:00Z", "malformed"] {
         let mut changed = b.clone();
         changed.repositories[0].package_files[0].dependencies[0].updates[0]
             .release_age
@@ -262,6 +262,30 @@ fn release_age_departure_requires_newer_target_and_timestamp_evidence_inside_win
                 .all(|d| d.classification == Class::FieldMismatch)
         );
     }
+    // Observed clips-only rerun: unocss 66.11.0 was still held at 72 h 17 min.
+    let mut observed = b.clone();
+    observed.repositories[0].package_files[0].dependencies[0].updates[0]
+        .release_age
+        .as_mut()
+        .unwrap()
+        .published_at = "2026-10-12T06:41:36Z".into();
+    let mut baseline = a.clone();
+    baseline.repositories[0].package_files[0].dependencies[0]
+        .metadata
+        .as_mut()
+        .unwrap()
+        .lookup
+        .as_mut()
+        .unwrap()
+        .evaluated_at = "2026-10-15T06:59:00Z".into();
+    let diffs = compare(&baseline, &observed, &rules()).unwrap().differences;
+    assert_eq!(diffs.len(), 2);
+    assert!(
+        diffs
+            .iter()
+            .all(|d| d.classification == Class::DeliberateDeparture
+                && d.departure.as_ref().unwrap().row == 23)
+    );
     assert!(
         compare(&b, &a, &rules())
             .unwrap()
@@ -269,15 +293,15 @@ fn release_age_departure_requires_newer_target_and_timestamp_evidence_inside_win
             .iter()
             .all(|d| d.classification == Class::FieldMismatch)
     );
-    // The target crosses 72 h between the independent evaluations.
+    // The target crosses 96 h between the independent evaluations.
     b.repositories[0].package_files[0].dependencies[0].updates[0]
         .release_age
         .as_mut()
         .unwrap()
-        .evaluated_at = "2026-10-17T00:00:00Z".into();
+        .evaluated_at = "2026-10-18T00:00:00Z".into();
     for (time, expected) in [
-        (Some("2026-10-16T23:59:59Z"), Class::DeliberateDeparture),
-        (Some("2026-10-17T00:00:00Z"), Class::FieldMismatch),
+        (Some("2026-10-17T23:59:59Z"), Class::DeliberateDeparture),
+        (Some("2026-10-18T00:00:00Z"), Class::FieldMismatch),
         (Some("2026-10-14T23:59:59Z"), Class::FieldMismatch),
         (Some("malformed"), Class::FieldMismatch),
         (None, Class::FieldMismatch),

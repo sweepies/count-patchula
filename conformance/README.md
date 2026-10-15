@@ -142,8 +142,8 @@ report-only. Input or execution failures exit nonzero.
 are mapped to [departure 7](../docs/departures.md#departure-7). An extra pin must
 keep the current value/version, add a digest to an unpinned dependency and have
 no group. Release-age differences map to [departure 23](../docs/departures.md#departure-23)
-only when timestamp evidence places a newer rustovate target between 24 and 72
-hours old at Renovate's own package-snapshot log timestamp, under an explicit
+only when timestamp evidence places a newer rustovate target at least 24 and less than 96
+hours old (an empirical ceiling, not Renovate's exact rule) at Renovate's own package-snapshot log timestamp, under an explicit
 24-hour policy, with an older Renovate proposal in
 the same class. Exact npm major range edits map narrowly to
 [departure 25](../docs/departures.md#departure-25) with identical resolved targets
