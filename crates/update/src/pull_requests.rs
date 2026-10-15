@@ -502,7 +502,8 @@ impl Lifecycle {
             if releases.len() >= 8 || text.len() > BODY_LIMIT - 6000 {
                 break;
             }
-            if !change.release_notes
+            if change.kind == "pin"
+                || !change.release_notes
                 || !matches!(change.source.as_str(), "github-tags" | "github-releases")
             {
                 continue;
@@ -528,7 +529,9 @@ impl Lifecycle {
             .changes
             .iter()
             .filter(|c| {
-                c.release_notes && !matches!(c.source.as_str(), "github-tags" | "github-releases")
+                c.kind != "pin"
+                    && c.release_notes
+                    && !matches!(c.source.as_str(), "github-tags" | "github-releases")
             })
             .map(|c| cell(&c.package))
             .take(8)

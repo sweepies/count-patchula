@@ -1784,6 +1784,7 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_and_blocked_pin_is_indepen
         .find(|p| p.action.branch == "rustovate/pin-dependencies")
         .unwrap();
     assert_eq!(pins.changes.len(), 5);
+    assert_eq!(pins.action.message, "chore(deps): pin dependencies");
     assert!(!pins.contents.contains_key("package.json"));
     assert_eq!(
         plans
@@ -1792,6 +1793,31 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_and_blocked_pin_is_indepen
             .count(),
         1
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn pin_title_respects_prefix_and_pin_rows_never_request_release_notes() {
+    let (mut config, mut repo, deps, snapshot) = setup("22.0.0", false);
+    config.defaults.commit_prefix = "build(deps):".into();
+    repo.package_files[0].dependencies[0].updates[0].update_type = "pin".into();
+    let mut plans = plan(&repo, &config, &deps, &snapshot, false, chrono::Utc::now()).unwrap();
+    assert_eq!(plans[0].action.message, "build(deps): pin dependencies");
+    plans[0].changes[0].source = "github-tags".into();
+    plans[0].changes[0].package = "actions/checkout".into();
+    plans[0].changes[0].release_notes = true;
+    let mut other = plans[0].changes[0].clone();
+    other.source = "docker".into();
+    plans[0].changes.push(other);
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    pr_cycle(&github, &repo, &config, &mut plans, &snapshot).await;
+    let s = server.0.lock().unwrap();
+    assert_eq!(s.prs[&1]["title"], "build(deps): pin dependencies");
+    let text = s.prs[&1]["body"].as_str().unwrap();
+    assert!(text.contains("| Package | Change | Type | File |"));
+    assert!(text.contains("| pin |"));
+    assert!(!text.to_lowercase().contains("release notes"));
+    assert!(!s.requests.iter().any(|(_, p)| p.contains("/releases/")));
 }
 
 #[tokio::test(start_paused = true)]

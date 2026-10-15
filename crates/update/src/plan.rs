@@ -240,10 +240,14 @@ pub fn plan(
             reason = Some("group has conflicting commitPrefix policies".into());
         }
         let prefix = prefixes.first().unwrap_or(&config.defaults.commit_prefix);
-        let message = format!(
-            "{prefix} update {}",
-            titles.into_iter().collect::<Vec<_>>().join(", ")
-        );
+        let message = if items.iter().all(|item| item.update.update_type == "pin") {
+            format!("{prefix} pin dependencies")
+        } else {
+            format!(
+                "{prefix} update {}",
+                titles.into_iter().collect::<Vec<_>>().join(", ")
+            )
+        };
         let mut contents = BTreeMap::new();
         let mut files = Vec::new();
         for (path, edits) in changes {
