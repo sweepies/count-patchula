@@ -22,7 +22,18 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
             package: name.to_ascii_lowercase().replace(['_', '.'], "-"),
             kind: DependencyKind::Production,
             current: current.into(),
-            resolved: None,
+            resolved: current
+                .strip_prefix("==")
+                .filter(|v| {
+                    !v.starts_with('=')
+                        && !v.contains(['*', ','])
+                        && rustovate_versioning::Versioning::parse(
+                            &rustovate_versioning::Ecosystem::Pep440,
+                            v,
+                        )
+                        .is_ok()
+                })
+                .map(str::to_owned),
             digest: None,
             source: Source::Pypi,
             scheme: Scheme::Pep440,

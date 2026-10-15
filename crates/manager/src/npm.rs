@@ -110,8 +110,27 @@ pub(super) fn extract(
             extract: None,
         });
     }
+    if let Some(version) = object
+        .get_object("engines")
+        .and_then(|engines| engines.get_string("node"))
+    {
+        deps.push(Dependency {
+            manager,
+            file: path.into(),
+            location: Location::new(text, version.start(), version.end(), "/engines/node".into()),
+            name: "node".into(),
+            package: "node".into(),
+            kind: DependencyKind::Toolchain,
+            current: version.value.to_string(),
+            resolved: None,
+            digest: None,
+            source: Source::Mise,
+            scheme: Scheme::Semver,
+            extract: None,
+        });
+    }
     for dep in &mut deps {
-        if dep.resolved.is_none() {
+        if dep.resolved.is_none() && dep.kind != DependencyKind::Toolchain {
             dep.resolved = resolved(path, &dep.name, files)?;
         }
     }

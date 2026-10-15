@@ -37,7 +37,16 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
                 kind: DependencyKind::Production,
                 current: version.as_str().into(),
                 resolved: Some(version.as_str().into()),
-                digest: None,
+                digest: version
+                    .as_str()
+                    .rsplit_once('-')
+                    .and_then(|(prefix, hash)| {
+                        (prefix.rsplit('-').next().is_some_and(|time| {
+                            time.len() == 14 && time.bytes().all(|b| b.is_ascii_digit())
+                        }) && hash.len() == 12
+                            && hash.bytes().all(|b| b.is_ascii_hexdigit()))
+                        .then(|| hash.to_owned())
+                    }),
                 source: Source::Go,
                 scheme: Scheme::Go,
                 extract: None,

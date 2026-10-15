@@ -29,6 +29,21 @@ pub(super) fn extract(
         return Ok(out);
     }
     for terraform in body.get_blocks("terraform") {
+        if let Some(version) = terraform.body.get_attribute("required_version") {
+            add(
+                path,
+                text,
+                "hashicorp/terraform",
+                "hashicorp/terraform",
+                &version.value,
+                DependencyKind::Toolchain,
+                &mut out,
+            );
+            if let Some(dep) = out.last_mut().filter(|d| d.name == "hashicorp/terraform") {
+                dep.source = Source::GithubReleases;
+                dep.extract = Some("^v?(?<version>.*)$".into());
+            }
+        }
         for providers in terraform.body.get_blocks("required_providers") {
             for attribute in providers.body.attributes() {
                 let name = attribute.key.as_str();
@@ -95,7 +110,7 @@ pub(super) fn extract(
             let Some(package) = provider
                 .labels
                 .first()
-                .map(|v| v.as_str().trim_start_matches("registry.terraform.io/"))
+                .map(|v| provider_package(v.as_str()))
             else {
                 continue;
             };
@@ -107,8 +122,7 @@ pub(super) fn extract(
                 continue;
             };
             for dep in &mut out {
-                if dep.kind == DependencyKind::Provider
-                    && dep.package.trim_start_matches("registry.terraform.io/") == package
+                if dep.kind == DependencyKind::Provider && provider_package(&dep.package) == package
                 {
                     dep.resolved = Some(version.into());
                 }
@@ -148,7 +162,7 @@ fn add(
             format!("/{}/{name}/version", word(&kind)),
         ),
         name: name.into(),
-        package: package.trim_start_matches("registry.terraform.io/").into(),
+        package: provider_package(package).into(),
         kind,
         current: current.into(),
         resolved: None,
@@ -157,4 +171,11 @@ fn add(
         scheme: Scheme::Hashicorp,
         extract: None,
     });
+}
+
+fn provider_package(package: &str) -> &str {
+    package
+        .strip_prefix("registry.terraform.io/")
+        .or_else(|| package.strip_prefix("registry.opentofu.org/"))
+        .unwrap_or(package)
 }

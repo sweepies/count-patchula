@@ -114,8 +114,78 @@ fn steps_extract(
                 used,
                 out,
             )?;
+            setup_input(path, text, reference, step, &format!("{pointer}/{i}"), out)?;
         }
     }
+    Ok(())
+}
+
+fn setup_input(
+    path: &str,
+    text: &str,
+    reference: &str,
+    step: &Value,
+    pointer: &str,
+    out: &mut Vec<Dependency>,
+) -> Result<(), String> {
+    let action = reference.split('@').next().unwrap_or(reference);
+    let (key, name, package, extract) = match action {
+        "actions/setup-node" => (
+            "node-version",
+            "node",
+            "actions/node-versions",
+            Some(r"^v?(?<version>\d+\.\d+\.\d+)(?:-|$)"),
+        ),
+        "actions/setup-go" => (
+            "go-version",
+            "go",
+            "actions/go-versions",
+            Some(r"^v?(?<version>\d+\.\d+\.\d+)(?:-|$)"),
+        ),
+        "golangci/golangci-lint-action" => (
+            "version",
+            "golangci/golangci-lint",
+            "golangci/golangci-lint",
+            None,
+        ),
+        "goreleaser/goreleaser-action" => (
+            "version",
+            "goreleaser/goreleaser",
+            "goreleaser/goreleaser",
+            None,
+        ),
+        _ => return Ok(()),
+    };
+    let Some(value) = step.get("with").and_then(|v| v.get(key)).and_then(|v| {
+        v.as_str()
+            .map(str::to_owned)
+            .or_else(|| v.as_u64().map(|n| n.to_string()))
+    }) else {
+        return Ok(());
+    };
+    if value.contains("${{") {
+        return Ok(());
+    }
+    let pointer = format!("/0{pointer}/with/{key}");
+    let locations = crate::yaml_locations::parse(text)?;
+    let location = locations
+        .get(&pointer)
+        .cloned()
+        .ok_or_else(|| format!("cannot locate setup input {pointer}"))?;
+    out.push(Dependency {
+        manager: Manager::GithubActions,
+        file: path.into(),
+        location,
+        name: name.into(),
+        package: package.into(),
+        kind: DependencyKind::Tool,
+        current: value.clone(),
+        resolved: (value != "latest").then_some(value),
+        digest: None,
+        source: Source::GithubReleases,
+        scheme: Scheme::Loose,
+        extract: extract.map(str::to_owned),
+    });
     Ok(())
 }
 #[allow(clippy::too_many_arguments)]
