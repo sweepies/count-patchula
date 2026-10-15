@@ -69,6 +69,76 @@ struct Effective<'a> {
     permitted: Option<&'a Filter>,
 }
 impl Evaluator {
+    /// Effective class exclusions, including digest policy, are report evidence.
+    pub fn disabled_updates(&self, dep: &Dependency) -> Vec<String> {
+        [
+            Update::Major,
+            Update::Minor,
+            Update::Patch,
+            Update::Pin,
+            Update::Digest,
+        ]
+        .into_iter()
+        .filter(|kind| {
+            let effective = self.effective(dep, *kind);
+            self.ignored(dep)
+                || !effective.policy.active
+                || (*kind == Update::Digest && !effective.digest)
+        })
+        .map(|kind| rustovate_manager::word(&kind))
+        .collect()
+    }
+    pub fn lookup_evidence(
+        &self,
+        dep: &Dependency,
+        catalog: Option<&Catalog>,
+        now: DateTime<Utc>,
+    ) -> rustovate_report::LookupEvidence {
+        let scheme = scheme(dep).ok();
+        let current = dep.resolved.as_deref().unwrap_or(&dep.current);
+        let baseline = scheme.and_then(|s| s.parse(current).ok());
+        let extract = dep.extract.as_ref().and_then(|v| Regex::new(v).ok());
+        let mut rejected = Vec::new();
+        for version in catalog.into_iter().flat_map(|c| &c.versions) {
+            if !version.deprecated && !version.yanked {
+                continue;
+            }
+            let value = if let Some(extract) = &extract {
+                let Some(value) = extract
+                    .captures(&version.version)
+                    .and_then(|c| c.name("version"))
+                else {
+                    continue;
+                };
+                value.as_str()
+            } else {
+                &version.version
+            };
+            if let Some(scheme) = scheme
+                && let Some(baseline) = &baseline
+                && scheme
+                    .parse(value)
+                    .is_ok_and(|v| scheme.order(&v, baseline).is_gt())
+            {
+                rejected.push(rustovate_report::RejectedVersion {
+                    version: value.into(),
+                    reason: if version.yanked {
+                        "yanked"
+                    } else {
+                        "deprecated"
+                    }
+                    .into(),
+                });
+            }
+        }
+        rejected.sort_by(|a, b| a.version.cmp(&b.version).then(a.reason.cmp(&b.reason)));
+        rejected.dedup();
+        rustovate_report::LookupEvidence {
+            evaluated_at: timestamp(now),
+            disabled_updates: self.disabled_updates(dep),
+            rejected,
+        }
+    }
     pub fn new(config: &Config) -> Result<Self> {
         let rules = config
             .rules

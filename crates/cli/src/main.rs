@@ -144,9 +144,26 @@ async fn lookup(app: &App, options: &cli::Lookup) -> Result<u8, (u8, miette::Rep
         .map_err(|e| (1, miette::miette!("{e}")))?;
     let transport =
         Arc::new(rustovate_http::Network::new().map_err(|e| (1, miette::miette!("{e}")))?);
-    let engine =
+    let mut engine =
         Engine::with_http_options(&token, cache, options.concurrency, transport, http_options)
             .map_err(|e| (1, miette::miette!("{e}")))?;
+    match (
+        std::env::var("RUSTOVATE_DOCKERHUB_USERNAME").ok(),
+        std::env::var("RUSTOVATE_DOCKERHUB_TOKEN").ok(),
+    ) {
+        (None, None) => {}
+        (Some(username), Some(token)) if !username.is_empty() && !token.is_empty() => {
+            engine = engine.with_dockerhub_credentials(username, token);
+        }
+        _ => {
+            return Err((
+                2,
+                miette::miette!(
+                    "set both RUSTOVATE_DOCKERHUB_USERNAME and RUSTOVATE_DOCKERHUB_TOKEN to nonempty values"
+                ),
+            ));
+        }
+    }
     let report = engine
         .lookup(Options {
             repositories: options.repositories.clone(),

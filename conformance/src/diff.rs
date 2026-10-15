@@ -26,6 +26,8 @@ pub struct Difference {
     pub renovate: Value,
     pub rustovate: Value,
     pub departure: Option<Departure>,
+    /// Rate-limited lookup evidence is independent of the comparison class.
+    pub rate_limited: bool,
     #[serde(skip)]
     target_version: Option<String>,
     #[serde(skip)]
@@ -73,6 +75,11 @@ enum Predicate {
     NpmRangePin,
     PatchAlternative,
     GoModulePath,
+    CargoManifestNoop,
+    DisabledUpdate,
+    RejectedRelease,
+    ObservedResolution,
+    ReleaseAgeMissing,
 }
 
 impl Rules {
@@ -92,6 +99,20 @@ impl Rules {
                 || !matches!(
                     (&rule.predicate, rule.classification, rule.field.as_str()),
                     (
+                        Predicate::DisabledUpdate
+                            | Predicate::RejectedRelease
+                            | Predicate::ReleaseAgeMissing,
+                        Classification::RustovateMissing,
+                        "updates"
+                    ) | (
+                        Predicate::ObservedResolution,
+                        Classification::FieldMismatch,
+                        "current.version"
+                    ) | (
+                        Predicate::CargoManifestNoop,
+                        Classification::RustovateMissing,
+                        "updates"
+                    ) | (
                         Predicate::DigestAdded,
                         Classification::FieldMismatch,
                         "updates.newDigest"
@@ -154,6 +175,73 @@ impl Rules {
                 continue;
             }
             let matches = match rule.predicate {
+                Predicate::DisabledUpdate | Predicate::RejectedRelease | Predicate::ReleaseAgeMissing => dependency.is_some_and(|left| {
+                    left.package == rustovate.package && left.current.value == rustovate.current.value
+                        && rustovate.metadata.as_ref().and_then(|m| m.lookup.as_ref()).is_some_and(|evidence| {
+                            let evaluated = chrono::DateTime::parse_from_rfc3339(&evidence.evaluated_at).ok();
+                            evaluated.is_some() && serde_json::from_value::<Update>(difference.renovate.clone()).is_ok_and(|u| {
+                                match rule.predicate {
+                                    Predicate::DisabledUpdate => evidence.disabled_updates.contains(&u.update_type),
+                                    Predicate::RejectedRelease => {
+                                        u.new_digest.is_none() && matches!(u.update_type.as_str(), "major" | "minor" | "patch")
+                                            && u.new_version.as_deref().is_some_and(|target| evidence.rejected.iter().any(|v|
+                                                v.version == target && matches!(v.reason.as_str(), "deprecated" | "yanked")))
+                                            && matches!(rustovate.metadata.as_ref().map(|m| m.source.as_str()), Some("npm" | "crates" | "pypi"))
+                                    },
+                                    Predicate::ReleaseAgeMissing => {
+                                        u.new_digest.is_none() && matches!(u.update_type.as_str(), "major" | "minor" | "patch")
+                                            && rustovate.metadata.as_ref().is_some_and(|m| m.held_back.iter().any(|held|
+                                                held.update_type == u.update_type && u.new_version.as_deref() == Some(&held.version)
+                                                    && chrono::DateTime::parse_from_rfc3339(&held.published_at).ok()
+                                                        .zip(chrono::DateTime::parse_from_rfc3339(&held.eligible_at).ok())
+                                                        .zip(evaluated).is_some_and(|((published, eligible), evaluated)|
+                                                            eligible - published == chrono::Duration::hours(24) && published <= evaluated && evaluated < eligible)))
+                                    },
+                                    _ => false,
+                                }
+                            })
+                        })
+                }),
+                Predicate::ObservedResolution => dependency.is_some_and(|left| {
+                    left.package == rustovate.package && left.current.value == rustovate.current.value
+                        && left.current.digest == rustovate.current.digest
+                        && rustovate.metadata.as_ref().and_then(|m| m.resolution.as_ref()).is_some_and(|resolution| {
+                            rustovate.current.version.as_deref() == Some(&resolution.version)
+                                && left.current.version.as_deref().and_then(parse_version)
+                                    .zip(parse_version(&resolution.version)).is_some_and(|(new, old)| new > old)
+                                && match resolution.kind.as_str() {
+                                    "lockfile" => rustovate.manager == "npm" && rustovate.metadata.as_ref().is_some_and(|m| m.source == "npm")
+                                        && left.current.value.as_deref().is_some_and(|range| semver::VersionReq::parse(range).is_ok_and(|r|
+                                            parse_version(&resolution.version).is_some_and(|v| r.matches(&v))
+                                                && left.current.version.as_deref().and_then(parse_version).is_some_and(|v| r.matches(&v)))),
+                                    "pinned-commit" => rustovate.manager == "github-actions"
+                                        && rustovate.metadata.as_ref().is_some_and(|m| m.source == "github-tags")
+                                        && rustovate.current.digest.as_ref().is_some_and(|sha| sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()))
+                                        && left.current.value.as_deref().is_some_and(|alias| {
+                                            let alias = alias.trim_start_matches('v');
+                                            !alias.is_empty() && alias.split('.').count() < 3 && alias.split('.').all(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
+                                                && resolution.version.trim_start_matches('v').starts_with(&format!("{alias}."))
+                                                && left.current.version.as_deref().is_some_and(|v| v.trim_start_matches('v').starts_with(&format!("{alias}.")))
+                                        }),
+                                    _ => false,
+                                }
+                        })
+                }),
+                Predicate::CargoManifestNoop => dependency.is_some_and(|left| {
+                    left.manager == "cargo" && left.package == rustovate.package
+                        && left.current.value == rustovate.current.value
+                        && left.metadata.as_ref().is_some_and(|m| m.source == "crate")
+                        && rustovate.metadata.as_ref().is_some_and(|m| m.source == "crates")
+                        && serde_json::from_value::<Update>(difference.renovate.clone()).is_ok_and(|u| {
+                            matches!(u.update_type.as_str(), "major" | "minor" | "patch")
+                                && u.new_value == left.current.value && u.new_digest.is_none()
+                                && left.current.value.as_deref().is_some_and(|range| {
+                                    !range.starts_with('=') && semver::VersionReq::parse(range).is_ok_and(|r|
+                                        u.new_version.as_deref().and_then(parse_version).is_some_and(|v|
+                                            r.matches(&v) && v.pre.is_empty()))
+                                })
+                        })
+                }),
                 Predicate::GoModulePath => dependency.is_some_and(|left| {
                     left.manager == "go" && left.package == rustovate.package
                         && left.current.value == rustovate.current.value
@@ -414,6 +502,10 @@ impl Triage {
             out.push_str(&format!("- {}: {count}\n", label(class)));
         }
         out.push_str("\nRepository coverage and normalized inputs are in the accompanying JSON. Departure links are relative to the repository root.\n\n");
+        out.push_str(&format!(
+            "- Rate-limited digest differences (included above): {}\n\n",
+            self.differences.iter().filter(|d| d.rate_limited).count()
+        ));
         for missing in &self.no_baseline {
             out.push_str(&format!(
                 "- No baseline: {} — {}\n",
@@ -516,6 +608,7 @@ fn difference(
         renovate: a,
         rustovate: b,
         departure: None,
+        rate_limited: false,
         target_version: None,
         paired: None,
     }
@@ -931,6 +1024,58 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
                     rules.classify(d, Some(left), right);
                 }
             }
+        }
+    }
+    for d in &mut differences {
+        if let Some(repo) = rustovate
+            .repositories
+            .iter()
+            .find(|r| r.repository == d.repository)
+            && let Some(dep) = repo
+                .package_files
+                .iter()
+                .find(|f| Some(&f.path) == d.package_file.as_ref())
+                .and_then(|f| {
+                    f.dependencies.iter().find(|dep| {
+                        Some(&dep.name) == d.dependency.as_ref()
+                            && Some(&dep.manager) == d.manager.as_ref()
+                    })
+                })
+        {
+            let digest_difference =
+                (d.field == "updates.newDigest" && d.rustovate.is_null() && !d.renovate.is_null())
+                    || (d.classification == Classification::RustovateMissing
+                        && d.field == "updates"
+                        && serde_json::from_value::<Update>(d.renovate.clone()).is_ok_and(|u| {
+                            matches!(u.update_type.as_str(), "digest" | "pin")
+                                && u.new_digest.is_some()
+                                && u.new_value == dep.current.value
+                        }));
+            let reference = if d.field == "updates.newDigest" {
+                d.paired
+                    .as_ref()
+                    .and_then(|(_, right)| right.new_value.as_ref().or(right.new_version.as_ref()))
+            } else {
+                dep.current.value.as_ref()
+            };
+            let rate_warning = reference.is_some_and(|reference| {
+                repo.warnings.iter().any(|w| {
+                    w.starts_with(&format!(
+                        "{}@{reference}: registry rate limit reached",
+                        dep.name
+                    )) || Some(reference) == dep.current.value.as_ref()
+                        && w.starts_with(&format!("{}: registry rate limit reached", dep.name))
+                })
+            });
+            d.rate_limited = digest_difference
+                && dep.metadata.as_ref().is_some_and(|m| {
+                    matches!(m.source.as_str(), "docker" | "oci")
+                        && (rate_warning
+                            || reference.is_some_and(|tag| {
+                                m.stale
+                                    .contains_key(&format!("digest:{}", tag.replace('+', "_")))
+                            }))
+                });
         }
     }
     normalizations.retain(|_, count| *count > 0);

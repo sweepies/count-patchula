@@ -130,6 +130,7 @@ fn setup_input(
 ) -> Result<(), String> {
     let action = reference.split('@').next().unwrap_or(reference);
     let (key, name, package, extract) = match action {
+        "oven-sh/setup-bun" => ("bun-version", "bun", "bun", None),
         "actions/setup-node" => (
             "node-version",
             "node",
@@ -182,8 +183,16 @@ fn setup_input(
         current: value.clone(),
         resolved: (value != "latest").then_some(value),
         digest: None,
-        source: Source::GithubReleases,
-        scheme: Scheme::Loose,
+        source: if action == "oven-sh/setup-bun" {
+            Source::Npm
+        } else {
+            Source::GithubReleases
+        },
+        scheme: if action == "oven-sh/setup-bun" {
+            Scheme::Semver
+        } else {
+            Scheme::Loose
+        },
         extract: extract.map(str::to_owned),
     });
     Ok(())

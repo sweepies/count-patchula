@@ -167,6 +167,31 @@ fn exact_preserve_nightly_and_deprecated_yanked_filters() {
             .all(|p| p.new_version.as_ref().unwrap().contains("nightly.") && p.group.is_none())
     );
 }
+
+#[test]
+fn lookup_evidence_records_rejected_versions_and_per_class_policy() {
+    let eval = Evaluator::new(&config("maccrae-infra")).unwrap();
+    let mut dep = dependency("plain");
+    let mut versions = catalog(&["0.9.0", "1.1.0", "1.2.0", "1.3.0"]);
+    versions.versions[0].deprecated = true;
+    versions.versions[1].deprecated = true;
+    versions.versions[2].yanked = true;
+    let evidence = eval.lookup_evidence(
+        &dep,
+        Some(&versions),
+        chrono::DateTime::parse_from_rfc3339("2026-10-15T00:00:00Z")
+            .unwrap()
+            .into(),
+    );
+    assert_eq!(evidence.rejected.len(), 2);
+    assert_eq!(evidence.rejected[0].version, "1.1.0");
+    assert_eq!(evidence.rejected[0].reason, "deprecated");
+    dep.manager = Manager::Kubernetes;
+    dep.source = Source::Docker;
+    dep.package = "postgres".into();
+    dep.file = "apps/notifuse/deployment-database.yaml".into();
+    assert_eq!(eval.disabled_updates(&dep), ["major"]);
+}
 #[test]
 fn rules_replace_lists_in_order_and_windows_are_reported() {
     let mut config = config("renovate-runner");

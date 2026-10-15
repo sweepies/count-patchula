@@ -79,6 +79,34 @@ pub struct DependencyMetadata {
     pub locations: Vec<Location>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub held_back: Vec<HeldBack>,
+    /// Registry cache provenance, present only after a rate-limited lookup.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub stale: std::collections::BTreeMap<String, i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lookup: Option<LookupEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<Resolution>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LookupEvidence {
+    pub evaluated_at: String,
+    pub disabled_updates: Vec<String>,
+    pub rejected: Vec<RejectedVersion>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RejectedVersion {
+    pub version: String,
+    pub reason: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Resolution {
+    /// declared, lockfile, pinned-commit, floating-ref, release-line or supported-range.
+    pub kind: String,
+    pub version: String,
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -259,6 +287,18 @@ pub fn normalize_dependencies(dependencies: Vec<Dependency>) -> Vec<Dependency> 
                 a.held_back.append(&mut b.held_back);
                 a.held_back.sort();
                 a.held_back.dedup();
+                a.stale.append(&mut b.stale);
+                if let (Some(a), Some(b)) = (&mut a.lookup, b.lookup) {
+                    a.disabled_updates
+                        .retain(|kind| b.disabled_updates.contains(kind));
+                    a.rejected.extend(b.rejected);
+                    a.rejected
+                        .sort_by(|a, b| (&a.version, &a.reason).cmp(&(&b.version, &b.reason)));
+                    a.rejected.dedup();
+                }
+                if a.resolution != b.resolution {
+                    a.resolution = None;
+                }
             }
         } else {
             group.push(dep);

@@ -2,6 +2,46 @@
   "schemaVersion": 1,
   "rules": [
     {
+      "id": "explicit-disabled-class",
+      "departure": 37,
+      "classification": "rustovate-missing",
+      "managers": ["npm", "mise", "cargo", "go", "regex", "github-actions", "kubernetes", "flux", "terraform"],
+      "field": "updates",
+      "predicate": "disabled-update"
+    },
+    {
+      "id": "rejected-release",
+      "departure": 38,
+      "classification": "rustovate-missing",
+      "managers": ["npm", "cargo", "requirements"],
+      "field": "updates",
+      "predicate": "rejected-release"
+    },
+    {
+      "id": "observed-current-resolution",
+      "departure": 39,
+      "classification": "field-mismatch",
+      "managers": ["npm", "github-actions"],
+      "field": "current.version",
+      "predicate": "observed-resolution"
+    },
+    {
+      "id": "release-age-missing-target",
+      "departure": 23,
+      "classification": "rustovate-missing",
+      "managers": ["npm", "mise", "cargo", "go", "regex", "github-actions", "flux", "terraform", "requirements"],
+      "field": "updates",
+      "predicate": "release-age-missing"
+    },
+    {
+      "id": "cargo-manifest-noop",
+      "departure": 35,
+      "classification": "rustovate-missing",
+      "managers": ["cargo"],
+      "field": "updates",
+      "predicate": "cargo-manifest-noop"
+    },
+    {
       "id": "go-major-module-path",
       "departure": 34,
       "classification": "rustovate-missing",

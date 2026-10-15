@@ -79,6 +79,10 @@ struct LookupHint {
 }
 
 impl Engine {
+    pub fn with_dockerhub_credentials(mut self, username: String, token: String) -> Self {
+        self.sources = self.sources.with_dockerhub_credentials(username, token);
+        self
+    }
     pub fn with_transport(
         token: &str,
         cache: Cache,
@@ -467,6 +471,78 @@ impl Engine {
                 }
                 proposals.sort();
                 proposals.dedup();
+                let stale = if matches!(dep.source, Source::Docker | Source::Oci) {
+                    let mut stale = self.sources.registry_stale(&dep.package).await;
+                    stale.retain(|key, _| {
+                        key == "catalog"
+                            || key.strip_prefix("digest:").is_some_and(|tag| {
+                                tag == dep.current.replace('+', "_")
+                                    || proposals.iter().any(|p| {
+                                        p.new_version
+                                            .as_ref()
+                                            .is_some_and(|v| v.replace('+', "_") == tag)
+                                    })
+                            })
+                    });
+                    stale
+                } else {
+                    BTreeMap::new()
+                };
+                if !stale.is_empty() {
+                    repo.report.warnings.push(format!(
+                        "{}: stale cached registry lookup after rate limiting ({})",
+                        dep.name,
+                        stale.keys().cloned().collect::<Vec<_>>().join(", ")
+                    ));
+                }
+                let catalog = catalogs
+                    .get(&(word(&dep.source), dep.package.clone()))
+                    .and_then(|c| c.as_ref().ok());
+                if dep.manager == Manager::GithubActions
+                    && dep.source == Source::GithubTags
+                    && catalog.is_some_and(|c| c.versions.is_empty())
+                {
+                    repo.report.warnings.push(format!(
+                        "{}: registry returned an empty tag catalog; version lookup is unavailable",
+                        dep.name
+                    ));
+                }
+                let resolved =
+                    catalog.and_then(|c| rustovate_lookup::resolved_current_version(dep, c));
+                let resolution = resolved.as_ref().or(dep.resolved.as_ref()).map(|version| {
+                    let kind = if dep.manager == Manager::GithubActions
+                        && dep.source == Source::GithubTags
+                    {
+                        if dep.digest.is_some() {
+                            "pinned-commit"
+                        } else {
+                            "floating-ref"
+                        }
+                    } else if matches!(dep.manager, Manager::Npm | Manager::Cargo)
+                        && !matches!(
+                            dep.kind,
+                            rustovate_config::DependencyKind::Toolchain
+                                | rustovate_config::DependencyKind::Tool
+                        )
+                        && dep.resolved.is_some()
+                    {
+                        "lockfile"
+                    } else if resolved.is_some()
+                        && matches!(dep.kind, rustovate_config::DependencyKind::Tool)
+                    {
+                        "release-line"
+                    } else if resolved.is_some()
+                        && dep.kind == rustovate_config::DependencyKind::Toolchain
+                    {
+                        "supported-range"
+                    } else {
+                        "declared"
+                    };
+                    rustovate_report::Resolution {
+                        kind: kind.into(),
+                        version: version.clone(),
+                    }
+                });
                 let value = ReportDependency {
                     manager: word(&dep.manager),
                     name: dep.name.clone(),
@@ -505,6 +581,11 @@ impl Engine {
                             pointer: dep.location.pointer.clone(),
                         }],
                         held_back: evaluation.held_back,
+                        stale,
+                        lookup: eval
+                            .as_ref()
+                            .map(|eval| eval.lookup_evidence(dep, catalog, now)),
+                        resolution,
                     }),
                 };
                 files.entry(dep.file.clone()).or_default().push(value);
@@ -835,7 +916,7 @@ impl Engine {
             repo: repo.into(),
             default_branch_commit: commit,
             config_hash: format!(
-                "extract-v4:{}:{}",
+                "extract-v5:{}:{}",
                 hash(&serde_json::to_vec(&config)?),
                 hash(rustovate_manager::MISE_REGISTRY.as_bytes())
             ),

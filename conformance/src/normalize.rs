@@ -12,6 +12,17 @@ fn normalize(report: &mut Report, notes: &mut BTreeMap<String, usize>) {
     for repo in &mut report.repositories {
         for file in &mut repo.package_files {
             for dep in &mut file.dependencies {
+                if dep.manager == "mise"
+                    && matches!(source(dep), Some("github-tags" | "git-tags"))
+                    && dep.name.starts_with("cargo:https://github.com/")
+                    && dep.package == dep.name.trim_start_matches("cargo:")
+                    && let Some(package) = dep.package.strip_prefix("https://github.com/")
+                    && package.split('/').count() == 2
+                    && !package.contains(['?', '#', '@'])
+                {
+                    dep.package = package.into();
+                    *notes.entry("mise-cargo-git-identity".into()).or_default() += 1;
+                }
                 if dep.manager == "bun"
                     && file.path.rsplit('/').next() == Some("package.json")
                     && source(dep).is_none_or(|s| s == "npm")

@@ -24,6 +24,201 @@ fn update(value: &str, kind: &str) -> rustovate_report::Update {
 }
 
 #[test]
+fn cargo_noop_departure_requires_unchanged_satisfying_nonexact_manifest() {
+    for (current, next, target, source, expected) in [
+        ("1", "1", "1.9.2", "crate", true),
+        ("0.3", "0.3", "0.3.9", "crate", true),
+        ("1", "2", "2.0.0", "crate", false),
+        ("1", "1", "2.0.0", "crate", false),
+        ("=1.0.0", "=1.0.0", "1.0.0", "crate", false),
+        ("1", "1", "1.9.2", "npm", false),
+    ] {
+        let mut d = dep("lib", source, current);
+        d["updates"] =
+            json!([{"newValue":next,"newVersion":target,"newDigest":null,"updateType":"patch"}]);
+        let baseline = snapshot(json!({"cargo":[{"packageFile":"Cargo.toml","deps":[d]}]}));
+        let mut actual = baseline.clone();
+        let dep = &mut actual.repositories[0].package_files[0].dependencies[0];
+        dep.updates.clear();
+        dep.metadata.as_mut().unwrap().source = "crates".into();
+        let triage = compare(&baseline, &actual, &rules()).unwrap();
+        assert_eq!(
+            triage.differences[0].classification == Class::DeliberateDeparture,
+            expected,
+            "{current}/{next}/{target}/{source}"
+        );
+    }
+}
+
+#[test]
+fn digest_rate_limit_attribution_does_not_excuse_missing_major_policy() {
+    let mut d = dep("image", "docker", "1");
+    d["updates"] = json!([
+        {"newValue":"1","newDigest":"sha256:changed","updateType":"digest"},
+        {"newValue":"2","newVersion":"2","newDigest":"sha256:new","updateType":"major"}
+    ]);
+    let baseline = snapshot(json!({"kubernetes":[{"packageFile":"deploy.yaml","deps":[d]}]}));
+    let mut actual = baseline.clone();
+    actual.repositories[0].package_files[0].dependencies[0]
+        .updates
+        .clear();
+    actual.repositories[0]
+        .warnings
+        .push("image: registry rate limit reached; retry after 60 seconds".into());
+    let triage = compare(&baseline, &actual, &rules()).unwrap();
+    assert_eq!(
+        triage.differences.iter().filter(|d| d.rate_limited).count(),
+        1
+    );
+    assert!(
+        triage
+            .differences
+            .iter()
+            .all(|d| d.classification == Class::RustovateMissing)
+    );
+    actual.repositories[0].warnings[0] = "other-image: registry rate limit reached".into();
+    assert!(
+        compare(&baseline, &actual, &rules())
+            .unwrap()
+            .differences
+            .iter()
+            .all(|d| !d.rate_limited)
+    );
+}
+
+#[test]
+fn mise_cargo_git_url_normalization_retains_other_sources_and_repository_changes() {
+    let mut d = dep(
+        "cargo:https://github.com/example/tool",
+        "git-tags",
+        "v1.0.0",
+    );
+    d["packageName"] = json!("https://github.com/example/tool");
+    let baseline = snapshot(json!({"mise":[{"packageFile":"mise.toml","deps":[d]}]}));
+    let mut actual = baseline.clone();
+    let d = &mut actual.repositories[0].package_files[0].dependencies[0];
+    d.package = "example/tool".into();
+    d.metadata.as_mut().unwrap().source = "github-tags".into();
+    assert!(
+        compare(&baseline, &actual, &rules())
+            .unwrap()
+            .differences
+            .is_empty()
+    );
+    actual.repositories[0].package_files[0].dependencies[0].package = "example/other".into();
+    assert!(
+        compare(&baseline, &actual, &rules())
+            .unwrap()
+            .differences
+            .iter()
+            .any(|d| d.field == "package")
+    );
+}
+
+#[test]
+fn disabled_rejected_and_age_departures_require_new_report_evidence() {
+    let mut d = dep("lib", "npm", "1.0.0");
+    d["updates"] = json!([{"newValue":"1.1.0","newVersion":"1.1.0","updateType":"minor"}]);
+    let baseline = snapshot(json!({"npm":[{"packageFile":"package.json","deps":[d]}]}));
+    for (lookup, held, expected) in [
+        (
+            json!({"evaluatedAt":"2026-10-15T00:00:00Z","disabledUpdates":["minor"],"rejected":[]}),
+            json!([]),
+            Some(37),
+        ),
+        (
+            json!({"evaluatedAt":"2026-10-15T00:00:00Z","disabledUpdates":["major"],"rejected":[]}),
+            json!([]),
+            None,
+        ),
+        (
+            json!({"evaluatedAt":"2026-10-15T00:00:00Z","disabledUpdates":[],"rejected":[{"version":"1.1.0","reason":"deprecated"}]}),
+            json!([]),
+            Some(38),
+        ),
+        (
+            json!({"evaluatedAt":"2026-10-15T00:00:00Z","disabledUpdates":[],"rejected":[{"version":"1.2.0","reason":"deprecated"}]}),
+            json!([]),
+            None,
+        ),
+        (
+            json!({"evaluatedAt":"2026-10-15T00:00:00Z","disabledUpdates":[],"rejected":[]}),
+            json!([{"version":"1.1.0","updateType":"minor","publishedAt":"2026-10-14T12:00:00Z","eligibleAt":"2026-10-15T12:00:00Z"}]),
+            Some(23),
+        ),
+        (
+            json!({"evaluatedAt":"2026-10-16T00:00:00Z","disabledUpdates":[],"rejected":[]}),
+            json!([{"version":"1.1.0","updateType":"minor","publishedAt":"2026-10-14T12:00:00Z","eligibleAt":"2026-10-15T12:00:00Z"}]),
+            None,
+        ),
+    ] {
+        let mut actual = baseline.clone();
+        let d = &mut actual.repositories[0].package_files[0].dependencies[0];
+        d.updates.clear();
+        d.metadata.as_mut().unwrap().lookup = Some(serde_json::from_value(lookup).unwrap());
+        d.metadata.as_mut().unwrap().held_back = serde_json::from_value(held).unwrap();
+        let triage = compare(&baseline, &actual, &rules()).unwrap();
+        assert_eq!(
+            triage.differences[0].departure.as_ref().map(|d| d.row),
+            expected
+        );
+        actual.repositories[0].package_files[0].dependencies[0]
+            .metadata
+            .as_mut()
+            .unwrap()
+            .lookup = None;
+        assert!(
+            compare(&baseline, &actual, &rules()).unwrap().differences[0]
+                .departure
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn current_resolution_departure_does_not_hide_lock_or_digest_changes() {
+    let mut d = dep("lib", "npm", "^1.0.0");
+    d["currentVersion"] = json!("1.2.0");
+    let baseline = snapshot(json!({"npm":[{"packageFile":"package.json","deps":[d]}]}));
+    let mut actual = baseline.clone();
+    let d = &mut actual.repositories[0].package_files[0].dependencies[0];
+    d.current.version = Some("1.0.0".into());
+    d.metadata.as_mut().unwrap().resolution =
+        Some(serde_json::from_value(json!({"kind":"lockfile","version":"1.0.0"})).unwrap());
+    assert_eq!(
+        compare(&baseline, &actual, &rules()).unwrap().differences[0]
+            .departure
+            .as_ref()
+            .unwrap()
+            .row,
+        39
+    );
+    actual.repositories[0].package_files[0].dependencies[0]
+        .current
+        .digest = Some("changed".into());
+    assert!(
+        compare(&baseline, &actual, &rules())
+            .unwrap()
+            .differences
+            .iter()
+            .all(|d| d.departure.is_none())
+    );
+    actual.repositories[0].package_files[0].dependencies[0]
+        .current
+        .digest = None;
+    actual.repositories[0].package_files[0].dependencies[0]
+        .metadata
+        .as_mut()
+        .unwrap()
+        .resolution = None;
+    assert!(
+        compare(&baseline, &actual, &rules()).unwrap().differences[0]
+            .departure
+            .is_none()
+    );
+}
+
+#[test]
 fn invalid_or_absent_baseline_is_coverage_and_empty_success_is_comparable() {
     let failed = parse_logs(r#"{"repository":"example/demo","msg":"Repository finished","result":"config-validation","exitCode":5}"#).unwrap();
     let actual =

@@ -149,6 +149,207 @@ async fn rate_limit_and_foreign_pagination_are_explicit() {
 }
 
 #[tokio::test]
+async fn rate_limited_catalogs_and_digests_reuse_cache_without_refreshing_it() {
+    let tags = "https://registry-1.docker.io/v2/library/spec/tags/list?n=1000";
+    let manifest = "https://registry-1.docker.io/v2/library/spec/manifests/1.0";
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
+        (
+            tags.into(),
+            response(200, r#"{"tags":["1.0"]}"#, &[("etag", "\"tags\"")]),
+        ),
+        (
+            manifest.into(),
+            response(
+                200,
+                "",
+                &[("etag", "\"tags\""), ("docker-content-digest", &digest)],
+            ),
+        ),
+        (manifest.into(), response(304, "", &[])),
+        (
+            tags.into(),
+            response(429, "", &[("ratelimit-remaining", "0;w=21600")]),
+        ),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    let sources = client(steps.clone(), dir.path()).await;
+    sources.lookup(Source::Docker, "spec").await.unwrap();
+    assert_eq!(
+        sources.registry_digest("spec", "1.0").await.unwrap(),
+        digest
+    );
+    // An unchanged HEAD validator resolves the pinned digest without downloading a manifest.
+    assert_eq!(
+        sources.registry_digest("spec", "1.0").await.unwrap(),
+        digest
+    );
+    let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
+        .await
+        .unwrap();
+    let key = rustovate_cache::HttpKey::new(
+        "GET",
+        tags,
+        std::collections::BTreeMap::from([("accept".into(), "application/json".into())]),
+    )
+    .unwrap()
+    .representation("oci-tags-v1");
+    let fetched = cache.http_get(&key).await.unwrap().unwrap().fetched_at;
+    assert_eq!(
+        sources
+            .lookup(Source::Docker, "spec")
+            .await
+            .unwrap()
+            .versions
+            .len(),
+        1
+    );
+    // Shared quota blocks subsequent network reads, but not cached results.
+    assert_eq!(
+        sources.registry_digest("spec", "1.0").await.unwrap(),
+        digest
+    );
+    let stale = sources.registry_stale("docker.io/library/spec").await;
+    assert_eq!(stale["catalog"], fetched);
+    assert!(stale.contains_key("digest:1.0"));
+    assert_eq!(
+        cache.http_get(&key).await.unwrap().unwrap().fetched_at,
+        fetched
+    );
+    assert!(steps.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn zero_remaining_on_success_stops_other_hub_requests_without_blocking_other_hosts() {
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
+        (
+            "https://registry-1.docker.io/v2/library/spec/manifests/1.0".into(),
+            response(
+                200,
+                "",
+                &[
+                    ("docker-content-digest", &digest),
+                    ("ratelimit-remaining", "0;w=21600"),
+                ],
+            ),
+        ),
+        (
+            "https://ghcr.io/v2/spec/image/manifests/1.0".into(),
+            response(200, "", &[("docker-content-digest", &digest)]),
+        ),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    let sources = client(steps.clone(), dir.path()).await;
+    sources.registry_digest("spec", "1.0").await.unwrap();
+    assert!(sources.registry_digest("uncached", "1.0").await.is_err());
+    sources
+        .registry_digest("ghcr.io/spec/image", "1.0")
+        .await
+        .unwrap();
+    assert!(steps.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn rate_limited_heads_can_reuse_legacy_get_digests_but_no_store_is_authoritative() {
+    let manifest = "https://registry-1.docker.io/v2/library/spec/manifests/1.0";
+    let digest = format!("sha256:{}", "a".repeat(64));
+    for no_store in [false, true] {
+        let mut headers = vec![("docker-content-digest", digest.as_str())];
+        if no_store {
+            headers.push(("cache-control", "no-store"));
+        }
+        let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
+            (manifest.into(), response(405, "", &[])),
+            (manifest.into(), response(200, "{}", &headers)),
+            (
+                manifest.into(),
+                response(429, "", &[("ratelimit-remaining", "0;w=21600")]),
+            ),
+        ]))));
+        let dir = tempfile::tempdir().unwrap();
+        let sources = client(steps.clone(), dir.path()).await;
+        sources.registry_digest("spec", "1.0").await.unwrap();
+        assert_eq!(
+            sources.registry_digest("spec", "1.0").await.is_ok(),
+            !no_store
+        );
+        assert_eq!(sources.registry_stale("spec").await.is_empty(), no_store);
+        assert!(steps.0.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn public_helm_index_redirects_use_the_same_https_policy() {
+    let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
+        (
+            "https://charts.example.org/index.yaml".into(),
+            response(
+                302,
+                "",
+                &[("location", "https://mirror.example.org/index.yaml")],
+            ),
+        ),
+        (
+            "https://mirror.example.org/index.yaml".into(),
+            response(
+                200,
+                "apiVersion: v1\nentries:\n  chart:\n    - version: 1.0.0\n      created: 2026-01-01T00:00:00Z\n",
+                &[],
+            ),
+        ),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = client(steps.clone(), dir.path())
+        .await
+        .lookup(Source::Helm, "https://charts.example.org|chart")
+        .await
+        .unwrap();
+    assert_eq!(catalog.versions[0].version, "1.0.0");
+    assert!(steps.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_fresh_catalog_clears_stale_provenance_after_a_short_limit() {
+    let tags = "https://ghcr.io/v2/spec/image/tags/list?n=1000";
+    let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
+        (
+            tags.into(),
+            response(200, r#"{"tags":["1.0"]}"#, &[("etag", "\"tags\"")]),
+        ),
+        (tags.into(), response(429, "", &[("retry-after", "0")])),
+        (tags.into(), response(304, "", &[])),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    let sources = client(steps.clone(), dir.path()).await;
+    sources
+        .lookup(Source::Docker, "ghcr.io/spec/image")
+        .await
+        .unwrap();
+    sources
+        .lookup(Source::Docker, "ghcr.io/spec/image")
+        .await
+        .unwrap();
+    assert!(
+        sources
+            .registry_stale("ghcr.io/spec/image")
+            .await
+            .contains_key("catalog")
+    );
+    sources
+        .lookup(Source::Docker, "ghcr.io/spec/image")
+        .await
+        .unwrap();
+    assert!(
+        sources
+            .registry_stale("ghcr.io/spec/image")
+            .await
+            .is_empty()
+    );
+    assert!(steps.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn concurrent_charts_share_one_compact_index_but_later_calls_revalidate() {
     let url = "https://charts.example.org/index.yaml";
     let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
@@ -311,6 +512,165 @@ async fn auth_client(steps: Arc<AuthSteps>, dir: &std::path::Path) -> Client {
         Cached::new(cache.clone(), steps, 4).unwrap(),
         cache,
     )
+}
+
+#[tokio::test]
+async fn registry_redirects_strip_auth_and_reject_downgrades_userinfo_loops_and_long_chains() {
+    let manifest = "https://registry.k8s.io/v2/spec/image/manifests/1.0";
+    let auth = "https://registry.k8s.io/token?scope=repository%3Aspec%2Fimage%3Apull";
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let steps = Arc::new(AuthSteps(Mutex::new(VecDeque::from([
+        (
+            manifest.into(),
+            None,
+            response(
+                401,
+                "",
+                &[(
+                    "www-authenticate",
+                    r#"Bearer realm="https://registry.k8s.io/token""#,
+                )],
+            ),
+        ),
+        (
+            auth.into(),
+            None,
+            response(200, r#"{"token":"fixture-token","expires_in":300}"#, &[]),
+        ),
+        (
+            manifest.into(),
+            Some("Bearer fixture-token".into()),
+            response(307, "", &[("location", "/mirror")]),
+        ),
+        (
+            "https://registry.k8s.io/mirror".into(),
+            Some("Bearer fixture-token".into()),
+            response(
+                307,
+                "",
+                &[("location", "https://mirror.example.org/manifest")],
+            ),
+        ),
+        (
+            "https://mirror.example.org/manifest".into(),
+            None,
+            response(200, "", &[("docker-content-digest", &digest)]),
+        ),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(
+        auth_client(steps.clone(), dir.path())
+            .await
+            .registry_digest("registry.k8s.io/spec/image", "1.0")
+            .await
+            .unwrap(),
+        digest
+    );
+    assert!(steps.0.lock().unwrap().is_empty());
+    for target in [
+        "http://mirror.example.org/manifest",
+        "https://user:pass@mirror.example.org/manifest",
+        manifest,
+    ] {
+        let steps = Arc::new(AuthSteps(Mutex::new(VecDeque::from([(
+            manifest.into(),
+            None,
+            response(307, "", &[("location", target)]),
+        )]))));
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            auth_client(steps.clone(), dir.path())
+                .await
+                .registry_digest("registry.k8s.io/spec/image", "1.0")
+                .await
+                .is_err()
+        );
+        assert!(steps.0.lock().unwrap().is_empty());
+    }
+    let steps = Arc::new(AuthSteps(Mutex::new(
+        (0..6)
+            .map(|n| {
+                (
+                    if n == 0 {
+                        manifest.into()
+                    } else {
+                        format!("https://registry.k8s.io/hop/{n}")
+                    },
+                    None,
+                    response(307, "", &[("location", &format!("/hop/{}", n + 1))]),
+                )
+            })
+            .collect(),
+    )));
+    let dir = tempfile::tempdir().unwrap();
+    assert!(
+        auth_client(steps.clone(), dir.path())
+            .await
+            .registry_digest("registry.k8s.io/spec/image", "1.0")
+            .await
+            .is_err()
+    );
+    assert!(steps.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn dockerhub_login_is_realm_scoped_and_authenticated_tokens_are_not_persisted() {
+    let manifest = "https://registry-1.docker.io/v2/library/spec/manifests/latest";
+    let token_url = "https://auth.docker.io/token?service=registry.docker.io&scope=repository%3Alibrary%2Fspec%3Apull";
+    let steps = Arc::new(AuthSteps(Mutex::new(VecDeque::from([
+        (
+            manifest.into(),
+            None,
+            response(
+                401,
+                "",
+                &[(
+                    "www-authenticate",
+                    r#"Bearer realm="https://auth.docker.io/token",service="registry.docker.io""#,
+                )],
+            ),
+        ),
+        (
+            token_url.into(),
+            Some("Basic dXNlcjpwYXNz".into()),
+            response(
+                200,
+                r#"{"token":"authenticated-fixture","expires_in":300}"#,
+                &[],
+            ),
+        ),
+        (
+            manifest.into(),
+            Some("Bearer authenticated-fixture".into()),
+            response(
+                200,
+                "",
+                &[(
+                    "docker-content-digest",
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                )],
+            ),
+        ),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    auth_client(steps.clone(), dir.path())
+        .await
+        .with_dockerhub_credentials("user".into(), "pass".into())
+        .registry_digest("spec", "latest")
+        .await
+        .unwrap();
+    let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
+        .await
+        .unwrap();
+    let key = rustovate_cache::HttpKey::new(
+        "GET",
+        "https://registry-1.docker.io/v2/library/spec/",
+        Default::default(),
+    )
+    .unwrap()
+    .representation("anonymous-registry-pull-token-v1");
+    assert!(cache.http_get(&key).await.unwrap().is_none());
+    assert!(steps.0.lock().unwrap().is_empty());
 }
 #[tokio::test]
 async fn anonymous_pull_tokens_survive_reopen_and_rejected_tokens_are_replaced() {

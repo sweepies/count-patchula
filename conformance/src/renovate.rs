@@ -308,6 +308,9 @@ fn dependency(value: &Value, source_manager: &str, ctx: &mut Context<'_>) -> Res
         current,
         updates,
         metadata: datasource.map(|source| rustovate_report::DependencyMetadata {
+            stale: Default::default(),
+            lookup: None,
+            resolution: None,
             source,
             kinds: value
                 .get("depType")

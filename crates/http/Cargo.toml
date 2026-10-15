@@ -10,6 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+base64 = "0.22"
 httpdate = "1"
 reqwest.workspace = true
 rustovate-cache = { version = "0.1.0", path = "../cache" }

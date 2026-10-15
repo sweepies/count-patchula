@@ -7,7 +7,7 @@ use reqwest::{
 use rustovate_cache::{Cache, HttpEntry, HttpKey};
 use serde::Serialize;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -274,12 +274,30 @@ impl Cached {
     /// Fetch an anonymous token without caching the raw response. The registry
     /// caller may persist only its scoped bearer with a validated expiry.
     pub async fn token_get(&self, url: &str) -> Result<Response, Error> {
+        self.token_get_with_credentials(url, None).await
+    }
+
+    /// Credentials are used only for the validated token realm and never cached.
+    pub async fn token_get_with_credentials(
+        &self,
+        url: &str,
+        credentials: Option<(&str, &str)>,
+    ) -> Result<Response, Error> {
         let url = Url::parse(url).map_err(|_| Error::Configuration)?;
         if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
             return Err(Error::Configuration);
         }
         let trace = RequestTrace::new("GET", &url);
         let mut request = Request::new(Method::GET, url.clone());
+        if let Some((username, password)) = credentials {
+            use base64::Engine;
+            let encoded =
+                base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"));
+            let mut value = HeaderValue::from_str(&format!("Basic {encoded}"))
+                .map_err(|_| Error::Configuration)?;
+            value.set_sensitive(true);
+            request.headers_mut().insert(header::AUTHORIZATION, value);
+        }
         request
             .headers_mut()
             .insert(header::ACCEPT, HeaderValue::from_static("application/json"));
@@ -289,6 +307,42 @@ impl Cached {
         Ok(trace
             .send(self.0.transport.as_ref(), request, queued.elapsed(), false)
             .await?)
+    }
+
+    async fn stale_registry(
+        &self,
+        cached: Option<&HttpEntry>,
+        url: &Url,
+        accept: &str,
+        method: &Method,
+    ) -> Result<Option<Response>, Error> {
+        // A previous GET also proves a manifest digest if HEAD has not yet been cached.
+        let fallback = if cached.is_none() && method == Method::HEAD {
+            self.0
+                .cache
+                .http_get(&HttpKey::new(
+                    "GET",
+                    url.as_str(),
+                    BTreeMap::from([("accept".into(), accept.into())]),
+                )?)
+                .await?
+        } else {
+            None
+        };
+        let Some(entry) = cached.or(fallback.as_ref()) else {
+            return Ok(None);
+        };
+        let mut response = cached_response(entry)?;
+        response
+            .headers
+            .insert("x-rustovate-stale", HeaderValue::from_static("rate-limit"));
+        response.headers.insert(
+            "x-rustovate-fetched-at",
+            HeaderValue::from_str(&entry.fetched_at.to_string())
+                .map_err(|_| Error::Configuration)?,
+        );
+        self.0.cache_hits.fetch_add(1, Ordering::Relaxed);
+        Ok(Some(response))
     }
 
     /// Derive once on a 200. Fresh hits and 304s contain only the compact body;
@@ -454,9 +508,23 @@ impl Cached {
             }
         }
         let mut attempt = 0;
+        let mut redirects = BTreeSet::from([url.to_string()]);
         let mut response = loop {
             let queued = Instant::now();
-            let permit = self.acquire(&url).await?;
+            let target = request.url().clone();
+            let permit = match self.acquire(&target).await {
+                Ok(permit) => permit,
+                Err(Error::Status(429)) if registry.is_some() => {
+                    if let Some(response) = self
+                        .stale_registry(cached.as_ref(), &url, accept, &method)
+                        .await?
+                    {
+                        return Ok(response);
+                    }
+                    return Err(Error::Status(429));
+                }
+                Err(error) => return Err(error),
+            };
             self.0.requests.fetch_add(1, Ordering::Relaxed);
             let response = trace
                 .send(
@@ -466,8 +534,43 @@ impl Cached {
                     cached.is_some(),
                 )
                 .await?;
+            if matches!(response.status.as_u16(), 301 | 302 | 303 | 307 | 308) {
+                let next = response
+                    .headers
+                    .get(header::LOCATION)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| target.join(v).ok())
+                    .ok_or(Error::Configuration)?;
+                if next.scheme() != "https"
+                    || next.host_str().is_none()
+                    || !next.username().is_empty()
+                    || next.password().is_some()
+                    || redirects.len() > 5
+                    || !redirects.insert(next.to_string())
+                {
+                    return Err(Error::Configuration);
+                }
+                if next.origin() != target.origin() {
+                    for name in [
+                        header::AUTHORIZATION,
+                        header::COOKIE,
+                        header::PROXY_AUTHORIZATION,
+                    ] {
+                        request.headers_mut().remove(name);
+                    }
+                }
+                *request.url_mut() = next.clone();
+                trace = RequestTrace::new(method.as_str(), &next);
+                continue;
+            }
+            if registry.is_some()
+                && target.host_str() == Some("registry-1.docker.io")
+                && let Some(window) = exhausted_quota(&response)
+            {
+                self.cooldown(&target, window)?;
+            }
             if registry.is_some() && response.status == StatusCode::TOO_MANY_REQUESTS {
-                let pull_quota = url.host_str() == Some("registry-1.docker.io")
+                let pull_quota = target.host_str() == Some("registry-1.docker.io")
                     && (response
                         .headers
                         .get("ratelimit-remaining")
@@ -476,7 +579,8 @@ impl Cached {
                         || response
                             .body
                             .windows(b"pull rate limit".len())
-                            .any(|v| v.eq_ignore_ascii_case(b"pull rate limit")));
+                            .any(|v| v.eq_ignore_ascii_case(b"pull rate limit"))
+                        || !response.headers.contains_key("retry-after"));
                 let delay = if pull_quota {
                     None
                 } else {
@@ -485,20 +589,39 @@ impl Cached {
                 // Publish even an exhausted/long cooldown before releasing the
                 // permit, so unrelated queued requests to this host respect it.
                 if let Some(delay) = delay {
-                    self.cooldown(&url, delay)?;
+                    self.cooldown(&target, delay)?;
+                } else if pull_quota && exhausted_quota(&response).is_none() {
+                    self.cooldown(&target, Duration::from_secs(21600))?;
                 }
                 drop(permit);
+                if let Some(response) = self
+                    .stale_registry(cached.as_ref(), &url, accept, &method)
+                    .await?
+                {
+                    return Ok(response);
+                }
                 if attempt < self.0.options.registry_retries
                     && delay.is_some_and(|delay| delay <= Duration::from_secs(60))
                 {
                     attempt += 1;
-                    trace = RequestTrace::new(method.as_str(), &url);
+                    trace = RequestTrace::new(method.as_str(), &target);
                     trace.cache_policy("rate-retry", ttl);
                     continue;
                 }
             }
             break response;
         };
+        // These are local provenance headers, never trusted from the network.
+        response.headers.remove("x-rustovate-stale");
+        response.headers.remove("x-rustovate-fetched-at");
+        if registry.is_some()
+            && response.status == StatusCode::TOO_MANY_REQUESTS
+            && let Some(response) = self
+                .stale_registry(cached.as_ref(), &url, accept, &method)
+                .await?
+        {
+            return Ok(response);
+        }
         let not_modified = response.status == StatusCode::NOT_MODIFIED;
         if not_modified {
             let entry = cached.ok_or(Error::MissingBody)?;
@@ -609,6 +732,42 @@ impl Cached {
         }
         Ok(response)
     }
+}
+
+fn cached_response(entry: &HttpEntry) -> Result<Response, Error> {
+    let mut headers = header::HeaderMap::new();
+    for (name, value) in &entry.headers {
+        headers.insert(
+            header::HeaderName::from_bytes(name.as_bytes()).map_err(|_| Error::Configuration)?,
+            HeaderValue::from_str(value).map_err(|_| Error::Configuration)?,
+        );
+    }
+    Ok(Response {
+        status: StatusCode::from_u16(entry.status).map_err(|_| Error::Configuration)?,
+        headers,
+        body: entry.body.clone(),
+    })
+}
+
+// Docker Hub uses `remaining;w=seconds`, not the unrelated Hub REST API's X- headers.
+fn exhausted_quota(response: &Response) -> Option<Duration> {
+    let remaining = response.headers.get("ratelimit-remaining")?.to_str().ok()?;
+    if remaining.split(';').next()?.trim().parse::<u64>().ok()? != 0 {
+        return None;
+    }
+    let window = remaining
+        .split(';')
+        .chain(
+            response
+                .headers
+                .get("ratelimit-limit")
+                .and_then(|v| v.to_str().ok())
+                .into_iter()
+                .flat_map(|v| v.split(';')),
+        )
+        .find_map(|v| v.trim().strip_prefix("w=")?.parse::<u64>().ok())
+        .unwrap_or(21600);
+    Some(Duration::from_secs(window.max(61)))
 }
 
 fn retry_delay(response: &Response, attempt: u32) -> Option<Duration> {

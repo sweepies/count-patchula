@@ -59,6 +59,8 @@ pub struct Client {
     pub(crate) http: Cached,
     pub(crate) cache: Cache,
     tokens: docker::Tokens,
+    dockerhub_credentials: Option<std::sync::Arc<(String, String)>>,
+    stale_registry: std::sync::Arc<tokio::sync::Mutex<BTreeMap<String, BTreeMap<String, i64>>>>,
 }
 impl Client {
     pub fn new(github: rustovate_github::Client, http: Cached, cache: Cache) -> Self {
@@ -67,7 +69,28 @@ impl Client {
             http,
             cache,
             tokens: Default::default(),
+            dockerhub_credentials: None,
+            stale_registry: Default::default(),
         }
+    }
+    /// Optional Docker Hub token-service login. Never persisted or included in Debug.
+    pub fn with_dockerhub_credentials(mut self, username: String, token: String) -> Self {
+        self.dockerhub_credentials = Some(std::sync::Arc::new((username, token)));
+        self.tokens = Default::default();
+        self
+    }
+
+    /// Cached registry reads used because of rate limiting, keyed by catalog or digest tag.
+    pub async fn registry_stale(&self, package: &str) -> BTreeMap<String, i64> {
+        let Ok((host, path)) = docker::identity(package) else {
+            return BTreeMap::new();
+        };
+        self.stale_registry
+            .lock()
+            .await
+            .get(&format!("{host}/{path}"))
+            .cloned()
+            .unwrap_or_default()
     }
     pub async fn lookup(&self, source: Source, package: &str) -> Result<Catalog> {
         if package.is_empty()

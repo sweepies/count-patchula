@@ -81,6 +81,7 @@ impl Client {
         method: Method,
     ) -> Result<rustovate_http::Response> {
         let scope = format!("{host}/{path}");
+        let authenticated = host == "registry-1.docker.io" && self.dockerhub_credentials.is_some();
         let token = self.tokens.lock().await.entry(scope).or_default().clone();
         let key = token_key(host, path)?;
         let mut saved = token.lock().await;
@@ -89,7 +90,8 @@ impl Client {
             .is_none_or(|(_, expiry)| *expiry <= Instant::now())
         {
             *saved = None;
-            if let Some(entry) = self.cache.http_get(&key).await?
+            if !authenticated
+                && let Some(entry) = self.cache.http_get(&key).await?
                 && let Some(expiry) = entry.expires_at.filter(|expiry| *expiry > now())
                 && let Ok(bearer) = String::from_utf8(entry.body)
             {
@@ -151,7 +153,20 @@ impl Client {
                     .query_pairs_mut()
                     .append_pair("scope", &format!("repository:{path}:pull"));
                 let requested_at = now();
-                let auth = self.http.token_get(realm.as_str()).await?;
+                let credentials = self
+                    .dockerhub_credentials
+                    .as_deref()
+                    .filter(|_| {
+                        authenticated
+                            && realm.host_str() == Some("auth.docker.io")
+                            && realm.port_or_known_default() == Some(443)
+                            && realm.path() == "/token"
+                    })
+                    .map(|(username, token)| (username.as_str(), token.as_str()));
+                let auth = self
+                    .http
+                    .token_get_with_credentials(realm.as_str(), credentials)
+                    .await?;
                 if !auth.status.is_success() {
                     return Err(rustovate_http::CacheError::Status(auth.status.as_u16()).into());
                 }
@@ -180,7 +195,8 @@ impl Client {
                     .saturating_sub(10);
                 let expiry = Instant::now()
                     + Duration::from_secs(expires_at.saturating_sub(now()).max(0) as u64);
-                if expires_at > now()
+                if !authenticated
+                    && expires_at > now()
                     && !auth
                         .headers
                         .get("cache-control")
@@ -229,6 +245,25 @@ impl Client {
         if !response.status.is_success() {
             return Err(rustovate_http::CacheError::Status(response.status.as_u16()).into());
         }
+        let reference = if let Some((_, tag)) = url.split_once("/manifests/") {
+            format!("digest:{tag}")
+        } else {
+            return Ok(response);
+        };
+        let mut stale = self.stale_registry.lock().await;
+        let entries = stale.entry(format!("{host}/{path}")).or_default();
+        if response.headers.contains_key("x-rustovate-stale") {
+            if let Some(time) = response
+                .headers
+                .get("x-rustovate-fetched-at")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse().ok())
+            {
+                entries.insert(reference, time);
+            }
+        } else {
+            entries.remove(&reference);
+        }
         Ok(response)
     }
 
@@ -263,6 +298,7 @@ impl Client {
         let origin = url.origin();
         let mut seen = HashSet::new();
         let mut tags = std::collections::BTreeSet::new();
+        let mut stale_at: Option<i64> = None;
         loop {
             if !seen.insert(url.to_string()) || seen.len() > 10000 {
                 return Err(Error::Invalid);
@@ -270,6 +306,15 @@ impl Client {
             let response = self
                 .registry(&host, &path, url.as_str(), "application/json", Method::GET)
                 .await?;
+            if response.headers.contains_key("x-rustovate-stale")
+                && let Some(time) = response
+                    .headers
+                    .get("x-rustovate-fetched-at")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<i64>().ok())
+            {
+                stale_at = Some(stale_at.map_or(time, |old| old.min(time)));
+            }
             #[derive(Deserialize)]
             struct Page {
                 tags: Option<Vec<String>>,
@@ -317,6 +362,13 @@ impl Client {
             dist_tags: BTreeMap::new(),
         };
         sort(&mut catalog.versions, Ecosystem::Docker);
+        let mut stale = self.stale_registry.lock().await;
+        let entries = stale.entry(format!("{host}/{path}")).or_default();
+        if let Some(time) = stale_at {
+            entries.insert("catalog".into(), time);
+        } else {
+            entries.remove("catalog");
+        }
         Ok(catalog)
     }
 

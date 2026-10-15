@@ -43,6 +43,52 @@ Stable comparison link: <a id="departure-7"></a>**Departure 7: default policy**
 | 32 | Unversioned inventory | Retains unused/unversioned provider, local module and setup-input records | Reports concrete dependency occurrences that can be looked up or edited | Avoid inventing version locations for references without versions |
 | 33 | Patch alternatives | Often proposes only the highest non-major release | Offers a patch track alongside a minor track | Let callers choose a smaller upgrade independently |
 | 34 | Go module identity | Can report a new numeric major under the old module name | Go proxy catalogs preserve module identity; /vN migrations are separate | A version-only edit cannot update module paths and imports |
+| 35 | Cargo manifest no-ops | Can propose a newer satisfying release with unchanged newValue | Suppress proposals that cannot edit the manifest | Lock refreshes need an explicit future lockfile operation |
+| 36 | Registry availability | Lookup may fail on quota exhaustion or HTTPS redirects | Follow bounded HTTPS redirects; reuse rate-limited cached data with stale provenance | Preserve useful results while exposing freshness limits |
+| 37 | Explicit disabled updates | Lookup snapshots can contain targets disabled by repository rules | Report effective disabled classes and omit their proposals | Preserve repository policy during comparisons |
+| 38 | Rejected releases | Lookup can propose deprecated releases | Reject deprecated/yanked versions and record the exact rejected targets | Avoid moving users onto withdrawn releases |
+| 39 | Observed current versions | currentVersion can mean newest satisfying release or floating tag | Current version follows the lockfile or pinned commit when available | Keep installed/pinned identity separate from candidate resolution |
+
+<a id="departure-37"></a>**Departure 37: effective disabled classes.**
+Only missing proposals on matching package/current identities with a valid
+`metadata.lookup.evaluatedAt` and the exact proposal class in `disabledUpdates`
+qualify. No inference is made from absent proposals or old reports lacking policy
+evidence. Rules are evaluated in order using the dependency's real file and kind.
+
+<a id="departure-38"></a>**Departure 38: rejected release evidence.**
+Only missing version upgrades without digests on matching package/current
+identities qualify, with an npm/crates/PyPI actual source and a valid evaluation
+timestamp. The exact proposed version must appear as deprecated or yanked in
+`metadata.lookup.rejected`. Other targets, digest changes, unknown reasons and
+reports without rejection evidence stay actionable.
+
+<a id="departure-39"></a>**Departure 39: current resolution provenance.**
+Only current.version mismatches on matching declarations, packages and digests
+qualify, with explicit actual resolution metadata equal to its current.version.
+For npm lockfiles, both versions must satisfy the same declaration and the
+baseline must be newer. For pinned GitHub actions, a 40-digit SHA and a numeric
+partial alias are required; both full versions must lie on that alias's line,
+with the baseline newer. Changed values, digests, targets, unknown provenance,
+unresolved pins and other sources remain actionable. Reports without provenance
+cannot use this departure.
+
+<a id="departure-35"></a>**Departure 35: Cargo manifest no-ops.**
+Only missing version proposals on an existing Cargo dependency with identical
+package and current declarations, baseline `crate` and actual `crates` sources,
+an unchanged newValue, no digest, and a stable target satisfying the original
+non-exact Cargo requirement qualify. Changed ranges, exact `=` requirements,
+unsatisfied targets, digest changes, other sources and missing dependencies stay
+actionable. A future explicit lockfile refresh can maintain satisfying releases;
+the current lookup does not claim to implement it.
+
+<a id="departure-36"></a>**Departure 36: rate-limited registry cache.**
+Registry reads follow at most five HTTPS redirects and strip authorization when
+the origin changes. Exhausted Docker Hub `ratelimit-remaining` windows stop queued
+requests; HEAD checks retain conditional validators. Rate-limited reads can use
+the last cached representation without renewing its freshness. Reports expose
+`metadata.stale` as catalog/digest-tag keys with original Unix fetch timestamps,
+and emit a warning. A cold miss remains a lookup failure. This availability
+behavior has no comparison exemption: stale targets still need a live rerun.
 
 <a id="departure-34"></a>**Departure 34: Go major module paths.**
 Only missing `major` proposals on existing GitHub-hosted Go modules qualify,
@@ -126,6 +172,11 @@ least 24 and less than 72 hours old, plus a strictly older Renovate target in
 the same update class. Reversed, undated, older-than-window, unrelated range,
 missing, and extra proposals are never excused. This is a narrow explanation of
 the observed three-day comparison window, not a claim about all Renovate defaults.
+New reports additionally allow a missing exact target to be classified when
+`metadata.lookup.evaluatedAt` falls inside that target's recorded 24-hour
+held-back window. Only matching package/current identities, digest-free version
+upgrades and the exact summary version/class qualify. Missing evaluation evidence,
+elapsed windows and fallback extras remain actionable.
 
 <a id="departure-24"></a>**Departure 24: npm integrity normalization.**
 The adapter ignores only proposed newDigest for dependencies whose datasource is

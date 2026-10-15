@@ -177,8 +177,9 @@ async fn discovered_config_precedence_skips_errors_and_cached_extraction() {
         .await
         .unwrap();
     let engine = Engine::with_transport("offline", cache, 4, replay.clone()).unwrap();
-    let cold = engine.lookup(Options::default()).await.unwrap();
-    let warm = engine.lookup(Options::default()).await.unwrap();
+    let now = chrono::Utc::now();
+    let cold = engine.lookup_at(Options::default(), now).await.unwrap();
+    let warm = engine.lookup_at(Options::default(), now).await.unwrap();
     assert_eq!(cold.repositories, warm.repositories);
     use rustovate_report::Status;
     assert_eq!(cold.repositories[0].status, Status::Complete);
