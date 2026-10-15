@@ -66,6 +66,7 @@ impl Transport for Network {
     fn send(&self, request: Request) -> Exchange<'_> {
         Box::pin(async move {
             let response = self.0.execute(request).await.map_err(|_| Error::Network)?;
+            tracing::Span::current().record("protocol", tracing::field::debug(response.version()));
             let status = response.status();
             let headers = response.headers().clone();
             let body = response.bytes().await.map_err(|_| Error::Network)?.to_vec();
@@ -80,3 +81,5 @@ impl Transport for Network {
 
 mod cached;
 pub use cached::{Cached, Error as CacheError, Stats};
+mod trace;
+pub use trace::{PhaseTrace, RequestTrace};

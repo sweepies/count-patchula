@@ -23,6 +23,8 @@ rustovate-cache = { version = "0.1.0", path = "../cache" }
 rustovate-http = { version = "0.1.0", path = "../http" }
 rustovate-report = { version = "0.1.0", path = "../report" }
 tokio.workspace = true
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "registry"] }
 
 [dev-dependencies]
 tempfile = "3"

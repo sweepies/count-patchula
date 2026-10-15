@@ -1,0 +1,15 @@
+amends "../Rustovate.pkl"
+
+// Public live workload: package.json, workflows, mise.toml, and a version
+// declared outside the tools table. No repository code is executed.
+managers = new Listing { "npm"; "github-actions"; "mise"; "regex" }
+extractors = new Listing {
+  new Extractor {
+    paths = new Listing { "mise.toml" }
+    patterns = new Listing { #"min_version = "(?<current>[^"]+)""# }
+    source = "github-releases"
+    dependency = "jdx/mise"
+    package = "jdx/mise"
+    extract = #"^v?(?<version>.*)$"#
+  }
+}

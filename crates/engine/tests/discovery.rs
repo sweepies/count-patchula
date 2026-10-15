@@ -53,6 +53,30 @@ fn get(
         },
     }
 }
+fn head(repo: &str, branch: Option<&str>) -> Interaction {
+    let (owner, name) = repo.split_once('/').unwrap();
+    Interaction {
+        request: RecordedRequest {
+            method: "POST".into(),
+            url: "https://api.github.com/graphql".into(),
+            headers: BTreeMap::from([
+                ("accept".into(), vec!["application/vnd.github+json".into()]),
+                ("x-github-api-version".into(), vec!["2022-11-28".into()]),
+                ("content-type".into(), vec!["application/json".into()]),
+            ]),
+            body: Body::Json(
+                json!({"query":rustovate_engine::REPOSITORY_HEAD_QUERY,"variables":{"owner":owner,"name":name}}),
+            ),
+        },
+        response: RecordedResponse {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: Body::Json(
+                json!({"data":{"repository": branch.map(|branch| json!({"isPrivate":false,"defaultBranchRef":{"name":branch,"target":{"oid":"head","tree":{"oid":"tree"}}}}))}}),
+            ),
+        },
+    }
+}
 #[tokio::test]
 async fn discovered_config_precedence_skips_errors_and_cached_extraction() {
     let dir = tempfile::tempdir().unwrap();
@@ -68,22 +92,7 @@ async fn discovered_config_precedence_skips_errors_and_cached_extraction() {
         false,
     ));
     for repo in ["configured", "skipped"] {
-        interactions.push(get(
-            &format!("repos/demo/{repo}"),
-            json!({"default_branch":"main"}),
-            200,
-            Some("meta"),
-            None,
-            false,
-        ));
-        interactions.push(get(
-            &format!("repos/demo/{repo}/branches/main"),
-            json!({"commit":{"sha":"head","commit":{"tree":{"sha":"tree"}}}}),
-            200,
-            Some("head"),
-            None,
-            false,
-        ));
+        interactions.push(head(&format!("demo/{repo}"), Some("main")));
         let tree = if repo == "configured" {
             json!([{"path":".github/rustovate.pkl","type":"blob","sha":"config"},{"path":"rustovate.pkl","type":"blob","sha":"bad-config"},{"path":"package.json","type":"blob","sha":"manifest"}])
         } else {
@@ -98,14 +107,7 @@ async fn discovered_config_precedence_skips_errors_and_cached_extraction() {
             false,
         ));
     }
-    interactions.push(get(
-        "repos/demo/error",
-        json!({"message":"Not Found"}),
-        404,
-        None,
-        None,
-        false,
-    ));
+    interactions.push(head("demo/error", None));
     for (sha, text) in [
         (
             "config",
@@ -142,25 +144,24 @@ async fn discovered_config_precedence_skips_errors_and_cached_extraction() {
         false,
     ));
     for repo in ["configured", "skipped"] {
-        for (suffix, etag) in [("", "meta"), ("/branches/main", "head")] {
-            interactions.push(get(
-                &format!("repos/demo/{repo}{suffix}"),
-                json!(null),
-                304,
-                Some(etag),
-                Some(etag),
-                false,
-            ));
-        }
+        interactions.push(get(
+            &format!("repos/demo/{repo}"),
+            json!({"default_branch":"main"}),
+            200,
+            Some("meta"),
+            None,
+            false,
+        ));
+        interactions.push(get(
+            &format!("repos/demo/{repo}/branches/main"),
+            json!({"commit":{"sha":"head","commit":{"tree":{"sha":"tree"}}}}),
+            200,
+            Some("head"),
+            None,
+            false,
+        ));
     }
-    interactions.push(get(
-        "repos/demo/error",
-        json!({"message":"Not Found"}),
-        404,
-        None,
-        None,
-        false,
-    ));
+    interactions.push(head("demo/error", None));
     interactions.push(get(
         "fixture-spec",
         json!(null),
@@ -237,30 +238,14 @@ async fn installation_tokens_use_installation_repository_listing() {
 }
 
 #[tokio::test]
-async fn changed_default_branch_retries_failed_hint_and_reuses_identical_commit() {
+async fn cold_snapshot_and_warm_branch_rename_reuse_identical_commit() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("branch.json");
-    let head = json!({"commit":{"sha":"head","commit":{"tree":{"sha":"tree"}}}});
     let cassette = Cassette {
         schema_version: 1,
         provenance: "Independently simulated GitHub default-branch rename".into(),
         interactions: vec![
-            get(
-                "repos/demo/renamed",
-                json!({"default_branch":"main"}),
-                200,
-                Some("meta"),
-                None,
-                false,
-            ),
-            get(
-                "repos/demo/renamed/branches/main",
-                head.clone(),
-                200,
-                Some("head"),
-                None,
-                false,
-            ),
+            head("demo/renamed", Some("main")),
             get(
                 "repos/demo/renamed/git/trees/tree?recursive=1",
                 json!({"truncated":false,"tree":[]}),
@@ -273,23 +258,23 @@ async fn changed_default_branch_retries_failed_hint_and_reuses_identical_commit(
                 "repos/demo/renamed",
                 json!({"default_branch":"next"}),
                 200,
-                Some("new-meta"),
-                Some("meta"),
+                None,
+                None,
                 false,
             ),
             get(
                 "repos/demo/renamed/branches/main",
-                json!({"message":"Not Found"}),
+                json!(null),
                 404,
                 None,
-                Some("head"),
+                None,
                 false,
             ),
             get(
                 "repos/demo/renamed/branches/next",
-                head,
+                json!({"commit":{"sha":"head","commit":{"tree":{"sha":"tree"}}}}),
                 200,
-                Some("head"),
+                None,
                 None,
                 false,
             ),
@@ -327,5 +312,140 @@ async fn changed_default_branch_retries_failed_hint_and_reuses_identical_commit(
     );
     assert_eq!(warm.repositories[0].default_branch.as_deref(), Some("next"));
     assert_eq!(warm.stats.unwrap().extraction_hits, 1);
+    replay.assert_finished().unwrap();
+}
+
+#[tokio::test]
+async fn warm_sources_start_before_head_finishes_but_new_extraction_is_authoritative() {
+    use rustovate_http::{Exchange, Transport};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct Gate {
+        replay: Arc<Replay>,
+        warm: AtomicBool,
+        prefetched: AtomicBool,
+        release: tokio::sync::Notify,
+    }
+    impl Transport for Gate {
+        fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+            Box::pin(async move {
+                if self.warm.load(Ordering::SeqCst) {
+                    if request.url().path() == "/repos/demo/pipeline/branches/main" {
+                        self.release.notified().await;
+                    } else if request.url().host_str() == Some("registry.npmjs.org")
+                        && request.url().path() == "/old-dep"
+                    {
+                        self.prefetched.store(true, Ordering::SeqCst);
+                        self.release.notify_one();
+                    }
+                }
+                self.replay.send(request).await
+            })
+        }
+    }
+    // No elapsed-time performance assertion: the blocked head cannot complete
+    // until the source read starts. New files must still replace the hint.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("pipeline.json");
+    let mut interactions = vec![head("demo/pipeline", Some("main"))];
+    for (tree, blob, dependency) in [("tree", "blob", "old-dep"), ("tree2", "blob2", "new-dep")] {
+        interactions.push(get(
+            &format!("repos/demo/pipeline/git/trees/{tree}?recursive=1"),
+            json!({"truncated":false,"tree":[{"path":"package.json","type":"blob","sha":blob}]}),
+            200,
+            None,
+            None,
+            false,
+        ));
+        interactions.push(get(&format!("repos/demo/pipeline/git/blobs/{blob}"), json!({"encoding":"base64","content":STANDARD.encode(format!(r#"{{"dependencies":{{"{dependency}":"1.0.0"}}}}"#))}), 200, None, None, false));
+        interactions.push(get(
+            dependency,
+            json!({"dist-tags":{"latest":"1.0.1"},"versions":{"1.0.0":{},"1.0.1":{}}}),
+            200,
+            Some(dependency),
+            None,
+            true,
+        ));
+    }
+    interactions.push(get(
+        "repos/demo/pipeline",
+        json!({"default_branch":"main"}),
+        200,
+        None,
+        None,
+        false,
+    ));
+    interactions.push(get(
+        "repos/demo/pipeline/branches/main",
+        json!({"commit":{"sha":"head2","commit":{"tree":{"sha":"tree2"}}}}),
+        200,
+        None,
+        None,
+        false,
+    ));
+    interactions.push(get(
+        "old-dep",
+        json!(null),
+        304,
+        Some("old-dep"),
+        Some("old-dep"),
+        true,
+    ));
+    rustovate_testkit::save(
+        &path,
+        &Cassette {
+            schema_version: 1,
+            provenance: "Independently simulated extraction/source overlap and changed dependency"
+                .into(),
+            interactions,
+        },
+        &Default::default(),
+    )
+    .unwrap();
+    let replay = Arc::new(Replay::open(&path, Default::default()).unwrap());
+    let gate = Arc::new(Gate {
+        replay: replay.clone(),
+        warm: AtomicBool::new(false),
+        prefetched: AtomicBool::new(false),
+        release: Default::default(),
+    });
+    let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
+        .await
+        .unwrap();
+    let engine = Engine::with_transport("offline", cache, 4, gate.clone()).unwrap();
+    let config = rustovate_config::load_files(
+        "/repo/config.pkl",
+        BTreeMap::from([
+            (
+                "/repo/config.pkl".into(),
+                "amends \"Rustovate.pkl\"\nmanagers = new Listing { \"npm\" }".into(),
+            ),
+            (
+                "/repo/Rustovate.pkl".into(),
+                rustovate_config::SCHEMA.into(),
+            ),
+        ]),
+    )
+    .unwrap();
+    let options = || Options {
+        repositories: vec!["demo/pipeline".into()],
+        config: Some(config.clone()),
+    };
+    engine.lookup(options()).await.unwrap();
+    gate.warm.store(true, Ordering::SeqCst);
+    let warm = tokio::time::timeout(std::time::Duration::from_secs(5), engine.lookup(options()))
+        .await
+        .expect("head waited for a source read that never started")
+        .unwrap();
+    assert!(gate.prefetched.load(Ordering::SeqCst));
+    let repo = &warm.repositories[0];
+    assert_eq!(repo.status, rustovate_report::Status::Complete);
+    assert_eq!(repo.commit.as_deref(), Some("head2"));
+    assert_eq!(repo.package_files[0].dependencies.len(), 1);
+    assert_eq!(repo.package_files[0].dependencies[0].name, "new-dep");
+    assert_eq!(
+        warm.stats.unwrap().lookups,
+        1,
+        "removed hints must not enter the report"
+    );
     replay.assert_finished().unwrap();
 }

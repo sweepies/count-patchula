@@ -5,14 +5,14 @@ use rustovate_cache::{Cache, ExtractionKey};
 use rustovate_config::{Config, Manager, Source};
 use rustovate_datasource::Client as Sources;
 use rustovate_github::{Client as Github, Options as GithubOptions};
-use rustovate_http::{Cached, Transport};
+use rustovate_http::{Cached, PhaseTrace, Transport};
 use rustovate_lookup::{Evaluation, Evaluator};
 use rustovate_manager::{Dependency, Extraction, Files, Scanner, word};
 use rustovate_report::{
     Current, Dependency as ReportDependency, PackageFile, Report, Repository, SCHEMA_VERSION,
     Status,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
@@ -64,6 +64,15 @@ struct Entry {
     kind: String,
 }
 
+type LookupKey = (String, String);
+type Catalogs = BTreeMap<LookupKey, std::result::Result<rustovate_datasource::Catalog, String>>;
+pub const REPOSITORY_HEAD_QUERY: &str = "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){isPrivate defaultBranchRef{name target{... on Commit{oid tree{oid}}}}}}";
+#[derive(Default, Serialize, Deserialize)]
+struct LookupHint {
+    catalogs: BTreeSet<LookupKey>,
+    digests: BTreeSet<LookupKey>,
+}
+
 impl Engine {
     pub fn with_transport(
         token: &str,
@@ -104,10 +113,12 @@ impl Engine {
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<Report> {
         let total = Instant::now();
+        let _total_span = PhaseTrace::new("total");
         let before_g = self.github.stats().await;
         let before_h = self.http.stats();
         let before_hits = self.extraction_hits.load(Ordering::Relaxed);
         let started = Instant::now();
+        let phase = PhaseTrace::new("discovery");
         let repos = if options.repositories.is_empty() {
             self.repositories().await?
         } else {
@@ -118,24 +129,60 @@ impl Engine {
             validate_repo(repo)?;
         }
         let discovery = micros(started);
-        let started = Instant::now();
+        drop(phase);
         let override_config = options.config.as_ref();
-        let mut work: Vec<_> = stream::iter(repos)
-            .map(|repo| async move {
-                match self.scan(&repo, override_config).await {
-                    Ok(work) => work,
-                    Err(error) => Work {
-                        report: repository(&repo, Status::Error, Some(error.to_string())),
-                        config: None,
-                        dependencies: Vec::new(),
-                    },
-                }
-            })
-            .buffer_unordered(self.concurrency)
-            .collect()
-            .await;
+        // A hint only schedules reads. Freshly validated extraction/config is
+        // always authoritative for evaluation; unused speculative results are
+        // discarded. Overlap source revalidation with the repository head read.
+        let hint_hash = format!(
+            "lookup-hint-v1:{}:{}:{}:{}",
+            hash(&serde_json::to_vec(&options.config)?),
+            hash(rustovate_config::SCHEMA.as_bytes()),
+            hash(rustovate_manager::MISE_REGISTRY.as_bytes()),
+            self.github.credential_scope()
+        );
+        let mut hint = LookupHint::default();
+        for repo in &repos {
+            let key = ExtractionKey {
+                repo: format!("lookup-hint:{repo}"),
+                default_branch_commit: String::new(),
+                config_hash: hint_hash.clone(),
+            };
+            if let Some(bytes) = self.cache.extraction_get(&key).await? {
+                let known: LookupHint = serde_json::from_slice(&bytes)?;
+                hint.catalogs.extend(known.catalogs);
+                hint.digests.extend(known.digests);
+            }
+        }
+        let scans = async {
+            let started = Instant::now();
+            let _phase = PhaseTrace::new("extraction");
+            let work: Vec<_> = stream::iter(repos)
+                .map(|repo| async move {
+                    match self.scan(&repo, override_config).await {
+                        Ok(work) => work,
+                        Err(error) => Work {
+                            report: repository(&repo, Status::Error, Some(error.to_string())),
+                            config: None,
+                            dependencies: Vec::new(),
+                        },
+                    }
+                })
+                .buffer_unordered(self.concurrency)
+                .collect()
+                .await;
+            (work, micros(started))
+        };
+        let prefetch = async {
+            let started = Instant::now();
+            let _phase = PhaseTrace::new("lookup.prefetch");
+            let result = tokio::join!(self.catalogs(hint.catalogs), self.digests(hint.digests));
+            (result, micros(started))
+        };
+        let ((mut work, extraction_time), ((mut catalogs, mut digests), prefetch_time)) =
+            tokio::join!(scans, prefetch);
         work.sort_by(|a, b| a.report.repository.cmp(&b.report.repository));
-        let extraction_time = micros(started);
+        let phase = PhaseTrace::new("lookup");
         let started = Instant::now();
         let mut keys = BTreeSet::new();
         let evaluators: Vec<_> = work
@@ -167,6 +214,7 @@ impl Engine {
                         && dep.source == Source::GithubTags
                         && !(dep.digest.is_some() && dep.resolved.is_none())
                         && eval.digest_proposal(dep, "probe").is_some()
+                        && !eval.needs_lookup(dep)
                     {
                         current_refs.insert((
                             dep.package.clone(),
@@ -176,24 +224,50 @@ impl Engine {
                 }
             }
         }
-        let catalogs = stream::iter(keys)
-            .map(|(source, package)| async move {
-                let parsed: Source =
-                    serde_json::from_value(Value::String(source.clone())).expect("typed source");
-                let result = self
-                    .sources
-                    .lookup(parsed, &package)
-                    .await
-                    .map_err(|e| e.to_string());
-                ((source, package), result)
-            })
-            .buffer_unordered(self.concurrency)
-            .collect::<BTreeMap<_, _>>();
+        // Replace per-repository hints only after successful extraction.
+        for (repo, eval) in work.iter().zip(&evaluators) {
+            if repo.report.status == Status::Complete
+                && let Some(eval) = eval
+            {
+                let catalogs = repo
+                    .dependencies
+                    .iter()
+                    .filter(|dep| eval.needs_lookup(dep))
+                    .map(|dep| (word(&dep.source), dep.package.clone()))
+                    .collect();
+                let digests = current_refs
+                    .iter()
+                    .filter(|(package, _)| {
+                        repo.dependencies.iter().any(|dep| &dep.package == package)
+                    })
+                    .cloned()
+                    .collect();
+                let key = ExtractionKey {
+                    repo: format!("lookup-hint:{}", repo.report.repository),
+                    default_branch_commit: String::new(),
+                    config_hash: hint_hash.clone(),
+                };
+                self.cache
+                    .extraction_put(
+                        &key,
+                        &serde_json::to_vec(&LookupHint { catalogs, digests })?,
+                    )
+                    .await?;
+            }
+        }
+        // Hints may refer to dependencies removed by the new commit/config.
+        catalogs.retain(|key, _| keys.contains(key));
+        keys.retain(|key| !catalogs.contains_key(key));
+        current_refs.retain(|key| !digests.contains_key(key));
         // Revalidate current action refs alongside source heads. These network
         // reads used to serialize behind all catalogs inside the policy phase.
-        let (catalogs, mut digests) = tokio::join!(catalogs, self.digests(current_refs));
-        let lookup_time = micros(started);
+        let (remaining, refs) = tokio::join!(self.catalogs(keys), self.digests(current_refs));
+        catalogs.extend(remaining);
+        digests.extend(refs);
+        let lookup_time = prefetch_time + micros(started);
+        drop(phase);
         let started = Instant::now();
+        let phase = PhaseTrace::new("policy.evaluate");
         let mut proposals: Vec<Vec<Evaluation>> = Vec::with_capacity(work.len());
         let mut digest_keys = BTreeSet::new();
         for (repo, eval) in work.iter_mut().zip(&evaluators) {
@@ -240,11 +314,29 @@ impl Engine {
             proposals.push(deps);
         }
         let proposal_cpu_time = micros(started);
+        drop(phase);
+        // The revalidated complete tag namespace already carries peeled target
+        // commits. Reuse those for both current and proposed action tags instead
+        // of adding a serial /commits/{tag} round trip after policy evaluation.
+        for (package, reference) in &digest_keys {
+            if let Some(Ok(catalog)) = catalogs.get(&(word(&Source::GithubTags), package.clone()))
+                && let Some(digest) = catalog
+                    .versions
+                    .iter()
+                    .find(|version| &version.version == reference)
+                    .and_then(|version| version.digest.as_ref())
+            {
+                digests.insert((package.clone(), reference.clone()), Ok(digest.clone()));
+            }
+        }
         digest_keys.retain(|key| !digests.contains_key(key));
         let started = Instant::now();
+        let phase = PhaseTrace::new("digest");
         digests.extend(self.digests(digest_keys).await);
         let digest_time = micros(started);
+        drop(phase);
         let started = Instant::now();
+        let _phase = PhaseTrace::new("policy.report");
         for ((repo, eval), dep_proposals) in work.iter_mut().zip(&evaluators).zip(proposals) {
             let mut files: BTreeMap<String, Vec<ReportDependency>> = BTreeMap::new();
             for (dep, evaluation) in repo.dependencies.iter().zip(dep_proposals) {
@@ -388,6 +480,68 @@ impl Engine {
             .collect()
             .await
     }
+
+    async fn catalogs(&self, keys: BTreeSet<LookupKey>) -> Catalogs {
+        // The HTTP governors cap requests. A catalog walking several pages
+        // must not occupy a slot that prevents unrelated sources from starting.
+        let (releases, others): (Vec<_>, Vec<_>) = keys
+            .into_iter()
+            .partition(|(source, _)| source == "github-releases");
+        let packages: Vec<_> = releases.into_iter().map(|(_, package)| package).collect();
+        let batched = async {
+            let groups = stream::iter(packages.chunks(16))
+                .map(|group| async move {
+                    match self.sources.release_catalogs(group).await {
+                        Ok(catalogs) => catalogs
+                            .into_iter()
+                            .map(|(package, catalog)| {
+                                (
+                                    ("github-releases".into(), package),
+                                    catalog.map_err(|e| e.to_string()),
+                                )
+                            })
+                            .collect(),
+                        Err(_) => {
+                            // One inaccessible repository must not poison a group.
+                            stream::iter(group)
+                                .map(|package| async move {
+                                    (
+                                        ("github-releases".into(), package.clone()),
+                                        self.sources
+                                            .lookup(Source::GithubReleases, package)
+                                            .await
+                                            .map_err(|e| e.to_string()),
+                                    )
+                                })
+                                .buffer_unordered(self.concurrency)
+                                .collect::<Catalogs>()
+                                .await
+                        }
+                    }
+                })
+                .buffer_unordered(self.concurrency)
+                .collect::<Vec<Catalogs>>()
+                .await;
+            groups.into_iter().flatten().collect::<Catalogs>()
+        };
+        let pending = others.len().max(1);
+        let other_catalogs = stream::iter(others)
+            .map(|(source, package)| async move {
+                let parsed: Source =
+                    serde_json::from_value(Value::String(source.clone())).expect("typed source");
+                let result = self
+                    .sources
+                    .lookup(parsed, &package)
+                    .await
+                    .map_err(|e| e.to_string());
+                ((source, package), result)
+            })
+            .buffer_unordered(pending)
+            .collect::<Catalogs>();
+        let (mut catalogs, other_catalogs) = tokio::join!(batched, other_catalogs);
+        catalogs.extend(other_catalogs);
+        catalogs
+    }
     async fn repositories(&self) -> Result<Vec<String>> {
         match self
             .github
@@ -464,61 +618,83 @@ impl Engine {
         String::from_utf8(bytes).map_err(|_| Error::Invalid("selected file is not UTF-8".into()))
     }
     async fn scan(&self, repo: &str, override_config: Option<&Config>) -> Result<Work> {
-        // The previous branch is only a speculation hint. Always revalidate
-        // metadata, and retry the branch read if the default changed.
         let hint_key = ExtractionKey {
-            repo: format!("default-branch:{repo}"),
-            default_branch_commit: String::new(),
-            config_hash: "branch-v1".into(),
+            repo: format!("branch-hint:{repo}"),
+            default_branch_commit: self.github.credential_scope().into(),
+            config_hash: "branch-v2".into(),
         };
         let hint = self
             .cache
             .extraction_get(&hint_key)
             .await?
-            .and_then(|b| serde_json::from_slice::<String>(&b).ok());
-        let metadata_path = format!("repos/{repo}");
-        let (metadata, speculative_head) = if let Some(branch) = &hint {
-            let (metadata, head) = tokio::join!(self.json(&metadata_path), self.head(repo, branch));
-            (metadata?, Some(head))
+            .and_then(|bytes| String::from_utf8(bytes).ok());
+        let (branch, commit, tree_sha) = if let Some(hint) = hint {
+            // Conditional REST heads are faster than GraphQL snapshots on the
+            // measured warm path. Revalidate metadata and the hinted branch in
+            // parallel; a rename retries only the newly authoritative branch.
+            let metadata_path = format!("repos/{repo}");
+            let (metadata, head) = tokio::join!(self.json(&metadata_path), self.head(repo, &hint));
+            let metadata = metadata?;
+            let branch = metadata["default_branch"]
+                .as_str()
+                .ok_or_else(|| Error::Invalid("repository has no default branch".into()))?
+                .to_owned();
+            let head = if branch == hint {
+                head?
+            } else {
+                self.head(repo, &branch).await?
+            };
+            let commit = head["commit"]["sha"]
+                .as_str()
+                .ok_or_else(|| Error::Invalid("branch has no commit".into()))?
+                .to_owned();
+            let tree = head["commit"]["commit"]["tree"]["sha"]
+                .as_str()
+                .ok_or_else(|| Error::Invalid("commit has no tree".into()))?
+                .to_owned();
+            (branch, commit, tree)
         } else {
-            (self.json(&metadata_path).await?, None)
-        };
-        let branch = metadata["default_branch"]
-            .as_str()
-            .ok_or_else(|| Error::Invalid("repository has no default branch".into()))?
-            .to_owned();
-        let head = if hint.as_deref() == Some(&branch) {
-            speculative_head.expect("head started with hint")?
-        } else {
-            let head = self.head(repo, &branch).await?;
-            self.cache
-                .extraction_put(&hint_key, &serde_json::to_vec(&branch)?)
+            let (owner, name) = repo.split_once('/').expect("validated repository");
+            let data = self
+                .github
+                .graphql(
+                    REPOSITORY_HEAD_QUERY,
+                    serde_json::json!({"owner":owner,"name":name}),
+                )
                 .await?;
-            head
+            let head = &data["repository"]["defaultBranchRef"];
+            let branch = head["name"]
+                .as_str()
+                .ok_or_else(|| Error::Invalid("repository has no default branch".into()))?
+                .to_owned();
+            let commit = head["target"]["oid"]
+                .as_str()
+                .ok_or_else(|| Error::Invalid("branch has no commit".into()))?
+                .to_owned();
+            let tree = head["target"]["tree"]["oid"]
+                .as_str()
+                .ok_or_else(|| Error::Invalid("commit has no tree".into()))?
+                .to_owned();
+            (branch, commit, tree)
         };
-        let commit = head["commit"]["sha"]
-            .as_str()
-            .ok_or_else(|| Error::Invalid("branch has no commit".into()))?
-            .to_owned();
-        let tree_sha = head["commit"]["commit"]["tree"]["sha"]
-            .as_str()
-            .ok_or_else(|| Error::Invalid("commit has no tree".into()))?;
+        self.cache
+            .extraction_put(&hint_key, branch.as_bytes())
+            .await?;
         let mut report = repository(repo, Status::Complete, None);
         report.default_branch = Some(branch);
         report.commit = Some(commit.clone());
-        self.extract(repo, override_config, report, commit, tree_sha)
+        self.extract(repo, override_config, report, commit, &tree_sha)
             .await
     }
     async fn head(&self, repo: &str, branch: &str) -> Result<Value> {
-        let mut branch_url =
+        let mut url =
             reqwest::Url::parse(&format!("https://api.github.com/repos/{repo}/branches/"))
-                .expect("validated repository URL");
-        branch_url
-            .path_segments_mut()
+                .expect("validated repository");
+        url.path_segments_mut()
             .expect("https URL")
             .pop_if_empty()
             .push(branch);
-        self.json(branch_url.as_str()).await
+        self.json(url.as_str()).await
     }
     async fn extract(
         &self,

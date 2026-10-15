@@ -65,10 +65,15 @@ async fn public_multi_repo_report_cold_and_warm() {
     assert_eq!(cold.repositories, warm.repositories);
     let stats = warm.stats.as_ref().unwrap();
     assert_eq!(stats.extraction_hits, 2);
-    assert_eq!(
-        stats.requests, stats.not_modified,
-        "unchanged warm API requests must all be 304"
-    );
+    // Cold discovery uses GraphQL. First warm REST metadata/branch/release
+    // reads prime their validators; the tag namespace already revalidates.
+    if !recording {
+        assert_eq!(
+            stats.requests, 6,
+            "four conditional repository reads, one release head, one tag namespace"
+        );
+        assert_eq!(stats.not_modified, 1);
+    }
     assert!(stats.lookups > 0);
     assert!(
         stats.lookups
@@ -85,17 +90,18 @@ async fn public_multi_repo_report_cold_and_warm() {
     let cassette: rustovate_testkit::Cassette =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     for repo in ["jdx/usage", "jdx/mr-boxington"] {
-        let url = format!("https://api.github.com/repos/{repo}");
         let metadata = cassette
             .interactions
             .iter()
-            .find(|i| i.request.url == url && i.response.status == 200)
+            .find(|i| matches!(&i.request.body, rustovate_testkit::Body::Json(value)
+                if value["query"] == rustovate_engine::REPOSITORY_HEAD_QUERY
+                    && format!("{}/{}", value["variables"]["owner"].as_str().unwrap(), value["variables"]["name"].as_str().unwrap()) == repo))
             .expect("public repo metadata");
         let rustovate_testkit::Body::Json(value) = &metadata.response.body else {
             panic!("JSON metadata")
         };
         assert_eq!(
-            value["private"], false,
+            value["data"]["repository"]["isPrivate"], false,
             "only public repo recordings may be committed"
         );
     }

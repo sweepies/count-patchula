@@ -157,6 +157,15 @@ impl Client {
         self.0.governor.stats().await
     }
 
+    pub fn concurrency(&self) -> usize {
+        self.0.options.concurrency
+    }
+
+    /// One-way namespace for derived read hints; never the token itself.
+    pub fn credential_scope(&self) -> &str {
+        &self.0.credential_scope
+    }
+
     fn url(&self, path: &str) -> Result<Url> {
         let url = self.0.options.api_url.join(path).map_err(|_| Error::Url)?;
         if url.origin() != self.0.options.api_url.origin()
@@ -219,7 +228,7 @@ impl Client {
             .map_err(|_| Error::Cache)
     }
 
-    async fn exchange(&self, request: &Request) -> Result<Response> {
+    async fn exchange(&self, request: &Request, cached: bool) -> Result<Response> {
         let resource = if request.method() == Method::POST {
             "graphql"
         } else if request.url().path().starts_with("/search/") {
@@ -228,12 +237,18 @@ impl Client {
             "core"
         };
         for attempt in 0..=self.0.options.max_retries {
+            let trace = rustovate_http::RequestTrace::new(request.method().as_str(), request.url());
+            trace.cache_policy(if cached { "always-revalidate" } else { "cold" }, None);
+            let queued = std::time::Instant::now();
             let permit = self.0.governor.acquire(resource).await?;
             self.0.governor.request();
-            let result = self
-                .0
-                .transport
-                .send(request.try_clone().ok_or(Error::Configuration)?)
+            let result = trace
+                .send(
+                    self.0.transport.as_ref(),
+                    request.try_clone().ok_or(Error::Configuration)?,
+                    queued.elapsed(),
+                    cached,
+                )
                 .await;
             let response = match result {
                 Ok(response) => response,
@@ -308,7 +323,7 @@ impl Client {
                     }
                 }
             }
-            let mut response = self.exchange(&request).await?;
+            let mut response = self.exchange(&request, cached.is_some()).await?;
             if matches!(response.status.as_u16(), 301 | 302 | 303 | 307 | 308) {
                 let location = response
                     .headers
@@ -414,7 +429,7 @@ impl Client {
                 .map_err(|_| Error::Json)?
                 .into(),
         );
-        let response = self.exchange(&request).await?;
+        let response = self.exchange(&request, false).await?;
         if !response.status.is_success() {
             return Err(Error::Status(response.status.as_u16()));
         }

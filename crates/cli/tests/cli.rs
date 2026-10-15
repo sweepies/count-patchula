@@ -54,6 +54,7 @@ fn lookup_requires_token_without_network_and_validates_concurrency() {
         ])
         .env_remove("GITHUB_TOKEN")
         .env_remove("RUSTOVATE_TOKEN")
+        .env_remove("GH_TOKEN")
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));

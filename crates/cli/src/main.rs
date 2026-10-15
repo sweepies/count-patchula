@@ -42,6 +42,25 @@ async fn run(app: &App) -> Result<u8, (u8, miette::Report)> {
 #[tokio::main]
 async fn main() -> ExitCode {
     let app = App::parse();
+    // Only our explicitly sanitized events reach stderr. Dependency HTTP debug
+    // logs can contain headers even when the user requests maximum verbosity.
+    use tracing_subscriber::{filter::Targets, prelude::*};
+    let level = std::env::var("RUSTOVATE_LOG")
+        .ok()
+        .and_then(|value| value.parse::<tracing::level_filters::LevelFilter>().ok())
+        .unwrap_or(if app.verbose >= 2 {
+            tracing::level_filters::LevelFilter::DEBUG
+        } else {
+            tracing::level_filters::LevelFilter::WARN
+        });
+    let _ = tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(io::stderr)
+                .with_ansi(false)
+                .with_filter(Targets::new().with_target("rustovate", level)),
+        )
+        .try_init();
     let color = app.color == cli::Color::Always
         || (app.color == cli::Color::Auto && io::stderr().is_terminal());
     let _ = miette::set_hook(Box::new(move |_| {
@@ -86,10 +105,11 @@ async fn lookup(app: &App, options: &cli::Lookup) -> Result<u8, (u8, miette::Rep
         .map_err(|e| (2, e))?;
     let token = std::env::var("RUSTOVATE_TOKEN")
         .or_else(|_| std::env::var("GITHUB_TOKEN"))
+        .or_else(|_| std::env::var("GH_TOKEN"))
         .map_err(|_| {
             (
                 1,
-                miette::miette!("lookup requires RUSTOVATE_TOKEN or GITHUB_TOKEN"),
+                miette::miette!("lookup requires RUSTOVATE_TOKEN, GITHUB_TOKEN or GH_TOKEN"),
             )
         })?;
     if let Some(parent) = options.cache.parent().filter(|p| !p.as_os_str().is_empty()) {

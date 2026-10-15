@@ -1,5 +1,5 @@
 //! Conditional, unauthenticated registry GETs sharing the batch transport pool.
-use crate::{Response, Transport};
+use crate::{RequestTrace, Response, Transport};
 use reqwest::{
     Method, Request, StatusCode, Url,
     header::{self, HeaderValue},
@@ -12,7 +12,7 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Semaphore;
 
@@ -84,17 +84,39 @@ impl Cached {
             url.as_str(),
             BTreeMap::from([("accept".into(), accept.into())]),
         )?;
+        let trace = RequestTrace::new("GET", &url);
         let cached = self.0.cache.http_get(&key).await?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
-        if let Some(entry) = &cached
-            && entry.expires_at.is_some_and(|expiry| expiry > now)
-            && !entry.cache_control.as_deref().is_some_and(|c| {
+        let no_cache = cached.as_ref().is_some_and(|entry| {
+            entry.cache_control.as_deref().is_some_and(|c| {
                 c.split(',')
                     .any(|p| p.trim().eq_ignore_ascii_case("no-cache"))
             })
+        });
+        let ttl = cached
+            .as_ref()
+            .and_then(|entry| entry.expires_at)
+            .map(|expiry| expiry.saturating_sub(now));
+        trace.cache_policy(
+            if cached.is_none() {
+                "cold"
+            } else if no_cache {
+                "no-cache"
+            } else if ttl.is_none() {
+                "no-expiry"
+            } else if ttl.is_some_and(|ttl| ttl > 0) {
+                "fresh"
+            } else {
+                "expired"
+            },
+            ttl,
+        );
+        if let Some(entry) = &cached
+            && entry.expires_at.is_some_and(|expiry| expiry > now)
+            && !no_cache
         {
             self.0.cache_hits.fetch_add(1, Ordering::Relaxed);
             let mut headers = header::HeaderMap::new();
@@ -105,11 +127,13 @@ impl Cached {
                     HeaderValue::from_str(value).map_err(|_| Error::Configuration)?,
                 );
             }
-            return Ok(Response {
+            let response = Response {
                 status: StatusCode::from_u16(entry.status).map_err(|_| Error::Configuration)?,
                 headers,
                 body: entry.body.clone(),
-            });
+            };
+            trace.fresh(&response);
+            return Ok(response);
         }
         let mut request = Request::new(Method::GET, url);
         request.headers_mut().insert(
@@ -138,14 +162,23 @@ impl Cached {
                 }
             }
         }
-        let _permit = self
+        let queued = Instant::now();
+        let permit = self
             .0
             .semaphore
             .acquire()
             .await
             .map_err(|_| Error::Configuration)?;
         self.0.requests.fetch_add(1, Ordering::Relaxed);
-        let mut response = self.0.transport.send(request).await?;
+        let mut response = trace
+            .send(
+                self.0.transport.as_ref(),
+                request,
+                queued.elapsed(),
+                cached.is_some(),
+            )
+            .await?;
+        drop(permit);
         let not_modified = response.status == StatusCode::NOT_MODIFIED;
         if not_modified {
             let entry = cached.ok_or(Error::MissingBody)?;

@@ -135,9 +135,11 @@ async fn public_sources_cold_and_conditional_warm() {
     assert_eq!(
         after_g.requests - before_g.requests,
         3,
-        "warm GitHub only probes and ref, no GraphQL history"
+        "warm GitHub has one batched release head, one tag namespace and one ref read"
     );
-    assert_eq!(after_g.not_modified - before_g.not_modified, 3);
+    if std::env::var("RUSTOVATE_RECORD").as_deref() != Ok("1") {
+        assert_eq!(after_g.not_modified - before_g.not_modified, 2);
+    }
     assert!(
         after_h.requests - before_h.requests <= 2,
         "fresh registries and Go history are cached"

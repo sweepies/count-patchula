@@ -15,3 +15,8 @@ rustovate-cache = { version = "0.1.0", path = "../cache" }
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
 tokio.workspace = true
+tracing = "0.1"
+percent-encoding = "2"
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "registry"] }
