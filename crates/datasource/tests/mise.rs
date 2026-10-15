@@ -8,13 +8,80 @@ use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
 
 #[tokio::test]
+async fn setup_node_uses_node_lts_membership_without_replacing_github_release_dates() {
+    use rustovate_http::{Exchange, Response, Transport};
+    struct Node;
+    impl Transport for Node {
+        fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+            Box::pin(async move {
+                let body = match request.url().path() {
+                    "/graphql" => json!({"data":{"r0":{"releases":{"nodes":[
+                        {"tagName":"24.2.0","publishedAt":"2026-10-08T12:00:00Z","isDraft":false,"isPrerelease":false},
+                        {"tagName":"26.1.0","publishedAt":"2026-10-09T12:00:00Z","isDraft":false,"isPrerelease":false}
+                    ],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+                    "/dist/index.json" => json!([
+                        {"version":"v26.1.0","date":"2026-10-08","lts":false},
+                        {"version":"v24.1.0","date":"2026-10-01","lts":"Example"}
+                    ]),
+                    "/repos/actions/node-versions/releases" => {
+                        json!([{"tag_name":"24.2.0","published_at":"2026-10-08T12:00:00Z","draft":false,"prerelease":false}])
+                    }
+                    path => panic!("unexpected offline request {path}"),
+                };
+                Ok(Response {
+                    status: reqwest::StatusCode::OK,
+                    headers: reqwest::header::HeaderMap::from_iter([(
+                        reqwest::header::CACHE_CONTROL,
+                        "max-age=300".parse().unwrap(),
+                    )]),
+                    body: serde_json::to_vec(&body).unwrap(),
+                })
+            })
+        }
+    }
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let transport = Arc::new(Node);
+    let github = rustovate_github::Client::with_transport(
+        "offline",
+        cache.clone(),
+        Default::default(),
+        transport.clone(),
+    )
+    .unwrap();
+    let client = Client::new(
+        github,
+        Cached::new(cache.clone(), transport, 2).unwrap(),
+        cache,
+    );
+    for _ in 0..2 {
+        let catalog = client
+            .lookup(Source::GithubReleases, "actions/node-versions")
+            .await
+            .unwrap();
+        assert_eq!(catalog.dist_tags["lts"], "24.1.0");
+        assert_eq!(catalog.versions.len(), 2);
+        assert_eq!(
+            catalog
+                .versions
+                .iter()
+                .find(|v| v.version == "24.2.0")
+                .unwrap()
+                .published_at
+                .as_deref(),
+            Some("2026-10-08T12:00:00Z")
+        );
+    }
+}
+
+#[tokio::test]
 async fn core_node_and_pypi_use_real_metadata_shapes_and_fresh_bodies() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("mise.json");
     let interactions = [
         ("https://nodejs.org/dist/index.json", json!([
-            {"version":"v24.2.0","date":"2026-10-14"},
-            {"version":"v24.1.0","date":"2026-10-01"}
+            {"version":"v24.2.0","date":"2026-10-14","lts":false},
+            {"version":"v24.1.0","date":"2026-10-01","lts":"Example"},
+            {"version":"v22.9.0","date":"2026-10-02","lts":"Previous"}
         ])),
         ("https://pypi.org/pypi/spec-cli/json", json!({"releases":{
             "1.0.0":[{"upload_time_iso_8601":"2026-10-01T09:00:00Z","yanked":false}],
@@ -41,6 +108,7 @@ async fn core_node_and_pypi_use_real_metadata_shapes_and_fresh_bodies() {
     let client = Client::new(github, http.clone(), cache);
     let node = client.lookup(Source::Mise, "node").await.unwrap();
     assert_eq!(node.versions[0].version, "24.2.0");
+    assert_eq!(node.dist_tags["lts"], "24.1.0");
     assert_eq!(
         node.versions[0].published_at.as_deref(),
         Some("2026-10-14T00:00:00Z")

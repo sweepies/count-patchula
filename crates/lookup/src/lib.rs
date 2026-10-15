@@ -239,6 +239,7 @@ impl Evaluator {
             replace!(
                 active,
                 versions,
+                channel,
                 merge,
                 labels,
                 commit_prefix,
@@ -256,6 +257,15 @@ impl Evaluator {
             if o.permitted.is_some() {
                 effective.permitted = compiled.permitted.as_ref();
             }
+        }
+        // Peers express consumer compatibility, even when installed packages
+        // use exact versions. Exact peer declarations still bump in place.
+        if dep.manager == Manager::Npm && dep.kind == DependencyKind::Peer {
+            effective.policy.versions = if Ecosystem::Npm.parse(&dep.current).is_ok() {
+                VersionPolicy::Exact
+            } else {
+                VersionPolicy::Widen
+            };
         }
         effective
     }
@@ -332,6 +342,26 @@ impl Evaluator {
                             kind: Update,
                             effective: &Effective<'_>|
          -> Result<bool> {
+            if effective.policy.channel == rustovate_config::ReleaseChannel::Lts {
+                let node = (dep.source == Source::Mise
+                    && matches!(dep.package.as_str(), "node" | "core:node"))
+                    || (dep.source == Source::GithubReleases
+                        && dep.package == "actions/node-versions");
+                if !node {
+                    return Err("LTS channel is supported only for Node distributions and setup-node inputs".into());
+                }
+                let lts = catalog
+                    .dist_tags
+                    .get("lts")
+                    .and_then(|v| Ecosystem::Loose.parse(v).ok())
+                    .ok_or_else(|| "Node catalog has no LTS channel evidence".to_owned())?;
+                if !Ecosystem::Loose
+                    .parse(selected)
+                    .is_ok_and(|v| v.0.major == lts.0.major)
+                {
+                    return Ok(false);
+                }
+            }
             // The gate chooses proposals; it never removes extracted/current releases.
             if effective.policy.wait_hours == 0 || version.published_at.is_none() {
                 return Ok(true);
@@ -610,9 +640,47 @@ impl Evaluator {
                     },
                 )
             } else {
-                let value = scheme
-                    .new_range(&dep.current, &normalized, effective.policy.versions)
-                    .map_err(|e| e.to_string())?;
+                let value = if dep.manager == Manager::Npm
+                    && dep.kind == DependencyKind::Peer
+                    && effective.policy.versions == VersionPolicy::Widen
+                {
+                    if scheme
+                        .matches(
+                            &dep.current,
+                            &scheme.parse(&normalized).map_err(|e| e.to_string())?,
+                        )
+                        .unwrap_or(false)
+                    {
+                        dep.current.clone()
+                    } else {
+                        let target = scheme.parse(&normalized).map_err(|e| e.to_string())?;
+                        let minor = if target.0.major == 0 {
+                            target.0.minor
+                        } else {
+                            0
+                        };
+                        let patch = if target.0.major == 0 && minor == 0 {
+                            target.0.patch
+                        } else {
+                            0
+                        };
+                        format!("{} || ^{}.{}.{}", dep.current, target.0.major, minor, patch)
+                    }
+                } else if dep.manager == Manager::Terraform
+                    && dep.kind == DependencyKind::Provider
+                    && scheme
+                        .matches(
+                            &dep.current,
+                            &scheme.parse(&normalized).map_err(|e| e.to_string())?,
+                        )
+                        .unwrap_or(false)
+                {
+                    dep.current.clone()
+                } else {
+                    scheme
+                        .new_range(&dep.current, &normalized, effective.policy.versions)
+                        .map_err(|e| e.to_string())?
+                };
                 // Preserve aliases and packageManager identity via extraction
                 // location metadata, while current/newValue describe the version.
                 value
@@ -772,6 +840,7 @@ fn proposal(
         group: policy.group.clone().filter(|g| !g.is_empty()),
         policy: Some(UpdatePolicy {
             versions: Some(rustovate_manager::word(&policy.versions)),
+            channel: Some(rustovate_manager::word(&policy.channel)),
             wait_hours: policy.wait_hours,
             windows: policy
                 .windows

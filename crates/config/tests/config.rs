@@ -36,10 +36,27 @@ fn defaults_are_explicit_safe_and_unlimited() {
     assert!(config.defaults.action_digests && config.defaults.image_digests);
     assert!(!config.defaults.merge);
     assert_eq!(config.defaults.versions, VersionPolicy::Exact);
+    assert_eq!(
+        config.defaults.channel,
+        rustovate_config::ReleaseChannel::Stable
+    );
     assert_eq!(config.defaults.wait_hours, 24);
     assert_eq!(config.prs.concurrent, None);
     assert_eq!(config.prs.per_hour, None);
     assert!(config.managers.contains(&Manager::GithubActions));
+}
+
+#[test]
+fn node_lts_channel_is_typed_and_rule_selectable() {
+    let (_dir, path) = fixture(
+        "rules = new Listing { new Rule { select { packages = new Listing { \"node\"; \"actions/node-versions\" } } apply { channel = \"lts\" } } }",
+    );
+    assert_eq!(
+        load(&path).unwrap().rules[0].apply.channel,
+        Some(rustovate_config::ReleaseChannel::Lts)
+    );
+    let (_dir, path) = fixture("defaults { channel = \"guess\" }");
+    assert!(load(&path).is_err());
 }
 
 #[test]

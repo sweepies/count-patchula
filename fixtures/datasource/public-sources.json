@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "provenance": "Recorded by rustovate from the request URLs; never imported from other bots",
+  "provenance": "Recorded by rustovate from the request URLs; never imported from other bots; round 4 offline adaptation: tag hydration requests use tagger dates; previously unrecorded tagger dates remain unavailable. New tag release-history interactions are independently simulated empty catalogs, not live recordings. Release date precedence and late publication are tested with an independent synthetic transport.",
   "interactions": [
     {
       "request": {
@@ -1722,7 +1722,7 @@
         "body": {
           "format": "json",
           "value": {
-            "query": "query($owner:String!,$name:String!,$s0:GitObjectID!,$s1:GitObjectID!){repository(owner:$owner,name:$name){t0:object(oid:$s0){oid __typename ... on Commit{committedDate} ... on Tag{target{__typename ... on Commit{oid committedDate} ... on Tag{target{__typename ... on Commit{oid committedDate}}}}}} t1:object(oid:$s1){oid __typename ... on Commit{committedDate} ... on Tag{target{__typename ... on Commit{oid committedDate} ... on Tag{target{__typename ... on Commit{oid committedDate}}}}}}}}",
+            "query": "query($owner:String!,$name:String!,$s0:GitObjectID!,$s1:GitObjectID!){repository(owner:$owner,name:$name){t0:object(oid:$s0){oid __typename ... on Tag{tagger{date} target{__typename ... on Commit{oid} ... on Tag{target{__typename ... on Commit{oid}}}}}} t1:object(oid:$s1){oid __typename ... on Tag{tagger{date} target{__typename ... on Commit{oid} ... on Tag{target{__typename ... on Commit{oid}}}}}}}}",
             "variables": {
               "name": "hello-world-javascript-action",
               "owner": "actions",
@@ -2926,6 +2926,79 @@
         "body": {
           "format": "text",
           "value": ""
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ],
+          "content-type": [
+            "application/json"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "query": "query($o0:String!,$n0:String!){r0:repository(owner:$o0,name:$n0){releases(first:100,orderBy:{field:CREATED_AT,direction:DESC}){nodes{tagName publishedAt isDraft isPrerelease}pageInfo{hasNextPage endCursor}}}}",
+            "variables": {
+              "o0": "actions",
+              "n0": "hello-world-javascript-action"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {},
+        "body": {
+          "format": "json",
+          "value": {
+            "data": {
+              "r0": {
+                "releases": {
+                  "nodes": [],
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": null
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/repos/actions/hello-world-javascript-action/releases?per_page=1",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {},
+        "body": {
+          "format": "json",
+          "value": []
         }
       }
     }

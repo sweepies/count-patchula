@@ -179,6 +179,8 @@ pub struct Update {
 pub struct UpdatePolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub versions: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
     pub wait_hours: u32,
     pub windows: Vec<Window>,
     pub merge: bool,

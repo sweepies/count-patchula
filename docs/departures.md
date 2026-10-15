@@ -4,10 +4,10 @@ rustovate is not a Renovate clone. Each entry records a behaviour that differs
 on purpose, and why. The comparison harness links differences it finds to
 entries here; a difference with no entry is treated as a bug.
 
-Review map (45 entries; IDs below remain stable):
+Review map (44 entries; IDs below remain stable):
 
 - **Policy:** 2–8, 10, 12, 14, 16–18, 20, 23, 25, 29–31, 33–35,
-  37–38, 40–43, 45 cover explicit activation, reproducibility, update tracks,
+  37–38, 42–43, 45–46 cover explicit activation, reproducibility, update tracks,
   release timing and editable declarations. rustovate is developed independently;
   the twelve public repositories are test inputs, not product requirements.
 - **Performance and strategy:** 21 and 36 describe conditional history probes,
@@ -19,13 +19,13 @@ Review map (45 entries; IDs below remain stable):
   uneditable inventory. Numeric prefixes and missing optional fields are counted
   normalizations, not extra product policies.
 
-**Questionable choices for owner review:** 21's one-hour catalog floor can delay
-new releases; 23 uses commit dates for GitHub tags, which cannot prove creation
-time for lightweight tags; 25's exact peer pins can narrow a library's support
-contract; 40's higher Cargo floor and 41's exact provider pins trade breadth for
-explicit selection; 42 chooses stable releases without inferring LTS. Configure
-support ranges/channels explicitly where these tradeoffs are unsuitable. These
-are policy choices, not evidence that a stale or failed lookup is equivalent.
+**SWE-103 owner decisions (round 4):** keep the one-hour catalog floor
+(21) and newest stable by default (42); Node LTS requires an explicit channel
+rule. GitHub tag age uses release publication, then annotated tagger time,
+never commit time (23). Peer ranges widen and exact peers bump in place (25).
+Cargo floors and satisfying Terraform provider constraints now follow the
+observed baseline; departures 40 and 41 and their harness rules are removed.
+These choices apply independently of the twelve comparison repositories.
 
 Stable comparison link: <a id="departure-7"></a>**Departure 7: default policy**
 (table row 7 below). IDs are retained when descriptions change.
@@ -56,7 +56,7 @@ Stable comparison link: <a id="departure-7"></a>**Departure 7: default policy**
 | 22 | Repeated dependencies | Manager snapshots can contain repeated dependency names | Optional occurrence IDs preserve different current values, merging identical rows | Retain all manifest occurrences without ambiguous report identities |
 | 23 | Minimum release age | The compared run waits about three days | Follow mise's default minimum_release_age of 24 hours for dated releases; choose the newest eligible release and report held-back versions | A short explicit default with release-date evidence; undated releases have no delay |
 | 24 | npm integrity | Lookup reports npm integrity as newDigest | npm manifests do not pin integrity; compare targets without npm newDigest | Lockfile integrity belongs to lockfile tooling |
-| 25 | npm range edits | The compared policy can retain caret/tilde ranges | versions = "exact" proposes exact releases and range pins | Apply explicit version policy consistently |
+| 25 | npm range edits | The compared policy can retain caret/tilde ranges | versions = "exact" pins installed dependencies/devDependencies; peers widen ranges or bump exact values | Reproducible installs while preserving consumer support |
 | 26 | Kubernetes API inventory | Reports apiVersion/kind pairs as kubernetes-api dependencies | Kubernetes extraction owns workload images; API migrations require a separate schema-aware operation | Changing CRD API versions without migrating their fields is unsafe |
 | 27 | YAML image ownership | Broad helm-values file patterns can repeat Kubernetes images | Kubernetes workload images belong to kubernetes; HelmRelease values belong to flux | Apply one manager policy to each semantic image location |
 | 28 | Helm archive checksums | Lookup reports chart archive hashes as newDigest | Helm chart references contain versions, not archive hashes | Artifact verification metadata does not edit the manifest |
@@ -71,61 +71,65 @@ Stable comparison link: <a id="departure-7"></a>**Departure 7: default policy**
 | 37 | Explicit disabled updates | Lookup snapshots can contain targets disabled by repository rules | Report effective disabled classes and omit their proposals | Preserve repository policy during comparisons |
 | 38 | Rejected releases | Lookup can propose deprecated releases | Reject deprecated/yanked versions and record the exact rejected targets | Avoid moving users onto withdrawn releases |
 | 39 | Observed current versions | currentVersion can mean newest satisfying release or floating tag | Current version follows the lockfile or pinned commit when available | Keep installed/pinned identity separate from candidate resolution |
-| 40 | Cargo range floors | Can retain a lower compatibility floor such as 1.0 for target 1.1.0 | Preserve the declaration's precision while moving its floor to the selected release, such as 1.1 | Do not claim compatibility with releases below the selected target line |
-| 41 | Exact Terraform provider pins | Can retain a satisfying provider constraint without a manifest edit | Explicit exact policy replaces it with the selected version | A reproducible provider selection should be an intentional manifest edit |
 | 42 | Release channels | Some Node targets follow the LTS line | Select the newest eligible stable version allowed by explicit policy | Do not infer a hidden LTS restriction from a package name |
 | 43 | Go language floor | Can resolve the go directive as the installed toolchain | Report the declared minimum language version and its own upgrades | Keep minimum language support distinct from a toolchain installation |
 | 44 | mise registry identity | Can select older or different backend identities | Follow the first supported backend in the published mise registry snapshot | Use the tool's current published backend; never equate distinct package identities |
 | 45 | Action alias precision | Can expand a ref when adding a digest | Preserve the declared numeric ref precision and report the full resolved target separately | The commit pin supplies reproducibility while the ref describes the intended release line |
+| 46 | Cargo target resolution | Observed pre-1.0 upgrades can select an older release in the proposed range | Resolve the newest eligible release in that same compatibility interval | Report the available release without narrowing the manifest |
 
 <a id="departure-42"></a>**Departure 42: explicit stable channels.**
-The reviewed live cases are Node major targets in mise/setup-node and the
-corresponding npm type package: stable 26 versus the baseline's 24 line.
-They are not a one-hour age crossing. An explicit permitted filter can keep an
-LTS line. **Review choice:** newest stable is not always the desired production
-channel. No automatic comparison rule guesses LTS membership from a name or
-major number; these eight rows stay visible pending a channel decision.
+Newest eligible stable remains the default. The reviewed Node differences
+(mise Node, setup-node inputs, and @types/node) select a newer stable major
+while the observed baseline stays on a lower line. Narrow rules require these
+specific source identities, equal declarations/digests, explicit stable policy
+(or the legacy default), stable ordered majors and digest-free major proposals.
+Other packages, peer ranges, same-major target drift and explicit LTS policy do
+not qualify. This explains the observed channel choice without guessing LTS
+membership from an even major number. For an opt-in Node LTS rule, see
+[lookup policy](lookup-policy.md#node-release-channels).
 
 <a id="departure-43"></a>**Departure 43: Go language directives.**
-The reviewed case declares `go 1.26` while the baseline resolves currentVersion
-to 1.27.2 and emits no go-directive upgrades. rustovate retains 1.26 and offers
-1.26.9/1.27.2 as explicit edits to that floor. This does not infer an installed
-compiler from go.mod. The three rows remain visible: there is no general Go
-currentVersion exemption, and toolchain/module dependencies are unaffected.
+A go.mod `go` directive declares a language floor, distinct from an installed
+compiler. Narrow rules require the exact go/go identity, baseline
+golang-version/golang metadata, actual mise/go-directive metadata, identical
+manifest values/digests and explicit declared resolution equal to the floor.
+Only a newer baseline compiler and digest-free exact patch/minor floor edits
+up to that compiler qualify when the baseline has no proposals. Toolchains,
+modules, invented resolutions and targets beyond the observed compiler stay
+visible. This explains the three reviewed rows without a generic Go exemption.
 
 <a id="departure-44"></a>**Departure 44: published mise backends.**
-The reviewed names are bitwarden-secrets-manager (`bitwarden/sdk-sm` rather
-than `bitwarden/sdk`) and prettier (npm `prettier` rather than GitHub
-`prettier/prettier`). Backend identity is observable and remains compared.
-The resolver's public registry snapshot and product tag-prefix mappings are
-independent of the test repositories. There is no package-equivalence exemption;
-explicit backend selectors can choose a different source.
+The published registry selects bitwarden-secrets-manager from bitwarden/sdk-sm
+rather than bitwarden/sdk, and prettier from npm rather than prettier/prettier.
+The identity remains distinct in both reports. The narrow rule classifies only
+those two observed migrations with matching `latest` current fields, no
+proposals, and the exact old/new source and tool-kind metadata. Other backend
+changes and all target changes remain visible; this is not package equivalence.
+Explicit backend selectors can choose another source.
 
 <a id="departure-45"></a>**Departure 45: action pin precision.**
-For an unpinned numeric alias such as v4, adding a commit keeps newValue v4 and
-reports the full version (for example v4.4.0) in newVersion. The digest must be
-the alias's peeled commit. A digest update on an existing pin resolves the new
-commit, not the old pin. The supplied report's v4/v2 newVersion fields were a
-bug, now fixed; the ref-value choice is intentional. No exemption hides those
-old report fields or a changed hash.
+Adding or updating a commit pin retains a numeric alias such as v4 while
+newVersion reports the full target. The narrow rule requires equal package and
+current identity, github-tags action/workflow metadata, an unchanged alias with
+one or two numeric components, and the identical full target. The actual commit
+must be a 40-digit hash and match a baseline commit when supplied; an added
+commit is separately audited under departure 7. Changed targets, supplied hashes,
+upgrade classes and absent full versions remain visible. The previous newVersion
+bug is fixed separately.
 
-<a id="departure-40"></a>**Departure 40: Cargo target range floors.**
-Only paired Cargo proposals with identical package/current identities, target,
-class and no digest qualify. The current declaration must be a bare two-component
-range, actual source must be crates, and explicit preserve policy must produce
-the target's major/minor line. The baseline range must contain that exact target.
-Target, precision, policy, digest and package changes remain actionable. This
-does not classify the older keepass/toml_edit targets in the live comparison.
-
-<a id="departure-41"></a>**Departure 41: exact provider pins.**
-Only same-target, same-class, digest-free provider updates with matching
-package/current identities qualify. Actual metadata must say terraform/provider
-and carry explicit exact policy. The baseline must leave the current `~> x.y`
-or `~> x.y.z` range unchanged, and that range must contain the stable target;
-actual newValue must equal newVersion. Module/runtime constraints, changed
-targets or ranges and absent policy stay actionable. **Review choice:** exact
-pins sacrifice the original support interval; use preserve policy for reusable
-modules that intentionally support a range.
+<a id="departure-46"></a>**Departure 46: Cargo compatible target resolution.**
+The fresh output resolves keepass 0.15.0 versus 0.15.2, and toml_edit 0.25.16
+versus 0.25.17+spec-1.1.0. All exceed both release-age windows. Both sides propose
+the identical bare two-component Cargo interval, which contains both targets;
+rustovate selects the newest eligible release available from its sparse index.
+This is a resolved-target choice, not capture skew or a range-floor exemption.
+The narrow rule requires matching package/current declarations and digests,
+crate/crates sources, no stale evidence, a current pre-1.0 minor below both
+targets, ordered stable releases on the same nonzero pre-1.0 minor, identical
+proposed `0.minor` intervals, explicit preserve policy, no proposed digests,
+and the observed minor-to-major Cargo taxonomy. Both missing/extra rows remain
+separately audited. Changed ranges, different compatibility intervals, stale
+lookups and unrelated taxonomy remain actionable. Tests cover negative cases.
 
 <a id="departure-37"></a>**Departure 37: effective disabled classes.**
 Only missing proposals on matching package/current identities with a valid
@@ -251,7 +255,11 @@ reported separately from dependency differences and never implies parity.
 
 <a id="departure-23"></a>**Departure 23: minimum release age.**
 The default follows [mise's minimum_release_age](https://mise.jdx.dev/configuration/settings.html#minimum_release_age):
-24 hours when a release timestamp is available. The comparison rule requires an
+24 hours when a release timestamp is available. GitHub tags use the matching
+release publishedAt, otherwise the annotated tagger date; a lightweight tag
+without a release is undated and has no wait. Commit dates are never release
+age evidence. Tag-object/catalog caches are versioned to discard old commit
+dates; release dates revalidate even when the tag namespace is unchanged. The comparison rule requires an
 explicit 24-hour policy and timestamp evidence that rustovate's newer proposal is
 at least 24 and less than 72 hours old, plus a strictly older Renovate target in
 the same update class. A newer baseline target instead requires an unexpired
@@ -289,13 +297,13 @@ existing npm dependency, the same caret/tilde current range, no baseline pin, a
 satisfying exact target, no digest, npm datasource and explicit exact policy.
 Other target, update-type, or range differences stay actionable.
 
-The exact major rule also accepts a lower caret/tilde floor on the target's
-major line when it contains the selected target, numeric shorthand current
-ranges, and a peer-only `current || target-range` widening. Differing targets
-require the independent release-age predicate's clock/held-target evidence.
-An unchanged satisfying baseline minor/patch declaration paired with the
-identical exact pin is also classified; arbitrary missing version targets are
-not. Exact peer policy is explicitly flagged for owner review above.
+The exact major rule also accepts a lower caret/tilde floor on the target
+major line when it contains the selected target, and numeric shorthand current
+ranges. Differing targets require independent release-age evidence. An unchanged
+satisfying baseline minor/patch declaration paired with the identical exact pin
+is also classified. **Peers never qualify for these exact-pin exemptions:**
+ranges widen to include the new major (`^5 || ^7.0.0`), exact peers bump in
+place, and satisfying peer ranges are never pinned by `versions = "exact"`.
 
 <a id="departure-19"></a>**Departure 19: configuration dependency scope.**
 The fixed comparison rule `renovate-config-manager` excludes only Renovate's own

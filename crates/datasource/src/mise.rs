@@ -29,19 +29,23 @@ impl Client {
             }
         }
     }
-    async fn node(&self) -> Result<Catalog> {
+    pub(super) async fn node(&self) -> Result<Catalog> {
         let response = self
             .http
             .get("https://nodejs.org/dist/index.json", "application/json")
             .await?;
         let values: Vec<Value> = serde_json::from_slice(&response.body)?;
         let mut versions = Vec::with_capacity(values.len());
+        let mut lts = Vec::new();
         for value in values {
             let version = value["version"]
                 .as_str()
                 .ok_or(Error::Invalid)?
                 .trim_start_matches('v');
             let date = value["date"].as_str().ok_or(Error::Invalid)?;
+            if value["lts"].as_str().is_some_and(|s| !s.is_empty()) {
+                lts.push(version.to_owned());
+            }
             versions.push(Version {
                 version: version.into(),
                 published_at: Some(format!("{date}T00:00:00Z")),
@@ -51,9 +55,16 @@ impl Client {
             });
         }
         sort(&mut versions, Ecosystem::Loose);
+        let latest_lts = lts
+            .into_iter()
+            .filter_map(|v| Some((Ecosystem::Loose.parse(&v).ok()?, v)))
+            .max_by(|(a, _), (b, _)| Ecosystem::Loose.order(a, b))
+            .map(|(_, v)| v);
         Ok(Catalog {
             versions,
-            dist_tags: BTreeMap::new(),
+            dist_tags: latest_lts
+                .map(|v| BTreeMap::from([("lts".into(), v)]))
+                .unwrap_or_default(),
         })
     }
 }

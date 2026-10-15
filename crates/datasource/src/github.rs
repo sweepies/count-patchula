@@ -6,7 +6,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 const RELEASES: &str = "query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){releases(first:100,after:$cursor,orderBy:{field:CREATED_AT,direction:DESC}){nodes{tagName publishedAt isDraft isPrerelease}pageInfo{hasNextPage endCursor}}}}";
-const GIT_OBJECT_FIELDS: &str = "oid __typename ... on Commit{committedDate} ... on Tag{target{__typename ... on Commit{oid committedDate} ... on Tag{target{__typename ... on Commit{oid committedDate}}}}}";
+const GIT_OBJECT_FIELDS: &str = "oid __typename ... on Tag{tagger{date} target{__typename ... on Commit{oid} ... on Tag{target{__typename ... on Commit{oid}}}}}";
 
 #[derive(Serialize, Deserialize)]
 struct ReleaseHead {
@@ -179,7 +179,7 @@ impl Client {
             }
             self.cache.extraction_put(&key, &fingerprint).await?;
         }
-        Ok(Catalog {
+        let mut catalog = Catalog {
             versions: self
                 .cache
                 .releases("github-releases", package)
@@ -189,10 +189,25 @@ impl Client {
                 .map(Version::from)
                 .collect(),
             dist_tags: BTreeMap::new(),
-        })
+        };
+        if package == "actions/node-versions" {
+            // Stable setup-node targets remain usable during a Node-index
+            // outage. An explicit LTS policy fails closed without this evidence.
+            if let Ok(node) = self.node().await {
+                catalog.dist_tags = node.dist_tags;
+            }
+        }
+        Ok(catalog)
     }
 
     async fn github_tags(&self, package: &str) -> Result<Catalog> {
+        // Releases can be published after their tags. Revalidate release history
+        // independently of the immutable object/namespace caches on every run.
+        let releases = self
+            .release_catalogs(&[package.to_owned()])
+            .await?
+            .remove(package)
+            .ok_or(Error::Invalid)??;
         // Unlike a cursor connection, matching-refs returns the namespace in
         // one read. Hydrate new/retargeted refs through bounded parallel object
         // queries. This also notices changes below the newest tag.
@@ -232,10 +247,13 @@ impl Client {
         let catalog_key = ExtractionKey {
             repo: format!("source-tags:{package}"),
             default_branch_commit: fingerprint,
-            config_hash: "tag-catalog-v1".into(),
+            config_hash: "tag-catalog-v2".into(),
         };
         if let Some(bytes) = self.cache.extraction_get(&catalog_key).await? {
-            return Ok(serde_json::from_slice(&bytes)?);
+            return Ok(with_release_dates(
+                serde_json::from_slice(&bytes)?,
+                &releases,
+            ));
         }
         let mut versions = Vec::with_capacity(refs.len());
         let mut targets: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -252,7 +270,7 @@ impl Client {
             let key = ExtractionKey {
                 repo: format!("tag-object:{package}"),
                 default_branch_commit: sha.clone(),
-                config_hash: "tag-object-v1".into(),
+                config_hash: "tag-object-v2".into(),
             };
             if let Some(bytes) = self.cache.extraction_get(&key).await? {
                 let target: Version = serde_json::from_slice(&bytes)?;
@@ -298,7 +316,7 @@ impl Client {
                     let commit = peel(node).ok_or(Error::Invalid)?;
                     let target = Version::from(Release {
                         version: String::new(),
-                        published_at: commit["committedDate"].as_str().map(str::to_owned),
+                        published_at: node["tagger"]["date"].as_str().map(str::to_owned),
                         digest: commit["oid"].as_str().map(str::to_owned),
                     });
                     self.cache
@@ -325,7 +343,7 @@ impl Client {
         self.cache
             .extraction_put(&catalog_key, &serde_json::to_vec(&catalog)?)
             .await?;
-        Ok(catalog)
+        Ok(with_release_dates(catalog, &releases))
     }
     /// Resolve moving refs separately: tags may be retargeted without a new head
     /// and branches such as main are not version releases. Conditional every run.
@@ -349,6 +367,19 @@ impl Client {
             .ok_or(Error::Invalid)
     }
 }
+fn with_release_dates(mut tags: Catalog, releases: &Catalog) -> Catalog {
+    let dates: BTreeMap<_, _> = releases
+        .versions
+        .iter()
+        .map(|v| (v.version.as_str(), &v.published_at))
+        .collect();
+    for tag in &mut tags.versions {
+        if let Some(date) = dates.get(tag.version.as_str()) {
+            tag.published_at = (*date).clone();
+        }
+    }
+    tags
+}
 fn peel(value: &Value) -> Option<&Value> {
     let mut value = value;
     for _ in 0..10 {
@@ -369,6 +400,132 @@ mod tests {
     use std::{collections::BTreeMap, sync::Arc};
 
     #[tokio::test]
+    async fn tag_age_uses_release_then_tagger_never_commit_and_refreshes_after_publication() {
+        use rustovate_http::{Exchange, Response, Transport};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Dates {
+            phase: AtomicUsize,
+            hydrations: AtomicUsize,
+        }
+        impl Transport for Dates {
+            fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+                Box::pin(async move {
+                    let phase = self.phase.load(Ordering::SeqCst);
+                    let released = if phase == 0 {
+                        vec![]
+                    } else {
+                        vec![
+                            json!({"tag_name":"v1.0.0","published_at":if phase == 1 {"2026-10-14T00:00:00Z"}else{"2026-10-15T00:00:00Z"},"draft":false,"prerelease":false}),
+                        ]
+                    };
+                    let connection = || json!({"nodes":released.iter().map(|r|json!({"tagName":r["tag_name"],"publishedAt":r["published_at"],"isDraft":false,"isPrerelease":false})).collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false,"endCursor":null}});
+                    let body = if request.url().path().ends_with("/releases") {
+                        json!(released)
+                    } else if request.url().path().contains("matching-refs") {
+                        json!((0..3).map(|i|json!({"ref":format!("refs/tags/v{}.0.0",i+1),"object":{"sha":format!("{i:040x}")}})).collect::<Vec<_>>())
+                    } else {
+                        let body: Value =
+                            serde_json::from_slice(request.body().unwrap().as_bytes().unwrap())
+                                .unwrap();
+                        let query = body["query"].as_str().unwrap();
+                        if query.contains("r0:repository") {
+                            json!({"data":{"r0":{"releases":connection()}}})
+                        } else if query.contains("releases(") {
+                            json!({"data":{"repository":{"releases":connection()}}})
+                        } else {
+                            assert!(!query.contains("committedDate"));
+                            assert!(query.contains("tagger{date}"));
+                            self.hydrations.fetch_add(1, Ordering::SeqCst);
+                            json!({"data":{"repository":{
+                                "t0":{"oid":format!("{:040x}",0),"__typename":"Tag","tagger":{"date":"2026-10-10T00:00:00Z"},"target":{"__typename":"Commit","oid":"a".repeat(40),"committedDate":"2000-01-01T00:00:00Z"}},
+                                "t1":{"oid":format!("{:040x}",1),"__typename":"Tag","tagger":{"date":"2026-10-11T00:00:00Z"},"target":{"__typename":"Tag","target":{"__typename":"Commit","oid":"b".repeat(40)}}},
+                                "t2":{"oid":format!("{:040x}",2),"__typename":"Commit","committedDate":"2000-01-01T00:00:00Z"}
+                            }}})
+                        }
+                    };
+                    Ok(Response {
+                        status: reqwest::StatusCode::OK,
+                        headers: Default::default(),
+                        body: serde_json::to_vec(&body).unwrap(),
+                    })
+                })
+            }
+        }
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        // Old immutable-object entries must not perpetuate commit-date ages.
+        cache
+            .extraction_put(
+                &ExtractionKey {
+                    repo: "tag-object:example/dates".into(),
+                    default_branch_commit: format!("{:040x}", 0),
+                    config_hash: "tag-object-v1".into(),
+                },
+                &serde_json::to_vec(&Version::from(Release {
+                    version: String::new(),
+                    published_at: Some("2000-01-01T00:00:00Z".into()),
+                    digest: Some("a".repeat(40)),
+                }))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let transport = Arc::new(Dates {
+            phase: AtomicUsize::new(0),
+            hydrations: AtomicUsize::new(0),
+        });
+        let github = rustovate_github::Client::with_transport(
+            "offline",
+            cache.clone(),
+            Default::default(),
+            transport.clone(),
+        )
+        .unwrap();
+        let client = Client::new(
+            github,
+            Cached::new(cache.clone(), transport.clone(), 2).unwrap(),
+            cache,
+        );
+        for (phase, date) in [
+            (0, "2026-10-10T00:00:00Z"),
+            (1, "2026-10-14T00:00:00Z"),
+            (2, "2026-10-15T00:00:00Z"),
+        ] {
+            transport.phase.store(phase, Ordering::SeqCst);
+            let tags = client
+                .lookup(Source::GithubTags, "example/dates")
+                .await
+                .unwrap();
+            assert_eq!(
+                tags.versions
+                    .iter()
+                    .find(|v| v.version == "v1.0.0")
+                    .unwrap()
+                    .published_at
+                    .as_deref(),
+                Some(date)
+            );
+            assert_eq!(
+                tags.versions
+                    .iter()
+                    .find(|v| v.version == "v2.0.0")
+                    .unwrap()
+                    .published_at
+                    .as_deref(),
+                Some("2026-10-11T00:00:00Z")
+            );
+            assert_eq!(
+                tags.versions
+                    .iter()
+                    .find(|v| v.version == "v3.0.0")
+                    .unwrap()
+                    .published_at,
+                None
+            );
+        }
+        assert_eq!(transport.hydrations.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn empty_matching_refs_falls_back_without_poisoning_warm_catalogs() {
         use rustovate_http::{Exchange, Response, Transport};
         struct Tags;
@@ -379,6 +536,18 @@ mod tests {
                         "/repos/example/empty/git/matching-refs/tags/" => json!([]),
                         "/repos/example/empty/tags" => {
                             json!([{"name":"v2.0.0","commit":{"sha":"a".repeat(40)}}])
+                        }
+                        "/repos/example/empty/releases" => json!([]),
+                        "/graphql"
+                            if serde_json::from_slice::<Value>(
+                                request.body().unwrap().as_bytes().unwrap(),
+                            )
+                            .unwrap()["query"]
+                                .as_str()
+                                .unwrap()
+                                .contains("releases(") =>
+                        {
+                            json!({"data":{"r0":{"releases":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}})
                         }
                         "/graphql" => {
                             json!({"data":{"repository":{"t0":{"__typename":"Commit","oid":"a".repeat(40),"committedDate":"2026-10-01T00:00:00Z"}}}})
@@ -437,7 +606,9 @@ mod tests {
                     let step = self.step.load(Ordering::SeqCst);
                     let sha =
                         |i: usize| format!("{:040x}", if step >= 2 && i == 0 { 9999 } else { i });
-                    let body = if request.method() == reqwest::Method::GET {
+                    let body = if request.url().path().ends_with("/releases") {
+                        json!([])
+                    } else if request.method() == reqwest::Method::GET {
                         assert_eq!(
                             request.url().path(),
                             "/repos/example/tags/git/matching-refs/tags/"
@@ -448,6 +619,9 @@ mod tests {
                         let body: Value =
                             serde_json::from_slice(request.body().unwrap().as_bytes().unwrap())
                                 .unwrap();
+                        if body["query"].as_str().unwrap().contains("releases(") {
+                            return Ok(Response { status: reqwest::StatusCode::OK, headers: Default::default(), body: serde_json::to_vec(&json!({"data":{"r0":{"releases":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}})).unwrap() });
+                        }
                         assert!(body["query"].as_str().unwrap().contains("object(oid:$s0)"));
                         let targets: Vec<_> = body["variables"]
                             .as_object()

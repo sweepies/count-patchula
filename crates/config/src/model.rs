@@ -11,6 +11,7 @@ words!(Manager { Npm => "npm", Bun => "bun", GithubActions => "github-actions", 
 words!(Source { Npm => "npm", GithubReleases => "github-releases", GithubTags => "github-tags", GithubRunners => "github-runners", Docker => "docker", Crates => "crates", Go => "go", Terraform => "terraform", Pypi => "pypi", Helm => "helm", Oci => "oci", Mise => "mise" });
 words!(Update { Major => "major", Minor => "minor", Patch => "patch", Digest => "digest", Pin => "pin" });
 words!(VersionPolicy { Exact => "exact", Preserve => "preserve", Widen => "widen" });
+words!(ReleaseChannel { Stable => "stable", Lts => "lts" });
 words!(Scheme { Semver => "semver", Docker => "docker", Pep440 => "pep440", Go => "go", Hashicorp => "hashicorp", Loose => "loose" });
 words!(Rebase { Conflicts => "conflicts", Behind => "behind" });
 words!(DependencyKind { Production => "production", Development => "development", Peer => "peer", Optional => "optional", Build => "build", Action => "action", ReusableWorkflow => "reusable-workflow", Runner => "runner", ContainerImage => "container-image", Tool => "tool", GoDirective => "go-directive", Toolchain => "toolchain", Provider => "provider", Module => "module", Chart => "chart" });
@@ -36,6 +37,7 @@ pub struct Config {
 pub struct Policy {
     pub active: bool,
     pub versions: VersionPolicy,
+    pub channel: ReleaseChannel,
     pub action_digests: bool,
     pub image_digests: bool,
     pub merge: bool,
@@ -54,6 +56,7 @@ pub struct Policy {
 pub struct Overrides {
     pub active: Option<bool>,
     pub versions: Option<VersionPolicy>,
+    pub channel: Option<ReleaseChannel>,
     pub digest: Option<bool>,
     pub merge: Option<bool>,
     pub group: Option<String>,

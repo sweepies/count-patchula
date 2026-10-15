@@ -21,7 +21,300 @@ fn policy() -> Value {
 }
 
 #[test]
-fn target_range_floor_and_exact_pins_require_the_same_target() {
+fn stable_node_departures_require_identity_major_order_and_stable_policy() {
+    for (manager, file, name, package, source, actual_source, kind, current) in [
+        (
+            "mise",
+            "mise.toml",
+            "node",
+            "node",
+            "node-version",
+            "mise",
+            "tool",
+            "24.1.0",
+        ),
+        (
+            "github-actions",
+            "ci.yml",
+            "node",
+            "actions/node-versions",
+            "github-releases",
+            "github-releases",
+            "tool",
+            "22.1.0",
+        ),
+        (
+            "npm",
+            "package.json",
+            "@types/node",
+            "@types/node",
+            "npm",
+            "npm",
+            "development",
+            "22.1.0",
+        ),
+    ] {
+        let mut node = dep(name, source, current);
+        node["packageName"] = json!(package);
+        node["updates"] = if manager == "mise" {
+            json!([])
+        } else {
+            json!([{"newValue":"24","newVersion":"24.1.0","updateType":"major"}])
+        };
+        let baseline = snapshot(json!({(manager):[{"packageFile":file,"deps":[node]}]}));
+        let mut actual = baseline.clone();
+        let d = &mut actual.repositories[0].package_files[0].dependencies[0];
+        d.metadata.as_mut().unwrap().source = actual_source.into();
+        d.metadata.as_mut().unwrap().kinds = vec![kind.into()];
+        d.updates = vec![update("26.1.0", "major")];
+        let triage = compare(&baseline, &actual, &rules()).unwrap();
+        assert!(
+            triage
+                .differences
+                .iter()
+                .all(|d| d.departure.as_ref().is_some_and(|d| d.row == 42)),
+            "{manager}: {:?}",
+            triage.differences
+        );
+        d_policy(&mut actual).channel = Some("lts".into());
+        assert!(
+            compare(&baseline, &actual, &rules())
+                .unwrap()
+                .differences
+                .iter()
+                .all(|d| d.departure.is_none())
+        );
+        d_policy(&mut actual).channel = Some("stable".into());
+        actual.repositories[0].package_files[0].dependencies[0].updates[0].new_digest =
+            Some("a".repeat(40));
+        // npm integrity is independently normalized; peers must still remain
+        // outside the Node channel exemption.
+        if manager == "npm" {
+            actual.repositories[0].package_files[0].dependencies[0]
+                .metadata
+                .as_mut()
+                .unwrap()
+                .kinds = vec!["peer".into()];
+        }
+        assert!(
+            compare(&baseline, &actual, &rules())
+                .unwrap()
+                .differences
+                .iter()
+                .any(|d| d.departure.is_none())
+        );
+        if manager == "mise" {
+            let mut baseline = baseline;
+            baseline.repositories[0].package_files[0].dependencies[0]
+                .updates
+                .clear();
+            actual.repositories[0].package_files[0].dependencies[0].updates[0].new_digest = None;
+            assert!(
+                compare(&baseline, &actual, &rules())
+                    .unwrap()
+                    .differences
+                    .iter()
+                    .all(|d| d.departure.as_ref().is_some_and(|d| d.row == 42))
+            );
+        }
+    }
+}
+
+fn d_policy(report: &mut Report) -> &mut rustovate_report::UpdatePolicy {
+    report.repositories[0].package_files[0].dependencies[0].updates[0]
+        .policy
+        .as_mut()
+        .unwrap()
+}
+
+#[test]
+fn declared_go_floor_requires_provenance_and_limits_targets_to_observed_compiler() {
+    let mut go = dep("go", "golang-version", "1.26");
+    go["currentVersion"] = json!("1.27.2");
+    go["depType"] = json!("golang");
+    let baseline = snapshot(json!({"gomod":[{"packageFile":"go.mod","deps":[go]}]}));
+    let mut actual = baseline.clone();
+    let d = &mut actual.repositories[0].package_files[0].dependencies[0];
+    d.current.version = Some("1.26".into());
+    d.metadata.as_mut().unwrap().source = "mise".into();
+    d.metadata.as_mut().unwrap().kinds = vec!["go-directive".into()];
+    d.metadata.as_mut().unwrap().resolution =
+        Some(serde_json::from_value(json!({"kind":"declared","version":"1.26"})).unwrap());
+    d.updates = vec![update("1.26.9", "patch"), update("1.27.2", "minor")];
+    let triage = compare(&baseline, &actual, &rules()).unwrap();
+    assert_eq!(triage.differences.len(), 3);
+    assert!(
+        triage
+            .differences
+            .iter()
+            .all(|d| d.departure.as_ref().is_some_and(|d| d.row == 43))
+    );
+    actual.repositories[0].package_files[0].dependencies[0].updates[1] = update("1.28.0", "minor");
+    assert!(
+        compare(&baseline, &actual, &rules())
+            .unwrap()
+            .differences
+            .iter()
+            .any(|d| d.departure.is_none())
+    );
+    actual.repositories[0].package_files[0].dependencies[0]
+        .metadata
+        .as_mut()
+        .unwrap()
+        .resolution = None;
+    assert!(
+        compare(&baseline, &actual, &rules())
+            .unwrap()
+            .differences
+            .iter()
+            .all(|d| d.departure.is_none())
+    );
+}
+
+#[test]
+fn mise_migrations_keep_distinct_identities_and_reject_other_sources_or_targets() {
+    for (name, old, new, source) in [
+        ("prettier", "prettier/prettier", "prettier", "npm"),
+        (
+            "bitwarden-secrets-manager",
+            "bitwarden/sdk",
+            "bitwarden/sdk-sm",
+            "github-releases",
+        ),
+    ] {
+        let mut tool = dep(name, "github-releases", "latest");
+        tool["packageName"] = json!(old);
+        tool["currentVersion"] = Value::Null;
+        tool["depType"] = json!("tools");
+        let baseline = snapshot(json!({"mise":[{"packageFile":"mise.toml","deps":[tool]}]}));
+        let mut actual = baseline.clone();
+        let d = &mut actual.repositories[0].package_files[0].dependencies[0];
+        d.package = new.into();
+        d.metadata.as_mut().unwrap().source = source.into();
+        d.metadata.as_mut().unwrap().kinds = vec!["tool".into()];
+        let triage = compare(&baseline, &actual, &rules()).unwrap();
+        assert_eq!(triage.differences.len(), 1);
+        assert_eq!(triage.differences[0].departure.as_ref().unwrap().row, 44);
+        assert_ne!(
+            triage.differences[0].renovate,
+            triage.differences[0].rustovate
+        );
+        actual.repositories[0].package_files[0].dependencies[0].updates =
+            vec![update("2.0.0", "pin")];
+        assert!(
+            compare(&baseline, &actual, &rules())
+                .unwrap()
+                .differences
+                .iter()
+                .find(|d| d.field == "package")
+                .unwrap()
+                .departure
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn action_alias_rule_requires_identical_full_version_and_commit() {
+    let mut action = dep("example/action", "github-tags", "v4");
+    action["updates"] = json!([{"newValue":"v4.4.0","newVersion":"v4.4.0","newDigest":"a".repeat(40),"updateType":"pinDigest"}]);
+    let baseline = snapshot(json!({"github-actions":[{"packageFile":"ci.yml","deps":[action]}]}));
+    let mut actual = baseline.clone();
+    let d = &mut actual.repositories[0].package_files[0].dependencies[0];
+    d.metadata.as_mut().unwrap().kinds = vec!["action".into()];
+    d.updates[0].new_value = Some("v4".into());
+    d.updates[0].new_version = Some("v4.4.0".into());
+    assert!(
+        compare(&baseline, &actual, &rules())
+            .unwrap()
+            .differences
+            .iter()
+            .all(|d| d.departure.as_ref().is_some_and(|d| d.row == 45))
+    );
+    for (version, digest) in [("v4.5.0", "a".repeat(40)), ("v4.4.0", "b".repeat(40))] {
+        let u = &mut actual.repositories[0].package_files[0].dependencies[0].updates[0];
+        u.new_version = Some(version.into());
+        u.new_digest = Some(digest);
+        assert!(
+            compare(&baseline, &actual, &rules())
+                .unwrap()
+                .differences
+                .iter()
+                .all(|d| d.departure.is_none())
+        );
+    }
+}
+
+#[test]
+fn cargo_resolved_targets_require_the_identical_compatibility_interval() {
+    let mut lib = dep("lib", "crate", "0.8");
+    lib["currentVersion"] = json!("0.8.19");
+    lib["updates"] = json!([{"newValue":"0.15","newVersion":"0.15.0","updateType":"minor"}]);
+    let baseline = snapshot(json!({"cargo":[{"packageFile":"Cargo.toml","deps":[lib]}]}));
+    let mut actual = baseline.clone();
+    let d = &mut actual.repositories[0].package_files[0].dependencies[0];
+    d.metadata.as_mut().unwrap().source = "crates".into();
+    d.updates = vec![update("0.15.2", "major")];
+    d.updates[0].new_value = Some("0.15".into());
+    d.updates[0].policy.as_mut().unwrap().versions = Some("preserve".into());
+    let triage = compare(&baseline, &actual, &rules()).unwrap();
+    assert_eq!(triage.differences.len(), 2);
+    assert!(
+        triage
+            .differences
+            .iter()
+            .all(|d| d.departure.as_ref().is_some_and(|d| d.row == 46))
+    );
+    for (target, range) in [("0.16.0", "0.15"), ("0.15.2", "0.16"), ("0.15.0", "0.15")] {
+        let d = &mut actual.repositories[0].package_files[0].dependencies[0];
+        d.updates[0].new_version = Some(target.into());
+        d.updates[0].new_value = Some(range.into());
+        assert!(
+            compare(&baseline, &actual, &rules())
+                .unwrap()
+                .differences
+                .iter()
+                .any(|d| d.departure.as_ref().is_none_or(|d| d.row != 46))
+        );
+    }
+    let d = &mut actual.repositories[0].package_files[0].dependencies[0];
+    d.updates[0].new_version = Some("0.15.2".into());
+    d.metadata
+        .as_mut()
+        .unwrap()
+        .stale
+        .insert("catalog".into(), 1);
+    assert!(
+        compare(&baseline, &actual, &rules())
+            .unwrap()
+            .differences
+            .iter()
+            .all(|d| d.departure.is_none())
+    );
+}
+
+#[test]
+fn exact_peer_pins_are_no_longer_a_departure() {
+    let mut peer = dep("lib", "npm", "^5");
+    peer["depType"] = json!("peerDependencies");
+    peer["updates"] =
+        json!([{"newValue":"^5 || ^7.0.0","newVersion":"7.0.2","updateType":"major"}]);
+    let baseline = snapshot(json!({"npm":[{"packageFile":"package.json","deps":[peer]}]}));
+    let mut actual = baseline.clone();
+    let d = &mut actual.repositories[0].package_files[0].dependencies[0];
+    d.metadata.as_mut().unwrap().kinds = vec!["peer".into()];
+    d.updates = vec![update("7.0.2", "major")];
+    assert!(
+        compare(&baseline, &actual, &rules())
+            .unwrap()
+            .differences
+            .iter()
+            .all(|d| d.departure.is_none())
+    );
+}
+
+#[test]
+fn retired_cargo_floor_exemption_stays_actionable_and_npm_pins_require_the_same_target() {
     let mut cargo = dep("lib", "crate", "0.30");
     cargo["updates"] = json!([{"newValue":"1.0","newVersion":"1.1.0","updateType":"major"}]);
     let baseline = snapshot(json!({"cargo":[{"packageFile":"Cargo.toml","deps":[cargo]}]}));
@@ -32,13 +325,12 @@ fn target_range_floor_and_exact_pins_require_the_same_target() {
     let mut p: rustovate_report::UpdatePolicy = serde_json::from_value(policy()).unwrap();
     p.versions = Some("preserve".into());
     d.updates[0].policy = Some(p);
-    assert_eq!(
-        compare(&baseline, &actual, &rules()).unwrap().differences[0]
-            .departure
-            .as_ref()
+    assert!(
+        compare(&baseline, &actual, &rules())
             .unwrap()
-            .row,
-        40
+            .differences
+            .iter()
+            .all(|d| d.departure.is_none())
     );
     actual.repositories[0].package_files[0].dependencies[0].updates[0].new_version =
         Some("1.2.0".into());
@@ -115,13 +407,12 @@ fn provider_pins_do_not_excuse_target_changes_or_support_constraints() {
     d.metadata.as_mut().unwrap().source = "terraform".into();
     d.metadata.as_mut().unwrap().kinds = vec!["provider".into()];
     d.updates[0] = update("6.69.0", "minor");
-    assert_eq!(
-        compare(&baseline, &actual, &rules()).unwrap().differences[0]
-            .departure
-            .as_ref()
+    assert!(
+        compare(&baseline, &actual, &rules())
             .unwrap()
-            .row,
-        41
+            .differences
+            .iter()
+            .all(|d| d.departure.is_none())
     );
     for kind in ["module", "toolchain"] {
         actual.repositories[0].package_files[0].dependencies[0]

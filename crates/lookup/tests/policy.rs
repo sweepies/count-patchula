@@ -48,6 +48,159 @@ fn catalog(values: &[&str]) -> Catalog {
 }
 
 #[test]
+fn peer_support_ranges_widen_without_pins_while_installed_dependencies_remain_exact() {
+    let eval = Evaluator::new(&config("benchmark-public")).unwrap();
+    for (kind, current, target, expected) in [
+        (DependencyKind::Peer, "^5", "7.0.2", "^5 || ^7.0.0"),
+        (
+            DependencyKind::Peer,
+            "^5 || ^7.0.0",
+            "8.1.2",
+            "^5 || ^7.0.0 || ^8.0.0",
+        ),
+        (DependencyKind::Peer, "2026.9.8", "2026.10.1", "2026.10.1"),
+        (DependencyKind::Production, "^5", "7.0.2", "7.0.2"),
+        (DependencyKind::Development, "^5", "7.0.2", "7.0.2"),
+    ] {
+        let mut dep = dependency("lib");
+        dep.kind = kind;
+        dep.current = current.into();
+        dep.resolved = Some(
+            if current.starts_with('^') {
+                "5.0.0"
+            } else {
+                current
+            }
+            .into(),
+        );
+        let proposals = eval
+            .propose(&dep, &catalog(&["5.0.0", "5.9.3", target]))
+            .unwrap();
+        let selected = proposals
+            .iter()
+            .find(|p| p.new_version.as_deref() == Some(target))
+            .unwrap();
+        assert_eq!(selected.new_value.as_deref(), Some(expected));
+        if kind == DependencyKind::Peer {
+            assert!(proposals.iter().all(|p| p.update_type != "pin"));
+        }
+    }
+    let mut dep = dependency("lib");
+    dep.kind = DependencyKind::Peer;
+    dep.current = "^5".into();
+    dep.resolved = Some("5.9.3".into());
+    assert!(eval.propose(&dep, &catalog(&["5.9.3"])).unwrap().is_empty());
+}
+
+#[test]
+fn satisfying_provider_constraints_and_cargo_floors_are_retained() {
+    let cfg = config("fnox");
+    let eval = Evaluator::new(&cfg).unwrap();
+    let mut dep = dependency("azure_core");
+    dep.manager = Manager::Cargo;
+    dep.source = Source::Crates;
+    dep.current = "0.30".into();
+    dep.resolved = Some("0.30.1".into());
+    assert_eq!(
+        eval.propose(&dep, &catalog(&["1.1.0"])).unwrap()[0]
+            .new_value
+            .as_deref(),
+        Some("1.0")
+    );
+    dep.current = "1.0".into();
+    dep.resolved = Some("1.0.0".into());
+    assert!(eval.propose(&dep, &catalog(&["1.1.0"])).unwrap().is_empty());
+
+    let eval = Evaluator::new(&config("benchmark-public")).unwrap();
+    dep.manager = Manager::Terraform;
+    dep.kind = DependencyKind::Provider;
+    dep.source = Source::Terraform;
+    dep.scheme = Scheme::Hashicorp;
+    dep.current = "~> 6.0".into();
+    dep.resolved = Some("6.68.0".into());
+    let proposals = eval.propose(&dep, &catalog(&["6.69.0", "7.1.0"])).unwrap();
+    assert_eq!(
+        proposals
+            .iter()
+            .find(|p| p.new_version.as_deref() == Some("6.69.0"))
+            .unwrap()
+            .new_value
+            .as_deref(),
+        Some("~> 6.0")
+    );
+    assert_eq!(
+        proposals
+            .iter()
+            .find(|p| p.new_version.as_deref() == Some("7.1.0"))
+            .unwrap()
+            .new_value
+            .as_deref(),
+        Some("7.1.0")
+    );
+}
+
+#[test]
+fn node_lts_is_explicit_uses_catalog_evidence_and_respects_ordered_rules() {
+    use rustovate_config::ReleaseChannel;
+    let mut cfg = config("benchmark-public");
+    let mut dep = dependency("node");
+    dep.manager = Manager::Mise;
+    dep.kind = DependencyKind::Tool;
+    dep.source = Source::Mise;
+    dep.scheme = Scheme::Loose;
+    dep.current = "22.0.0".into();
+    dep.resolved = Some(dep.current.clone());
+    let mut versions = catalog(&["22.1.0", "24.2.0", "26.1.0"]);
+    versions.dist_tags.insert("lts".into(), "24.2.0".into());
+    let stable = Evaluator::new(&cfg)
+        .unwrap()
+        .propose(&dep, &versions)
+        .unwrap();
+    assert!(
+        stable
+            .iter()
+            .any(|p| p.new_version.as_deref() == Some("26.1.0"))
+    );
+    let rule = serde_json::from_value(serde_json::json!({"note":"Node LTS", "select":{"packages":["node"],"dependencies":[],"managers":["mise"],"files":[],"updates":[],"sources":[],"kinds":[],"current":null},"apply":{"channel":"lts"}})).unwrap();
+    cfg.rules.push(rule);
+    let lts = Evaluator::new(&cfg)
+        .unwrap()
+        .propose(&dep, &versions)
+        .unwrap();
+    assert_eq!(lts.len(), 1);
+    assert_eq!(lts[0].new_version.as_deref(), Some("24.2.0"));
+    assert_eq!(
+        lts[0].policy.as_ref().unwrap().channel.as_deref(),
+        Some("lts")
+    );
+    versions.dist_tags.clear();
+    assert!(
+        Evaluator::new(&cfg)
+            .unwrap()
+            .propose(&dep, &versions)
+            .unwrap_err()
+            .contains("no LTS channel evidence")
+    );
+    cfg.rules[0].apply.channel = Some(ReleaseChannel::Stable);
+    assert!(
+        Evaluator::new(&cfg)
+            .unwrap()
+            .propose(&dep, &versions)
+            .is_ok()
+    );
+    cfg.defaults.channel = ReleaseChannel::Lts;
+    cfg.rules.clear();
+    dep = dependency("arbitrary-npm-package");
+    assert!(
+        Evaluator::new(&cfg)
+            .unwrap()
+            .propose(&dep, &catalog(&["2.0.0"]))
+            .unwrap_err()
+            .contains("supported only for Node")
+    );
+}
+
+#[test]
 fn equal_precedence_candidates_and_age_boundaries_are_order_independent() {
     let cfg = config("benchmark-public");
     let eval = Evaluator::new(&cfg).unwrap();
@@ -651,7 +804,7 @@ fn cargo_noop_ranges_are_not_updates_and_both_breaking_tracks_survive() {
     assert_eq!(p.len(), 2);
     assert!(p.iter().all(|p| p.update_type == "major"));
     assert!(p.iter().any(|p| p.new_value.as_deref() == Some("0.3")));
-    assert!(p.iter().any(|p| p.new_value.as_deref() == Some("1.2")));
+    assert!(p.iter().any(|p| p.new_value.as_deref() == Some("1.0")));
 }
 
 #[test]

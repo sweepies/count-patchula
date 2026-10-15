@@ -2,14 +2,6 @@
   "schemaVersion": 1,
   "rules": [
     {
-      "id": "terraform-exact-provider-pin",
-      "departure": 41,
-      "classification": "field-mismatch",
-      "managers": ["terraform"],
-      "field": "updates.newValue",
-      "predicate": "exact-provider-pin"
-    },
-    {
       "id": "release-age-action-digest",
       "departure": 23,
       "classification": "field-mismatch",
@@ -24,14 +16,6 @@
       "managers": ["npm"],
       "field": "updates",
       "predicate": "npm-satisfying-pin"
-    },
-    {
-      "id": "cargo-target-range-floor",
-      "departure": 40,
-      "classification": "field-mismatch",
-      "managers": ["cargo"],
-      "field": "updates.newValue",
-      "predicate": "cargo-range-floor"
     },
     {
       "id": "explicit-disabled-class",
@@ -176,6 +160,78 @@
       "managers": ["github-actions", "dockerfile", "compose"],
       "field": "updates",
       "predicate": "digest-pin-only"
+    },
+    {
+      "id": "stable-node-extra",
+      "departure": 42,
+      "classification": "rustovate-extra",
+      "managers": ["mise"],
+      "field": "updates",
+      "predicate": "stable-node-channel"
+    },
+    {
+      "id": "stable-node-value",
+      "departure": 42,
+      "classification": "field-mismatch",
+      "managers": ["github-actions", "npm"],
+      "field": "updates.newValue",
+      "predicate": "stable-node-channel"
+    },
+    {
+      "id": "stable-node-version",
+      "departure": 42,
+      "classification": "field-mismatch",
+      "managers": ["github-actions", "npm"],
+      "field": "updates.newVersion",
+      "predicate": "stable-node-channel"
+    },
+    {
+      "id": "declared-go-current",
+      "departure": 43,
+      "classification": "field-mismatch",
+      "managers": ["go"],
+      "field": "current.version",
+      "predicate": "declared-go-floor"
+    },
+    {
+      "id": "declared-go-upgrades",
+      "departure": 43,
+      "classification": "rustovate-extra",
+      "managers": ["go"],
+      "field": "updates",
+      "predicate": "declared-go-floor"
+    },
+    {
+      "id": "published-mise-backends",
+      "departure": 44,
+      "classification": "field-mismatch",
+      "managers": ["mise"],
+      "field": "package",
+      "predicate": "mise-backend-identity"
+    },
+    {
+      "id": "action-alias-precision",
+      "departure": 45,
+      "classification": "field-mismatch",
+      "managers": ["github-actions"],
+      "field": "updates.newValue",
+      "predicate": "action-alias-precision"
+    },
+    {
+      "id": "cargo-compatible-missing",
+      "departure": 46,
+      "classification": "rustovate-missing",
+      "managers": ["cargo"],
+      "field": "updates",
+      "predicate": "cargo-compatible-target"
+    },
+    {
+      "id": "cargo-compatible-extra",
+      "departure": 46,
+      "classification": "rustovate-extra",
+      "managers": ["cargo"],
+      "field": "updates",
+      "predicate": "cargo-compatible-target"
     }
   ]
 }

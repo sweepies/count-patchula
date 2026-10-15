@@ -209,7 +209,18 @@ impl Versioning for Ecosystem {
                 ""
             });
             if !matches!(fields[1], "x" | "X" | "*") {
-                out.push_str(&parsed.0.minor.to_string());
+                // A bare Cargo requirement already includes compatible newer
+                // releases. Across numeric majors start at that major's floor.
+                let minor = if *self == Self::Cargo
+                    && operator.is_empty()
+                    && fields.len() == 2
+                    && parsed.0.major > 0
+                {
+                    0
+                } else {
+                    parsed.0.minor
+                };
+                out.push_str(&minor.to_string());
             }
         }
         if fields.len() >= 3 {

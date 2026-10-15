@@ -81,9 +81,12 @@ enum Predicate {
     ObservedResolution,
     ReleaseAgeMissing,
     NpmSatisfyingPin,
-    CargoRangeFloor,
     ReleaseAgeDigest,
-    ExactProviderPin,
+    StableNodeChannel,
+    DeclaredGoFloor,
+    MiseBackendIdentity,
+    ActionAliasPrecision,
+    CargoCompatibleTarget,
 }
 
 impl Rules {
@@ -103,6 +106,34 @@ impl Rules {
                 || !matches!(
                     (&rule.predicate, rule.classification, rule.field.as_str()),
                     (
+                        Predicate::StableNodeChannel,
+                        Classification::RustovateExtra,
+                        "updates"
+                    ) | (
+                        Predicate::StableNodeChannel,
+                        Classification::FieldMismatch,
+                        "updates.newValue" | "updates.newVersion"
+                    ) | (
+                        Predicate::DeclaredGoFloor,
+                        Classification::FieldMismatch,
+                        "current.version"
+                    ) | (
+                        Predicate::DeclaredGoFloor,
+                        Classification::RustovateExtra,
+                        "updates"
+                    ) | (
+                        Predicate::MiseBackendIdentity,
+                        Classification::FieldMismatch,
+                        "package"
+                    ) | (
+                        Predicate::ActionAliasPrecision,
+                        Classification::FieldMismatch,
+                        "updates.newValue"
+                    ) | (
+                        Predicate::CargoCompatibleTarget,
+                        Classification::RustovateMissing | Classification::RustovateExtra,
+                        "updates"
+                    ) | (
                         Predicate::DisabledUpdate
                             | Predicate::RejectedRelease
                             | Predicate::ReleaseAgeMissing
@@ -138,10 +169,7 @@ impl Rules {
                         Classification::FieldMismatch,
                         "updates.newValue" | "updates.newVersion"
                     ) | (
-                        Predicate::NpmExactMajor
-                            | Predicate::NpmExactRange
-                            | Predicate::CargoRangeFloor
-                            | Predicate::ExactProviderPin,
+                        Predicate::NpmExactMajor | Predicate::NpmExactRange,
                         Classification::FieldMismatch,
                         "updates.newValue"
                     ) | (
@@ -187,26 +215,11 @@ impl Rules {
                 continue;
             }
             let matches = match rule.predicate {
-                Predicate::ExactProviderPin => dependency.is_some_and(|dep| {
-                    dep.package == rustovate.package && dep.current.value == rustovate.current.value
-                        && rustovate.metadata.as_ref().is_some_and(|m| m.source == "terraform" && m.kinds.iter().any(|k| k == "provider"))
-                        && difference.paired.as_ref().is_some_and(|(left,right)| {
-                            let range = dep.current.value.as_deref().unwrap_or("");
-                            let components: Vec<_> = range.strip_prefix("~>").unwrap_or("").trim().split('.').collect();
-                            let lower = components.iter().map(|s| s.parse::<u64>().ok()).collect::<Option<Vec<_>>>();
-                            let target = right.new_version.as_deref().and_then(parse_version);
-                            left.new_value == dep.current.value && left.new_version == right.new_version
-                                && left.update_type == right.update_type && left.new_digest.is_none() && right.new_digest.is_none()
-                                && right.new_value == right.new_version
-                                && right.policy.as_ref().is_some_and(|p| p.versions.as_deref() == Some("exact"))
-                                && lower.zip(target).is_some_and(|(lower,target)| {
-                                    (2..=3).contains(&lower.len()) && target.pre.is_empty()
-                                        && target.major == lower[0]
-                                        && (target.major,target.minor,target.patch) >= (lower[0],lower[1],*lower.get(2).unwrap_or(&0))
-                                        && (lower.len() == 2 || target.minor == lower[1])
-                                })
-                        })
-                }),
+                Predicate::StableNodeChannel => dependency.is_some_and(|dep| stable_node_channel(dep, rustovate, difference)),
+                Predicate::DeclaredGoFloor => dependency.is_some_and(|dep| declared_go_floor(dep, rustovate, difference)),
+                Predicate::MiseBackendIdentity => dependency.is_some_and(|dep| mise_backend_identity(dep, rustovate)),
+                Predicate::ActionAliasPrecision => dependency.is_some_and(|dep| action_alias_precision(dep, rustovate, difference)),
+                Predicate::CargoCompatibleTarget => dependency.is_some_and(|dep| cargo_compatible_target(dep, rustovate, difference)),
                 Predicate::ReleaseAgeDigest => dependency.is_some_and(|dep| {
                     dep.package == rustovate.package && dep.current.value == rustovate.current.value
                         && dep.current.digest == rustovate.current.digest
@@ -229,6 +242,8 @@ impl Rules {
                         })
                 }),
                 Predicate::NpmSatisfyingPin => dependency.is_some_and(|left| {
+                    !is_peer(rustovate)
+                        &&
                     left.package == rustovate.package && left.current.value == rustovate.current.value
                         && rustovate.metadata.as_ref().is_some_and(|m| m.source == "npm")
                         && serde_json::from_value::<Update>(difference.renovate.clone()).is_ok_and(|u| {
@@ -242,22 +257,6 @@ impl Rules {
                                     && actual.new_version == u.new_version && actual.new_value == actual.new_version
                                     && actual.new_digest.is_none()
                                     && actual.policy.as_ref().is_some_and(|p| p.versions.as_deref() == Some("exact")))
-                        })
-                }),
-                Predicate::CargoRangeFloor => dependency.is_some_and(|dep| {
-                    dep.package == rustovate.package && dep.current.value == rustovate.current.value
-                        && rustovate.metadata.as_ref().is_some_and(|m| m.source == "crates")
-                        && difference.paired.as_ref().is_some_and(|(left, right)| {
-                            let current = dep.current.value.as_deref().unwrap_or("");
-                            let target = right.new_version.as_deref().and_then(parse_version);
-                            let exact_line = target.as_ref().map(|v| format!("{}.{}", v.major, v.minor));
-                            current.split('.').count() == 2 && current.split('.').all(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
-                                && left.new_version == right.new_version && left.update_type == right.update_type
-                                && left.new_digest.is_none() && right.new_digest.is_none()
-                                && right.new_value == exact_line
-                                && right.policy.as_ref().is_some_and(|p| p.versions.as_deref() == Some("preserve"))
-                                && left.new_value.as_deref().is_some_and(|range| semver::VersionReq::parse(range)
-                                    .is_ok_and(|r| target.as_ref().is_some_and(|v| r.matches(v))))
                         })
                 }),
                 Predicate::DisabledUpdate | Predicate::RejectedRelease | Predicate::ReleaseAgeMissing => dependency.is_some_and(|left| {
@@ -342,6 +341,7 @@ impl Rules {
                         })
                 }),
                 Predicate::NpmExactRange => difference.paired.as_ref().is_some_and(|(left, right)| {
+                    if is_peer(rustovate) { return false; }
                     let current = dependency.and_then(|d| d.current.value.as_deref())
                         .and_then(simple_range_version);
                     let target = right.new_version.as_deref().and_then(parse_version);
@@ -356,6 +356,7 @@ impl Rules {
                             && if right.update_type == "minor" { target.minor > old.minor } else { target.minor == old.minor })
                 }),
                 Predicate::NpmRangePin => dependency.is_some_and(|left| {
+                    !is_peer(rustovate) &&
                     left.manager == "npm" && left.current.value == rustovate.current.value
                         && left.updates.iter().all(|u| u.update_type != "pin")
                         && rustovate.metadata.as_ref().is_some_and(|m| m.source == "npm")
@@ -391,7 +392,9 @@ impl Rules {
                     })
                 }),
                 Predicate::FloatingPin => dependency.is_some_and(|left| {
-                    left.current.value.as_deref() == Some("latest")
+                    left.package == rustovate.package
+                        && left.current.digest == rustovate.current.digest
+                        && left.current.value.as_deref() == Some("latest")
                         && left.updates.is_empty()
                         && rustovate.current.value == left.current.value
                         && (matches!(rustovate.manager.as_str(), "mise" | "npm")
@@ -459,16 +462,11 @@ impl Rules {
                         } else { true }
                 }),
                 Predicate::NpmExactMajor => difference.paired.as_ref().is_some_and(|(left, right)| {
+                    if is_peer(rustovate) { return false; }
                     let current = dependency.and_then(|d| d.current.value.as_deref());
                     let target = right.new_version.as_deref().and_then(parse_version);
                     let range = left.new_value.as_deref();
-                    let target_range = range.and_then(|range| {
-                        if !range.contains(" || ") { return Some(range); }
-                        let prefix = format!("{} || ", current?);
-                        dependency.filter(|d| d.metadata.as_ref().is_some_and(|m| m.kinds.iter().any(|k| k == "peerDependencies")))?;
-                        rustovate.metadata.as_ref().filter(|m| m.kinds.iter().any(|k| k == "peer"))?;
-                        range.strip_prefix(&prefix)
-                    });
+                    let target_range = range.filter(|range| !range.contains(" || "));
                     let lower = target_range.and_then(simple_range_version);
                     let baseline = current.and_then(simple_range_version);
                     left.update_type == "major" && right.update_type == "major"
@@ -1261,6 +1259,278 @@ fn simple_range_version(value: &str) -> Option<semver::Version> {
         parts.get(1).unwrap_or(&"0"),
         parts.get(2).unwrap_or(&"0")
     ))
+}
+
+fn is_peer(dep: &Dependency) -> bool {
+    dep.metadata
+        .as_ref()
+        .is_some_and(|m| m.kinds.iter().any(|k| k == "peer"))
+}
+
+fn same_declaration(left: &Dependency, right: &Dependency) -> bool {
+    left.package == right.package
+        && left.current.value == right.current.value
+        && left.current.digest == right.current.digest
+}
+
+fn stable_node_channel(left: &Dependency, right: &Dependency, difference: &Difference) -> bool {
+    if !same_declaration(left, right) {
+        return false;
+    }
+    let Some(m) = &right.metadata else {
+        return false;
+    };
+    let node = (right.manager == "mise"
+        && right.name == "node"
+        && right.package == "node"
+        && m.source == "mise"
+        && m.kinds == ["tool"]
+        && left
+            .metadata
+            .as_ref()
+            .is_some_and(|m| m.source == "node-version"))
+        || (right.manager == "github-actions"
+            && right.name == "node"
+            && right.package == "actions/node-versions"
+            && m.source == "github-releases"
+            && m.kinds == ["tool"]
+            && left
+                .metadata
+                .as_ref()
+                .is_some_and(|m| m.source == "github-releases"))
+        || (right.manager == "npm"
+            && right.name == "@types/node"
+            && right.package == "@types/node"
+            && m.source == "npm"
+            && !is_peer(right)
+            && left.metadata.as_ref().is_some_and(|m| m.source == "npm"));
+    if !node {
+        return false;
+    }
+    let pair = difference.paired.clone().or_else(|| {
+        (difference.original_classification == Classification::RustovateExtra
+            && left
+                .updates
+                .iter()
+                .all(|u| u.update_type != "major" && u.new_digest.is_none()))
+        .then(|| serde_json::from_value::<Update>(difference.rustovate.clone()).ok())
+        .flatten()
+        .map(|u| {
+            let mut current = u.clone();
+            current.new_version = left.current.version.clone();
+            (current, u)
+        })
+    });
+    pair.is_some_and(|(a, b)| {
+        b.update_type == "major"
+            && b.new_digest.is_none()
+            && a.new_digest.is_none()
+            && b.policy
+                .as_ref()
+                .is_some_and(|p| p.channel.as_deref().is_none_or(|c| c == "stable"))
+            && a.new_version
+                .as_deref()
+                .and_then(parse_version)
+                .zip(b.new_version.as_deref().and_then(parse_version))
+                .is_some_and(|(a, b)| a.pre.is_empty() && b.pre.is_empty() && b.major > a.major)
+            && b.new_value
+                .as_deref()
+                .zip(b.new_version.as_deref())
+                .is_some_and(|(value, target)| {
+                    let components = value.trim_start_matches('v').split('.').collect::<Vec<_>>();
+                    !components.is_empty()
+                        && components.len() <= 3
+                        && components
+                            .iter()
+                            .all(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+                        && target
+                            .trim_start_matches('v')
+                            .strip_prefix(value.trim_start_matches('v'))
+                            .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+                })
+    })
+}
+
+fn declared_go_floor(left: &Dependency, right: &Dependency, difference: &Difference) -> bool {
+    if !same_declaration(left, right)
+        || right.manager != "go"
+        || right.name != "go"
+        || right.package != "go"
+        || !left.updates.is_empty()
+    {
+        return false;
+    }
+    let Some(m) = &right.metadata else {
+        return false;
+    };
+    if m.source != "mise"
+        || m.kinds != ["go-directive"]
+        || !m.resolution.as_ref().is_some_and(|r| {
+            r.kind == "declared"
+                && Some(&r.version) == right.current.value.as_ref()
+                && Some(&r.version) == right.current.version.as_ref()
+        })
+        || !left
+            .metadata
+            .as_ref()
+            .is_some_and(|m| m.source == "golang-version" && m.kinds == ["golang"])
+    {
+        return false;
+    }
+    let Some((floor, compiler)) = right
+        .current
+        .version
+        .as_deref()
+        .and_then(|v| numeric_version(v).or_else(|| numeric_version(&format!("{v}.0"))))
+        .zip(left.current.version.as_deref().and_then(numeric_version))
+    else {
+        return false;
+    };
+    if compiler <= floor {
+        return false;
+    }
+    if difference.field == "current.version" {
+        return true;
+    }
+    serde_json::from_value::<Update>(difference.rustovate.clone()).is_ok_and(|u| {
+        matches!(u.update_type.as_str(), "minor" | "patch")
+            && u.new_value == u.new_version
+            && u.new_digest.is_none()
+            && u.policy
+                .as_ref()
+                .is_some_and(|p| p.versions.as_deref() == Some("exact"))
+            && u.new_version
+                .as_deref()
+                .and_then(numeric_version)
+                .is_some_and(|v| v > floor && v <= compiler)
+    })
+}
+
+fn mise_backend_identity(left: &Dependency, right: &Dependency) -> bool {
+    right.manager == "mise"
+        && left.current == right.current
+        && left.current.value.as_deref() == Some("latest")
+        && left.updates.is_empty()
+        && right.updates.is_empty()
+        && left
+            .metadata
+            .as_ref()
+            .is_some_and(|m| m.source == "github-releases" && m.kinds == ["tools"])
+        && right.metadata.as_ref().is_some_and(|m| {
+            m.kinds == ["tool"]
+                && match right.name.as_str() {
+                    "prettier" => {
+                        left.package == "prettier/prettier"
+                            && right.package == "prettier"
+                            && m.source == "npm"
+                    }
+                    "bitwarden-secrets-manager" => {
+                        left.package == "bitwarden/sdk"
+                            && right.package == "bitwarden/sdk-sm"
+                            && m.source == "github-releases"
+                    }
+                    _ => false,
+                }
+        })
+}
+
+fn action_alias_precision(left: &Dependency, right: &Dependency, difference: &Difference) -> bool {
+    same_declaration(left, right)
+        && right.manager == "github-actions"
+        && right.metadata.as_ref().is_some_and(|m| {
+            m.source == "github-tags"
+                && m.kinds
+                    .iter()
+                    .any(|k| matches!(k.as_str(), "action" | "reusable-workflow"))
+        })
+        && difference.paired.as_ref().is_some_and(|(a, b)| {
+            a.update_type == b.update_type
+                && matches!(b.update_type.as_str(), "pin" | "digest")
+                && a.new_version == b.new_version
+                && a.new_value == b.new_version
+                && a.new_digest
+                    .as_ref()
+                    .is_none_or(|d| Some(d) == b.new_digest.as_ref())
+                && b.new_digest
+                    .as_ref()
+                    .is_some_and(|d| d.len() == 40 && d.bytes().all(|b| b.is_ascii_hexdigit()))
+                && b.new_value == right.current.value
+                && b.new_value
+                    .as_deref()
+                    .zip(b.new_version.as_deref())
+                    .is_some_and(|(alias, full)| {
+                        let alias = alias.trim_start_matches('v');
+                        let parts = alias.split('.').collect::<Vec<_>>();
+                        (1..=2).contains(&parts.len())
+                            && parts
+                                .iter()
+                                .all(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+                            && full
+                                .trim_start_matches('v')
+                                .strip_prefix(alias)
+                                .is_some_and(|s| s.starts_with('.'))
+                            && parse_version(full).is_some()
+                    })
+        })
+}
+
+fn cargo_compatible_target(left: &Dependency, right: &Dependency, difference: &Difference) -> bool {
+    if !same_declaration(left, right)
+        || left.current.version != right.current.version
+        || right.manager != "cargo"
+        || !right
+            .metadata
+            .as_ref()
+            .is_some_and(|m| m.source == "crates" && m.stale.is_empty())
+        || !left.metadata.as_ref().is_some_and(|m| m.source == "crate")
+    {
+        return false;
+    }
+    let compatible = |a: &Update, b: &Update| {
+        a.new_value == b.new_value
+            && a.new_digest.is_none()
+            && b.new_digest.is_none()
+            && a.update_type == "minor"
+            && b.update_type == "major"
+            && b.policy
+                .as_ref()
+                .is_some_and(|p| p.versions.as_deref() == Some("preserve"))
+            && a.new_version
+                .as_deref()
+                .and_then(parse_version)
+                .zip(b.new_version.as_deref().and_then(parse_version))
+                .is_some_and(|(av, bv)| {
+                    av.major == 0
+                        && bv.major == 0
+                        && av.minor > 0
+                        && av.minor == bv.minor
+                        && av.pre.is_empty()
+                        && bv.pre.is_empty()
+                        && bv.cmp_precedence(&av).is_gt()
+                        && a.new_value.as_deref().is_some_and(|range| {
+                            range == format!("0.{}", av.minor)
+                                && semver::VersionReq::parse(range)
+                                    .is_ok_and(|r| r.matches(&av) && r.matches(&bv))
+                        })
+                        && left
+                            .current
+                            .version
+                            .as_deref()
+                            .and_then(parse_version)
+                            .is_some_and(|v| v.major == 0 && v.minor < av.minor)
+                })
+    };
+    match difference.original_classification {
+        Classification::RustovateMissing => {
+            serde_json::from_value::<Update>(difference.renovate.clone())
+                .is_ok_and(|a| right.updates.iter().any(|b| compatible(&a, b)))
+        }
+        Classification::RustovateExtra => {
+            serde_json::from_value::<Update>(difference.rustovate.clone())
+                .is_ok_and(|b| left.updates.iter().any(|a| compatible(a, &b)))
+        }
+        _ => false,
+    }
 }
 
 fn numeric_version(value: &str) -> Option<(u64, u64, u64)> {

@@ -134,8 +134,8 @@ async fn public_sources_cold_and_conditional_warm() {
     let after_h = http.stats();
     assert_eq!(
         after_g.requests - before_g.requests,
-        3,
-        "warm GitHub has one batched release head, one tag namespace and one ref read"
+        4,
+        "warm GitHub has release and tag-release heads, one tag namespace and one ref read"
     );
     if std::env::var("RUSTOVATE_RECORD").as_deref() != Ok("1") {
         assert_eq!(after_g.not_modified - before_g.not_modified, 2);

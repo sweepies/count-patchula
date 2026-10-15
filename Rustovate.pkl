@@ -6,6 +6,7 @@ typealias Manager = "npm"|"bun"|"github-actions"|"mise"|"cargo"|"dockerfile"|"co
 typealias Source = "npm"|"github-releases"|"github-tags"|"github-runners"|"docker"|"crates"|"go"|"terraform"|"pypi"|"helm"|"oci"|"mise"
 typealias Update = "major"|"minor"|"patch"|"digest"|"pin"
 typealias VersionPolicy = "exact"|"preserve"|"widen"
+typealias ReleaseChannel = "stable"|"lts"
 typealias Scheme = "semver"|"docker"|"pep440"|"go"|"hashicorp"|"loose"
 /// Dependency roles emitted by first-release managers. npm/bun use the first
 /// four roles; Cargo also uses build. Ordinary Go/Python/regex packages use
@@ -38,6 +39,8 @@ class Window {
 class Policy {
   active: Boolean = true
   versions: VersionPolicy = "exact"
+  /// Node LTS is opt-in; other sources retain stable selection by default.
+  channel: ReleaseChannel = "stable"
   actionDigests: Boolean = true
   imageDigests: Boolean = true
   merge: Boolean = false
@@ -59,6 +62,7 @@ class Policy {
 class Overrides {
   active: Boolean? = null
   versions: VersionPolicy? = null
+  channel: ReleaseChannel? = null
   digest: Boolean? = null
   merge: Boolean? = null
   group: String? = null

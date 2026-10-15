@@ -75,8 +75,8 @@ async fn public_multi_repo_report_cold_and_warm() {
     // reads prime their validators; the tag namespace already revalidates.
     if !recording {
         assert_eq!(
-            stats.requests, 6,
-            "four conditional repository reads, one release head, one tag namespace"
+            stats.requests, 7,
+            "four conditional repository reads, release and tag-release heads, one tag namespace"
         );
         assert_eq!(stats.not_modified, 1);
     }

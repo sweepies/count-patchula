@@ -20,6 +20,55 @@ Extracted current versions and existing lockfile pins remain valid regardless of
 age. Rules can replace waitHours per dependency/update class. One UTC instant
 per batch determines eligibility; invalid supplied timestamps diagnose an error.
 
+For GitHub tags, the matching release's `publishedAt` takes priority. Without a
+release, an annotated tag uses its tagger date. Lightweight tags without a
+release are undated and have no wait. Commit timestamps never determine release
+age. Release history revalidates independently of the tag namespace, so publishing
+a release after its tag updates the date even with a warm cache.
+
+Installed npm dependencies and devDependencies follow `versions`, including
+exact pinning. Peers describe consumer compatibility: a range widens at a new
+major (`^5` becomes `^5 || ^7.0.0`), and an exact peer bumps in place
+(`2026.9.8` becomes `2026.10.1`). Exact policy never pins a peer range. Cargo
+preserve keeps a satisfying original floor; a bare two-component upgrade across
+numeric majors starts at the new major's floor (`0.30` to `1.0` for 1.1.0).
+Satisfying Terraform provider constraints retain their original declaration
+even under exact policy. New versions outside that constraint use the configured
+version policy.
+
+## Node release channels
+
+Newest eligible stable is the default. To opt into the newest published LTS
+line for mise Node and setup-node inputs, add this explicit rule:
+
+```pkl
+rules = new Listing {
+  new Rule {
+    note = "Use Node LTS"
+    select {
+      managers = new Listing { "mise"; "github-actions" }
+      packages = new Listing { "node"; "core:node"; "actions/node-versions" }
+      kinds = new Listing { "tool" }
+    }
+    apply { channel = "lts" }
+  }
+}
+```
+
+`channel` is typed (`stable` or `lts`) and follows ordered rule replacement.
+The LTS major comes from the highest version marked with an LTS codename in
+Node's [distribution index](https://nodejs.org/dist/index.json), not an even-major
+heuristic. The setup-node catalog retains its own targets and release dates and
+uses that same Node metadata for the LTS line. Normal permitted filters and
+release-age gates still apply. Missing LTS evidence or LTS on another source
+reports a diagnostic instead of silently selecting stable. Existing current
+versions remain inventory, even if they are outside the selected channel.
+
+For a deliberate fixed support line (including npm `@types/node`), a separate
+rule can use `apply { permitted = "semver:^24" }`. Choose that line explicitly;
+the npm package does not inherit the Node binary's channel. No example repository
+is silently changed to LTS.
+
 Actions retain opaque branch refs. Their digest is resolved for that same ref;
 the ops-workflows rule disables digest changes. Version tags can upgrade and be
 pinned to their commit. SHA pins without a version comment cannot safely select
