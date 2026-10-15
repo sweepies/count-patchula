@@ -12,16 +12,27 @@ Go proxy responses lack validators; aggregate list/latest requests refresh on
 expiry. npm and sparse
 indexes are aggregate upstream responses, not paginated version endpoints.
 
-GitHub uses the batch governor. Conditional REST head probes gate newest-first
-GraphQL releases and tag connections; refreshed pages merge into SQLite and stop
-at the first known release. A warm unchanged head issues no GraphQL request.
-Tag targets peel annotated tags to commits; conditional commit/ref lookups keep
-moving branch pins and retargeted version tags fresh.
+GitHub uses the batch governor. Cold release sources share GraphQL queries in
+groups of at most sixteen, including their first hundred releases. Warm sources
+use parallel conditional REST head reads, comparing only tag, publication date,
+draft and prerelease fields. Asset download counters, author profiles and
+reactions never affect the fingerprint, so a counter-driven 200 does not fetch
+history. Changed heads refresh newest-first history, merging into SQLite until
+a known release. A live A/B experiment found warm GraphQL batches slower than
+parallel conditional REST, so batching is reserved for cold first pages.
 
-The REST head gate cannot reliably detect an older tag inserted behind an
-unchanged head, historical deletion or metadata edits outside that head. These
-need webhook invalidation or periodic reconciliation in a future phase; we do
-not claim exhaustive history refresh. GitHub GraphQL has no 304 validator.
+Tags use a conditional REST matching-refs namespace read, followed by bounded
+parallel repository-scoped GraphQL object queries for new or retargeted refs.
+Tags sharing an immutable target share one hydration/cache entry. Annotated tags
+peel to commits. Per-target data and complete catalog fingerprints avoid warm
+hydration, including when a namespace responds 200 with identical semantic data.
+This detects older tag additions, retargeting and deletion anywhere in the
+namespace. The revalidated catalog supplies action tag digests; opaque branch
+refs still use conditional commit lookups.
+
+Release-head gates cannot detect historical release deletion/metadata edits or
+insertion behind an unchanged head. These still need webhook invalidation or
+periodic reconciliation; exhaustive release-history reconciliation is not claimed.
 
 mise short names resolve through the published registry snapshot in
 `crates/mise/registry.json` (`mise run registry:update`). Supported backends are
@@ -44,12 +55,15 @@ The docs do not supply release timestamps, so runner versions have no age gate.
 
 Public recordings use tiny-tarball, heck, rsc.io/quote, jdx/mr-boxington and
 GitHub's hello-world action. Fresh registry responses reduce the warm source run
-to three GitHub GETs, all 304; no .info or GraphQL history requests.
+to three GitHub requests: three GETs (release head, tag namespace and moving ref); the first warm release
+head primes its REST validators, and unchanged subsequent reads can be 304. No
+.info or GraphQL history requests occur.
 
 References: [npm metadata](https://github.com/npm/registry/blob/main/docs/responses/package-metadata.md),
 [Cargo index](https://doc.rust-lang.org/cargo/reference/registry-index.html),
 [Go proxy](https://go.dev/ref/mod#goproxy-protocol),
 [GitHub GraphQL](https://docs.github.com/en/graphql/reference).
+Tag enumeration follows [matching references](https://docs.github.com/en/rest/git/refs#list-matching-references).
 Additional specifications: [Node distribution index](https://nodejs.org/dist/index.json),
 [PyPI JSON API](https://docs.pypi.org/api/json/),
 [mise registry format](https://mise.jdx.dev/contributing/registry.html).

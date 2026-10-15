@@ -20,7 +20,10 @@ an explicit second endpoint option before use).
 Authorization headers are marked sensitive. Client Debug/Display, Response
 Debug and errors omit tokens and bodies. Network failures discard reqwest's
 URL-bearing error details. Replay errors retain the testkit's sanitized
-method/URL diagnostic. The library emits no request or body logs. Tests verify
+method/URL diagnostic. Optional request diagnostics use an explicit allowlist of
+fields; headers, bodies and query strings never reach the logger. The CLI enables
+them with `-vv` or `RUSTOVATE_LOG=debug`, filtering out dependency HTTP logs even
+at trace level. Tests verify
 credential/body confidentiality, including rejected requests and 403 responses.
 
 Every REST GET checks SQLite for validators and sends If-None-Match and/or
@@ -57,6 +60,14 @@ finish while a newly observed secondary cooldown blocks subsequent attempts.
 milliseconds (queueing plus rate waits), and primary header snapshots. Requests
 count actual transport attempts, not cache operations. Tests use Tokio's paused
 clock to verify minute-scale backoff without wall-clock sleeps.
+
+Request lines include method, host, sanitized path, status, cache outcome,
+decoded body bytes, governor queue/rate-wait milliseconds and total milliseconds.
+Fresh registry hits are explicitly marked. Freshness reasons and remaining TTL
+explain transitions to conditional requests. The network transport records the
+negotiated HTTP protocol. reqwest does not expose per-request connection/TLS reuse
+or connect/TLS durations here; these fields say `unavailable`. No values are
+inferred from response latency.
 
 REST pagination follows Link rel=next, retaining query URLs instead of inventing
 page numbers. Multiple Link fields, commas in URI/quoted parameters, relative

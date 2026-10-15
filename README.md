@@ -67,10 +67,10 @@ workload. CI publishes results as artifacts without benchmark gates.
 `mise exec -- cargo run -p rustovate-cli -- config check examples/renovate-runner.pkl`
 validates a config. `config schema` prints the bundled typed Pkl schema.
 See [configuration](docs/configuration.md), [CLI reference](docs/cli.md), and
-[twelve repository examples](examples). `run` remains a write-side stub.
+[repository examples](examples). `run` remains a write-side stub.
 
 ```sh
-# Export RUSTOVATE_TOKEN or GITHUB_TOKEN first.
+# Export RUSTOVATE_TOKEN, GITHUB_TOKEN or GH_TOKEN first.
 mise exec -- cargo run --locked -p rustovate-cli -- lookup \
   --config examples/renovate-runner.pkl --cache /tmp/rustovate.sqlite \
   --concurrency 8 --json owner/repo > /tmp/rustovate-report.json
@@ -79,6 +79,9 @@ mise exec -- cargo run --locked -p rustovate-cli -- lookup \
 Omit repository arguments to discover accessible repositories. With no local
 override, `.github/rustovate.pkl` takes precedence over `rustovate.pkl`; repositories
 with neither are skipped. Unsupported managers/sources produce report warnings.
+`-vv` or `RUSTOVATE_LOG=debug` enables sanitized per-request and phase diagnostics
+on stderr. See [live benchmarks](docs/benchmarks.md#live-network-investigation-2026-10-15)
+for fields, measured limits and cold/warm reproduction commands.
 See [extraction](docs/managers.md), [sources](docs/datasources.md),
 [versioning](docs/versioning.md), [policy](docs/lookup-policy.md) and
 [engine](docs/engine.md) for supported cases and limitations.

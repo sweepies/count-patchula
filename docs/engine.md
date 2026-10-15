@@ -6,8 +6,8 @@ Its lookup method accepts repositories or discovers all accessible repositories,
 using user/repos or the installation repository endpoint for App tokens.
 
 Repositories run concurrently behind one GitHub governor. The default branch
-commit and tree are read through conditional API requests. Only selected manager
-files and required local config modules are fetched as blobs. Truncated trees
+name, commit and tree identity come from one GraphQL snapshot on a cold scan.
+Only selected manager files and required local config modules are fetched as blobs. Truncated trees
 and invalid selected files produce per-repo errors. Config precedence is
 .github/rustovate.pkl then rustovate.pkl; absence is skipped. Local --config
 applies to every selected repository and is evaluated before network access.
@@ -18,15 +18,21 @@ when not vendored. Remote and escaping imports/resources are rejected. Literal
 imports are supported; dynamic import targets require future discovery support.
 An unchanged commit/config fingerprint reuses extraction without tree/blob calls.
 The extraction fingerprint includes the mise registry snapshot; its namespace
-changes when extraction semantics change. A cached
-default-branch name permits parallel metadata/head revalidation; a changed default
-branch causes a retry against the newly reported branch. Metadata is never skipped.
+changes when extraction semantics change. Warm scans conditionally revalidate
+metadata and the hinted branch in parallel; if the default branch changed, they
+retry only the new branch. Both paths always check the current default branch.
 Catalog and digest/ref requests are deduplicated across the whole batch. Opaque
 action branches skip release history lookups, retaining their ref when pinned.
-Current action refs revalidate alongside catalogs; only newly proposed tag refs
-need a subsequent digest wave. `policy` measures CPU selection/report assembly;
-`digest` measures the subsequent ref wave. `extraction` includes repository
-metadata/head HTTP latency even on a warm extraction hit. No Pkl evaluation,
+Warm source and branch-ref reads overlap repository revalidation using persisted
+lookup hints. Hints only schedule work: the validated current extraction and
+policy determine the report, and removed dependencies' speculative results are
+discarded. Conditional tag namespaces already carry current and proposed tag
+digests, avoiding a subsequent commit lookup. Opaque branches still revalidate
+separately. `policy` measures CPU selection/report assembly;
+`digest` measures any remaining ref wave. `extraction` includes the repository
+metadata/head latency even on a warm extraction hit. `lookup` includes source prefetch
+and remaining catalog work; it overlaps `extraction`, so phase times must not be
+summed. Trace phase boundaries show that overlap. No Pkl evaluation,
 tree/blob fetch or scanner work occurs on an unchanged cached repository config.
 
 Report metadata includes branch/commit, warnings, source/kinds/locations, per-update
@@ -82,9 +88,9 @@ mise run lookup:release --config examples/renovate-runner.pkl \
   sweepies/renovate-runner > /tmp/rustovate-runner-report.json
 ```
 
-Live fixture refresh needs a GitHub recording credential; this follow-up session
-had none. `mise run fixtures:refresh-npm` refreshed only public npm metadata and
-removed now-unused warm registry reads. All ordinary tests remain offline.
-The live target of well under one second is unverified; repository metadata/head
-and GitHub source/ref revalidation still require round trips. Registry max-age
-is honored rather than replaced with an arbitrary local TTL.
+The `3029efd` follow-up had no GitHub recording credential and refreshed only
+public npm metadata. The subsequent live investigation refreshed both public
+source and engine cassettes for GraphQL head batches and matching-ref hydration.
+All ordinary tests remain offline. Current live results and reproduction commands
+are in [benchmarks](benchmarks.md#live-network-investigation-2026-10-15).
+Registry max-age is honored rather than replaced with an arbitrary local TTL.
