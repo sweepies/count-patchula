@@ -8,3 +8,24 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+rustovate-config = { path = "../config" }
+rustovate-manager = { path = "../manager" }
+rustovate-github = { path = "../github" }
+rustovate-report = { path = "../report" }
+rustovate-lookup = { path = "../lookup" }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.11.1"
+sha1 = "0.11"
+reqwest.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono-tz = "0.10"
+cron = "0.17"
+
+[dev-dependencies]
+rustovate-cache = { path = "../cache" }
+rustovate-http = { path = "../http" }
+tokio.workspace = true
+tempfile = "3"

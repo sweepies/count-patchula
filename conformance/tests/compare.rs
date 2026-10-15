@@ -490,7 +490,8 @@ fn aliases_taxonomy_latest_snapshot_and_empty_repo_coverage_are_explicit() {
         "pin"
     );
     let empty = Report {
-        schema_version: 1,
+        actions: None,
+        schema_version: rustovate_report::SCHEMA_VERSION,
         repositories: vec![],
         stats: None,
     };
@@ -614,7 +615,8 @@ fn real_lookup_shape_retains_skipped_and_digest_only_deps_and_audits_exclusion()
         2
     );
     let empty = Report {
-        schema_version: 1,
+        actions: None,
+        schema_version: rustovate_report::SCHEMA_VERSION,
         repositories: vec![],
         stats: None,
     };
@@ -726,7 +728,7 @@ fn required_snapshot_structure_and_ambiguous_dependency_identities_still_fail() 
 fn cli_accepts_one_sided_repo_coverage_and_writes_diagnostics() {
     let dir = tempfile::tempdir().unwrap();
     let report = dir.path().join("empty report.json");
-    std::fs::write(&report, r#"{"schemaVersion":1,"repositories":[]}"#).unwrap();
+    std::fs::write(&report, r#"{"schemaVersion":2,"repositories":[]}"#).unwrap();
     let run = Command::new(env!("CARGO_BIN_EXE_rustovate-conformance"))
         .arg("--report")
         .arg(report)

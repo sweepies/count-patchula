@@ -83,9 +83,29 @@ Extract dependencies and report available updates without writing repositories.
 
 ## `rustovate run`
 
-- **Usage:** `rustovate run`
+- **Usage:** `rustovate run [FLAGS] [REPOSITORIES]…`
 
-Run dependency updates (not implemented yet, Phase 1).
+Create or update dependency branches with API commits (no pull requests).
+
+### Arguments
+- **`[REPOSITORIES]…`** — Repositories as owner/repo; omit to discover all accessible repositories.
 
 ### Flags
+- **`--cache <CACHE>`** — Shared SQLite cache path.
+
+  **Default:** `.rustovate-cache.sqlite`
+- **`--concurrency <CONCURRENCY>`** — Maximum concurrent repository scans (1–100); HTTP limits are per host.
+
+  **Default:** `8`
+- **`--host-concurrency <HOST_CONCURRENCY>`** — Override a host's HTTP limit as HOST=LIMIT (1–100); repeat per host. Default: 16.
+- **`--registry-freshness-secs <REGISTRY_FRESHNESS_SECS>`** — Freshness seconds for OCI tag lists without validators; 0 uses upstream policy.
+
+  **Default:** `3600`
+- **`--go-freshness-secs <GO_FRESHNESS_SECS>`** — Minimum freshness seconds for Go proxy lists/latest; 0 uses upstream policy.
+
+  **Default:** `3600`
+- **`--config <CONFIG>`** — Local Pkl override applied to every selected repository.
+- **`--config-dir <CONFIG_DIR>`** — Per-repository local overrides: `<dir>/<owner>/<name>.pkl` wins over `<dir>/<name>.pkl`. Unmatched repositories discover `.github/rustovate.pkl` then `rustovate.pkl`; neither means skipped. All matched files are validated before repository scans. Mutually exclusive with `--config`.
+- **`--dry-run`** — Print planned branches, files and unified diffs without writing to GitHub.
+- **`--allow-lockfile-pending`** — Permit manifest-only test branches whose lockfiles need SWE-109 tooling.
 - **`-h --help`** — Print help

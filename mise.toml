@@ -168,6 +168,11 @@ description = "Run read-only lookup; forwards repository and lookup flags"
 raw_args = true
 run = "cargo run --quiet --locked -p rustovate-cli -- lookup"
 
+[tasks.run]
+description = "Plan or apply dependency branches; forwards repositories and write flags"
+raw_args = true
+run = "cargo run --quiet --locked -p rustovate-cli -- run"
+
 [tasks."lookup:release"]
 description = "Run read-only lookup in release mode; forwards repository and lookup flags"
 raw_args = true

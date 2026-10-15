@@ -25,17 +25,24 @@ fn help_version_and_bundled_schema() {
 }
 
 #[test]
-fn update_stub_is_a_runtime_error() {
-    {
-        let command = "run";
-        let output = cli(&[command]);
-        assert_eq!(output.status.code(), Some(1));
-        assert!(String::from_utf8_lossy(&output.stderr).contains("not implemented yet (Phase 1)"));
-        let output = cli(&[command, "--json"]);
+fn run_requires_only_the_standard_token_and_accepts_write_options() {
+    for dry_run in [false, true] {
+        let mut args = vec!["run", "--json", "--allow-lockfile-pending", "owner/repo"];
+        if dry_run {
+            args.push("--dry-run");
+        }
+        let output = Command::new(env!("CARGO_BIN_EXE_rustovate"))
+            .args(args)
+            .env_remove("RUSTOVATE_TOKEN")
+            .env_remove("GITHUB_TOKEN")
+            .env_remove("GH_TOKEN")
+            .output()
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(output.status.code(), Some(1));
         assert_eq!(json["exitCode"], 1);
         assert_eq!(json["schemaVersion"], 1);
+        assert!(json["error"].as_str().unwrap().contains("RUSTOVATE_TOKEN"));
     }
 }
 

@@ -17,6 +17,7 @@ rustovate-manager = { path = "../manager" }
 rustovate-datasource = { path = "../datasource" }
 rustovate-lookup = { path = "../lookup" }
 rustovate-report = { path = "../report" }
+rustovate-update = { path = "../update" }
 rustovate-versioning = { path = "../versioning" }
 tokio.workspace = true
 reqwest.workspace = true

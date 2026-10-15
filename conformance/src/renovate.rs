@@ -602,6 +602,7 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
         }
     }
     let mut report = Report {
+        actions: None,
         schema_version: SCHEMA_VERSION,
         repositories: Vec::new(),
         stats: None,

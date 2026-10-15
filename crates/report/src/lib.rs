@@ -4,13 +4,13 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("invalid report JSON: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("unsupported report schemaVersion {0}; expected 1")]
+    #[error("unsupported report schemaVersion {0}; expected 2")]
     Version(u32),
     #[error("invalid report: {0}")]
     Invalid(String),
@@ -23,6 +23,54 @@ pub struct Report {
     pub repositories: Vec<Repository>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stats: Option<Stats>,
+    /// Versioned write-path extension; lookup reports omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actions: Option<Actions>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Actions {
+    pub schema_version: u32,
+    pub dry_run: bool,
+    pub branches: Vec<BranchAction>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ActionStatus {
+    Planned,
+    Created,
+    Updated,
+    Rebased,
+    Unchanged,
+    Skipped,
+    Protected,
+    Error,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BranchAction {
+    pub repository: String,
+    pub branch: String,
+    pub base_commit: String,
+    pub status: ActionStatus,
+    pub reason: Option<String>,
+    pub message: String,
+    pub previous_commit: Option<String>,
+    pub commit: Option<String>,
+    pub verified: Option<bool>,
+    pub lockfile_pending: bool,
+    pub files: Vec<FileAction>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FileAction {
+    pub path: String,
+    pub blob_sha: String,
+    pub diff: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -170,7 +218,7 @@ pub struct Update {
     /// major, minor, patch, digest, pin; comparison retains other upstream types.
     pub update_type: String,
     pub group: Option<String>,
-    /// Additive v1 lookup metadata; absent in black-box comparison inputs.
+    /// Lookup metadata; absent in black-box comparison inputs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<UpdatePolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -219,6 +267,61 @@ impl Report {
     pub fn validate(&self) -> Result<(), Error> {
         if self.schema_version != SCHEMA_VERSION {
             return Err(Error::Version(self.schema_version));
+        }
+        if let Some(actions) = &self.actions {
+            if actions.schema_version != 1 {
+                return Err(Error::Invalid("unsupported actions.schemaVersion".into()));
+            }
+            let mut branches = BTreeSet::new();
+            for action in &actions.branches {
+                if action.branch.is_empty()
+                    || action.base_commit.is_empty()
+                    || !branches.insert((&action.repository, &action.branch))
+                    || !self
+                        .repositories
+                        .iter()
+                        .any(|r| r.repository == action.repository)
+                {
+                    return Err(Error::Invalid(
+                        "invalid or duplicate branch action identity".into(),
+                    ));
+                }
+                if matches!(
+                    action.status,
+                    ActionStatus::Skipped | ActionStatus::Protected | ActionStatus::Error
+                ) && action.reason.as_ref().is_none_or(String::is_empty)
+                {
+                    return Err(Error::Invalid(
+                        "skipped/protected/error action needs a reason".into(),
+                    ));
+                }
+                if actions.dry_run
+                    && (action.commit.is_some()
+                        || matches!(
+                            action.status,
+                            ActionStatus::Created | ActionStatus::Updated | ActionStatus::Rebased
+                        ))
+                {
+                    return Err(Error::Invalid(
+                        "dry run cannot contain applied actions".into(),
+                    ));
+                }
+                if matches!(
+                    action.status,
+                    ActionStatus::Created | ActionStatus::Updated | ActionStatus::Rebased
+                ) && action.commit.is_none()
+                {
+                    return Err(Error::Invalid("applied action needs a commit".into()));
+                }
+                let mut paths = BTreeSet::new();
+                if action
+                    .files
+                    .iter()
+                    .any(|f| f.path.is_empty() || f.blob_sha.is_empty() || !paths.insert(&f.path))
+                {
+                    return Err(Error::Invalid("invalid or duplicate action file".into()));
+                }
+            }
         }
         let mut repos = BTreeSet::new();
         for repo in &self.repositories {
@@ -331,11 +434,40 @@ mod tests {
     #[test]
     fn reject_future_schema_before_interpreting_payload() {
         assert!(matches!(
-            Report::from_json(br#"{"schemaVersion":2,"future":true}"#),
-            Err(Error::Version(2))
+            Report::from_json(br#"{"schemaVersion":3,"future":true}"#),
+            Err(Error::Version(3))
         ));
         assert!(
-            Report::from_json(br#"{"schemaVersion":1,"repositories":[],"typo":true}"#).is_err()
+            Report::from_json(br#"{"schemaVersion":2,"repositories":[],"typo":true}"#).is_err()
         );
+        assert!(matches!(
+            Report::from_json(br#"{"schemaVersion":1,"repositories":[]}"#),
+            Err(Error::Version(1))
+        ));
+    }
+
+    #[test]
+    fn action_versions_and_dry_run_states_are_validated() {
+        let mut value = serde_json::json!({
+            "schemaVersion": 2,
+            "repositories": [{"repository":"demo/app","status":"complete","reason":null,"packageFiles":[]}],
+            "actions": {"schemaVersion":1,"dryRun":true,"branches":[{
+                "repository":"demo/app","branch":"rustovate/example","baseCommit":"base",
+                "status":"planned","reason":null,"message":"update example","previousCommit":null,
+                "commit":null,"verified":null,"lockfilePending":false,"files":[]
+            }]}
+        });
+        let parse = |v: &serde_json::Value| Report::from_json(&serde_json::to_vec(v).unwrap());
+        parse(&value).unwrap();
+        value["actions"]["schemaVersion"] = serde_json::json!(2);
+        assert!(parse(&value).is_err());
+        value["actions"]["schemaVersion"] = serde_json::json!(1);
+        value["actions"]["branches"][0]["commit"] = serde_json::json!("unexpected-write");
+        assert!(parse(&value).is_err());
+        value["actions"]["branches"][0]["commit"] = serde_json::Value::Null;
+        value["actions"]["branches"][0]["status"] = serde_json::json!("protected");
+        assert!(parse(&value).is_err());
+        value["actions"]["branches"][0]["reason"] = serde_json::json!("human commit");
+        parse(&value).unwrap();
     }
 }

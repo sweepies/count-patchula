@@ -1,8 +1,10 @@
-//! Pure extraction: no tools, network, filesystem access or manifest rewriting.
+//! Pure extraction and surgical manifest edits: no tools, network or filesystem access.
 #![forbid(unsafe_code)]
 mod actions;
+mod edit;
 pub use actions::replacement as action_replacement;
 pub use actions::runner_replacement;
+pub use edit::{Edit, apply, edits};
 /// Included in persistent extraction fingerprints because backend mappings can change.
 pub const MISE_REGISTRY: &str = rustovate_mise::REGISTRY_JSON;
 mod cargo;

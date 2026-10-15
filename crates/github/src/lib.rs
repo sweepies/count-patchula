@@ -1,4 +1,4 @@
-//! Batch-shared GitHub REST/GraphQL reads with conditional caching and rate limits.
+//! Batch-shared GitHub REST/GraphQL requests with conditional reads and rate limits.
 #![forbid(unsafe_code)]
 
 mod governor;
@@ -53,7 +53,7 @@ type Derive = fn(&[u8]) -> std::result::Result<Vec<u8>, serde_json::Error>;
 
 #[derive(Clone, Debug)]
 pub struct Options {
-    /// Shared REST+GraphQL in-flight cap, default 4 (all operations are reads).
+    /// Shared REST+GraphQL in-flight cap, default 4.
     pub concurrency: usize,
     /// Retries after the initial attempt; applies only to documented rate limits.
     pub max_retries: u32,
@@ -232,7 +232,7 @@ impl Client {
     }
 
     async fn exchange(&self, request: &Request, cached: bool) -> Result<Response> {
-        let resource = if request.method() == Method::POST {
+        let resource = if request.url().path().ends_with("/graphql") {
             "graphql"
         } else if request.url().path().starts_with("/search/") {
             "search"
@@ -283,6 +283,34 @@ impl Client {
     /// A 304 returns the original status/body with refreshed response metadata.
     pub async fn get(&self, path: &str) -> Result<Response> {
         self.get_representation(path, None).await
+    }
+
+    /// Uncached authoritative read used for write preconditions. Never falls
+    /// back to a cached representation or follows redirects.
+    pub async fn get_fresh(&self, path: &str) -> Result<Value> {
+        let request = self.request(Method::GET, self.url(path)?);
+        let response = self.exchange(&request, false).await?;
+        if !response.status.is_success() {
+            return Err(Error::Status(response.status.as_u16()));
+        }
+        serde_json::from_slice(&response.body).map_err(|_| Error::Json)
+    }
+
+    /// Git Data writes do not enter the HTTP cache. Only documented rate-limit
+    /// refusals are retried; transport/5xx failures may have written and must be
+    /// reconciled by the next run rather than blindly repeated.
+    pub async fn post(&self, path: &str, body: Value) -> Result<Value> {
+        let mut request = self.request(Method::POST, self.url(path)?);
+        request.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        *request.body_mut() = Some(serde_json::to_vec(&body).map_err(|_| Error::Json)?.into());
+        let response = self.exchange(&request, false).await?;
+        if !response.status.is_success() {
+            return Err(Error::Status(response.status.as_u16()));
+        }
+        serde_json::from_slice(&response.body).map_err(|_| Error::Json)
     }
 
     /// Conditional GET whose cached body contains only caller-selected fields.

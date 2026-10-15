@@ -34,8 +34,8 @@ async fn run(app: &App) -> Result<u8, (u8, miette::Report)> {
                     .map_err(|error| (1, miette::miette!("{error}")))
             }
         },
-        Command::Lookup(options) => lookup(app, options).await,
-        Command::Run => Err((1, miette::miette!("run: not implemented yet (Phase 1)"))),
+        Command::Lookup(options) => batch(app, options, None).await,
+        Command::Run(options) => batch(app, &options.lookup, Some(options)).await,
     }
 }
 
@@ -90,7 +90,11 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn lookup(app: &App, options: &cli::Lookup) -> Result<u8, (u8, miette::Report)> {
+async fn batch(
+    app: &App,
+    options: &cli::Lookup,
+    run: Option<&cli::Run>,
+) -> Result<u8, (u8, miette::Report)> {
     use rustovate_engine::{Engine, Options};
     use rustovate_report::Status;
     use std::sync::Arc;
@@ -132,7 +136,7 @@ async fn lookup(app: &App, options: &cli::Lookup) -> Result<u8, (u8, miette::Rep
         .map_err(|_| {
             (
                 1,
-                miette::miette!("lookup requires RUSTOVATE_TOKEN, GITHUB_TOKEN or GH_TOKEN"),
+                miette::miette!("lookup/run requires RUSTOVATE_TOKEN, GITHUB_TOKEN or GH_TOKEN"),
             )
         })?;
     if let Some(parent) = options.cache.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -164,25 +168,57 @@ async fn lookup(app: &App, options: &cli::Lookup) -> Result<u8, (u8, miette::Rep
             ));
         }
     }
-    let report = engine
-        .lookup(Options {
-            repositories: options.repositories.clone(),
-            config,
-            config_dir: options.config_dir.clone(),
-        })
-        .await
-        .map_err(|e| {
-            let code = if matches!(e, rustovate_engine::Error::Configuration(_)) {
-                2
-            } else {
-                1
-            };
-            (code, miette::miette!("{e}"))
-        })?;
+    let options = Options {
+        repositories: options.repositories.clone(),
+        config,
+        config_dir: options.config_dir.clone(),
+    };
+    let report = if let Some(run) = run {
+        engine
+            .run(options, run.dry_run, run.allow_lockfile_pending)
+            .await
+    } else {
+        engine.lookup(options).await
+    }
+    .map_err(|e| {
+        let code = if matches!(e, rustovate_engine::Error::Configuration(_)) {
+            2
+        } else {
+            1
+        };
+        (code, miette::miette!("{e}"))
+    })?;
     if app.json {
         serde_json::to_writer(io::stdout().lock(), &report)
             .map_err(|e| (1, miette::miette!("cannot write report: {e}")))?;
         println!();
+    } else if let Some(actions) = &report.actions {
+        let mut out = io::stdout().lock();
+        for branch in &actions.branches {
+            writeln!(
+                out,
+                "{} {}: {:?}{}",
+                branch.repository,
+                branch.branch,
+                branch.status,
+                if branch.lockfile_pending {
+                    " [lockfile pending]"
+                } else {
+                    ""
+                }
+            )
+            .map_err(|e| (1, miette::miette!("{e}")))?;
+            if let Some(reason) = &branch.reason {
+                writeln!(out, "  {reason}").map_err(|e| (1, miette::miette!("{e}")))?;
+            }
+            for file in &branch.files {
+                writeln!(out, "  {} (extracted blob {})", file.path, file.blob_sha)
+                    .map_err(|e| (1, miette::miette!("{e}")))?;
+                if actions.dry_run {
+                    write!(out, "{}", file.diff).map_err(|e| (1, miette::miette!("{e}")))?;
+                }
+            }
+        }
     }
     let mut errors = 0;
     let mut updates = 0;

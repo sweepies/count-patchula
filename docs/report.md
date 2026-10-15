@@ -1,7 +1,7 @@
-# Batch report contract (version 1)
+# Batch report contract (version 2)
 
 `rustovate-report` is the shared caller interface for `lookup --json`
-and future `run --json` results, and for CLI/server callers of the engine. The
+and `run --json` results, and for CLI/server callers of the engine. The
 existing config-check JSON is a different command result, not a batch report.
 
 Deserialize untrusted input with `Report::from_json`, which checks `schemaVersion`
@@ -11,7 +11,7 @@ rather than treating a new payload as an empty successful lookup.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "repositories": [{
     "repository": "owner/repo",
     "status": "complete",
@@ -87,3 +87,66 @@ batch-level failures; per-repository errors stay in the report.
 
 The hand-written [sample](../conformance/tests/fixtures/report.json) exercises
 aliases, ranges, grouping and digest policy. It is not a real lookup result.
+
+## Branch actions (SWE-106)
+
+Version 2 adds the optional top-level `actions` object for `run`. `lookup` omits
+it. The batch version increments because previous readers reject unknown fields;
+regenerate v1 lookup snapshots rather than relabeling them. Config-check/error
+envelopes, HTTP cassettes and conformance triage output retain their separate v1
+versions. The original extraction/proposal fields keep their meaning.
+
+```json
+"actions": {
+  "schemaVersion": 1,
+  "dryRun": true,
+  "branches": [{
+    "repository": "owner/repo",
+    "branch": "rustovate/example-major-0123456789abcdef",
+    "baseCommit": "default-branch-commit",
+    "status": "planned",
+    "reason": "would create branch",
+    "message": "chore(deps): update example to 2.0.0",
+    "previousCommit": null,
+    "commit": null,
+    "verified": null,
+    "lockfilePending": false,
+    "files": [{
+      "path": "mise.toml",
+      "blobSha": "extracted-git-blob-sha",
+      "diff": "--- a/mise.toml\n+++ b/mise.toml\n@@ -1,1 +1,1 @@\n-example = '1.0.0'\n+example = '2.0.0'\n"
+    }]
+  }]
+}
+```
+
+The inner schema is independently versioned and validated. `branches` is sorted
+by repository/name; each identity and file path is unique. `files` describes
+the changes against the extraction base even when an existing branch is already
+up to date. Each diff is unified text; original bytes, comments and file modes
+are retained outside the extracted scalar replacements. `blobSha` is the Git
+blob SHA (including Git's object header), not a plain content hash.
+
+Statuses are `planned`, `created`, `updated`, `rebased`, `unchanged`, `skipped`,
+`protected`, `error`. Dry runs never contain a new `commit` or an applied status;
+they do read GitHub to validate blobs and inspect existing branch ownership.
+`previousCommit` records the observed branch head. Applied actions supply the
+published commit and `verified: true`. An unsigned API commit is never published.
+A failed atomic ref lease can leave unreachable Git objects, but does not
+replace the branch. Applied actions in a partially failed batch remain reported.
+Protected/error actions make their repository an error and the CLI exits 1.
+
+Skipped/protected/error actions require `reason`; skipped plans may still have
+files/diffs. Lockfile-bearing branches are skipped by default with
+`lockfilePending: true`. `--allow-lockfile-pending` explicitly permits manifest-only
+test branches, retaining that flag and a clear warning in the report and commit
+message. No lockfiles, PRs, dashboards or lockfile tools are written in this wave.
+
+Names use the exact `prs.branch` prefix plus a group/dependency slug, update class
+and 16 hex digits of SHA-256 over the full typed identity. A dependency identity
+includes its source, package and class; a group includes its exact name and class.
+Targets, base commits and member ordering do not change the name. Distinct slugs,
+sources and groups cannot silently overwrite each other: duplicate generated
+names are rejected before repository writes, and existing commits must carry the
+full identity marker. Major/minor/patch/pin/digest alternatives use separate tracks;
+conflicting edits within one track skip that branch with an explanation.

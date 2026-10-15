@@ -8,10 +8,12 @@ requests. It is built to run a whole batch of repositories in one short-lived
 process, so it is designed around shared caching and concurrency rather than
 one repository at a time.
 
-Status: Phase 1, wave 2. Read-only lookup covers the bundled managers and public
+Status: Phase 2, wave 1. Read-only lookup covers the bundled managers and public
 sources, including Cargo, Docker/Compose, Go, Terraform, Kubernetes/Flux/Helm and
-Python requirements. Repository writes remain later-phase work. See
-[coverage, replay measurements and remaining limits](docs/wave2.md).
+Python requirements. `run` now plans and publishes guarded dependency branches;
+PRs/dashboard and lockfile tooling are later work. Lockfile-bearing branches are
+skipped by default. See [write path and sandbox verification](docs/phase2-wave1.md)
+and [lookup coverage](docs/wave2.md).
 Dated proposals default to a 24-hour release-age gate. GitHub-hosted runner
 labels and mise registry backends are supported by read-only lookup.
 
@@ -36,7 +38,7 @@ minimal images without system development packages.
 - `mise run build` builds the workspace.
 - `mise run test` runs offline unit and integration tests (Cargo may download dependencies).
 - `mise run lint` checks rustfmt and Clippy with warnings denied.
-- `mise run ci` runs lint, test and build in order.
+- `mise run ci` runs fixture checks, lint, test and build, retaining full logs on failure.
 - `mise run fixtures:check` scans all HTTP cassettes for possible secrets (also in CI).
 - `mise run fixtures:record` opts into real GitHub recording with an existing
   GITHUB_TOKEN or GH_TOKEN; ordinary tests replay offline. See [HTTP tests](docs/http-testing.md).
@@ -68,7 +70,13 @@ workload. CI publishes results as artifacts without benchmark gates.
 `mise exec -- cargo run -p rustovate-cli -- config check examples/renovate-runner.pkl`
 validates a config. `config schema` prints the bundled typed Pkl schema.
 See [configuration](docs/configuration.md), [CLI reference](docs/cli.md), and
-[repository examples](examples). `run` remains a write-side stub.
+[repository examples](examples). Use an App installation token for verified
+write-side commits, and review a dry run first:
+
+```sh
+mise run run --dry-run owner/repo
+mise run run owner/repo
+```
 
 ```sh
 # Export RUSTOVATE_TOKEN, GITHUB_TOKEN or GH_TOKEN first.

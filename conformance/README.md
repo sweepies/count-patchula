@@ -63,7 +63,7 @@ included in-scope Renovate dependency `rustovate-missing`:
 mise run conformance:compare --report /path/to/empty.json \
   --renovate-log /path/to/private-renovate.jsonl --output /path/to/private-triage \
   owner/repo-one owner/repo-two
-# empty.json: {"schemaVersion":1,"repositories":[]}
+# empty.json: {"schemaVersion":2,"repositories":[]}
 ```
 
 The parser takes each repository's latest `packageFiles with updates` snapshot.

@@ -36,8 +36,20 @@ pub enum Command {
     Config(Config),
     /// Extract dependencies and report available updates without writing repositories.
     Lookup(Lookup),
-    /// Run dependency updates (not implemented yet, Phase 1).
-    Run,
+    /// Create or update dependency branches with API commits (no pull requests).
+    Run(Run),
+}
+
+#[derive(Args)]
+pub struct Run {
+    #[usage(flatten)]
+    pub lookup: Lookup,
+    /// Print planned branches, files and unified diffs without writing to GitHub.
+    #[usage(long)]
+    pub dry_run: bool,
+    /// Permit manifest-only test branches whose lockfiles need SWE-109 tooling.
+    #[usage(long)]
+    pub allow_lockfile_pending: bool,
 }
 
 #[derive(Args)]

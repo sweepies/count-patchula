@@ -1,4 +1,4 @@
-# Read-only engine (SWE-95)
+# Batch engine (SWE-95 / SWE-106)
 
 `rustovate-engine::Engine` accepts a token, shared SQLite cache, concurrency cap
 and transport. The CLI constructs one network pool; tests inject cassette replay.
@@ -43,7 +43,8 @@ policy and request/cache counters plus phase timings. Unavailable upstream
 identities produce warnings; API/config/extraction failures are errors. The CLI
 writes only the report to stdout with --json and always summarizes on stderr.
 It exits 1 for batch failures or any per-repo error, 2 for invalid config/options.
-`run` remains unimplemented. No writes to GitHub occur.
+`lookup` remains read-only. `run` adds guarded branch planning/publication,
+described below.
 
 Validation includes a public two-repo replay using jdx/usage and jdx/mr-boxington,
 plus independently simulated discovery/config-precedence/skips/errors tests.
@@ -97,3 +98,50 @@ source and engine cassettes for GraphQL head batches and matching-ref hydration.
 All ordinary tests remain offline. Current live results and reproduction commands
 are in [benchmarks](benchmarks.md#live-network-investigation-2026-10-15).
 Registry max-age is honored rather than replaced with an arbitrary local TTL.
+
+## Branch write path
+
+`Engine::run` shares lookup, discovery, configuration and policy with `lookup`.
+The extraction cache now retains original file contents, Git blob SHAs, modes and
+the full path inventory. Its v7 namespace invalidates older extraction rows.
+Files needed only for lockfile detection need not be downloaded.
+
+The pure updater derives branches and scalar edits from proposals and extracted
+locations. npm aliases, Cargo inheritance, action refs/subpaths/comments, mise
+forms, container tags and Go directive prefixes have explicit renderers. Edits
+apply in descending byte order after overlap and UTF-8 boundary checks, preserving
+all surrounding text. Uneditable generated Flux bundles, expanded Docker ARG
+locations and missing separate YAML digest fields are reported as skipped rather
+than rewritten incorrectly. Required but unavailable target digests also skip.
+
+Before creating objects, the writer performs uncached reads of the default head
+and tree, comparing each extracted blob SHA and its actual content hash. A moved
+base or stale blob refuses publication and requires a rerun. Git Data blobs,
+trees and commits create one replacement commit with the default commit as its
+sole parent. No custom author, committer or signature is supplied; GitHub must
+return `verification.verified = true` before a ref is published. See GitHub's
+[bot signing requirements](https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification#signature-verification-for-bots).
+Signing with the sandbox App token still needs live verification.
+
+Existing branches require authenticated-actor authorship, matching bot/GitHub
+committer, verified commits, and rustovate's version/full-identity trailers on
+every exclusive commit. Incomplete histories and human commits are protected.
+Changes replace the branch commit in place; unchanged contents produce no writes.
+`rebase = "behind"` recreates on a moved base. `"conflicts"` keeps an identical
+manifest plan on its old base, recreating it when a touched file or proposal
+changes. Actual branch blob hashes also verify purported unchanged plans.
+
+Ref publication uses the Git Data GraphQL
+[`updateRefs` mutation](https://docs.github.com/en/graphql/reference/git#updaterefs)
+with `beforeOid` leases for both the branch and the default head. This is a
+deliberate choice over REST's unconditional force update: it atomically refuses
+concurrent human pushes and base movements. Object writes never enter the read
+cache. Transport/server failures are not blindly retried; a later run reconciles
+the current ref. Rate-limit refusals retain the existing governor behavior.
+
+Until SWE-109, a matching ecosystem lockfile anywhere in a repository
+conservatively gates npm/bun, Cargo, Go or Terraform branch plans. An explicit
+`--allow-lockfile-pending` enables manifest-only testing and marks each affected
+report/commit. The default sandbox run can update Actions, mise and containers
+without producing inconsistent npm/Cargo/Go lockfiles. No PRs or dashboard writes
+occur. See [wave-1 evidence and sandbox commands](phase2-wave1.md).

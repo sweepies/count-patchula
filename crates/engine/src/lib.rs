@@ -1,4 +1,4 @@
-//! Read-only batch engine shared by CLI and future server callers.
+//! Batch lookup and branch-writing engine shared by CLI and future server callers.
 #![forbid(unsafe_code)]
 mod overrides;
 
@@ -60,6 +60,12 @@ struct Work {
     report: Repository,
     config: Option<Config>,
     dependencies: Vec<Dependency>,
+    snapshot: rustovate_update::Snapshot,
+}
+#[derive(Serialize, Deserialize)]
+struct CachedExtraction {
+    extraction: Extraction,
+    snapshot: rustovate_update::Snapshot,
 }
 #[derive(Clone, Deserialize)]
 struct Entry {
@@ -67,6 +73,11 @@ struct Entry {
     sha: String,
     #[serde(rename = "type")]
     kind: String,
+    #[serde(default = "file_mode")]
+    mode: String,
+}
+fn file_mode() -> String {
+    "100644".into()
 }
 
 type LookupKey = (String, String);
@@ -130,6 +141,106 @@ impl Engine {
         options: Options,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<Report> {
+        self.lookup_work_at(options, now)
+            .await
+            .map(|(report, _)| report)
+    }
+    pub async fn run(
+        &self,
+        options: Options,
+        dry_run: bool,
+        allow_lockfile_pending: bool,
+    ) -> Result<Report> {
+        self.run_at(options, dry_run, allow_lockfile_pending, chrono::Utc::now())
+            .await
+    }
+    pub async fn run_at(
+        &self,
+        options: Options,
+        dry_run: bool,
+        allow_lockfile_pending: bool,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Report> {
+        let started = Instant::now();
+        let (mut report, work) = self.lookup_work_at(options, now).await?;
+        let write_started = Instant::now();
+        let before = self.github.stats().await;
+        let mut branches = Vec::new();
+        for work in work {
+            let Some(config) = work.config else {
+                continue;
+            };
+            let repo = report
+                .repositories
+                .iter_mut()
+                .find(|r| r.repository == work.report.repository)
+                .expect("lookup repository");
+            if repo.status != Status::Complete {
+                continue;
+            }
+            let plans = rustovate_update::plan(
+                repo,
+                &config,
+                &work.dependencies,
+                &work.snapshot,
+                allow_lockfile_pending,
+                now,
+            );
+            let mut plans = match plans {
+                Ok(plans) => plans,
+                Err(error) => {
+                    repo.status = Status::Error;
+                    repo.reason = Some(error);
+                    continue;
+                }
+            };
+            for plan in &mut plans {
+                rustovate_update::apply(
+                    &self.github,
+                    plan,
+                    &work.snapshot,
+                    repo.default_branch.as_deref().expect("configured branch"),
+                    config.prs.rebase,
+                    dry_run,
+                )
+                .await;
+                if matches!(
+                    plan.action.status,
+                    rustovate_report::ActionStatus::Error
+                        | rustovate_report::ActionStatus::Protected
+                ) {
+                    repo.status = Status::Error;
+                    repo.reason.get_or_insert_with(|| {
+                        "one or more branch actions failed or were protected; inspect actions"
+                            .into()
+                    });
+                }
+            }
+            branches.extend(plans.into_iter().map(|p| p.action));
+        }
+        branches.sort_by(|a, b| (&a.repository, &a.branch).cmp(&(&b.repository, &b.branch)));
+        report.actions = Some(rustovate_report::Actions {
+            schema_version: 1,
+            dry_run,
+            branches,
+        });
+        if let Some(stats) = &mut report.stats {
+            let after = self.github.stats().await;
+            stats.requests += after.requests - before.requests;
+            stats.not_modified += after.not_modified - before.not_modified;
+            stats
+                .phase_micros
+                .insert("write".into(), micros(write_started));
+            stats.phase_micros.insert("total".into(), micros(started));
+        }
+        report.validate()?;
+        Ok(report)
+    }
+    async fn lookup_work_at(
+        &self,
+        options: Options,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(Report, Vec<Work>)> {
         if options.config.is_some() && options.config_dir.is_some() {
             return Err(Error::Configuration(
                 "--config and --config-dir are mutually exclusive".into(),
@@ -193,6 +304,7 @@ impl Engine {
                             report: repository(&repo, Status::Error, Some(error.to_string())),
                             config: None,
                             dependencies: Vec::new(),
+                            snapshot: Default::default(),
                         },
                     }
                 })
@@ -631,7 +743,8 @@ impl Engine {
         let after_h = self.http.stats();
         let report = Report {
             schema_version: SCHEMA_VERSION,
-            repositories: work.into_iter().map(|w| w.report).collect(),
+            repositories: work.iter().map(|w| w.report.clone()).collect(),
+            actions: None,
             stats: Some(rustovate_report::Stats {
                 requests: after_g.requests + after_h.requests
                     - before_g.requests
@@ -654,7 +767,7 @@ impl Engine {
             }),
         };
         report.validate()?;
-        Ok(report)
+        Ok((report, work))
     }
     async fn digests(
         &self,
@@ -936,18 +1049,19 @@ impl Engine {
                 report,
                 config: None,
                 dependencies: Vec::new(),
+                snapshot: Default::default(),
             });
         };
         let key = ExtractionKey {
             repo: repo.into(),
             default_branch_commit: commit,
             config_hash: format!(
-                "extract-v6:{}:{}",
+                "extract-v7:{}:{}",
                 hash(&serde_json::to_vec(&config)?),
                 hash(rustovate_manager::MISE_REGISTRY.as_bytes())
             ),
         };
-        let extraction: Extraction = if let Some(bytes) = self.cache.extraction_get(&key).await? {
+        let cached: CachedExtraction = if let Some(bytes) = self.cache.extraction_get(&key).await? {
             self.extraction_hits.fetch_add(1, Ordering::Relaxed);
             serde_json::from_slice(&bytes)?
         } else {
@@ -957,31 +1071,58 @@ impl Engine {
             } else {
                 self.tree(repo, tree_sha).await?
             };
+            let paths = entries
+                .iter()
+                .filter(|e| e.kind == "blob")
+                .map(|e| e.path.clone())
+                .collect();
             let selected: Vec<_> = entries
                 .into_iter()
                 .filter(|entry| entry.kind == "blob" && scanner.needs(&entry.path))
                 .collect();
-            let files: Files = stream::iter(selected)
-                .map(|entry| async move { Ok((entry.path, self.file(repo, &entry.sha).await?)) })
+            let blobs: BTreeMap<String, rustovate_update::Blob> = stream::iter(selected)
+                .map(|entry| async move {
+                    let content = self.file(repo, &entry.sha).await?;
+                    Ok((
+                        entry.path,
+                        rustovate_update::Blob {
+                            sha: entry.sha,
+                            mode: entry.mode,
+                            content,
+                        },
+                    ))
+                })
                 .buffer_unordered(self.github.concurrency())
                 .collect::<Vec<Result<_>>>()
                 .await
                 .into_iter()
                 .collect::<Result<_>>()?;
+            let files: Files = blobs
+                .iter()
+                .map(|(p, b)| (p.clone(), b.content.clone()))
+                .collect();
             let extraction = tokio::task::spawn_blocking(move || scanner.extract(&files))
                 .await
                 .map_err(|e| Error::Invalid(e.to_string()))?
                 .map_err(Error::Invalid)?;
+            let cached = CachedExtraction {
+                extraction,
+                snapshot: rustovate_update::Snapshot {
+                    paths,
+                    files: blobs,
+                },
+            };
             self.cache
-                .extraction_put(&key, &serde_json::to_vec(&extraction)?)
+                .extraction_put(&key, &serde_json::to_vec(&cached)?)
                 .await?;
-            extraction
+            cached
         };
-        report.warnings = extraction.warnings;
+        report.warnings = cached.extraction.warnings;
         Ok(Work {
             report,
             config: Some(config),
-            dependencies: extraction.dependencies,
+            dependencies: cached.extraction.dependencies,
+            snapshot: cached.snapshot,
         })
     }
     async fn config(&self, repo: &str, path: &str, entries: &[Entry]) -> Result<Config> {

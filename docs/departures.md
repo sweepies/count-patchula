@@ -4,7 +4,7 @@ rustovate is not a Renovate clone. Each entry records a behaviour that differs
 on purpose, and why. The comparison harness links differences it finds to
 entries here; a difference with no entry is treated as a bug.
 
-Review map (44 entries; IDs below remain stable):
+Review map (45 entries; IDs below remain stable):
 
 - **Policy:** 2–8, 10, 12, 14, 16–18, 20, 23, 25, 29–31, 33–35,
   37–38, 42–43, 45–46 cover explicit activation, reproducibility, update tracks,
@@ -18,6 +18,8 @@ Review map (44 entries; IDs below remain stable):
   fields from manifest comparisons; 19, 26 and 27 also scope/audit duplicate or
   uneditable inventory. Numeric prefixes and missing optional fields are counted
   normalizations, not extra product policies.
+- **Write safety:** 47 records independent branch identity, verification, ref
+  leases and the temporary lockfile gate. It grants no lookup comparison exemption.
 
 **SWE-103 owner decisions (round 4):** keep the one-hour catalog floor
 (21) and newest stable by default (42); Node LTS requires an explicit channel
@@ -76,6 +78,18 @@ Stable comparison link: <a id="departure-7"></a>**Departure 7: default policy**
 | 44 | mise registry identity | Can select older or different backend identities | Follow the first supported backend in the published mise registry snapshot | Use the tool's current published backend; never equate distinct package identities |
 | 45 | Action alias precision | Can expand a ref when adding a digest | Preserve the declared numeric ref precision and report the full resolved target separately | The commit pin supplies reproducibility while the ref describes the intended release line |
 | 46 | Cargo target resolution | Observed pre-1.0 upgrades can select an older release in the proposed range | Resolve the newest eligible release in that same compatibility interval | Report the available release without narrowing the manifest |
+| 47 | Branch write safety | No write behavior is inferred from comparison output | Leased API refs, verified bot ownership, explicit pending-lockfile testing | Preserve human work and lockfile consistency without emulating another bot |
+
+<a id="departure-47"></a>**Departure 47: independent write safety.**
+Phase 2 does not claim compatibility with Renovate's branch/commit behavior.
+Branch identities include source/package or exact group plus update class, with
+stable hashed suffixes. Each update replaces one API commit on the chosen base;
+human, unmarked and unverified histories are protected. Atomic Git Data ref leases
+guard both the base and update branch against concurrent changes. GitHub supplies
+commit authorship/signing, and unverified objects are never published. Lockfile
+updates are skipped until tooling exists; manifest-only test branches require an
+explicit flag and remain marked pending in reports and commits. This entry grants
+no lookup comparison exemption. See [write-path contract](report.md#branch-actions-swe-106).
 
 <a id="departure-42"></a>**Departure 42: explicit stable channels.**
 Newest eligible stable remains the default. The reviewed Node differences

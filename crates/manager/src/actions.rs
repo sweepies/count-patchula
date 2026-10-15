@@ -2,6 +2,13 @@ use crate::*;
 use regex::Regex;
 use serde_yaml_ng::Value;
 
+fn version_comment(value: &str) -> bool {
+    static VERSION: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(r"^v?[0-9]+(?:\.[0-9]+){0,2}(?:[-+][0-9A-Za-z.-]+)?$").expect("version comment")
+    });
+    VERSION.is_match(value)
+}
+
 pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
     let root: Value = serde_yaml_ng::from_str(text).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
@@ -259,13 +266,7 @@ fn add(
             .map(|(_, c)| c.trim())
             .and_then(|c| c.split_whitespace().next());
         let version = if digest.is_some() {
-            comment.filter(|v| {
-                static VERSION: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-                    Regex::new(r"^v?[0-9]+(?:\.[0-9]+){0,2}(?:[-+][0-9A-Za-z.-]+)?$")
-                        .expect("version comment")
-                });
-                VERSION.is_match(v)
-            })
+            comment.filter(|v| version_comment(v))
         } else {
             Some(reference)
         };
@@ -501,7 +502,7 @@ pub fn replacement(
         .split_once(" #")
         .map_or((raw, None), |(a, b)| (a, Some(b)));
     let at = scalar.rfind('@').ok_or("action scalar has no ref")?;
-    let old_ref = scalar[at + 1..].trim_end_matches(['\'', '"', ' ', '\t']);
+    let old_ref = scalar[at + 1..].trim_end_matches(['\'', '"', ' ', '\t', '\r']);
     let end = at + 1 + old_ref.len();
     let mut result = format!(
         "{}{}{}",
@@ -512,14 +513,25 @@ pub fn replacement(
     if let Some(comment) = comment {
         result.push_str(" #");
         let old = comment.split_whitespace().next().unwrap_or("");
-        if digest.is_some() && dep.digest.is_some() && dep.resolved.as_deref() == Some(old) {
+        if version_comment(old) && (dep.digest.is_none() || dep.resolved.as_deref() == Some(old)) {
             let lead = comment.len() - comment.trim_start().len();
             result.push_str(&comment[..lead]);
             result.push_str(value);
             result.push_str(&comment[lead + old.len()..]);
+        } else if digest.is_some() && dep.digest.is_none() {
+            let lead = comment.len() - comment.trim_start().len();
+            result.push_str(&comment[..lead]);
+            result.push_str(value);
+            result.push(' ');
+            result.push_str(comment.trim_start());
         } else {
             result.push_str(comment);
         }
+    } else if digest.is_some() && dep.resolved.is_some() {
+        let suffix = result.split_off(result.trim_end_matches([' ', '\t', '\r']).len());
+        result.push_str(" # ");
+        result.push_str(value);
+        result.push_str(&suffix);
     }
     Ok(result)
 }

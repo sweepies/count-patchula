@@ -23,3 +23,85 @@ logs outside the checkout. `RUSTOVATE_STRESS_RUNS`, `RUSTOVATE_STRESS_LOG_DIR` a
 Tests use isolated caches and no shared environment mutations, ports or fixed
 temporary directories. A recurrence should be investigated using its retained
 log rather than inferred from an aggregate count.
+
+## SWE-105: shared config evaluation
+
+Local checks/overrides and API-supplied modules now use the same evaluator and
+bundled-schema fallback. Regression tests compare nested `prs` and `defaults`
+amendments with and without vendoring, plus vendored-schema precedence and CLI
+directory discovery. `config check /root/rustovate-sandbox` passes without a
+local `Rustovate.pkl`. No files in the sandbox were changed.
+
+## SWE-106: branches only
+
+The updater plans surgical manifest edits with extracted locations and blob
+identities, then uses Git Data blobs/trees/commits and leased GraphQL Git Data refs.
+It preserves formatting and file modes, refuses stale content and protects human
+or uninspectable branch histories. Updates/rebases replace one commit with the
+default branch as its sole parent. Only GitHub-verified commits are published.
+`run --dry-run` performs read-only validation and prints branch/file plans with
+unified diffs. `run --json` emits batch schema v2 and actions schema v1.
+
+Offline tests cover creation, replacement, unchanged reruns, both rebase policies,
+conflicting moved-base files, human commits at/below the branch tip, foreign
+committers, stale blobs, moved bases, truncated trees, unsigned commits and failed
+ref leases. Manager tests cover JSON aliases/key order/indentation, action pin
+comments/subpaths/CRLF, TOML forms/inheritance, Docker variants, Compose YAML and
+Go require blocks/directives. A token-only synthetic engine test exercises in-repo
+Pkl discovery on both cold and cached extraction, dry/real runs, and lockfile gates.
+No private responses or credentials were recorded.
+
+## Live sandbox verification
+
+From `/root/rustovate`, with an installation token already exported as
+`RUSTOVATE_TOKEN` (no other credentials/config flags are needed):
+
+```sh
+mise run run --dry-run sweepies/rustovate-sandbox
+mise run run sweepies/rustovate-sandbox
+# A second real run should report unchanged eligible branches:
+mise run run --json sweepies/rustovate-sandbox > /tmp/rustovate-sandbox-applied.json
+```
+
+For JSON review before publishing, add `--json` to the first command and redirect
+stdout to `/tmp/rustovate-sandbox-plan.json`. Diagnostics/summaries stay on stderr.
+The token needs Contents write, and the installation must allow workflow updates
+for `.github/workflows/*`. No App ID, private key, checkout or local schema is used.
+
+Expected default outcome: only `rustovate/` branches for eligible Actions
+(`actions-checkout-*`, `jdx-mise-action-*` and hosted-runner `ubuntu-*`), mise
+(`node-*`, `oven-sh-bun-*`, `jqlang-jq-*`) and container (`node-*`, `nginx-*`,
+`redis-*`, `postgres-*`) tracks. Each name ends in its class and stable 16-digit
+identity hash. Docker Node and mise Node have different source identities/hashes.
+Available patch/minor/major/pin/digest tracks depend on the catalogs returned at
+run time; the dry-run report is the authoritative exact branch list. No PRs or
+dashboard issue are created and the default branch remains unchanged.
+
+npm/bun package, Cargo and Go plans are skipped with explicit `lockfile pending`
+reasons because this sandbox has `bun.lock`, `Cargo.lock` and `go.sum`. To test
+those manifest-only branches deliberately, use the same flag for both steps:
+
+```sh
+mise run run --dry-run --allow-lockfile-pending sweepies/rustovate-sandbox
+mise run run --allow-lockfile-pending sweepies/rustovate-sandbox
+```
+
+Those branches retain `lockfilePending: true` and a commit warning. Keep this
+flag out of ordinary runs until SWE-109 can regenerate and validate lockfiles.
+
+Open live check: verify the App's Git Data commits return `verification.verified`
+as true. The offline server tests both outcomes; an unsigned commit leaves the
+branch untouched and returns an action error. GitHub explicitly documents
+automatic signing for
+[`createCommitOnBranch`](https://docs.github.com/en/graphql/reference/commits#createcommitonbranch),
+whereas the requested REST Git Data route exposes a verification result. If the
+App's Git Data route is unsigned, use the signed GraphQL authoring route in a
+follow-up rather than weakening verification or inventing an App identity.
+That change needs to preserve the one-commit/base and atomic human-work protection
+guarantees; it cannot simply append commits to an existing update branch.
+
+Final offline validation: `mise run ci` passes (216 tests across 55 suites,
+zero failures; strict Clippy, formatting and workspace build). Its fixture stage
+checked all 22 cassettes for possible secrets. `mise run docs` regenerated the
+CLI reference, usage definition, man page and completions. No live sandbox write
+was attempted and nothing was pushed.
