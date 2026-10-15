@@ -76,6 +76,15 @@ fn backend(name: &str) -> Option<Resolution> {
     } else {
         package.into()
     };
+    // Product-specific release namespaces, observed in public release metadata.
+    // A generic v-prefix cannot distinguish these from SDK/language releases.
+    if matches!(source, Source::GithubReleases | Source::GithubTags) {
+        extract = match package.as_str() {
+            "jqlang/jq" => Some("^jq-(?<version>.+)$".into()),
+            "bitwarden/sdk-sm" => Some("^bws-v(?<version>.+)$".into()),
+            _ => extract,
+        };
+    }
     Some(Resolution {
         source,
         package,
@@ -108,6 +117,17 @@ mod tests {
         assert_eq!(
             resolve("bun").unwrap().extract.as_deref(),
             Some("^bun-v(?<version>.+)$")
+        );
+        assert_eq!(
+            resolve("jq").unwrap().extract.as_deref(),
+            Some("^jq-(?<version>.+)$")
+        );
+        assert_eq!(
+            resolve("bitwarden-secrets-manager")
+                .unwrap()
+                .extract
+                .as_deref(),
+            Some("^bws-v(?<version>.+)$")
         );
     }
 }

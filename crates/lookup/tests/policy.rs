@@ -48,6 +48,98 @@ fn catalog(values: &[&str]) -> Catalog {
 }
 
 #[test]
+fn equal_precedence_candidates_and_age_boundaries_are_order_independent() {
+    let cfg = config("benchmark-public");
+    let eval = Evaluator::new(&cfg).unwrap();
+    let now = chrono::DateTime::parse_from_rfc3339("2026-10-15T05:51:26Z")
+        .unwrap()
+        .to_utc();
+    let mut versions = catalog(&["1.0.1+a", "1.0.1+b", "1.0.2"]);
+    versions.versions[0].published_at = Some("2026-10-10T00:00:00Z".into());
+    versions.versions[1].published_at = Some("2026-10-10T00:00:00Z".into());
+    versions.versions[2].published_at = Some("2026-10-14T05:51:27Z".into());
+    for current in ["1.0.0", "^1.0.0", "latest"] {
+        let mut dep = dependency("lib");
+        dep.current = current.into();
+        if current == "latest" {
+            dep.resolved = None;
+            versions.dist_tags.insert("latest".into(), "1.0.2".into());
+        }
+        let expected = eval.evaluate_at(&dep, &versions, now).unwrap();
+        assert_eq!(expected.updates[0].new_version.as_deref(), Some("1.0.1+b"));
+        for _ in 0..versions.versions.len() {
+            versions.versions.rotate_left(1);
+            let result = eval.evaluate_at(&dep, &versions, now).unwrap();
+            assert_eq!(result.updates, expected.updates);
+            assert_eq!(result.held_back, expected.held_back);
+        }
+        assert_eq!(
+            eval.evaluate_at(&dep, &versions, now + chrono::Duration::seconds(1))
+                .unwrap()
+                .updates[0]
+                .new_version
+                .as_deref(),
+            Some("1.0.2")
+        );
+    }
+}
+
+#[test]
+fn action_digest_targets_resolve_the_new_commit_without_expanding_ref_precision() {
+    let eval = Evaluator::new(&config("benchmark-public")).unwrap();
+    let mut dep = dependency("example/action");
+    dep.manager = Manager::GithubActions;
+    dep.kind = DependencyKind::Action;
+    dep.source = Source::GithubTags;
+    dep.scheme = Scheme::Loose;
+    dep.current = "v2".into();
+    dep.resolved = Some("v2".into());
+    let mut versions = catalog(&["v2", "v2.1.0", "v2.2.0"]);
+    versions.versions[1].digest = Some("b".repeat(40));
+    for digest in [None, Some("b".repeat(40))] {
+        dep.digest = digest;
+        let p = eval
+            .digest_proposal_with_catalog(&dep, &"a".repeat(40), Some(&versions))
+            .unwrap();
+        assert_eq!(p.new_value.as_deref(), Some("v2"));
+        assert_eq!(p.new_version.as_deref(), Some("v2.2.0"));
+        assert_eq!(
+            p.update_type,
+            if dep.digest.is_some() {
+                "digest"
+            } else {
+                "pin"
+            }
+        );
+    }
+}
+
+#[test]
+fn prefixed_mise_product_releases_pin_latest_without_sdk_tags() {
+    let cfg = config("benchmark-public");
+    let dependencies = rustovate_manager::Scanner::new(&cfg)
+        .unwrap()
+        .extract(&rustovate_manager::Files::from([(
+            "mise.toml".into(),
+            "[tools]\njq = \"latest\"\nbitwarden-secrets-manager = \"latest\"\n".into(),
+        )]))
+        .unwrap()
+        .dependencies;
+    let eval = Evaluator::new(&cfg).unwrap();
+    for dep in dependencies {
+        let (tags, target) = if dep.name == "jq" {
+            (vec!["jq-1.8.2", "jq-1.8.1"], "1.8.2")
+        } else {
+            (vec!["python-v9.0.0", "bws-v2.1.0", "rust-v9.0.0"], "2.1.0")
+        };
+        let proposals = eval.propose(&dep, &catalog(&tags)).unwrap();
+        assert_eq!(proposals.len(), 1);
+        assert_eq!(proposals[0].update_type, "pin");
+        assert_eq!(proposals[0].new_version.as_deref(), Some(target));
+    }
+}
+
+#[test]
 fn docker_policy_keeps_variants_and_python_epochs_use_pep440_order() {
     let mut cfg = config("renovate-runner");
     cfg.defaults.wait_hours = 0;

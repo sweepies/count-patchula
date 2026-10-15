@@ -100,6 +100,7 @@ struct Inner {
 struct Host {
     semaphore: Arc<Semaphore>,
     cooldown: Mutex<Option<Instant>>,
+    pull_cooldown: Mutex<Option<Instant>>,
 }
 type Coalesced = Arc<tokio::sync::Mutex<Option<(Instant, Response)>>>;
 type Derive = fn(&[u8]) -> Result<Vec<u8>, Error>;
@@ -154,11 +155,12 @@ impl Cached {
                 Arc::new(Host {
                     semaphore: Arc::new(Semaphore::new(self.0.options.host_limit(host))),
                     cooldown: Mutex::new(None),
+                    pull_cooldown: Mutex::new(None),
                 })
             })
             .clone())
     }
-    async fn acquire(&self, url: &Url) -> Result<OwnedSemaphorePermit, Error> {
+    async fn acquire(&self, url: &Url, pull: bool) -> Result<OwnedSemaphorePermit, Error> {
         let host = self.host(url)?;
         loop {
             let permit = host
@@ -167,7 +169,15 @@ impl Cached {
                 .acquire_owned()
                 .await
                 .map_err(|_| Error::Configuration)?;
-            let until = *host.cooldown.lock().map_err(|_| Error::Configuration)?;
+            let mut until = *host.cooldown.lock().map_err(|_| Error::Configuration)?;
+            if pull {
+                until = until.max(
+                    *host
+                        .pull_cooldown
+                        .lock()
+                        .map_err(|_| Error::Configuration)?,
+                );
+            }
             if let Some(delay) =
                 until.and_then(|until| until.checked_duration_since(Instant::now()))
             {
@@ -181,9 +191,15 @@ impl Cached {
             }
         }
     }
-    fn cooldown(&self, url: &Url, delay: Duration) -> Result<(), Error> {
+    fn cooldown(&self, url: &Url, delay: Duration, pull: bool) -> Result<(), Error> {
         let host = self.host(url)?;
-        let mut until = host.cooldown.lock().map_err(|_| Error::Configuration)?;
+        let mut until = if pull {
+            &host.pull_cooldown
+        } else {
+            &host.cooldown
+        }
+        .lock()
+        .map_err(|_| Error::Configuration)?;
         let now = Instant::now();
         let next = now
             .checked_add(delay)
@@ -302,7 +318,7 @@ impl Cached {
             .headers_mut()
             .insert(header::ACCEPT, HeaderValue::from_static("application/json"));
         let queued = Instant::now();
-        let _permit = self.acquire(&url).await?;
+        let _permit = self.acquire(&url, false).await?;
         self.0.requests.fetch_add(1, Ordering::Relaxed);
         Ok(trace
             .send(self.0.transport.as_ref(), request, queued.elapsed(), false)
@@ -512,7 +528,11 @@ impl Cached {
         let mut response = loop {
             let queued = Instant::now();
             let target = request.url().clone();
-            let permit = match self.acquire(&target).await {
+            let pull_request = registry.is_some()
+                && method == Method::GET
+                && target.host_str() == Some("registry-1.docker.io")
+                && target.path().contains("/manifests/");
+            let permit = match self.acquire(&target, pull_request).await {
                 Ok(permit) => permit,
                 Err(Error::Status(429)) if registry.is_some() => {
                     if let Some(response) = self
@@ -567,7 +587,10 @@ impl Cached {
                 && target.host_str() == Some("registry-1.docker.io")
                 && let Some(window) = exhausted_quota(&response)
             {
-                self.cooldown(&target, window)?;
+                // Docker's pull counter is also returned on successful HEADs.
+                // Only manifest GETs consume it; blocking HEADs here makes the
+                // available digest pins depend on which response finishes first.
+                self.cooldown(&target, window, true)?;
             }
             if registry.is_some() && response.status == StatusCode::TOO_MANY_REQUESTS {
                 let pull_quota = target.host_str() == Some("registry-1.docker.io")
@@ -589,9 +612,13 @@ impl Cached {
                 // Publish even an exhausted/long cooldown before releasing the
                 // permit, so unrelated queued requests to this host respect it.
                 if let Some(delay) = delay {
-                    self.cooldown(&target, delay)?;
+                    self.cooldown(&target, delay, false)?;
                 } else if pull_quota && exhausted_quota(&response).is_none() {
-                    self.cooldown(&target, Duration::from_secs(21600))?;
+                    self.cooldown(&target, Duration::from_secs(21600), pull_request)?;
+                } else if pull_quota && !pull_request {
+                    // An actual HEAD/tag-list 429 is evidence of throttling
+                    // those requests too, unlike a successful zero-counter HEAD.
+                    self.cooldown(&target, exhausted_quota(&response).unwrap(), false)?;
                 }
                 drop(permit);
                 if let Some(response) = self
@@ -1016,6 +1043,68 @@ mod tests {
             })
         }
     }
+    #[tokio::test]
+    async fn zero_pull_counter_does_not_make_head_digests_depend_on_order_or_cache() {
+        struct VersionChecks;
+        impl Transport for VersionChecks {
+            fn send(&self, request: Request) -> crate::Exchange<'_> {
+                assert_ne!(request.method(), Method::GET, "manifest GET is quota gated");
+                let zero = request.url().path().contains("/limited/");
+                Box::pin(async move {
+                    Ok(Response {
+                        status: StatusCode::OK,
+                        headers: [
+                            (
+                                header::HeaderName::from_static("ratelimit-remaining"),
+                                HeaderValue::from_str(if zero { "0;w=3600" } else { "10;w=3600" })
+                                    .unwrap(),
+                            ),
+                            (
+                                header::HeaderName::from_static("docker-content-digest"),
+                                HeaderValue::from_static("sha256:fixed"),
+                            ),
+                            (header::ETAG, HeaderValue::from_static("\"fixed\"")),
+                        ]
+                        .into_iter()
+                        .collect(),
+                        body: Vec::new(),
+                    })
+                })
+            }
+        }
+        for reverse in [false, true] {
+            let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+            let urls = [
+                "https://registry-1.docker.io/v2/limited/image/manifests/latest",
+                "https://registry-1.docker.io/v2/other/image/manifests/latest",
+            ];
+            for _ in 0..3 {
+                // Reopening the client resets in-memory state, while HTTP entries
+                // exercise cold and warm validation with the same responses.
+                let client = Cached::with_options(
+                    cache.clone(),
+                    Arc::new(VersionChecks),
+                    Options {
+                        default_host_concurrency: 1,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                for index in if reverse { [1, 0] } else { [0, 1] } {
+                    let response = client
+                        .registry_head(urls[index], "text/plain", None)
+                        .await
+                        .unwrap();
+                    assert_eq!(response.headers["docker-content-digest"], "sha256:fixed");
+                }
+                assert!(matches!(
+                    client.registry_get(urls[1], "text/plain", None).await,
+                    Err(Error::Status(429))
+                ));
+            }
+        }
+    }
+
     #[tokio::test]
     async fn docker_hub_pull_quota_is_not_a_short_retry() {
         for header_only in [false, true] {

@@ -297,6 +297,22 @@ impl Evaluator {
             &effective.policy,
         ))
     }
+    pub fn digest_proposal_with_catalog(
+        &self,
+        dep: &Dependency,
+        new_digest: &str,
+        catalog: Option<&Catalog>,
+    ) -> Option<Proposal> {
+        let mut proposal = self.digest_proposal(dep, new_digest)?;
+        if dep.manager == Manager::GithubActions && dep.source == Source::GithubTags {
+            let mut target = dep.clone();
+            target.digest = Some(new_digest.into());
+            if let Some(version) = catalog.and_then(|c| resolved_current_version(&target, c)) {
+                proposal.new_version = Some(version);
+            }
+        }
+        Some(proposal)
+    }
     pub fn propose(&self, dep: &Dependency, catalog: &Catalog) -> Result<Vec<Proposal>> {
         Ok(self.evaluate_at(dep, catalog, Utc::now())?.updates)
     }
@@ -381,7 +397,7 @@ impl Evaluator {
                             && effective.permitted.is_none_or(|f| f.matches(&value)))
                         .then_some((parsed, value))
                     })
-                    .max_by(|(a, _), (b, _)| scheme.order(a, b))
+                    .max_by(|(a, av), (b, bv)| scheme.order(a, b).then_with(|| av.cmp(bv)))
                     .map(|(_, v)| v)
             });
         if let Some(target) = tag_target {
@@ -408,7 +424,7 @@ impl Evaluator {
                             && effective.permitted.is_none_or(|f| f.matches(value))
                     })
                     .collect();
-                candidates.sort_by(|a, b| scheme.order(&b.2, &a.2));
+                candidates.sort_by(|a, b| candidate_order(scheme, &b.2, b.0, &a.2, a.0));
                 let mut selected = None;
                 for (version, value, _) in candidates {
                     if eligible(version, &value, Update::Pin, &effective)? {
@@ -575,7 +591,7 @@ impl Evaluator {
                             == Ecosystem::Npm.classify(&baseline, &parsed)
                 }
             }) {
-                if scheme.order(&parsed, &existing.0) == Ordering::Greater {
+                if candidate_order(scheme, &parsed, version, &existing.0, existing.1).is_gt() {
                     *existing = (parsed, version, normalized, kind, effective);
                 }
             } else {
@@ -654,10 +670,9 @@ impl Evaluator {
                 {
                     continue;
                 }
-                if selected
-                    .as_ref()
-                    .is_none_or(|(_, p)| scheme.order(&parsed, p).is_gt())
-                {
+                if selected.as_ref().is_none_or(|(previous, p)| {
+                    candidate_order(scheme, &parsed, v, p, previous).is_gt()
+                }) {
                     selected = Some((v, parsed));
                 }
             }
@@ -830,8 +845,27 @@ pub fn resolved_tool_version(dep: &Dependency, catalog: &Catalog) -> Option<Stri
             };
             matches.then_some((parsed, value))
         })
-        .max_by(|(a, _), (b, _)| scheme.order(a, b))
+        .max_by(|(a, av), (b, bv)| scheme.order(a, b).then_with(|| av.cmp(bv)))
         .map(|(_, value)| value)
+}
+
+// SemVer precedence deliberately ignores build metadata. Break equal-precedence
+// ties by the complete source record so pagination/concurrency/cache order can
+// never select a different concrete artifact at a fixed evaluation time.
+fn candidate_order(
+    scheme: Ecosystem,
+    a: &Parsed,
+    av: &Version,
+    b: &Parsed,
+    bv: &Version,
+) -> Ordering {
+    scheme.order(a, b).then_with(|| {
+        (&av.version, &av.published_at, &av.digest).cmp(&(
+            &bv.version,
+            &bv.published_at,
+            &bv.digest,
+        ))
+    })
 }
 
 fn numeric_fields(value: &str) -> Option<usize> {
@@ -884,7 +918,7 @@ pub fn resolved_current_version(dep: &Dependency, catalog: &Catalog) -> Option<S
             .filter(|(parsed, _)| {
                 parsed.0.pre.is_empty() && scheme.matches(&dep.current, parsed).unwrap_or(false)
             })
-            .max_by(|(a, _), (b, _)| scheme.order(a, b))
+            .max_by(|(a, av), (b, bv)| scheme.order(a, b).then_with(|| av.cmp(bv)))
             .map(|(_, version)| version.trim_start_matches('v').into());
     }
     if dep.manager == Manager::Mise || dep.kind == DependencyKind::Tool {
@@ -914,7 +948,7 @@ pub fn resolved_current_version(dep: &Dependency, catalog: &Catalog) -> Option<S
                 && digest.is_some_and(|d| v.digest.as_ref() == Some(d))
         })
         .filter_map(|v| Some((Ecosystem::Loose.parse(&v.version).ok()?, &v.version)))
-        .max_by(|(a, _), (b, _)| Ecosystem::Loose.order(a, b))
+        .max_by(|(a, av), (b, bv)| Ecosystem::Loose.order(a, b).then_with(|| av.cmp(bv)))
         .map(|(_, v)| v.clone())
 }
 pub fn scheme(dep: &Dependency) -> Result<Ecosystem> {

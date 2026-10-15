@@ -80,6 +80,10 @@ enum Predicate {
     RejectedRelease,
     ObservedResolution,
     ReleaseAgeMissing,
+    NpmSatisfyingPin,
+    CargoRangeFloor,
+    ReleaseAgeDigest,
+    ExactProviderPin,
 }
 
 impl Rules {
@@ -101,7 +105,8 @@ impl Rules {
                     (
                         Predicate::DisabledUpdate
                             | Predicate::RejectedRelease
-                            | Predicate::ReleaseAgeMissing,
+                            | Predicate::ReleaseAgeMissing
+                            | Predicate::NpmSatisfyingPin,
                         Classification::RustovateMissing,
                         "updates"
                     ) | (
@@ -117,6 +122,10 @@ impl Rules {
                         Classification::FieldMismatch,
                         "updates.newDigest"
                     ) | (
+                        Predicate::ReleaseAgeDigest,
+                        Classification::FieldMismatch,
+                        "updates.newDigest"
+                    ) | (
                         Predicate::DigestPinOnly,
                         Classification::RustovateExtra,
                         "updates"
@@ -129,7 +138,10 @@ impl Rules {
                         Classification::FieldMismatch,
                         "updates.newValue" | "updates.newVersion"
                     ) | (
-                        Predicate::NpmExactMajor | Predicate::NpmExactRange,
+                        Predicate::NpmExactMajor
+                            | Predicate::NpmExactRange
+                            | Predicate::CargoRangeFloor
+                            | Predicate::ExactProviderPin,
                         Classification::FieldMismatch,
                         "updates.newValue"
                     ) | (
@@ -175,6 +187,79 @@ impl Rules {
                 continue;
             }
             let matches = match rule.predicate {
+                Predicate::ExactProviderPin => dependency.is_some_and(|dep| {
+                    dep.package == rustovate.package && dep.current.value == rustovate.current.value
+                        && rustovate.metadata.as_ref().is_some_and(|m| m.source == "terraform" && m.kinds.iter().any(|k| k == "provider"))
+                        && difference.paired.as_ref().is_some_and(|(left,right)| {
+                            let range = dep.current.value.as_deref().unwrap_or("");
+                            let components: Vec<_> = range.strip_prefix("~>").unwrap_or("").trim().split('.').collect();
+                            let lower = components.iter().map(|s| s.parse::<u64>().ok()).collect::<Option<Vec<_>>>();
+                            let target = right.new_version.as_deref().and_then(parse_version);
+                            left.new_value == dep.current.value && left.new_version == right.new_version
+                                && left.update_type == right.update_type && left.new_digest.is_none() && right.new_digest.is_none()
+                                && right.new_value == right.new_version
+                                && right.policy.as_ref().is_some_and(|p| p.versions.as_deref() == Some("exact"))
+                                && lower.zip(target).is_some_and(|(lower,target)| {
+                                    (2..=3).contains(&lower.len()) && target.pre.is_empty()
+                                        && target.major == lower[0]
+                                        && (target.major,target.minor,target.patch) >= (lower[0],lower[1],*lower.get(2).unwrap_or(&0))
+                                        && (lower.len() == 2 || target.minor == lower[1])
+                                })
+                        })
+                }),
+                Predicate::ReleaseAgeDigest => dependency.is_some_and(|dep| {
+                    dep.package == rustovate.package && dep.current.value == rustovate.current.value
+                        && dep.current.digest == rustovate.current.digest
+                        && rustovate.metadata.as_ref().is_some_and(|m| m.source == "github-tags")
+                        && difference.paired.as_ref().is_some_and(|(left, right)| {
+                            left.update_type == right.update_type
+                                && matches!(right.update_type.as_str(), "major" | "minor" | "patch")
+                                && left.new_value == right.new_value
+                                && [&left.new_digest, &right.new_digest].iter().all(|d| d.as_ref().is_some_and(|s|
+                                    s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit())))
+                                && left.new_version.as_deref().and_then(parse_version)
+                                    .zip(right.new_version.as_deref().and_then(parse_version))
+                                    .is_some_and(|(a,b)| b.cmp_precedence(&a).is_gt())
+                                && right.policy.as_ref().is_some_and(|p| p.wait_hours == 24)
+                                && right.release_age.as_ref().is_some_and(|age|
+                                    chrono::DateTime::parse_from_rfc3339(&age.published_at).ok()
+                                        .zip(chrono::DateTime::parse_from_rfc3339(&age.evaluated_at).ok())
+                                        .is_some_and(|(published,evaluated)| (chrono::Duration::hours(24)..chrono::Duration::hours(72))
+                                            .contains(&(evaluated-published))))
+                        })
+                }),
+                Predicate::NpmSatisfyingPin => dependency.is_some_and(|left| {
+                    left.package == rustovate.package && left.current.value == rustovate.current.value
+                        && rustovate.metadata.as_ref().is_some_and(|m| m.source == "npm")
+                        && serde_json::from_value::<Update>(difference.renovate.clone()).is_ok_and(|u| {
+                            matches!(u.update_type.as_str(), "minor" | "patch") && u.new_digest.is_none()
+                                && u.new_value == left.current.value
+                                && left.current.value.as_deref().is_some_and(|range|
+                                    simple_range_version(range).is_some()
+                                    && semver::VersionReq::parse(range).is_ok_and(|r|
+                                        u.new_version.as_deref().and_then(parse_version).is_some_and(|v| r.matches(&v))))
+                                && rustovate.updates.iter().any(|actual| actual.update_type == "pin"
+                                    && actual.new_version == u.new_version && actual.new_value == actual.new_version
+                                    && actual.new_digest.is_none()
+                                    && actual.policy.as_ref().is_some_and(|p| p.versions.as_deref() == Some("exact")))
+                        })
+                }),
+                Predicate::CargoRangeFloor => dependency.is_some_and(|dep| {
+                    dep.package == rustovate.package && dep.current.value == rustovate.current.value
+                        && rustovate.metadata.as_ref().is_some_and(|m| m.source == "crates")
+                        && difference.paired.as_ref().is_some_and(|(left, right)| {
+                            let current = dep.current.value.as_deref().unwrap_or("");
+                            let target = right.new_version.as_deref().and_then(parse_version);
+                            let exact_line = target.as_ref().map(|v| format!("{}.{}", v.major, v.minor));
+                            current.split('.').count() == 2 && current.split('.').all(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+                                && left.new_version == right.new_version && left.update_type == right.update_type
+                                && left.new_digest.is_none() && right.new_digest.is_none()
+                                && right.new_value == exact_line
+                                && right.policy.as_ref().is_some_and(|p| p.versions.as_deref() == Some("preserve"))
+                                && left.new_value.as_deref().is_some_and(|range| semver::VersionReq::parse(range)
+                                    .is_ok_and(|r| target.as_ref().is_some_and(|v| r.matches(v))))
+                        })
+                }),
                 Predicate::DisabledUpdate | Predicate::RejectedRelease | Predicate::ReleaseAgeMissing => dependency.is_some_and(|left| {
                     left.package == rustovate.package && left.current.value == rustovate.current.value
                         && rustovate.metadata.as_ref().and_then(|m| m.lookup.as_ref()).is_some_and(|evidence| {
@@ -292,11 +377,13 @@ impl Rules {
                                     && target.cmp_precedence(&old).is_gt()
                                     && left.updates.iter().any(|minor| {
                                         minor.update_type == "minor"
-                                            && rustovate.updates.iter().any(|actual| actual.update_type == "minor"
-                                                && actual.new_version == minor.new_version
-                                                && actual.new_value == minor.new_value
+                                            && (rustovate.updates.iter().any(|actual| actual.update_type == "minor"
+                                                && ((actual.new_version == minor.new_version
+                                                    && actual.new_value == minor.new_value)
+                                                    || release_age_difference(minor, actual, rustovate))
                                                 && (actual.new_digest == minor.new_digest
-                                                    || left.metadata.as_ref().is_some_and(|m| m.source == "npm")))
+                                                    || left.metadata.as_ref().is_some_and(|m| matches!(m.source.as_str(), "npm" | "helm"))))
+                                                || held_target(minor, rustovate))
                                             && minor.new_version.as_deref().and_then(parse_version).is_some_and(|v|
                                                 v.major == target.major && v.minor > target.minor)
                                     })
@@ -309,7 +396,7 @@ impl Rules {
                         && rustovate.current.value == left.current.value
                         && (matches!(rustovate.manager.as_str(), "mise" | "npm")
                             || (rustovate.manager == "github-actions" && rustovate.metadata.as_ref().is_some_and(|m|
-                                m.source == "github-releases" && m.kinds.iter().any(|k| k == "tool"))))
+                                matches!(m.source.as_str(), "github-releases" | "npm") && m.kinds.iter().any(|k| k == "tool"))))
                         && serde_json::from_value::<Update>(difference.rustovate.clone()).is_ok_and(|u| {
                             u.update_type == "pin" && u.new_digest.is_none()
                                 && u.policy.as_ref().is_some_and(|p| p.versions.as_deref() == Some("exact"))
@@ -375,15 +462,23 @@ impl Rules {
                     let current = dependency.and_then(|d| d.current.value.as_deref());
                     let target = right.new_version.as_deref().and_then(parse_version);
                     let range = left.new_value.as_deref();
-                    let lower = range.and_then(|s| s.strip_prefix('^').or_else(|| s.strip_prefix('~'))).and_then(parse_version);
-                    let baseline = current.and_then(|s| s.strip_prefix('^').or_else(|| s.strip_prefix('~'))).and_then(parse_version);
+                    let target_range = range.and_then(|range| {
+                        if !range.contains(" || ") { return Some(range); }
+                        let prefix = format!("{} || ", current?);
+                        dependency.filter(|d| d.metadata.as_ref().is_some_and(|m| m.kinds.iter().any(|k| k == "peerDependencies")))?;
+                        rustovate.metadata.as_ref().filter(|m| m.kinds.iter().any(|k| k == "peer"))?;
+                        range.strip_prefix(&prefix)
+                    });
+                    let lower = target_range.and_then(simple_range_version);
+                    let baseline = current.and_then(simple_range_version);
                     left.update_type == "major" && right.update_type == "major"
-                        && left.new_version == right.new_version
+                        && (left.new_version == right.new_version || release_age_difference(left, right, rustovate))
                         && right.new_value == right.new_version
                         && right.policy.as_ref().is_some_and(|p| p.versions.as_deref() == Some("exact"))
                         && baseline.zip(lower).zip(target).is_some_and(|((old,lower), target)| {
                             target.major > old.major && lower.major == target.major
-                                && lower.minor == target.minor && lower.patch <= target.patch
+                                && lower.cmp_precedence(&target).is_le()
+                                && target_range.is_some_and(|range| semver::VersionReq::parse(range).is_ok_and(|r| r.matches(&target)))
                                 && lower.pre.is_empty() && target.pre.is_empty()
                         })
                 }),
@@ -1060,11 +1155,13 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
             };
             let rate_warning = reference.is_some_and(|reference| {
                 repo.warnings.iter().any(|w| {
-                    w.starts_with(&format!(
-                        "{}@{reference}: registry rate limit reached",
-                        dep.name
-                    )) || Some(reference) == dep.current.value.as_ref()
-                        && w.starts_with(&format!("{}: registry rate limit reached", dep.name))
+                    ["registry rate limit reached", "registry HTTP 429"]
+                        .iter()
+                        .any(|condition| {
+                            w.starts_with(&format!("{}@{reference}: {condition}", dep.name))
+                                || Some(reference) == dep.current.value.as_ref()
+                                    && w.starts_with(&format!("{}: {condition}", dep.name))
+                        })
                 })
             });
             d.rate_limited = digest_difference
@@ -1094,11 +1191,76 @@ fn parse_version(value: &str) -> Option<semver::Version> {
     semver::Version::parse(value.trim_start_matches('v')).ok()
 }
 
-fn simple_range_version(value: &str) -> Option<semver::Version> {
-    value
-        .strip_prefix('^')
-        .or_else(|| value.strip_prefix('~'))
+fn held_target(update: &Update, dependency: &Dependency) -> bool {
+    dependency.metadata.as_ref().is_some_and(|m| {
+        let evaluated = m
+            .lookup
+            .as_ref()
+            .and_then(|e| chrono::DateTime::parse_from_rfc3339(&e.evaluated_at).ok());
+        m.held_back.iter().any(|held| {
+            held.update_type == update.update_type
+                && update
+                    .new_version
+                    .as_ref()
+                    .is_some_and(|v| &held.version == v || held.versions.contains(v))
+                && chrono::DateTime::parse_from_rfc3339(&held.published_at)
+                    .ok()
+                    .zip(chrono::DateTime::parse_from_rfc3339(&held.eligible_at).ok())
+                    .zip(evaluated)
+                    .is_some_and(|((published, eligible), evaluated)| {
+                        eligible - published == chrono::Duration::hours(24)
+                            && published <= evaluated
+                            && evaluated < eligible
+                    })
+        })
+    })
+}
+
+fn release_age_difference(left: &Update, right: &Update, dependency: &Dependency) -> bool {
+    if left.update_type != right.update_type
+        || !right.policy.as_ref().is_some_and(|p| p.wait_hours == 24)
+    {
+        return false;
+    }
+    let Some((a, b)) = left
+        .new_version
+        .as_deref()
         .and_then(parse_version)
+        .zip(right.new_version.as_deref().and_then(parse_version))
+    else {
+        return false;
+    };
+    (a.cmp_precedence(&b).is_gt() && held_target(left, dependency))
+        || (b.cmp_precedence(&a).is_gt()
+            && right.release_age.as_ref().is_some_and(|age| {
+                chrono::DateTime::parse_from_rfc3339(&age.published_at)
+                    .ok()
+                    .zip(chrono::DateTime::parse_from_rfc3339(&age.evaluated_at).ok())
+                    .is_some_and(|(published, evaluated)| {
+                        (chrono::Duration::hours(24)..chrono::Duration::hours(72))
+                            .contains(&(evaluated - published))
+                    })
+            }))
+}
+
+fn simple_range_version(value: &str) -> Option<semver::Version> {
+    let value = value
+        .strip_prefix('^')
+        .or_else(|| value.strip_prefix('~'))?;
+    let parts: Vec<_> = value.split('.').collect();
+    if !(1..=3).contains(&parts.len())
+        || parts
+            .iter()
+            .any(|s| s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return None;
+    }
+    parse_version(&format!(
+        "{}.{}.{}",
+        parts[0],
+        parts.get(1).unwrap_or(&"0"),
+        parts.get(2).unwrap_or(&"0")
+    ))
 }
 
 fn numeric_version(value: &str) -> Option<(u64, u64, u64)> {

@@ -19,6 +19,164 @@ fn dep(name: &str, source: &str, current: &str) -> Value {
 fn policy() -> Value {
     json!({"versions":"exact","waitHours":24,"windows":[],"merge":false,"labels":[],"commitPrefix":"chore(deps):","releaseNotes":true,"bodyNotes":[]})
 }
+
+#[test]
+fn target_range_floor_and_exact_pins_require_the_same_target() {
+    let mut cargo = dep("lib", "crate", "0.30");
+    cargo["updates"] = json!([{"newValue":"1.0","newVersion":"1.1.0","updateType":"major"}]);
+    let baseline = snapshot(json!({"cargo":[{"packageFile":"Cargo.toml","deps":[cargo]}]}));
+    let mut actual = baseline.clone();
+    let d = &mut actual.repositories[0].package_files[0].dependencies[0];
+    d.metadata.as_mut().unwrap().source = "crates".into();
+    d.updates[0].new_value = Some("1.1".into());
+    let mut p: rustovate_report::UpdatePolicy = serde_json::from_value(policy()).unwrap();
+    p.versions = Some("preserve".into());
+    d.updates[0].policy = Some(p);
+    assert_eq!(
+        compare(&baseline, &actual, &rules()).unwrap().differences[0]
+            .departure
+            .as_ref()
+            .unwrap()
+            .row,
+        40
+    );
+    actual.repositories[0].package_files[0].dependencies[0].updates[0].new_version =
+        Some("1.2.0".into());
+    assert!(
+        compare(&baseline, &actual, &rules())
+            .unwrap()
+            .differences
+            .iter()
+            .all(|d| d.departure.is_none())
+    );
+
+    let mut npm = dep("types", "npm", "^22.20.4");
+    npm["updates"] = json!([{"newValue":"^22.20.4","newVersion":"22.20.5","updateType":"patch"}]);
+    let baseline = snapshot(json!({"npm":[{"packageFile":"package.json","deps":[npm]}]}));
+    let mut actual = baseline.clone();
+    actual.repositories[0].package_files[0].dependencies[0].updates =
+        vec![update("22.20.5", "pin")];
+    assert!(
+        compare(&baseline, &actual, &rules())
+            .unwrap()
+            .differences
+            .iter()
+            .all(|d| d.departure.as_ref().is_some_and(|d| d.row == 25))
+    );
+    actual.repositories[0].package_files[0].dependencies[0].updates[0] = update("22.20.6", "pin");
+    assert!(
+        compare(&baseline, &actual, &rules())
+            .unwrap()
+            .differences
+            .iter()
+            .any(|d| d.classification == Class::RustovateMissing)
+    );
+}
+
+#[test]
+fn action_age_digest_does_not_excuse_equal_version_hash_differences() {
+    let mut action = dep("example/action", "github-tags", "v3");
+    action["updates"] = json!([{"newValue":"v5","newVersion":"v5.1.0","newDigest":"a".repeat(40),"updateType":"major"}]);
+    let baseline = snapshot(json!({"github-actions":[{"packageFile":"ci.yml","deps":[action]}]}));
+    let mut actual = baseline.clone();
+    let update = &mut actual.repositories[0].package_files[0].dependencies[0].updates[0];
+    update.new_version = Some("v5.1.1".into());
+    update.new_digest = Some("b".repeat(40));
+    update.policy = Some(serde_json::from_value(policy()).unwrap());
+    update.release_age = Some(rustovate_report::ReleaseAge {
+        published_at: "2026-10-13T00:00:00Z".into(),
+        evaluated_at: "2026-10-15T00:00:00Z".into(),
+    });
+    assert!(
+        compare(&baseline, &actual, &rules())
+            .unwrap()
+            .differences
+            .iter()
+            .all(|d| d.departure.as_ref().is_some_and(|d| d.row == 23))
+    );
+    actual.repositories[0].package_files[0].dependencies[0].updates[0].new_version =
+        Some("v5.1.0".into());
+    assert!(
+        compare(&baseline, &actual, &rules())
+            .unwrap()
+            .differences
+            .iter()
+            .all(|d| d.departure.is_none())
+    );
+}
+
+#[test]
+fn provider_pins_do_not_excuse_target_changes_or_support_constraints() {
+    let mut provider = dep("aws", "terraform-provider", "~> 6.0");
+    provider["updates"] = json!([{"newValue":"~> 6.0","newVersion":"6.69.0","updateType":"minor"}]);
+    let baseline = snapshot(json!({"terraform":[{"packageFile":"versions.tf","deps":[provider]}]}));
+    let mut actual = baseline.clone();
+    let d = &mut actual.repositories[0].package_files[0].dependencies[0];
+    d.metadata.as_mut().unwrap().source = "terraform".into();
+    d.metadata.as_mut().unwrap().kinds = vec!["provider".into()];
+    d.updates[0] = update("6.69.0", "minor");
+    assert_eq!(
+        compare(&baseline, &actual, &rules()).unwrap().differences[0]
+            .departure
+            .as_ref()
+            .unwrap()
+            .row,
+        41
+    );
+    for kind in ["module", "toolchain"] {
+        actual.repositories[0].package_files[0].dependencies[0]
+            .metadata
+            .as_mut()
+            .unwrap()
+            .kinds = vec![kind.into()];
+        assert!(
+            compare(&baseline, &actual, &rules())
+                .unwrap()
+                .differences
+                .iter()
+                .all(|d| d.departure.is_none())
+        );
+    }
+}
+
+#[test]
+fn held_minor_patch_alternatives_require_target_and_clock_evidence() {
+    let mut lib = dep("lib", "npm", "1.2.0");
+    lib["updates"] = json!([{"newValue":"1.3.0","newVersion":"1.3.0","updateType":"minor"}]);
+    let baseline = snapshot(json!({"regex":[{"packageFile":"versions.txt","deps":[lib]}]}));
+    let mut actual = baseline.clone();
+    let d = &mut actual.repositories[0].package_files[0].dependencies[0];
+    d.updates = vec![update("1.2.1", "patch")];
+    d.metadata.as_mut().unwrap().lookup = Some(
+        serde_json::from_value(
+            json!({"evaluatedAt":"2026-10-15T00:00:00Z","disabledUpdates":[],"rejected":[]}),
+        )
+        .unwrap(),
+    );
+    d.metadata.as_mut().unwrap().held_back = vec![serde_json::from_value(json!({"version":"1.3.0","versions":["1.3.0"],"count":1,"updateType":"minor","publishedAt":"2026-10-14T12:00:00Z","eligibleAt":"2026-10-15T12:00:00Z"})).unwrap()];
+    assert!(
+        compare(&baseline, &actual, &rules())
+            .unwrap()
+            .differences
+            .iter()
+            .all(|d| d.departure.is_some())
+    );
+    actual.repositories[0].package_files[0].dependencies[0]
+        .metadata
+        .as_mut()
+        .unwrap()
+        .lookup
+        .as_mut()
+        .unwrap()
+        .evaluated_at = "2026-10-16T00:00:00Z".into();
+    assert!(
+        compare(&baseline, &actual, &rules())
+            .unwrap()
+            .differences
+            .iter()
+            .all(|d| d.departure.is_none())
+    );
+}
 fn update(value: &str, kind: &str) -> rustovate_report::Update {
     serde_json::from_value(json!({"newValue":value,"newVersion":value,"newDigest":null,"updateType":kind,"group":null,"policy":policy()})).unwrap()
 }
@@ -75,6 +233,16 @@ fn digest_rate_limit_attribution_does_not_excuse_missing_major_policy() {
             .differences
             .iter()
             .all(|d| d.classification == Class::RustovateMissing)
+    );
+    actual.repositories[0].warnings[0] = "image: registry HTTP 429".into();
+    assert_eq!(
+        compare(&baseline, &actual, &rules())
+            .unwrap()
+            .differences
+            .iter()
+            .filter(|d| d.rate_limited)
+            .count(),
+        1
     );
     actual.repositories[0].warnings[0] = "other-image: registry rate limit reached".into();
     assert!(

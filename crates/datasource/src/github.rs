@@ -196,12 +196,31 @@ impl Client {
         // Unlike a cursor connection, matching-refs returns the namespace in
         // one read. Hydrate new/retargeted refs through bounded parallel object
         // queries. This also notices changes below the newest tag.
-        let refs: Vec<Value> = self
+        let mut refs: Vec<Value> = self
             .github
             .rest_pages(&format!("repos/{package}/git/matching-refs/tags/"), |_| {
                 false
             })
             .await?;
+        // Some repositories return an empty matching-refs namespace even while
+        // the tags API exposes version tags. Do not cache that partial view as
+        // a complete version catalog. Both APIs supply immutable object SHAs.
+        if refs.is_empty() {
+            refs = self
+                .github
+                .rest_pages(&format!("repos/{package}/tags?per_page=100"), |_| false)
+                .await?
+                .into_iter()
+                .map(|tag: Value| {
+                    let name = tag["name"]
+                        .as_str()
+                        .filter(|s| !s.is_empty())
+                        .ok_or(Error::Invalid)?;
+                    let sha = tag["commit"]["sha"].as_str().ok_or(Error::Invalid)?;
+                    Ok(json!({"ref": format!("refs/tags/{name}"), "object": {"sha": sha}}))
+                })
+                .collect::<Result<_>>()?;
+        }
         let identity: Vec<_> = refs
             .iter()
             .map(|reference| (&reference["ref"], &reference["object"]["sha"]))
@@ -348,6 +367,59 @@ mod tests {
         Body, Cassette, Interaction, Options, RecordedRequest, RecordedResponse, Replay,
     };
     use std::{collections::BTreeMap, sync::Arc};
+
+    #[tokio::test]
+    async fn empty_matching_refs_falls_back_without_poisoning_warm_catalogs() {
+        use rustovate_http::{Exchange, Response, Transport};
+        struct Tags;
+        impl Transport for Tags {
+            fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+                Box::pin(async move {
+                    let body = match request.url().path() {
+                        "/repos/example/empty/git/matching-refs/tags/" => json!([]),
+                        "/repos/example/empty/tags" => {
+                            json!([{"name":"v2.0.0","commit":{"sha":"a".repeat(40)}}])
+                        }
+                        "/graphql" => {
+                            json!({"data":{"repository":{"t0":{"__typename":"Commit","oid":"a".repeat(40),"committedDate":"2026-10-01T00:00:00Z"}}}})
+                        }
+                        path => panic!("unexpected request {path}"),
+                    };
+                    Ok(Response {
+                        status: reqwest::StatusCode::OK,
+                        headers: Default::default(),
+                        body: serde_json::to_vec(&body).unwrap(),
+                    })
+                })
+            }
+        }
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let transport = Arc::new(Tags);
+        let github = rustovate_github::Client::with_transport(
+            "offline",
+            cache.clone(),
+            Default::default(),
+            transport.clone(),
+        )
+        .unwrap();
+        let client = Client::new(
+            github,
+            Cached::new(cache.clone(), transport, 2).unwrap(),
+            cache,
+        );
+        for _ in 0..2 {
+            let catalog = client
+                .lookup(Source::GithubTags, "example/empty")
+                .await
+                .unwrap();
+            assert_eq!(catalog.versions.len(), 1);
+            assert_eq!(catalog.versions[0].version, "v2.0.0");
+            assert_eq!(
+                catalog.versions[0].digest.as_deref(),
+                Some("a".repeat(40).as_str())
+            );
+        }
+    }
 
     #[tokio::test]
     async fn tag_hydration_is_parallel_bounded_and_only_refetches_changed_targets() {

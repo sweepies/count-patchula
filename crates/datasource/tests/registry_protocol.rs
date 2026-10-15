@@ -220,7 +220,7 @@ async fn rate_limited_catalogs_and_digests_reuse_cache_without_refreshing_it() {
 }
 
 #[tokio::test]
-async fn zero_remaining_on_success_stops_other_hub_requests_without_blocking_other_hosts() {
+async fn zero_remaining_on_success_keeps_digest_heads_and_other_hosts_available() {
     let digest = format!("sha256:{}", "a".repeat(64));
     let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
         (
@@ -235,6 +235,10 @@ async fn zero_remaining_on_success_stops_other_hub_requests_without_blocking_oth
             ),
         ),
         (
+            "https://registry-1.docker.io/v2/library/uncached/manifests/1.0".into(),
+            response(200, "", &[("docker-content-digest", &digest)]),
+        ),
+        (
             "https://ghcr.io/v2/spec/image/manifests/1.0".into(),
             response(200, "", &[("docker-content-digest", &digest)]),
         ),
@@ -242,7 +246,10 @@ async fn zero_remaining_on_success_stops_other_hub_requests_without_blocking_oth
     let dir = tempfile::tempdir().unwrap();
     let sources = client(steps.clone(), dir.path()).await;
     sources.registry_digest("spec", "1.0").await.unwrap();
-    assert!(sources.registry_digest("uncached", "1.0").await.is_err());
+    assert_eq!(
+        sources.registry_digest("uncached", "1.0").await.unwrap(),
+        digest
+    );
     sources
         .registry_digest("ghcr.io/spec/image", "1.0")
         .await

@@ -2,6 +2,38 @@
   "schemaVersion": 1,
   "rules": [
     {
+      "id": "terraform-exact-provider-pin",
+      "departure": 41,
+      "classification": "field-mismatch",
+      "managers": ["terraform"],
+      "field": "updates.newValue",
+      "predicate": "exact-provider-pin"
+    },
+    {
+      "id": "release-age-action-digest",
+      "departure": 23,
+      "classification": "field-mismatch",
+      "managers": ["github-actions"],
+      "field": "updates.newDigest",
+      "predicate": "release-age-digest"
+    },
+    {
+      "id": "npm-satisfying-range-pin",
+      "departure": 25,
+      "classification": "rustovate-missing",
+      "managers": ["npm"],
+      "field": "updates",
+      "predicate": "npm-satisfying-pin"
+    },
+    {
+      "id": "cargo-target-range-floor",
+      "departure": 40,
+      "classification": "field-mismatch",
+      "managers": ["cargo"],
+      "field": "updates.newValue",
+      "predicate": "cargo-range-floor"
+    },
+    {
       "id": "explicit-disabled-class",
       "departure": 37,
       "classification": "rustovate-missing",
