@@ -27,6 +27,55 @@ description = "Compare Renovate JSON output with a versioned rustovate report; f
 raw_args = true
 run = "cargo run --quiet --locked -p rustovate-conformance --"
 
+[tasks."conformance:inspect"]
+description = "Summarize triage buckets; optional manager argument prints representative differences"
+raw_args = true
+run = '''
+bun -e '
+const [path, manager, limit = "2"] = process.argv.slice(1);
+const triage = await Bun.file(path).json();
+const buckets = new Map();
+for (const d of triage.differences) {
+  const key = [d.repository, d.manager, d.classification, d.field].join(" / ");
+  buckets.set(key, (buckets.get(key) ?? 0) + 1);
+}
+if (!manager) for (const [key, count] of [...buckets].sort()) console.log(`${count}\t${key}`);
+if (manager === "warnings") {
+  for (const r of triage.rustovate.repositories) if (r.warnings?.length) console.log(JSON.stringify({repository:r.repository,warnings:r.warnings}));
+} else if (manager) {
+  const seen = new Map();
+  for (const d of triage.differences.filter(d => d.manager === manager && d.classification !== "deliberate-departure")) {
+    const key = [d.repository, d.classification, d.field].join("/");
+    if ((seen.get(key) ?? 0) >= Number(limit)) continue;
+    seen.set(key, (seen.get(key) ?? 0) + 1);
+    const actual = triage.rustovate.repositories.find(r => r.repository === d.repository)?.packageFiles
+      .find(f => f.path === d.packageFile)?.dependencies.find(a => a.manager === d.manager && a.name === d.dependency);
+    console.log(JSON.stringify({...d, heldBack: actual?.metadata?.heldBack}));
+  }
+}
+' "$@"
+'''
+
+[tasks."conformance:logs"]
+description = "Inspect output snapshot identities and skip reasons without reading upstream source"
+raw_args = true
+run = '''
+bun -e '
+const [path, repository, manager] = process.argv.slice(1);
+for (const line of (await Bun.file(path).text()).split("\n")) {
+  if (!line.startsWith("{")) continue;
+  const r = JSON.parse(line);
+  if (r.repository !== repository) continue;
+  if (r.msg === "Repository finished") console.log(JSON.stringify({result:r.result,exitCode:r.exitCode}));
+  if (r.msg !== "packageFiles with updates") continue;
+  for (const [m, files] of Object.entries(r.config ?? r.packageFiles ?? {})) {
+    if (manager && m !== manager) continue;
+    for (const file of files) for (const d of file.deps) console.log(JSON.stringify({manager:m,file:file.packageFile,name:d.depName,package:d.packageName,source:d.datasource,current:d.currentValue,version:d.currentVersion,digest:d.currentDigest,skip:d.skipReason,updates:d.updates,registry:d.registryUrls}));
+  }
+}
+' "$@"
+'''
+
 [tasks."benchmarks:build"]
 description = "Build release subjects outside tak's measured commands"
 run = ["cargo build --release --locked -p rustovate-cli", "cargo build --release --locked -p rustovate-github --example replay_bench"]

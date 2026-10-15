@@ -66,6 +66,13 @@ enum Predicate {
     CargoPre1Breaking,
     ReleaseAgeWindow,
     NpmExactMajor,
+    FloatingPin,
+    IndirectGo,
+    ComposeTestFile,
+    NpmExactRange,
+    NpmRangePin,
+    PatchAlternative,
+    GoModulePath,
 }
 
 impl Rules {
@@ -101,9 +108,24 @@ impl Rules {
                         Classification::FieldMismatch,
                         "updates.newValue" | "updates.newVersion"
                     ) | (
-                        Predicate::NpmExactMajor,
+                        Predicate::NpmExactMajor | Predicate::NpmExactRange,
                         Classification::FieldMismatch,
                         "updates.newValue"
+                    ) | (
+                        Predicate::FloatingPin
+                            | Predicate::IndirectGo
+                            | Predicate::NpmRangePin
+                            | Predicate::PatchAlternative,
+                        Classification::RustovateExtra,
+                        "updates"
+                    ) | (
+                        Predicate::ComposeTestFile,
+                        Classification::RustovateExtra,
+                        "dependency"
+                    ) | (
+                        Predicate::GoModulePath,
+                        Classification::RustovateMissing,
+                        "updates"
                     )
                 )
             {
@@ -132,6 +154,103 @@ impl Rules {
                 continue;
             }
             let matches = match rule.predicate {
+                Predicate::GoModulePath => dependency.is_some_and(|left| {
+                    left.manager == "go" && left.package == rustovate.package
+                        && left.current.value == rustovate.current.value
+                        && left.metadata.as_ref().is_some_and(|m| m.source == "go")
+                        && rustovate.metadata.as_ref().is_some_and(|m| m.source == "go")
+                        && left.package.starts_with("github.com/")
+                        && serde_json::from_value::<Update>(difference.renovate.clone()).is_ok_and(|u| {
+                            u.update_type == "major" && u.new_value == u.new_version && u.new_digest.is_none()
+                                && left.current.value.as_deref().and_then(parse_version)
+                                    .zip(u.new_version.as_deref().and_then(parse_version))
+                                    .is_some_and(|(a,b)| b.major >= 2 && b.major > a.major && b.pre.is_empty()
+                                        && b.build.is_empty() && !left.package.ends_with(&format!("/v{}", b.major)))
+                        })
+                }),
+                Predicate::NpmExactRange => difference.paired.as_ref().is_some_and(|(left, right)| {
+                    let current = dependency.and_then(|d| d.current.value.as_deref())
+                        .and_then(simple_range_version);
+                    let target = right.new_version.as_deref().and_then(parse_version);
+                    left.update_type == right.update_type
+                        && matches!(right.update_type.as_str(), "minor" | "patch")
+                        && left.new_version == right.new_version && right.new_value == right.new_version
+                        && right.policy.as_ref().is_some_and(|p| p.versions.as_deref() == Some("exact"))
+                        && left.new_value.as_deref().is_some_and(|range| simple_range_version(range).is_some()
+                            && semver::VersionReq::parse(range).is_ok_and(|r| target.as_ref().is_some_and(|v| r.matches(v))))
+                        && current.zip(target).is_some_and(|(old, target)| old.major == target.major
+                            && target.cmp_precedence(&old).is_gt()
+                            && if right.update_type == "minor" { target.minor > old.minor } else { target.minor == old.minor })
+                }),
+                Predicate::NpmRangePin => dependency.is_some_and(|left| {
+                    left.manager == "npm" && left.current.value == rustovate.current.value
+                        && left.updates.iter().all(|u| u.update_type != "pin")
+                        && rustovate.metadata.as_ref().is_some_and(|m| m.source == "npm")
+                        && serde_json::from_value::<Update>(difference.rustovate.clone()).is_ok_and(|u| {
+                            u.update_type == "pin" && u.new_value == u.new_version && u.new_digest.is_none()
+                                && u.policy.as_ref().is_some_and(|p| p.versions.as_deref() == Some("exact"))
+                                && left.current.value.as_deref().is_some_and(|range| simple_range_version(range).is_some()
+                                    && semver::VersionReq::parse(range).is_ok_and(|r| u.new_version.as_deref()
+                                        .and_then(parse_version).is_some_and(|v| r.matches(&v))))
+                        })
+                }),
+                Predicate::PatchAlternative => dependency.is_some_and(|left| {
+                    let current = left.current.version.as_deref().and_then(parse_version);
+                    serde_json::from_value::<Update>(difference.rustovate.clone()).is_ok_and(|u| {
+                        u.update_type == "patch" && u.new_value != left.current.value
+                            && u.policy.is_some()
+                            && current.zip(u.new_version.as_deref().and_then(parse_version)).is_some_and(|(old,target)| {
+                                target.major == old.major && target.minor == old.minor
+                                    && target.cmp_precedence(&old).is_gt()
+                                    && left.updates.iter().any(|minor| {
+                                        minor.update_type == "minor"
+                                            && rustovate.updates.iter().any(|actual| actual.update_type == "minor"
+                                                && actual.new_version == minor.new_version
+                                                && actual.new_value == minor.new_value
+                                                && (actual.new_digest == minor.new_digest
+                                                    || left.metadata.as_ref().is_some_and(|m| m.source == "npm")))
+                                            && minor.new_version.as_deref().and_then(parse_version).is_some_and(|v|
+                                                v.major == target.major && v.minor > target.minor)
+                                    })
+                            })
+                    })
+                }),
+                Predicate::FloatingPin => dependency.is_some_and(|left| {
+                    left.current.value.as_deref() == Some("latest")
+                        && left.updates.is_empty()
+                        && rustovate.current.value == left.current.value
+                        && (matches!(rustovate.manager.as_str(), "mise" | "npm")
+                            || (rustovate.manager == "github-actions" && rustovate.metadata.as_ref().is_some_and(|m|
+                                m.source == "github-releases" && m.kinds.iter().any(|k| k == "tool"))))
+                        && serde_json::from_value::<Update>(difference.rustovate.clone()).is_ok_and(|u| {
+                            u.update_type == "pin" && u.new_digest.is_none()
+                                && u.policy.as_ref().is_some_and(|p| p.versions.as_deref() == Some("exact"))
+                                && u.new_version.as_deref().and_then(parse_version).is_some()
+                                && u.new_value.as_deref().and_then(parse_version)
+                                    == u.new_version.as_deref().and_then(parse_version)
+                        })
+                }),
+                Predicate::IndirectGo => dependency.is_some_and(|left| {
+                    left.manager == "go" && left.updates.is_empty()
+                        && left.metadata.as_ref().is_some_and(|m| m.source == "go" && m.kinds.iter().any(|k| k == "indirect"))
+                        && left.current.value == rustovate.current.value
+                        && serde_json::from_value::<Update>(difference.rustovate.clone()).is_ok_and(|u| {
+                            u.new_digest.is_none() && u.new_value == u.new_version
+                                && matches!(u.update_type.as_str(), "major" | "minor" | "patch")
+                                && left.current.value.as_deref().and_then(parse_version)
+                                    .zip(u.new_version.as_deref().and_then(parse_version))
+                                    .is_some_and(|(a,b)| b.cmp_precedence(&a).is_gt())
+                        })
+                }),
+                Predicate::ComposeTestFile => dependency.is_none()
+                    && rustovate.manager == "compose"
+                    && rustovate.metadata.as_ref().is_some_and(|m| m.source == "docker"
+                        && m.kinds.iter().any(|k| k == "container-image"))
+                    && difference.package_file.as_deref().is_some_and(|path| {
+                        path.starts_with("test/")
+                            && path.rsplit('/').next().is_some_and(|leaf| leaf.starts_with("docker-compose.")
+                                && matches!(leaf.rsplit('.').next(), Some("yml" | "yaml")))
+                    }),
                 Predicate::ReleaseAgeWindow => difference.paired.as_ref().is_some_and(|(left, right)| {
                     let versions = left.new_version.as_deref().and_then(parse_version)
                         .zip(right.new_version.as_deref().and_then(parse_version));
@@ -249,6 +368,14 @@ pub struct Triage {
     pub warnings: Vec<Warning>,
     pub exclusions: Vec<Exclusion>,
     pub normalizations: BTreeMap<String, usize>,
+    pub no_baseline: Vec<NoBaseline>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoBaseline {
+    pub repository: String,
+    pub reason: String,
 }
 
 fn label(class: Classification) -> &'static str {
@@ -287,6 +414,16 @@ impl Triage {
             out.push_str(&format!("- {}: {count}\n", label(class)));
         }
         out.push_str("\nRepository coverage and normalized inputs are in the accompanying JSON. Departure links are relative to the repository root.\n\n");
+        for missing in &self.no_baseline {
+            out.push_str(&format!(
+                "- No baseline: {} — {}\n",
+                cell(&missing.repository),
+                cell(&missing.reason)
+            ));
+        }
+        if !self.no_baseline.is_empty() {
+            out.push('\n');
+        }
         for (rule, count) in &self.normalizations {
             out.push_str(&format!("- Normalization {}: {count}\n", cell(rule)));
         }
@@ -401,20 +538,41 @@ fn updates(
     location: &Location<'_>,
     a: &[Update],
     b: &[Update],
-    npm: bool,
+    checksum_source: Option<&str>,
     notes: &mut BTreeMap<String, usize>,
 ) {
     let normalize = |u: &Update| {
         let mut u = u.clone();
-        if npm {
+        if checksum_source.is_some() {
             u.new_digest = None;
         }
         u
     };
     let a: Vec<_> = a.iter().map(normalize).collect();
     let b: Vec<_> = b.iter().map(normalize).collect();
-    if npm {
-        *notes.entry("npm-newDigest-ignored".into()).or_default() += a.len();
+    if let Some(source) = checksum_source {
+        *notes
+            .entry(format!("{source}-newDigest-ignored"))
+            .or_default() += a.len();
+    }
+    let mut b = b;
+    // Digest updates omit a redundant newVersion in the upstream output. It is
+    // unknown metadata, and only comparable when the baseline actually has it.
+    for right in &mut b {
+        if matches!(right.update_type.as_str(), "pin" | "digest")
+            && right.new_digest.is_some()
+            && a.iter().any(|left| {
+                left.update_type == right.update_type
+                    && left.new_value == right.new_value
+                    && left.new_digest == right.new_digest
+                    && left.new_version.is_none()
+            })
+            && right.new_version.take().is_some()
+        {
+            *notes
+                .entry("digest-update-version-unavailable".into())
+                .or_default() += 1;
+        }
     }
     *notes
         .entry("groups-unavailable-skipped".into())
@@ -547,6 +705,7 @@ fn missing_file(
     location: &Location<'_>,
     file: &PackageFile,
     class: Classification,
+    rules: &Rules,
 ) {
     let location = Location {
         path: Some(&file.path),
@@ -566,13 +725,16 @@ fn missing_file(
         };
         let (a, b) = values(json!(dep));
         out.push(difference(&location, "dependency", a, b, class));
+        if class == Classification::RustovateExtra {
+            rules.classify(out.last_mut().expect("just inserted"), None, dep);
+        }
     }
 }
 
 pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<Triage> {
     renovate.validate()?;
     rustovate.validate()?;
-    for repo in renovate.repositories.iter().chain(&rustovate.repositories) {
+    for repo in &rustovate.repositories {
         if repo.status != Status::Complete {
             return Err(Error::Input(format!(
                 "{} is {:?}; only complete repositories can be compared",
@@ -580,6 +742,15 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
             )));
         }
     }
+    for repo in &renovate.repositories {
+        if repo.status == Status::Error {
+            return Err(Error::Input(format!("{} baseline failed", repo.repository)));
+        }
+    }
+    let mut renovate = renovate.clone();
+    let mut rustovate = rustovate.clone();
+    let mut normalizations = BTreeMap::new();
+    let exclusions = crate::normalize::reports(&mut renovate, &mut rustovate, &mut normalizations);
     let a: BTreeMap<_, _> = renovate
         .repositories
         .iter()
@@ -591,7 +762,7 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
         .map(|r| (&r.repository, r))
         .collect();
     let mut differences = Vec::new();
-    let mut normalizations = BTreeMap::new();
+    let mut no_baseline = Vec::new();
     let repos: BTreeSet<_> = a.keys().chain(b.keys()).copied().collect();
     for repo in repos {
         let location = Location {
@@ -599,6 +770,16 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
             path: None,
             dep: None,
         };
+        if b.contains_key(repo) && a.get(repo).is_none_or(|r| r.status == Status::Skipped) {
+            no_baseline.push(NoBaseline {
+                repository: repo.clone(),
+                reason: a
+                    .get(repo)
+                    .and_then(|r| r.reason.clone())
+                    .unwrap_or_else(|| "no Renovate lookup snapshot in supplied output".into()),
+            });
+            continue;
+        }
         let (Some(left), Some(right)) = (a.get(repo), b.get(repo)) else {
             let class = if a.contains_key(repo) {
                 Classification::RustovateMissing
@@ -623,7 +804,7 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
                 ));
             } else {
                 for file in &present.package_files {
-                    missing_file(&mut differences, &location, file, class);
+                    missing_file(&mut differences, &location, file, class, rules);
                 }
             }
             continue;
@@ -656,6 +837,7 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
                     &location,
                     a.get(path).or_else(|| b.get(path)).expect("file exists"),
                     class,
+                    rules,
                 );
                 continue;
             };
@@ -692,6 +874,9 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
                         json!(b.get(&key)),
                         class,
                     ));
+                    if class == Classification::RustovateExtra {
+                        rules.classify(differences.last_mut().expect("just inserted"), None, dep);
+                    }
                     continue;
                 };
                 let start = differences.len();
@@ -713,21 +898,33 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
                         json!(right.current.digest),
                     ),
                 ] {
+                    if field == "current.version" && av.is_null() {
+                        if !bv.is_null() {
+                            *normalizations
+                                .entry("current-version-unavailable".into())
+                                .or_default() += 1;
+                        }
+                        continue;
+                    }
                     mismatch(&mut differences, &location, field, av, bv);
                 }
-                let npm = left
+                let source = left
                     .metadata
                     .as_ref()
                     .or(right.metadata.as_ref())
-                    .map_or(matches!(left.manager.as_str(), "npm" | "bun"), |m| {
-                        m.source == "npm"
-                    });
+                    .map(|m| m.source.as_str());
+                let checksum_source = match source {
+                    Some("npm") => Some("npm"),
+                    Some("helm") => Some("helm"),
+                    None if matches!(left.manager.as_str(), "npm" | "bun") => Some("npm"),
+                    _ => None,
+                };
                 updates(
                     &mut differences,
                     &location,
                     &left.updates,
                     &right.updates,
-                    npm,
+                    checksum_source,
                     &mut normalizations,
                 );
                 for d in &mut differences[start..] {
@@ -739,16 +936,24 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
     normalizations.retain(|_, count| *count > 0);
     Ok(Triage {
         schema_version: 1,
-        renovate: renovate.clone(),
-        rustovate: rustovate.clone(),
+        renovate,
+        rustovate,
         differences,
         warnings: Vec::new(),
-        exclusions: Vec::new(),
+        exclusions,
         normalizations,
+        no_baseline,
     })
 }
 fn parse_version(value: &str) -> Option<semver::Version> {
     semver::Version::parse(value.trim_start_matches('v')).ok()
+}
+
+fn simple_range_version(value: &str) -> Option<semver::Version> {
+    value
+        .strip_prefix('^')
+        .or_else(|| value.strip_prefix('~'))
+        .and_then(parse_version)
 }
 
 fn numeric_version(value: &str) -> Option<(u64, u64, u64)> {

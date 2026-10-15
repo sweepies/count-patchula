@@ -541,12 +541,8 @@ fn real_lookup_shape_retains_skipped_and_digest_only_deps_and_audits_exclusion()
             .all(|d| d.classification == Class::RustovateMissing && d.field == "dependency")
     );
     let reverse = compare(&empty, &parsed.report, &rules()).unwrap();
-    assert!(
-        reverse
-            .differences
-            .iter()
-            .all(|d| d.classification == Class::RustovateExtra)
-    );
+    assert!(reverse.differences.is_empty());
+    assert_eq!(reverse.no_baseline.len(), 1);
     let mut missing_file = parsed.report.clone();
     missing_file.repositories[0]
         .package_files

@@ -67,11 +67,12 @@ fn run(app: App) -> Result<(), Error> {
                     .is_none_or(|r| app.repositories.contains(r))
         })
         .collect();
-    triage.exclusions = parsed
-        .exclusions
-        .into_iter()
-        .filter(|e| app.repositories.is_empty() || app.repositories.contains(&e.repository))
-        .collect();
+    triage.exclusions.extend(
+        parsed
+            .exclusions
+            .into_iter()
+            .filter(|e| app.repositories.is_empty() || app.repositories.contains(&e.repository)),
+    );
     std::fs::create_dir_all(&app.output)?;
     // Local reports may be written anywhere; use an absolute documentation link.
     let docs = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -86,8 +87,14 @@ fn run(app: App) -> Result<(), Error> {
         serde_json::to_vec_pretty(&triage)?,
     )?;
     println!(
-        "Compared {} repositories: {} differences. Reports: {}",
-        triage.renovate.repositories.len(),
+        "Compared {} repositories; {} without baseline: {} differences. Reports: {}",
+        triage
+            .renovate
+            .repositories
+            .iter()
+            .filter(|r| r.status == rustovate_report::Status::Complete)
+            .count(),
+        triage.no_baseline.len(),
         triage.differences.len(),
         app.output.display()
     );
