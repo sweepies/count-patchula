@@ -1,0 +1,22 @@
+{
+  "docker-official": {
+    "redis": "redis/redis",
+    "postgres": "postgres/postgres",
+    "nginx": "nginx/nginx",
+    "node": "nodejs/node",
+    "python": "python/cpython",
+    "golang": "golang/go",
+    "alpine": "alpinelinux/aports",
+    "busybox": "mirror/busybox"
+  },
+  "mise-core": {
+    "node": "nodejs/node",
+    "go": "golang/go",
+    "python": "python/cpython",
+    "bun": "oven-sh/bun",
+    "deno": "denoland/deno",
+    "rust": "rust-lang/rust",
+    "ruby": "ruby/ruby",
+    "zig": "ziglang/zig"
+  }
+}

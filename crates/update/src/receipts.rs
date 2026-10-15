@@ -62,6 +62,7 @@ fn key(repo: &str, prefix: &str) -> ExtractionKey {
 fn intent(plan: &Plan, config: &Config, recheck: Recheck) -> String {
     hash(
         serde_json::to_string(&(
+            "release-notes-v2",
             &plan.identity,
             &plan.input_fingerprint,
             &plan.changes,

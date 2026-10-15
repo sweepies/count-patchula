@@ -1,4 +1,4 @@
-use crate::{Change, Plan, plan::hash};
+use crate::{Plan, plan::hash};
 use chrono::{DateTime, Duration, Utc};
 use rustovate_config::Config;
 use rustovate_github::Client;
@@ -8,7 +8,6 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const BODY_LIMIT: usize = 32_000;
-const NOTES_LIMIT: usize = 4_000;
 const MARKER: &str = "<!-- rustovate:";
 const RECHECK: &str = "<!-- rustovate-recheck -->";
 const OBSOLETE: &str = "<!-- rustovate-closed:obsolete -->";
@@ -140,7 +139,7 @@ pub struct Lifecycle {
     base: String,
     pub(crate) prs: Vec<Value>,
     pub actions: Vec<PullRequestAction>,
-    notes: BTreeMap<(String, String), String>,
+    notes: BTreeMap<(String, String, String, String), rustovate_datasource::notes::Notes>,
     pub(crate) recheck: Recheck,
     merge_settings: Option<crate::automerge::Settings>,
     maintenance_policy: rustovate_config::Policy,
@@ -386,6 +385,16 @@ impl Lifecycle {
     }
 
     pub async fn publish(&mut self, client: &Client, plans: &mut [Plan]) {
+        let sources =
+            rustovate_datasource::Client::new(client.clone(), client.public_http(), client.cache());
+        self.publish_with_sources(client, &sources, plans).await;
+    }
+    pub async fn publish_with_sources(
+        &mut self,
+        client: &Client,
+        sources: &rustovate_datasource::Client,
+        plans: &mut [Plan],
+    ) {
         for plan in plans {
             if let Some(pr) = &plan.cached_pr {
                 self.actions.push(action(
@@ -406,7 +415,7 @@ impl Lifecycle {
             ) {
                 continue;
             }
-            if let Err(error) = self.publish_one(client, plan).await {
+            if let Err(error) = self.publish_one(client, sources, plan).await {
                 self.actions.push(action(
                     &self.repo,
                     &plan.action.branch,
@@ -439,7 +448,12 @@ impl Lifecycle {
         }
         Ok(())
     }
-    async fn publish_one(&mut self, client: &Client, plan: &Plan) -> Result<(), String> {
+    async fn publish_one(
+        &mut self,
+        client: &Client,
+        sources: &rustovate_datasource::Client,
+        plan: &Plan,
+    ) -> Result<(), String> {
         if self
             .branch_permits
             .get(&plan.action.branch)
@@ -459,7 +473,7 @@ impl Lifecycle {
                 p["state"] == "open" && branch(p) == plan.action.branch && same_repo(p, &self.repo)
             })
             .cloned();
-        let text = self.render(client, plan).await;
+        let text = self.render(sources, plan, existing.as_ref()).await;
         let title = truncate(&plan.action.message.replace(['\n', '\r'], " "), 250);
         let path = format!("repos/{}/pulls", self.repo);
         let (mut pr, status) = if let Some(pr) = existing {
@@ -632,7 +646,12 @@ impl Lifecycle {
         Ok(())
     }
 
-    async fn render(&mut self, client: &Client, plan: &Plan) -> String {
+    async fn render(
+        &mut self,
+        sources: &rustovate_datasource::Client,
+        plan: &Plan,
+        existing: Option<&Value>,
+    ) -> String {
         let mut text =
             String::from("| Package | Change | Type | File |\n| --- | --- | --- | --- |\n");
         if plan.maintenance {
@@ -679,54 +698,83 @@ impl Lifecycle {
         for note in body_notes {
             append(&mut text, &format!("\n{}\n", safe(note)), 22_000);
         }
+        let ranges: Vec<_> = plan
+            .changes
+            .iter()
+            .map(|c| {
+                (
+                    &c.source,
+                    &c.package,
+                    &c.current,
+                    &c.current_version,
+                    &c.version,
+                    &c.value,
+                    &c.kind,
+                    c.release_notes,
+                )
+            })
+            .collect();
+        let content_hash = hash(
+            &serde_json::to_vec(&(
+                "notes-render-v2",
+                &text,
+                ranges,
+                self.recheck,
+                self.branch_permits.get(&plan.action.branch),
+            ))
+            .expect("serializable body intent"),
+        );
+        let content_marker = format!("<!-- rustovate-content:{content_hash} -->");
+        if let Some(pr) = existing
+            && body(pr).contains(&content_marker)
+            && !checked(pr)
+            && marker(body(pr))
+                .is_some_and(|m| m.identity == plan.identity && m.update == update_key(plan))
+        {
+            // Rebases, label reconciliation and receipt repair do not change
+            // body inputs. Reuse their notes without metadata or network reads.
+            return body(pr).into();
+        }
         let mut releases = BTreeSet::new();
         for change in &plan.changes {
-            if releases.len() >= 8 || text.len() > BODY_LIMIT - 6000 {
+            if releases.len() >= 8 || text.len() > BODY_LIMIT - 2500 {
+                text.push_str("\nAdditional release notes truncated to fit this PR. Consult the source repositories for the remaining updates.\n");
                 break;
             }
-            if change.kind == "pin"
-                || !change.release_notes
-                || !matches!(change.source.as_str(), "github-tags" | "github-releases")
-            {
+            if change.kind == "pin" || !change.release_notes {
                 continue;
             }
             let Some(version) = change.version.as_ref().or(change.value.as_ref()) else {
                 continue;
             };
-            let key = (change.package.clone(), version.clone());
+            let current = change.current_version.as_ref().unwrap_or(&change.current);
+            let key = (
+                change.source.clone(),
+                change.package.clone(),
+                current.clone(),
+                version.clone(),
+            );
             if !releases.insert(key.clone()) {
                 continue;
             }
             if !self.notes.contains_key(&key) {
-                let note = release_note(client, change, version).await;
+                let note =
+                    if let Ok(source) = serde_json::from_value(serde_json::json!(change.source)) {
+                        sources
+                            .release_notes(source, &change.package, current, version)
+                            .await
+                            .unwrap_or_default()
+                    } else {
+                        Default::default()
+                    };
                 self.notes.insert(key.clone(), note);
             }
-            append(
-                &mut text,
-                &format!("\n{}\n", self.notes[&key]),
-                BODY_LIMIT - 1500,
-            );
-        }
-        let unavailable: BTreeSet<_> = plan
-            .changes
-            .iter()
-            .filter(|c| {
-                c.kind != "pin"
-                    && c.release_notes
-                    && !matches!(c.source.as_str(), "github-tags" | "github-releases")
-            })
-            .map(|c| cell(&c.package))
-            .take(8)
-            .collect();
-        if !unavailable.is_empty() {
-            append(
-                &mut text,
-                &format!(
-                    "\nRelease notes unavailable for {}.\n",
-                    unavailable.into_iter().collect::<Vec<_>>().join(", ")
-                ),
-                BODY_LIMIT - 1000,
-            );
+            let budget = (BODY_LIMIT - 1500)
+                .saturating_sub(text.len() + 2)
+                .min(12_000);
+            text.push('\n');
+            text.push_str(&self.notes[&key].render(&change.package, budget));
+            text.push('\n');
         }
         if let Some(permits) = self.branch_permits.get(&plan.action.branch) {
             let marker = crate::dashboard::permit_marker(permits);
@@ -735,6 +783,8 @@ impl Lifecycle {
             text.push('\n');
             text.push_str(&marker);
         }
+        text.push('\n');
+        text.push_str(&content_marker);
         let timing = match self.recheck {
             Recheck::Now => "now",
             Recheck::NextRun => "on the next run",
@@ -762,7 +812,9 @@ fn truncate(text: &str, limit: usize) -> String {
     text[..end].into()
 }
 fn safe(text: &str) -> String {
-    text.replace("<!--", "&lt;!--").replace("-->", "--&gt;")
+    text.replace("<!--", "&lt;!--")
+        .replace("-->", "--&gt;")
+        .replace('@', "@\u{200d}")
 }
 fn cell(text: &str) -> String {
     truncate(
@@ -774,62 +826,5 @@ fn append(text: &mut String, addition: &str, limit: usize) {
     let remaining = limit.saturating_sub(text.len());
     if remaining > 0 {
         text.push_str(&truncate(addition, remaining));
-    }
-}
-#[derive(Deserialize, Serialize)]
-struct ReleaseNote {
-    body: Option<String>,
-}
-fn compact_note(bytes: &[u8]) -> Result<Vec<u8>, serde_json::Error> {
-    let mut note: ReleaseNote = serde_json::from_slice(bytes)?;
-    note.body = note.body.map(|s| truncate(&safe(&s), NOTES_LIMIT));
-    serde_json::to_vec(&note)
-}
-async fn release_note(client: &Client, change: &Change, version: &str) -> String {
-    let parts: Vec<_> = change.package.split('/').collect();
-    if parts.len() != 2
-        || parts.iter().any(|s| {
-            s.is_empty()
-                || !s
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
-        })
-    {
-        return String::new();
-    }
-    let mut url = reqwest::Url::parse(&format!(
-        "https://api.github.com/repos/{}/releases/tags/",
-        change.package
-    ))
-    .expect("validated release repo");
-    url.path_segments_mut()
-        .unwrap()
-        .pop_if_empty()
-        .push(version);
-    let path = url.path();
-    let mut link = reqwest::Url::parse(&format!(
-        "https://github.com/{}/releases/tag/",
-        change.package
-    ))
-    .expect("validated release repo");
-    link.path_segments_mut()
-        .unwrap()
-        .pop_if_empty()
-        .push(version);
-    let heading = format!(
-        "### {} {}\n\n[Release notes]({link})",
-        cell(&change.package),
-        cell(version)
-    );
-    match client
-        .get_derived(path, "release-note-v1-4000", compact_note)
-        .await
-    {
-        Ok(response) => {
-            let note: ReleaseNote =
-                serde_json::from_slice(&response.body).unwrap_or(ReleaseNote { body: None });
-            format!("{heading}\n\n{}", note.body.unwrap_or_default())
-        }
-        Err(_) => format!("{heading}\n\nRelease text unavailable; see the upstream release."),
     }
 }

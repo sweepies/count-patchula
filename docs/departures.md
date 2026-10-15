@@ -4,7 +4,7 @@ rustovate is not a Renovate clone. Each entry records a behaviour that differs
 on purpose, and why. The comparison harness links differences it finds to
 entries here; a difference with no entry is treated as a bug.
 
-Review map (45 entries; IDs below remain stable):
+Review map (46 entries; IDs below remain stable):
 
 - **Policy:** 2–8, 10, 12, 14, 16–18, 20, 23, 25, 29–31, 33–35,
   37–38, 42–43, 45–46 cover explicit activation, reproducibility, update tracks,
@@ -79,6 +79,7 @@ Stable comparison link: <a id="departure-7"></a>**Departure 7: default policy**
 | 45 | Action alias precision | Can expand a ref when adding a digest | Preserve the declared numeric ref precision and report the full resolved target separately | The commit pin supplies reproducibility while the ref describes the intended release line |
 | 46 | Cargo target resolution | Observed pre-1.0 upgrades can select an older release in the proposed range | Resolve the newest eligible release in that same compatibility interval | Report the available release without narrowing the manifest |
 | 47 | Branch and merge safety | No write behavior is inferred from comparison output | Leased API refs, verified bot ownership, receipt-backed later-run merges when native auto-merge is unavailable | Preserve human work and lockfile consistency without emulating another bot |
+| 48 | Release note presentation and discovery | No presentation compatibility is claimed | Ecosystem metadata, public mise-versions note lists, cached changelog sections, bounded ranges and neutralised mentions/references | Useful upstream context without steady-run reads or notification noise; see [release notes](release-notes.md) |
 
 <a id="departure-47"></a>**Departure 47: independent write safety.**
 Phase 2 does not claim compatibility with Renovate's branch/commit behavior.

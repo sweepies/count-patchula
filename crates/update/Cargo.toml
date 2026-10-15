@@ -10,6 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+rustovate-datasource = { path = "../datasource" }
 rustovate-cache = { path = "../cache" }
 rustovate-config = { path = "../config" }
 rustovate-manager = { path = "../manager" }

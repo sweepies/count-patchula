@@ -188,6 +188,19 @@ impl Client {
         self.0.options.concurrency
     }
 
+    /// Public metadata reads share the transport pool but never GitHub auth.
+    pub fn public_http(&self) -> rustovate_http::Cached {
+        rustovate_http::Cached::new(
+            self.0.cache.clone(),
+            self.0.transport.clone(),
+            self.concurrency(),
+        )
+        .expect("validated concurrency")
+    }
+    pub fn cache(&self) -> Cache {
+        self.0.cache.clone()
+    }
+
     /// One-way namespace for derived read hints; never the token itself.
     pub fn credential_scope(&self) -> &str {
         &self.0.credential_scope

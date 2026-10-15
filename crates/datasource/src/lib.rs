@@ -4,6 +4,7 @@ mod compact;
 mod docker;
 mod github;
 mod mise;
+pub mod notes;
 mod registries;
 use rustovate_cache::{Cache, Release};
 use rustovate_config::Source;
@@ -60,6 +61,7 @@ pub struct Client {
     pub(crate) cache: Cache,
     tokens: docker::Tokens,
     dockerhub_credentials: Option<std::sync::Arc<(String, String)>>,
+    changelogs: notes::ChangelogCache,
     stale_registry: std::sync::Arc<tokio::sync::Mutex<BTreeMap<String, BTreeMap<String, i64>>>>,
 }
 impl Client {
@@ -75,6 +77,7 @@ impl Client {
             cache,
             tokens: Default::default(),
             dockerhub_credentials: None,
+            changelogs: Default::default(),
             stale_registry: Default::default(),
         }
     }

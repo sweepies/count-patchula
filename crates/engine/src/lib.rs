@@ -442,7 +442,9 @@ impl Engine {
             )
             .await;
             if let Some(state) = &mut lifecycle {
-                state.publish(&self.github, &mut plans).await;
+                state
+                    .publish_with_sources(&self.github, &self.sources, &mut plans)
+                    .await;
                 let merge_actions = rustovate_update::automerge::reconcile(
                     &self.github,
                     &self.cache,

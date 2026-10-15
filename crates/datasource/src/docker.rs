@@ -12,6 +12,27 @@ type Token = Arc<Mutex<Option<(String, Instant)>>>;
 pub(super) type Tokens = Arc<Mutex<BTreeMap<String, Token>>>;
 const MANIFEST: &str = "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json";
 
+fn validate_digest(digest: &str) -> Result<()> {
+    if digest
+        .strip_prefix("sha256:")
+        .is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        Ok(())
+    } else {
+        Err(Error::Invalid)
+    }
+}
+fn compact_source_labels(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheError> {
+    let value: Value =
+        serde_json::from_slice(bytes).map_err(|_| rustovate_http::CacheError::Document)?;
+    let labels = &value["config"]["Labels"];
+    serde_json::to_vec(&serde_json::json!({
+        "org.opencontainers.image.source": labels["org.opencontainers.image.source"],
+        "org.opencontainers.image.version": labels["org.opencontainers.image.version"]
+    }))
+    .map_err(|_| rustovate_http::CacheError::Document)
+}
+
 fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -286,9 +307,103 @@ impl Client {
                 .http
                 .registry_get_derived(url, accept, token, "oci-tags-v1", compact_tags)
                 .await?)
+        } else if url.contains("/blobs/") {
+            Ok(self
+                .http
+                .registry_get_derived(
+                    url,
+                    accept,
+                    token,
+                    "oci-source-labels-v1",
+                    compact_source_labels,
+                )
+                .await?)
         } else {
             Ok(self.http.registry_get(url, accept, token).await?)
         }
+    }
+
+    pub(super) async fn image_source(
+        &self,
+        package: &str,
+        version: &str,
+    ) -> Result<Option<notes::Repository>> {
+        let (host, path) = identity(package)?;
+        let fallback = (host == "registry-1.docker.io")
+            .then(|| {
+                path.strip_prefix("library/")
+                    .and_then(|name| notes::mapped("docker-official", name))
+            })
+            .flatten();
+        match self.image_labels(&host, &path, version).await {
+            Ok(labels) => {
+                let mut source = labels["org.opencontainers.image.source"]
+                    .as_str()
+                    .and_then(notes::Repository::from_url)
+                    .or(fallback);
+                if let Some(source) = &mut source {
+                    source.image_version = labels["org.opencontainers.image.version"]
+                        .as_str()
+                        .map(str::to_owned);
+                }
+                Ok(source)
+            }
+            Err(_) if fallback.is_some() => Ok(fallback),
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn image_labels(&self, host: &str, path: &str, version: &str) -> Result<Value> {
+        if version.is_empty()
+            || !version
+                .bytes()
+                .all(|v| v.is_ascii_alphanumeric() || b"._-+:".contains(&v))
+        {
+            return Err(Error::Invalid);
+        }
+        let mut reference = version.to_owned();
+        for _ in 0..4 {
+            let response = self
+                .registry(
+                    host,
+                    path,
+                    &format!("https://{host}/v2/{path}/manifests/{reference}"),
+                    MANIFEST,
+                    Method::GET,
+                )
+                .await?;
+            let manifest: Value = serde_json::from_slice(&response.body)?;
+            if let Some(digest) = manifest["config"]["digest"].as_str() {
+                validate_digest(digest)?;
+                let response = self
+                    .registry(
+                        host,
+                        path,
+                        &format!("https://{host}/v2/{path}/blobs/{digest}"),
+                        "application/json",
+                        Method::GET,
+                    )
+                    .await?;
+                return Ok(serde_json::from_slice(&response.body)?);
+            }
+            let manifests = manifest["manifests"].as_array().ok_or(Error::Invalid)?;
+            let child = manifests
+                .iter()
+                .find(|m| {
+                    m["platform"]["os"] == "linux" && m["platform"]["architecture"] == "amd64"
+                })
+                .or_else(|| {
+                    manifests.iter().find(|m| {
+                        m["platform"]["os"]
+                            .as_str()
+                            .is_some_and(|os| os != "unknown")
+                    })
+                })
+                .ok_or(Error::Invalid)?;
+            reference = child["digest"].as_str().ok_or(Error::Invalid)?.into();
+            validate_digest(&reference)?;
+        }
+        Err(Error::Invalid)
     }
 
     pub(super) async fn docker(&self, package: &str) -> Result<Catalog> {

@@ -39,6 +39,7 @@ pub struct Change {
     pub package: String,
     pub file: String,
     pub current: String,
+    pub current_version: Option<String>,
     pub value: Option<String>,
     pub version: Option<String>,
     pub digest: Option<String>,
@@ -85,6 +86,7 @@ pub fn branch_name(prefix: &str, label: &str, _identity: &str) -> Result<String,
 struct Item<'a> {
     dep: &'a Dependency,
     update: &'a Update,
+    current_version: Option<&'a str>,
 }
 
 pub fn plan(
@@ -171,7 +173,11 @@ pub fn plan(
                         .entry(identity)
                         .or_insert_with(|| (label, Vec::new()))
                         .1
-                        .push(Item { dep, update });
+                        .push(Item {
+                            dep,
+                            update,
+                            current_version: reported.current.version.as_deref(),
+                        });
                 }
             }
         }
@@ -314,6 +320,7 @@ pub fn plan(
                 let u = item.update;
                 let p = u.policy.as_ref();
                 Change {
+                    current_version: item.current_version.map(str::to_owned),
                     source: word(&item.dep.source),
                     package: item.dep.package.clone(),
                     file: item.dep.file.clone(),

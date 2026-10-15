@@ -100,17 +100,14 @@ registry failure cannot be mistaken for a satisfied update. Unowned histories,
 unowned PRs and changed ownership markers are protected. Transport/5xx outcomes
 are reconciled on the next run instead of blindly retrying creates.
 
-Release notes use only the selected GitHub release tag, never whole repository
-changelogs. Compact, conditionally revalidated entries retain at most 4,000 bytes
-of UTF-8 text. Per-run memoization shares a package/tag across branches and files;
-304 responses reuse the compact representation without parsing the original text.
-At most eight release targets are fetched per PR and the full body is capped at
-32,000 bytes, reserving space for the checkbox and machine marker. HTML comment
-markers in upstream text/config notes are escaped. `releaseNotes = false` skips
-both text and requests. GitHub release text is included when available; other
-datasources explicitly report release-note unavailability because catalog
-metadata does not yet provide verified upstream release identities. Do not guess
-an image's upstream project or fetch arbitrary changelog URLs.
+Release notes now resolve ecosystem upstream metadata, select a version range
+through the public mise-versions mirror and use GitHub releases with cached
+changelog sections as a fallback. PR bodies retain a 32,000-byte budget, with
+older versions collapsed and explicit truncation links. Unchanged bodies and
+receipt-backed steady runs avoid note reads. See [release notes](release-notes.md)
+for source mappings, cache identities, notification neutralisation, mirror
+failure semantics and supported formats. `releaseNotes = false` skips both text
+and requests.
 
 `merge = true` for every update in a branch enables GitHub native auto-merge via
 `enablePullRequestAutoMerge`, choosing an enabled squash/merge/rebase method in

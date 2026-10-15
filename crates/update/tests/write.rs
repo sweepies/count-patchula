@@ -60,7 +60,11 @@ fn graphql_author(pr: &Value) -> Value {
 }
 impl Transport for Fake {
     fn send(&self, request: reqwest::Request) -> Exchange<'_> {
-        assert!(request.headers()["authorization"].is_sensitive());
+        if request.url().host_str() == Some("api.github.com") {
+            assert!(request.headers()["authorization"].is_sensitive());
+        } else {
+            assert!(!request.headers().contains_key("authorization"));
+        }
         let path = request.url().path().to_owned();
         let body: Value = request
             .body()
@@ -307,6 +311,25 @@ impl Transport for Fake {
                 }
             }
             response(200, state.prs[&n].clone())
+        } else if path == "/data/github/nodejs/node/releases.json" {
+            response(200, json!({"releases":[],"truncated":false}))
+        } else if path == "/data/github/nodejs/node/tags.json" {
+            response(200, json!({"tags":[],"truncated":false}))
+        } else if path == "/repos/nodejs/node/contents" {
+            response(200, json!([]))
+        } else if path == "/data/github/actions/checkout/releases.json" {
+            assert!(!request.headers().contains_key("authorization"));
+            response(
+                200,
+                json!({"releases":[{"tag":"20.0.0"},{"tag":"22.0.0"}],"truncated":false}),
+            )
+        } else if path == "/data/github/actions/checkout/tags.json" {
+            response(
+                200,
+                json!({"tags":[{"tag":"20.0.0"},{"tag":"22.0.0"}],"truncated":false}),
+            )
+        } else if path == "/repos/actions/checkout/contents" {
+            response(200, json!({"tree":[],"truncated":false}))
         } else if path.starts_with("/repos/actions/checkout/releases/tags/") {
             let mut reply = if request.headers().contains_key("if-none-match") {
                 response(304, Value::Null)
@@ -1176,6 +1199,7 @@ async fn pr_cycle(
 async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes() {
     for case in [
         "same",
+        "notes",
         "adopted",
         "generated",
         "conflicts",
@@ -1200,6 +1224,11 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
             config.prs.rebase = Rebase::Conflicts;
         }
         let (mut p, snapshot) = make_plan("22.0.0");
+        if case == "notes" {
+            p.changes[0].source = "github-tags".into();
+            p.changes[0].package = "actions/checkout".into();
+            p.changes[0].release_notes = true;
+        }
         p.changes[0].labels = vec!["dependencies".into()];
         if case == "generated" {
             p.fingerprint = "d".repeat(64);
@@ -1260,6 +1289,9 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
         .await
         .unwrap();
         let (mut next, _) = make_plan(if case == "plan" { "22.1.0" } else { "22.0.0" });
+        if case == "notes" {
+            next.changes = p.changes.clone();
+        }
         next.changes[0].labels = p.changes[0].labels.clone();
         next.lock_jobs = p.lock_jobs.clone();
         {
@@ -1324,7 +1356,13 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
             all,
             matches!(
                 case,
-                "same" | "adopted" | "generated" | "conflicts" | "pages" | "foreign-obsolete"
+                "same"
+                    | "notes"
+                    | "adopted"
+                    | "generated"
+                    | "conflicts"
+                    | "pages"
+                    | "foreign-obsolete"
             ),
             "{case}"
         );
@@ -1333,6 +1371,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
             matches!(
                 case,
                 "same"
+                    | "notes"
                     | "adopted"
                     | "generated"
                     | "conflicts"
@@ -1942,6 +1981,34 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
     )
     .await;
     assert_eq!(github.stats().await.not_modified, 1);
+    let reads = server
+        .0
+        .lock()
+        .unwrap()
+        .requests
+        .iter()
+        .filter(|(_, p)| p.contains("/releases/tags/") || p.starts_with("/data/github/"))
+        .count();
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut repeat),
+        &snapshot,
+    )
+    .await;
+    assert_eq!(
+        reads,
+        server
+            .0
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .filter(|(_, p)| p.contains("/releases/tags/") || p.starts_with("/data/github/"))
+            .count(),
+        "unchanged body inputs reuse notes even without receipt restoration"
+    );
     repeat.action.status = ActionStatus::Unchanged;
     repeat.changes.iter_mut().for_each(|c| {
         c.release_notes = false;

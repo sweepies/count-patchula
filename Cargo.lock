@@ -2268,6 +2268,7 @@ dependencies = [
 name = "rustovate-datasource"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "futures-util",
  "regex",
@@ -2463,6 +2464,7 @@ dependencies = [
  "rustix",
  "rustovate-cache",
  "rustovate-config",
+ "rustovate-datasource",
  "rustovate-github",
  "rustovate-http",
  "rustovate-lookup",
