@@ -325,3 +325,34 @@ async fn credentials_are_partitioned_in_cache_and_errors_hide_credentials_and_bo
         Err(Error::Configuration)
     ));
 }
+
+#[tokio::test(start_paused = true)]
+async fn mutations_share_serial_cooldown_but_graphql_queries_do_not() {
+    let transport = Arc::new(Concurrent {
+        active: AtomicUsize::new(0),
+        maximum: AtomicUsize::new(0),
+    });
+    let observer = transport.clone();
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let github = Client::with_transport("offline", cache, Default::default(), transport).unwrap();
+    let started = tokio::time::Instant::now();
+    github
+        .post("repos/demo/app/git/trees", json!({}))
+        .await
+        .unwrap();
+    github
+        .post("repos/demo/app/git/trees", json!({}))
+        .await
+        .unwrap();
+    assert!(started.elapsed() >= Duration::from_secs(1));
+    let started = tokio::time::Instant::now();
+    github
+        .graphql("query{viewer{login}}", json!({}))
+        .await
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(1));
+    let (a, b) = tokio::join!(github.post("a", json!({})), github.post("b", json!({})));
+    a.unwrap();
+    b.unwrap();
+    assert_eq!(observer.maximum.load(Ordering::SeqCst), 1);
+}

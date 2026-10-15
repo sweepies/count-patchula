@@ -29,3 +29,41 @@ These names follow the owner's observed Renovate output. Deliberate departures:
 a numeric container variant uses the major plus variant, pins take precedence
 over config groups, and a residual slug collision fails safely instead of adding
 a hash. No Renovate source, presets or fixtures were consulted.
+
+## Write performance
+
+Wave 1 live evidence: `sandbox-run.err` reports write=75.475s, total=77.605s,
+230 batch requests; `sandbox-dry.err` reports write=33.587s, total=36.790s,
+170 batch requests. These are supplied measurements, not reruns by this agent.
+
+The old writer issued four identical base precondition reads for every plan,
+then a branch lookup, one blob POST per changed file, tree/commit POSTs and a
+leased ref mutation. Dry runs performed all precondition and ownership reads.
+The new dry writer sends **zero requests**. Real writes validate the base once,
+run at most four independent branch tasks, and send only changed files inline in
+one Git tree POST, followed by commit and ref mutation. A one-file new branch
+therefore costs `4 + 4*N` requests per repository instead of `9*N`, excluding
+cleanup/PR lifecycle. Existing-branch signature/history verification remains.
+
+Offline trace evidence (`shared_base_write_trace_and_request_budget`): twelve
+branches, 150ms synthetic latency/request, 1s mutation cooldown: **52 requests,
+41.150s simulated time**; dry run **0 requests, 0s simulated time**. The trace
+prints method, host and path, verifies exactly one base tree read, and rejects
+blob POSTs. This is a bounded deterministic API simulation, **not a measured
+live speedup**. At 12 branches the prior request count was 108. The supplied
+22-branch live timing cannot be directly compared to this simulation.
+
+GitHub's [secondary limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#about-secondary-rate-limits)
+include 80 content requests/minute and 500/hour, and its
+[best practices](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#pause-between-mutative-requests)
+recommend serialized requests and a one-second pause after mutations. Client
+clones now share a mutation lock, one-second post-response pause, rolling hourly
+budget and primary/secondary cooldown. Reads remain bounded by the governor.
+GraphQL queries do not consume the mutation budget. Mutation failures still
+avoid blind retries except for explicit rate-limit refusals. Migration adds
+one-time history inspection and ref deletion costs; PR creation adds its own
+paced mutations. Do not promise a shorter first migration run than wave 1.
+
+This session has no configured `RUSTOVATE_TOKEN`, `GITHUB_TOKEN` or `GH_TOKEN`.
+Fresh live `-vv` before/after traces and write timings require the caller's App
+installation token; no credential files were opened to recover one.

@@ -126,7 +126,7 @@ impl Transport for Fake {
         })
     }
 }
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn token_only_run_uses_repository_config_cold_and_cached_and_reports_actions() {
     for (lock, allow, dry_run) in [
         (false, false, true),

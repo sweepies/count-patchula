@@ -17,6 +17,8 @@ use std::{
 #[derive(Default)]
 struct State {
     base: String,
+    requests: Vec<(String, String)>,
+    latency: std::time::Duration,
     refs: BTreeMap<String, String>,
     trees: BTreeMap<String, Value>,
     commits: BTreeMap<String, Value>,
@@ -44,6 +46,10 @@ impl Transport for Fake {
             .and_then(|b| serde_json::from_slice(b).ok())
             .unwrap_or(Value::Null);
         let mut state = self.0.lock().unwrap();
+        let latency = state.latency;
+        state
+            .requests
+            .push((request.method().to_string(), path.clone()));
         let reply = if path == "/graphql" {
             if body["query"] == "query{viewer{login}}" {
                 response(200, json!({"data":{"viewer":{"login":"rustovate[bot]"}}}))
@@ -88,7 +94,12 @@ impl Transport for Fake {
                 )
             } else if path.ends_with("/git/trees") {
                 let mut tree = state.trees[body["base_tree"].as_str().unwrap()].clone();
-                for entry in body["tree"].as_array().unwrap() {
+                for original in body["tree"].as_array().unwrap() {
+                    let mut entry = original.clone();
+                    if let Some(content) = entry["content"].as_str() {
+                        entry["sha"] = json!(blob_sha(content));
+                        entry.as_object_mut().unwrap().remove("content");
+                    }
                     tree.as_array_mut()
                         .unwrap()
                         .retain(|e| e["path"] != entry["path"]);
@@ -151,7 +162,12 @@ impl Transport for Fake {
         } else {
             panic!("unexpected read {path}");
         };
-        Box::pin(async move { Ok(reply) })
+        Box::pin(async move {
+            if !latency.is_zero() {
+                tokio::time::sleep(latency).await;
+            }
+            Ok(reply)
+        })
     }
 }
 fn setup(
@@ -263,7 +279,7 @@ async fn client(fake: Arc<Fake>) -> Client {
     .unwrap()
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn create_update_and_repeat_use_one_verified_commit_on_base_and_no_prs() {
     let (mut first, snapshot) = make_plan("22.0.0");
     let server = fake(&snapshot);
@@ -321,7 +337,7 @@ async fn create_update_and_repeat_use_one_verified_commit_on_base_and_no_prs() {
     );
     assert_eq!(server.0.lock().unwrap().writes.len(), count);
 }
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn dry_run_plans_diffs_and_never_sends_mutations() {
     let (mut plan, snapshot) = make_plan("22.0.0");
     let server = fake(&snapshot);
@@ -351,8 +367,9 @@ async fn dry_run_plans_diffs_and_never_sends_mutations() {
             .contains("+node = '22.0.0' # keep")
     );
     assert!(server.0.lock().unwrap().writes.is_empty());
+    assert!(server.0.lock().unwrap().requests.is_empty());
 }
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn behind_rebases_and_conflicts_keeps_an_identical_manifest_on_old_base() {
     for mode in [Rebase::Behind, Rebase::Conflicts] {
         let (mut first, snapshot) = make_plan("22.0.0");
@@ -383,7 +400,7 @@ async fn behind_rebases_and_conflicts_keeps_an_identical_manifest_on_old_base() 
         );
     }
 }
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn human_commit_is_protected_even_with_copied_rustovate_markers() {
     let (mut first, snapshot) = make_plan("22.0.0");
     let server = fake(&snapshot);
@@ -416,7 +433,7 @@ async fn human_commit_is_protected_even_with_copied_rustovate_markers() {
     assert_eq!(server.0.lock().unwrap().writes.len(), count);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_human_below_the_bot_head_and_a_foreign_committer_are_protected() {
     for earlier in [false, true] {
         let (mut first, snapshot) = make_plan("22.0.0");
@@ -456,7 +473,7 @@ async fn a_human_below_the_bot_head_and_a_foreign_committer_are_protected() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn conflicts_mode_recreates_when_the_default_changes_a_touched_file() {
     let (mut first, mut snapshot) = make_plan("22.0.0");
     let server = fake(&snapshot);
@@ -508,7 +525,7 @@ async fn conflicts_mode_recreates_when_the_default_changes_a_touched_file() {
     );
     assert!(next.contents["mise.toml"].contains("# new base comment"));
 }
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn stale_blob_content_tree_moved_base_unsigned_and_lease_race_fail_closed() {
     for case in 0..6 {
         let (mut plan, mut snapshot) = make_plan("22.0.0");
@@ -702,7 +719,7 @@ fn consolidates_minor_patch_digest_pins_and_keeps_only_latest_major() {
     assert_eq!(nonmajor.action.status, ActionStatus::Planned);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn migration_deletes_owned_hash_branch_with_a_lease_and_preserves_human_work() {
     let (mut p, snapshot) = make_plan("22.0.0");
     let server = fake(&snapshot);
@@ -807,5 +824,74 @@ fn container_occurrences_across_managers_share_target_and_slug_collisions_gain_m
             .files
             .len(),
         2
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn shared_base_write_trace_and_request_budget() {
+    let (p, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    server.0.lock().unwrap().latency = std::time::Duration::from_millis(150);
+    let github = client(server.clone()).await;
+    let mut plans: Vec<_> = (0..12)
+        .map(|n| {
+            let (mut p, _) = make_plan("22.0.0");
+            p.action.branch = format!("rustovate/tool-{n}-22.x");
+            p
+        })
+        .collect();
+    let started = tokio::time::Instant::now();
+    rustovate_update::apply_all(&github, &mut plans, &snapshot, "main", Rebase::Behind, true).await;
+    assert_eq!(github.stats().await.requests, 0);
+    eprintln!(
+        "dry-run: {} requests, simulated elapsed {:?}",
+        github.stats().await.requests,
+        started.elapsed()
+    );
+    let started = tokio::time::Instant::now();
+    rustovate_update::apply_all(
+        &github,
+        &mut plans,
+        &snapshot,
+        "main",
+        Rebase::Behind,
+        false,
+    )
+    .await;
+    assert!(
+        plans
+            .iter()
+            .all(|p| p.action.status == ActionStatus::Created)
+    );
+    let state = server.0.lock().unwrap();
+    for (method, path) in &state.requests {
+        eprintln!("{method} api.github.com{path}");
+    }
+    eprintln!(
+        "real: {} requests, simulated elapsed {:?}; 12 branches, 150ms/request, 1s mutation cooldown",
+        state.requests.len(),
+        started.elapsed()
+    );
+    assert_eq!(state.requests.len(), 4 + 12 * 4);
+    assert_eq!(
+        state
+            .requests
+            .iter()
+            .filter(|(_, p)| p.ends_with("/git/trees/base-tree"))
+            .count(),
+        1
+    );
+    assert!(
+        !state
+            .requests
+            .iter()
+            .any(|(_, p)| p.ends_with("/git/blobs"))
+    );
+    assert!(
+        state
+            .writes
+            .iter()
+            .filter(|(p, _)| p.ends_with("/git/trees"))
+            .all(|(_, b)| b["tree"][0]["content"] == p.contents["mise.toml"])
     );
 }

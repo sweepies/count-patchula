@@ -1,4 +1,5 @@
 use crate::{Plan, Snapshot, blob_sha};
+use futures_util::{StreamExt, stream};
 use rustovate_config::Rebase;
 use rustovate_github::Client;
 use rustovate_report::ActionStatus;
@@ -42,10 +43,114 @@ pub async fn apply(
     if plan.action.status != ActionStatus::Planned {
         return;
     }
-    if let Err(error) = apply_inner(client, plan, snapshot, default_branch, rebase, dry_run).await {
+    if dry_run {
+        return;
+    }
+    let result = match prepare(
+        client,
+        &plan.action.repository,
+        &plan.action.base_commit,
+        default_branch,
+    )
+    .await
+    {
+        Ok(base) => apply_inner(client, plan, snapshot, default_branch, rebase, &base).await,
+        Err(error) => Err(error),
+    };
+    if let Err(error) = result {
         plan.action.status = ActionStatus::Error;
         plan.action.reason = Some(error);
     }
+}
+
+struct Base {
+    repository: String,
+    commit: String,
+    node_id: String,
+    tree_sha: String,
+    entries: Vec<Value>,
+}
+async fn prepare(
+    client: &Client,
+    repo: &str,
+    base_commit: &str,
+    default_branch: &str,
+) -> Result<Base, String> {
+    let metadata = fresh(client, &format!("repos/{repo}")).await?;
+    if metadata["default_branch"] != default_branch {
+        return Err("default branch changed since extraction; rerun".into());
+    }
+    let head = fresh(client, &ref_path(repo, default_branch)).await?;
+    if head["object"]["sha"] != base_commit {
+        return Err("default branch moved since extraction; stale blob refusal, rerun".into());
+    }
+    let base = fresh(client, &format!("repos/{repo}/git/commits/{base_commit}")).await?;
+    let tree_sha = field(&base["tree"], "sha")?.to_owned();
+    let tree = fresh(
+        client,
+        &format!("repos/{repo}/git/trees/{tree_sha}?recursive=1"),
+    )
+    .await?;
+    if tree["truncated"] != false {
+        return Err("truncated tree; cannot validate extracted blobs".into());
+    }
+    Ok(Base {
+        repository: repo.into(),
+        commit: base_commit.into(),
+        node_id: field(&metadata, "node_id")?.into(),
+        tree_sha,
+        entries: tree["tree"].as_array().ok_or("missing Git tree")?.clone(),
+    })
+}
+
+/// Shared base validation, bounded independent branch preparation and governed writes.
+/// Dry runs end at the pure planner and send no GitHub requests here.
+pub async fn apply_all(
+    client: &Client,
+    plans: &mut [Plan],
+    snapshot: &Snapshot,
+    default_branch: &str,
+    rebase: Rebase,
+    dry_run: bool,
+) {
+    if dry_run {
+        return;
+    }
+    let Some(first) = plans
+        .iter()
+        .find(|p| p.action.status == ActionStatus::Planned)
+    else {
+        return;
+    };
+    let base = prepare(
+        client,
+        &first.action.repository,
+        &first.action.base_commit,
+        default_branch,
+    )
+    .await;
+    stream::iter(plans.iter_mut())
+        .map(|plan| {
+            let base = &base;
+            async move {
+                if plan.action.status != ActionStatus::Planned {
+                    return;
+                }
+                let result = match base {
+                    Ok(base) => {
+                        apply_inner(client, plan, snapshot, default_branch, rebase, base).await
+                    }
+                    Err(error) => Err(error.clone()),
+                };
+                if let Err(error) = result {
+                    plan.action.status = ActionStatus::Error;
+                    plan.action.reason = Some(error);
+                }
+            }
+        })
+        .buffer_unordered(client.concurrency().min(4))
+        .collect::<Vec<_>>()
+        .await;
 }
 async fn apply_inner(
     client: &Client,
@@ -53,9 +158,12 @@ async fn apply_inner(
     snapshot: &Snapshot,
     default_branch: &str,
     rebase: Rebase,
-    dry_run: bool,
+    base: &Base,
 ) -> Result<(), String> {
     let repo = plan.action.repository.clone();
+    if repo != base.repository || plan.action.base_commit != base.commit {
+        return Err("mixed repositories or base commits in write batch".into());
+    }
     if plan.action.branch == default_branch {
         return Err("update branch equals default branch".into());
     }
@@ -68,30 +176,9 @@ async fn apply_inner(
     {
         return Err("plan contents and file preconditions differ".into());
     }
-    let metadata = fresh(client, &format!("repos/{repo}")).await?;
-    if metadata["default_branch"] != default_branch {
-        return Err("default branch changed since extraction; rerun".into());
-    }
-    let node_id = field(&metadata, "node_id")?;
-    let head = fresh(client, &ref_path(&repo, default_branch)).await?;
-    if head["object"]["sha"] != plan.action.base_commit {
-        return Err("default branch moved since extraction; stale blob refusal, rerun".into());
-    }
-    let base = fresh(
-        client,
-        &format!("repos/{repo}/git/commits/{}", plan.action.base_commit),
-    )
-    .await?;
-    let tree_sha = field(&base["tree"], "sha")?;
-    let tree = fresh(
-        client,
-        &format!("repos/{repo}/git/trees/{tree_sha}?recursive=1"),
-    )
-    .await?;
-    if tree["truncated"] != false {
-        return Err("truncated tree; cannot validate extracted blobs".into());
-    }
-    let entries = tree["tree"].as_array().ok_or("missing Git tree")?;
+    let node_id = &base.node_id;
+    let tree_sha = &base.tree_sha;
+    let entries = &base.entries;
     for file in &plan.action.files {
         let blob = snapshot
             .files
@@ -186,42 +273,15 @@ async fn apply_inner(
                     .any(|e| e["path"] == *p && e["sha"] == blob_sha(c))
             }) {
                 plan.action.status = ActionStatus::Unchanged;
-                if !dry_run {
-                    plan.action.commit = Some(old.clone());
-                    plan.action.verified = Some(true);
-                }
+                plan.action.commit = Some(old.clone());
+                plan.action.verified = Some(true);
                 return Ok(());
             }
         }
     }
-    if dry_run {
-        plan.action.reason = Some(
-            if old.is_none() {
-                "would create branch"
-            } else if moved_base {
-                "would recreate branch on the current base"
-            } else {
-                "would replace rustovate commit"
-            }
-            .into(),
-        );
-        return Ok(());
-    }
-    let mut blobs = Vec::new();
-    for (path, content) in &plan.contents {
-        let value = client
-            .post(
-                &format!("repos/{repo}/git/blobs"),
-                json!({"content":content,"encoding":"utf-8"}),
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-        let sha = field(&value, "sha")?;
-        if sha != blob_sha(content) {
-            return Err("created blob SHA differs from planned contents".into());
-        }
-        blobs.push(json!({"path":path,"mode":snapshot.files[path].mode,"type":"blob","sha":sha}));
-    }
+    let blobs: Vec<_> = plan.contents.iter().map(|(path, content)| {
+        json!({"path":path,"mode":snapshot.files[path].mode,"type":"blob","content":content})
+    }).collect();
     let tree = client
         .post(
             &format!("repos/{repo}/git/trees"),

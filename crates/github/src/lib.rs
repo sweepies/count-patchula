@@ -239,10 +239,32 @@ impl Client {
         } else {
             "core"
         };
+        let content = if resource == "graphql" {
+            request
+                .body()
+                .and_then(|b| b.as_bytes())
+                .and_then(|b| serde_json::from_slice::<Value>(b).ok())
+                .and_then(|b| {
+                    b["query"]
+                        .as_str()
+                        .map(|q| q.trim_start().starts_with("mutation"))
+                })
+                .unwrap_or(true)
+        } else {
+            !matches!(
+                *request.method(),
+                Method::GET | Method::HEAD | Method::OPTIONS
+            )
+        };
         for attempt in 0..=self.0.options.max_retries {
             let trace = rustovate_http::RequestTrace::new(request.method().as_str(), request.url());
             trace.cache_policy(if cached { "always-revalidate" } else { "cold" }, None);
             let queued = std::time::Instant::now();
+            let content_permit = if content {
+                Some(self.0.governor.content().await?)
+            } else {
+                None
+            };
             let permit = self.0.governor.acquire(resource).await?;
             self.0.governor.request();
             let result = trace
@@ -268,6 +290,7 @@ impl Client {
                 .rate_limited(resource, &response, attempt)
                 .await?;
             drop(permit);
+            drop(content_permit);
             if !retry {
                 return Ok(response);
             }
@@ -300,7 +323,17 @@ impl Client {
     /// refusals are retried; transport/5xx failures may have written and must be
     /// reconciled by the next run rather than blindly repeated.
     pub async fn post(&self, path: &str, body: Value) -> Result<Value> {
-        let mut request = self.request(Method::POST, self.url(path)?);
+        self.mutate(Method::POST, path, body).await
+    }
+
+    pub async fn patch(&self, path: &str, body: Value) -> Result<Value> {
+        self.mutate(Method::PATCH, path, body).await
+    }
+    pub async fn put(&self, path: &str, body: Value) -> Result<Value> {
+        self.mutate(Method::PUT, path, body).await
+    }
+    async fn mutate(&self, method: Method, path: &str, body: Value) -> Result<Value> {
+        let mut request = self.request(method, self.url(path)?);
         request.headers_mut().insert(
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/json"),
@@ -309,6 +342,9 @@ impl Client {
         let response = self.exchange(&request, false).await?;
         if !response.status.is_success() {
             return Err(Error::Status(response.status.as_u16()));
+        }
+        if response.body.is_empty() {
+            return Ok(Value::Null);
         }
         serde_json::from_slice(&response.body).map_err(|_| Error::Json)
     }

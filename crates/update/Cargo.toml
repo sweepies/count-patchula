@@ -16,6 +16,7 @@ rustovate-github = { path = "../github" }
 rustovate-report = { path = "../report" }
 rustovate-versioning = { path = "../versioning" }
 rustovate-lookup = { path = "../lookup" }
+futures-util = "0.3"
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.11.1"
@@ -26,7 +27,7 @@ chrono-tz = "0.10"
 cron = "0.17"
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 rustovate-cache = { path = "../cache" }
 rustovate-http = { path = "../http" }
-tokio.workspace = true
 tempfile = "3"

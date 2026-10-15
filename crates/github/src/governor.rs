@@ -1,12 +1,12 @@
 use crate::{Error, Response, Result, text};
 use serde::Serialize;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
-    sync::{Mutex, Semaphore, SemaphorePermit},
+    sync::{Mutex, MutexGuard, Semaphore, SemaphorePermit},
     time::Instant,
 };
 
@@ -41,8 +41,21 @@ struct State {
     secondary_until: Option<Instant>,
 }
 
+#[derive(Default)]
+struct Content {
+    next: Option<Instant>,
+    hour: VecDeque<Instant>,
+}
+pub(super) struct ContentPermit<'a>(MutexGuard<'a, Content>);
+impl Drop for ContentPermit<'_> {
+    fn drop(&mut self) {
+        self.0.next = Some(Instant::now() + Duration::from_secs(1));
+    }
+}
+
 pub(super) struct Governor {
     semaphore: Semaphore,
+    content: Mutex<Content>,
     state: Mutex<State>,
     max_wait: Duration,
     requests: AtomicU64,
@@ -55,6 +68,7 @@ impl Governor {
     pub fn new(concurrency: usize, max_wait: Duration) -> Self {
         Self {
             semaphore: Semaphore::new(concurrency),
+            content: Mutex::new(Content::default()),
             state: Mutex::new(State::default()),
             max_wait,
             requests: AtomicU64::new(0),
@@ -62,6 +76,42 @@ impl Governor {
             retries: AtomicU64::new(0),
             wait_millis: AtomicU64::new(0),
         }
+    }
+
+    /// Serialize REST mutations and GraphQL mutations across all client clones.
+    /// GitHub recommends a one-second pause after mutations; also reserve the
+    /// documented 500 content requests/hour budget (one-second spacing <80/min).
+    pub async fn content(&self) -> Result<ContentPermit<'_>> {
+        let started = Instant::now();
+        let mut state = self.content.lock().await;
+        let now = Instant::now();
+        while state
+            .hour
+            .front()
+            .is_some_and(|t| now.duration_since(*t) >= Duration::from_secs(3600))
+        {
+            state.hour.pop_front();
+        }
+        let until = state
+            .next
+            .into_iter()
+            .chain(
+                (state.hour.len() >= 500)
+                    .then(|| *state.hour.front().expect("full hour") + Duration::from_secs(3600)),
+            )
+            .max();
+        if let Some(until) = until {
+            if until.saturating_duration_since(now) > self.max_wait {
+                return Err(Error::RateLimit);
+            }
+            tokio::time::sleep_until(until).await;
+        }
+        state.hour.push_back(Instant::now());
+        self.wait_millis.fetch_add(
+            started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+            Ordering::Relaxed,
+        );
+        Ok(ContentPermit(state))
     }
 
     pub fn request(&self) {

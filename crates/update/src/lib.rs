@@ -5,4 +5,4 @@ pub use cleanup::{cleanup, delete_owned, owned};
 mod plan;
 mod write;
 pub use plan::{Blob, Plan, Snapshot, blob_sha, branch_name, plan};
-pub use write::{REF_UPDATE, apply};
+pub use write::{REF_UPDATE, apply, apply_all};

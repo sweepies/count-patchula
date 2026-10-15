@@ -211,16 +211,16 @@ impl Engine {
                     continue;
                 }
             }
-            for plan in &mut plans {
-                rustovate_update::apply(
-                    &self.github,
-                    plan,
-                    &work.snapshot,
-                    repo.default_branch.as_deref().expect("configured branch"),
-                    config.prs.rebase,
-                    dry_run,
-                )
-                .await;
+            rustovate_update::apply_all(
+                &self.github,
+                &mut plans,
+                &work.snapshot,
+                repo.default_branch.as_deref().expect("configured branch"),
+                config.prs.rebase,
+                dry_run,
+            )
+            .await;
+            for plan in &plans {
                 if matches!(
                     plan.action.status,
                     rustovate_report::ActionStatus::Error
