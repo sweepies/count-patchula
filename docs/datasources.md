@@ -55,7 +55,24 @@ resolution for current/proposed tags. Anonymous pull tokens coalesce in memory
 and persist in SQLite until their scoped expiry minus a safety margin. GitHub
 and private registry credentials are never persisted as tokens. Registry 429s share a host cooldown and retry at most three times, honoring
 Retry-After (up to 60 seconds per retry) or backing off 1/2/4 seconds when absent.
-Longer waits/exhaustion are explicit errors; failed pages are never cached. Lexically
+Longer waits/exhaustion use the last cached representation when available and
+mark it stale in dependency metadata and repository warnings. Its original
+fetch time is retained; cold misses remain errors and failed pages are never cached.
+Docker Hub's `ratelimit-remaining` / `ratelimit-limit` windows stop queued reads
+at zero remaining. Its pull-quota 429s do not trigger short retries. HEAD
+revalidation uses cached manifest validators and digests, avoiding a GET on 304.
+Tag-list validators cannot prove that a tag still points at the same digest.
+Optional `RUSTOVATE_DOCKERHUB_USERNAME` and `RUSTOVATE_DOCKERHUB_TOKEN` must be set
+together. They are sent with Basic authentication only to Docker Hub's validated
+HTTPS token service, never to other registries or redirect targets. Authenticated
+bearers are memory-only; anonymous scoped tokens retain the existing expiry cache.
+Credentials and bearer values are excluded from traces and error messages.
+Public GET/HEAD reads, including Helm indexes, follow at most five HTTPS redirects,
+reject loops and credential-bearing URLs, and remove authorization/cookies across
+origins. Cross-origin pagination remains rejected.
+See [Docker Hub pull limits](https://docs.docker.com/docker-hub/usage/pulls/) and
+the [OCI redirect rule](https://github.com/opencontainers/distribution-spec/blob/main/spec.md).
+Lexically
 ordered tag pages cannot safely stop at a known version; full enumeration detects
 new historical tags. Numeric Docker updates keep the exact suffix variant.
 OCI charts use registry tags/manifests, translating SemVer build metadata to `_`.

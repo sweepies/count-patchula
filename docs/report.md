@@ -65,6 +65,16 @@ dated updates' `releaseAge` (`publishedAt`, `evaluatedAt`); dependency metadata
 `heldBack` entries summarize each update type: `version` is the newest blocked
 release, `versions` contains every blocked release, and `count` counts them.
 `publishedAt` and `eligibleAt` describe the earliest release that becomes eligible.
+Registry rate-limit fallback adds `metadata.stale`, mapping `catalog` and
+`digest:<tag>` to the original cache fetch time (Unix seconds). These entries
+mean the data is stale because the registry could not be revalidated; they do
+not renew freshness. Repository warnings also identify each affected dependency.
+`metadata.lookup` adds the fixed batch `evaluatedAt`, effective `disabledUpdates`
+and `rejected` versions with deprecated/yanked reasons. Rejection evidence covers
+versions newer than the known current version. `metadata.resolution` identifies
+the origin and value of the reported current version: declared, lockfile,
+pinned-commit, floating-ref, release-line or supported-range. Consumers should
+use this provenance when comparing installed versions with resolved candidates.
 These entries also include `updateType`; batch
 `stats` (requests, notModified, cacheHits, extractionHits, unique lookups and
 phaseMicros). Unknown fields are still rejected. Timing windows are reported
