@@ -1,5 +1,6 @@
 //! Real ecosystem tools run before any Git Data mutation, in disposable trees.
 mod checkout;
+mod mise;
 mod process;
 use crate::{
     Blob, Plan, Snapshot, blob_sha,
@@ -22,6 +23,7 @@ pub enum Ecosystem {
     Cargo,
     Go,
     Terraform,
+    Mise,
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Job {
@@ -50,6 +52,18 @@ pub(crate) fn job(
     snapshot: &Snapshot,
 ) -> Result<Option<Job>, String> {
     let (ecosystem, root) = match dep.manager {
+        Manager::Mise => {
+            let Some(root) = nearest(&dep.file, &snapshot.paths, &["mise.lock"]) else {
+                return Ok(None);
+            };
+            return Ok(Some(Job {
+                ecosystem: Ecosystem::Mise,
+                directory: root.into(),
+                package: Some(dep.name.clone()),
+                current: Some(dep.current.clone()),
+                target: update.new_version.clone().or(update.new_value.clone()),
+            }));
+        }
         Manager::Npm | Manager::Bun => {
             let Some(root) = nearest(
                 &dep.file,
@@ -128,6 +142,7 @@ pub fn maintenance(
                 Ecosystem::Node
             }
             "Cargo.lock" if config.managers.contains(&Manager::Cargo) => Ecosystem::Cargo,
+            "mise.lock" if config.managers.contains(&Manager::Mise) => Ecosystem::Mise,
             "go.mod" if config.managers.contains(&Manager::Go) => Ecosystem::Go,
             ".terraform.lock.hcl" if config.managers.contains(&Manager::Terraform) => {
                 Ecosystem::Terraform
@@ -353,7 +368,11 @@ impl Runner {
             .map(|j| (j.ecosystem, j.directory.clone()))
             .collect();
         for (ecosystem, directory) in groups {
-            let versions = versions(&baseline, &directory)?;
+            let versions = if ecosystem == Ecosystem::Mise {
+                BTreeMap::new()
+            } else {
+                versions(&baseline, &directory)?
+            };
             let jobs: Vec<_> = plan
                 .lock_jobs
                 .iter()
@@ -361,6 +380,10 @@ impl Runner {
                 .collect();
             let cwd = root.join(&directory);
             match ecosystem {
+                Ecosystem::Mise => {
+                    self.mise_lock(&driver, &root, &baseline, &jobs, plan.maintenance, config)
+                        .await?;
+                }
                 Ecosystem::Node => {
                     for (leaf, tool, args) in [
                         (
@@ -529,6 +552,14 @@ impl Runner {
             }
             if !writable(&path) && plan.contents.get(&path) != after {
                 return Err(format!("tool modified unexpected file {path}"));
+            }
+            if path.rsplit('/').next() == Some("mise.lock")
+                && !plan
+                    .lock_jobs
+                    .iter()
+                    .any(|j| j.ecosystem == Ecosystem::Mise && j.directory == directory(&path))
+            {
+                return Err(format!("tool modified unexpected mise lockfile {path}"));
             }
             let old = before.map(|b| b.content.as_str()).unwrap_or("");
             let new = after.map(String::as_str).unwrap_or("");
@@ -719,13 +750,14 @@ fn writable(path: &str) -> bool {
             | "go.mod"
             | "go.sum"
             | ".terraform.lock.hcl"
+            | "mise.lock"
     ) || path.ends_with(".tf")
 }
 fn materialized(path: &str) -> bool {
     writable(path)
         || matches!(
             path.rsplit('/').next().unwrap_or(path),
-            "mise.toml" | ".mise.toml" | "go.work" | "go.work.sum"
+            "mise.toml" | ".mise.toml" | ".tool-versions" | "go.work" | "go.work.sum"
         )
         || path.ends_with(".go")
         || path.ends_with(".rs")

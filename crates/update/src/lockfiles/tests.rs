@@ -662,3 +662,167 @@ fn provider_lock_drift_is_rejected_before_publication() {
     );
     validate_targets(&p, &config, &files).unwrap();
 }
+
+struct MiseFixture {
+    git: Arc<Fixture>,
+    fault: &'static str,
+    calls: Mutex<Vec<Vec<String>>>,
+}
+impl Executor for MiseFixture {
+    fn run(
+        &self,
+        spec: CommandSpec,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+        if spec.args.iter().any(|arg| arg == "git") {
+            return self.git.run(spec);
+        }
+        Box::pin(async move {
+            self.calls.lock().unwrap().push(spec.args.clone());
+            assert_eq!(spec.env[std::ffi::OsStr::new("MISE_NO_CONFIG")], "1");
+            assert_eq!(spec.env[std::ffi::OsStr::new("MISE_NO_ENV")], "1");
+            assert_eq!(spec.env[std::ffi::OsStr::new("MISE_NO_HOOKS")], "1");
+            assert!(
+                !spec
+                    .env
+                    .keys()
+                    .any(|key| key.to_string_lossy().contains("TOKEN"))
+            );
+            assert!(spec.args.iter().any(|arg| arg == "mise@2026.10.11"));
+            let work =
+                Path::new(&spec.args[spec.args.iter().position(|arg| arg == "--cd").unwrap() + 1]);
+            let text = std::fs::read_to_string(work.join("mise.toml")).unwrap();
+            assert!(!text.contains("tasks") && !text.contains("env") && !text.contains("hooks"));
+            let mut lock = std::fs::read_to_string(work.join("mise.lock")).unwrap();
+            if self.fault == "failure" {
+                return Err("offline fixture failure".into());
+            }
+            if self.fault != "stale" {
+                lock = lock.replace("22.0.0", "24.0.0");
+            }
+            if self.fault == "unrelated" {
+                lock = lock.replace("1.4.3", "1.4.4");
+            }
+            if self.fault == "platform" {
+                lock = lock
+                    .lines()
+                    .filter(|line| !line.contains("macos"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            }
+            std::fs::write(work.join("mise.lock"), lock).unwrap();
+            Ok(Vec::new())
+        })
+    }
+}
+
+#[tokio::test]
+async fn mise_lock_is_targeted_scrubbed_and_committed_with_each_supported_manifest() {
+    for manifest in ["mise.toml", ".mise.toml", ".tool-versions"] {
+        for fault in ["", "unrelated", "platform", "stale", "failure"] {
+            let old = if manifest.ends_with(".tool-versions") {
+                "node 22.0.0\nbun 1.4.3\n"
+            } else {
+                "[tools]\nnode='22.0.0'\nbun='1.4.3'\n[env]\nUNTRUSTED='no'\n[tasks.untrusted]\nrun='false'\n"
+            };
+            let files = BTreeMap::from([
+                (manifest.into(), old.into()),
+                (
+                    "mise.lock".into(),
+                    include_str!("fixtures/mise.lock").into(),
+                ),
+            ]);
+            let executor = Arc::new(MiseFixture {
+                git: fixture(files.clone(), false, false),
+                fault,
+                calls: Mutex::new(Vec::new()),
+            });
+            let temp = tempfile::tempdir().unwrap();
+            let runner = Runner::new(temp.path().into(), "offline-installation")
+                .with_executor(executor.clone());
+            let mut snapshot = snapshot(&files);
+            let config = config();
+            let dep = rustovate_manager::Scanner::new(&config)
+                .unwrap()
+                .extract(&files)
+                .unwrap()
+                .dependencies
+                .into_iter()
+                .find(|d| d.name == "node")
+                .unwrap();
+            let update = Update {
+                new_version: Some("24.0.0".into()),
+                new_value: Some("24.0.0".into()),
+                ..serde_json::from_value(serde_json::json!({"updateType":"major"})).unwrap()
+            };
+            let job = job(&dep, &update, &snapshot).unwrap().unwrap();
+            assert_eq!(job.ecosystem, Ecosystem::Mise);
+            let mut p = maintenance(&repo(), &config, &snapshot, monday())
+                .unwrap()
+                .unwrap();
+            p.maintenance = false;
+            p.lock_jobs = vec![job];
+            p.contents
+                .insert(manifest.into(), old.replace("22.0.0", "24.0.0"));
+            p.action.files.push(FileAction {
+                path: manifest.into(),
+                blob_sha: blob_sha(old),
+                diff: String::new(),
+            });
+            runner.prepare(&mut p, &mut snapshot, &config).await;
+            if fault.is_empty() {
+                assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+                assert!(p.lockfiles_ready);
+                assert_eq!(p.action.files.len(), 2);
+                assert!(p.contents["mise.lock"].contains("version = \"24.0.0\""));
+                assert!(p.contents["mise.lock"].contains("version = \"1.4.3\""));
+            } else {
+                assert_eq!(
+                    p.action.status,
+                    ActionStatus::Error,
+                    "{manifest} {fault}: {:?}",
+                    p.action
+                );
+                assert!(!p.lockfiles_ready);
+                assert!(!p.contents.contains_key("mise.lock"));
+            }
+            let calls = executor.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].last().unwrap(), "node");
+            assert!(calls[0].iter().any(|arg| arg == "linux-x64,macos-arm64"));
+        }
+    }
+}
+
+#[test]
+fn mise_lock_maintenance_respects_refresh_and_unlocked_manifests_need_no_job() {
+    let files = BTreeMap::from([("mise.toml".into(), "[tools]\nnode='22.0.0'\n".into())]);
+    let mut snapshot = snapshot(&files);
+    let mut config = config();
+    let dep = rustovate_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies
+        .remove(0);
+    let update: Update =
+        serde_json::from_value(serde_json::json!({"updateType":"major","newVersion":"24.0.0"}))
+            .unwrap();
+    assert!(job(&dep, &update, &snapshot).unwrap().is_none());
+    snapshot.paths.insert("mise.lock".into());
+    config.lockfiles.refresh = false;
+    assert!(
+        maintenance(&repo(), &config, &snapshot, monday())
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        job(&dep, &update, &snapshot).unwrap().is_some(),
+        "ordinary updates must still refresh a committed lock"
+    );
+    config.lockfiles.refresh = true;
+    let plan = maintenance(&repo(), &config, &snapshot, monday())
+        .unwrap()
+        .unwrap();
+    assert_eq!(plan.lock_jobs.len(), 1);
+    assert_eq!(plan.lock_jobs[0].ecosystem, Ecosystem::Mise);
+}

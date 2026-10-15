@@ -1,0 +1,21 @@
+# Independently written offline fixture; no upstream package or bot code.
+lockfile_version = 1
+
+[[tools.node]]
+version = "22.0.0"
+backend = "core:node"
+specifiers = ["22.0.0"]
+[tools.node."platforms.linux-x64"]
+url = "https://example.invalid/node/22.0.0/linux.tar.gz"
+checksum = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+[tools.node."platforms.macos-arm64"]
+url = "https://example.invalid/node/22.0.0/macos.tar.gz"
+checksum = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+
+[[tools.bun]]
+version = "1.4.3"
+backend = "core:bun"
+specifiers = ["1.4.3"]
+[tools.bun."platforms.linux-x64"]
+url = "https://example.invalid/bun/1.4.3/linux.zip"
+checksum = "sha256:2222222222222222222222222222222222222222222222222222222222222222"

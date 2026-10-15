@@ -143,3 +143,22 @@ With pklr 5.1.1, use explicit class constructors inside listings: `new Rule`,
 `new Extractor`, `new FileSet` and `new Window`. Anonymous `new { ... }` entries
 do not consistently receive class defaults from an enclosing `Listing<T>`.
 The examples use explicit constructors and the tests cover their defaults.
+# Committed mise lockfiles
+
+Updates to `mise.toml`, `.mise.toml` and `.tool-versions` also regenerate an
+existing nearest `mise.lock`. The manifest and lockfile enter the same verified
+Git commit. Repositories without a committed lockfile keep manifest-only updates.
+
+The isolated lockfile runner uses `mise@2026.10.11` and `mise lock` with explicit
+tool selection and the platforms already recorded in the lockfile. It reads a
+literal tools-only projection of the changed configuration; repository tasks,
+environment and hooks are excluded. Before publication it checks requested
+versions, retained platforms and semantic equality of unrelated entries and
+lockfile metadata. Invalid output or tool failure prevents branch publication.
+Native dependency sidecars currently fail closed rather than publishing an
+incomplete tool lock.
+
+`lockfiles.refresh` controls scheduled mise lockfile maintenance alongside other
+ecosystems. Maintenance uses `--bump` within the existing declarations and applies
+the configured minimum release age. Disabling maintenance does not disable
+lockfile regeneration for an ordinary tool update.
