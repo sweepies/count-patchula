@@ -173,3 +173,8 @@ Behind-mode base moves invalidate the receipt; conflicts mode retains the
 existing behavior when planned file contents are unchanged. Unknown, obsolete
 or incomplete inventory data never authorizes a write. Remaining Git Data
 reads use conditional GETs and publication retains atomic head/base leases.
+GraphQL PR authors are converted to REST bot logins only when their Actor type
+is `Bot`; ordinary users with the same name remain distinct. Receipts are saved
+per verified branch even when unrelated actions fail or are skipped. At `-vv`,
+receipt diagnostics report save/restore counts and the first failed condition
+for each branch requiring verification, without PR bodies or credentials.

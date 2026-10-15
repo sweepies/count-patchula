@@ -46,6 +46,17 @@ fn response(status: u16, body: Value) -> Response {
         body: serde_json::to_vec(&body).unwrap(),
     }
 }
+fn graphql_author(pr: &Value) -> Value {
+    if let Some(actor) = pr.get("graphql_author") {
+        return actor.clone();
+    }
+    let login = pr["user"]["login"].as_str().unwrap();
+    if let Some(bot) = login.strip_suffix("[bot]") {
+        json!({"__typename":"Bot","login":bot})
+    } else {
+        json!({"__typename":"User","login":login})
+    }
+}
 impl Transport for Fake {
     fn send(&self, request: reqwest::Request) -> Exchange<'_> {
         assert!(request.headers()["authorization"].is_sensitive());
@@ -67,13 +78,13 @@ impl Transport for Fake {
                     let commit = &state.commits[oid];
                     let prs: Vec<_> = state.prs.values().filter(|p|p["state"] == "open" && p["head"]["ref"] == name).map(|p|json!({
                         "number":p["number"],"id":p["node_id"],"url":p["html_url"],"title":p["title"],"body":p["body"],
-                        "headRefName":p["head"]["ref"],"headRefOid":p["head"]["sha"],"baseRefName":p["base"]["ref"],"author":p["user"],
+                        "headRefName":p["head"]["ref"],"headRefOid":p["head"]["sha"],"baseRefName":p["base"]["ref"],"author":graphql_author(p),
                         "headRepository":{"nameWithOwner":p["head"]["repo"]["full_name"]},"baseRepository":{"nameWithOwner":p["base"]["repo"]["full_name"]},
                         "labels":{"nodes":p["labels"],"pageInfo":{"hasNextPage":false}},"autoMergeRequest":p["auto_merge"]
                     })).collect();
                     json!({"name":name,"target":{"oid":oid,"tree":{"oid":commit["tree"]["sha"]},"message":commit["message"],
                         "author":{"user":{"login":commit.get("actor").and_then(Value::as_str).unwrap_or("rustovate[bot]")}},
-                        "committer":{"user":{"login":"web-flow"}},"signature":{"isValid":true}},
+                        "committer":{"user":{"login":"web-flow"}},"signature":{"isValid":!state.unsigned}},
                         "associatedPullRequests":{"nodes":prs,"pageInfo":{"hasNextPage":false}}})
                 }).collect();
                 let offset = body["variables"]["cursor"]
@@ -87,7 +98,7 @@ impl Transport for Fake {
                     200,
                     json!({"data":{"viewer":{"login":"rustovate[bot]"},"nodes":state.prs.values().filter(|p|body["variables"]["closed"].as_array().unwrap().contains(&p["node_id"])).map(|p|json!({
                         "id":p["node_id"],"state":if p["state"] == "open" {"OPEN"} else {"CLOSED"},"merged":!p["merged_at"].is_null(),
-                        "body":p["body"],"author":p["user"],"headRepository":{"nameWithOwner":p["head"]["repo"]["full_name"]},"baseRepository":{"nameWithOwner":p["base"]["repo"]["full_name"]}
+                        "body":p["body"],"author":graphql_author(p),"headRepository":{"nameWithOwner":p["head"]["repo"]["full_name"]},"baseRepository":{"nameWithOwner":p["base"]["repo"]["full_name"]}
                     })).collect::<Vec<_>>(),"repository":{
                         "defaultBranchRef":{"name":"main","target":{"oid":state.base}},
                         "refs":{"nodes":nodes,"pageInfo":{"hasNextPage":more,"endCursor":(offset+size).to_string()}}
@@ -1137,6 +1148,9 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
         "plan",
         "obsolete",
         "foreign-obsolete",
+        "actor",
+        "user-with-bot-name",
+        "signature",
     ] {
         let (mut config, mut repo) = pr_config();
         config.prs.rebase = Rebase::Behind;
@@ -1217,6 +1231,12 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
                     s.refs
                         .insert(format!("refs/heads/{}", p.action.branch), "human".into());
                 }
+                "actor" => s.prs.get_mut(&1).unwrap()["user"]["login"] = json!("other[bot]"),
+                "user-with-bot-name" => {
+                    s.prs.get_mut(&1).unwrap()["graphql_author"] =
+                        json!({"__typename":"User","login":"rustovate"})
+                }
+                "signature" => s.unsigned = true,
                 "body" => s.prs.get_mut(&1).unwrap()["body"] = json!("Human edited body"),
                 "title" => s.prs.get_mut(&1).unwrap()["title"] = json!("Human title"),
                 "labels" => s.prs.get_mut(&1).unwrap()["labels"] = json!([]),
@@ -1409,6 +1429,91 @@ async fn published_pr_heads_wait_for_our_old_head_but_reject_foreign_commits() {
             }
         }
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn receipts_save_verified_branches_despite_unrelated_pr_errors_and_skips() {
+    let (config, repo) = pr_config();
+    let (mut first, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut first),
+        &snapshot,
+    )
+    .await;
+    server.0.lock().unwrap().prs.get_mut(&1).unwrap()["state"] = json!("closed");
+    let (closed, _) = make_plan("22.0.0");
+    let (live, _) = make_plan("24.0.0");
+    let (mut failed, _) = make_plan("26.0.0");
+    failed.action.status = ActionStatus::Error;
+    let (mut skipped, _) = make_plan("28.0.0");
+    skipped.action.status = ActionStatus::Skipped;
+    skipped.action.reason = Some("unrelated policy skip".into());
+    let mut plans = vec![closed, live, failed, skipped];
+    let mut lifecycle = rustovate_update::Lifecycle::prepare(
+        &github,
+        &repo,
+        &mut plans,
+        &config,
+        chrono::Utc::now(),
+        Default::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(plans[0].action.status, ActionStatus::Skipped);
+    rustovate_update::apply_all(
+        &github,
+        &mut plans,
+        &snapshot,
+        "main",
+        config.prs.rebase,
+        false,
+    )
+    .await;
+    lifecycle.publish(&github, &mut plans).await;
+    assert_eq!(plans[1].action.verified, Some(true));
+    lifecycle.actions.push(rustovate_report::PullRequestAction {
+        repository: repo.repository.clone(),
+        branch: "unrelated".into(),
+        number: None,
+        url: None,
+        status: ActionStatus::Error,
+        reason: Some("unrelated publication failure".into()),
+    });
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    rustovate_update::save_receipts(&cache, &repo, &config, &plans, &lifecycle)
+        .await
+        .unwrap();
+    let bytes = cache
+        .extraction_get(&rustovate_cache::ExtractionKey {
+            repo: repo.repository.clone(),
+            default_branch_commit: config.prs.branch.clone(),
+            config_hash: "verified-write-receipts-v3".into(),
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let receipts: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        receipts["writes"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .collect::<Vec<_>>(),
+        [&plans[1].action.branch]
+    );
+    assert_eq!(
+        receipts["closed"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .collect::<Vec<_>>(),
+        [&plans[0].action.branch]
+    );
 }
 
 #[tokio::test(start_paused = true)]

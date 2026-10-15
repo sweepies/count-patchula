@@ -7,7 +7,37 @@ use cli::{App, Command, ConfigCommand};
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 
-async fn run(app: &App) -> Result<u8, (u8, miette::Report)> {
+// Only the token and transport are replaced in offline CLI tests. Dispatch,
+// configuration, disk-cache opening and engine construction stay on this path.
+#[derive(Default)]
+struct Services {
+    #[cfg(test)]
+    token: Option<String>,
+    #[cfg(test)]
+    transport: Option<std::sync::Arc<dyn rustovate_http::Transport>>,
+}
+impl Services {
+    fn token(&self) -> Result<String, std::env::VarError> {
+        #[cfg(test)]
+        if let Some(token) = &self.token {
+            return Ok(token.clone());
+        }
+        std::env::var("RUSTOVATE_TOKEN")
+            .or_else(|_| std::env::var("GITHUB_TOKEN"))
+            .or_else(|_| std::env::var("GH_TOKEN"))
+    }
+    fn transport(
+        &self,
+    ) -> Result<std::sync::Arc<dyn rustovate_http::Transport>, rustovate_http::Error> {
+        #[cfg(test)]
+        if let Some(transport) = &self.transport {
+            return Ok(transport.clone());
+        }
+        Ok(std::sync::Arc::new(rustovate_http::Network::new()?))
+    }
+}
+
+async fn run(app: &App, services: &Services) -> Result<u8, (u8, miette::Report)> {
     match &app.command {
         Command::Config(config) => match &config.command {
             ConfigCommand::Schema => write!(io::stdout().lock(), "{}", rustovate_config::SCHEMA)
@@ -34,8 +64,8 @@ async fn run(app: &App) -> Result<u8, (u8, miette::Report)> {
                     .map_err(|error| (1, miette::miette!("{error}")))
             }
         },
-        Command::Lookup(options) => batch(app, options, None).await,
-        Command::Run(options) => batch(app, &options.lookup, Some(options)).await,
+        Command::Lookup(options) => batch(app, options, None, services).await,
+        Command::Run(options) => batch(app, &options.lookup, Some(options), services).await,
     }
 }
 
@@ -71,7 +101,7 @@ async fn main() -> ExitCode {
                 .build(),
         )
     }));
-    match run(&app).await {
+    match run(&app, &Services::default()).await {
         Ok(code) => ExitCode::from(code),
         Err((code, error)) => {
             if app.json {
@@ -94,10 +124,10 @@ async fn batch(
     app: &App,
     options: &cli::Lookup,
     run: Option<&cli::Run>,
+    services: &Services,
 ) -> Result<u8, (u8, miette::Report)> {
     use rustovate_engine::{Engine, Options};
     use rustovate_report::Status;
-    use std::sync::Arc;
     if options.concurrency == 0 || options.concurrency > 100 {
         return Err((2, miette::miette!("concurrency must be 1..100")));
     }
@@ -147,15 +177,12 @@ async fn batch(
         .map(|path| rustovate_config::load(path))
         .transpose()
         .map_err(|e| (2, e))?;
-    let token = std::env::var("RUSTOVATE_TOKEN")
-        .or_else(|_| std::env::var("GITHUB_TOKEN"))
-        .or_else(|_| std::env::var("GH_TOKEN"))
-        .map_err(|_| {
-            (
-                1,
-                miette::miette!("lookup/run requires RUSTOVATE_TOKEN, GITHUB_TOKEN or GH_TOKEN"),
-            )
-        })?;
+    let token = services.token().map_err(|_| {
+        (
+            1,
+            miette::miette!("lookup/run requires RUSTOVATE_TOKEN, GITHUB_TOKEN or GH_TOKEN"),
+        )
+    })?;
     if let Some(parent) = options.cache.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)
             .map_err(|e| (1, miette::miette!("cannot create cache directory: {e}")))?;
@@ -163,8 +190,9 @@ async fn batch(
     let cache = rustovate_cache::Cache::open(&options.cache, Default::default())
         .await
         .map_err(|e| (1, miette::miette!("{e}")))?;
-    let transport =
-        Arc::new(rustovate_http::Network::new().map_err(|e| (1, miette::miette!("{e}")))?);
+    let transport = services
+        .transport()
+        .map_err(|e| (1, miette::miette!("{e}")))?;
     let mut engine =
         Engine::with_http_options(&token, cache, options.concurrency, transport, http_options)
             .map_err(|e| (1, miette::miette!("{e}")))?
@@ -304,3 +332,6 @@ async fn batch(
     }
     Ok(if errors == 0 { 0 } else { 1 })
 }
+
+#[cfg(test)]
+mod tests;

@@ -11,14 +11,14 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const INVENTORY_QUERY: &str = r#"query($owner:String!,$name:String!,$prefix:String!,$cursor:String,$closed:[ID!]!){
  viewer{login}
  nodes(ids:$closed){... on PullRequest{id number state merged body headRefName
-  author{login} headRepository{nameWithOwner} baseRepository{nameWithOwner}
+  author{__typename login} headRepository{nameWithOwner} baseRepository{nameWithOwner}
  }}
  repository(owner:$owner,name:$name){
   defaultBranchRef{name target{oid}}
   refs(refPrefix:$prefix,first:100,after:$cursor){pageInfo{hasNextPage endCursor} nodes{
    name target{... on Commit{oid message tree{oid} author{user{login}} committer{user{login}} signature{isValid}}}
    associatedPullRequests(states:[OPEN],first:2){pageInfo{hasNextPage} nodes{
-    number id url title body headRefName headRefOid baseRefName author{login}
+    number id url title body headRefName headRefOid baseRefName author{__typename login}
     headRepository{nameWithOwner} baseRepository{nameWithOwner}
     labels(first:100){pageInfo{hasNextPage} nodes{name}} autoMergeRequest{enabledAt}
    }}
@@ -80,6 +80,34 @@ fn pr_state(pr: &Value) -> Value {
         "base":{"ref":pr["base"]["ref"],"repo":pr["base"]["repo"]["full_name"]},"actor":pr["user"]["login"],
         "labels":labels,"merge":!pr["auto_merge"].is_null()})
 }
+// GraphQL Actor.login omits REST's suffix for Bots. Use the explicit type:
+// stripping/appending suffixes for arbitrary Users would conflate identities.
+fn actor_login(actor: &Value) -> Option<String> {
+    let login = actor["login"].as_str()?;
+    Some(
+        if actor["__typename"] == "Bot" && !login.ends_with("[bot]") {
+            format!("{login}[bot]")
+        } else {
+            login.into()
+        },
+    )
+}
+fn fallback(repository: &Repository, plan: &Plan, reason: &str) {
+    tracing::debug!(target: "rustovate_update::receipts", repo = %repository.repository,
+        branch = %plan.action.branch, reason, "write receipt verification fallback");
+}
+fn not_restored(repository: &Repository, plans: &[Plan], reason: &str) -> bool {
+    for plan in plans
+        .iter()
+        .filter(|p| p.action.status == ActionStatus::Planned)
+    {
+        fallback(repository, plan, reason);
+    }
+    tracing::debug!(target: "rustovate_update::receipts", repo = %repository.repository,
+        restored = 0, complete = false, reason, "write receipts restored");
+    false
+}
+
 fn rest_pr(pr: &Value) -> Option<Value> {
     if pr["labels"]["pageInfo"]["hasNextPage"] != false {
         return None;
@@ -89,7 +117,7 @@ fn rest_pr(pr: &Value) -> Option<Value> {
         "title":pr["title"],"body":pr["body"],"state":"open",
         "head":{"ref":pr["headRefName"],"sha":pr["headRefOid"],"repo":{"full_name":pr["headRepository"]["nameWithOwner"]}},
         "base":{"ref":pr["baseRefName"],"repo":{"full_name":pr["baseRepository"]["nameWithOwner"]}},
-        "user":pr["author"],"labels":pr["labels"]["nodes"],"auto_merge":pr["autoMergeRequest"]}),
+        "user":{"login":actor_login(&pr["author"])},"labels":pr["labels"]["nodes"],"auto_merge":pr["autoMergeRequest"]}),
     )
 }
 
@@ -109,13 +137,13 @@ pub async fn restore_unchanged(
         .await
         .map_err(|e| e.to_string())?
     else {
-        return Ok(false);
+        return Ok(not_restored(repository, plans, "missing-receipt"));
     };
     let Ok(receipts) = serde_json::from_slice::<Receipts>(&bytes) else {
-        return Ok(false);
+        return Ok(not_restored(repository, plans, "invalid-receipts"));
     };
     if receipts.writes.is_empty() && receipts.closed.is_empty() || receipts.closed.len() > 100 {
-        return Ok(false);
+        return Ok(not_restored(repository, plans, "unusable-receipts"));
     }
     let (owner, name) = repository
         .repository
@@ -165,68 +193,110 @@ pub async fn restore_unchanged(
                     .as_str()
                     .is_some_and(|m| m.contains("\nRustovate: v1")))
     });
+    let mut restored = 0;
     for plan in plans
         .iter_mut()
         .filter(|p| p.action.status == ActionStatus::Planned)
     {
-        if let Some(receipt) = receipts.closed.get(&plan.action.branch)
-            && receipt.actor == actor
-            && receipt.intent == intent(plan, config, recheck)
-            && closed.iter().any(|pr| {
+        let result = if let Some(receipt) = receipts.closed.get(&plan.action.branch) {
+            if receipt.actor != actor {
+                Err("actor-mismatch")
+            } else if receipt.intent != intent(plan, config, recheck) {
+                Err("intent-changed")
+            } else if !closed.iter().any(|pr| {
                 pr["id"] == receipt.pr["node_id"]
                     && pr["state"] == "CLOSED"
                     && pr["merged"] == false
                     && pr["body"] == receipt.pr["body"]
-                    && pr["author"]["login"] == actor
+                    && actor_login(&pr["author"]).as_deref() == Some(&actor)
                     && pr["headRepository"]["nameWithOwner"] == repository.repository
                     && pr["baseRepository"]["nameWithOwner"] == repository.repository
-            })
-        {
-            plan.action.status = ActionStatus::Skipped;
-            plan.action.reason = Some(crate::pull_requests::CLOSED_BY_OWNER.into());
-            continue;
+            }) {
+                Err("pr-state-changed")
+            } else {
+                plan.action.status = ActionStatus::Skipped;
+                plan.action.reason = Some(crate::pull_requests::CLOSED_BY_OWNER.into());
+                Ok(())
+            }
+        } else {
+            restore_write(&receipts, &refs, &actor, plan, config, recheck)
+        };
+        match result {
+            Ok(()) => {
+                restored += 1;
+                tracing::debug!(target: "rustovate_update::receipts", repo = %repository.repository,
+                    branch = %plan.action.branch, "write receipt restored");
+            }
+            Err(reason) => fallback(repository, plan, reason),
         }
-        let Some(receipt) = receipts.writes.get(&plan.action.branch) else {
-            continue;
-        };
-        let Some(r) = refs.iter().find(|r| r["name"] == plan.action.branch) else {
-            continue;
-        };
-        let prs = &r["associatedPullRequests"];
-        let Some(nodes) = prs["nodes"].as_array() else {
-            continue;
-        };
-        if nodes.len() != 1 || prs["pageInfo"]["hasNextPage"] != false {
-            continue;
-        }
-        let Some(pr) = rest_pr(&nodes[0]) else {
-            continue;
-        };
-        if receipt.actor != actor
-            || receipt.intent != intent(plan, config, recheck)
-            || r["target"]["oid"] != receipt.commit
-            || r["target"]["tree"]["oid"] != receipt.tree
-            || pr["head"]["sha"] != receipt.commit
-            || pr_state(&pr) != receipt.pr
-            || (receipt.base != plan.action.base_commit
-                && (config.prs.rebase != Rebase::Conflicts || !plan.lock_jobs.is_empty()))
-        {
-            continue;
-        }
-        plan.action.status = ActionStatus::Unchanged;
-        plan.action.previous_commit = Some(receipt.commit.clone());
-        plan.action.commit = Some(receipt.commit.clone());
-        plan.action.verified = Some(true);
-        plan.tree = Some(receipt.tree.clone());
-        plan.cached_pr = Some(pr);
-        plan.fingerprint = receipt.fingerprint.clone();
-        plan.action.files = receipt.files.clone();
-        plan.lockfiles_ready = true;
     }
-    Ok(!obsolete
+    let complete = !obsolete
         && plans
             .iter()
-            .all(|p| p.action.status != ActionStatus::Planned))
+            .all(|p| p.action.status != ActionStatus::Planned);
+    tracing::debug!(target: "rustovate_update::receipts", repo = %repository.repository,
+        restored, complete, obsolete, "write receipts restored");
+    Ok(complete)
+}
+
+fn restore_write(
+    receipts: &Receipts,
+    refs: &[Value],
+    actor: &str,
+    plan: &mut Plan,
+    config: &Config,
+    recheck: Recheck,
+) -> Result<(), &'static str> {
+    let receipt = receipts
+        .writes
+        .get(&plan.action.branch)
+        .ok_or("missing-receipt")?;
+    if receipt.actor != actor {
+        return Err("actor-mismatch");
+    }
+    if receipt.intent != intent(plan, config, recheck) {
+        return Err("intent-changed");
+    }
+    let r = refs
+        .iter()
+        .find(|r| r["name"] == plan.action.branch)
+        .ok_or("missing-head")?;
+    if r["target"]["oid"] != receipt.commit {
+        return Err("head-oid-changed");
+    }
+    if r["target"]["tree"]["oid"] != receipt.tree {
+        return Err("tree-oid-changed");
+    }
+    if r["target"]["signature"]["isValid"] != true {
+        return Err("signature-invalid");
+    }
+    let prs = &r["associatedPullRequests"];
+    let nodes = prs["nodes"].as_array().ok_or("pr-state-incomplete")?;
+    if nodes.len() != 1 || prs["pageInfo"]["hasNextPage"] != false {
+        return Err("pr-state-changed");
+    }
+    let pr = rest_pr(&nodes[0]).ok_or("pr-state-incomplete")?;
+    if pr["user"]["login"] != actor {
+        return Err("actor-mismatch");
+    }
+    if pr["head"]["sha"] != receipt.commit || pr_state(&pr) != receipt.pr {
+        return Err("pr-state-changed");
+    }
+    if receipt.base != plan.action.base_commit
+        && (config.prs.rebase != Rebase::Conflicts || !plan.lock_jobs.is_empty())
+    {
+        return Err("base-changed");
+    }
+    plan.action.status = ActionStatus::Unchanged;
+    plan.action.previous_commit = Some(receipt.commit.clone());
+    plan.action.commit = Some(receipt.commit.clone());
+    plan.action.verified = Some(true);
+    plan.tree = Some(receipt.tree.clone());
+    plan.cached_pr = Some(pr);
+    plan.fingerprint = receipt.fingerprint.clone();
+    plan.action.files = receipt.files.clone();
+    plan.lockfiles_ready = true;
+    Ok(())
 }
 
 pub async fn save_receipts(
@@ -243,13 +313,14 @@ pub async fn save_receipts(
             && let Some(pr) = lifecycle.closed_for(plan)
             && pr["node_id"].is_string()
         {
+            let Some(actor) = pr["user"]["login"].as_str() else {
+                fallback(repository, plan, "missing-pr-author");
+                continue;
+            };
             receipts.closed.insert(
                 plan.action.branch.clone(),
                 ClosedReceipt {
-                    actor: pr["user"]["login"]
-                        .as_str()
-                        .ok_or("missing PR author")?
-                        .into(),
+                    actor: actor.into(),
                     intent: intent(plan, config, lifecycle.recheck),
                     pr: json!({"node_id":pr["node_id"],"body":pr["body"]}),
                 },
@@ -261,13 +332,15 @@ pub async fn save_receipts(
                 | ActionStatus::Updated
                 | ActionStatus::Rebased
                 | ActionStatus::Unchanged
-        ) || !lifecycle.actions.iter().any(|a| {
-            a.branch == plan.action.branch
-                && matches!(
-                    a.status,
-                    ActionStatus::Created | ActionStatus::Updated | ActionStatus::Unchanged
-                )
-        }) {
+        ) || plan.action.verified != Some(true)
+            || !lifecycle.actions.iter().any(|a| {
+                a.branch == plan.action.branch
+                    && matches!(
+                        a.status,
+                        ActionStatus::Created | ActionStatus::Updated | ActionStatus::Unchanged
+                    )
+            })
+        {
             continue;
         }
         let (Some(commit), Some(tree)) = (&plan.action.commit, &plan.tree) else {
@@ -281,13 +354,18 @@ pub async fn save_receipts(
         }) else {
             continue;
         };
+        let Some(actor) = pr["user"]["login"].as_str() else {
+            fallback(repository, plan, "missing-pr-author");
+            continue;
+        };
+        if pr["head"]["sha"] != *commit {
+            fallback(repository, plan, "pr-head-oid-changed");
+            continue;
+        }
         receipts.writes.insert(
             plan.action.branch.clone(),
             Receipt {
-                actor: pr["user"]["login"]
-                    .as_str()
-                    .ok_or("missing PR author")?
-                    .into(),
+                actor: actor.into(),
                 commit: commit.clone(),
                 tree: tree.clone(),
                 base: plan.action.base_commit.clone(),
@@ -304,5 +382,9 @@ pub async fn save_receipts(
             &serde_json::to_vec(&receipts).map_err(|e| e.to_string())?,
         )
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    tracing::debug!(target: "rustovate_update::receipts", repo = %repository.repository,
+        count = receipts.writes.len() + receipts.closed.len(), writes = receipts.writes.len(),
+        closed = receipts.closed.len(), "write receipts saved");
+    Ok(())
 }

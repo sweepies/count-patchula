@@ -74,7 +74,7 @@ impl Transport for Fake {
             } else if body["query"] == rustovate_update::INVENTORY_QUERY {
                 let prs = self.prs.lock().unwrap();
                 let nodes: Vec<_> = prs.iter().filter(|p|p["state"] == "open").map(|p|json!({
-                    "name":p["head"]["ref"],"target":{"oid":p["head"]["sha"],"tree":{"oid":"updated-tree"}},
+                    "name":p["head"]["ref"],"target":{"oid":p["head"]["sha"],"tree":{"oid":"updated-tree"},"signature":{"isValid":true}},
                     "associatedPullRequests":{"pageInfo":{"hasNextPage":false},"nodes":[{
                         "number":p["number"],"id":p["node_id"],"url":p["html_url"],"title":p["title"],"body":p["body"],
                         "headRefName":p["head"]["ref"],"headRefOid":p["head"]["sha"],"baseRefName":p["base"]["ref"],"author":p["user"],

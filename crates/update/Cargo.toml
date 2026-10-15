@@ -31,6 +31,7 @@ tempfile = "3"
 toml_edit = "0.25.17"
 rustix = { version = "1", features = ["process"] }
 base64 = "0.22"
+tracing = "0.1"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

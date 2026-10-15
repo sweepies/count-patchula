@@ -1669,13 +1669,18 @@ dependencies = [
 name = "rustovate-cli"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "chrono",
  "miette",
+ "reqwest",
  "rustovate-cache",
  "rustovate-config",
  "rustovate-engine",
  "rustovate-http",
  "rustovate-report",
+ "rustovate-update",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tracing",
@@ -1890,6 +1895,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml_edit",
+ "tracing",
 ]
 
 [[package]]
