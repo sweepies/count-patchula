@@ -249,6 +249,89 @@ fn release_age_departure_requires_newer_target_and_timestamp_evidence_inside_win
 }
 
 #[test]
+fn older_rustovate_target_requires_the_exact_held_back_release_and_24_hour_evidence() {
+    let mut a = parse_logs(LOG).unwrap();
+    let dep = &mut a.repositories[0].package_files[0].dependencies[0];
+    dep.manager = "npm".into();
+    dep.updates = vec![serde_json::from_value(json!({"newValue":"1.0.2","newVersion":"1.0.2","newDigest":null,"updateType":"patch","group":null})).unwrap()];
+    let mut b = a.clone();
+    let dep = &mut b.repositories[0].package_files[0].dependencies[0];
+    dep.updates[0].new_value = Some("1.0.1".into());
+    dep.updates[0].new_version = Some("1.0.1".into());
+    dep.updates[0].policy = Some(policy());
+    dep.updates[0].release_age = Some(rustovate_report::ReleaseAge {
+        published_at: "2026-10-01T00:00:00Z".into(),
+        evaluated_at: "2026-10-15T12:00:00Z".into(),
+    });
+    dep.metadata = Some(serde_json::from_value(json!({"source":"npm","kinds":[],"locations":[],"heldBack":[{"version":"1.0.2","updateType":"patch","publishedAt":"2026-10-14T19:00:00Z","eligibleAt":"2026-10-15T19:00:00Z"}]})).unwrap());
+    let diffs = compare(&a, &b, &rules()).unwrap().differences;
+    assert_eq!(diffs.len(), 2);
+    assert!(
+        diffs
+            .iter()
+            .all(|d| d.classification == Class::DeliberateDeparture
+                && d.departure.as_ref().unwrap().row == 23)
+    );
+    for (field, value) in [
+        ("version", "1.0.3"),
+        ("updateType", "minor"),
+        ("publishedAt", "malformed"),
+        ("publishedAt", "2026-10-15T13:00:00Z"),
+        ("eligibleAt", "malformed"),
+        ("eligibleAt", "2026-10-15T12:00:00Z"),
+        ("eligibleAt", "2026-10-17T19:00:00Z"),
+    ] {
+        let mut changed = serde_json::to_value(&b).unwrap();
+        changed["repositories"][0]["packageFiles"][0]["dependencies"][0]["metadata"]["heldBack"]
+            [0][field] = json!(value);
+        let changed: rustovate_report::Report = serde_json::from_value(changed).unwrap();
+        assert!(
+            compare(&a, &changed, &rules())
+                .unwrap()
+                .differences
+                .iter()
+                .all(|d| d.classification == Class::FieldMismatch),
+            "{field}={value}"
+        );
+    }
+    for hours in [0, 72] {
+        let mut changed = b.clone();
+        changed.repositories[0].package_files[0].dependencies[0].updates[0]
+            .policy
+            .as_mut()
+            .unwrap()
+            .wait_hours = hours;
+        assert!(
+            compare(&a, &changed, &rules())
+                .unwrap()
+                .differences
+                .iter()
+                .all(|d| d.classification == Class::FieldMismatch)
+        );
+    }
+    let mut ranged = a.clone();
+    ranged.repositories[0].package_files[0].dependencies[0].updates[0].new_value =
+        Some("^1.0.2".into());
+    let diffs = compare(&ranged, &b, &rules()).unwrap().differences;
+    assert_eq!(
+        diffs
+            .iter()
+            .find(|d| d.field == "updates.newValue")
+            .unwrap()
+            .classification,
+        Class::FieldMismatch
+    );
+    b.repositories[0].package_files[0].dependencies[0].metadata = None;
+    assert!(
+        compare(&a, &b, &rules())
+            .unwrap()
+            .differences
+            .iter()
+            .all(|d| d.classification == Class::FieldMismatch)
+    );
+}
+
+#[test]
 fn npm_exact_major_departure_requires_identical_resolved_targets_and_explicit_policy() {
     let mut a = parse_logs(LOG).unwrap();
     let dep = &mut a.repositories[0].package_files[0].dependencies[0];

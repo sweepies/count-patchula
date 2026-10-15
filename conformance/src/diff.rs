@@ -115,7 +115,12 @@ impl Rules {
         Ok(rules)
     }
 
-    fn classify(&self, difference: &mut Difference, dependency: Option<&Dependency>) {
+    fn classify(
+        &self,
+        difference: &mut Difference,
+        dependency: Option<&Dependency>,
+        rustovate: &Dependency,
+    ) {
         for rule in &self.rules {
             if difference.classification != rule.classification
                 || difference.field != rule.field
@@ -135,9 +140,23 @@ impl Rules {
                         let evaluated = chrono::DateTime::parse_from_rfc3339(&age.evaluated_at).ok()?;
                         Some(evaluated.signed_duration_since(published))
                     });
+                    let held_back = rustovate.metadata.as_ref().is_some_and(|metadata| metadata.held_back.iter().any(|held| {
+                        let times = chrono::DateTime::parse_from_rfc3339(&held.published_at).ok()
+                            .zip(chrono::DateTime::parse_from_rfc3339(&held.eligible_at).ok())
+                            .zip(right.release_age.as_ref().and_then(|age| chrono::DateTime::parse_from_rfc3339(&age.evaluated_at).ok()));
+                        left.new_version.as_deref() == Some(held.version.as_str())
+                            && held.update_type == left.update_type
+                            && times.is_some_and(|((published, eligible), evaluated)| {
+                                eligible - published == chrono::Duration::hours(24)
+                                    && published <= evaluated && evaluated < eligible
+                            })
+                    }));
                     right.policy.as_ref().is_some_and(|p| p.wait_hours == 24)
-                        && versions.is_some_and(|(a,b)| b.cmp_precedence(&a).is_gt())
-                        && age.is_some_and(|age| age >= chrono::Duration::hours(24) && age < chrono::Duration::hours(72))
+                        && versions.is_some_and(|(a,b)| {
+                            (b.cmp_precedence(&a).is_gt()
+                                && age.is_some_and(|age| age >= chrono::Duration::hours(24) && age < chrono::Duration::hours(72)))
+                                || (a.cmp_precedence(&b).is_gt() && held_back)
+                        })
                         && left.update_type == right.update_type
                         && matches!(right.update_type.as_str(), "major" | "minor" | "patch")
                         // Range-policy differences need their own explanation.
@@ -712,7 +731,7 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
                     &mut normalizations,
                 );
                 for d in &mut differences[start..] {
-                    rules.classify(d, Some(left));
+                    rules.classify(d, Some(left), right);
                 }
             }
         }

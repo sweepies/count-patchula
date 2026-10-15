@@ -228,27 +228,30 @@ impl Evaluator {
             return Ok(Evaluation::default());
         }
         let mut held_back = Vec::new();
-        let mut eligible =
-            |version: &Version, kind: Update, effective: &Effective<'_>| -> Result<bool> {
-                // The gate chooses proposals; it never removes extracted/current releases.
-                if effective.policy.wait_hours == 0 || version.published_at.is_none() {
-                    return Ok(true);
-                }
-                let published = published(version)?;
-                let until = published
-                    .checked_add_signed(Duration::hours(i64::from(effective.policy.wait_hours)))
-                    .ok_or_else(|| "release eligibility timestamp overflow".to_owned())?;
-                if until <= now {
-                    return Ok(true);
-                }
-                held_back.push(HeldBack {
-                    version: version.version.clone(),
-                    update_type: rustovate_manager::word(&kind),
-                    published_at: timestamp(published),
-                    eligible_at: timestamp(until),
-                });
-                Ok(false)
-            };
+        let mut eligible = |version: &Version,
+                            selected: &str,
+                            kind: Update,
+                            effective: &Effective<'_>|
+         -> Result<bool> {
+            // The gate chooses proposals; it never removes extracted/current releases.
+            if effective.policy.wait_hours == 0 || version.published_at.is_none() {
+                return Ok(true);
+            }
+            let published = published(version)?;
+            let until = published
+                .checked_add_signed(Duration::hours(i64::from(effective.policy.wait_hours)))
+                .ok_or_else(|| "release eligibility timestamp overflow".to_owned())?;
+            if until <= now {
+                return Ok(true);
+            }
+            held_back.push(HeldBack {
+                version: selected.into(),
+                update_type: rustovate_manager::word(&kind),
+                published_at: timestamp(published),
+                eligible_at: timestamp(until),
+            });
+            Ok(false)
+        };
         let scheme = scheme(dep)?;
         let extractor = dep
             .extract
@@ -319,7 +322,7 @@ impl Evaluator {
                 candidates.sort_by(|a, b| scheme.order(&b.2, &a.2));
                 let mut selected = None;
                 for (version, value, _) in candidates {
-                    if eligible(version, Update::Pin, &effective)? {
+                    if eligible(version, &value, Update::Pin, &effective)? {
                         selected = Some((version, value));
                         break;
                     }
@@ -413,7 +416,7 @@ impl Evaluator {
             {
                 continue;
             }
-            if !eligible(version, kind, effective)? {
+            if !eligible(version, &normalized, kind, effective)? {
                 continue;
             }
             if let Some(existing) = best.iter_mut().find(|(_, _, _, k, _)| *k == kind) {
@@ -476,7 +479,7 @@ impl Evaluator {
                     continue;
                 }
                 if dep.resolved.as_deref() != Some(v.version.as_str())
-                    && !eligible(v, Update::Pin, &effective)?
+                    && !eligible(v, &v.version, Update::Pin, &effective)?
                 {
                     continue;
                 }
@@ -511,7 +514,7 @@ impl Evaluator {
         result.dedup();
         // Only report releases newer than the eligible proposal of their class.
         held_back.retain(|held| {
-            let held_version = normalize(&held.version).and_then(|v| scheme.parse(&v).ok());
+            let held_version = scheme.parse(&held.version).ok();
             !result
                 .iter()
                 .filter(|u| u.update_type == held.update_type)

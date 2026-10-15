@@ -128,6 +128,16 @@ the same class. Exact npm major range edits map narrowly to
 [departure 25](../docs/departures.md#departure-25) with identical resolved targets
 and an explicit exact policy. Other version and identity differences remain actionable.
 
+The reverse age difference is also departure 23 when Renovate's newer target
+exactly matches a rustovate `metadata.heldBack` version in the same update class.
+The paired rustovate proposal must carry a 24-hour policy and an evaluation
+timestamp inside that held-back release's publication/eligibility interval,
+which must be exactly 24 hours. Future publication dates, expired eligibility,
+different versions/classes and missing evidence stay actionable. A `newValue`
+difference additionally requires exact values on both sides; this rule does not
+explain range edits. Held-back versions use the same extracted version identity
+as proposals, including when an extractor removes a tag prefix.
+
 Proposed npm integrity digests are ignored under
 [departure 24](../docs/departures.md#departure-24), including regex dependencies
 whose datasource is npm. Other-source and current digests remain comparable.

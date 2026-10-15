@@ -217,6 +217,21 @@ fn instant(value: &str) -> chrono::DateTime<chrono::Utc> {
         .with_timezone(&chrono::Utc)
 }
 #[test]
+fn held_back_versions_share_the_normalized_proposal_identity() {
+    let cfg = config("renovate-runner");
+    let eval = Evaluator::new(&cfg).unwrap();
+    let mut dep = dependency("plain");
+    dep.extract = Some(r"^release-(?<version>.*)$".into());
+    let mut versions = catalog(&["release-1.0.1", "release-1.0.2"]);
+    versions.versions[0].published_at = Some("2026-10-01T00:00:00Z".into());
+    versions.versions[1].published_at = Some("2026-10-15T00:00:00Z".into());
+    let result = eval
+        .evaluate_at(&dep, &versions, instant("2026-10-15T12:00:00Z"))
+        .unwrap();
+    assert_eq!(result.updates[0].new_version.as_deref(), Some("1.0.1"));
+    assert_eq!(result.held_back[0].version, "1.0.2");
+}
+#[test]
 fn release_age_falls_back_and_reports_eligibility_without_hiding_current() {
     let config = config("renovate-runner");
     let eval = Evaluator::new(&config).unwrap();
