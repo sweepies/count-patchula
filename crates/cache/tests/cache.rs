@@ -252,7 +252,7 @@ async fn migrates_previous_schema_without_discarding_http_or_release_data() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        4
+        5
     );
 }
 

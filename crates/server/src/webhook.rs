@@ -126,17 +126,11 @@ pub fn classify(event: &str, payload: &Value, settings: &Settings, bot: &str) ->
                 .iter()
                 .filter_map(|r| r["full_name"].as_str())
                 .filter(|repo| settings.allows(id, repo))
-                .map(|repo| Work {
-                    installation: id,
-                    repo: repo.to_ascii_lowercase(),
-                })
+                .map(|repo| Work::repository(id, repo.to_ascii_lowercase()))
                 .collect();
         }
         // Discovery is durable too; the webhook path never waits for GitHub API calls.
-        return vec![Work {
-            installation: id,
-            repo: String::new(),
-        }];
+        return vec![Work::repository(id, String::new())];
     }
     let Some(repo) = payload["repository"]["full_name"]
         .as_str()
@@ -144,6 +138,39 @@ pub fn classify(event: &str, payload: &Value, settings: &Settings, bot: &str) ->
     else {
         return Vec::new();
     };
+    if matches!(event, "check_suite" | "check_run")
+        && settings.triggers.checks
+        && action == "completed"
+    {
+        // Abbreviated GitHub check records omit author/body and may use a custom
+        // configured branch prefix. Persist candidates; ownership is checked by
+        // the worker without delaying the delivery response.
+        let checks = payload[event]["pull_requests"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|pr| {
+                let same = |side: &str| {
+                    pr[side]["repo"]["full_name"]
+                        .as_str()
+                        .is_some_and(|r| r.eq_ignore_ascii_case(repo))
+                        || (pr[side]["repo"]["id"].as_u64().is_some()
+                            && pr[side]["repo"]["id"] == payload["repository"]["id"])
+                };
+                same("head") && same("base")
+            })
+            .filter_map(|pr| pr["number"].as_u64().filter(|number| *number > 0))
+            .collect::<std::collections::BTreeSet<_>>();
+        return if checks.is_empty() {
+            Vec::new()
+        } else {
+            vec![Work {
+                installation: id,
+                repo: repo.to_ascii_lowercase(),
+                check_prs: Some(checks),
+            }]
+        };
+    }
     let before = payload["changes"]["body"]["from"].as_str();
     let issue = &payload["issue"];
     let pr = &payload["pull_request"];
@@ -171,36 +198,10 @@ pub fn classify(event: &str, payload: &Value, settings: &Settings, bot: &str) ->
                         !rustovate_update::pull_requests::checked(&json!({"body":before}))
                     }))
         }
-        "check_suite" | "check_run" if settings.triggers.checks && action == "completed" => {
-            payload[event]["pull_requests"]
-                .as_array()
-                .is_some_and(|prs| {
-                    prs.iter().any(|pr| {
-                        // GitHub sends abbreviated PRs without author/body for check events.
-                        // Only same-repository rustovate branch candidates enter the engine;
-                        // its fresh inventory/receipts verify ownership before every write.
-                        let same = |side: &str| {
-                            pr[side]["repo"]["full_name"]
-                                .as_str()
-                                .is_some_and(|r| r.eq_ignore_ascii_case(repo))
-                                || (pr[side]["repo"]["id"].as_u64().is_some()
-                                    && pr[side]["repo"]["id"] == payload["repository"]["id"])
-                        };
-                        same("head")
-                            && same("base")
-                            && pr["head"]["ref"]
-                                .as_str()
-                                .is_some_and(|r| r.starts_with("rustovate/"))
-                    })
-                })
-        }
         _ => false,
     };
     if trigger {
-        vec![Work {
-            installation: id,
-            repo: repo.to_ascii_lowercase(),
-        }]
+        vec![Work::repository(id, repo.to_ascii_lowercase())]
     } else {
         Vec::new()
     }

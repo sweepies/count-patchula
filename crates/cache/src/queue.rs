@@ -1,12 +1,24 @@
 //! Durable single-process queue and transactional webhook delivery deduplication.
 use crate::{Cache, Result};
 use rusqlite::{OptionalExtension, params};
+use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Work {
     pub installation: u64,
     /// Empty means discover repositories for this installation (not an engine batch).
     pub repo: String,
+    /// None runs unconditionally; Some verifies at least one owned PR first.
+    pub check_prs: Option<BTreeSet<u64>>,
+}
+impl Work {
+    pub fn repository(installation: u64, repo: impl Into<String>) -> Self {
+        Self {
+            installation,
+            repo: repo.into(),
+            check_prs: None,
+        }
+    }
 }
 #[derive(Clone, Debug)]
 pub struct Claim {
@@ -32,8 +44,18 @@ impl Cache {
                 if inserted == 0 { return Ok(false); }
             }
             for item in &work {
-                tx.execute("INSERT INTO server_work(installation,repo,available_at) VALUES (?1,?2,?3) ON CONFLICT(installation,repo) DO UPDATE SET generation=server_work.generation+1",
-                    params![item.installation as i64, item.repo, now + coalesce_ms])?;
+                let previous: Option<Option<String>> = tx.query_row("SELECT check_prs FROM server_work WHERE installation=?1 AND repo=?2", params![item.installation as i64, item.repo], |r| r.get(0)).optional()?;
+                let checks = match (&item.check_prs, previous) {
+                    (Some(incoming), Some(Some(previous))) => {
+                        let mut merged: BTreeSet<u64> = serde_json::from_str(&previous)?;
+                        merged.extend(incoming);
+                        Some(serde_json::to_string(&merged)?)
+                    }
+                    (Some(incoming), None) => Some(serde_json::to_string(incoming)?),
+                    _ => None, // A push/checkbox/sweep takes precedence over check hints.
+                };
+                tx.execute("INSERT INTO server_work(installation,repo,available_at,check_prs) VALUES (?1,?2,?3,?4) ON CONFLICT(installation,repo) DO UPDATE SET generation=server_work.generation+1,check_prs=excluded.check_prs",
+                    params![item.installation as i64, item.repo, now + coalesce_ms, checks])?;
             }
             tx.commit()?;
             Ok(true)
@@ -46,10 +68,11 @@ impl Cache {
             let installation: Option<i64> = tx.query_row("SELECT installation FROM server_work WHERE claimed IS NULL AND available_at<=?1 ORDER BY available_at,installation,repo LIMIT 1", [now], |r| r.get(0)).optional()?;
             let Some(installation) = installation else { return Ok(Vec::new()); };
             let rows = {
-                let mut query = tx.prepare("SELECT repo,generation FROM server_work WHERE claimed IS NULL AND available_at<=?1 AND installation=?2 ORDER BY available_at,repo LIMIT ?3")?;
-                query.query_map(params![now, installation, limit as i64], |r| Ok(Claim {
-                    work: Work { installation: installation as u64, repo: r.get(0)? }, generation: r.get(1)?,
-                }))?.collect::<std::result::Result<Vec<_>, _>>()?
+                let mut query = tx.prepare("SELECT repo,generation,check_prs FROM server_work WHERE claimed IS NULL AND available_at<=?1 AND installation=?2 ORDER BY available_at,repo LIMIT ?3")?;
+                let rows = query.query_map(params![now, installation, limit as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, Option<String>>(2)?)))?.collect::<std::result::Result<Vec<_>, _>>()?;
+                rows.into_iter().map(|(repo, generation, checks)| Ok(Claim {
+                    work: Work { installation: installation as u64, repo, check_prs: checks.map(|text| serde_json::from_str(&text)).transpose()? }, generation,
+                })).collect::<Result<Vec<_>>>()?
             };
             for claim in &rows {
                 tx.execute("UPDATE server_work SET claimed=generation WHERE installation=?1 AND repo=?2", params![installation, claim.work.repo])?;
@@ -103,10 +126,33 @@ impl Cache {
 mod tests {
     use super::*;
     fn work() -> Vec<Work> {
-        vec![Work {
+        vec![Work::repository(1, "owner/repo")]
+    }
+    #[tokio::test]
+    async fn check_candidates_merge_survive_restart_and_yield_to_other_triggers() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cache.sqlite");
+        let cache = Cache::open(&path, Default::default()).await.unwrap();
+        let candidate = |number| Work {
             installation: 1,
             repo: "owner/repo".into(),
-        }]
+            check_prs: Some(BTreeSet::from([number])),
+        };
+        cache.enqueue(None, vec![candidate(1)], 0, 0).await.unwrap();
+        let claims = cache.claim_batch(0, 1).await.unwrap();
+        cache.enqueue(None, vec![candidate(2)], 0, 0).await.unwrap();
+        cache.finish_work(claims, true, 0, 0).await.unwrap();
+        drop(cache);
+        let cache = Cache::open(path, Default::default()).await.unwrap();
+        cache.recover_work().await.unwrap();
+        let claims = cache.claim_batch(0, 1).await.unwrap();
+        assert_eq!(claims[0].work.check_prs, Some(BTreeSet::from([1, 2])));
+        cache.enqueue(None, work(), 0, 0).await.unwrap();
+        cache.finish_work(claims, true, 0, 0).await.unwrap();
+        assert_eq!(
+            cache.claim_batch(0, 1).await.unwrap()[0].work.check_prs,
+            None
+        );
     }
     #[tokio::test]
     async fn dedupe_coalesce_and_generation_fence() {
