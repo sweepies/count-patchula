@@ -1,6 +1,6 @@
 <!-- rustovate-dashboard:v1 -->
 
-Created by rustovate CLI. Click to re-check on the next run.
+Created by rustovate. Click to re-check on the next run.
 
 - [ ] Re-check this repository <!-- rustovate-action:{"action":"recheck","target":"REPOSITORY"} -->
 

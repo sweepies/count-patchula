@@ -136,6 +136,13 @@ fn checked_actions(body: &str) -> BTreeSet<Action> {
         .collect()
 }
 impl Controls {
+    /// Newly checked, valid marker actions; unrelated issue body edits do not trigger.
+    pub fn checkbox_edited(before: &str, after: &str) -> bool {
+        let previous = checked_actions(before);
+        checked_actions(after)
+            .iter()
+            .any(|action| !previous.contains(action))
+    }
     pub fn apply(&mut self, plans: &mut [Plan], dependencies: &[rustovate_manager::Dependency]) {
         for plan in plans {
             let key = update_key(plan);
@@ -510,7 +517,7 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
         Recheck::Now => "now",
         Recheck::NextRun => "on the next run",
     };
-    let mut text = format!("{MARKER}\n\nCreated by rustovate CLI. Click to re-check {timing}.\n\n");
+    let mut text = format!("{MARKER}\n\nCreated by rustovate. Click to re-check {timing}.\n\n");
     text.push_str(&checkbox(
         "Re-check this repository",
         Action::Recheck(hash(repo.repository.as_bytes())),

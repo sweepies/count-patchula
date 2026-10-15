@@ -74,7 +74,7 @@ fn same_repo(pr: &Value, repo: &str) -> bool {
             .as_str()
             .is_some_and(|s| s.eq_ignore_ascii_case(repo))
 }
-pub(crate) fn owned_pr(pr: &Value, actor: &str, repo: &str) -> bool {
+pub fn owned_pr(pr: &Value, actor: &str, repo: &str) -> bool {
     pr["user"]["login"] == actor && same_repo(pr, repo) && marker(body(pr)).is_some()
 }
 fn action(
@@ -97,7 +97,7 @@ fn limit(plan: &mut Plan, reason: &str) {
     plan.action.status = ActionStatus::Skipped;
     plan.action.reason = Some(reason.into());
 }
-pub(crate) fn checked(pr: &Value) -> bool {
+pub fn checked(pr: &Value) -> bool {
     if body(pr).matches(RECHECK).count() != 1 {
         return false;
     }
@@ -740,7 +740,7 @@ impl Lifecycle {
             Recheck::NextRun => "on the next run",
         };
         text.push_str(&format!(
-            "\n- [ ] Created by rustovate CLI. Click to re-check {timing}. {RECHECK}\n\n"
+            "\n- [ ] Created by rustovate. Click to re-check {timing}. {RECHECK}\n\n"
         ));
         let m = Marker {
             version: 1,

@@ -1614,7 +1614,7 @@ async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
         assert!(body.contains("| Package | Change | Type | File |"));
         assert!(body.contains("mise.toml") && body.contains("22.0.0"));
         assert!(body.contains("Review our deployment first."));
-        assert!(body.contains("Created by rustovate CLI. Click to re-check on the next run."));
+        assert!(body.contains("Created by rustovate. Click to re-check on the next run."));
         assert!(body.contains("<!-- rustovate:") && body.contains("<!-- rustovate-recheck -->"));
         assert_eq!(pr["labels"][0]["name"], "dependencies");
     }
@@ -1634,7 +1634,7 @@ async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
     {
         let mut s = server.0.lock().unwrap();
         let body = s.prs[&1]["body"].as_str().unwrap().replace(
-            "- [ ] Created by rustovate CLI. Click to re-check on the next run.",
+            "- [ ] Created by rustovate. Click to re-check on the next run.",
             "- [x] Any operator wording",
         );
         s.prs.get_mut(&1).unwrap()["body"] = json!(body);
