@@ -46,3 +46,13 @@ uses a convex interval because Cargo requirements cannot express unions.
 Compound preserve edits with no safe operator-preserving representation report
 a warning instead of inventing a range. No black-box comparison difference has
 been established yet; no broad conformance exemption is added.
+
+<a id="departure-21"></a>**Departure 21: explicit freshness and GitHub history gates.**
+GraphQL POSTs have no conditional HTTP validators, so a conditional REST head
+probe gates incremental GitHub history. The Go proxy's list/latest responses
+provide max-age but no validators; fresh bodies are reused and expired bodies
+are refreshed. Unchanged warm public source requests are therefore all 304, with
+Go served from its declared freshness window. Historical changes behind an
+unchanged GitHub head require future invalidation/reconciliation. This affects
+request strategy, not a confirmed proposal difference, so it has no comparison
+exemption.

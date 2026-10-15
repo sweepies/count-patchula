@@ -8,3 +8,21 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+regex = "1.13.1"
+reqwest.workspace = true
+rustovate-cache = { version = "0.1.0", path = "../cache" }
+rustovate-config = { version = "0.1.0", path = "../config" }
+rustovate-github = { version = "0.1.0", path = "../github" }
+rustovate-http = { version = "0.1.0", path = "../http" }
+rustovate-versioning = { version = "0.1.0", path = "../versioning" }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.11.1"
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+rustovate-testkit = { path = "../testkit" }
+tempfile = "3.27.0"

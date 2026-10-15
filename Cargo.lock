@@ -1658,6 +1658,7 @@ dependencies = [
  "rustovate-report",
  "rustovate-versioning",
  "semver",
+ "serde_json",
 ]
 
 [[package]]

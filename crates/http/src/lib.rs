@@ -77,3 +77,6 @@ impl Transport for Network {
         })
     }
 }
+
+mod cached;
+pub use cached::{Cached, Error as CacheError, Stats};

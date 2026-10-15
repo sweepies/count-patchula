@@ -1,0 +1,3102 @@
+{
+  "schema_version": 1,
+  "provenance": "Recorded by rustovate from the request URLs; never imported from other bots",
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://registry.npmjs.org/tiny-tarball",
+        "headers": {
+          "accept": [
+            "application/vnd.npm.install-v1+json"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "age": [
+            "49"
+          ],
+          "cache-control": [
+            "public, max-age=300"
+          ],
+          "cf-cache-status": [
+            "HIT"
+          ],
+          "cf-ray": [
+            "a4aab597bbdc1447-YVR"
+          ],
+          "content-type": [
+            "application/vnd.npm.install-v1+json"
+          ],
+          "date": [
+            "Thu, 15 Oct 2026 00:29:25 GMT"
+          ],
+          "etag": [
+            "W/\"9cce9f64ae8724ea3544171f7ef935cb\""
+          ],
+          "last-modified": [
+            "Mon, 27 Jun 2022 07:01:32 GMT"
+          ],
+          "server": [
+            "cloudflare"
+          ],
+          "set-cookie": [
+            "[REDACTED]"
+          ],
+          "vary": [
+            "accept-encoding, accept"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "dist-tags": {
+              "latest": "1.0.0"
+            },
+            "modified": "2022-06-27T07:01:30.945Z",
+            "name": "tiny-tarball",
+            "versions": {
+              "1.0.0": {
+                "dist": {
+                  "integrity": "sha512-SxmEuEiq4d9L2UjUCyP7g3KHND65MJnsFbEwCbaoMp9NYjHjufAzIUCRaRHB+FNTwzZ1e2xjBoYobBB8pqB5IQ==",
+                  "shasum": "bbf102d5ae73afe2c553295e0fb02230216f65b1",
+                  "signatures": "[REDACTED]",
+                  "tarball": "https://registry.npmjs.org/tiny-tarball/-/tiny-tarball-1.0.0.tgz"
+                },
+                "name": "tiny-tarball",
+                "version": "1.0.0"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://index.crates.io/he/ck/heck",
+        "headers": {
+          "accept": [
+            "text/plain"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "accept-ranges": [
+            "bytes"
+          ],
+          "age": [
+            "121"
+          ],
+          "cache-control": [
+            "public,max-age=600"
+          ],
+          "content-length": [
+            "3278"
+          ],
+          "content-type": [
+            "text/plain"
+          ],
+          "date": [
+            "Thu, 15 Oct 2026 00:29:25 GMT"
+          ],
+          "etag": [
+            "\"7e0edc8a30cc76008afc4790e4001589\""
+          ],
+          "last-modified": [
+            "Sun, 01 Feb 2026 12:00:12 GMT"
+          ],
+          "server": [
+            "AmazonS3"
+          ],
+          "via": [
+            "1.1 varnish"
+          ],
+          "x-amz-id-2": [
+            "K+eO1eomp/H8PG13QgS+0xqL6liYl+eZFym1KGfi7pmm71YwrqWBUL5basZsGKRbIVbzQ6cYfNU="
+          ],
+          "x-amz-request-id": [
+            "4HET3JSR97XKC4GN"
+          ],
+          "x-amz-server-side-encryption": [
+            "AES256"
+          ],
+          "x-amz-version-id": [
+            "5GX6lWDyPGARPWOujIov3aJEiLRf.Kr4"
+          ],
+          "x-cache": [
+            "HIT"
+          ],
+          "x-cache-hits": [
+            "2"
+          ],
+          "x-served-by": [
+            "cache-yvr-cyvr160049-YVR"
+          ],
+          "x-timer": [
+            "S1792024165.185248,VS0,VE0"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": "{\"name\":\"heck\",\"vers\":\"0.1.0\",\"deps\":[{\"name\":\"unicode-segmentation\",\"req\":\"^1.1.0\",\"features\":[],\"optional\":false,\"default_features\":true,\"target\":null,\"kind\":\"normal\"}],\"cksum\":\"51d06ada917775339740e560fb86cf0922e698aa1bebdc7ea9ee17dc0425ce06\",\"features\":{},\"yanked\":false,\"pubtime\":\"2017-03-27T11:22:23Z\"}\n{\"name\":\"heck\",\"vers\":\"0.2.0\",\"deps\":[{\"name\":\"unicode-segmentation\",\"req\":\"^1.1.0\",\"features\":[],\"optional\":false,\"default_features\":true,\"target\":null,\"kind\":\"normal\"}],\"cksum\":\"6f807d2f64cc044a6bcf250ff23e59be0deec7a16612c014f962a06fa7e020f9\",\"features\":{},\"yanked\":false,\"pubtime\":\"2017-03-27T23:37:35Z\"}\n{\"name\":\"heck\",\"vers\":\"0.2.1\",\"deps\":[{\"name\":\"unicode-segmentation\",\"req\":\"^1.1.0\",\"features\":[],\"optional\":false,\"default_features\":true,\"target\":null,\"kind\":\"normal\"}],\"cksum\":\"e0db42a2924a5d7d628685e7a8cf9a2edd628650a9d01efc3dde35d3cdd22451\",\"features\":{},\"yanked\":false,\"pubtime\":\"2017-04-23T10:35:27Z\"}\n{\"name\":\"heck\",\"vers\":\"0.3.0\",\"deps\":[{\"name\":\"unicode-segmentation\",\"req\":\"^1.2.0\",\"features\":[],\"optional\":false,\"default_features\":true,\"target\":null,\"kind\":\"normal\"}],\"cksum\":\"ea04fa3ead4e05e51a7c806fc07271fdbde4e246a6c6d1efd52e72230b771b82\",\"features\":{},\"yanked\":false,\"pubtime\":\"2017-08-17T03:30:18Z\"}\n{\"name\":\"heck\",\"vers\":\"0.3.1\",\"deps\":[{\"name\":\"unicode-segmentation\",\"req\":\"^1.2.0\",\"features\":[],\"optional\":false,\"default_features\":true,\"target\":null,\"kind\":\"normal\"}],\"cksum\":\"20564e78d53d2bb135c343b3f47714a56af2061f1c928fdb541dc7b9fdd94205\",\"features\":{},\"yanked\":false,\"pubtime\":\"2018-12-19T22:48:29Z\"}\n{\"name\":\"heck\",\"vers\":\"0.3.2\",\"deps\":[{\"name\":\"unicode-segmentation\",\"req\":\"^1.2.0\",\"features\":[],\"optional\":false,\"default_features\":true,\"target\":null,\"kind\":\"normal\"}],\"cksum\":\"87cbf45460356b7deeb5e3415b5563308c0a9b057c85e12b06ad551f98d0a6ac\",\"features\":{},\"yanked\":false,\"pubtime\":\"2020-12-21T12:46:16Z\"}\n{\"name\":\"heck\",\"vers\":\"0.3.3\",\"deps\":[{\"name\":\"unicode-segmentation\",\"req\":\"^1.2.0\",\"features\":[],\"optional\":false,\"default_features\":true,\"target\":null,\"kind\":\"normal\"}],\"cksum\":\"6d621efb26863f0e9924c6ac577e8275e5e6b77455db64ffa6c65c904e9e132c\",\"features\":{},\"yanked\":false,\"pubtime\":\"2021-06-02T20:40:39Z\"}\n{\"name\":\"heck\",\"vers\":\"0.4.0\",\"deps\":[{\"name\":\"unicode-segmentation\",\"req\":\"^1.2.0\",\"features\":[],\"optional\":true,\"default_features\":true,\"target\":null,\"kind\":\"normal\"}],\"cksum\":\"2540771e65fc8cb83cd6e8a237f70c319bd5c29f78ed1084ba5d50eeac86f7f9\",\"features\":{\"default\":[],\"unicode\":[\"unicode-segmentation\"]},\"yanked\":false,\"pubtime\":\"2021-12-09T17:52:40Z\"}\n{\"name\":\"heck\",\"vers\":\"0.4.1\",\"deps\":[{\"name\":\"unicode-segmentation\",\"req\":\"^1.2.0\",\"features\":[],\"optional\":true,\"default_features\":true,\"target\":null,\"kind\":\"normal\"}],\"cksum\":\"95505c38b4572b2d910cecb0281560f54b440a19336cbbcb27bf6ce6adc6f5a8\",\"features\":{\"default\":[],\"unicode\":[\"unicode-segmentation\"]},\"yanked\":false,\"pubtime\":\"2023-02-01T15:51:50Z\"}\n{\"name\":\"heck\",\"vers\":\"0.5.0-rc.1\",\"deps\":[],\"cksum\":\"28eaf72f9d21ee92f580d066b93d05742a4d188e91016b8165dc7a75c0475309\",\"features\":{},\"yanked\":false,\"rust_version\":\"1.56\",\"pubtime\":\"2023-08-15T09:30:39Z\"}\n{\"name\":\"heck\",\"vers\":\"0.5.0\",\"deps\":[],\"cksum\":\"2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea\",\"features\":{},\"yanked\":false,\"rust_version\":\"1.56\",\"pubtime\":\"2024-03-12T22:42:23Z\"}\n"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://proxy.golang.org/rsc.io/quote/@v/list",
+        "headers": {
+          "accept": [
+            "text/plain"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "accept-ranges": [
+            "bytes"
+          ],
+          "access-control-allow-headers": [
+            "Range"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "Content-Range, Content-Length"
+          ],
+          "age": [
+            "49"
+          ],
+          "alt-svc": [
+            "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
+          ],
+          "cache-control": [
+            "public, max-age=60"
+          ],
+          "content-length": [
+            "87"
+          ],
+          "content-security-policy-report-only": [
+            "script-src 'none'; form-action 'none'; frame-src 'none'; report-uri https://csp.withgoogle.com/csp/goa-fa2dfb7c_2"
+          ],
+          "content-type": [
+            "text/plain; charset=UTF-8"
+          ],
+          "cross-origin-opener-policy": [
+            "same-origin"
+          ],
+          "date": [
+            "Thu, 15 Oct 2026 00:28:36 GMT"
+          ],
+          "expires": [
+            "Thu, 15 Oct 2026 00:29:36 GMT"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "SAMEORIGIN"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": "v0.9.9-pre1\nv1.3.0\nv1.5.1\nv1.0.0\nv1.5.3-pre1\nv1.5.0\nv1.5.2\nv1.2.1\nv1.4.0\nv1.2.0\nv1.1.0\n"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://proxy.golang.org/rsc.io/quote/@latest",
+        "headers": {
+          "accept": [
+            "application/json"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "accept-ranges": [
+            "bytes"
+          ],
+          "access-control-allow-headers": [
+            "Range"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "Content-Range, Content-Length"
+          ],
+          "age": [
+            "49"
+          ],
+          "alt-svc": [
+            "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
+          ],
+          "cache-control": [
+            "public, max-age=60"
+          ],
+          "content-length": [
+            "50"
+          ],
+          "content-security-policy-report-only": [
+            "script-src 'none'; form-action 'none'; frame-src 'none'; report-uri https://csp.withgoogle.com/csp/goa-fa2dfb7c_2"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "cross-origin-opener-policy": [
+            "same-origin"
+          ],
+          "date": [
+            "Thu, 15 Oct 2026 00:28:36 GMT"
+          ],
+          "expires": [
+            "Thu, 15 Oct 2026 00:29:36 GMT"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "SAMEORIGIN"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "Time": "2018-02-14T15:44:20Z",
+            "Version": "v1.5.2"
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://proxy.golang.org/rsc.io/quote/@v/v1.5.3-pre1.info",
+        "headers": {
+          "accept": [
+            "application/json"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "accept-ranges": [
+            "bytes"
+          ],
+          "access-control-allow-headers": [
+            "Range"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "Content-Range, Content-Length"
+          ],
+          "age": [
+            "10306"
+          ],
+          "alt-svc": [
+            "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
+          ],
+          "cache-control": [
+            "public, max-age=10800"
+          ],
+          "content-length": [
+            "55"
+          ],
+          "content-security-policy-report-only": [
+            "script-src 'none'; form-action 'none'; frame-src 'none'; report-uri https://csp.withgoogle.com/csp/goa-fa2dfb7c_2"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "cross-origin-opener-policy": [
+            "same-origin"
+          ],
+          "date": [
+            "Wed, 14 Oct 2026 21:37:39 GMT"
+          ],
+          "expires": [
+            "Thu, 15 Oct 2026 00:37:39 GMT"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "SAMEORIGIN"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "Time": "2018-06-28T00:32:53Z",
+            "Version": "v1.5.3-pre1"
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://proxy.golang.org/rsc.io/quote/@v/v1.5.2.info",
+        "headers": {
+          "accept": [
+            "application/json"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "accept-ranges": [
+            "bytes"
+          ],
+          "access-control-allow-headers": [
+            "Range"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "Content-Range, Content-Length"
+          ],
+          "age": [
+            "8809"
+          ],
+          "alt-svc": [
+            "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
+          ],
+          "cache-control": [
+            "public, max-age=10800"
+          ],
+          "content-length": [
+            "50"
+          ],
+          "content-security-policy-report-only": [
+            "script-src 'none'; form-action 'none'; frame-src 'none'; report-uri https://csp.withgoogle.com/csp/goa-fa2dfb7c_2"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "cross-origin-opener-policy": [
+            "same-origin"
+          ],
+          "date": [
+            "Wed, 14 Oct 2026 22:02:36 GMT"
+          ],
+          "expires": [
+            "Thu, 15 Oct 2026 01:02:36 GMT"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "SAMEORIGIN"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "Time": "2018-02-14T15:44:20Z",
+            "Version": "v1.5.2"
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://proxy.golang.org/rsc.io/quote/@v/v1.5.1.info",
+        "headers": {
+          "accept": [
+            "application/json"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "accept-ranges": [
+            "bytes"
+          ],
+          "access-control-allow-headers": [
+            "Range"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "Content-Range, Content-Length"
+          ],
+          "age": [
+            "10306"
+          ],
+          "alt-svc": [
+            "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
+          ],
+          "cache-control": [
+            "public, max-age=10800"
+          ],
+          "content-length": [
+            "50"
+          ],
+          "content-security-policy-report-only": [
+            "script-src 'none'; form-action 'none'; frame-src 'none'; report-uri https://csp.withgoogle.com/csp/goa-fa2dfb7c_2"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "cross-origin-opener-policy": [
+            "same-origin"
+          ],
+          "date": [
+            "Wed, 14 Oct 2026 21:37:39 GMT"
+          ],
+          "expires": [
+            "Thu, 15 Oct 2026 00:37:39 GMT"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "SAMEORIGIN"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "Time": "2018-02-14T00:58:40Z",
+            "Version": "v1.5.1"
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://proxy.golang.org/rsc.io/quote/@v/v1.5.0.info",
+        "headers": {
+          "accept": [
+            "application/json"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "accept-ranges": [
+            "bytes"
+          ],
+          "access-control-allow-headers": [
+            "Range"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "Content-Range, Content-Length"
+          ],
+          "age": [
+            "10306"
+          ],
+          "alt-svc": [
+            "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
+          ],
+          "cache-control": [
+            "public, max-age=10800"
+          ],
+          "content-length": [
+            "50"
+          ],
+          "content-security-policy-report-only": [
+            "script-src 'none'; form-action 'none'; frame-src 'none'; report-uri https://csp.withgoogle.com/csp/goa-fa2dfb7c_2"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "cross-origin-opener-policy": [
+            "same-origin"
+          ],
+          "date": [
+            "Wed, 14 Oct 2026 21:37:39 GMT"
+          ],
+          "expires": [
+            "Thu, 15 Oct 2026 00:37:39 GMT"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "SAMEORIGIN"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "Time": "2018-02-14T00:58:15Z",
+            "Version": "v1.5.0"
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://proxy.golang.org/rsc.io/quote/@v/v1.4.0.info",
+        "headers": {
+          "accept": [
+            "application/json"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "accept-ranges": [
+            "bytes"
+          ],
+          "access-control-allow-headers": [
+            "Range"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "Content-Range, Content-Length"
+          ],
+          "age": [
+            "10306"
+          ],
+          "alt-svc": [
+            "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
+          ],
+          "cache-control": [
+            "public, max-age=10800"
+          ],
+          "content-length": [
+            "50"
+          ],
+          "content-security-policy-report-only": [
+            "script-src 'none'; form-action 'none'; frame-src 'none'; report-uri https://csp.withgoogle.com/csp/goa-fa2dfb7c_2"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "cross-origin-opener-policy": [
+            "same-origin"
+          ],
+          "date": [
+            "Wed, 14 Oct 2026 21:37:39 GMT"
+          ],
+          "expires": [
+            "Thu, 15 Oct 2026 00:37:39 GMT"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "SAMEORIGIN"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "Time": "2018-02-14T00:56:05Z",
+            "Version": "v1.4.0"
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://proxy.golang.org/rsc.io/quote/@v/v1.3.0.info",
+        "headers": {
+          "accept": [
+            "application/json"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "accept-ranges": [
+            "bytes"
+          ],
+          "access-control-allow-headers": [
+            "Range"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "Content-Range, Content-Length"
+          ],
+          "age": [
+            "10306"
+          ],
+          "alt-svc": [
+            "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
+          ],
+          "cache-control": [
+            "public, max-age=10800"
+          ],
+          "content-length": [
+            "50"
+          ],
+          "content-security-policy-report-only": [
+            "script-src 'none'; form-action 'none'; frame-src 'none'; report-uri https://csp.withgoogle.com/csp/goa-fa2dfb7c_2"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "cross-origin-opener-policy": [
+            "same-origin"
+          ],
+          "date": [
+            "Wed, 14 Oct 2026 21:37:39 GMT"
+          ],
+          "expires": [
+            "Thu, 15 Oct 2026 00:37:39 GMT"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "SAMEORIGIN"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "Time": "2018-02-14T00:54:53Z",
+            "Version": "v1.3.0"
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://proxy.golang.org/rsc.io/quote/@v/v1.2.1.info",
+        "headers": {
+          "accept": [
+            "application/json"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "accept-ranges": [
+            "bytes"
+          ],
+          "access-control-allow-headers": [
+            "Range"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "Content-Range, Content-Length"
+          ],
+          "age": [
+            "10306"
+          ],
+          "alt-svc": [
+            "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
+          ],
+          "cache-control": [
+            "public, max-age=10800"
+          ],
+          "content-length": [
+            "50"
+          ],
+          "content-security-policy-report-only": [
+            "script-src 'none'; form-action 'none'; frame-src 'none'; report-uri https://csp.withgoogle.com/csp/goa-fa2dfb7c_2"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "cross-origin-opener-policy": [
+            "same-origin"
+          ],
+          "date": [
+            "Wed, 14 Oct 2026 21:37:39 GMT"
+          ],
+          "expires": [
+            "Thu, 15 Oct 2026 00:37:39 GMT"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "SAMEORIGIN"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "Time": "2018-02-14T00:54:20Z",
+            "Version": "v1.2.1"
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://proxy.golang.org/rsc.io/quote/@v/v1.2.0.info",
+        "headers": {
+          "accept": [
+            "application/json"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "accept-ranges": [
+            "bytes"
+          ],
+          "access-control-allow-headers": [
+            "Range"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "Content-Range, Content-Length"
+          ],
+          "age": [
+            "10306"
+          ],
+          "alt-svc": [
+            "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
+          ],
+          "cache-control": [
+            "public, max-age=10800"
+          ],
+          "content-length": [
+            "50"
+          ],
+          "content-security-policy-report-only": [
+            "script-src 'none'; form-action 'none'; frame-src 'none'; report-uri https://csp.withgoogle.com/csp/goa-fa2dfb7c_2"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "cross-origin-opener-policy": [
+            "same-origin"
+          ],
+          "date": [
+            "Wed, 14 Oct 2026 21:37:39 GMT"
+          ],
+          "expires": [
+            "Thu, 15 Oct 2026 00:37:39 GMT"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "SAMEORIGIN"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "Time": "2018-02-14T00:47:51Z",
+            "Version": "v1.2.0"
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://proxy.golang.org/rsc.io/quote/@v/v1.1.0.info",
+        "headers": {
+          "accept": [
+            "application/json"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "accept-ranges": [
+            "bytes"
+          ],
+          "access-control-allow-headers": [
+            "Range"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "Content-Range, Content-Length"
+          ],
+          "age": [
+            "10306"
+          ],
+          "alt-svc": [
+            "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
+          ],
+          "cache-control": [
+            "public, max-age=10800"
+          ],
+          "content-length": [
+            "50"
+          ],
+          "content-security-policy-report-only": [
+            "script-src 'none'; form-action 'none'; frame-src 'none'; report-uri https://csp.withgoogle.com/csp/goa-fa2dfb7c_2"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "cross-origin-opener-policy": [
+            "same-origin"
+          ],
+          "date": [
+            "Wed, 14 Oct 2026 21:37:39 GMT"
+          ],
+          "expires": [
+            "Thu, 15 Oct 2026 00:37:39 GMT"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "SAMEORIGIN"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "Time": "2018-02-14T00:46:44Z",
+            "Version": "v1.1.0"
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://proxy.golang.org/rsc.io/quote/@v/v1.0.0.info",
+        "headers": {
+          "accept": [
+            "application/json"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "accept-ranges": [
+            "bytes"
+          ],
+          "access-control-allow-headers": [
+            "Range"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "Content-Range, Content-Length"
+          ],
+          "age": [
+            "10306"
+          ],
+          "alt-svc": [
+            "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
+          ],
+          "cache-control": [
+            "public, max-age=10800"
+          ],
+          "content-length": [
+            "50"
+          ],
+          "content-security-policy-report-only": [
+            "script-src 'none'; form-action 'none'; frame-src 'none'; report-uri https://csp.withgoogle.com/csp/goa-fa2dfb7c_2"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "cross-origin-opener-policy": [
+            "same-origin"
+          ],
+          "date": [
+            "Wed, 14 Oct 2026 21:37:39 GMT"
+          ],
+          "expires": [
+            "Thu, 15 Oct 2026 00:37:39 GMT"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "SAMEORIGIN"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "Time": "2018-02-14T00:45:20Z",
+            "Version": "v1.0.0"
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://proxy.golang.org/rsc.io/quote/@v/v0.9.9-pre1.info",
+        "headers": {
+          "accept": [
+            "application/json"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "accept-ranges": [
+            "bytes"
+          ],
+          "access-control-allow-headers": [
+            "Range"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "Content-Range, Content-Length"
+          ],
+          "age": [
+            "10306"
+          ],
+          "alt-svc": [
+            "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
+          ],
+          "cache-control": [
+            "public, max-age=10800"
+          ],
+          "content-length": [
+            "55"
+          ],
+          "content-security-policy-report-only": [
+            "script-src 'none'; form-action 'none'; frame-src 'none'; report-uri https://csp.withgoogle.com/csp/goa-fa2dfb7c_2"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "cross-origin-opener-policy": [
+            "same-origin"
+          ],
+          "date": [
+            "Wed, 14 Oct 2026 21:37:39 GMT"
+          ],
+          "expires": [
+            "Thu, 15 Oct 2026 00:37:39 GMT"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "SAMEORIGIN"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "Time": "2018-02-14T00:45:20Z",
+            "Version": "v0.9.9-pre1"
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/repos/jdx/mr-boxington/releases?per_page=1",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "cache-control": [
+            "private, max-age=60, s-maxage=60"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Thu, 15 Oct 2026 00:29:26 GMT"
+          ],
+          "etag": [
+            "W/\"c8bf59d16682fea11f507b1507ee1107045475f9235171025e9e781cb3ab1dbd\""
+          ],
+          "link": [
+            "<https://api.github.com/repositories/1340721957/releases?per_page=1&page=2>; rel=\"next\", <https://api.github.com/repositories/1340721957/releases?per_page=1&page=48>; rel=\"last\""
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            "repo"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-api-version-selected": [
+            "2022-11-28"
+          ],
+          "x-github-edge-region": [
+            "iad"
+          ],
+          "x-github-media-type": [
+            "github.v3; format=json"
+          ],
+          "x-github-request-id": [
+            "98D2:227836:9B674B:1FF7BE6:6AD01E65"
+          ],
+          "x-oauth-client-id": [
+            "178c6fc778ccc68e1d6a"
+          ],
+          "x-oauth-scopes": [
+            "gist, read:org, repo, workflow"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4933"
+          ],
+          "x-ratelimit-reset": [
+            "1792025230"
+          ],
+          "x-ratelimit-resource": [
+            "core"
+          ],
+          "x-ratelimit-used": [
+            "67"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": [
+            {
+              "assets": [
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx-aarch64-apple-darwin.tar.gz",
+                  "content_type": "application/x-gtar",
+                  "created_at": "2026-10-13T19:14:59Z",
+                  "digest": "sha256:60c646b7ce5ae9cfdb67b1565a4ec81ec3a07290f1e7000a026a6db7fa247440",
+                  "download_count": 769,
+                  "id": 637997810,
+                  "label": "",
+                  "name": "mbx-aarch64-apple-darwin.tar.gz",
+                  "node_id": "RA_kwDOT-nLJc4mBxLy",
+                  "size": 5991333,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:00Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637997810"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx-aarch64-pc-windows-msvc.zip",
+                  "content_type": "application/zip",
+                  "created_at": "2026-10-13T19:15:00Z",
+                  "digest": "sha256:635089d0dfea0fcdb12b5e4318120de01fd481dc0e122dafc89735a345b13205",
+                  "download_count": 124,
+                  "id": 637997814,
+                  "label": "",
+                  "name": "mbx-aarch64-pc-windows-msvc.zip",
+                  "node_id": "RA_kwDOT-nLJc4mBxL2",
+                  "size": 5530143,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:01Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637997814"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx-aarch64-unknown-linux-gnu.tar.gz",
+                  "content_type": "application/x-gtar",
+                  "created_at": "2026-10-13T19:14:59Z",
+                  "digest": "sha256:80a2909eff63aaf5b9901f923d68ab8b70056bb11d5fd025535614033e48dfcf",
+                  "download_count": 87,
+                  "id": 637997811,
+                  "label": "",
+                  "name": "mbx-aarch64-unknown-linux-gnu.tar.gz",
+                  "node_id": "RA_kwDOT-nLJc4mBxLz",
+                  "size": 6217427,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:00Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637997811"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx-aarch64-unknown-linux-musl.tar.gz",
+                  "content_type": "application/x-gtar",
+                  "created_at": "2026-10-13T19:14:59Z",
+                  "digest": "sha256:9e63b57eea37c97d1b1eb47801a92a73337e4a537d2678d761244fbc8434b123",
+                  "download_count": 36,
+                  "id": 637997809,
+                  "label": "",
+                  "name": "mbx-aarch64-unknown-linux-musl.tar.gz",
+                  "node_id": "RA_kwDOT-nLJc4mBxLx",
+                  "size": 6343172,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:00Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637997809"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx-x86_64-pc-windows-msvc.zip",
+                  "content_type": "application/zip",
+                  "created_at": "2026-10-13T19:15:00Z",
+                  "digest": "sha256:ced45f3dfd66649b2cea0b48ad01e13d1d7f7796c1182cc77d56ef4829af1d5b",
+                  "download_count": 551,
+                  "id": 637997838,
+                  "label": "",
+                  "name": "mbx-x86_64-pc-windows-msvc.zip",
+                  "node_id": "RA_kwDOT-nLJc4mBxMO",
+                  "size": 5919675,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:01Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637997838"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx-x86_64-unknown-linux-gnu.tar.gz",
+                  "content_type": "application/x-gtar",
+                  "created_at": "2026-10-13T19:15:00Z",
+                  "digest": "sha256:3e35b12dd105875fa0505c45224eaf7e2fd7103d86199ffca97c0cd4093e708f",
+                  "download_count": 748,
+                  "id": 637997849,
+                  "label": "",
+                  "name": "mbx-x86_64-unknown-linux-gnu.tar.gz",
+                  "node_id": "RA_kwDOT-nLJc4mBxMZ",
+                  "size": 6863021,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:01Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637997849"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx-x86_64-unknown-linux-musl.tar.gz",
+                  "content_type": "application/x-gtar",
+                  "created_at": "2026-10-13T19:15:00Z",
+                  "digest": "sha256:823626ca1246a6df1c20f83cfc49522f062bfa772b266f86614651483cea1c62",
+                  "download_count": 1434,
+                  "id": 637997848,
+                  "label": "",
+                  "name": "mbx-x86_64-unknown-linux-musl.tar.gz",
+                  "node_id": "RA_kwDOT-nLJc4mBxMY",
+                  "size": 6950680,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:01Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637997848"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx.bash",
+                  "content_type": "application/octet-stream",
+                  "created_at": "2026-10-13T19:15:13Z",
+                  "digest": "sha256:c60dd13ab68c5d2a06efb9bda4bd727951f43b5fb3935db228889c5cf11a4081",
+                  "download_count": 874,
+                  "id": 637998306,
+                  "label": "",
+                  "name": "mbx.bash",
+                  "node_id": "RA_kwDOT-nLJc4mBxTi",
+                  "size": 3985,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:13Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637998306"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx.fish",
+                  "content_type": "application/x-fishscript",
+                  "created_at": "2026-10-13T19:15:13Z",
+                  "digest": "sha256:75cf5ef6a5007d3ffa3e60857ace14c267f969e30811a62f150813affd522968",
+                  "download_count": 874,
+                  "id": 637998308,
+                  "label": "",
+                  "name": "mbx.fish",
+                  "node_id": "RA_kwDOT-nLJc4mBxTk",
+                  "size": 3115,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:13Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637998308"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx.powershell",
+                  "content_type": "application/octet-stream",
+                  "created_at": "2026-10-13T19:15:13Z",
+                  "digest": "sha256:12facc11a070963fbd2bf555830192bcc7ddbe03e7fcd2a123ae7205cb318404",
+                  "download_count": 874,
+                  "id": 637998307,
+                  "label": "",
+                  "name": "mbx.powershell",
+                  "node_id": "RA_kwDOT-nLJc4mBxTj",
+                  "size": 4615,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:13Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637998307"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx.usage.kdl",
+                  "content_type": "application/octet-stream",
+                  "created_at": "2026-10-13T19:15:13Z",
+                  "digest": "sha256:2f5ddbbbaaeaf82de6bd90921c1bcdfee86334619cb5833fd54a83d3a79cae35",
+                  "download_count": 910,
+                  "id": 637998309,
+                  "label": "",
+                  "name": "mbx.usage.kdl",
+                  "node_id": "RA_kwDOT-nLJc4mBxTl",
+                  "size": 51227,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:13Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637998309"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx.zsh",
+                  "content_type": "application/octet-stream",
+                  "created_at": "2026-10-13T19:15:13Z",
+                  "digest": "sha256:349c11069bee64e14b0c8a1f16a4f864df19efc5c975ec4515b321bf7f63ba6a",
+                  "download_count": 873,
+                  "id": 637998305,
+                  "label": "",
+                  "name": "mbx.zsh",
+                  "node_id": "RA_kwDOT-nLJc4mBxTh",
+                  "size": 4230,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:13Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637998305"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/packslip.sigstore.json",
+                  "content_type": "application/json",
+                  "created_at": "2026-10-13T19:15:21Z",
+                  "digest": "sha256:e881a0392a9175f8e6b16b485f84521fc8e2308b2f90d1a5492269cd2b2bb27b",
+                  "download_count": 1858,
+                  "id": 637998535,
+                  "label": "",
+                  "name": "packslip.sigstore.json",
+                  "node_id": "RA_kwDOT-nLJc4mBxXH",
+                  "size": 20781,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:21Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637998535"
+                },
+                {
+                  "browser_download_url": "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/SHA256SUMS",
+                  "content_type": "application/octet-stream",
+                  "created_at": "2026-10-13T19:14:59Z",
+                  "digest": "sha256:5cabc52a5406e275230d49d7f7af100227783c1ebc39342ad74d3c973f071b10",
+                  "download_count": 61,
+                  "id": 637997807,
+                  "label": "",
+                  "name": "SHA256SUMS",
+                  "node_id": "RA_kwDOT-nLJc4mBxLv",
+                  "size": 705,
+                  "state": "uploaded",
+                  "updated_at": "2026-10-13T19:15:00Z",
+                  "uploader": {
+                    "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+                    "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events%7B/privacy%7D",
+                    "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+                    "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following%7B/other_user%7D",
+                    "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists%7B/gist_id%7D",
+                    "gravatar_id": "",
+                    "html_url": "https://github.com/apps/github-actions",
+                    "id": 41898282,
+                    "login": "github-actions[bot]",
+                    "node_id": "MDM6Qm90NDE4OTgyODI=",
+                    "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+                    "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+                    "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+                    "site_admin": false,
+                    "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
+                    "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+                    "type": "Bot",
+                    "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+                    "user_view_type": "public"
+                  },
+                  "url": "https://api.github.com/repos/jdx/mr-boxington/releases/assets/637997807"
+                }
+              ],
+              "assets_url": "https://api.github.com/repos/jdx/mr-boxington/releases/412008010/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/216188?v=4",
+                "events_url": "https://api.github.com/users/jdx/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/jdx/followers",
+                "following_url": "https://api.github.com/users/jdx/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/jdx/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/jdx",
+                "id": 216188,
+                "login": "jdx",
+                "node_id": "MDQ6VXNlcjIxNjE4OA==",
+                "organizations_url": "https://api.github.com/users/jdx/orgs",
+                "received_events_url": "https://api.github.com/users/jdx/received_events",
+                "repos_url": "https://api.github.com/users/jdx/repos",
+                "site_admin": false,
+                "starred_url": "https://api.github.com/users/jdx/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/jdx/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/jdx",
+                "user_view_type": "public"
+              },
+              "body": "With `scheduler.tests` on, `cargo nextest run` now runs each test under the machine-wide scheduler, and nextest's `-j` no longer caps the build. This release also fixes several causes of cache misses and bypasses: explicit linkers, `-L native` directories, and build scripts that declare `OUT_DIR`. Workspace `staticlib`/`cdylib` libraries now compile incrementally, and `HOST_CC` no longer changes between a symlinked `mbx` and its real path.\n\n## Added\n\n- **`cargo nextest run` tests are scheduled in the shared pool** ([#684](https://github.com/jdx/mr-boxington/pull/684), @jbellis). Before, only compilers and `cargo test` binaries waited for permits. So several agents on one machine could each start a full nextest run at once and run out of memory. With `scheduler.tests = true` (or `MBX_SCHEDULER_TESTS=1`), each nextest test process now waits for permits from the same machine-wide pool as compilers:\n\n  ```sh\n  MBX_SCHEDULER_TESTS=1 mbx nextest run --workspace\n  # or, for every run:\n  mbx settings set scheduler.tests true\n  ```\n\n  - mbx installs its runner through `CARGO_TARGET_<TRIPLE>_RUNNER`. Any runner you configured is still called. Cargo aliases such as `[alias] nt = \"nextest run\"` are scheduled too.\n  - mbx records each test's CPU and peak memory under `<cache>/scheduler/tests/` and uses them to size its permit request. A test with no history asks for 1 core and 2 permits of memory. `mbx gc` removes history that hasn't been used for 30 days.\n  - Listing tests never waits.\n  - **Timeouts:** nextest starts a test's `slow-timeout` clock, including `terminate-after`, when it starts the runner, so time spent waiting for a permit counts as test time. After a one-second wait, mbx writes a note to the test's stderr. If your profiles set `terminate-after`, leave room for queueing.\n  - These are still not scheduled: test binaries run directly, doctests, `--no-run`, commands with `--config`, `+toolchain` or `-C`, and `--archive-file` runs built for a triple that is neither the requested target nor the host.\n\n- **The `mbx doctor` archives check falls back to `llvm-ar` and `llvm-ranlib`** when `ar` or `ranlib` isn't on `PATH`, for example on Windows ([#699](https://github.com/jdx/mr-boxington/pull/699), @Veykril). Each tool falls back separately. If a tool runs but fails, mbx reports that error instead of trying the fallback. This changes only the host probe. It doesn't change which archiver build scripts use.\n\n## Fixed\n\n- **`mbx nextest run -j N` no longer limits the build to N compiler permits** ([#685](https://github.com/jdx/mr-boxington/pull/685), @jbellis). For nextest, `-j`, `--jobs` and `--test-threads` set how many tests run at once, so mbx now ignores them as build limits. It reads `--build-jobs N` instead, and still falls back to `CARGO_BUILD_JOBS`. This also works through Cargo aliases. Alias expansion no longer runs `cargo --list`, which saves one Cargo subprocess per external command.\n- **Setting an explicit linker no longer makes rlib and `cargo check` compilations skip the cache** ([#694](https://github.com/jdx/mr-boxington/pull/694), @jdx). A target `linker = \"clang\"` (for example, with `-C link-arg=-fuse-ld=mold`) made every library and check compilation report `unknown-codegen-option`, even though they never link. These compilations are now cached, and the linker is still part of the cache key. Outputs that actually link keep their existing restrictions.\n- **`-L native=` directories no longer cause misses across checkouts or target dirs** ([#692](https://github.com/jdx/mr-boxington/pull/692), @jdx). Build scripts such as `libz-sys` and `aws-lc-sys` leave files there that the linker never reads but that contain the absolute target path. mbx now skips `pkgconfig/`, `cmake/` and `*.dSYM/` directories, plus `.pc`, `.cmake` and C/C++ header files, when hashing these directories. Libraries are still hashed.\n- **A `-L native=` directory passed more than once now counts once against the 2 GiB native input limit** ([#691](https://github.com/jdx/mr-boxington/pull/691), @jdx). A build script that printed the same `rustc-link-search` line twice could double a 1.2 GiB directory past the limit, so the result wasn't stored (`rustc search path kind is not cacheable yet: native`). A directory nested inside another `-L native=` directory is also counted once now.\n- **Crates whose build script declares `rerun-if-env-changed=OUT_DIR` build again** ([#700](https://github.com/jdx/mr-boxington/pull/700), @jdx). This is what `build-rs` emits for `build_rs::input::out_dir()`. Crates that included generated sources from `OUT_DIR` failed with `compilation result was discarded: build-script inputs changed during compilation`. They now build and are cached, and two checkouts of the same project share the cache entry.\n- **Workspace libraries with a `staticlib`, `cdylib` or `dylib` crate type now compile incrementally** ([#695](https://github.com/jdx/mr-boxington/pull/695), @jdx). mbx doesn't cache these libraries, such as Tauri's `[\"staticlib\", \"cdylib\", \"rlib\"]` template, and until now it also rebuilt them from scratch on every edit. They now get learned incremental state on the first build and reuse it after that. They're still reported as `unsupported-crate-type` bypasses. `learned_incremental = false` (`MBX_LEARNED_INCREMENTAL=0`), `MBX_VERIFY`, or a user-set `-Cincremental` turns this off.\n- **Running `mbx` through a symlink and through its real path now gives the same `HOST_CC`** ([#693](https://github.com/jdx/mr-boxington/pull/693), @jdx). Before, the two paths used different C/C++ shim directories. So switching between `mbx build` and plain `cargo` (through the cargo shim) in the same target dir reran every build script that watches `HOST_CC`. Upgrading in place at the same real path still keeps the same shim directory. If you reach versioned installs through a moving `latest` symlink, each release now gets its own shim directory, so cc-based build scripts rerun once after each upgrade.\n\n## New Contributors\n\n* @Veykril made their first contribution in [#699](https://github.com/jdx/mr-boxington/pull/699)\n\n**Full Changelog**: https://github.com/jdx/mr-boxington/compare/v1.23.0...v1.24.0",
+              "created_at": "2026-10-13T18:57:53Z",
+              "draft": false,
+              "html_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.24.0",
+              "id": 412008010,
+              "immutable": true,
+              "mentions_count": 3,
+              "name": "v1.24.0: Schedule cargo-nextest tests in the shared pool, plus cache and incremental fixes",
+              "node_id": "RE_kwDOT-nLJc4Yjr5K",
+              "prerelease": false,
+              "published_at": "2026-10-13T19:15:26Z",
+              "reactions": {
+                "+1": 1,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 0,
+                "heart": 0,
+                "hooray": 0,
+                "laugh": 0,
+                "rocket": 0,
+                "total_count": 1,
+                "url": "https://api.github.com/repos/jdx/mr-boxington/releases/412008010/reactions"
+              },
+              "tag_name": "v1.24.0",
+              "tarball_url": "https://api.github.com/repos/jdx/mr-boxington/tarball/v1.24.0",
+              "target_commitish": "main",
+              "updated_at": "2026-10-13T19:15:26Z",
+              "upload_url": "https://uploads.github.com/repos/jdx/mr-boxington/releases/412008010/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/jdx/mr-boxington/releases/412008010",
+              "zipball_url": "https://api.github.com/repos/jdx/mr-boxington/zipball/v1.24.0"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "query": "query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){releases(first:100,after:$cursor,orderBy:{field:CREATED_AT,direction:DESC}){nodes{tagName publishedAt isDraft isPrerelease}pageInfo{hasNextPage endCursor}}}}",
+            "variables": {
+              "cursor": null,
+              "name": "mr-boxington",
+              "owner": "jdx"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Thu, 15 Oct 2026 00:29:26 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            "repo"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-edge-region": [
+            "iad"
+          ],
+          "x-github-media-type": [
+            "github.v4; format=json"
+          ],
+          "x-github-request-id": [
+            "98D2:227836:9B6A47:1FF8642:6AD01E66"
+          ],
+          "x-oauth-client-id": [
+            "178c6fc778ccc68e1d6a"
+          ],
+          "x-oauth-scopes": [
+            "gist, read:org, repo, workflow"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4993"
+          ],
+          "x-ratelimit-reset": [
+            "1792025367"
+          ],
+          "x-ratelimit-resource": [
+            "graphql"
+          ],
+          "x-ratelimit-used": [
+            "7"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "data": {
+              "repository": {
+                "releases": {
+                  "nodes": [
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-10-13T19:15:26Z",
+                      "tagName": "v1.24.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-10-09T00:26:14Z",
+                      "tagName": "v1.23.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-10-03T19:03:40Z",
+                      "tagName": "v1.22.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-10-02T12:50:15Z",
+                      "tagName": "v1.21.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-29T18:08:02Z",
+                      "tagName": "v1.21.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-28T18:14:29Z",
+                      "tagName": "v1.20.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-27T16:39:59Z",
+                      "tagName": "v1.19.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-25T17:46:28Z",
+                      "tagName": "v1.18.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-23T19:34:39Z",
+                      "tagName": "v1.17.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-23T11:08:32Z",
+                      "tagName": "v1.16.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-20T01:25:27Z",
+                      "tagName": "v1.15.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-18T14:25:19Z",
+                      "tagName": "v1.14.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-17T15:37:39Z",
+                      "tagName": "v1.13.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-15T22:02:02Z",
+                      "tagName": "v1.12.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-14T20:29:36Z",
+                      "tagName": "v1.11.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-11T20:10:13Z",
+                      "tagName": "v1.11.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-10T20:51:45Z",
+                      "tagName": "v1.10.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-08T04:29:25Z",
+                      "tagName": "v1.10.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-06T16:11:24Z",
+                      "tagName": "v1.9.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-05T17:18:41Z",
+                      "tagName": "v1.8.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-05T16:57:52Z",
+                      "tagName": "v1.8.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-05T01:50:01Z",
+                      "tagName": "v1.8.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-04T12:20:12Z",
+                      "tagName": "v1.8.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-03T23:04:28Z",
+                      "tagName": "v1.7.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-03T14:45:34Z",
+                      "tagName": "v1.6.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-02T19:06:07Z",
+                      "tagName": "v1.5.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-02T02:44:04Z",
+                      "tagName": "v1.4.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-02T01:32:03Z",
+                      "tagName": "v1.4.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-01T16:49:24Z",
+                      "tagName": "v1.3.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-01T11:35:03Z",
+                      "tagName": "v1.3.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-31T21:42:39Z",
+                      "tagName": "v1.3.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-31T12:27:36Z",
+                      "tagName": "v1.2.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-31T00:37:35Z",
+                      "tagName": "v1.1.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-29T23:00:43Z",
+                      "tagName": "v1.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-29T14:11:42Z",
+                      "tagName": "v1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-29T13:05:22Z",
+                      "tagName": "v0.7.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-29T12:05:13Z",
+                      "tagName": "v0.7.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-29T00:26:59Z",
+                      "tagName": "v0.7.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-28T12:44:12Z",
+                      "tagName": "v0.6.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-28T02:12:37Z",
+                      "tagName": "v0.5.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-28T00:46:26Z",
+                      "tagName": "v0.5.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-28T00:06:28Z",
+                      "tagName": "v0.5.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-26T20:12:52Z",
+                      "tagName": "v0.5.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-26T19:55:19Z",
+                      "tagName": "v0.5.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-25T20:06:21Z",
+                      "tagName": "v0.4.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-23T22:21:38Z",
+                      "tagName": "v0.3.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-23T20:10:11Z",
+                      "tagName": "v0.2.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-21T19:59:38Z",
+                      "tagName": "v0.1.0"
+                    }
+                  ],
+                  "pageInfo": {
+                    "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOC0yMVQxOTo1MDoyMFrOFlSPSQ==",
+                    "hasNextPage": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/repos/actions/hello-world-javascript-action/tags?per_page=1",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "cache-control": [
+            "private, max-age=60, s-maxage=60"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Thu, 15 Oct 2026 00:29:27 GMT"
+          ],
+          "etag": [
+            "W/\"077d09aeeb2210938dcfad74aceb06bff8fa0471a5e814c54c683781c15968df\""
+          ],
+          "last-modified": [
+            "Thu, 01 Oct 2026 07:05:36 GMT"
+          ],
+          "link": [
+            "<https://api.github.com/repositories/200423311/tags?per_page=1&page=2>; rel=\"next\", <https://api.github.com/repositories/200423311/tags?per_page=1&page=2>; rel=\"last\""
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            ""
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-api-version-selected": [
+            "2022-11-28"
+          ],
+          "x-github-edge-region": [
+            "iad"
+          ],
+          "x-github-media-type": [
+            "github.v3; format=json"
+          ],
+          "x-github-request-id": [
+            "98D2:227836:9B6D04:1FF8EFB:6AD01E66"
+          ],
+          "x-oauth-client-id": [
+            "178c6fc778ccc68e1d6a"
+          ],
+          "x-oauth-scopes": [
+            "gist, read:org, repo, workflow"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4932"
+          ],
+          "x-ratelimit-reset": [
+            "1792025230"
+          ],
+          "x-ratelimit-resource": [
+            "core"
+          ],
+          "x-ratelimit-used": [
+            "68"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": [
+            {
+              "commit": {
+                "sha": "ad41a6c27317e688719c813b0d6a25685a9bce54",
+                "url": "https://api.github.com/repos/actions/hello-world-javascript-action/commits/ad41a6c27317e688719c813b0d6a25685a9bce54"
+              },
+              "name": "v1.1",
+              "node_id": "MDM6UmVmMjAwNDIzMzExOnJlZnMvdGFncy92MS4x",
+              "tarball_url": "https://api.github.com/repos/actions/hello-world-javascript-action/tarball/refs/tags/v1.1",
+              "zipball_url": "https://api.github.com/repos/actions/hello-world-javascript-action/zipball/refs/tags/v1.1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "query": "query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){refs(refPrefix:\"refs/tags/\",first:100,after:$cursor,orderBy:{field:TAG_COMMIT_DATE,direction:DESC}){nodes{name target{__typename ... on Commit{oid committedDate} ... on Tag{target{__typename ... on Commit{oid committedDate} ... on Tag{target{__typename ... on Commit{oid committedDate}}}}}}}pageInfo{hasNextPage endCursor}}}}",
+            "variables": {
+              "cursor": null,
+              "name": "hello-world-javascript-action",
+              "owner": "actions"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Thu, 15 Oct 2026 00:29:27 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            "repo"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-edge-region": [
+            "iad"
+          ],
+          "x-github-media-type": [
+            "github.v4; format=json"
+          ],
+          "x-github-request-id": [
+            "98D2:227836:9B6E8B:1FF942E:6AD01E67"
+          ],
+          "x-oauth-client-id": [
+            "178c6fc778ccc68e1d6a"
+          ],
+          "x-oauth-scopes": [
+            "gist, read:org, repo, workflow"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4990"
+          ],
+          "x-ratelimit-reset": [
+            "1792027615"
+          ],
+          "x-ratelimit-resource": [
+            "graphql"
+          ],
+          "x-ratelimit-used": [
+            "10"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "data": {
+              "repository": {
+                "refs": {
+                  "nodes": [
+                    {
+                      "name": "v1.1",
+                      "target": {
+                        "__typename": "Commit",
+                        "committedDate": "2020-09-11T16:54:57Z",
+                        "oid": "ad41a6c27317e688719c813b0d6a25685a9bce54"
+                      }
+                    },
+                    {
+                      "name": "v1",
+                      "target": {
+                        "__typename": "Commit",
+                        "committedDate": "2019-09-06T22:26:14Z",
+                        "oid": "ae53f59fd519c0006ceb494ecbfed5f05d4151cf"
+                      }
+                    }
+                  ],
+                  "pageInfo": {
+                    "endCursor": "Mg",
+                    "hasNextPage": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/repos/actions/hello-world-javascript-action/commits/main",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "cache-control": [
+            "private, max-age=60, s-maxage=60"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Thu, 15 Oct 2026 00:29:27 GMT"
+          ],
+          "etag": [
+            "W/\"d0ff74972dee86345b37ec305fc26740b4554d19eaed862511337bb4f0638ad8\""
+          ],
+          "last-modified": [
+            "Wed, 18 Feb 2026 21:07:59 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            ""
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-api-version-selected": [
+            "2022-11-28"
+          ],
+          "x-github-edge-region": [
+            "iad"
+          ],
+          "x-github-media-type": [
+            "github.v3; format=json"
+          ],
+          "x-github-request-id": [
+            "98D2:227836:9B7018:1FF98EA:6AD01E67"
+          ],
+          "x-oauth-client-id": [
+            "178c6fc778ccc68e1d6a"
+          ],
+          "x-oauth-scopes": [
+            "gist, read:org, repo, workflow"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4931"
+          ],
+          "x-ratelimit-reset": [
+            "1792025230"
+          ],
+          "x-ratelimit-resource": [
+            "core"
+          ],
+          "x-ratelimit-used": [
+            "69"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "author": {
+              "avatar_url": "https://avatars.githubusercontent.com/u/5089146?v=4",
+              "events_url": "https://api.github.com/users/ncalteen/events%7B/privacy%7D",
+              "followers_url": "https://api.github.com/users/ncalteen/followers",
+              "following_url": "https://api.github.com/users/ncalteen/following%7B/other_user%7D",
+              "gists_url": "https://api.github.com/users/ncalteen/gists%7B/gist_id%7D",
+              "gravatar_id": "",
+              "html_url": "https://github.com/ncalteen",
+              "id": 5089146,
+              "login": "ncalteen",
+              "node_id": "MDQ6VXNlcjUwODkxNDY=",
+              "organizations_url": "https://api.github.com/users/ncalteen/orgs",
+              "received_events_url": "https://api.github.com/users/ncalteen/received_events",
+              "repos_url": "https://api.github.com/users/ncalteen/repos",
+              "site_admin": true,
+              "starred_url": "https://api.github.com/users/ncalteen/starred%7B/owner%7D%7B/repo%7D",
+              "subscriptions_url": "https://api.github.com/users/ncalteen/subscriptions",
+              "type": "User",
+              "url": "https://api.github.com/users/ncalteen",
+              "user_view_type": "public"
+            },
+            "comments_url": "https://api.github.com/repos/actions/hello-world-javascript-action/commits/79ac0da13ee392da3fdd151813d5ce4658cb7e27/comments",
+            "commit": {
+              "author": {
+                "date": "2026-02-18T21:07:59Z",
+                "email": "ncalteen@github.com",
+                "name": "Nick Alteen"
+              },
+              "comment_count": 0,
+              "committer": {
+                "date": "2026-02-18T21:07:59Z",
+                "email": "noreply@github.com",
+                "name": "GitHub"
+              },
+              "message": "Merge pull request #261 from actions/dist\n\nRebuild Dist",
+              "tree": {
+                "sha": "9af6744194bed8a95297f0153899aefe447f10ba",
+                "url": "https://api.github.com/repos/actions/hello-world-javascript-action/git/trees/9af6744194bed8a95297f0153899aefe447f10ba"
+              },
+              "url": "https://api.github.com/repos/actions/hello-world-javascript-action/git/commits/79ac0da13ee392da3fdd151813d5ce4658cb7e27",
+              "verification": {
+                "payload": "tree 9af6744194bed8a95297f0153899aefe447f10ba\nparent adf0d7e30742ec90f63700bbf64e5e0fef8e887a\nparent 64ec3eae3d652dcb57fe028d960a63447fb40c25\nauthor Nick Alteen <ncalteen@github.com> 1771448879 -0500\ncommitter GitHub <noreply@github.com> 1771448879 -0500\n\nMerge pull request #261 from actions/dist\n\nRebuild Dist",
+                "reason": "valid",
+                "signature": "[REDACTED]",
+                "verified": true,
+                "verified_at": "2026-02-18T21:07:59Z"
+              }
+            },
+            "committer": {
+              "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
+              "events_url": "https://api.github.com/users/web-flow/events%7B/privacy%7D",
+              "followers_url": "https://api.github.com/users/web-flow/followers",
+              "following_url": "https://api.github.com/users/web-flow/following%7B/other_user%7D",
+              "gists_url": "https://api.github.com/users/web-flow/gists%7B/gist_id%7D",
+              "gravatar_id": "",
+              "html_url": "https://github.com/web-flow",
+              "id": 19864447,
+              "login": "web-flow",
+              "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
+              "organizations_url": "https://api.github.com/users/web-flow/orgs",
+              "received_events_url": "https://api.github.com/users/web-flow/received_events",
+              "repos_url": "https://api.github.com/users/web-flow/repos",
+              "site_admin": false,
+              "starred_url": "https://api.github.com/users/web-flow/starred%7B/owner%7D%7B/repo%7D",
+              "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
+              "type": "User",
+              "url": "https://api.github.com/users/web-flow",
+              "user_view_type": "public"
+            },
+            "files": [
+              {
+                "additions": 1418,
+                "blob_url": "https://github.com/actions/hello-world-javascript-action/blob/79ac0da13ee392da3fdd151813d5ce4658cb7e27/dist%2Findex.js",
+                "changes": 1697,
+                "contents_url": "https://api.github.com/repos/actions/hello-world-javascript-action/contents/dist%2Findex.js?ref=79ac0da13ee392da3fdd151813d5ce4658cb7e27",
+                "deletions": 279,
+                "filename": "dist/index.js",
+                "raw_url": "https://github.com/actions/hello-world-javascript-action/raw/79ac0da13ee392da3fdd151813d5ce4658cb7e27/dist%2Findex.js",
+                "sha": "a351c372553949321ea6777c618ed9f233d72b05",
+                "status": "modified"
+              },
+              {
+                "additions": 94,
+                "blob_url": "https://github.com/actions/hello-world-javascript-action/blob/79ac0da13ee392da3fdd151813d5ce4658cb7e27/package-lock.json",
+                "changes": 168,
+                "contents_url": "https://api.github.com/repos/actions/hello-world-javascript-action/contents/package-lock.json?ref=79ac0da13ee392da3fdd151813d5ce4658cb7e27",
+                "deletions": 74,
+                "filename": "package-lock.json",
+                "patch": "@@ -9,11 +9,11 @@\n       \"version\": \"1.0.0\",\n       \"license\": \"MIT\",\n       \"dependencies\": {\n-        \"@actions/core\": \"^1.11.1\",\n-        \"@actions/github\": \"^6.0.1\"\n+        \"@actions/core\": \"^2.0.2\",\n+        \"@actions/github\": \"^7.0.0\"\n       },\n       \"devDependencies\": {\n-        \"@eslint/compat\": \"^1.4.0\",\n+        \"@eslint/compat\": \"^2.0.1\",\n         \"@jest/globals\": \"^30.2.0\",\n         \"@rollup/plugin-commonjs\": \"^29.0.0\",\n         \"@rollup/plugin-node-resolve\": \"^16.0.3\",\n@@ -36,29 +36,37 @@\n       }\n     },\n     \"node_modules/@actions/core\": {\n-      \"version\": \"1.11.1\",\n-      \"resolved\": \"https://registry.npmjs.org/@actions/core/-/core-1.11.1.tgz\",\n-      \"integrity\": \"sha512-hXJCSrkwfA46Vd9Z3q4cpEpHB1rL5NG04+/rbqW9d3+CSvtB1tYe8UTpAlixa1vj0m/ULglfEK2UKxMGxCxv5A==\",\n+      \"version\": \"2.0.2\",\n+      \"resolved\": \"https://registry.npmjs.org/@actions/core/-/core-2.0.2.tgz\",\n+      \"integrity\": \"sha512-Ast1V7yHbGAhplAsuVlnb/5J8Mtr/Zl6byPPL+Qjq3lmfIgWF1ak1iYfF/079cRERiuTALTXkSuEUdZeDCfGtA==\",\n       \"dependencies\": {\n-        \"@actions/exec\": \"^1.1.1\",\n-        \"@actions/http-client\": \"^2.0.1\"\n+        \"@actions/exec\": \"^2.0.0\",\n+        \"@actions/http-client\": \"^3.0.1\"\n+      }\n+    },\n+    \"node_modules/@actions/core/node_modules/@actions/http-client\": {\n+      \"version\": \"3.0.1\",\n+      \"resolved\": \"https://registry.npmjs.org/@actions/http-client/-/http-client-3.0.1.tgz\",\n+      \"integrity\": \"sha512-SbGS8c/vySbNO3kjFgSW77n83C4MQx/Yoe+b1hAdpuvfHxnkHzDq2pWljUpAA56Si1Gae/7zjeZsV0CYjmLo/w==\",\n+      \"dependencies\": {\n+        \"tunnel\": \"^0.0.6\",\n+        \"undici\": \"^5.28.5\"\n       }\n     },\n     \"node_modules/@actions/exec\": {\n-      \"version\": \"1.1.1\",\n-      \"resolved\": \"https://registry.npmjs.org/@actions/exec/-/exec-1.1.1.tgz\",\n-      \"integrity\": \"sha512-+sCcHHbVdk93a0XT19ECtO/gIXoxvdsgQLzb2fE2/5sIZmWQuluYyjPQtrtTHdU1YzTZ7bAPN4sITq2xi1679w==\",\n+      \"version\": \"2.0.0\",\n+      \"resolved\": \"https://registry.npmjs.org/@actions/exec/-/exec-2.0.0.tgz\",\n+      \"integrity\": \"sha512-k8ngrX2voJ/RIN6r9xB82NVqKpnMRtxDoiO+g3olkIUpQNqjArXrCQceduQZCQj3P3xm32pChRLqRrtXTlqhIw==\",\n       \"dependencies\": {\n-        \"@actions/io\": \"^1.0.1\"\n+        \"@actions/io\": \"^2.0.0\"\n       }\n     },\n     \"node_modules/@actions/github\": {\n-      \"version\": \"6.0.1\",\n-      \"resolved\": \"https://registry.npmjs.org/@actions/github/-/github-6.0.1.tgz\",\n-      \"integrity\": \"sha512-xbZVcaqD4XnQAe35qSQqskb3SqIAfRyLBrHMd/8TuL7hJSz2QtbDwnNM8zWx4zO5l2fnGtseNE3MbEvD7BxVMw==\",\n-      \"license\": \"MIT\",\n+      \"version\": \"7.0.0\",\n+      \"resolved\": \"https://registry.npmjs.org/@actions/github/-/github-7.0.0.tgz\",\n+      \"integrity\": \"sha512-PyGODO938aoBTZd/IfN/+e+Pd5hUcVpyf+thm4CPESLeqhdSkq5QwMTGX9v84XHE1ifmHWBQ60KB8kIgm96opw==\",\n       \"dependencies\": {\n-        \"@actions/http-client\": \"^2.2.0\",\n+        \"@actions/http-client\": \"^3.0.1\",\n         \"@octokit/core\": \"^5.0.1\",\n         \"@octokit/plugin-paginate-rest\": \"^9.2.2\",\n         \"@octokit/plugin-rest-endpoint-methods\": \"^10.4.0\",\n@@ -67,19 +75,19 @@\n         \"undici\": \"^5.28.5\"\n       }\n     },\n-    \"node_modules/@actions/http-client\": {\n-      \"version\": \"2.2.0\",\n-      \"resolved\": \"https://registry.npmjs.org/@actions/http-client/-/http-client-2.2.0.tgz\",\n-      \"integrity\": \"sha512-q+epW0trjVUUHboliPb4UF9g2msf+w61b32tAkFEwL/IwP0DQWgbCMM0Hbe3e3WXSKz5VcUXbzJQgy8Hkra/Lg==\",\n+    \"node_modules/@actions/github/node_modules/@actions/http-client\": {\n+      \"version\": \"3.0.1\",\n+      \"resolved\": \"https://registry.npmjs.org/@actions/http-client/-/http-client-3.0.1.tgz\",\n+      \"integrity\": \"sha512-SbGS8c/vySbNO3kjFgSW77n83C4MQx/Yoe+b1hAdpuvfHxnkHzDq2pWljUpAA56Si1Gae/7zjeZsV0CYjmLo/w==\",\n       \"dependencies\": {\n         \"tunnel\": \"^0.0.6\",\n-        \"undici\": \"^5.25.4\"\n+        \"undici\": \"^5.28.5\"\n       }\n     },\n     \"node_modules/@actions/io\": {\n-      \"version\": \"1.1.3\",\n-      \"resolved\": \"https://registry.npmjs.org/@actions/io/-/io-1.1.3.tgz\",\n-      \"integrity\": \"sha512-wi9JjgKLYS7U/z8PPbco+PvTb/nRWjeoFlJ1Qer83k/3C5PHQi28hiVdeE2kHXmIL99mQFawx8qt/JPjZilJ8Q==\"\n+      \"version\": \"2.0.0\",\n+      \"resolved\": \"https://registry.npmjs.org/@actions/io/-/io-2.0.0.tgz\",\n+      \"integrity\": \"sha512-Jv33IN09XLO+0HS79aaODsvIRyduiF7NY/F6LYeK5oeUmrsz7aFdRphQjFoESF4jS7lMauDOttKALcpapVDIAg==\"\n     },\n     \"node_modules/@ampproject/remapping\": {\n       \"version\": \"2.3.0\",\n@@ -672,15 +680,15 @@\n       }\n     },\n     \"node_modules/@eslint/compat\": {\n-      \"version\": \"1.4.0\",\n-      \"resolved\": \"https://registry.npmjs.org/@eslint/compat/-/compat-1.4.0.tgz\",\n-      \"integrity\": \"sha512-DEzm5dKeDBPm3r08Ixli/0cmxr8LkRdwxMRUIJBlSCpAwSrvFEJpVBzV+66JhDxiaqKxnRzCXhtiMiczF7Hglg==\",\n+      \"version\": \"2.0.1\",\n+      \"resolved\": \"https://registry.npmjs.org/@eslint/compat/-/compat-2.0.1.tgz\",\n+      \"integrity\": \"sha512-yl/JsgplclzuvGFNqwNYV4XNPhP3l62ZOP9w/47atNAdmDtIFCx6X7CSk/SlWUuBGkT4Et/5+UD+WyvX2iiIWA==\",\n       \"dev\": true,\n       \"dependencies\": {\n-        \"@eslint/core\": \"^0.16.0\"\n+        \"@eslint/core\": \"^1.0.1\"\n       },\n       \"engines\": {\n-        \"node\": \"^18.18.0 || ^20.9.0 || >=21.1.0\"\n+        \"node\": \"^20.19.0 || ^22.13.0 || >=24\"\n       },\n       \"peerDependencies\": {\n         \"eslint\": \"^8.40 || 9\"\n@@ -730,15 +738,15 @@\n       }\n     },\n     \"node_modules/@eslint/core\": {\n-      \"version\": \"0.16.0\",\n-      \"resolved\": \"https://registry.npmjs.org/@eslint/core/-/core-0.16.0.tgz\",\n-      \"integrity\": \"sha512-nmC8/totwobIiFcGkDza3GIKfAw1+hLiYVrh3I1nIomQ8PEr5cxg34jnkmGawul/ep52wGRAcyeDCNtWKSOj4Q==\",\n+      \"version\": \"1.0.1\",\n+      \"resolved\": \"https://registry.npmjs.org/@eslint/core/-/core-1.0.1.tgz\",\n+      \"integrity\": \"sha512-r18fEAj9uCk+VjzGt2thsbOmychS+4kxI14spVNibUO2vqKX7obOG+ymZljAwuPZl+S3clPGwCwTDtrdqTiY6Q==\",\n       \"dev\": true,\n       \"dependencies\": {\n         \"@types/json-schema\": \"^7.0.15\"\n       },\n       \"engines\": {\n-        \"node\": \"^18.18.0 || ^20.9.0 || >=21.1.0\"\n+        \"node\": \"^20.19.0 || ^22.13.0 || >=24\"\n       }\n     },\n     \"node_modules/@eslint/eslintrc\": {\n@@ -6801,11 +6809,10 @@\n       }\n     },\n     \"node_modules/lodash\": {\n-      \"version\": \"4.17.21\",\n-      \"resolved\": \"https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz\",\n-      \"integrity\": \"sha512-v2kDEe57lecTulaDIuNTPy3Ry4gLGJ6Z1O3vE1krgXZNrsQ+LFTGHVxVjcXPs17LhbZVGedAJv8XZ1tvj5FvSg==\",\n-      \"dev\": true,\n-      \"license\": \"MIT\"\n+      \"version\": \"4.17.23\",\n+      \"resolved\": \"https://registry.npmjs.org/lodash/-/lodash-4.17.23.tgz\",\n+      \"integrity\": \"sha512-LgVTMpQtIopCi79SJeDiP0TfWi5CNEc/L/aRdTh3yIvmZXTnheWpKjSZhnvMl8iXbC1tFg9gdHHDMLoV7CnG+w==\",\n+      \"dev\": true\n     },\n     \"node_modules/lodash.merge\": {\n       \"version\": \"4.6.2\",\n@@ -9444,49 +9451,62 @@\n   },\n   \"dependencies\": {\n     \"@actions/core\": {\n-      \"version\": \"1.11.1\",\n-      \"resolved\": \"https://registry.npmjs.org/@actions/core/-/core-1.11.1.tgz\",\n-      \"integrity\": \"sha512-hXJCSrkwfA46Vd9Z3q4cpEpHB1rL5NG04+/rbqW9d3+CSvtB1tYe8UTpAlixa1vj0m/ULglfEK2UKxMGxCxv5A==\",\n+      \"version\": \"2.0.2\",\n+      \"resolved\": \"https://registry.npmjs.org/@actions/core/-/core-2.0.2.tgz\",\n+      \"integrity\": \"sha512-Ast1V7yHbGAhplAsuVlnb/5J8Mtr/Zl6byPPL+Qjq3lmfIgWF1ak1iYfF/079cRERiuTALTXkSuEUdZeDCfGtA==\",\n       \"requires\": {\n-        \"@actions/exec\": \"^1.1.1\",\n-        \"@actions/http-client\": \"^2.0.1\"\n+        \"@actions/exec\": \"^2.0.0\",\n+        \"@actions/http-client\": \"^3.0.1\"\n+      },\n+      \"dependencies\": {\n+        \"@actions/http-client\": {\n+          \"version\": \"3.0.1\",\n+          \"resolved\": \"https://registry.npmjs.org/@actions/http-client/-/http-client-3.0.1.tgz\",\n+          \"integrity\": \"sha512-SbGS8c/vySbNO3kjFgSW77n83C4MQx/Yoe+b1hAdpuvfHxnkHzDq2pWljUpAA56Si1Gae/7zjeZsV0CYjmLo/w==\",\n+          \"requires\": {\n+            \"tunnel\": \"^0.0.6\",\n+            \"undici\": \"^5.28.5\"\n+          }\n+        }\n       }\n     },\n     \"@actions/exec\": {\n-      \"version\": \"1.1.1\",\n-      \"resolved\": \"https://registry.npmjs.org/@actions/exec/-/exec-1.1.1.tgz\",\n-      \"integrity\": \"sha512-+sCcHHbVdk93a0XT19ECtO/gIXoxvdsgQLzb2fE2/5sIZmWQuluYyjPQtrtTHdU1YzTZ7bAPN4sITq2xi1679w==\",\n+      \"version\": \"2.0.0\",\n+      \"resolved\": \"https://registry.npmjs.org/@actions/exec/-/exec-2.0.0.tgz\",\n+      \"integrity\": \"sha512-k8ngrX2voJ/RIN6r9xB82NVqKpnMRtxDoiO+g3olkIUpQNqjArXrCQceduQZCQj3P3xm32pChRLqRrtXTlqhIw==\",\n       \"requires\": {\n-        \"@actions/io\": \"^1.0.1\"\n+        \"@actions/io\": \"^2.0.0\"\n       }\n     },\n     \"@actions/github\": {\n-      \"version\": \"6.0.1\",\n-      \"resolved\": \"https://registry.npmjs.org/@actions/github/-/github-6.0.1.tgz\",\n-      \"integrity\": \"sha512-xbZVcaqD4XnQAe35qSQqskb3SqIAfRyLBrHMd/8TuL7hJSz2QtbDwnNM8zWx4zO5l2fnGtseNE3MbEvD7BxVMw==\",\n+      \"version\": \"7.0.0\",\n+      \"resolved\": \"https://registry.npmjs.org/@actions/github/-/github-7.0.0.tgz\",\n+      \"integrity\": \"sha512-PyGODO938aoBTZd/IfN/+e+Pd5hUcVpyf+thm4CPESLeqhdSkq5QwMTGX9v84XHE1ifmHWBQ60KB8kIgm96opw==\",\n       \"requires\": {\n-        \"@actions/http-client\": \"^2.2.0\",\n+        \"@actions/http-client\": \"^3.0.1\",\n         \"@octokit/core\": \"^5.0.1\",\n         \"@octokit/plugin-paginate-rest\": \"^9.2.2\",\n         \"@octokit/plugin-rest-endpoint-methods\": \"^10.4.0\",\n         \"@octokit/request\": \"^8.4.1\",\n         \"@octokit/request-error\": \"^5.1.1\",\n         \"undici\": \"^5.28.5\"\n-      }\n-    },\n-    \"@actions/http-client\": {\n-      \"version\": \"2.2.0\",\n-      \"resolved\": \"https://registry.npmjs.org/@actions/http-client/-/http-client-2.2.0.tgz\",\n-      \"integrity\": \"sha512-q+epW0trjVUUHboliPb4UF9g2msf+w61b32tAkFEwL/IwP0DQWgbCMM0Hbe3e3WXSKz5VcUXbzJQgy8Hkra/Lg==\",\n-      \"requires\": {\n-        \"tunnel\": \"^0.0.6\",\n-        \"undici\": \"^5.25.4\"\n+      },\n+      \"dependencies\": {\n+        \"@actions/http-client\": {\n+          \"version\": \"3.0.1\",\n+          \"resolved\": \"https://registry.npmjs.org/@actions/http-client/-/http-client-3.0.1.tgz\",\n+          \"integrity\": \"sha512-SbGS8c/vySbNO3kjFgSW77n83C4MQx/Yoe+b1hAdpuvfHxnkHzDq2pWljUpAA56Si1Gae/7zjeZsV0CYjmLo/w==\",\n+          \"requires\": {\n+            \"tunnel\": \"^0.0.6\",\n+            \"undici\": \"^5.28.5\"\n+          }\n+        }\n       }\n     },\n     \"@actions/io\": {\n-      \"version\": \"1.1.3\",\n-      \"resolved\": \"https://registry.npmjs.org/@actions/io/-/io-1.1.3.tgz\",\n-      \"integrity\": \"sha512-wi9JjgKLYS7U/z8PPbco+PvTb/nRWjeoFlJ1Qer83k/3C5PHQi28hiVdeE2kHXmIL99mQFawx8qt/JPjZilJ8Q==\"\n+      \"version\": \"2.0.0\",\n+      \"resolved\": \"https://registry.npmjs.org/@actions/io/-/io-2.0.0.tgz\",\n+      \"integrity\": \"sha512-Jv33IN09XLO+0HS79aaODsvIRyduiF7NY/F6LYeK5oeUmrsz7aFdRphQjFoESF4jS7lMauDOttKALcpapVDIAg==\"\n     },\n     \"@ampproject/remapping\": {\n       \"version\": \"2.3.0\",\n@@ -9894,12 +9914,12 @@\n       \"dev\": true\n     },\n     \"@eslint/compat\": {\n-      \"version\": \"1.4.0\",\n-      \"resolved\": \"https://registry.npmjs.org/@eslint/compat/-/compat-1.4.0.tgz\",\n-      \"integrity\": \"sha512-DEzm5dKeDBPm3r08Ixli/0cmxr8LkRdwxMRUIJBlSCpAwSrvFEJpVBzV+66JhDxiaqKxnRzCXhtiMiczF7Hglg==\",\n+      \"version\": \"2.0.1\",\n+      \"resolved\": \"https://registry.npmjs.org/@eslint/compat/-/compat-2.0.1.tgz\",\n+      \"integrity\": \"sha512-yl/JsgplclzuvGFNqwNYV4XNPhP3l62ZOP9w/47atNAdmDtIFCx6X7CSk/SlWUuBGkT4Et/5+UD+WyvX2iiIWA==\",\n       \"dev\": true,\n       \"requires\": {\n-        \"@eslint/core\": \"^0.16.0\"\n+        \"@eslint/core\": \"^1.0.1\"\n       }\n     },\n     \"@eslint/config-array\": {\n@@ -9934,9 +9954,9 @@\n       }\n     },\n     \"@eslint/core\": {\n-      \"version\": \"0.16.0\",\n-      \"resolved\": \"https://registry.npmjs.org/@eslint/core/-/core-0.16.0.tgz\",\n-      \"integrity\": \"sha512-nmC8/totwobIiFcGkDza3GIKfAw1+hLiYVrh3I1nIomQ8PEr5cxg34jnkmGawul/ep52wGRAcyeDCNtWKSOj4Q==\",\n+      \"version\": \"1.0.1\",\n+      \"resolved\": \"https://registry.npmjs.org/@eslint/core/-/core-1.0.1.tgz\",\n+      \"integrity\": \"sha512-r18fEAj9uCk+VjzGt2thsbOmychS+4kxI14spVNibUO2vqKX7obOG+ymZljAwuPZl+S3clPGwCwTDtrdqTiY6Q==\",\n       \"dev\": true,\n       \"requires\": {\n         \"@types/json-schema\": \"^7.0.15\"\n@@ -14113,9 +14133,9 @@\n       }\n     },\n     \"lodash\": {\n-      \"version\": \"4.17.21\",\n-      \"resolved\": \"https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz\",\n-      \"integrity\": \"sha512-v2kDEe57lecTulaDIuNTPy3Ry4gLGJ6Z1O3vE1krgXZNrsQ+LFTGHVxVjcXPs17LhbZVGedAJv8XZ1tvj5FvSg==\",\n+      \"version\": \"4.17.23\",\n+      \"resolved\": \"https://registry.npmjs.org/lodash/-/lodash-4.17.23.tgz\",\n+      \"integrity\": \"sha512-LgVTMpQtIopCi79SJeDiP0TfWi5CNEc/L/aRdTh3yIvmZXTnheWpKjSZhnvMl8iXbC1tFg9gdHHDMLoV7CnG+w==\",\n       \"dev\": true\n     },\n     \"lodash.merge\": {",
+                "raw_url": "https://github.com/actions/hello-world-javascript-action/raw/79ac0da13ee392da3fdd151813d5ce4658cb7e27/package-lock.json",
+                "sha": "9a3d7411dc2d09bd8d267eac00e772a72b6d6a25",
+                "status": "modified"
+              },
+              {
+                "additions": 3,
+                "blob_url": "https://github.com/actions/hello-world-javascript-action/blob/79ac0da13ee392da3fdd151813d5ce4658cb7e27/package.json",
+                "changes": 6,
+                "contents_url": "https://api.github.com/repos/actions/hello-world-javascript-action/contents/package.json?ref=79ac0da13ee392da3fdd151813d5ce4658cb7e27",
+                "deletions": 3,
+                "filename": "package.json",
+                "patch": "@@ -38,11 +38,11 @@\n   },\n   \"license\": \"MIT\",\n   \"dependencies\": {\n-    \"@actions/core\": \"^1.11.1\",\n-    \"@actions/github\": \"^6.0.1\"\n+    \"@actions/core\": \"^2.0.2\",\n+    \"@actions/github\": \"^7.0.0\"\n   },\n   \"devDependencies\": {\n-    \"@eslint/compat\": \"^1.4.0\",\n+    \"@eslint/compat\": \"^2.0.1\",\n     \"@jest/globals\": \"^30.2.0\",\n     \"@rollup/plugin-commonjs\": \"^29.0.0\",\n     \"@rollup/plugin-node-resolve\": \"^16.0.3\",",
+                "raw_url": "https://github.com/actions/hello-world-javascript-action/raw/79ac0da13ee392da3fdd151813d5ce4658cb7e27/package.json",
+                "sha": "31ae52761ddb0c9ee93dbe87c5a4adae5954b504",
+                "status": "modified"
+              }
+            ],
+            "html_url": "https://github.com/actions/hello-world-javascript-action/commit/79ac0da13ee392da3fdd151813d5ce4658cb7e27",
+            "node_id": "C_kwDOC_I3j9oAKDc5YWMwZGExM2VlMzkyZGEzZmRkMTUxODEzZDVjZTQ2NThjYjdlMjc",
+            "parents": [
+              {
+                "html_url": "https://github.com/actions/hello-world-javascript-action/commit/adf0d7e30742ec90f63700bbf64e5e0fef8e887a",
+                "sha": "adf0d7e30742ec90f63700bbf64e5e0fef8e887a",
+                "url": "https://api.github.com/repos/actions/hello-world-javascript-action/commits/adf0d7e30742ec90f63700bbf64e5e0fef8e887a"
+              },
+              {
+                "html_url": "https://github.com/actions/hello-world-javascript-action/commit/64ec3eae3d652dcb57fe028d960a63447fb40c25",
+                "sha": "64ec3eae3d652dcb57fe028d960a63447fb40c25",
+                "url": "https://api.github.com/repos/actions/hello-world-javascript-action/commits/64ec3eae3d652dcb57fe028d960a63447fb40c25"
+              }
+            ],
+            "sha": "79ac0da13ee392da3fdd151813d5ce4658cb7e27",
+            "stats": {
+              "additions": 1515,
+              "deletions": 356,
+              "total": 1871
+            },
+            "url": "https://api.github.com/repos/actions/hello-world-javascript-action/commits/79ac0da13ee392da3fdd151813d5ce4658cb7e27"
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://registry.npmjs.org/tiny-tarball",
+        "headers": {
+          "accept": [
+            "application/vnd.npm.install-v1+json"
+          ],
+          "if-modified-since": [
+            "Mon, 27 Jun 2022 07:01:32 GMT"
+          ],
+          "if-none-match": [
+            "W/\"9cce9f64ae8724ea3544171f7ef935cb\""
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 304,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "age": [
+            "52"
+          ],
+          "cache-control": [
+            "public, max-age=300"
+          ],
+          "cf-cache-status": [
+            "HIT"
+          ],
+          "cf-ray": [
+            "a4aab5a9db781447-YVR"
+          ],
+          "date": [
+            "Thu, 15 Oct 2026 00:29:27 GMT"
+          ],
+          "etag": [
+            "\"9cce9f64ae8724ea3544171f7ef935cb\""
+          ],
+          "last-modified": [
+            "Mon, 27 Jun 2022 07:01:32 GMT"
+          ],
+          "server": [
+            "cloudflare"
+          ],
+          "set-cookie": [
+            "[REDACTED]"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://index.crates.io/he/ck/heck",
+        "headers": {
+          "accept": [
+            "text/plain"
+          ],
+          "if-modified-since": [
+            "Sun, 01 Feb 2026 12:00:12 GMT"
+          ],
+          "if-none-match": [
+            "\"7e0edc8a30cc76008afc4790e4001589\""
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 304,
+        "headers": {
+          "age": [
+            "124"
+          ],
+          "cache-control": [
+            "public,max-age=600"
+          ],
+          "date": [
+            "Thu, 15 Oct 2026 00:29:28 GMT"
+          ],
+          "etag": [
+            "\"7e0edc8a30cc76008afc4790e4001589\""
+          ],
+          "via": [
+            "1.1 varnish"
+          ],
+          "x-varnish": [
+            "3535125614"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/repos/jdx/mr-boxington/releases?per_page=1",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "if-none-match": [
+            "W/\"c8bf59d16682fea11f507b1507ee1107045475f9235171025e9e781cb3ab1dbd\""
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 304,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "cache-control": [
+            "private, max-age=60, s-maxage=60"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "date": [
+            "Thu, 15 Oct 2026 00:29:28 GMT"
+          ],
+          "etag": [
+            "\"c8bf59d16682fea11f507b1507ee1107045475f9235171025e9e781cb3ab1dbd\""
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-api-version-selected": [
+            "2022-11-28"
+          ],
+          "x-github-edge-region": [
+            "iad"
+          ],
+          "x-github-request-id": [
+            "98D2:227836:9B72E3:1FFA28E:6AD01E67"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4931"
+          ],
+          "x-ratelimit-reset": [
+            "1792025230"
+          ],
+          "x-ratelimit-resource": [
+            "core"
+          ],
+          "x-ratelimit-used": [
+            "69"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/repos/actions/hello-world-javascript-action/tags?per_page=1",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "if-modified-since": [
+            "Thu, 01 Oct 2026 07:05:36 GMT"
+          ],
+          "if-none-match": [
+            "W/\"077d09aeeb2210938dcfad74aceb06bff8fa0471a5e814c54c683781c15968df\""
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 304,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "cache-control": [
+            "private, max-age=60, s-maxage=60"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "date": [
+            "Thu, 15 Oct 2026 00:29:28 GMT"
+          ],
+          "etag": [
+            "\"077d09aeeb2210938dcfad74aceb06bff8fa0471a5e814c54c683781c15968df\""
+          ],
+          "last-modified": [
+            "Thu, 01 Oct 2026 07:05:36 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-api-version-selected": [
+            "2022-11-28"
+          ],
+          "x-github-edge-region": [
+            "iad"
+          ],
+          "x-github-request-id": [
+            "98D2:227836:9B74C5:1FFA8CF:6AD01E68"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4931"
+          ],
+          "x-ratelimit-reset": [
+            "1792025230"
+          ],
+          "x-ratelimit-resource": [
+            "core"
+          ],
+          "x-ratelimit-used": [
+            "69"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/repos/actions/hello-world-javascript-action/commits/main",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "if-modified-since": [
+            "Wed, 18 Feb 2026 21:07:59 GMT"
+          ],
+          "if-none-match": [
+            "W/\"d0ff74972dee86345b37ec305fc26740b4554d19eaed862511337bb4f0638ad8\""
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 304,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "cache-control": [
+            "private, max-age=60, s-maxage=60"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "date": [
+            "Thu, 15 Oct 2026 00:29:29 GMT"
+          ],
+          "etag": [
+            "\"d0ff74972dee86345b37ec305fc26740b4554d19eaed862511337bb4f0638ad8\""
+          ],
+          "last-modified": [
+            "Wed, 18 Feb 2026 21:07:59 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-api-version-selected": [
+            "2022-11-28"
+          ],
+          "x-github-edge-region": [
+            "iad"
+          ],
+          "x-github-request-id": [
+            "98D2:227836:9B7693:1FFAE86:6AD01E68"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4931"
+          ],
+          "x-ratelimit-reset": [
+            "1792025230"
+          ],
+          "x-ratelimit-resource": [
+            "core"
+          ],
+          "x-ratelimit-used": [
+            "69"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      }
+    }
+  ]
+}
