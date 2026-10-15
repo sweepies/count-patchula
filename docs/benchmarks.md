@@ -446,3 +446,222 @@ parsing, sorting, storage and converting returned catalogs to JSON are included.
 compare different captured input sets. The example uses only the public client
 API and can be copied unchanged into a detached baseline checkout for A/B runs.
 Tests never record or fetch these inputs.
+
+
+## Twelve-repository host queues and registry freshness (2026-10-15)
+
+Baseline: `4182a1f`; implementation: `acf42c2`, `832936f` and `ecec03b`. This work uses
+independent protocol documentation and public manifests, never Renovate
+implementation source. Builds and tests run through mise; tests are offline.
+Release binaries are built before measurements, and each sample is a fresh
+process with `GH_TOKEN="$(gh auth token)"`, concurrency eight and `-vv`. Own
+build/CI jobs finished before live samples; the host is shared. Measurements are
+individual observations, not medians or a controlled latency guarantee.
+
+### Confirmed causes and selected behavior
+
+The registry client had one semaphore across every registry host. GitHub already
+had a separate governor: it did not literally wait behind GHCR's semaphore, but
+its cap was also tied to repository concurrency. The CLI now defaults to 16
+requests per host, independent of its eight repository scans, with repeatable
+`--host-concurrency HOST=LIMIT` overrides. Catalog groups, file reads and digest
+work use HTTP admission instead of repository slots. GitHub's existing primary
+reservations, secondary cooldowns and retry budgets remain intact.
+
+The supplied successful original warm-2 trace contains 260 GHCR 200s, 56 Go
+list/latest 200s and 52 anonymous token calls (36 GHCR, 16 Docker Hub). Registry
+validators cannot eliminate those downloads. OCI tag pages now store only tag
+strings and use a one-hour freshness floor when validators are absent. Go
+list/latest has the same configurable minimum; tagged Go lists skip @latest,
+while empty lists retain its pseudo-version fallback. Both floors are derived
+from fetched-at and can be disabled immediately with their `--*-freshness-secs 0`
+flags. `no-cache`/`no-store`, other registries and mutable manifest digests retain
+their upstream rules. Anonymous image-scoped pull tokens are reused only within
+their expiry minus a margin; private/GitHub credentials are never stored as tokens.
+See [cache policy](cache.md#local-freshness-and-host-limits) and
+[departure 21](departures.md#departure-21). New versions/deletions can be delayed
+within the chosen freshness window; OCI publication dates remain unknown.
+
+A live GitHub Packages versions probe returned 403: the supplied OAuth token
+lacks `read:packages`, as required by the
+[Packages API](https://docs.github.com/en/rest/packages/packages#list-package-versions-for-a-package-owned-by-an-organization).
+Docker Hub's dated newest-first API worked (the postgres probe reported 1,427
+tags). It does not make stopping at a known mutable tag sufficient to reconcile
+older retargeting/deletion. Neither API replaced portable OCI enumeration; no
+unsafe lexical `?last=` early stop was introduced. Every expired catalog still
+walks the complete page chain.
+
+Initial live attempts also exposed intermittent GHCR 429s partway through Immich
+catalogs. Extraction status remained Complete, but ten original-workload proposals
+were missing (432 versus 442). Those short timings were rejected. Registry reads
+now share a host cooldown and retry at most three times, honoring numeric/date
+Retry-After up to 60 seconds or backing off 1/2/4 seconds without it. Longer waits
+and exhaustion remain explicit failures; 429s never enter the cache. Tests cover
+recovery, exhaustion and isolating a throttled host. Final runs below are checked
+for full enumeration, stable proposal counts and warnings, not status alone.
+
+
+### Final public twelve-repository comparison
+
+The committed `examples/benchmark-batch-public.pkl` reads actual public workflow,
+Dockerfile, Kubernetes/Kustomize and Go declarations. It restricts Go extraction
+to six common `golang.org/x` modules; every selected source still enumerates its
+full catalog. The twelve repositories are listed in the reproduction command
+below. This is a different workload from the supplied twelve sweepies repos:
+72 unique catalogs, 203 proposals and twelve Complete repositories in every run.
+
+For this benchmark only, non-GHCR image digest checks are explicitly disabled;
+Docker Hub tag catalogs and GHCR digest checks remain enabled. The shared outbound
+IP exhausted Docker Hub's anonymous pull allowance during earlier repetitions.
+A direct public probe returned 429 with `ratelimit-remaining: 0;w=3600` and the
+unauthenticated pull-limit classification. HEAD is documented not to consume
+pull quota, but a live HEAD was also rejected once the quota was already zero.
+The production image-digest default remains enabled. This benchmark therefore
+cannot establish successful Docker Hub digest checks on the exhausted IP.
+See [Docker pull limits](https://docs.docker.com/docker-hub/usage/pulls/) and
+[its distinct quota/abuse responses](https://docs.docker.com/docker-hub/troubleshoot/).
+
+Both release binaries used this exact same benchmark configuration. Their six
+samples alternated before/after for cold, warm 1 and warm 2, with separate absent
+SQLite caches for cold and retained caches for warm. There were **zero 429s** in
+all six final samples. After removing only `stats` and `releaseAge.evaluatedAt`,
+all six complete JSON reports are identical, including the same six pre-existing
+warnings (five SHA pins without version comments and one setup-go digest 422).
+Normalized SHA-256:
+`8c54d1d8fe004ab9a505aa2e17e5933cdf66c829f155c981dfe4cd20ab2b19e4`.
+
+| Version | Sample | Wall s | Engine s | Requests | 304s | Proposals |
+|---|---|---:|---:|---:|---:|---:|
+| `4182a1f` | cold | 44.30 | 44.226 | 837 | 0 | 203 |
+| `4182a1f` | warm1 | 30.62 | 30.572 | 380 | 68 | 203 |
+| `4182a1f` | warm2 | 33.83 | 33.700 | 371 | 92 | 203 |
+| `ecec03b` | cold | 36.31 | 36.262 | 831 | 0 | 203 |
+| `ecec03b` | warm1 | 3.68 | 3.533 | 104 | 68 | 203 |
+| `ecec03b` | warm2 | 3.40 | 3.339 | 93 | 92 | 203 |
+
+Warm wall time improves 8.3× and 9.9× in these observations; warm-2 requests fall
+75%. Cold still walks 248 authenticated GHCR tag pages, including the very large
+Immich machine-learning catalog. Cold requests drop by six because tagged Go
+modules no longer query @latest. No history or lexical page chain is truncated.
+
+Warm 2 makes zero GHCR tag-list requests, zero Go list/latest requests and zero
+token requests. All 248 GHCR tag pages, nine Docker Hub tag pages and six Go
+lists are fresh reads. The remaining 93 requests are 87 GitHub reads and six
+conditional GHCR manifest HEADs. Warm 1 has five token refreshes and six initial
+HEAD 401s: intervening baseline scans let the short anonymous tokens expire;
+persisting tokens does not extend their server lifetime. The remaining wall
+latency is predominantly GitHub validation/head reads and their bounded queue.
+
+Representative warm-2 host aggregates follow. Durations sum across concurrent
+requests and must not be added to estimate wall time. `miss` includes challenges
+and first uncached reads; fresh hits are included explicitly. All cold/warm-1/
+warm-2 aggregates are retained next to the raw logs as `*.hosts.json`.
+
+| Version | Host | Outcome | Count | Summed total ms | Summed queued ms |
+|---|---|---|---:|---:|---:|
+| `4182a1f` | api.github.com | 304 | 86 | 143856.7 | 116657.4 |
+| `4182a1f` | api.github.com | miss | 1 | 264.1 | 0.0 |
+| `4182a1f` | auth.docker.io | miss | 4 | 812.7 | 31.4 |
+| `4182a1f` | ghcr.io | miss | 10 | 3816.7 | 1101.3 |
+| `4182a1f` | ghcr.io | 200 | 248 | 36039.2 | 85.2 |
+| `4182a1f` | ghcr.io | 304 | 6 | 585.1 | 0.0 |
+| `4182a1f` | proxy.golang.org | fresh-hit | 9 | 21.4 | 0.0 |
+| `4182a1f` | proxy.golang.org | 200 | 3 | 2048.5 | 1608.8 |
+| `4182a1f` | registry-1.docker.io | miss | 4 | 2171.8 | 0.0 |
+| `4182a1f` | registry-1.docker.io | 200 | 9 | 1408.6 | 25.8 |
+| `ecec03b` | api.github.com | 304 | 86 | 96779.1 | 65618.2 |
+| `ecec03b` | api.github.com | miss | 1 | 230.4 | 0.0 |
+| `ecec03b` | ghcr.io | fresh-hit | 248 | 416.8 | 0.0 |
+| `ecec03b` | ghcr.io | 304 | 6 | 1836.2 | 0.0 |
+| `ecec03b` | proxy.golang.org | fresh-hit | 6 | 22.9 | 0.0 |
+| `ecec03b` | registry-1.docker.io | fresh-hit | 9 | 30.6 | 0.0 |
+
+After WAL checkpoint/truncate without VACUUM, baseline/implementation database
+sizes are 7,401,472 / 7,434,240 bytes and compressed HTTP bodies are 3,631,228 /
+3,624,231 bytes. Compact OCI pages retain all tag strings, so this work mainly
+removes repeat network downloads rather than shrinking an already small page
+format. Anonymous token rows and SQLite allocation order can increase file size.
+
+Raw public artifacts are under `benchmark-results/batch-live/verified-{before,complete}/`;
+`verified-summary.json` includes all samples, host aggregates, cache sizes and
+normalized report hashes. Earlier `public-before`, `public-after`,
+`public-final` and original-workload attempts are diagnostic samples, not part
+of this final A/B comparison.
+
+### Original workload and limits of verification
+
+The supplied successful baseline remains 99.6 / 73.4 / 69.6 seconds with 442
+proposals and about 1,815 / 630 / 632 requests. The exact supplied warm-2 trace
+confirms 260 GHCR 200s and 56 Go list/latest 200s. Its GitHub 304s alone sum
+120,970 ms total / 87,915 ms queued; npm 304s sum 22,700 / 20,353 ms. These are
+actual queue costs, not connection-setup estimates.
+
+The original 324-catalog workload was also run with the new caches before the
+HEAD change. Warm lookup phase time was 2.584 / 3.396 seconds, with zero Go
+list/latest requests and no successful GHCR tag-page downloads (two inaccessible
+private-image challenges remained). However, Docker Hub manifest quota failures
+caused roughly 41 seconds of digest retry time and reduced proposal counts to
+434 / 429 / 429 across cold/warm samples. Those **are not successful end-to-end
+speedup results** and are excluded above. They motivated both HEAD checks and
+fail-fast classification of persistent pull-quota failures.
+
+The original full 442-proposal workload has **not** been validated after the
+quota was exhausted. It needs an available Docker Hub quota or authorized Docker
+registry credentials; neither is fabricated here. No new private registry
+credential support, Docker Hub dated-tag API or GitHub Packages fallback was
+implemented. The new public benchmark proves the catalog/host changes on twelve
+repositories, not an identical replacement for the supplied private workload.
+Private workload reports/caches/logs remain outside this repository at
+`/root/rustovate-conf/performance-{after,final}/`; no private fixtures were added.
+
+### Validation and reproduction
+
+`CARGO_NET_OFFLINE=true RUSTOVATE_RECORD=0 mise run ci` passed on the final code:
+22-cassette secret scan, formatting, Clippy `-D warnings`, workspace tests and
+build. Meaningful new coverage includes independent host admission, freshness
+expiry/disable/no-cache behavior, compact OCI reopen, anonymous-token persistence,
+expiry/rejection/no-store, stable/prerelease/pseudo Go versions, bounded 429
+recovery/exhaustion/host cooldowns, pull-quota classification, HEAD/GET validator
+isolation, HEAD 304 reuse and unsupported/missing-header fallback. The three
+manifest fixture interactions are explicitly identified as independently
+simulated HEAD responses derived from recorded GET headers and OCI semantics;
+no tests performed network requests. Log: `benchmark-results/batch-complete-ci.log`.
+
+Build first, then reproduce the final public policy with a new cache:
+
+```sh
+mise exec -- cargo build --release --locked -p rustovate-cli
+mise exec -- bash -c '
+  set -eu
+  export GH_TOKEN="$(gh auth token)"
+  unset RUSTOVATE_TOKEN GITHUB_TOKEN
+  batch_root=benchmark-results/batch-live
+  batch_repos=(
+    sweepies/remote-agent sweepies/immich-go stefanprodan/podinfo
+    fluxcd/flux2 fluxcd/source-controller fluxcd/helm-controller
+    fluxcd/kustomize-controller fluxcd/notification-controller
+    fluxcd/image-reflector-controller fluxcd/image-automation-controller
+    containrrr/watchtower immich-app/immich
+  )
+  for batch_repo in "${batch_repos[@]}"; do
+    mkdir -p "$batch_root/config/${batch_repo%/*}"
+    printf "amends \"../../../../examples/benchmark-batch-public.pkl\"\n" \
+      > "$batch_root/config/$batch_repo.pkl"
+  done
+  batch_run=$(mktemp -d "$batch_root/reproduce.XXXXXX")
+  for sample in cold warm1 warm2; do
+    /usr/bin/time -f "%e" -o "$batch_run/$sample.time" \
+      target/release/rustovate lookup --config-dir "$batch_root/config" \
+      --cache "$batch_run/cache.sqlite" --concurrency 8 -vv --json \
+      "${batch_repos[@]}" > "$batch_run/$sample.json" 2> "$batch_run/$sample.log"
+  done
+  echo "$batch_run"
+'
+```
+
+Use an independently built `4182a1f` binary and its own absent cache for the
+baseline, keeping the same final config. Alternate variants as above; do not
+compare the earlier invalid-rate-limit samples. To restore upstream catalog
+freshness for a diagnostic run, pass both `--registry-freshness-secs 0` and
+`--go-freshness-secs 0`; doing so deliberately restores repeated downloads.
+All implementation and documentation commits remain local; nothing was pushed.
