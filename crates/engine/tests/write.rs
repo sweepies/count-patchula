@@ -15,6 +15,7 @@ struct Fake {
     files: BTreeMap<String, String>,
     lock: bool,
     writes: Mutex<Vec<(String, Value)>>,
+    prs: Mutex<Vec<Value>>,
 }
 impl Fake {
     fn new(lock: bool) -> Self {
@@ -22,7 +23,7 @@ impl Fake {
         files:BTreeMap::from([
             (".github/rustovate.pkl".into(),"amends \"../Rustovate.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n".into()),
             ("package.json".into(),"{\n  \"dependencies\": {\"fixture\": \"1.0.0\"}\n}\n".into()),
-        ]),lock,writes:Default::default(),
+        ]),lock,writes:Default::default(),prs:Default::default(),
     }
     }
     fn tree(&self) -> Value {
@@ -59,6 +60,8 @@ impl Transport for Fake {
                     200,
                     json!({"data":{"repository":{"defaultBranchRef":{"name":"main","target":{"oid":"base","tree":{"oid":"base-tree"}}}}}}),
                 )
+            } else if body["query"] == "query{viewer{login}}" {
+                (200, json!({"data":{"viewer":{"login":"rustovate[bot]"}}}))
             } else {
                 assert_eq!(body["query"], rustovate_update::REF_UPDATE);
                 self.writes.lock().unwrap().push((path.into(), body));
@@ -72,7 +75,11 @@ impl Transport for Fake {
                 .lock()
                 .unwrap()
                 .push((path.into(), body.clone()));
-            if path.ends_with("/git/blobs") {
+            if path.ends_with("/pulls") {
+                let pr = json!({"number":1,"node_id":"pr-id","html_url":"https://github.com/demo/sandbox/pull/1","title":body["title"],"body":body["body"],"state":"open","user":{"login":"rustovate[bot]"},"head":{"ref":body["head"],"sha":"new-commit","repo":{"full_name":"demo/sandbox"}},"base":{"ref":"main","repo":{"full_name":"demo/sandbox"}},"labels":[{"name":"dependencies"}],"auto_merge":null,"created_at":chrono::Utc::now().to_rfc3339(),"merged_at":null});
+                self.prs.lock().unwrap().push(pr.clone());
+                (201, pr)
+            } else if path.ends_with("/git/blobs") {
                 (
                     201,
                     json!({"sha":blob_sha(body["content"].as_str().unwrap())}),
@@ -87,6 +94,10 @@ impl Transport for Fake {
             } else {
                 panic!("unexpected write {path}");
             }
+        } else if path == "/repos/demo/sandbox/pulls" {
+            (200, json!(*self.prs.lock().unwrap()))
+        } else if path == "/repos/demo/sandbox/pulls/1" {
+            (200, self.prs.lock().unwrap()[0].clone())
         } else if path == "/repos/demo/sandbox/branches" {
             (200, json!([]))
         } else if path == "/repos/demo/sandbox" {

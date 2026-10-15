@@ -23,6 +23,23 @@ pub struct Plan {
     pub contents: BTreeMap<String, String>,
     pub identity: String,
     pub fingerprint: String,
+    pub changes: Vec<Change>,
+    pub retry: bool,
+}
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct Change {
+    pub source: String,
+    pub package: String,
+    pub file: String,
+    pub current: String,
+    pub value: Option<String>,
+    pub version: Option<String>,
+    pub digest: Option<String>,
+    pub kind: String,
+    pub merge: bool,
+    pub labels: Vec<String>,
+    pub release_notes: bool,
+    pub body_notes: Vec<String>,
 }
 pub(crate) fn hash(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -72,6 +89,13 @@ pub fn plan(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Vec<Plan>, String> {
     let evaluator = rustovate_lookup::Evaluator::new(config)?;
+    let mut package_names = BTreeMap::<String, BTreeSet<(String, String)>>::new();
+    for dep in dependencies {
+        package_names
+            .entry(slug(&dep.package))
+            .or_default()
+            .insert((word(&dep.source), dep.package.clone()));
+    }
     let mut groups = BTreeMap::<String, (String, Vec<Item<'_>>)>::new();
     for file in &repo.package_files {
         for reported in &file.dependencies {
@@ -113,7 +137,27 @@ pub fn plan(
                         (
                             serde_json::json!(["dependency", word(&dep.source), dep.package, line])
                                 .to_string(),
-                            format!("{}-{line}", slug(&dep.package)),
+                            {
+                                let package = slug(&dep.package);
+                                let manager = if package_names[&package].len() > 1 {
+                                    format!("{}-", manager_slug(dep))
+                                } else {
+                                    String::new()
+                                };
+                                let variants: BTreeSet<_> = dependencies
+                                    .iter()
+                                    .filter(|d| d.package == dep.package && d.source == dep.source)
+                                    .map(|d| d.current.split_once('-').map(|(_, v)| v))
+                                    .collect();
+                                let display = if variants.len() == 1 && line.contains(".x-") {
+                                    line.split_once(".x-")
+                                        .map(|(major, _)| format!("{major}.x"))
+                                        .unwrap_or_else(|| line.clone())
+                                } else {
+                                    line.clone()
+                                };
+                                format!("{manager}{package}-{display}")
+                            },
                         )
                     };
                     groups
@@ -246,11 +290,45 @@ pub fn plan(
             lockfile_pending: pending,
             files,
         };
+        let changes: BTreeSet<_> = items
+            .iter()
+            .map(|item| {
+                let u = item.update;
+                let p = u.policy.as_ref();
+                Change {
+                    source: word(&item.dep.source),
+                    package: item.dep.package.clone(),
+                    file: item.dep.file.clone(),
+                    current: format!(
+                        "{}{}",
+                        item.dep.current,
+                        item.dep
+                            .digest
+                            .as_ref()
+                            .map(|d| format!("@{d}"))
+                            .unwrap_or_default()
+                    ),
+                    value: u.new_value.clone(),
+                    version: u.new_version.clone(),
+                    digest: u.new_digest.clone(),
+                    kind: u.update_type.clone(),
+                    merge: p.map_or(config.defaults.merge, |p| p.merge),
+                    labels: p.map_or_else(|| config.defaults.labels.clone(), |p| p.labels.clone()),
+                    release_notes: p.map_or(config.defaults.release_notes, |p| p.release_notes),
+                    body_notes: p.map_or_else(
+                        || config.defaults.body_notes.clone(),
+                        |p| p.body_notes.clone(),
+                    ),
+                }
+            })
+            .collect();
         plans.push(Plan {
             action,
             contents,
             identity: hash(identity.as_bytes()),
             fingerprint,
+            changes: changes.into_iter().collect(),
+            retry: false,
         });
     }
     Ok(plans)

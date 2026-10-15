@@ -86,6 +86,9 @@ pub async fn cleanup(
         .get_fresh(&format!("repos/{repo}"))
         .await
         .map_err(|e| e.to_string())?;
+    if metadata["default_branch"] != default_branch {
+        return Err("default branch changed before cleanup; rerun".into());
+    }
     let node = metadata["node_id"]
         .as_str()
         .ok_or("missing repository node ID")?;

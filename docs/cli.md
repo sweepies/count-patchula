@@ -85,7 +85,7 @@ Extract dependencies and report available updates without writing repositories.
 
 - **Usage:** `rustovate run [FLAGS] [REPOSITORIES]…`
 
-Create or update dependency branches with API commits (no pull requests).
+Create or update dependency branches and pull requests with verified API commits.
 
 ### Arguments
 - **`[REPOSITORIES]…`** — Repositories as owner/repo; omit to discover all accessible repositories.
@@ -108,4 +108,7 @@ Create or update dependency branches with API commits (no pull requests).
 - **`--config-dir <CONFIG_DIR>`** — Per-repository local overrides: `<dir>/<owner>/<name>.pkl` wins over `<dir>/<name>.pkl`. Unmatched repositories discover `.github/rustovate.pkl` then `rustovate.pkl`; neither means skipped. All matched files are validated before repository scans. Mutually exclusive with `--config`.
 - **`--dry-run`** — Print planned branches, files and unified diffs without writing to GitHub.
 - **`--allow-lockfile-pending`** — Permit manifest-only test branches whose lockfiles need SWE-109 tooling.
+- **`--recheck <RECHECK>`** — Checkbox wording: now or next-run (default); also RUSTOVATE_RECHECK.
+
+  **Choices:** `now`, `next-run`
 - **`-h --help`** — Print help

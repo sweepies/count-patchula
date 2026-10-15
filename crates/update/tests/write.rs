@@ -18,6 +18,9 @@ use std::{
 struct State {
     base: String,
     requests: Vec<(String, String)>,
+    prs: BTreeMap<u64, Value>,
+    pr_create_error: bool,
+    pr_page_size: Option<usize>,
     latency: std::time::Duration,
     refs: BTreeMap<String, String>,
     trees: BTreeMap<String, Value>,
@@ -27,6 +30,7 @@ struct State {
     race: bool,
     truncated: bool,
     history: Vec<String>,
+    merged_heads: BTreeSet<String>,
 }
 struct Fake(Mutex<State>);
 fn response(status: u16, body: Value) -> Response {
@@ -53,6 +57,26 @@ impl Transport for Fake {
         let reply = if path == "/graphql" {
             if body["query"] == "query{viewer{login}}" {
                 response(200, json!({"data":{"viewer":{"login":"rustovate[bot]"}}}))
+            } else if body["query"]
+                .as_str()
+                .is_some_and(|q| q.contains("PullRequestAutoMerge"))
+            {
+                state.writes.push((path.clone(), body.clone()));
+                let enabled = body["query"]
+                    .as_str()
+                    .unwrap()
+                    .contains("enablePullRequestAutoMerge");
+                for pr in state.prs.values_mut() {
+                    pr["auto_merge"] = if enabled {
+                        json!({"enabled":true})
+                    } else {
+                        Value::Null
+                    };
+                }
+                response(
+                    200,
+                    json!({"data":if enabled { json!({"enablePullRequestAutoMerge":{"pullRequest":{"id":"pr-id"}}}) } else {json!({"disablePullRequestAutoMerge":{"pullRequest":{"id":"pr-id"}}})}}),
+                )
             } else {
                 assert_eq!(body["query"], rustovate_update::REF_UPDATE);
                 state.writes.push((path.clone(), body.clone()));
@@ -76,6 +100,15 @@ impl Transport for Fake {
                             r["afterOid"].as_str().unwrap().into(),
                         );
                     }
+                    for pr in state.prs.values_mut() {
+                        for r in updates {
+                            if r["name"]
+                                == format!("refs/heads/{}", pr["head"]["ref"].as_str().unwrap())
+                            {
+                                pr["head"]["sha"] = r["afterOid"].clone();
+                            }
+                        }
+                    }
                     response(
                         200,
                         json!({"data":{"updateRefs":{"clientMutationId":null}}}),
@@ -86,7 +119,21 @@ impl Transport for Fake {
             }
         } else if request.method() == reqwest::Method::POST {
             state.writes.push((path.clone(), body.clone()));
-            if path.ends_with("/git/blobs") {
+            if path == "/repos/demo/app/pulls" {
+                let number = state.prs.len() as u64 + 1;
+                let sha =
+                    state.refs[&format!("refs/heads/{}", body["head"].as_str().unwrap())].clone();
+                let pr = json!({"number":number,"node_id":format!("pr-{number}"),"html_url":format!("https://github.com/demo/app/pull/{number}"),"state":"open","title":body["title"],"body":body["body"],"head":{"ref":body["head"],"sha":sha,"repo":{"full_name":"demo/app"}},"base":{"ref":body["base"],"repo":{"full_name":"demo/app"}},"user":{"login":"rustovate[bot]"},"labels":[],"auto_merge":null,"merged_at":null,"created_at":chrono::Utc::now().to_rfc3339()});
+                state.prs.insert(number, pr.clone());
+                response(
+                    if std::mem::take(&mut state.pr_create_error) {
+                        500
+                    } else {
+                        201
+                    },
+                    pr,
+                )
+            } else if path.ends_with("/git/blobs") {
                 assert_eq!(body["encoding"], "utf-8");
                 response(
                     201,
@@ -123,12 +170,75 @@ impl Transport for Fake {
             } else {
                 panic!("unexpected write {path}");
             }
+        } else if request.method() == reqwest::Method::PATCH
+            && path.starts_with("/repos/demo/app/pulls/")
+        {
+            state.writes.push((path.clone(), body.clone()));
+            let n: u64 = path.rsplit('/').next().unwrap().parse().unwrap();
+            let pr = state.prs.get_mut(&n).unwrap();
+            for (key, value) in body.as_object().unwrap() {
+                if key == "base" {
+                    pr["base"]["ref"] = value.clone();
+                } else {
+                    pr[key] = value.clone();
+                }
+            }
+            response(200, pr.clone())
+        } else if request.method() == reqwest::Method::PUT && path.ends_with("/labels") {
+            state.writes.push((path.clone(), body.clone()));
+            let n: u64 = path.split('/').nth(5).unwrap().parse().unwrap();
+            let labels: Vec<_> = body["labels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|l| json!({"name":l}))
+                .collect();
+            state.prs.get_mut(&n).unwrap()["labels"] = json!(labels);
+            response(200, json!(labels))
+        } else if path == "/repos/demo/app/pulls" {
+            let page = request
+                .url()
+                .query_pairs()
+                .find(|(k, _)| k == "page")
+                .and_then(|(_, p)| p.parse::<usize>().ok())
+                .unwrap_or(1);
+            let size = state.pr_page_size.unwrap_or(100);
+            let prs: Vec<_> = state
+                .prs
+                .values()
+                .rev()
+                .skip((page - 1) * size)
+                .take(size)
+                .cloned()
+                .collect();
+            let mut reply = response(200, json!(prs));
+            if page * size < state.prs.len() {
+                reply.headers.insert("link", format!("<https://api.github.com/repos/demo/app/pulls?state=all&page={}>; rel=\"next\"",page+1).parse().unwrap());
+            }
+            reply
+        } else if let Some(n) = path.strip_prefix("/repos/demo/app/pulls/") {
+            response(200, state.prs[&n.parse::<u64>().unwrap()].clone())
+        } else if path.starts_with("/repos/actions/checkout/releases/tags/") {
+            let mut reply = if request.headers().contains_key("if-none-match") {
+                response(304, Value::Null)
+            } else {
+                response(200, json!({"body":"Release details 🦀\n".repeat(10_000)}))
+            };
+            reply
+                .headers
+                .insert("etag", "\"release-one\"".parse().unwrap());
+            reply
+        } else if path == "/repos/demo/app/branches/main" {
+            response(200, json!({"commit":{"sha":state.base}}))
         } else if path == "/repos/demo/app/branches" {
             response(200, json!(state.refs.iter().map(|(n, sha)| json!({"name":n.strip_prefix("refs/heads/").unwrap(),"commit":{"sha":sha}})).collect::<Vec<_>>()))
         } else if let Some(sha) = path.strip_prefix("/repos/demo/app/commits/") {
             response(200, json!({"commit":state.commits[sha]}))
         } else if path == "/repos/demo/app" {
-            response(200, json!({"node_id":"repo-id","default_branch":"main"}))
+            response(
+                200,
+                json!({"node_id":"repo-id","default_branch":"main","allow_auto_merge":true,"allow_squash_merge":true}),
+            )
         } else if let Some(branch) = path.strip_prefix("/repos/demo/app/git/ref/heads/") {
             // url::Url keeps percent-encoded slashes in a path segment.
             let branch = branch.replace("%2F", "/");
@@ -151,10 +261,16 @@ impl Transport for Fake {
                 .map(String::as_str)
                 .chain(std::iter::once(sha))
                 .collect();
-            let commits: Vec<_> = history.iter().map(|sha| {
+            let commits: Vec<_> = if spec.starts_with(&format!("{}...", state.base))
+                && state.merged_heads.contains(sha)
+            {
+                Vec::new()
+            } else {
+                history.iter().map(|sha| {
                 let commit = &state.commits[*sha];
                 json!({"sha":sha,"author":{"login":commit.get("actor").and_then(Value::as_str).unwrap_or("rustovate[bot]")},"committer":{"login":commit.get("committer_login").and_then(Value::as_str).unwrap_or("web-flow")},"commit":commit})
-            }).collect();
+            }).collect()
+            };
             response(
                 200,
                 json!({"total_commits":commits.len(),"commits":commits}),
@@ -872,7 +988,7 @@ async fn shared_base_write_trace_and_request_budget() {
         state.requests.len(),
         started.elapsed()
     );
-    assert_eq!(state.requests.len(), 4 + 12 * 4);
+    assert_eq!(state.requests.len(), 4 + 12 * 3 + 1);
     assert_eq!(
         state
             .requests
@@ -894,4 +1010,769 @@ async fn shared_base_write_trace_and_request_budget() {
             .filter(|(p, _)| p.ends_with("/git/trees"))
             .all(|(_, b)| b["tree"][0]["content"] == p.contents["mise.toml"])
     );
+}
+
+fn pr_config() -> (Config, Repository) {
+    let (mut config, repo, _, _) = setup("22.0.0", false);
+    config.prs.concurrent = None;
+    config.prs.per_hour = None;
+    (config, repo)
+}
+async fn pr_cycle(
+    client: &Client,
+    repo: &Repository,
+    config: &Config,
+    plans: &mut [Plan],
+    snapshot: &Snapshot,
+) -> Vec<rustovate_report::PullRequestAction> {
+    let mut state = rustovate_update::Lifecycle::prepare(
+        client,
+        repo,
+        plans,
+        config,
+        chrono::Utc::now(),
+        rustovate_update::Recheck::NextRun,
+    )
+    .await
+    .unwrap();
+    rustovate_update::apply_all(client, plans, snapshot, "main", Rebase::Behind, false).await;
+    state.publish(client, plans).await;
+    state.actions
+}
+#[tokio::test(start_paused = true)]
+async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
+    let (config, repo) = pr_config();
+    let (mut p, snapshot) = make_plan("22.0.0");
+    p.changes[0].labels = vec!["dependencies".into()];
+    p.changes[0].body_notes = vec!["Review our deployment first.".into()];
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    let actions = pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut p),
+        &snapshot,
+    )
+    .await;
+    assert_eq!(actions[0].status, ActionStatus::Created);
+    {
+        let state = server.0.lock().unwrap();
+        let pr = &state.prs[&1];
+        assert_eq!(pr["title"], p.action.message);
+        let body = pr["body"].as_str().unwrap();
+        assert!(body.contains("| Package | Change | Type | File |"));
+        assert!(body.contains("mise.toml") && body.contains("22.0.0"));
+        assert!(body.contains("Review our deployment first."));
+        assert!(body.contains("Created by rustovate CLI. Click to re-check on the next run."));
+        assert!(body.contains("<!-- rustovate:") && body.contains("<!-- rustovate-recheck -->"));
+        assert_eq!(pr["labels"][0]["name"], "dependencies");
+    }
+    let count = server.0.lock().unwrap().writes.len();
+    let (mut repeat, _) = make_plan("22.0.0");
+    repeat.changes = p.changes.clone();
+    let actions = pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut repeat),
+        &snapshot,
+    )
+    .await;
+    assert_eq!(actions[0].status, ActionStatus::Unchanged);
+    assert_eq!(server.0.lock().unwrap().writes.len(), count);
+    {
+        let mut s = server.0.lock().unwrap();
+        let body = s.prs[&1]["body"].as_str().unwrap().replace(
+            "- [ ] Created by rustovate CLI. Click to re-check on the next run.",
+            "- [x] Any operator wording",
+        );
+        s.prs.get_mut(&1).unwrap()["body"] = json!(body);
+        s.prs.get_mut(&1).unwrap()["labels"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"name":"human-label"}));
+    }
+    let (mut retry, _) = make_plan("22.0.0");
+    retry.changes = p.changes.clone();
+    let actions = pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut retry),
+        &snapshot,
+    )
+    .await;
+    assert!(retry.retry);
+    assert_eq!(retry.action.status, ActionStatus::Updated);
+    assert_eq!(actions[0].status, ActionStatus::Updated);
+    let (mut next, _) = make_plan("22.1.0");
+    next.changes[0].labels = vec!["new-policy".into()];
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut next),
+        &snapshot,
+    )
+    .await;
+    let state = server.0.lock().unwrap();
+    assert_eq!(state.prs.len(), 1);
+    assert!(state.prs[&1]["body"].as_str().unwrap().contains("22.1.0"));
+    assert!(
+        state.prs[&1]["labels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l["name"] == "human-label")
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn manually_closed_update_stays_closed_across_files_and_wording_but_newer_target_is_allowed()
+{
+    let (config, repo) = pr_config();
+    let (mut p, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut p),
+        &snapshot,
+    )
+    .await;
+    {
+        let mut s = server.0.lock().unwrap();
+        s.prs.get_mut(&1).unwrap()["state"] = json!("closed");
+        let mut decoy = s.prs[&1].clone();
+        decoy["number"] = json!(2);
+        decoy["user"]["login"] = json!("human");
+        s.prs.insert(2, decoy);
+        s.pr_page_size = Some(1);
+    }
+    let count = server.0.lock().unwrap().writes.len();
+    let (mut repeat, _) = make_plan("22.0.0");
+    repeat.action.message = "build: different wording".into();
+    let mut row = repeat.changes[0].clone();
+    row.file = "other.toml".into();
+    repeat.changes.push(row);
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut repeat),
+        &snapshot,
+    )
+    .await;
+    assert_eq!(repeat.action.status, ActionStatus::Skipped);
+    assert!(repeat.action.reason.unwrap().contains("manually closed"));
+    assert_eq!(server.0.lock().unwrap().writes.len(), count);
+    let (mut next, _) = make_plan("22.1.0");
+    let actions = pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut next),
+        &snapshot,
+    )
+    .await;
+    assert_eq!(actions[0].status, ActionStatus::Created);
+    assert_eq!(server.0.lock().unwrap().prs.len(), 3);
+}
+
+#[tokio::test(start_paused = true)]
+async fn concurrent_and_hourly_limits_include_closed_creates_and_null_is_unlimited() {
+    let (mut config, repo) = pr_config();
+    config.prs.concurrent = Some(1);
+    let (p, snapshot) = make_plan("22.0.0");
+    let (mut other, _) = make_plan("24.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    let mut plans = vec![p, other];
+    pr_cycle(&github, &repo, &config, &mut plans, &snapshot).await;
+    assert_eq!(plans[1].action.status, ActionStatus::Skipped);
+    assert!(
+        plans[1]
+            .action
+            .reason
+            .as_ref()
+            .unwrap()
+            .contains("concurrent")
+    );
+    server.0.lock().unwrap().prs.get_mut(&1).unwrap()["state"] = json!("closed");
+    config.prs.concurrent = None;
+    config.prs.per_hour = Some(1);
+    (other, _) = make_plan("24.0.0");
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut other),
+        &snapshot,
+    )
+    .await;
+    assert_eq!(other.action.status, ActionStatus::Skipped);
+    assert!(other.action.reason.as_ref().unwrap().contains("perHour"));
+    config.prs.per_hour = None;
+    (other, _) = make_plan("24.0.0");
+    let actions = pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut other),
+        &snapshot,
+    )
+    .await;
+    assert_eq!(actions[0].status, ActionStatus::Created);
+}
+
+#[tokio::test(start_paused = true)]
+async fn obsolete_pr_closes_then_branch_deletes_and_human_history_is_protected() {
+    for human in [false, true] {
+        let (config, repo) = pr_config();
+        let (mut p, snapshot) = make_plan("22.0.0");
+        let server = fake(&snapshot);
+        let github = client(server.clone()).await;
+        pr_cycle(
+            &github,
+            &repo,
+            &config,
+            std::slice::from_mut(&mut p),
+            &snapshot,
+        )
+        .await;
+        {
+            let mut s = server.0.lock().unwrap();
+            let commit = s
+                .commits
+                .get_mut(p.action.commit.as_ref().unwrap())
+                .unwrap();
+            commit["message"] = json!(commit["message"].as_str().unwrap().replace(
+                "Rustovate-Base: base",
+                "Rustovate-Base: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ));
+            if human {
+                commit["actor"] = json!("human");
+            }
+        }
+        let state = rustovate_update::Lifecycle::prepare(
+            &github,
+            &repo,
+            &mut [],
+            &config,
+            chrono::Utc::now(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            state.actions[0].status,
+            if human {
+                ActionStatus::Protected
+            } else {
+                ActionStatus::Closed
+            }
+        );
+        let cleanup = rustovate_update::cleanup(&github, "demo/app", "base", "main", &[], false)
+            .await
+            .unwrap();
+        assert_eq!(cleanup.len(), usize::from(!human));
+        let s = server.0.lock().unwrap();
+        assert_eq!(s.prs[&1]["state"], if human { "open" } else { "closed" });
+        if !human {
+            let close = s
+                .writes
+                .iter()
+                .position(|(_, b)| b["state"] == "closed")
+                .unwrap();
+            let delete = s
+                .writes
+                .iter()
+                .rposition(|(_, b)| b["query"] == rustovate_update::REF_UPDATE)
+                .unwrap();
+            assert!(close < delete);
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
+    let (config, repo) = pr_config();
+    let (mut p, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    p.changes[0].source = "github-tags".into();
+    p.changes[0].package = "actions/checkout".into();
+    p.changes[0].release_notes = true;
+    let mut row = p.changes[0].clone();
+    row.file = "other.yml".into();
+    p.changes.push(row);
+    let mut lifecycle = rustovate_update::Lifecycle::prepare(
+        &github,
+        &repo,
+        std::slice::from_mut(&mut p),
+        &config,
+        chrono::Utc::now(),
+        rustovate_update::Recheck::Now,
+    )
+    .await
+    .unwrap();
+    apply(&github, &mut p, &snapshot, "main", Rebase::Behind, false).await;
+    lifecycle
+        .publish(&github, std::slice::from_mut(&mut p))
+        .await;
+    {
+        let s = server.0.lock().unwrap();
+        let body = s.prs[&1]["body"].as_str().unwrap();
+        assert!(body.len() <= rustovate_update::BODY_LIMIT);
+        assert!(body.contains("Release details 🦀") && body.contains("Click to re-check now."));
+        assert_eq!(
+            s.requests
+                .iter()
+                .filter(|(_, p)| p.contains("/releases/tags/"))
+                .count(),
+            1
+        );
+    }
+    let (mut repeat, _) = make_plan("22.0.0");
+    repeat.changes = p.changes.clone();
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut repeat),
+        &snapshot,
+    )
+    .await;
+    assert_eq!(github.stats().await.not_modified, 1);
+    repeat.action.status = ActionStatus::Unchanged;
+    repeat.changes.iter_mut().for_each(|c| {
+        c.release_notes = false;
+        c.body_notes = vec!["huge 🦀 <!-- rustovate:fake -->".repeat(5000)];
+    });
+    let count = server
+        .0
+        .lock()
+        .unwrap()
+        .requests
+        .iter()
+        .filter(|(_, p)| p.contains("/releases/tags/"))
+        .count();
+    lifecycle
+        .publish(&github, std::slice::from_mut(&mut repeat))
+        .await;
+    let s = server.0.lock().unwrap();
+    let body = s.prs[&1]["body"].as_str().unwrap();
+    assert!(body.len() <= rustovate_update::BODY_LIMIT);
+    assert_eq!(body.matches("<!-- rustovate:").count(), 1);
+    assert_eq!(
+        s.requests
+            .iter()
+            .filter(|(_, p)| p.contains("/releases/tags/"))
+            .count(),
+        count
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn merge_policy_uses_only_native_auto_merge_and_lockfile_pending_disables_it() {
+    let (config, repo) = pr_config();
+    let (mut p, snapshot) = make_plan("22.0.0");
+    p.changes[0].merge = true;
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    let actions = pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut p),
+        &snapshot,
+    )
+    .await;
+    assert_eq!(actions[0].status, ActionStatus::Created);
+    {
+        let s = server.0.lock().unwrap();
+        assert!(s.writes.iter().any(|(_, b)| {
+            b["query"]
+                .as_str()
+                .is_some_and(|q| q.contains("enablePullRequestAutoMerge"))
+                && b["variables"]["input"]["mergeMethod"] == "SQUASH"
+        }));
+        assert!(!s.requests.iter().any(|(_, p)| p.ends_with("/merge")));
+    }
+    let (mut next, _) = make_plan("22.1.0");
+    next.changes[0].merge = true;
+    next.action.lockfile_pending = true;
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut next),
+        &snapshot,
+    )
+    .await;
+    let s = server.0.lock().unwrap();
+    assert!(s.prs[&1]["auto_merge"].is_null());
+}
+
+#[tokio::test(start_paused = true)]
+async fn uncertain_pr_creation_is_reconciled_next_run_and_never_blindly_retried() {
+    let (config, repo) = pr_config();
+    let (mut p, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    server.0.lock().unwrap().pr_create_error = true;
+    let github = client(server.clone()).await;
+    let actions = pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut p),
+        &snapshot,
+    )
+    .await;
+    assert_eq!(actions[0].status, ActionStatus::Error);
+    assert_eq!(server.0.lock().unwrap().prs.len(), 1);
+    let (mut repeat, _) = make_plan("22.0.0");
+    let actions = pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut repeat),
+        &snapshot,
+    )
+    .await;
+    assert_eq!(actions[0].status, ActionStatus::Unchanged);
+    assert_eq!(server.0.lock().unwrap().prs.len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn lookup_warnings_defer_obsolete_pr_closure() {
+    let (config, mut repo) = pr_config();
+    let (mut p, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut p),
+        &snapshot,
+    )
+    .await;
+    repo.warnings
+        .push("registry temporarily unavailable".into());
+    let state = rustovate_update::Lifecycle::prepare(
+        &github,
+        &repo,
+        &mut [],
+        &config,
+        chrono::Utc::now(),
+        Default::default(),
+    )
+    .await
+    .unwrap();
+    assert!(state.actions.is_empty());
+    assert_eq!(server.0.lock().unwrap().prs[&1]["state"], "open");
+}
+
+#[test]
+fn supplied_sandbox_targets_converge_to_sixteen_plans_and_blocked_pin_is_independent() {
+    // Self-authored manifests and target facts from the owner's rustovate report;
+    // no Renovate fixture, source or preset data is used.
+    let (config, mut repo, _, _) = setup("22.0.0", false);
+    let mut config = config;
+    config.managers = vec![
+        Manager::GithubActions,
+        Manager::Dockerfile,
+        Manager::Compose,
+        Manager::Mise,
+        Manager::Npm,
+    ];
+    let files = Files::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            format!(
+                "jobs:\n  ci:\n    runs-on: ubuntu-22.04\n    steps:\n      - uses: actions/checkout@{} # v4.1.7\n      - uses: jdx/mise-action@v2\n",
+                "a".repeat(40)
+            ),
+        ),
+        (
+            "Dockerfile".into(),
+            "FROM nginx:1.27.1-alpine\nFROM node:20.17.0-alpine\n".into(),
+        ),
+        (
+            "compose.yml".into(),
+            "services:\n  db:\n    image: postgres:16.4\n  cache:\n    image: redis:7.2.5-alpine\n"
+                .into(),
+        ),
+        (
+            "mise.toml".into(),
+            "[tools]\nnode = '22.9.0'\nbun = '1.1.30'\njq = '1.7.1'\n".into(),
+        ),
+        (
+            "package.json".into(),
+            "{\"devDependencies\":{\"prettier\":\"^3.3.0\"}}\n".into(),
+        ),
+    ]);
+    let deps = Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies;
+    let mut snapshot = Snapshot {
+        paths: files.keys().cloned().collect(),
+        files: files
+            .iter()
+            .map(|(p, c)| {
+                (
+                    p.clone(),
+                    Blob {
+                        sha: blob_sha(c),
+                        mode: "100644".into(),
+                        content: c.clone(),
+                    },
+                )
+            })
+            .collect(),
+    };
+    snapshot.paths.insert("bun.lock".into());
+    repo.package_files.clear();
+    for dep in &deps {
+        let targets: &[(&str, &str)] = match (dep.package.as_str(), word(&dep.source).as_str()) {
+            ("actions/checkout", _) => &[("minor", "v4.4.0"), ("major", "v7.0.1")],
+            ("jdx/mise-action", _) => &[("pin", "v2"), ("major", "v5")],
+            ("ubuntu", _) => &[("major", "26.04")],
+            ("nginx", _) => &[
+                ("pin", "1.27.1-alpine"),
+                ("patch", "1.27.5-alpine"),
+                ("minor", "1.31.7-alpine"),
+            ],
+            ("node", "docker") => &[
+                ("pin", "20.17.0-alpine"),
+                ("minor", "20.20.2-alpine"),
+                ("major", "26.12.0-alpine"),
+            ],
+            ("node", _) => &[("minor", "22.23.3"), ("major", "26.12.0")],
+            ("postgres", _) => &[("pin", "16.4"), ("minor", "16.15"), ("major", "18.6")],
+            ("redis", _) => &[
+                ("pin", "7.2.5-alpine"),
+                ("patch", "7.2.16-alpine"),
+                ("minor", "7.4.11-alpine"),
+                ("major", "8.10.2-alpine"),
+            ],
+            ("oven-sh/bun", _) => &[("patch", "1.1.45"), ("minor", "1.4.3")],
+            ("jqlang/jq", _) => &[("minor", "1.8.2")],
+            ("prettier", _) => &[("pin", "3.9.10")],
+            other => panic!("unexpected synthetic sandbox dependency {other:?}"),
+        };
+        let updates = targets
+            .iter()
+            .map(|(kind, target)| Update {
+                new_value: Some((*target).into()),
+                new_version: Some((*target).into()),
+                new_digest: if dep.source == rustovate_config::Source::Docker {
+                    Some(format!("sha256:{}", "b".repeat(64)))
+                } else if dep.manager == Manager::GithubActions
+                    && dep.source == rustovate_config::Source::GithubTags
+                {
+                    Some("b".repeat(40))
+                } else {
+                    None
+                },
+                update_type: (*kind).into(),
+                group: None,
+                policy: None,
+                release_age: None,
+            })
+            .collect();
+        let r = ReportDependency {
+            manager: word(&dep.manager),
+            name: dep.name.clone(),
+            package: dep.package.clone(),
+            occurrence: None,
+            current: Current {
+                value: Some(dep.current.clone()),
+                version: dep.resolved.clone(),
+                digest: dep.digest.clone(),
+            },
+            metadata: None,
+            updates,
+        };
+        if let Some(file) = repo.package_files.iter_mut().find(|f| f.path == dep.file) {
+            file.dependencies.push(r);
+        } else {
+            repo.package_files.push(PackageFile {
+                path: dep.file.clone(),
+                dependencies: vec![r],
+            });
+        }
+    }
+    let plans = plan(&repo, &config, &deps, &snapshot, false, chrono::Utc::now()).unwrap();
+    let names: BTreeSet<_> = plans
+        .iter()
+        .filter(|p| p.action.status == ActionStatus::Planned)
+        .map(|p| p.action.branch.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        BTreeSet::from([
+            "rustovate/actions-checkout-4.x",
+            "rustovate/actions-checkout-7.x",
+            "rustovate/docker-node-20.x",
+            "rustovate/docker-node-26.x",
+            "rustovate/jdx-mise-action-5.x",
+            "rustovate/jqlang-jq-1.x",
+            "rustovate/mise-node-22.x",
+            "rustovate/mise-node-26.x",
+            "rustovate/nginx-1.x",
+            "rustovate/oven-sh-bun-1.x",
+            "rustovate/pin-dependencies",
+            "rustovate/postgres-16.x",
+            "rustovate/postgres-18.x",
+            "rustovate/redis-7.x",
+            "rustovate/redis-8.x",
+            "rustovate/ubuntu-26.x",
+        ])
+    );
+    let pins = plans
+        .iter()
+        .find(|p| p.action.branch == "rustovate/pin-dependencies")
+        .unwrap();
+    assert_eq!(pins.changes.len(), 5);
+    assert!(!pins.contents.contains_key("package.json"));
+    assert_eq!(
+        plans
+            .iter()
+            .filter(|p| p.action.status == ActionStatus::Skipped)
+            .count(),
+        1
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn batch_ref_race_keeps_every_prepared_branch_unpublished() {
+    let (p, snapshot) = make_plan("22.0.0");
+    let (other, _) = make_plan("24.0.0");
+    let mut plans = vec![p, other];
+    let server = fake(&snapshot);
+    server.0.lock().unwrap().race = true;
+    let github = client(server.clone()).await;
+    rustovate_update::apply_all(
+        &github,
+        &mut plans,
+        &snapshot,
+        "main",
+        Rebase::Behind,
+        false,
+    )
+    .await;
+    assert!(
+        plans
+            .iter()
+            .all(|p| p.action.status == ActionStatus::Error && p.action.commit.is_none())
+    );
+    let state = server.0.lock().unwrap();
+    assert_eq!(state.refs.len(), 1);
+    let mutations: Vec<_> = state
+        .writes
+        .iter()
+        .filter(|(_, b)| b["query"] == rustovate_update::REF_UPDATE)
+        .collect();
+    assert_eq!(mutations.len(), 1);
+    assert_eq!(
+        mutations[0].1["variables"]["input"]["refUpdates"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn owned_readable_branch_and_pr_can_follow_a_changed_track_identity() {
+    let (config, repo) = pr_config();
+    let (mut p, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut p),
+        &snapshot,
+    )
+    .await;
+    let (mut next, _) = make_plan("22.1.0");
+    next.identity = "c".repeat(64);
+    let actions = pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut next),
+        &snapshot,
+    )
+    .await;
+    assert_eq!(next.action.status, ActionStatus::Updated);
+    assert_eq!(actions[0].status, ActionStatus::Updated);
+    assert!(
+        server.0.lock().unwrap().prs[&1]["body"]
+            .as_str()
+            .unwrap()
+            .contains(&next.identity)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn merged_pr_branch_can_be_reused_for_the_next_update_on_its_major_line() {
+    let (config, mut repo) = pr_config();
+    let (mut p, mut snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut p),
+        &snapshot,
+    )
+    .await;
+    {
+        let mut s = server.0.lock().unwrap();
+        let sha = p.action.commit.as_ref().unwrap();
+        s.merged_heads.insert(sha.clone());
+        s.prs.get_mut(&1).unwrap()["state"] = json!("closed");
+        s.prs.get_mut(&1).unwrap()["merged_at"] = json!(chrono::Utc::now().to_rfc3339());
+        s.base = "base2".into();
+        s.refs.insert("refs/heads/main".into(), "base2".into());
+        let tree = s.commits[sha]["tree"].clone();
+        s.commits.insert("base2".into(), json!({"tree":tree}));
+    }
+    let blob = snapshot.files.get_mut("mise.toml").unwrap();
+    blob.content = blob.content.replace("20.0.0", "22.0.0");
+    blob.sha = blob_sha(&blob.content);
+    let deps = Scanner::new(&config)
+        .unwrap()
+        .extract(&Files::from([("mise.toml".into(), blob.content.clone())]))
+        .unwrap()
+        .dependencies;
+    repo.commit = Some("base2".into());
+    let r = &mut repo.package_files[0].dependencies[0];
+    r.current.value = Some("22.0.0".into());
+    r.current.version = Some("22.0.0".into());
+    r.updates[0].update_type = "minor".into();
+    r.updates[0].new_value = Some("22.1.0".into());
+    r.updates[0].new_version = Some("22.1.0".into());
+    let mut plans = plan(&repo, &config, &deps, &snapshot, false, chrono::Utc::now()).unwrap();
+    assert_eq!(plans[0].action.branch, p.action.branch);
+    let actions = pr_cycle(&github, &repo, &config, &mut plans, &snapshot).await;
+    assert_eq!(
+        plans[0].action.status,
+        ActionStatus::Rebased,
+        "{:?}",
+        plans[0].action
+    );
+    assert_eq!(actions[0].status, ActionStatus::Created);
+    assert_eq!(server.0.lock().unwrap().prs.len(), 2);
 }

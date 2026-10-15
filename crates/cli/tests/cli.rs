@@ -195,3 +195,33 @@ fn lookup_config_dir_validates_all_matches_before_repository_reads() {
         "{error}"
     );
 }
+
+#[test]
+fn recheck_flag_overrides_environment_and_invalid_environment_is_a_usage_error() {
+    let command = || {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_rustovate"));
+        command
+            .args(["run", "--json", "--dry-run", "owner/repo"])
+            .env_remove("RUSTOVATE_TOKEN")
+            .env_remove("GITHUB_TOKEN")
+            .env_remove("GH_TOKEN")
+            .env("RUSTOVATE_RECHECK", "invalid");
+        command
+    };
+    let output = command().output().unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("RUSTOVATE_RECHECK")
+    );
+    for mode in ["now", "next-run"] {
+        let output = command().args(["--recheck", mode]).output().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            String::from_utf8(output.stdout)
+                .unwrap()
+                .contains("RUSTOVATE_TOKEN")
+        );
+    }
+}

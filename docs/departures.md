@@ -377,6 +377,6 @@ black-box adapter applies the same normalization, so no comparison exclusion is
 needed. Unlabelled duplicate identities remain invalid.
 
 Phase 2 branch naming follows the observed `<dependency>-<major>.x`, shared pins,
-and `major-<group>` output. Container variants retain the major and variant
+and `major-<group>` output. When multiple container variants occur, names retain the major and variant
 (`3.x-slim`); unresolved manager-prefixed slug collisions require explicit groups.
 See [wave 2](phase2-wave2.md) for ownership and migration behavior.

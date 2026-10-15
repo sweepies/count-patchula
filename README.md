@@ -8,11 +8,12 @@ requests. It is built to run a whole batch of repositories in one short-lived
 process, so it is designed around shared caching and concurrency rather than
 one repository at a time.
 
-Status: Phase 2, wave 1. Read-only lookup covers the bundled managers and public
+Status: Phase 2, wave 2. Read-only lookup covers the bundled managers and public
 sources, including Cargo, Docker/Compose, Go, Terraform, Kubernetes/Flux/Helm and
-Python requirements. `run` now plans and publishes guarded dependency branches;
-PRs/dashboard and lockfile tooling are later work. Lockfile-bearing branches are
-skipped by default. See [write path and sandbox verification](docs/phase2-wave1.md)
+Python requirements. `run` plans and publishes readable dependency branches and pull requests, with
+closed-update suppression, PR limits, labels and native auto-merge policy. Dashboard
+and lockfile tooling remain later work. Lockfile-bearing updates are skipped by
+default. See [PR lifecycle and sandbox verification](docs/phase2-wave2.md)
 and [lookup coverage](docs/wave2.md).
 Dated proposals default to a 24-hour release-age gate. GitHub-hosted runner
 labels and mise registry backends are supported by read-only lookup.

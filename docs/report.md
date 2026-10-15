@@ -150,3 +150,14 @@ sources and groups cannot silently overwrite each other: duplicate generated
 names are rejected before repository writes, and existing commits must carry the
 full identity marker. Major/minor/patch/pin/digest alternatives use separate tracks;
 conflicting edits within one track skip that branch with an explanation.
+
+
+`actions.schemaVersion: 1` now optionally includes `pullRequests`, each with
+`repository`, `branch`, nullable `number`/`url`, `status` and nullable `reason`.
+Dry-run PR actions are `planned` with no number or URL; authoritative closed
+history and capacity checks happen on real runs only. PR statuses include
+`created`, `updated`, `unchanged`, `closed`, `protected` and `error`. Branch
+cleanup uses `deleted`. Older strict readers must upgrade to accept these
+additive fields/statuses. Failed PR actions make the repository status `error`,
+even when its signed branch was successfully published. A later run reconciles
+uncertain outcomes from GitHub rather than retrying writes blindly.

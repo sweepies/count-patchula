@@ -356,3 +356,30 @@ async fn mutations_share_serial_cooldown_but_graphql_queries_do_not() {
     b.unwrap();
     assert_eq!(observer.maximum.load(Ordering::SeqCst), 1);
 }
+
+#[tokio::test(start_paused = true)]
+async fn content_hour_budget_fails_before_sending_when_wait_exceeds_budget() {
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let transport = Arc::new(Concurrent {
+        active: AtomicUsize::new(0),
+        maximum: AtomicUsize::new(0),
+    });
+    let github = Client::with_transport(
+        "offline",
+        cache,
+        Options {
+            max_rate_wait: Duration::from_secs(5),
+            ..Default::default()
+        },
+        transport,
+    )
+    .unwrap();
+    for _ in 0..500 {
+        github.post("content", json!({})).await.unwrap();
+    }
+    assert_eq!(
+        github.post("content", json!({})).await.unwrap_err(),
+        Error::RateLimit
+    );
+    assert_eq!(github.stats().await.requests, 500);
+}

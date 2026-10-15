@@ -124,6 +124,23 @@ async fn batch(
             miette::miette!("host-concurrency requires a lowercase hostname and limit 1..100"),
         )
     })?;
+    let recheck = match run.and_then(|r| r.recheck) {
+        Some(cli::Recheck::Now) => rustovate_engine::Recheck::Now,
+        Some(cli::Recheck::NextRun) => rustovate_engine::Recheck::NextRun,
+        None if run.is_some() => match std::env::var("RUSTOVATE_RECHECK").as_deref() {
+            Ok("now") => rustovate_engine::Recheck::Now,
+            Ok("next-run") | Err(std::env::VarError::NotPresent) => {
+                rustovate_engine::Recheck::NextRun
+            }
+            _ => {
+                return Err((
+                    2,
+                    miette::miette!("RUSTOVATE_RECHECK must be now or next-run"),
+                ));
+            }
+        },
+        None => rustovate_engine::Recheck::NextRun,
+    };
     let config = options
         .config
         .as_ref()
@@ -150,7 +167,8 @@ async fn batch(
         Arc::new(rustovate_http::Network::new().map_err(|e| (1, miette::miette!("{e}")))?);
     let mut engine =
         Engine::with_http_options(&token, cache, options.concurrency, transport, http_options)
-            .map_err(|e| (1, miette::miette!("{e}")))?;
+            .map_err(|e| (1, miette::miette!("{e}")))?
+            .with_recheck(recheck);
     match (
         std::env::var("RUSTOVATE_DOCKERHUB_USERNAME").ok(),
         std::env::var("RUSTOVATE_DOCKERHUB_TOKEN").ok(),
@@ -217,6 +235,20 @@ async fn batch(
                 if actions.dry_run {
                     write!(out, "{}", file.diff).map_err(|e| (1, miette::miette!("{e}")))?;
                 }
+            }
+        }
+        for pr in &actions.pull_requests {
+            writeln!(
+                out,
+                "{} {} PR: {:?}{}",
+                pr.repository,
+                pr.branch,
+                pr.status,
+                pr.url.as_ref().map(|u| format!(" {u}")).unwrap_or_default()
+            )
+            .map_err(|e| (1, miette::miette!("{e}")))?;
+            if let Some(reason) = &pr.reason {
+                writeln!(out, "  {reason}").map_err(|e| (1, miette::miette!("{e}")))?;
             }
         }
     }

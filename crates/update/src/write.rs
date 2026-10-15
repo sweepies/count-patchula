@@ -54,7 +54,7 @@ pub async fn apply(
     )
     .await
     {
-        Ok(base) => apply_inner(client, plan, snapshot, default_branch, rebase, &base).await,
+        Ok(base) => apply_inner(client, plan, snapshot, rebase, &base, true).await,
         Err(error) => Err(error),
     };
     if let Err(error) = result {
@@ -69,6 +69,7 @@ struct Base {
     node_id: String,
     tree_sha: String,
     entries: Vec<Value>,
+    default_branch: String,
 }
 async fn prepare(
     client: &Client,
@@ -95,6 +96,7 @@ async fn prepare(
         return Err("truncated tree; cannot validate extracted blobs".into());
     }
     Ok(Base {
+        default_branch: default_branch.into(),
         repository: repo.into(),
         commit: base_commit.into(),
         node_id: field(&metadata, "node_id")?.into(),
@@ -129,6 +131,11 @@ pub async fn apply_all(
         default_branch,
     )
     .await;
+    let pending: std::collections::BTreeSet<_> = plans
+        .iter()
+        .filter(|p| p.action.status == ActionStatus::Planned)
+        .map(|p| p.action.branch.clone())
+        .collect();
     stream::iter(plans.iter_mut())
         .map(|plan| {
             let base = &base;
@@ -137,9 +144,7 @@ pub async fn apply_all(
                     return;
                 }
                 let result = match base {
-                    Ok(base) => {
-                        apply_inner(client, plan, snapshot, default_branch, rebase, base).await
-                    }
+                    Ok(base) => apply_inner(client, plan, snapshot, rebase, base, false).await,
                     Err(error) => Err(error.clone()),
                 };
                 if let Err(error) = result {
@@ -151,20 +156,64 @@ pub async fn apply_all(
         .buffer_unordered(client.concurrency().min(4))
         .collect::<Vec<_>>()
         .await;
+    if let Ok(base) = &base {
+        // Bound each atomic mutation to fifty refs, including the base lease.
+        for chunk in plans.chunks_mut(49) {
+            let eligible = |p: &Plan| {
+                pending.contains(&p.action.branch)
+                    && matches!(
+                        p.action.status,
+                        ActionStatus::Created | ActionStatus::Updated | ActionStatus::Rebased
+                    )
+            };
+            let mut refs = vec![
+                json!({"name":format!("refs/heads/{}",base.default_branch),"beforeOid":base.commit,"afterOid":base.commit,"force":false}),
+            ];
+            for p in chunk.iter().filter(|p| eligible(p)) {
+                refs.push(json!({"name":format!("refs/heads/{}",p.action.branch),"beforeOid":p.action.previous_commit.as_deref().unwrap_or("0000000000000000000000000000000000000000"),"afterOid":p.action.commit,"force":true}));
+            }
+            if refs.len() == 1 {
+                continue;
+            }
+            let result = client
+                .graphql(
+                    REF_UPDATE,
+                    json!({"input":{"repositoryId":base.node_id,"refUpdates":refs}}),
+                )
+                .await;
+            let error = match result {
+                Ok(value) if value["updateRefs"].is_object() => None,
+                Ok(_) => {
+                    Some("GitHub did not acknowledge atomic batch ref publication; rerun".into())
+                }
+                Err(e) => Some(format!(
+                    "atomic batch ref lease failed; inspect current heads and rerun: {e}"
+                )),
+            };
+            if let Some(error) = error {
+                for p in chunk.iter_mut().filter(|p| eligible(p)) {
+                    p.action.status = ActionStatus::Error;
+                    p.action.reason = Some(error.clone());
+                    p.action.commit = None;
+                }
+            }
+        }
+    }
 }
 async fn apply_inner(
     client: &Client,
     plan: &mut Plan,
     snapshot: &Snapshot,
-    default_branch: &str,
     rebase: Rebase,
     base: &Base,
+    publish_ref: bool,
 ) -> Result<(), String> {
+    let default_branch = &base.default_branch;
     let repo = plan.action.repository.clone();
     if repo != base.repository || plan.action.base_commit != base.commit {
         return Err("mixed repositories or base commits in write batch".into());
     }
-    if plan.action.branch == default_branch {
+    if plan.action.branch == *default_branch {
         return Err("update branch equals default branch".into());
     }
     if plan.contents.len() != plan.action.files.len()
@@ -215,12 +264,26 @@ async fn apply_inner(
             .await
             .map_err(|e| e.to_string())?;
         let actor = field(&viewer["viewer"], "login")?;
+        let existing_tip = fresh(client, &format!("repos/{repo}/git/commits/{old}")).await?;
+        let Some(recorded) = existing_tip["message"]
+            .as_str()
+            .and_then(|m| trailer(m, "Rustovate-Base: "))
+        else {
+            plan.action.status = ActionStatus::Protected;
+            plan.action.reason = Some("unmarked branch history; left untouched".into());
+            return Ok(());
+        };
+        if recorded.is_empty()
+            || recorded.len() > 64
+            || !recorded.bytes().all(|b| b.is_ascii_alphanumeric())
+        {
+            plan.action.status = ActionStatus::Protected;
+            plan.action.reason = Some("invalid recorded branch base; left untouched".into());
+            return Ok(());
+        }
         let compare = fresh(
             client,
-            &format!(
-                "repos/{repo}/compare/{}...{old}?per_page=100",
-                plan.action.base_commit
-            ),
+            &format!("repos/{repo}/compare/{}...{old}?per_page=100", recorded),
         )
         .await?;
         let commits = compare["commits"]
@@ -237,7 +300,7 @@ async fn apply_inner(
                     && (c["committer"]["login"] == actor || c["committer"]["login"] == "web-flow")
                     && c["commit"]["verification"]["verified"] == true
                     && trailer(message, "Rustovate: ") == Some("v1")
-                    && trailer(message, "Rustovate-Branch: ") == Some(&plan.identity)
+                    && trailer(message, "Rustovate-Branch: ").is_some()
             });
         if !owned {
             plan.action.status = ActionStatus::Protected;
@@ -253,11 +316,11 @@ async fn apply_inner(
             .ok_or("missing commit message")?;
         let parent = trailer(message, "Rustovate-Base: ").ok_or("missing rustovate base marker")?;
         moved_base = parent != plan.action.base_commit;
-        if trailer(message, "Rustovate-Plan: ") == Some(&plan.fingerprint)
+        if !plan.retry
+            && trailer(message, "Rustovate-Plan: ") == Some(&plan.fingerprint)
             && (!moved_base || rebase == Rebase::Conflicts)
         {
-            let existing = fresh(client, &format!("repos/{repo}/git/commits/{old}")).await?;
-            let existing_tree = field(&existing["tree"], "sha")?;
+            let existing_tree = field(&existing_tip["tree"], "sha")?;
             let existing = fresh(
                 client,
                 &format!("repos/{repo}/git/trees/{existing_tree}?recursive=1"),
@@ -312,16 +375,18 @@ async fn apply_inner(
         return Err("GitHub returned an unverified Git Data commit; branch left untouched. Check App bot signing; createCommitOnBranch may be required".into());
     }
     let sha = field(&commit, "sha")?;
-    let zero = "0000000000000000000000000000000000000000";
-    let published = client.graphql(REF_UPDATE, json!({"input":{"repositoryId":node_id,"refUpdates":[
+    if publish_ref {
+        let zero = "0000000000000000000000000000000000000000";
+        let published = client.graphql(REF_UPDATE, json!({"input":{"repositoryId":node_id,"refUpdates":[
         {"name":format!("refs/heads/{default_branch}"),"beforeOid":plan.action.base_commit,"afterOid":plan.action.base_commit,"force":false},
         {"name":format!("refs/heads/{}",plan.action.branch),"beforeOid":old.as_deref().unwrap_or(zero),"afterOid":sha,"force":true}
     ]}})).await.map_err(|e| format!("atomic ref lease failed; branch may have changed, rerun: {e}"))?;
-    if !published["updateRefs"].is_object() {
-        return Err(
+        if !published["updateRefs"].is_object() {
+            return Err(
             "GitHub did not acknowledge the ref update; inspect the current branch before retrying"
                 .into(),
         );
+        }
     }
     plan.action.commit = Some(sha.into());
     plan.action.status = if old.is_none() {

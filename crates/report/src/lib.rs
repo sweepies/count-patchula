@@ -34,6 +34,19 @@ pub struct Actions {
     pub schema_version: u32,
     pub dry_run: bool,
     pub branches: Vec<BranchAction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pull_requests: Vec<PullRequestAction>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PullRequestAction {
+    pub repository: String,
+    pub branch: String,
+    pub number: Option<u64>,
+    pub url: Option<String>,
+    pub status: ActionStatus,
+    pub reason: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,6 +54,7 @@ pub struct Actions {
 pub enum ActionStatus {
     Planned,
     Deleted,
+    Closed,
     Created,
     Updated,
     Rebased,
@@ -273,6 +287,46 @@ impl Report {
             if actions.schema_version != 1 {
                 return Err(Error::Invalid("unsupported actions.schemaVersion".into()));
             }
+            let mut prs = BTreeSet::new();
+            for pr in &actions.pull_requests {
+                if pr.branch.is_empty()
+                    || !prs.insert((&pr.repository, &pr.branch))
+                    || !self
+                        .repositories
+                        .iter()
+                        .any(|r| r.repository == pr.repository)
+                {
+                    return Err(Error::Invalid(
+                        "invalid or duplicate pull request action".into(),
+                    ));
+                }
+                if actions.dry_run && (pr.number.is_some() || pr.status != ActionStatus::Planned) {
+                    return Err(Error::Invalid(
+                        "dry run cannot contain applied pull requests".into(),
+                    ));
+                }
+                if matches!(
+                    pr.status,
+                    ActionStatus::Created
+                        | ActionStatus::Updated
+                        | ActionStatus::Unchanged
+                        | ActionStatus::Closed
+                ) && pr.number.is_none()
+                {
+                    return Err(Error::Invalid(
+                        "applied pull request action needs a number".into(),
+                    ));
+                }
+                if matches!(
+                    pr.status,
+                    ActionStatus::Protected | ActionStatus::Error | ActionStatus::Skipped
+                ) && pr.reason.as_ref().is_none_or(String::is_empty)
+                {
+                    return Err(Error::Invalid(
+                        "failed pull request action needs a reason".into(),
+                    ));
+                }
+            }
             let mut branches = BTreeSet::new();
             for action in &actions.branches {
                 if action.branch.is_empty()
@@ -300,7 +354,10 @@ impl Report {
                     && (action.commit.is_some()
                         || matches!(
                             action.status,
-                            ActionStatus::Created | ActionStatus::Updated | ActionStatus::Rebased
+                            ActionStatus::Created
+                                | ActionStatus::Updated
+                                | ActionStatus::Rebased
+                                | ActionStatus::Deleted
                         ))
                 {
                     return Err(Error::Invalid(

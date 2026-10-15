@@ -1,6 +1,7 @@
 //! Batch lookup and branch-writing engine shared by CLI and future server callers.
 #![forbid(unsafe_code)]
 mod overrides;
+pub use rustovate_update::Recheck;
 
 use futures_util::{StreamExt, stream};
 use rustovate_cache::{Cache, ExtractionKey};
@@ -55,6 +56,7 @@ pub struct Engine {
     cache: Cache,
     concurrency: usize,
     extraction_hits: AtomicU64,
+    recheck: Recheck,
 }
 struct Work {
     report: Repository,
@@ -90,6 +92,10 @@ struct LookupHint {
 }
 
 impl Engine {
+    pub fn with_recheck(mut self, recheck: Recheck) -> Self {
+        self.recheck = recheck;
+        self
+    }
     pub fn with_dockerhub_credentials(mut self, username: String, token: String) -> Self {
         self.sources = self.sources.with_dockerhub_credentials(username, token);
         self
@@ -131,6 +137,7 @@ impl Engine {
             cache,
             concurrency,
             extraction_hits: AtomicU64::new(0),
+            recheck: Recheck::default(),
         })
     }
     pub async fn lookup(&self, options: Options) -> Result<Report> {
@@ -166,6 +173,7 @@ impl Engine {
         let write_started = Instant::now();
         let before = self.github.stats().await;
         let mut branches = Vec::new();
+        let mut pull_requests = Vec::new();
         for work in work {
             let Some(config) = work.config else {
                 continue;
@@ -194,16 +202,56 @@ impl Engine {
                     continue;
                 }
             };
-            match rustovate_update::cleanup(
-                &self.github,
-                &repo.repository,
-                repo.commit.as_deref().expect("extracted commit"),
-                repo.default_branch.as_deref().expect("configured branch"),
-                &plans,
-                dry_run,
-            )
-            .await
-            {
+            let mut lifecycle = if dry_run {
+                pull_requests.extend(
+                    plans
+                        .iter()
+                        .filter(|p| p.action.status == rustovate_report::ActionStatus::Planned)
+                        .map(|p| rustovate_report::PullRequestAction {
+                            repository: repo.repository.clone(),
+                            branch: p.action.branch.clone(),
+                            number: None,
+                            url: None,
+                            status: rustovate_report::ActionStatus::Planned,
+                            reason: Some(
+                                "create or reconcile after authoritative live inventory".into(),
+                            ),
+                        }),
+                );
+                None
+            } else {
+                match rustovate_update::Lifecycle::prepare(
+                    &self.github,
+                    repo,
+                    &mut plans,
+                    &config,
+                    now,
+                    self.recheck,
+                )
+                .await
+                {
+                    Ok(state) => Some(state),
+                    Err(error) => {
+                        repo.status = Status::Error;
+                        repo.reason = Some(error);
+                        continue;
+                    }
+                }
+            };
+            let cleanup = if repo.warnings.is_empty() {
+                rustovate_update::cleanup(
+                    &self.github,
+                    &repo.repository,
+                    repo.commit.as_deref().expect("extracted commit"),
+                    repo.default_branch.as_deref().expect("configured branch"),
+                    &plans,
+                    dry_run,
+                )
+                .await
+            } else {
+                Ok(Vec::new())
+            };
+            match cleanup {
                 Ok(actions) => branches.extend(actions),
                 Err(error) => {
                     repo.status = Status::Error;
@@ -220,6 +268,20 @@ impl Engine {
                 dry_run,
             )
             .await;
+            if let Some(state) = &mut lifecycle {
+                state.publish(&self.github, &mut plans).await;
+                if state.actions.iter().any(|a| {
+                    matches!(
+                        a.status,
+                        rustovate_report::ActionStatus::Error
+                            | rustovate_report::ActionStatus::Protected
+                    )
+                }) {
+                    repo.status = Status::Error;
+                    repo.reason = Some("one or more pull request actions failed or were protected; inspect actions".into());
+                }
+                pull_requests.append(&mut state.actions);
+            }
             for plan in &plans {
                 if matches!(
                     plan.action.status,
@@ -240,6 +302,7 @@ impl Engine {
             schema_version: 1,
             dry_run,
             branches,
+            pull_requests,
         });
         if let Some(stats) = &mut report.stats {
             let after = self.github.stats().await;

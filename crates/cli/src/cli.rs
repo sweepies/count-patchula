@@ -36,7 +36,7 @@ pub enum Command {
     Config(Config),
     /// Extract dependencies and report available updates without writing repositories.
     Lookup(Lookup),
-    /// Create or update dependency branches with API commits (no pull requests).
+    /// Create or update dependency branches and pull requests with verified API commits.
     Run(Run),
 }
 
@@ -50,6 +50,15 @@ pub struct Run {
     /// Permit manifest-only test branches whose lockfiles need SWE-109 tooling.
     #[usage(long)]
     pub allow_lockfile_pending: bool,
+    /// Checkbox wording: now or next-run (default); also RUSTOVATE_RECHECK.
+    #[usage(long, value_enum)]
+    pub recheck: Option<Recheck>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum Recheck {
+    Now,
+    NextRun,
 }
 
 #[derive(Args)]
