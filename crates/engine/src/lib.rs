@@ -242,6 +242,27 @@ impl Engine {
                 match restored {
                     Ok(true) => {
                         let inventory = inventory.as_ref().expect("write inventory");
+                        let merge_actions = rustovate_update::automerge::reconcile(
+                            &self.github,
+                            &self.cache,
+                            repo,
+                            &config,
+                            inventory,
+                            &mut plans,
+                            now,
+                        )
+                        .await;
+                        if merge_actions.iter().any(|a| {
+                            matches!(
+                                a.status,
+                                rustovate_report::ActionStatus::Error
+                                    | rustovate_report::ActionStatus::Protected
+                            )
+                        }) {
+                            repo.status = Status::Error;
+                            repo.reason =
+                                Some("auto-merge failed or was protected; inspect actions".into());
+                        }
                         if let Err(error) = rustovate_update::dashboard::reconcile(
                             &self.github,
                             &self.cache,
@@ -251,7 +272,11 @@ impl Engine {
                             rustovate_update::dashboard::render(
                                 repo,
                                 &plans,
-                                &inventory.pull_requests(&repo.repository),
+                                &rustovate_update::automerge::dashboard_prs(
+                                    inventory,
+                                    &repo.repository,
+                                    &plans,
+                                ),
                                 self.recheck,
                             ),
                         )
@@ -260,18 +285,26 @@ impl Engine {
                             repo.status = Status::Error;
                             repo.reason = Some(format!("dependency dashboard: {error}"));
                         }
-                        pull_requests.extend(plans.iter().filter_map(|p| {
-                            p.cached_pr
-                                .as_ref()
-                                .map(|pr| rustovate_report::PullRequestAction {
-                                    repository: repo.repository.clone(),
-                                    branch: p.action.branch.clone(),
-                                    number: pr["number"].as_u64(),
-                                    url: pr["html_url"].as_str().map(str::to_owned),
-                                    status: rustovate_report::ActionStatus::Unchanged,
-                                    reason: None,
+                        pull_requests.extend(
+                            plans
+                                .iter()
+                                .filter(|p| {
+                                    !merge_actions.iter().any(|a| a.branch == p.action.branch)
                                 })
-                        }));
+                                .filter_map(|p| {
+                                    p.cached_pr.as_ref().map(|pr| {
+                                        rustovate_report::PullRequestAction {
+                                            repository: repo.repository.clone(),
+                                            branch: p.action.branch.clone(),
+                                            number: pr["number"].as_u64(),
+                                            url: pr["html_url"].as_str().map(str::to_owned),
+                                            status: rustovate_report::ActionStatus::Unchanged,
+                                            reason: None,
+                                        }
+                                    })
+                                }),
+                        );
+                        pull_requests.extend(merge_actions);
                         branches.extend(plans.into_iter().map(|p| p.action));
                         continue;
                     }
@@ -312,7 +345,16 @@ impl Engine {
                 )
                 .await
                 {
-                    Ok(state) => Some(state),
+                    Ok(mut state) => {
+                        state.set_merge_settings(
+                            inventory
+                                .as_ref()
+                                .expect("write inventory")
+                                .merge_settings
+                                .clone(),
+                        );
+                        Some(state)
+                    }
                     Err(error) => {
                         repo.status = Status::Error;
                         repo.reason = Some(error);
@@ -367,6 +409,17 @@ impl Engine {
             .await;
             if let Some(state) = &mut lifecycle {
                 state.publish(&self.github, &mut plans).await;
+                let merge_actions = rustovate_update::automerge::reconcile(
+                    &self.github,
+                    &self.cache,
+                    repo,
+                    &config,
+                    inventory.as_ref().expect("write inventory"),
+                    &mut plans,
+                    now,
+                )
+                .await;
+                state.record_merges(&plans, merge_actions);
                 if let Err(error) = state.acknowledge_rechecks(&self.github).await {
                     repo.warnings
                         .push(format!("PR checkbox acknowledgement: {error}"));
@@ -380,7 +433,11 @@ impl Engine {
                     rustovate_update::dashboard::render(
                         repo,
                         &plans,
-                        &state.dashboard_prs(),
+                        &rustovate_update::automerge::dashboard_history(
+                            inventory.as_ref().expect("write inventory"),
+                            state.dashboard_prs(),
+                            &plans,
+                        ),
                         self.recheck,
                     ),
                 )

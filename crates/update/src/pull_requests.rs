@@ -142,12 +142,27 @@ pub struct Lifecycle {
     pub actions: Vec<PullRequestAction>,
     notes: BTreeMap<(String, String), String>,
     pub(crate) recheck: Recheck,
-    merge_method: Option<String>,
+    merge_settings: Option<crate::automerge::Settings>,
     maintenance_policy: rustovate_config::Policy,
     maintenance_group: String,
     branch_permits: BTreeMap<String, BTreeSet<String>>,
 }
 impl Lifecycle {
+    pub fn set_merge_settings(&mut self, settings: crate::automerge::Settings) {
+        self.merge_settings = Some(settings);
+    }
+    pub fn record_merges(&mut self, plans: &[Plan], actions: Vec<PullRequestAction>) {
+        for plan in plans {
+            if let Some(pr) = &plan.cached_pr
+                && let Some(old) = self.prs.iter_mut().find(|p| p["number"] == pr["number"])
+            {
+                *old = pr.clone();
+            }
+        }
+        self.actions
+            .retain(|a| !actions.iter().any(|m| m.branch == a.branch));
+        self.actions.extend(actions);
+    }
     pub fn dashboard_prs(&self) -> Vec<Value> {
         self.prs
             .iter()
@@ -226,7 +241,7 @@ impl Lifecycle {
             actions: Vec::new(),
             notes: BTreeMap::new(),
             recheck,
-            merge_method: None,
+            merge_settings: None,
             maintenance_policy: config.defaults.clone(),
             maintenance_group: config.lockfiles.group.clone(),
             branch_permits: controls.branch_permits.clone(),
@@ -556,37 +571,30 @@ impl Lifecycle {
             };
         let enabled = !pr["auto_merge"].is_null();
         if merge && !enabled {
-            if self.merge_method.is_none() {
+            if self.merge_settings.is_none() {
                 let meta = client
                     .get_fresh(&format!("repos/{}", self.repo))
                     .await
                     .map_err(|e| e.to_string())?;
-                if meta["allow_auto_merge"] != true {
-                    return Err(
-                        "merge=true requires repository native auto-merge to be enabled".into(),
-                    );
-                }
-                let method = if meta["allow_squash_merge"] == true {
-                    "SQUASH"
-                } else if meta["allow_merge_commit"] == true {
-                    "MERGE"
-                } else if meta["allow_rebase_merge"] == true {
-                    "REBASE"
-                } else {
-                    return Err("repository has no enabled merge method".into());
-                };
-                self.merge_method = Some(method.into());
+                self.merge_settings = Some(crate::automerge::Settings::from_rest(&meta));
             }
-            let id = pr["node_id"].as_str().ok_or("missing PR node ID")?;
-            let result = client
-                .graphql(
-                    ENABLE_AUTO_MERGE,
-                    json!({"input":{"pullRequestId":id,"mergeMethod":self.merge_method}}),
-                )
-                .await
-                .map_err(|e| e.to_string())?;
-            if !result["enablePullRequestAutoMerge"]["pullRequest"].is_object() {
-                return Err("GitHub did not acknowledge native auto-merge".into());
+            let settings = self.merge_settings.as_ref().expect("repository settings");
+            if settings.native {
+                let method = settings
+                    .method
+                    .as_ref()
+                    .ok_or("repository has no enabled merge method")?;
+                let id = pr["node_id"].as_str().ok_or("missing PR node ID")?;
+                let result = client
+                    .graphql(
+                        ENABLE_AUTO_MERGE,
+                        json!({"input":{"pullRequestId":id,"mergeMethod":method.to_uppercase(),"expectedHeadOid":plan.action.commit}}),
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if !result["enablePullRequestAutoMerge"]["pullRequest"].is_object() {
+                    return Err("GitHub did not acknowledge native auto-merge".into());
+                }
             }
         } else if !merge && enabled {
             let id = pr["node_id"].as_str().ok_or("missing PR node ID")?;
@@ -595,11 +603,19 @@ impl Lifecycle {
                 .await
                 .map_err(|e| e.to_string())?;
         }
-        pr["auto_merge"] = if merge {
-            json!({"enabled":true})
-        } else {
-            Value::Null
-        };
+        pr["auto_merge"] =
+            if merge && (enabled || self.merge_settings.as_ref().is_some_and(|s| s.native)) {
+                json!({"enabled":true})
+            } else {
+                Value::Null
+            };
+        if merge && self.merge_settings.as_ref().is_some_and(|s| !s.native) {
+            pr["rustovate_merge"] = json!(
+                "auto-merge waiting for a later run with a verified receipt and passing checks"
+            );
+        } else if merge && !pr["auto_merge"].is_null() {
+            pr["rustovate_merge"] = json!("native auto-merge enabled");
+        }
         self.actions.push(action(
             &self.repo,
             &plan.action.branch,

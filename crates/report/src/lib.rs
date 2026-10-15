@@ -55,6 +55,7 @@ pub enum ActionStatus {
     Planned,
     Deleted,
     Closed,
+    Merged,
     Created,
     Updated,
     Rebased,

@@ -114,10 +114,14 @@ an image's upstream project or fetch arbitrary changelog URLs.
 
 `merge = true` for every update in a branch enables GitHub native auto-merge via
 `enablePullRequestAutoMerge`, choosing an enabled squash/merge/rebase method in
-that order. Repository auto-merge must already be enabled; permission/config
-failures are reported. Required checks and GitHub protections remain in charge.
-Mixed merge policy and lockfile-pending branches disable existing auto-merge.
-No direct merge endpoint or check bypass is used.
+that order, with an expected-head lease. Repository settings are included in the
+shared inventory, so availability adds no steady-run request. Where native
+auto-merge is off or unavailable, a later run can merge through GitHub's normal
+merge endpoint after restoring the exact head and intent from a prior successful
+write receipt. See [fallback merge gates and the sandbox rule](auto-merge.md).
+Required checks and GitHub protections remain authoritative; no bypass or direct
+base write is used. Mixed merge policy and lockfile-pending branches disable
+existing native auto-merge and cannot use the fallback.
 
 The checkbox says:
 

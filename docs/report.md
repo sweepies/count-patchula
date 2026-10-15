@@ -159,8 +159,16 @@ conflicting edits within one track skip that branch with an explanation.
 `repository`, `branch`, nullable `number`/`url`, `status` and nullable `reason`.
 Dry-run PR actions are `planned` with no number or URL; authoritative closed
 history and capacity checks happen on real runs only. PR statuses include
-`created`, `updated`, `unchanged`, `closed`, `protected` and `error`. Branch
+`created`, `updated`, `unchanged`, `closed`, `merged`, `skipped`, `protected` and `error`. Branch
 cleanup uses `deleted`. Older strict readers must upgrade to accept these
 additive fields/statuses. Failed PR actions make the repository status `error`,
 even when its signed branch was successfully published. A later run reconciles
 uncertain outcomes from GitHub rather than retrying writes blindly.
+
+Fallback auto-merge reports `merged` on both the PR and branch action, with its
+merge method and any deferred branch cleanup in `reason`. Check/policy holds
+are `skipped` PR actions; ownership races are `protected`. A successful merge is
+never relabelled as failed merely because its branch cleanup was refused.
+The dashboard retains up to twenty fallback merge outcomes for the cached
+actor, including cleanup diagnostics. Cache loss can lose this local history,
+but never authorizes a merge without fresh write receipt evidence.

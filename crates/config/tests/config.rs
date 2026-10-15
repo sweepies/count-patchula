@@ -23,7 +23,7 @@ fn every_repository_example_validates() {
         .filter(|path| path.extension().is_some_and(|extension| extension == "pkl"))
         .collect();
     examples.sort();
-    assert_eq!(examples.len(), 14);
+    assert_eq!(examples.len(), 15);
     for example in examples {
         load(&example).unwrap_or_else(|error| panic!("{}: {error:?}", example.display()));
     }

@@ -1931,7 +1931,7 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn merge_policy_uses_only_native_auto_merge_and_lockfile_pending_disables_it() {
+async fn merge_policy_prefers_native_auto_merge_and_lockfile_pending_disables_it() {
     let (config, repo) = pr_config();
     let (mut p, snapshot) = make_plan("22.0.0");
     p.changes[0].merge = true;
@@ -1953,6 +1953,7 @@ async fn merge_policy_uses_only_native_auto_merge_and_lockfile_pending_disables_
                 .as_str()
                 .is_some_and(|q| q.contains("enablePullRequestAutoMerge"))
                 && b["variables"]["input"]["mergeMethod"] == "SQUASH"
+                && b["variables"]["input"]["expectedHeadOid"] == p.action.commit.as_deref().unwrap()
         }));
         assert!(!s.requests.iter().any(|(_, p)| p.ends_with("/merge")));
     }

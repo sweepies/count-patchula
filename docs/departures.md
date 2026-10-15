@@ -78,7 +78,7 @@ Stable comparison link: <a id="departure-7"></a>**Departure 7: default policy**
 | 44 | mise registry identity | Can select older or different backend identities | Follow the first supported backend in the published mise registry snapshot | Use the tool's current published backend; never equate distinct package identities |
 | 45 | Action alias precision | Can expand a ref when adding a digest | Preserve the declared numeric ref precision and report the full resolved target separately | The commit pin supplies reproducibility while the ref describes the intended release line |
 | 46 | Cargo target resolution | Observed pre-1.0 upgrades can select an older release in the proposed range | Resolve the newest eligible release in that same compatibility interval | Report the available release without narrowing the manifest |
-| 47 | Branch write safety | No write behavior is inferred from comparison output | Leased API refs, verified bot ownership, explicit pending-lockfile testing | Preserve human work and lockfile consistency without emulating another bot |
+| 47 | Branch and merge safety | No write behavior is inferred from comparison output | Leased API refs, verified bot ownership, receipt-backed later-run merges when native auto-merge is unavailable | Preserve human work and lockfile consistency without emulating another bot |
 
 <a id="departure-47"></a>**Departure 47: independent write safety.**
 Phase 2 does not claim compatibility with Renovate's branch/commit behavior.
@@ -380,3 +380,10 @@ Phase 2 branch naming follows the observed `<dependency>-<major>.x`, shared pins
 and `major-<group>` output. When multiple container variants occur, names retain the major and variant
 (`3.x-slim`); unresolved manager-prefixed slug collisions require explicit groups.
 See [wave 2](phase2-wave2.md) for ownership and migration behavior.
+
+Departure 47 also covers the independently specified [auto-merge fallback](auto-merge.md).
+The supplied black-box comparisons do not exercise Renovate merging PRs, so no
+observed merge-behavior difference or new conformance exemption is claimed.
+The explicit rustovate policy requires a prior successful head receipt, at least
+one successful check/status, clean GitHub mergeability, and current age/window
+eligibility; a manual creation permit does not waive the merge gates.

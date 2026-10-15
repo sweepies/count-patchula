@@ -1,0 +1,15 @@
+amends "../Rustovate.pkl"
+
+prs { dashboard = true }
+defaults { waitHours = 0 }
+
+rules = new Listing {
+  new Rule {
+    select {
+      managers = new Listing { "github-actions" }
+      packages = new Listing { "jdx/mise-action" }
+      updates = new Listing { "major" }
+    }
+    apply { merge = true }
+  }
+}

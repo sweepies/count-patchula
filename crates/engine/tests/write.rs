@@ -23,6 +23,11 @@ struct Fake {
     close_on_read: std::sync::atomic::AtomicBool,
     catalog: Mutex<Value>,
     fail_lookup: std::sync::atomic::AtomicBool,
+    merge_settings: Mutex<Value>,
+    checks: Mutex<Vec<Value>>,
+    change_head_on_checks: std::sync::atomic::AtomicBool,
+    merge_refused: std::sync::atomic::AtomicBool,
+    deletion_race: std::sync::atomic::AtomicBool,
 }
 impl Fake {
     fn new(lock: bool) -> Self {
@@ -31,6 +36,9 @@ impl Fake {
             (".github/rustovate.pkl".into(),"amends \"../Rustovate.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n".into()),
             ("package.json".into(),"{\n  \"dependencies\": {\"fixture\": \"1.0.0\"}\n}\n".into()),
         ]),lock,lock_name:"yarn.lock",writes:Default::default(),prs:Default::default(),issues:Default::default(),requests:Default::default(),latency:Default::default(),close_on_read:Default::default(),catalog:Mutex::new(json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}}})),fail_lookup:Default::default(),
+        merge_settings: Mutex::new(json!({"id":"repo-id","autoMergeAllowed":false,"squashMergeAllowed":true,"mergeCommitAllowed":true,"rebaseMergeAllowed":true,"deleteBranchOnMerge":false})),
+        checks: Mutex::new(vec![json!({"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"})]),
+        change_head_on_checks: Default::default(), merge_refused: Default::default(), deletion_race: Default::default(),
     }
     }
     fn tree(&self) -> Value {
@@ -93,18 +101,91 @@ impl Transport for Fake {
                     "id":p["node_id"],"state":if p["state"] == "closed" {"CLOSED"} else {"OPEN"},"merged":false,"body":p["body"],
                     "author":p["user"],"headRepository":{"nameWithOwner":"demo/sandbox"},"baseRepository":{"nameWithOwner":"demo/sandbox"}
                 })).collect();
+                let mut repository = self.merge_settings.lock().unwrap().clone();
+                repository["defaultBranchRef"] = json!({"name":"main","target":{"oid":"base"}});
+                repository["refs"] =
+                    json!({"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}});
+                repository["issues"] = json!({"nodes":self.issues.lock().unwrap().iter().filter(|i|i["state"] == "OPEN").cloned().collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false,"endCursor":null}});
                 (
                     200,
-                    json!({"data":{"viewer":{"login":"rustovate[bot]"},"nodes":closed,"repository":{"defaultBranchRef":{"name":"main","target":{"oid":"base"}},"refs":{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}},"issues":{"nodes":self.issues.lock().unwrap().iter().filter(|i|i["state"] == "OPEN").cloned().collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+                    json!({"data":{"viewer":{"login":"rustovate[bot]"},"nodes":closed,"repository":repository}}),
+                )
+            } else if body["query"] == rustovate_update::automerge::CHECKS_QUERY {
+                if self
+                    .change_head_on_checks
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    self.prs.lock().unwrap()[0]["head"]["sha"] = json!("human-commit");
+                }
+                let checks = self.checks.lock().unwrap();
+                let offset = body["variables"]["cursor"]
+                    .as_str()
+                    .map(|c| c.parse::<usize>().unwrap())
+                    .unwrap_or(0);
+                let next = offset + 100;
+                (
+                    200,
+                    json!({"data":{"repository":{"object":{"oid":body["variables"]["oid"],"statusCheckRollup":{"contexts":{"nodes":checks.iter().skip(offset).take(100).cloned().collect::<Vec<_>>(),"pageInfo":{"hasNextPage":next < checks.len(),"endCursor":next.to_string()}}}}}}}),
+                )
+            } else if body["query"]
+                .as_str()
+                .is_some_and(|q| q.contains("PullRequestAutoMerge"))
+            {
+                let enabled = body["query"]
+                    .as_str()
+                    .unwrap()
+                    .contains("enablePullRequestAutoMerge");
+                if enabled {
+                    assert_eq!(body["variables"]["input"]["expectedHeadOid"], "new-commit");
+                }
+                self.writes.lock().unwrap().push((path.into(), body));
+                for pr in self.prs.lock().unwrap().iter_mut() {
+                    pr["auto_merge"] = if enabled {
+                        json!({"enabled":true})
+                    } else {
+                        Value::Null
+                    };
+                }
+                (
+                    200,
+                    json!({"data":if enabled {json!({"enablePullRequestAutoMerge":{"pullRequest":{"id":"pr-1"}}})} else {json!({"disablePullRequestAutoMerge":{"pullRequest":{"id":"pr-1"}}})}}),
                 )
             } else {
                 assert_eq!(body["query"], rustovate_update::REF_UPDATE);
+                let deleting = body["variables"]["input"]["refUpdates"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|r| r["afterOid"] == "0000000000000000000000000000000000000000");
                 self.writes.lock().unwrap().push((path.into(), body));
                 (
                     200,
-                    json!({"data":{"updateRefs":{"clientMutationId":null}}}),
+                    if deleting
+                        && self
+                            .deletion_race
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                    {
+                        json!({"errors":[{"message":"head changed"}]})
+                    } else {
+                        json!({"data":{"updateRefs":{"clientMutationId":null}}})
+                    },
                 )
             }
+        } else if request.method() == reqwest::Method::PUT && path.ends_with("/merge") {
+            let mut prs = self.prs.lock().unwrap();
+            let pr = &mut prs[0];
+            assert_eq!(body["sha"], pr["head"]["sha"]);
+            assert_eq!(pr["user"]["login"], "rustovate[bot]");
+            assert_eq!(pr["mergeable_state"], "clean");
+            self.writes.lock().unwrap().push((path.into(), body));
+            let merged = !self
+                .merge_refused
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if merged {
+                pr["state"] = json!("closed");
+                pr["merged_at"] = json!("2026-10-15T12:00:00Z");
+            }
+            (200, json!({"merged":merged,"sha":"merged-base"}))
         } else if request.method() == reqwest::Method::PATCH
             && path.starts_with("/repos/demo/sandbox/issues/")
         {
@@ -149,6 +230,9 @@ impl Transport for Fake {
                 let number = self.prs.lock().unwrap().len() + 1;
                 let pr = json!({"number":number,"node_id":format!("pr-{number}"),"html_url":format!("https://github.com/demo/sandbox/pull/{number}"),"title":body["title"],"body":body["body"],"state":"open","user":{"login":"rustovate[bot]"},"head":{"ref":body["head"],"sha":"new-commit","repo":{"full_name":"demo/sandbox"}},"base":{"ref":"main","repo":{"full_name":"demo/sandbox"}},"labels":[{"name":"dependencies"}],"auto_merge":null,"created_at":chrono::Utc::now().to_rfc3339(),"merged_at":null});
                 let mut pr = pr;
+                pr["draft"] = json!(false);
+                pr["mergeable"] = json!(true);
+                pr["mergeable_state"] = json!("clean");
                 pr["head"]["label"] = json!("demo:branch");
                 pr["head"]["repo"]["updated_at"] = json!("2026-10-15T00:00:00Z");
                 pr["base"]["sha"] = json!("base");
@@ -504,6 +588,345 @@ async fn token_only_run_uses_repository_config_cold_and_cached_and_reports_actio
 }
 
 struct FailTools;
+
+#[tokio::test(start_paused = true)]
+async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_check() {
+    for case in [
+        "green",
+        "neutral-skipped-status",
+        "status-only",
+        "pending",
+        "failure",
+        "cancelled",
+        "no-checks",
+        "pending-status",
+        "failed-status",
+        "late-page-failure",
+        "draft",
+        "conflict",
+        "protected",
+        "behind",
+        "unknown",
+        "head-race",
+        "human-head",
+        "human-owner",
+        "api-refusal",
+        "delete-race",
+    ] {
+        let fake = Arc::new(Fake::new(false));
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let engine =
+            Engine::with_transport("offline-installation", cache.clone(), 4, fake.clone()).unwrap();
+        let mut config = checkbox_config();
+        config.defaults.merge = true;
+        let now = "2026-10-15T12:00:00Z".parse().unwrap();
+        let first = checkbox_run(&engine, &config, now).await;
+        assert_eq!(
+            first.actions.unwrap().branches[0].status,
+            ActionStatus::Created
+        );
+        assert!(
+            !fake
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(_, path, body)| path.ends_with("/merge")
+                    || body["query"] == rustovate_update::automerge::CHECKS_QUERY),
+            "{case}: new PR must wait for another run"
+        );
+        match case {
+            "neutral-skipped-status" => *fake.checks.lock().unwrap() = vec![
+                json!({"__typename":"CheckRun","status":"COMPLETED","conclusion":"NEUTRAL"}),
+                json!({"__typename":"CheckRun","status":"COMPLETED","conclusion":"SKIPPED"}),
+                json!({"__typename":"StatusContext","state":"SUCCESS"}),
+            ],
+            "status-only" => *fake.checks.lock().unwrap() = vec![json!({"__typename":"StatusContext","state":"SUCCESS"})],
+            "pending" => fake.checks.lock().unwrap()[0]["status"] = json!("IN_PROGRESS"),
+            "failure" => fake.checks.lock().unwrap()[0]["conclusion"] = json!("FAILURE"),
+            "cancelled" => fake.checks.lock().unwrap()[0]["conclusion"] = json!("CANCELLED"),
+            "no-checks" => fake.checks.lock().unwrap().clear(),
+            "pending-status" | "failed-status" => fake.checks.lock().unwrap().push(json!({"__typename":"StatusContext","state":if case == "pending-status" {"PENDING"} else {"FAILURE"}})),
+            "late-page-failure" => {
+                let green = fake.checks.lock().unwrap()[0].clone();
+                *fake.checks.lock().unwrap() = vec![green; 101];
+                fake.checks.lock().unwrap()[100]["conclusion"] = json!("FAILURE");
+            }
+            "draft" => fake.prs.lock().unwrap()[0]["draft"] = json!(true),
+            "conflict" => fake.prs.lock().unwrap()[0]["mergeable"] = json!(false),
+            "protected" | "behind" | "unknown" => fake.prs.lock().unwrap()[0]["mergeable_state"] = json!(if case == "protected" {"blocked"} else {case}),
+            "head-race" => fake.change_head_on_checks.store(true, std::sync::atomic::Ordering::Relaxed),
+            "human-head" => fake.prs.lock().unwrap()[0]["head"]["sha"] = json!("human-commit"),
+            "human-owner" => fake.prs.lock().unwrap()[0]["user"]["login"] = json!("human"),
+            "api-refusal" => fake.merge_refused.store(true, std::sync::atomic::Ordering::Relaxed),
+            "delete-race" => fake.deletion_race.store(true, std::sync::atomic::Ordering::Relaxed),
+            _ => {}
+        }
+        fake.requests.lock().unwrap().clear();
+        fake.writes.lock().unwrap().clear();
+        let report = engine
+            .run_at(
+                Options {
+                    repositories: vec!["demo/sandbox".into()],
+                    config: Some(config.clone()),
+                    ..Default::default()
+                },
+                false,
+                false,
+                now,
+            )
+            .await
+            .unwrap();
+        let merges = matches!(
+            case,
+            "green" | "neutral-skipped-status" | "status-only" | "delete-race"
+        );
+        let actions = &report.actions.as_ref().unwrap().pull_requests;
+        assert_eq!(
+            actions.iter().any(|a| a.status == ActionStatus::Merged),
+            merges,
+            "{case}: {report:?}"
+        );
+        let requests = fake.requests.lock().unwrap().clone();
+        let merge_requests: Vec<_> = requests
+            .iter()
+            .filter(|(_, path, _)| path.ends_with("/merge"))
+            .collect();
+        assert_eq!(
+            merge_requests.len(),
+            usize::from(merges || case == "api-refusal"),
+            "{case}: {requests:?}"
+        );
+        if let Some((method, _, body)) = merge_requests.first() {
+            assert_eq!(method, "PUT");
+            assert_eq!(*body, json!({"sha":"new-commit","merge_method":"squash"}));
+        }
+        let deletes: Vec<_> = requests
+            .iter()
+            .filter(|(_, _, b)| {
+                b["query"] == rustovate_update::REF_UPDATE
+                    && b["variables"]["input"]["refUpdates"][1]["afterOid"]
+                        == "0000000000000000000000000000000000000000"
+            })
+            .collect();
+        assert_eq!(deletes.len(), usize::from(merges), "{case}");
+        if let Some((_, _, body)) = deletes.first() {
+            assert_eq!(
+                body["variables"]["input"]["refUpdates"][0]["beforeOid"],
+                "merged-base"
+            );
+            assert_eq!(
+                body["variables"]["input"]["refUpdates"][1]["beforeOid"],
+                "new-commit"
+            );
+        }
+        let dashboard = fake.issues.lock().unwrap()[0]["body"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        if merges {
+            assert!(
+                dashboard.contains("## Merged PRs") && dashboard.contains("merged by rustovate"),
+                "{case}: {dashboard}"
+            );
+            let bytes = cache
+                .extraction_get(&rustovate_cache::ExtractionKey {
+                    repo: "demo/sandbox".into(),
+                    default_branch_commit: "rustovate/".into(),
+                    config_hash: "verified-write-receipts-v3".into(),
+                })
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                serde_json::from_slice::<Value>(&bytes).unwrap()["writes"]
+                    .as_object()
+                    .unwrap()
+                    .is_empty(),
+                "merged heads must not remain eligible for another merge"
+            );
+            let github = rustovate_github::Client::with_transport(
+                "offline-installation",
+                cache.clone(),
+                Default::default(),
+                fake.clone(),
+            )
+            .unwrap();
+            let inventory = rustovate_update::Inventory::read(
+                &github,
+                &cache,
+                &report.repositories[0],
+                &config,
+            )
+            .await
+            .unwrap();
+            let prs = rustovate_update::automerge::dashboard_prs(&inventory, "demo/sandbox", &[]);
+            let next_dashboard = rustovate_update::dashboard::render(
+                &report.repositories[0],
+                &[],
+                &prs,
+                Default::default(),
+            );
+            assert!(
+                next_dashboard.contains("## Merged PRs")
+                    && next_dashboard.contains("merged by rustovate"),
+                "merged outcomes must survive the next inventory: {next_dashboard}"
+            );
+        } else if !matches!(case, "human-head" | "head-race" | "human-owner") {
+            assert!(dashboard.contains("auto-merge"), "{case}: {dashboard}");
+        }
+        if case == "delete-race" {
+            assert!(actions.iter().any(|a| {
+                a.reason
+                    .as_deref()
+                    .is_some_and(|r| r.contains("cleanup deferred"))
+            }));
+        }
+        if case == "late-page-failure" {
+            assert_eq!(
+                requests
+                    .iter()
+                    .filter(|(_, _, b)| b["query"] == rustovate_update::automerge::CHECKS_QUERY)
+                    .count(),
+                2
+            );
+        }
+        if matches!(case, "human-head" | "human-owner") {
+            assert!(
+                !requests
+                    .iter()
+                    .any(|(_, _, b)| b["query"] == rustovate_update::automerge::CHECKS_QUERY)
+            );
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn auto_merge_uses_inventory_methods_and_prefers_native_without_status_reads() {
+    for method in ["native", "squash", "merge", "rebase", "none"] {
+        let fake = Arc::new(Fake::new(false));
+        {
+            let mut settings = fake.merge_settings.lock().unwrap();
+            settings["autoMergeAllowed"] = json!(method == "native");
+            settings["squashMergeAllowed"] = json!(matches!(method, "native" | "squash"));
+            settings["mergeCommitAllowed"] = json!(matches!(method, "native" | "squash" | "merge"));
+            settings["rebaseMergeAllowed"] = json!(method != "none");
+            settings["deleteBranchOnMerge"] = json!(true);
+        }
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let engine =
+            Engine::with_transport("offline-installation", cache, 4, fake.clone()).unwrap();
+        let mut config = checkbox_config();
+        config.defaults.merge = true;
+        let now = chrono::Utc::now();
+        checkbox_run(&engine, &config, now).await;
+        fake.requests.lock().unwrap().clear();
+        let report = engine
+            .run_at(
+                Options {
+                    repositories: vec!["demo/sandbox".into()],
+                    config: Some(config),
+                    ..Default::default()
+                },
+                false,
+                false,
+                now,
+            )
+            .await
+            .unwrap();
+        let requests = fake.requests.lock().unwrap().clone();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|(_, _, b)| b["query"] == rustovate_update::INVENTORY_QUERY)
+                .count(),
+            1
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|(_, path, _)| path == "/repos/demo/sandbox")
+                .count(),
+            1,
+            "only the existing extraction metadata read is allowed"
+        );
+        assert!(
+            !requests
+                .iter()
+                .any(|(_, _, b)| b["query"] == rustovate_update::REF_UPDATE),
+            "GitHub deletes branches in this case"
+        );
+        if method == "native" {
+            assert!(!fake.prs.lock().unwrap()[0]["auto_merge"].is_null());
+            assert!(!requests.iter().any(|(_, path, b)| path.ends_with("/merge")
+                || b["query"] == rustovate_update::automerge::CHECKS_QUERY));
+            assert_eq!(
+                requests.len(),
+                4,
+                "native steady run retains one inventory and no merge precondition reads: {requests:?}"
+            );
+        } else if method == "none" {
+            assert_eq!(report.repositories[0].status, Status::Error);
+            assert!(!requests.iter().any(|(_, path, _)| path.ends_with("/merge")));
+        } else {
+            assert!(
+                requests
+                    .iter()
+                    .any(|(_, path, b)| path.ends_with("/merge") && b["merge_method"] == method),
+                "{method}: {requests:?}"
+            );
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn manual_create_age_and_schedule_permits_do_not_authorize_fallback_merging() {
+    for hold in ["age", "schedule"] {
+        let fake = Arc::new(Fake::new(false));
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let engine =
+            Engine::with_transport("offline-installation", cache, 4, fake.clone()).unwrap();
+        let mut config = checkbox_config();
+        config.defaults.merge = true;
+        let now: chrono::DateTime<chrono::Utc> = "2026-10-15T12:00:00Z".parse().unwrap();
+        if hold == "age" {
+            config.defaults.wait_hours = 24;
+            *fake.catalog.lock().unwrap() = json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}},"time":{"2.0.0":now.to_rfc3339()}});
+        } else {
+            config.defaults.windows = vec![rustovate_config::Window {
+                cron: vec!["0 0 1 1 *".into()],
+                zone: "UTC".into(),
+            }];
+        }
+        checkbox_run(&engine, &config, now).await;
+        tick_dashboard(&fake, "create");
+        checkbox_run(&engine, &config, now).await;
+        assert_eq!(fake.prs.lock().unwrap().len(), 1);
+        fake.requests.lock().unwrap().clear();
+        checkbox_run(&engine, &config, now).await;
+        assert!(
+            !fake
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(_, path, b)| path.ends_with("/merge")
+                    || b["query"] == rustovate_update::automerge::CHECKS_QUERY),
+            "{hold}"
+        );
+        if hold == "age" {
+            let later = checkbox_run(&engine, &config, now + chrono::Duration::hours(25)).await;
+            assert!(
+                later
+                    .actions
+                    .unwrap()
+                    .pull_requests
+                    .iter()
+                    .any(|a| a.status == ActionStatus::Merged)
+            );
+        }
+    }
+}
 
 fn checkbox_config() -> rustovate_config::Config {
     let mut config = rustovate_config::load(std::path::Path::new("../../Rustovate.pkl")).unwrap();

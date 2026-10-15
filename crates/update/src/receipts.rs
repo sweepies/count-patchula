@@ -14,6 +14,7 @@ pub const INVENTORY_QUERY: &str = r#"query($owner:String!,$name:String!,$prefix:
   author{__typename login} headRepository{nameWithOwner} baseRepository{nameWithOwner}
  }}
  repository(owner:$owner,name:$name){
+  id autoMergeAllowed squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed deleteBranchOnMerge
   defaultBranchRef{name target{oid}}
   issues(states:[OPEN],first:100,after:$issueCursor){pageInfo{hasNextPage endCursor} nodes{
    id number title body state author{__typename login}
@@ -146,6 +147,8 @@ pub struct Inventory {
     pub refs: Vec<Value>,
     pub closed: Vec<Value>,
     pub issues: Vec<Value>,
+    pub merge_settings: crate::automerge::Settings,
+    pub merged_prs: Vec<Value>,
 }
 impl Inventory {
     pub fn pull_requests(&self, repo: &str) -> Vec<Value> {
@@ -205,6 +208,7 @@ impl Inventory {
                 return Err("inventory actor changed".into());
             }
             result.actor = actor.into();
+            result.merge_settings = crate::automerge::Settings::from_graphql(&data["repository"]);
             result.closed = data["nodes"]
                 .as_array()
                 .cloned()
@@ -239,6 +243,9 @@ impl Inventory {
                 }
             }
             if refs_done && issues_done {
+                result.merged_prs =
+                    crate::automerge::load_history(cache, &repository.repository, &result.actor)
+                        .await?;
                 return Ok(result);
             }
             if result.refs.len() + result.issues.len() > 100_000 {
@@ -403,6 +410,40 @@ fn restore_write(
     plan.action.files = receipt.files.clone();
     plan.lockfiles_ready = true;
     Ok(())
+}
+
+pub(crate) async fn save_merge_states(
+    cache: &Cache,
+    repository: &Repository,
+    config: &Config,
+    plans: &[Plan],
+) -> Result<(), String> {
+    let key = key(&repository.repository, &config.prs.branch);
+    let Some(bytes) = cache
+        .extraction_get(&key)
+        .await
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(());
+    };
+    let mut receipts: Receipts = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    for plan in plans {
+        let Some(pr) = &plan.cached_pr else {
+            continue;
+        };
+        if plan.action.status == ActionStatus::Merged {
+            receipts.writes.remove(&plan.action.branch);
+        } else if let Some(receipt) = receipts.writes.get_mut(&plan.action.branch) {
+            receipt.pr = pr_state(pr);
+        }
+    }
+    cache
+        .extraction_put(
+            &key,
+            &serde_json::to_vec(&receipts).map_err(|e| e.to_string())?,
+        )
+        .await
+        .map_err(|e| e.to_string())
 }
 
 pub async fn save_receipts(

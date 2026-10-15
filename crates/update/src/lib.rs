@@ -1,5 +1,6 @@
 //! Deterministic manifest plans, signed GitHub branches and pull request lifecycle.
 #![forbid(unsafe_code)]
+pub mod automerge;
 mod cleanup;
 pub mod dashboard;
 mod receipts;

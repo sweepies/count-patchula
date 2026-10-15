@@ -344,6 +344,18 @@ pub fn issue(inventory: &Inventory) -> Result<Option<&Value>, String> {
 pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck) -> String {
     // Keep the numeric PR identity separate from the rendered Markdown.
     let mut sections = BTreeMap::<String, BTreeSet<(Option<u64>, String)>>::new();
+    for pr in prs.iter().filter(|p| !p["merged_at"].is_null()) {
+        if let Some(number) = pr["number"].as_u64() {
+            sections.entry("Merged PRs".into()).or_default().insert((
+                Some(number),
+                format!(
+                    "- #{number}: {} — {}\n",
+                    safe(pr["title"].as_str().unwrap_or("Update dependencies")),
+                    safe(pr["rustovate_merge"].as_str().unwrap_or("merged"))
+                ),
+            ));
+        }
+    }
     for pr in prs.iter().filter(|p| {
         p["state"] == "open"
             && !plans
@@ -364,6 +376,9 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
         }
     }
     for plan in plans {
+        if plan.action.status == rustovate_report::ActionStatus::Merged {
+            continue;
+        }
         let open = prs
             .iter()
             .find(|p| p["state"] == "open" && p["head"]["ref"] == plan.action.branch);
@@ -380,7 +395,14 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
                     .or_default()
                     .insert((
                         Some(number),
-                        format!("- #{number}: {}\n", safe(&plan.action.message)),
+                        format!(
+                            "- #{number}: {}{}\n",
+                            safe(&plan.action.message),
+                            pr["rustovate_merge"]
+                                .as_str()
+                                .map(|reason| format!(" — {}", safe(reason)))
+                                .unwrap_or_default()
+                        ),
                     ));
             }
         } else if plan.action.reason.as_deref() == Some(crate::pull_requests::CLOSED_BY_OWNER) {
@@ -499,11 +521,12 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
             0
         } else {
             match section.as_str() {
-                "Pending updates" => 1,
-                "Owner-closed updates" => 2,
-                "Lookup warnings and errors" => 3,
-                "Report warnings" => 4,
-                _ => 5,
+                "Merged PRs" => 1,
+                "Pending updates" => 2,
+                "Owner-closed updates" => 3,
+                "Lookup warnings and errors" => 4,
+                "Report warnings" => 5,
+                _ => 6,
             }
         };
         (rank, section.clone())
