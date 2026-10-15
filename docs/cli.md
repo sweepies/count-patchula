@@ -9,9 +9,12 @@ Exit codes: 0 = success; 1 = runtime error; 2 = usage or configuration error.
 No interactive prompts are used. Future prompts require both stdin and stdout to be TTYs and use demand.
 
 
-- **Usage:** `rustovate [FLAGS] <SUBCOMMAND>`
+- **Usage:** `rustovate [FLAGS] [SUBCOMMAND]`
 
 ## Global Flags
+- **`--recheck <RECHECK>`** — Checkbox wording; also RUSTOVATE_RECHECK. Default: now in server, next-run in CLI.
+
+  **Choices:** `now`, `next-run`
 - **`-v --verbose`** — Increase diagnostic verbosity; repeat for more detail.
 - **`--color <COLOR>`** — Control ANSI colors in diagnostics.
 
@@ -21,6 +24,14 @@ No interactive prompts are used. Future prompts require both stdin and stdout to
 - **`--json`** — Emit machine-readable command results and errors (schema stays Pkl).
 
 ## Flags
+- **`--server`** — Run the API-only GitHub App webhook server (no subcommand).
+- **`--settings <SETTINGS>`** — Operator Pkl settings file; also RUSTOVATE_SERVER_SETTINGS.
+- **`--listen <LISTEN>`** — Server bind address; also RUSTOVATE_LISTEN (default 127.0.0.1:8080).
+- **`--server-cache <SERVER_CACHE>`** — Persistent server cache/queue; also RUSTOVATE_SERVER_CACHE.
+- **`--app-id <APP_ID>`** — GitHub App ID; also RUSTOVATE_APP_ID.
+- **`--private-key-file <PRIVATE_KEY_FILE>`** — PEM private key file; also RUSTOVATE_APP_PRIVATE_KEY_FILE.
+- **`--webhook-secret-file <WEBHOOK_SECRET_FILE>`** — Webhook secret file; also RUSTOVATE_WEBHOOK_SECRET_FILE.
+- **`--shutdown-timeout-secs <SHUTDOWN_TIMEOUT_SECS>`** — Graceful server drain deadline; also RUSTOVATE_SHUTDOWN_TIMEOUT_SECS (default 60).
 - **`-h --help`** — Print help
 - **`-V --version`** — Print version
 
@@ -50,6 +61,27 @@ Validate a Pkl config file or discover one in a repository directory.
 - **Usage:** `rustovate config schema`
 
 Print the bundled Rustovate.pkl schema as Pkl source.
+
+### Flags
+- **`-h --help`** — Print help
+
+## `rustovate config server-schema`
+
+- **Usage:** `rustovate config server-schema`
+
+Print the bundled RustovateServer.pkl operator schema.
+
+### Flags
+- **`-h --help`** — Print help
+
+## `rustovate config check-server`
+
+- **Usage:** `rustovate config check-server <PATH>`
+
+Validate an operator Pkl server settings file without credentials or network.
+
+### Arguments
+- **`<PATH>`** — Pkl file or repository directory to check.
 
 ### Flags
 - **`-h --help`** — Print help
@@ -108,7 +140,4 @@ Create or update dependency branches and pull requests with verified API commits
 - **`--config-dir <CONFIG_DIR>`** — Per-repository local overrides: `<dir>/<owner>/<name>.pkl` wins over `<dir>/<name>.pkl`. Unmatched repositories discover `.github/rustovate.pkl` then `rustovate.pkl`; neither means skipped. All matched files are validated before repository scans. Mutually exclusive with `--config`.
 - **`--dry-run`** — Print planned branches, files and unified diffs without writing to GitHub.
 - **`--allow-lockfile-pending`** — Permit manifest-only test branches for unsupported yarn/pnpm/binary bun locks.
-- **`--recheck <RECHECK>`** — Checkbox wording: now or next-run (default); also RUSTOVATE_RECHECK.
-
-  **Choices:** `now`, `next-run`
 - **`-h --help`** — Print help

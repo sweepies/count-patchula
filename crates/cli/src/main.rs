@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 mod cli;
+mod server;
 
 use cli::{App, Command, ConfigCommand};
 use std::io::{self, IsTerminal, Write};
@@ -38,8 +39,46 @@ impl Services {
 }
 
 async fn run(app: &App, services: &Services) -> Result<u8, (u8, miette::Report)> {
-    match &app.command {
+    if app.server {
+        if app.command.is_some() {
+            return Err((
+                2,
+                miette::miette!("--server cannot be combined with a subcommand"),
+            ));
+        }
+        return server::run(app).await;
+    }
+    let command = app.command.as_ref().ok_or_else(|| {
+        (
+            2,
+            miette::miette!("choose a subcommand or --server; see --help"),
+        )
+    })?;
+    match command {
         Command::Config(config) => match &config.command {
+            ConfigCommand::ServerSchema => write!(
+                io::stdout().lock(),
+                "{}",
+                rustovate_server::settings::SCHEMA
+            )
+            .map(|_| 0)
+            .map_err(|e| (1, miette::miette!("{e}"))),
+            ConfigCommand::CheckServer(check) => {
+                rustovate_server::settings::Settings::load(&check.path)
+                    .map_err(|e| (2, miette::miette!("{e}")))?;
+                writeln!(
+                    io::stdout().lock(),
+                    "{}",
+                    if app.json {
+                        serde_json::json!({"schemaVersion":1,"valid":true,"path":check.path})
+                            .to_string()
+                    } else {
+                        format!("Valid server settings: {}", check.path.display())
+                    }
+                )
+                .map(|_| 0)
+                .map_err(|e| (1, miette::miette!("{e}")))
+            }
             ConfigCommand::Schema => write!(io::stdout().lock(), "{}", rustovate_config::SCHEMA)
                 .map(|_| 0)
                 .map_err(|error| (1, miette::miette!("{error}"))),
@@ -80,16 +119,25 @@ async fn main() -> ExitCode {
         .and_then(|value| value.parse::<tracing::level_filters::LevelFilter>().ok())
         .unwrap_or(if app.verbose >= 2 {
             tracing::level_filters::LevelFilter::DEBUG
+        } else if app.server {
+            tracing::level_filters::LevelFilter::INFO
         } else {
             tracing::level_filters::LevelFilter::WARN
         });
+    let layer = if app.server {
+        tracing_subscriber::fmt::layer()
+            .json()
+            .with_writer(io::stderr)
+            .with_ansi(false)
+            .boxed()
+    } else {
+        tracing_subscriber::fmt::layer()
+            .with_writer(io::stderr)
+            .with_ansi(false)
+            .boxed()
+    };
     let _ = tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_writer(io::stderr)
-                .with_ansi(false)
-                .with_filter(Targets::new().with_target("rustovate", level)),
-        )
+        .with(layer.with_filter(Targets::new().with_target("rustovate", level)))
         .try_init();
     let color = app.color == cli::Color::Always
         || (app.color == cli::Color::Auto && io::stderr().is_terminal());
@@ -104,7 +152,9 @@ async fn main() -> ExitCode {
     match run(&app, &Services::default()).await {
         Ok(code) => ExitCode::from(code),
         Err((code, error)) => {
-            if app.json {
+            if app.server {
+                tracing::error!(target: "rustovate_server", error = %error, exit_code = code, "server stopped");
+            } else if app.json {
                 println!(
                     "{}",
                     serde_json::json!({"schemaVersion": 1, "error": format!("{error:#}"), "exitCode": code})
@@ -154,7 +204,7 @@ async fn batch(
             miette::miette!("host-concurrency requires a lowercase hostname and limit 1..100"),
         )
     })?;
-    let recheck = match run.and_then(|r| r.recheck) {
+    let recheck = match app.recheck {
         Some(cli::Recheck::Now) => rustovate_engine::Recheck::Now,
         Some(cli::Recheck::NextRun) => rustovate_engine::Recheck::NextRun,
         None if run.is_some() => match std::env::var("RUSTOVATE_RECHECK").as_deref() {

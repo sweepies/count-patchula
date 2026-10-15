@@ -5,5 +5,8 @@
 *.sqlite-wal
 *.sqlite-shm
 *.worktrees/
+*.server.lock
+*.pem
+/server-reports/
 /conformance-results/
 /benchmark-results/

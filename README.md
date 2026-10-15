@@ -22,6 +22,7 @@ Dated proposals default to a 24-hour release-age gate. GitHub-hosted runner
 labels and mise registry backends are supported by read-only lookup.
 
 - Design: [docs/design.md](docs/design.md)
+- API server and sandbox replay: [docs/server.md](docs/server.md)
 - Deliberate departures from Renovate: [docs/departures.md](docs/departures.md)
 - Progress: the `rustovate` project in Linear (sweepies team)
 

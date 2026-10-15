@@ -174,6 +174,38 @@ description = "Plan or apply dependency branches; forwards repositories and writ
 raw_args = true
 run = "cargo run --quiet --locked -p rustovate-cli -- run"
 
+[tasks.server]
+description = "Run the API-only GitHub App server; accepts server flags"
+raw_args = true
+run = "cargo run --quiet --locked -p rustovate-cli -- --server"
+
+[tasks."server:schema"]
+description = "Print the published operator settings schema"
+run = "cargo run --quiet --locked -p rustovate-cli -- config server-schema"
+
+[tasks."server:replay"]
+description = "Sign and deliver a saved webhook locally: PAYLOAD EVENT DELIVERY [URL]"
+raw_args = true
+run = '''
+bun -e '
+import { createHmac } from "node:crypto";
+const [path, event, delivery, url = "http://127.0.0.1:8080/webhook"] = process.argv.slice(1);
+if (!path || !event || !delivery) throw new Error("usage: mise run server:replay PAYLOAD EVENT DELIVERY [URL]");
+const destination = new URL(url);
+if (!["127.0.0.1", "localhost", "[::1]"].includes(destination.hostname)) throw new Error("replay target must be loopback");
+const file = process.env.RUSTOVATE_WEBHOOK_SECRET_FILE;
+const value = process.env.RUSTOVATE_WEBHOOK_SECRET;
+if (file && value) throw new Error("choose a secret file or environment value");
+const secret = (file ? await Bun.file(file).text() : value)?.replace(/[\r\n]+$/, "");
+if (!secret) throw new Error("set RUSTOVATE_WEBHOOK_SECRET_FILE or RUSTOVATE_WEBHOOK_SECRET");
+const body = new Uint8Array(await Bun.file(path).arrayBuffer());
+const signature = "sha256=" + createHmac("sha256", secret).update(body).digest("hex");
+const response = await fetch(destination, {method:"POST", body, redirect:"error", headers:{"content-type":"application/json", "x-hub-signature-256":signature, "x-github-event":event, "x-github-delivery":delivery}});
+console.log(`HTTP ${response.status}`);
+if (response.status !== 202) process.exitCode = 1;
+' "$@"
+'''
+
 [tasks."lookup:release"]
 description = "Run read-only lookup in release mode; forwards repository and lookup flags"
 raw_args = true

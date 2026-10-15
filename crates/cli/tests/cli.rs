@@ -22,6 +22,75 @@ fn help_version_and_bundled_schema() {
         String::from_utf8(output.stdout).unwrap(),
         rustovate_config::SCHEMA
     );
+    let output = cli(&["config", "server-schema"]);
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        rustovate_server::settings::SCHEMA
+    );
+}
+
+#[test]
+fn operator_settings_are_checked_offline_and_secret_diagnostics_are_sanitized() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("server.pkl");
+    std::fs::write(&path, "amends \"RustovateServer.pkl\"\nconcurrency = 2\n").unwrap();
+    let output = cli(&["config", "check-server", path.to_str().unwrap(), "--json"]);
+    assert!(output.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["valid"],
+        true
+    );
+    std::fs::write(
+        &path,
+        "amends \"RustovateServer.pkl\"\nprivateKey = \"do-not-echo-test-secret\"\n",
+    )
+    .unwrap();
+    let output = cli(&["config", "check-server", path.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("do-not-echo-test-secret"));
+}
+
+#[test]
+fn server_startup_errors_are_json_and_never_echo_secret_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = dir.path().join("server.pkl");
+    std::fs::write(&settings, "amends \"RustovateServer.pkl\"\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_rustovate"))
+        .args([
+            "--server",
+            "--app-id",
+            "1",
+            "--listen",
+            "127.0.0.1:0",
+            "--shutdown-timeout-secs",
+            "1",
+            "--settings",
+        ])
+        .arg(settings)
+        .arg("--server-cache")
+        .arg(dir.path().join("cache.sqlite"))
+        .env(
+            "RUSTOVATE_APP_PRIVATE_KEY",
+            "test-private-key-must-not-appear",
+        )
+        .env(
+            "RUSTOVATE_WEBHOOK_SECRET",
+            "test-webhook-secret-must-not-appear",
+        )
+        .env_remove("RUSTOVATE_APP_PRIVATE_KEY_FILE")
+        .env_remove("RUSTOVATE_WEBHOOK_SECRET_FILE")
+        .env_remove("RUSTOVATE_RECHECK")
+        .env_remove("RUSTOVATE_LOG")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(!stderr.contains("must-not-appear"));
+    let log: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(log["level"], "ERROR");
+    assert_eq!(log["fields"]["error"], "invalid GitHub App credentials");
 }
 
 #[test]

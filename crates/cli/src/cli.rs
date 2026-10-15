@@ -10,6 +10,33 @@ use usage_rs::{Args, Cli, Subcommands, ValueEnum};
 #[derive(Cli)]
 #[usage(bin = "rustovate", version)]
 pub struct App {
+    /// Run the API-only GitHub App webhook server (no subcommand).
+    #[usage(long)]
+    pub server: bool,
+    /// Operator Pkl settings file; also RUSTOVATE_SERVER_SETTINGS.
+    #[usage(long)]
+    pub settings: Option<PathBuf>,
+    /// Server bind address; also RUSTOVATE_LISTEN (default 127.0.0.1:8080).
+    #[usage(long)]
+    pub listen: Option<std::net::SocketAddr>,
+    /// Persistent server cache/queue; also RUSTOVATE_SERVER_CACHE.
+    #[usage(long)]
+    pub server_cache: Option<PathBuf>,
+    /// GitHub App ID; also RUSTOVATE_APP_ID.
+    #[usage(long)]
+    pub app_id: Option<u64>,
+    /// PEM private key file; also RUSTOVATE_APP_PRIVATE_KEY_FILE.
+    #[usage(long)]
+    pub private_key_file: Option<PathBuf>,
+    /// Webhook secret file; also RUSTOVATE_WEBHOOK_SECRET_FILE.
+    #[usage(long)]
+    pub webhook_secret_file: Option<PathBuf>,
+    /// Graceful server drain deadline; also RUSTOVATE_SHUTDOWN_TIMEOUT_SECS (default 60).
+    #[usage(long)]
+    pub shutdown_timeout_secs: Option<u64>,
+    /// Checkbox wording; also RUSTOVATE_RECHECK. Default: now in server, next-run in CLI.
+    #[usage(long, value_enum, global)]
+    pub recheck: Option<Recheck>,
     /// Increase diagnostic verbosity; repeat for more detail.
     #[usage(short = 'v', long, count, global)]
     pub verbose: u8,
@@ -20,7 +47,7 @@ pub struct App {
     #[usage(long, global)]
     pub json: bool,
     #[usage(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -50,9 +77,6 @@ pub struct Run {
     /// Permit manifest-only test branches for unsupported yarn/pnpm/binary bun locks.
     #[usage(long)]
     pub allow_lockfile_pending: bool,
-    /// Checkbox wording: now or next-run (default); also RUSTOVATE_RECHECK.
-    #[usage(long, value_enum)]
-    pub recheck: Option<Recheck>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -102,6 +126,10 @@ pub enum ConfigCommand {
     Check(Check),
     /// Print the bundled Rustovate.pkl schema as Pkl source.
     Schema,
+    /// Print the bundled RustovateServer.pkl operator schema.
+    ServerSchema,
+    /// Validate an operator Pkl server settings file without credentials or network.
+    CheckServer(Check),
 }
 
 #[derive(Args)]
@@ -113,6 +141,29 @@ pub struct Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_has_no_subcommand_and_global_recheck_still_works_for_run() {
+        let app = App::parse_from(
+            &[
+                "--server",
+                "--settings",
+                "/operator/server.pkl",
+                "--recheck",
+                "next-run",
+            ]
+            .map(std::ffi::OsStr::new),
+        )
+        .unwrap();
+        assert!(app.server);
+        assert!(app.command.is_none());
+        assert_eq!(app.recheck, Some(Recheck::NextRun));
+        let app =
+            App::parse_from(&["run", "--recheck", "now", "owner/repo"].map(std::ffi::OsStr::new))
+                .unwrap();
+        assert_eq!(app.recheck, Some(Recheck::Now));
+        assert!(matches!(app.command, Some(Command::Run(_))));
+    }
 
     #[test]
     fn globals_work_after_nested_commands_and_verbose_counts() {
@@ -140,13 +191,13 @@ mod tests {
         .map(std::ffi::OsStr::new);
         let app = App::parse_from(&words).unwrap();
         assert!(app.json);
-        let Command::Lookup(options) = app.command else {
+        let Some(Command::Lookup(options)) = app.command else {
             panic!("lookup")
         };
         assert_eq!(options.repositories, vec!["sweepies/renovate-runner"]);
         assert_eq!(options.concurrency, 4);
         let app = App::parse_from(&[std::ffi::OsStr::new("lookup")]).unwrap();
-        let Command::Lookup(options) = app.command else {
+        let Some(Command::Lookup(options)) = app.command else {
             panic!("lookup")
         };
         assert!(options.repositories.is_empty());
@@ -166,7 +217,7 @@ mod tests {
         ]
         .map(std::ffi::OsStr::new);
         let app = App::parse_from(&words).unwrap();
-        let Command::Lookup(options) = app.command else {
+        let Some(Command::Lookup(options)) = app.command else {
             panic!("lookup")
         };
         assert_eq!(options.repositories, ["owner/repo"]);
