@@ -406,7 +406,7 @@ async fn expired_anonymous_tokens_are_not_reused_between_clients() {
                 (
                     manifest.into(),
                     Some("Bearer anonymous-expired".into()),
-                    response(200, "{}", &[]),
+                    response(200, "{}", &[("docker-content-digest", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]),
                 ),
             ]);
         }
@@ -418,6 +418,82 @@ async fn expired_anonymous_tokens_are_not_reused_between_clients() {
                 .registry_digest("ghcr.io/spec/image", "latest")
                 .await
                 .unwrap();
+        }
+        assert!(steps.0.lock().unwrap().is_empty());
+    }
+}
+
+struct DigestSteps(Mutex<VecDeque<(reqwest::Method, Response)>>);
+impl Transport for DigestSteps {
+    fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+        let (method, response) = self
+            .0
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("unexpected manifest request");
+        assert_eq!(request.method(), method);
+        if method == reqwest::Method::HEAD {
+            if response.status == 304 {
+                assert_eq!(request.headers()["if-none-match"], "head");
+            } else {
+                assert!(!request.headers().contains_key("if-none-match"));
+            }
+        }
+        Box::pin(async { Ok(response) })
+    }
+}
+#[tokio::test]
+async fn manifest_heads_have_separate_validators_and_fall_back_only_when_needed() {
+    let digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    for first in [
+        response(200, "", &[]),
+        response(405, "", &[]),
+        response(501, "", &[]),
+    ] {
+        let steps = Arc::new(DigestSteps(Mutex::new(VecDeque::from([
+            (reqwest::Method::HEAD, first),
+            (
+                reqwest::Method::GET,
+                response(
+                    200,
+                    "{}",
+                    &[("docker-content-digest", digest), ("etag", "get")],
+                ),
+            ),
+            (
+                reqwest::Method::HEAD,
+                response(
+                    200,
+                    "",
+                    &[("docker-content-digest", digest), ("etag", "head")],
+                ),
+            ),
+            (reqwest::Method::HEAD, response(304, "", &[])),
+        ]))));
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
+            .await
+            .unwrap();
+        let client = Client::new(
+            rustovate_github::Client::with_transport(
+                "offline",
+                cache.clone(),
+                Default::default(),
+                steps.clone(),
+            )
+            .unwrap(),
+            Cached::new(cache.clone(), steps.clone(), 4).unwrap(),
+            cache,
+        );
+        for _ in 0..3 {
+            assert_eq!(
+                client
+                    .registry_digest("ghcr.io/spec/image", "latest")
+                    .await
+                    .unwrap(),
+                digest
+            );
         }
         assert!(steps.0.lock().unwrap().is_empty());
     }

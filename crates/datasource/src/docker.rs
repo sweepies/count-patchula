@@ -1,5 +1,5 @@
 use super::*;
-use reqwest::Url;
+use reqwest::{Method, Url};
 use rustovate_cache::{HttpEntry, HttpKey};
 use std::{
     collections::HashSet,
@@ -78,6 +78,7 @@ impl Client {
         path: &str,
         url: &str,
         accept: &str,
+        method: Method,
     ) -> Result<rustovate_http::Response> {
         let scope = format!("{host}/{path}");
         let token = self.tokens.lock().await.entry(scope).or_default().clone();
@@ -103,7 +104,9 @@ impl Client {
             .filter(|(_, expiry)| *expiry > Instant::now())
             .map(|(v, _)| v.clone());
         drop(saved);
-        let mut response = self.registry_read(url, accept, bearer.as_deref()).await?;
+        let mut response = self
+            .registry_read(url, accept, bearer.as_deref(), method.clone())
+            .await?;
         if response.status == 401 {
             let mut saved_token = token.lock().await;
             let refreshed = saved_token
@@ -207,7 +210,7 @@ impl Client {
                 bearer
             };
             drop(saved_token);
-            response = self.registry_read(url, accept, Some(&next)).await?;
+            response = self.registry_read(url, accept, Some(&next), method).await?;
             if response.status == 401 {
                 *token.lock().await = None;
                 self.cache.http_remove(&key).await?;
@@ -234,7 +237,11 @@ impl Client {
         url: &str,
         accept: &str,
         token: Option<&str>,
+        method: Method,
     ) -> Result<rustovate_http::Response> {
+        if method == Method::HEAD {
+            return Ok(self.http.registry_head(url, accept, token).await?);
+        }
         if Url::parse(url)
             .map_err(|_| Error::Invalid)?
             .path()
@@ -261,7 +268,7 @@ impl Client {
                 return Err(Error::Invalid);
             }
             let response = self
-                .registry(&host, &path, url.as_str(), "application/json")
+                .registry(&host, &path, url.as_str(), "application/json", Method::GET)
                 .await?;
             #[derive(Deserialize)]
             struct Page {
@@ -324,14 +331,18 @@ impl Client {
         }
         let tag = tag.replace('+', "_");
         let (host, path) = identity(package)?;
-        let response = self
-            .registry(
-                &host,
-                &path,
-                &format!("https://{host}/v2/{path}/manifests/{tag}"),
-                MANIFEST,
-            )
-            .await?;
+        let url = format!("https://{host}/v2/{path}/manifests/{tag}");
+        let response = match self
+            .registry(&host, &path, &url, MANIFEST, Method::HEAD)
+            .await
+        {
+            Ok(response) if response.headers.contains_key("docker-content-digest") => response,
+            Ok(_) | Err(Error::Http(rustovate_http::CacheError::Status(405 | 501))) => {
+                self.registry(&host, &path, &url, MANIFEST, Method::GET)
+                    .await?
+            }
+            Err(error) => return Err(error),
+        };
         use sha2::{Digest, Sha256};
         let digest = response
             .headers

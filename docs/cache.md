@@ -116,7 +116,8 @@ reqwest pool retains up to 32 idle connections per host. Registry 429s publish
 a shared host cooldown and retry at most three times. Numeric/date Retry-After
 is honored; absent headers use 1/2/4-second backoff. Waits above 60 seconds and
 exhausted retries fail explicitly, and queued callers do not bypass long
-cooldowns. Other hosts remain available. Only successful responses enter the
+cooldowns. Other hosts remain available. Docker Hub pull-quota errors are returned immediately, rather than retried on
+a short backoff. Only successful responses enter the
 cache, so a rate-limited pagination attempt cannot become a complete catalog.
 
 Two explicit freshness departures avoid redownloading validator-free catalogs:
@@ -152,3 +153,12 @@ reopen avoids both the token request and the initial registry 401 until expiry.
 Protocol references: [GitHub secondary limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#about-secondary-rate-limits),
 [Go version queries](https://go.dev/ref/mod#version-queries),
 [registry authentication](https://docs.docker.com/reference/api/registry/auth/).
+
+
+Manifest digest checks use HEAD with the same Accept negotiation as GET and an
+independent method-aware cache key. The top-level Docker-Content-Digest header
+identifies the multi-architecture index. A missing digest header or unsupported
+HEAD (405/501) falls back to GET and, if necessary, hashing its body. Conditional
+HEAD 304s preserve the previous digest header. This avoids downloading unused
+manifest bodies and Docker Hub documents that HEAD version checks do not consume
+pull quota. It does not cache mutable tags beyond upstream freshness.

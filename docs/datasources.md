@@ -50,7 +50,7 @@ PyPI retains earliest file upload dates and all-files-yanked status. Python
 requirements use PEP 440 ordering/specifiers; mise keeps its loose version policy.
 
 Wave 2 adds anonymous registry v2 authentication for Docker Hub and GHCR, bounded
-same-origin tag pagination, conditional pages, and lazy manifest/index digest
+same-origin tag pagination, conditional pages, and lazy HEAD manifest/index digest
 resolution for current/proposed tags. Anonymous pull tokens coalesce in memory
 and persist in SQLite until their scoped expiry minus a safety margin. GitHub
 and private registry credentials are never persisted as tokens. Registry 429s share a host cooldown and retry at most three times, honoring

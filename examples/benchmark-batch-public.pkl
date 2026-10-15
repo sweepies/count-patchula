@@ -35,3 +35,12 @@ extractors = new Listing {
     package = "ghcr.io/immich-app/immich-machine-learning"
   }
 }
+
+// Benchmark catalog freshness without consuming Docker Hub's shared anonymous
+// pull quota. GHCR digest checks remain enabled. Production defaults are unchanged.
+rules = new Listing {
+  new Rule {
+    select { sources = new Listing { "docker" }; packages = new Listing { "**"; "!ghcr.io/**" } }
+    apply { digest = false }
+  }
+}

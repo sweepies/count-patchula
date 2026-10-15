@@ -199,7 +199,8 @@ impl Cached {
         }
     }
     pub async fn get(&self, url: &str, accept: &str) -> Result<Response, Error> {
-        self.get_representation(url, accept, None, None).await
+        self.get_representation(url, accept, None, None, Method::GET)
+            .await
     }
 
     /// Public registry content; bearer tokens never enter the persisted key.
@@ -209,7 +210,18 @@ impl Cached {
         accept: &str,
         token: Option<&str>,
     ) -> Result<Response, Error> {
-        self.registry_representation(url, accept, token, None).await
+        self.registry_representation(url, accept, token, None, Method::GET)
+            .await
+    }
+    /// Manifest version checks need only headers; HEAD has its own cache key.
+    pub async fn registry_head(
+        &self,
+        url: &str,
+        accept: &str,
+        token: Option<&str>,
+    ) -> Result<Response, Error> {
+        self.registry_representation(url, accept, token, None, Method::HEAD)
+            .await
     }
     pub async fn registry_get_derived(
         &self,
@@ -219,7 +231,7 @@ impl Cached {
         format: &'static str,
         derive: Derive,
     ) -> Result<Response, Error> {
-        self.registry_representation(url, accept, token, Some((format, derive)))
+        self.registry_representation(url, accept, token, Some((format, derive)), Method::GET)
             .await
     }
     async fn registry_representation(
@@ -228,10 +240,11 @@ impl Cached {
         accept: &str,
         token: Option<&str>,
         derived: Option<(&'static str, Derive)>,
+        method: Method,
     ) -> Result<Response, Error> {
         let started = Instant::now();
         let key = format!(
-            "registry:{}:{url}\n{accept}\n{}",
+            "registry:{method}:{}:{url}\n{accept}\n{}",
             token.is_some(),
             derived.map_or("", |(format, _)| format)
         );
@@ -250,7 +263,7 @@ impl Cached {
             return Ok(response.clone());
         }
         let response = self
-            .get_representation(url, accept, derived, Some(token))
+            .get_representation(url, accept, derived, Some(token), method)
             .await?;
         if response.status.is_success() {
             *previous = Some((Instant::now(), response.clone()));
@@ -306,7 +319,7 @@ impl Cached {
             return Ok(response.clone());
         }
         let response = self
-            .get_representation(url, accept, Some((format, derive)), None)
+            .get_representation(url, accept, Some((format, derive)), None, Method::GET)
             .await?;
         *previous = Some((Instant::now(), response.clone()));
         Ok(response)
@@ -318,6 +331,7 @@ impl Cached {
         accept: &str,
         derived: Option<(&'static str, Derive)>,
         registry: Option<Option<&str>>,
+        method: Method,
     ) -> Result<Response, Error> {
         let url = Url::parse(url).map_err(|_| Error::Configuration)?;
         if url.scheme() != "https"
@@ -328,14 +342,14 @@ impl Cached {
             return Err(Error::Configuration);
         }
         let mut key = HttpKey::new(
-            "GET",
+            method.as_str(),
             url.as_str(),
             BTreeMap::from([("accept".into(), accept.into())]),
         )?;
         if let Some((format, _)) = derived {
             key = key.representation(format);
         }
-        let mut trace = RequestTrace::new("GET", &url);
+        let mut trace = RequestTrace::new(method.as_str(), &url);
         let cached = self.0.cache.http_get(&key).await?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -406,7 +420,7 @@ impl Cached {
             trace.fresh(&response);
             return Ok(response);
         }
-        let mut request = Request::new(Method::GET, url.clone());
+        let mut request = Request::new(method.clone(), url.clone());
         if let Some(Some(token)) = registry {
             let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
                 .map_err(|_| Error::Configuration)?;
@@ -453,7 +467,21 @@ impl Cached {
                 )
                 .await?;
             if registry.is_some() && response.status == StatusCode::TOO_MANY_REQUESTS {
-                let delay = retry_delay(&response, attempt);
+                let pull_quota = url.host_str() == Some("registry-1.docker.io")
+                    && (response
+                        .headers
+                        .get("ratelimit-remaining")
+                        .and_then(|v| v.to_str().ok())
+                        .is_some_and(|v| v.split(';').next().is_some_and(|v| v.trim() == "0"))
+                        || response
+                            .body
+                            .windows(b"pull rate limit".len())
+                            .any(|v| v.eq_ignore_ascii_case(b"pull rate limit")));
+                let delay = if pull_quota {
+                    None
+                } else {
+                    retry_delay(&response, attempt)
+                };
                 // Publish even an exhausted/long cooldown before releasing the
                 // permit, so unrelated queued requests to this host respect it.
                 if let Some(delay) = delay {
@@ -464,7 +492,7 @@ impl Cached {
                     && delay.is_some_and(|delay| delay <= Duration::from_secs(60))
                 {
                     attempt += 1;
-                    trace = RequestTrace::new("GET", &url);
+                    trace = RequestTrace::new(method.as_str(), &url);
                     trace.cache_policy("rate-retry", ttl);
                     continue;
                 }
@@ -797,6 +825,57 @@ mod tests {
                     "other hosts remain available"
                 );
             }
+        }
+    }
+    struct PullQuota {
+        calls: std::sync::atomic::AtomicUsize,
+        header_only: bool,
+    }
+    impl Transport for PullQuota {
+        fn send(&self, _: Request) -> crate::Exchange<'_> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            let header_only = self.header_only;
+            Box::pin(async move {
+                Ok(Response {
+                    status: StatusCode::TOO_MANY_REQUESTS,
+                    headers: if header_only {
+                        [(
+                            header::HeaderName::from_static("ratelimit-remaining"),
+                            HeaderValue::from_static("0;w=3600"),
+                        )]
+                        .into_iter()
+                        .collect()
+                    } else {
+                        Default::default()
+                    },
+                    body: if header_only {
+                        Vec::new()
+                    } else {
+                        br#"{"errors":[{"code":"TOOMANYREQUESTS","message":"You have reached your unauthenticated pull rate limit"}]}"#.to_vec()
+                    },
+                })
+            })
+        }
+    }
+    #[tokio::test]
+    async fn docker_hub_pull_quota_is_not_a_short_retry() {
+        for header_only in [false, true] {
+            let transport = Arc::new(PullQuota {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+                header_only,
+            });
+            let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+            let client =
+                Cached::with_options(cache, transport.clone(), Default::default()).unwrap();
+            let url = "https://registry-1.docker.io/v2/library/image/manifests/latest";
+            let response = if header_only {
+                client.registry_head(url, "text/plain", None).await
+            } else {
+                client.registry_get(url, "text/plain", None).await
+            }
+            .unwrap();
+            assert_eq!(response.status, 429);
+            assert_eq!(transport.calls.load(Ordering::Relaxed), 1);
         }
     }
     struct Blocked {
