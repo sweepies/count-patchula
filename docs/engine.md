@@ -16,6 +16,9 @@ Repository configs evaluate with an isolated supplied-file capability. Local
 amends/import dependencies are fetched, with the bundled Rustovate.pkl available
 when not vendored. Remote and escaping imports/resources are rejected. Literal
 imports are supported; dynamic import targets require future discovery support.
+`config check` and local overrides use the same supplied-module evaluator and
+bundled-schema fallback. Vendored schemas take precedence, and nested object
+amendments retain class defaults in either path (SWE-105).
 An unchanged commit/config fingerprint reuses extraction without tree/blob calls.
 The extraction fingerprint includes the mise registry snapshot; its namespace
 changes when extraction semantics change. Warm scans conditionally revalidate

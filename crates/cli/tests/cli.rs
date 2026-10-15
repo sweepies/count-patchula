@@ -138,6 +138,26 @@ fn lookup_config_and_config_dir_are_mutually_exclusive() {
 }
 
 #[test]
+fn config_check_directory_uses_bundled_nested_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".github")).unwrap();
+    std::fs::write(
+        dir.path().join(".github/rustovate.pkl"),
+        "amends \"../Rustovate.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\n",
+    )
+    .unwrap();
+    for vendored in [false, true] {
+        if vendored {
+            std::fs::write(dir.path().join("Rustovate.pkl"), rustovate_config::SCHEMA).unwrap();
+        }
+        let output = cli(&["config", "check", dir.path().to_str().unwrap(), "--json"]);
+        assert!(output.status.success(), "{output:?}");
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(json["valid"], true);
+    }
+}
+
+#[test]
 fn lookup_config_dir_validates_all_matches_before_repository_reads() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("Rustovate.pkl"), rustovate_config::SCHEMA).unwrap();

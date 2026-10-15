@@ -50,15 +50,53 @@ pub fn load(path: &Path) -> miette::Result<Config> {
     let source = std::fs::read_to_string(&path)
         .into_diagnostic()
         .wrap_err_with(|| format!("cannot read config {}", path.display()))?;
-    let json = pklr::EvaluatorBuilder::new()
-        .offline(true)
-        .allowed_resources(Vec::new())
-        .environment_variables(Vec::new())
-        .eval_to_json(&path)
-        .map_err(|error| {
-            miette::Report::new(error)
-                .wrap_err(format!("invalid Pkl configuration {}", path.display()))
-        })?;
+    // Evaluate exactly like API-supplied repository modules. In particular a
+    // missing schema must be a real module, so Pkl retains nested class defaults.
+    let absolute = std::path::absolute(&path).into_diagnostic()?;
+    let mut files = std::collections::BTreeMap::new();
+    let mut pending = vec![absolute.clone()];
+    let imports = regex::Regex::new(r#"(?:amends|extends|import\*?)\s*\(?\s*"([^"]+)""#)
+        .expect("import regex");
+    while let Some(module) = pending.pop() {
+        let virtual_path = virtual_files::local_path(&module)?;
+        if files.contains_key(&virtual_path) {
+            continue;
+        }
+        if files.len() >= 100 {
+            return Err(miette::miette!("config import budget exceeded"));
+        }
+        let text = match std::fs::read_to_string(&module) {
+            Ok(text) => text,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && module
+                        .file_name()
+                        .is_some_and(|name| name == "Rustovate.pkl") =>
+            {
+                SCHEMA.into()
+            }
+            Err(error) => {
+                return Err(error)
+                    .into_diagnostic()
+                    .wrap_err_with(|| format!("cannot read config module {}", module.display()));
+            }
+        };
+        for captures in imports.captures_iter(&text) {
+            let relative = &captures[1];
+            if relative.contains(':') || relative.starts_with('/') {
+                return Err(miette::miette!(
+                    "config imports must be relative local modules; remote imports are disabled"
+                ));
+            }
+            pending.push(module.parent().expect("absolute file").join(relative));
+        }
+        files.insert(virtual_path, text);
+    }
+    let json = virtual_files::evaluate(&virtual_files::local_path(&absolute)?, files)?;
+    decode(&path, &source, json)
+}
+
+fn decode(path: &Path, source: &str, json: serde_json::Value) -> miette::Result<Config> {
     let config: Config = serde_path_to_error::deserialize(json).map_err(|error| {
         let mut field = error.path().to_string();
         let detail = error.inner().to_string();
@@ -75,11 +113,11 @@ pub fn load(path: &Path) -> miette::Result<Config> {
             };
         }
         let message = format!("{field}: {detail}");
-        problem(&path, &source, &field, &message)
+        problem(path, source, &field, &message)
     })?;
     config
         .validate()
-        .map_err(|issue| problem(&path, &source, &issue.field, &issue.message))?;
+        .map_err(|issue| problem(path, source, &issue.field, &issue.message))?;
     Ok(config)
 }
 

@@ -47,6 +47,50 @@ fn defaults_are_explicit_safe_and_unlimited() {
 }
 
 #[test]
+fn nested_amendments_keep_class_defaults_with_bundled_or_vendored_schema() {
+    use std::collections::BTreeMap;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".github")).unwrap();
+    let source =
+        "amends \"../Rustovate.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\n";
+    std::fs::write(dir.path().join(".github/rustovate.pkl"), source).unwrap();
+    let mut previous = None;
+    for vendored in [false, true] {
+        let mut files = BTreeMap::from([("/repo/.github/rustovate.pkl".into(), source.into())]);
+        if vendored {
+            std::fs::write(dir.path().join("Rustovate.pkl"), SCHEMA).unwrap();
+            files.insert("/repo/Rustovate.pkl".into(), SCHEMA.into());
+        }
+        let local = load(dir.path()).unwrap();
+        let api = rustovate_config::load_files("/repo/.github/rustovate.pkl", files).unwrap();
+        assert_eq!(
+            serde_json::to_value(&local).unwrap(),
+            serde_json::to_value(api).unwrap()
+        );
+        assert_eq!(local.prs.branch, "rustovate/");
+        assert!(local.defaults.active);
+        assert!(local.prs.dashboard);
+        assert_eq!(local.defaults.wait_hours, 0);
+        let value = serde_json::to_value(local).unwrap();
+        if let Some(previous) = &previous {
+            assert_eq!(&value, previous);
+        }
+        previous = Some(value);
+    }
+}
+
+#[test]
+fn vendored_schema_overrides_the_bundle() {
+    let (dir, path) = fixture("prs { dashboard = true }");
+    std::fs::write(
+        dir.path().join("Rustovate.pkl"),
+        SCHEMA.replace("rustovate/", "custom/"),
+    )
+    .unwrap();
+    assert_eq!(load(&path).unwrap().prs.branch, "custom/");
+}
+
+#[test]
 fn node_lts_channel_is_typed_and_rule_selectable() {
     let (_dir, path) = fixture(
         "rules = new Listing { new Rule { select { packages = new Listing { \"node\"; \"actions/node-versions\" } } apply { channel = \"lts\" } } }",

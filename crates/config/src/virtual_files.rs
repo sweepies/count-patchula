@@ -3,6 +3,23 @@ use crate::*;
 use std::collections::BTreeMap;
 
 pub fn load_files(path: &str, files: BTreeMap<String, String>) -> miette::Result<Config> {
+    let source = files.get(path).cloned().unwrap_or_default();
+    let value = evaluate(path, files)?;
+    decode(Path::new(path), &source, value)
+}
+
+pub(super) fn local_path(path: &Path) -> miette::Result<String> {
+    let path = Path::new("/repo").join(path.strip_prefix("/").into_diagnostic()?);
+    Ok(clean(&path)
+        .map_err(miette::Report::new)?
+        .to_string_lossy()
+        .into_owned())
+}
+
+pub(super) fn evaluate(
+    path: &str,
+    files: BTreeMap<String, String>,
+) -> miette::Result<serde_json::Value> {
     let mut evaluator = pklr::Evaluator::with_capabilities(Files(files));
     evaluator.set_offline(true);
     evaluator.set_allowed_resources(Vec::new());
@@ -10,11 +27,7 @@ pub fn load_files(path: &str, files: BTreeMap<String, String>) -> miette::Result
     let value = evaluator
         .eval_file(Path::new(path))
         .map_err(miette::Report::new)?;
-    let config: Config = serde_json::from_value(value.to_json()).into_diagnostic()?;
-    config
-        .validate()
-        .map_err(|issue| miette::miette!("{}", issue.message))?;
-    Ok(config)
+    Ok(value.to_json())
 }
 struct Files(BTreeMap<String, String>);
 fn denied() -> pklr::Error {
@@ -40,15 +53,20 @@ fn clean(path: &Path) -> pklr::Result<PathBuf> {
 }
 impl pklr::EvalCapabilities for Files {
     fn read_to_string(&mut self, path: &Path) -> pklr::Result<String> {
+        let path = clean(path)?;
         self.0
-            .get(clean(path)?.to_str().ok_or_else(denied)?)
+            .get(path.to_str().ok_or_else(denied)?)
             .cloned()
+            .or_else(|| {
+                (path.file_name().is_some_and(|name| name == "Rustovate.pkl"))
+                    .then(|| SCHEMA.into())
+            })
             .ok_or_else(|| pklr::Error::ImportNotFound(path.display().to_string()))
     }
     fn path_exists(&mut self, path: &Path) -> pklr::Result<bool> {
-        Ok(self
-            .0
-            .contains_key(clean(path)?.to_str().ok_or_else(denied)?))
+        let path = clean(path)?;
+        Ok(self.0.contains_key(path.to_str().ok_or_else(denied)?)
+            || path.file_name().is_some_and(|name| name == "Rustovate.pkl"))
     }
     fn canonicalize(&mut self, path: &Path) -> pklr::Result<PathBuf> {
         clean(path)
