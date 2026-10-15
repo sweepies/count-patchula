@@ -52,4 +52,17 @@ impl Patterns {
         (self.positive.is_empty() || self.positive.iter().any(|p| p.matches(text)))
             && !self.negative.iter().any(|p| p.matches(text))
     }
+    /// Evaluate aliases as one identity, so a negated exception on either
+    /// registry package or manifest name wins over a positive match.
+    pub fn matches_any(&self, left: &str, right: &str) -> bool {
+        (self.positive.is_empty()
+            || self
+                .positive
+                .iter()
+                .any(|p| p.matches(left) || p.matches(right)))
+            && !self
+                .negative
+                .iter()
+                .any(|p| p.matches(left) || p.matches(right))
+    }
 }

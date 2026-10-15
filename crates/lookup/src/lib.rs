@@ -102,9 +102,23 @@ impl Evaluator {
         })
     }
     pub fn ignored(&self, dep: &Dependency) -> bool {
-        (!self.config.ignore.is_empty()
-            && (self.ignore.matches(&dep.name) || self.ignore.matches(&dep.package)))
+        (!self.config.ignore.is_empty() && self.ignore.matches_any(&dep.name, &dep.package))
             || (!self.config.exclude.is_empty() && self.exclude.matches(&dep.file))
+    }
+    pub fn needs_lookup(&self, dep: &Dependency) -> bool {
+        if self.ignored(dep)
+            || ![Update::Major, Update::Minor, Update::Patch, Update::Pin]
+                .into_iter()
+                .any(|k| self.effective(dep, k).policy.active)
+        {
+            return false;
+        }
+        if dep.manager == Manager::GithubActions && dep.source == Source::GithubTags {
+            return Ecosystem::Loose
+                .parse(dep.resolved.as_deref().unwrap_or(&dep.current))
+                .is_ok();
+        }
+        true
     }
     fn effective(&self, dep: &Dependency, update: Update) -> Effective<'_> {
         let mut effective = Effective {
@@ -207,6 +221,51 @@ impl Evaluator {
         };
         let current = dep.resolved.as_deref().unwrap_or(&dep.current);
         let current = normalize(current).unwrap_or_else(|| current.into());
+        // Dist-tags and mise's latest are intentionally floating values. Exact
+        // policy can pin them without pretending a resolved version was known.
+        let tag_target = catalog
+            .dist_tags
+            .get(&dep.current)
+            .and_then(|v| normalize(v))
+            .or_else(|| {
+                if dep.kind != DependencyKind::Tool || dep.current != "latest" {
+                    return None;
+                }
+                let effective = self.effective(dep, Update::Pin);
+                catalog
+                    .versions
+                    .iter()
+                    .filter(|v| !v.yanked && !v.deprecated)
+                    .filter_map(|v| {
+                        let value = normalize(&v.version)?;
+                        let parsed = scheme.parse(&value).ok()?;
+                        (parsed.0.pre.is_empty()
+                            && effective.permitted.is_none_or(|f| f.matches(&value)))
+                        .then_some((parsed, value))
+                    })
+                    .max_by(|(a, _), (b, _)| scheme.order(a, b))
+                    .map(|(_, v)| v)
+            });
+        if let Some(target) = tag_target {
+            let effective = self.effective(dep, Update::Pin);
+            if effective.policy.active
+                && effective.policy.versions == VersionPolicy::Exact
+                && effective.permitted.is_none_or(|f| f.matches(&target))
+            {
+                return Ok(vec![proposal(
+                    Some(
+                        scheme
+                            .new_range(&dep.current, &target, VersionPolicy::Exact)
+                            .map_err(|e| e.to_string())?,
+                    ),
+                    Some(target),
+                    None,
+                    Update::Pin,
+                    &effective.policy,
+                )]);
+            }
+            return Ok(Vec::new());
+        }
         let baseline = scheme.parse(&current).ok().or_else(|| {
             if scheme == Ecosystem::Npm {
                 nodejs_semver::Range::parse(&dep.current)

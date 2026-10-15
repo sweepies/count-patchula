@@ -157,3 +157,56 @@ fn rules_replace_lists_in_order_and_windows_are_reported() {
             .is_empty()
     );
 }
+
+#[test]
+fn negated_ignore_exceptions_match_manifest_or_registry_alias() {
+    let mut config = config("renovate-runner");
+    config.ignore = vec!["!alias".into()];
+    let eval = Evaluator::new(&config).unwrap();
+    let mut dep = dependency("alias");
+    dep.package = "real".into();
+    assert!(!eval.ignored(&dep));
+    assert!(eval.ignored(&dependency("other")));
+}
+
+#[test]
+fn floating_dist_tags_and_latest_tools_can_be_pinned() {
+    let eval = Evaluator::new(&config("renovate-runner")).unwrap();
+    let mut dep = dependency("plain");
+    dep.current = "latest".into();
+    dep.resolved = None;
+    let mut versions = catalog(&["1.0.0", "2.0.0"]);
+    versions.dist_tags.insert("latest".into(), "2.0.0".into());
+    let p = eval.propose(&dep, &versions).unwrap();
+    assert_eq!(p.len(), 1);
+    assert_eq!(p[0].update_type, "pin");
+    assert_eq!(p[0].new_value.as_deref(), Some("2.0.0"));
+    dep.manager = Manager::Mise;
+    dep.source = Source::GithubReleases;
+    dep.scheme = Scheme::Loose;
+    dep.kind = DependencyKind::Tool;
+    let p = eval
+        .propose(&dep, &catalog(&["v2.0.0", "v3.0.0-beta.1"]))
+        .unwrap();
+    assert_eq!(p[0].new_value.as_deref(), Some("2.0.0"));
+}
+
+#[test]
+fn extracted_reusable_workflow_matches_runner_digest_opt_out() {
+    let config = config("renovate-runner");
+    let files = rustovate_manager::Files::from([(
+        ".github/workflows/test.yml".into(),
+        "jobs:\n  build:\n    uses: sweepies/ops-workflows/.github/workflows/build.yml@main\n"
+            .into(),
+    )]);
+    let extracted = rustovate_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap();
+    let dep = &extracted.dependencies[0];
+    assert_eq!(dep.name, "sweepies/ops-workflows");
+    let eval = Evaluator::new(&config).unwrap();
+    assert!(!eval.needs_lookup(dep));
+    assert!(eval.propose(dep, &catalog(&["v1.0.0"])).unwrap().is_empty());
+    assert!(eval.digest_proposal(dep, &"a".repeat(40)).is_none());
+}
