@@ -7,10 +7,11 @@ use cli::{App, Command, ConfigCommand};
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 
-fn run(app: &App) -> Result<(), (u8, miette::Report)> {
+async fn run(app: &App) -> Result<u8, (u8, miette::Report)> {
     match &app.command {
         Command::Config(config) => match &config.command {
             ConfigCommand::Schema => write!(io::stdout().lock(), "{}", rustovate_config::SCHEMA)
+                .map(|_| 0)
                 .map_err(|error| (1, miette::miette!("{error}"))),
             ConfigCommand::Check(check) => {
                 let config = rustovate_config::load(&check.path).map_err(|error| (2, error))?;
@@ -29,15 +30,17 @@ fn run(app: &App) -> Result<(), (u8, miette::Report)> {
                     format!("Valid configuration: {}", check.path.display())
                 };
                 writeln!(io::stdout().lock(), "{result}")
+                    .map(|_| 0)
                     .map_err(|error| (1, miette::miette!("{error}")))
             }
         },
-        Command::Lookup => Err((1, miette::miette!("lookup: not implemented yet (Phase 1)"))),
+        Command::Lookup(options) => lookup(app, options).await,
         Command::Run => Err((1, miette::miette!("run: not implemented yet (Phase 1)"))),
     }
 }
 
-fn main() -> ExitCode {
+#[tokio::main]
+async fn main() -> ExitCode {
     let app = App::parse();
     let color = app.color == cli::Color::Always
         || (app.color == cli::Color::Auto && io::stderr().is_terminal());
@@ -49,8 +52,8 @@ fn main() -> ExitCode {
                 .build(),
         )
     }));
-    match run(&app) {
-        Ok(()) => ExitCode::SUCCESS,
+    match run(&app).await {
+        Ok(code) => ExitCode::from(code),
         Err((code, error)) => {
             if app.json {
                 println!(
@@ -66,4 +69,101 @@ fn main() -> ExitCode {
             ExitCode::from(code)
         }
     }
+}
+
+async fn lookup(app: &App, options: &cli::Lookup) -> Result<u8, (u8, miette::Report)> {
+    use rustovate_engine::{Engine, Options};
+    use rustovate_report::Status;
+    use std::sync::Arc;
+    if options.concurrency == 0 || options.concurrency > 100 {
+        return Err((2, miette::miette!("concurrency must be 1..100")));
+    }
+    let config = options
+        .config
+        .as_ref()
+        .map(|path| rustovate_config::load(path))
+        .transpose()
+        .map_err(|e| (2, e))?;
+    let token = std::env::var("RUSTOVATE_TOKEN")
+        .or_else(|_| std::env::var("GITHUB_TOKEN"))
+        .map_err(|_| {
+            (
+                1,
+                miette::miette!("lookup requires RUSTOVATE_TOKEN or GITHUB_TOKEN"),
+            )
+        })?;
+    if let Some(parent) = options.cache.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| (1, miette::miette!("cannot create cache directory: {e}")))?;
+    }
+    let cache = rustovate_cache::Cache::open(&options.cache, Default::default())
+        .await
+        .map_err(|e| (1, miette::miette!("{e}")))?;
+    let transport =
+        Arc::new(rustovate_http::Network::new().map_err(|e| (1, miette::miette!("{e}")))?);
+    let engine = Engine::with_transport(&token, cache, options.concurrency, transport)
+        .map_err(|e| (1, miette::miette!("{e}")))?;
+    let report = engine
+        .lookup(Options {
+            repositories: options.repositories.clone(),
+            config,
+        })
+        .await
+        .map_err(|e| (1, miette::miette!("{e}")))?;
+    if app.json {
+        serde_json::to_writer(io::stdout().lock(), &report)
+            .map_err(|e| (1, miette::miette!("cannot write report: {e}")))?;
+        println!();
+    }
+    let mut errors = 0;
+    let mut updates = 0;
+    for repo in &report.repositories {
+        let deps: usize = repo
+            .package_files
+            .iter()
+            .map(|f| f.dependencies.len())
+            .sum();
+        let proposals: usize = repo
+            .package_files
+            .iter()
+            .flat_map(|f| &f.dependencies)
+            .map(|d| d.updates.len())
+            .sum();
+        updates += proposals;
+        eprintln!(
+            "{}: {:?}, {deps} dependencies, {proposals} proposals{}",
+            repo.repository,
+            repo.status,
+            repo.reason
+                .as_ref()
+                .map_or(String::new(), |r| format!(" ({r})"))
+        );
+        for warning in &repo.warnings {
+            eprintln!("  warning: {warning}");
+        }
+        if repo.status == Status::Error {
+            errors += 1;
+        }
+    }
+    if let Some(stats) = &report.stats {
+        eprintln!(
+            "rustovate: {} repos, {updates} proposals; {} requests, {} 304s, {} cache hits, {} extraction hits, {} unique lookups",
+            report.repositories.len(),
+            stats.requests,
+            stats.not_modified,
+            stats.cache_hits,
+            stats.extraction_hits,
+            stats.lookups
+        );
+        eprintln!(
+            "rustovate timings: {}",
+            stats
+                .phase_micros
+                .iter()
+                .map(|(phase, micros)| format!("{phase}={:.2}ms", *micros as f64 / 1000.0))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    Ok(if errors == 0 { 0 } else { 1 })
 }

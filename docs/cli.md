@@ -56,11 +56,21 @@ Print the bundled Rustovate.pkl schema as Pkl source.
 
 ## `rustovate lookup`
 
-- **Usage:** `rustovate lookup`
+- **Usage:** `rustovate lookup [FLAGS] [REPOSITORIES]…`
 
-Look up dependency updates (not implemented yet, Phase 1).
+Extract dependencies and report available updates without writing repositories.
+
+### Arguments
+- **`[REPOSITORIES]…`** — Repositories as owner/repo; omit to discover all accessible repositories.
 
 ### Flags
+- **`--cache <CACHE>`** — Shared SQLite cache path.
+
+  **Default:** `.rustovate-cache.sqlite`
+- **`--concurrency <CONCURRENCY>`** — Maximum concurrent repository and HTTP reads (1–100).
+
+  **Default:** `8`
+- **`--config <CONFIG>`** — Local Pkl override applied to every selected repository.
 - **`-h --help`** — Print help
 
 ## `rustovate run`

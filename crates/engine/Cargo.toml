@@ -1,0 +1,31 @@
+[package]
+name = "rustovate-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+[lints]
+workspace = true
+[dependencies]
+rustovate-cache = { path = "../cache" }
+rustovate-config = { path = "../config" }
+rustovate-http = { path = "../http" }
+rustovate-github = { path = "../github" }
+rustovate-manager = { path = "../manager" }
+rustovate-datasource = { path = "../datasource" }
+rustovate-lookup = { path = "../lookup" }
+rustovate-report = { path = "../report" }
+rustovate-versioning = { path = "../versioning" }
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+futures-util = "0.3"
+regex = "1"
+sha2 = "0.11.1"
+base64 = "0.22"
+[dev-dependencies]
+rustovate-testkit = { path = "../testkit" }
+tempfile = "3"

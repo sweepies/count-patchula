@@ -26,6 +26,8 @@ pub struct Difference {
     pub renovate: Value,
     pub rustovate: Value,
     pub departure: Option<Departure>,
+    #[serde(skip)]
+    target_version: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -59,6 +61,7 @@ struct Rule {
 enum Predicate {
     DigestAdded,
     DigestPinOnly,
+    CargoPre1Breaking,
 }
 
 impl Rules {
@@ -85,6 +88,10 @@ impl Rules {
                         Predicate::DigestPinOnly,
                         Classification::RustovateExtra,
                         "updates"
+                    ) | (
+                        Predicate::CargoPre1Breaking,
+                        Classification::FieldMismatch,
+                        "updates.updateType"
                     )
                 )
             {
@@ -108,6 +115,26 @@ impl Rules {
                 continue;
             }
             let matches = match rule.predicate {
+                Predicate::CargoPre1Breaking => {
+                    difference.manager.as_deref() == Some("cargo")
+                        && matches!(difference.renovate.as_str(), Some("minor" | "patch"))
+                        && difference.rustovate == "major"
+                        && dependency
+                            .and_then(|d| d.current.version.as_deref())
+                            .and_then(numeric_version)
+                            .zip(
+                                difference
+                                    .target_version
+                                    .as_deref()
+                                    .and_then(numeric_version),
+                            )
+                            .is_some_and(|(a, b)| {
+                                a.0 == 0
+                                    && b.0 == 0
+                                    && b > a
+                                    && (a.1 != b.1 || (a.1 == 0 && a.2 != b.2))
+                            })
+                }
                 Predicate::DigestAdded => {
                     difference.renovate.is_null()
                         && difference
@@ -280,6 +307,7 @@ fn difference(
         renovate: a,
         rustovate: b,
         departure: None,
+        target_version: None,
     }
 }
 
@@ -313,6 +341,7 @@ fn updates(out: &mut Vec<Difference>, location: &Location<'_>, a: &[Update], b: 
         }
         let candidates: Vec<_> = b.iter().filter(|u| same_target(left, u)).copied().collect();
         if let [right] = candidates.as_slice() {
+            let start = out.len();
             mismatch(
                 out,
                 location,
@@ -320,6 +349,9 @@ fn updates(out: &mut Vec<Difference>, location: &Location<'_>, a: &[Update], b: 
                 json!(left.update_type),
                 json!(right.update_type),
             );
+            for difference in &mut out[start..] {
+                difference.target_version = right.new_version.clone();
+            }
             mismatch(
                 out,
                 location,
@@ -501,12 +533,12 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
             let a: BTreeMap<_, _> = left
                 .dependencies
                 .iter()
-                .map(|d| ((&d.manager, &d.name), d))
+                .map(|d| ((&d.manager, &d.name, &d.occurrence), d))
                 .collect();
             let b: BTreeMap<_, _> = right
                 .dependencies
                 .iter()
-                .map(|d| ((&d.manager, &d.name), d))
+                .map(|d| ((&d.manager, &d.name, &d.occurrence), d))
                 .collect();
             for key in a.keys().chain(b.keys()).copied().collect::<BTreeSet<_>>() {
                 let dep = a
@@ -569,4 +601,14 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
         warnings: Vec::new(),
         exclusions: Vec::new(),
     })
+}
+
+fn numeric_version(value: &str) -> Option<(u64, u64, u64)> {
+    let mut components = value.trim_start_matches('v').split('.');
+    let version = (
+        components.next()?.parse().ok()?,
+        components.next()?.parse().ok()?,
+        components.next()?.parse().ok()?,
+    );
+    components.next().is_none().then_some(version)
 }

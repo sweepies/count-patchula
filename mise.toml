@@ -78,3 +78,17 @@ for shell in bash zsh fish; do
   usage generate completion "$shell" rustovate --file generated/rustovate.usage.kdl > "generated/completions/rustovate.$shell"
 done
 '''
+
+[tasks.lookup]
+description = "Run read-only lookup; forwards repository and lookup flags"
+raw_args = true
+run = "cargo run --quiet --locked -p rustovate-cli -- lookup"
+
+[tasks."fixtures:record-wave1"]
+description = "Record only Phase 1 public sources and multi-repo lookup fixtures"
+env = { RUSTOVATE_RECORD = "1" }
+run = ["cargo test --locked -p rustovate-datasource --test recorded -- --nocapture", "cargo test --locked -p rustovate-engine --test recorded -- --nocapture", "mise run fixtures:check"]
+
+[tasks."benchmarks:lookup"]
+description = "Measure cold/warm batch and source replay with fixed public cassettes"
+run = ["cargo test --locked -p rustovate-datasource --test recorded -- --nocapture", "cargo test --locked -p rustovate-engine --test recorded -- --nocapture"]

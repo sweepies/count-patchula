@@ -28,6 +28,9 @@ Stable comparison link: <a id="departure-7"></a>**Departure 7: default policy**
 | 17 | Maintenance and ancillary policy | Config migration, abandonment and post-update options | No migration or inferred abandonment policy; lockfile refresh and Go tidy are explicit fields | Pkl-only configuration and deliberate, reviewable maintenance |
 | 18 | Group identifiers | Separate groupName and groupSlug fields | One group string identifies the update group; branch slug derivation belongs to the updater | Avoid two configuration identities for the same grouping intent |
 | 19 | Configuration dependencies | The renovate-config manager treats Renovate configuration as package files | No equivalent manager: the comparison adapter excludes only renovate-config snapshots and summaries | rustovate uses Pkl and does not resolve Renovate configuration or presets |
+| 20 | Cargo compatibility | Numeric update levels may differ in black-box reports | A changed pre-1.0 Cargo compatibility boundary is major; exact Cargo uses = | Follow Cargo's documented compatibility rules |
+| 21 | Source refresh | Histories are exposed through registry/platform responses | Conditional head probes gate GraphQL; validator-free Go responses use declared freshness | Avoid unnecessary histories and respect actual upstream HTTP capabilities |
+| 22 | Repeated dependencies | Manager snapshots can contain repeated dependency names | Optional occurrence IDs preserve different current values, merging identical rows | Retain all manifest occurrences without ambiguous report identities |
 
 <a id="departure-19"></a>**Departure 19: configuration dependency scope.**
 The fixed comparison rule `renovate-config-manager` excludes only Renovate's own
@@ -44,8 +47,9 @@ npm classifications retain numeric SemVer components. Exact Cargo versions use
 `=`. npm widen retains the original range as a union with the target; Cargo
 uses a convex interval because Cargo requirements cannot express unions.
 Compound preserve edits with no safe operator-preserving representation report
-a warning instead of inventing a range. No black-box comparison difference has
-been established yet; no broad conformance exemption is added.
+a warning instead of inventing a range. The narrow cargo-pre1-breaking rule
+classifies only minor/patch-to-major taxonomy differences at those boundaries,
+with identical update targets. It never excludes version or range differences.
 
 <a id="departure-21"></a>**Departure 21: explicit freshness and GitHub history gates.**
 GraphQL POSTs have no conditional HTTP validators, so a conditional REST head
@@ -56,3 +60,10 @@ Go served from its declared freshness window. Historical changes behind an
 unchanged GitHub head require future invalidation/reconciliation. This affects
 request strategy, not a confirmed proposal difference, so it has no comparison
 exemption.
+
+<a id="departure-22"></a>**Departure 22: repeated dependency identities.**
+The v1 report now has optional occurrence IDs for repeated manager/name pairs
+with different package/current fields, including multiple action refs and mise
+versions. Identical occurrences merge their proposals and locations. The
+black-box adapter applies the same normalization, so no comparison exclusion is
+needed. Unlabelled duplicate identities remain invalid.

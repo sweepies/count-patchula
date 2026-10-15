@@ -291,8 +291,10 @@ fn dependency(value: &Value, source_manager: &str, ctx: &mut Context<'_>) -> Res
         manager: manager(source_manager),
         package,
         name,
+        occurrence: None,
         current,
         updates,
+        metadata: None,
     })
 }
 
@@ -554,32 +556,12 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
     let mut report = Report {
         schema_version: SCHEMA_VERSION,
         repositories: Vec::new(),
+        stats: None,
     };
     for (repo, files) in repositories {
         let mut package_files = Vec::new();
         for (path, dependencies) in files {
-            let mut merged = BTreeMap::<(String, String), Dependency>::new();
-            for mut dep in dependencies {
-                let key = (dep.manager.clone(), dep.name.clone());
-                if let Some(existing) = merged.get_mut(&key) {
-                    if existing.current != dep.current || existing.package != dep.package {
-                        return Err(Error::Input(format!(
-                            "ambiguous dependency identity in {repo}/{path}; duplicate manager/name has different package or current fields"
-                        )));
-                    }
-                    existing.updates.append(&mut dep.updates);
-                } else {
-                    merged.insert(key, dep);
-                }
-            }
-            let dependencies = merged
-                .into_values()
-                .map(|mut dep| {
-                    dep.updates.sort();
-                    dep.updates.dedup();
-                    dep
-                })
-                .collect();
+            let dependencies = rustovate_report::normalize_dependencies(dependencies);
             package_files.push(PackageFile { path, dependencies });
         }
         report.repositories.push(Repository {
@@ -587,6 +569,9 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
             status: Status::Complete,
             reason: None,
             package_files,
+            warnings: Vec::new(),
+            default_branch: None,
+            commit: None,
         });
     }
     report.validate()?;

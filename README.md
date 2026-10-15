@@ -8,9 +8,9 @@ requests. It is built to run a whole batch of repositories in one short-lived
 process, so it is designed around shared caching and concurrency rather than
 one repository at a time.
 
-Status: early development (Phase 0). Configuration checking, offline HTTP
-fixtures, SQLite caching and the GitHub read client are implemented; dependency
-scanning and updating are not implemented yet.
+Status: Phase 1, wave 1. Read-only lookup supports npm/bun, GitHub Actions,
+mise and regex extraction, cached registries and ordered policy. Repository
+writes and the remaining ecosystem managers are not implemented yet.
 
 - Design: [docs/design.md](docs/design.md)
 - Deliberate departures from Renovate: [docs/departures.md](docs/departures.md)
@@ -65,11 +65,24 @@ workload. CI publishes results as artifacts without benchmark gates.
 `mise exec -- cargo run -p rustovate-cli -- config check examples/renovate-runner.pkl`
 validates a config. `config schema` prints the bundled typed Pkl schema.
 See [configuration](docs/configuration.md), [CLI reference](docs/cli.md), and
-[twelve repository examples](examples). Dependency lookup and update commands
-remain explicit Phase 1 stubs and exit with a runtime error.
+[twelve repository examples](examples). `run` remains a write-side stub.
+
+```sh
+# Export RUSTOVATE_TOKEN or GITHUB_TOKEN first.
+mise exec -- cargo run --locked -p rustovate-cli -- lookup \
+  --config examples/renovate-runner.pkl --cache /tmp/rustovate.sqlite \
+  --concurrency 8 --json owner/repo > /tmp/rustovate-report.json
+```
+
+Omit repository arguments to discover accessible repositories. With no local
+override, `.github/rustovate.pkl` takes precedence over `rustovate.pkl`; repositories
+with neither are skipped. Unsupported managers/sources produce report warnings.
+See [extraction](docs/managers.md), [sources](docs/datasources.md),
+[versioning](docs/versioning.md), [policy](docs/lookup-policy.md) and
+[engine](docs/engine.md) for supported cases and limitations.
 
 Foundation APIs: [SQLite cache](docs/cache.md) and [GitHub client](docs/github.md).
 
 The [comparison harness](conformance/README.md) compares black-box Renovate JSON
 logs with the [v1 batch report](docs/report.md). Phase 0 includes a hand-written
-sample; dependency lookup is still unimplemented.
+sample and public lookup recordings. Lookup emits real engine reports.

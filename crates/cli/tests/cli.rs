@@ -25,8 +25,9 @@ fn help_version_and_bundled_schema() {
 }
 
 #[test]
-fn phase_one_stubs_are_runtime_errors() {
-    for command in ["lookup", "run"] {
+fn update_stub_is_a_runtime_error() {
+    {
+        let command = "run";
         let output = cli(&[command]);
         assert_eq!(output.status.code(), Some(1));
         assert!(String::from_utf8_lossy(&output.stderr).contains("not implemented yet (Phase 1)"));
@@ -36,6 +37,30 @@ fn phase_one_stubs_are_runtime_errors() {
         assert_eq!(json["exitCode"], 1);
         assert_eq!(json["schemaVersion"], 1);
     }
+}
+
+#[test]
+fn lookup_requires_token_without_network_and_validates_concurrency() {
+    let output = Command::new(env!("CARGO_BIN_EXE_rustovate"))
+        .args([
+            "lookup",
+            "--config",
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../examples/renovate-runner.pkl"
+            ),
+            "--json",
+            "sweepies/renovate-runner",
+        ])
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("RUSTOVATE_TOKEN")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(value["error"].as_str().unwrap().contains("RUSTOVATE_TOKEN"));
+    let output = cli(&["lookup", "--concurrency", "0", "--json", "owner/repo"]);
+    assert_eq!(output.status.code(), Some(2));
 }
 
 #[test]

@@ -168,6 +168,7 @@ fn aliases_taxonomy_latest_snapshot_and_empty_repo_coverage_are_explicit() {
     let empty = Report {
         schema_version: 1,
         repositories: vec![],
+        stats: None,
     };
     assert_eq!(
         compare(&report, &empty, &rules())
@@ -291,6 +292,7 @@ fn real_lookup_shape_retains_skipped_and_digest_only_deps_and_audits_exclusion()
     let empty = Report {
         schema_version: 1,
         repositories: vec![],
+        stats: None,
     };
     let triage = compare(&parsed.report, &empty, &rules()).unwrap();
     assert_eq!(triage.differences.len(), 6);
@@ -389,9 +391,6 @@ fn required_snapshot_structure_and_ambiguous_dependency_identities_still_fail() 
         json!({"npm":[{"packageFile":"package.json","deps":{}}]}),
         json!({"npm":[{"deps":[]}]}),
         json!({"npm":[{"packageFile":"package.json","deps":[{},null]}]}),
-        json!({"npm":[{"packageFile":"package.json","deps":[
-            {"depName":"same","currentValue":"1"}, {"depName":"same","currentValue":"2"}
-        ]}]}),
     ] {
         assert!(
             parse_logs(
@@ -464,4 +463,74 @@ fn ambiguous_optional_summaries_warn_and_new_snapshots_replace_exclusions() {
     .unwrap();
     assert!(parsed.exclusions.is_empty());
     assert!(parsed.report.repositories[0].package_files.is_empty());
+}
+
+#[test]
+fn distinct_occurrences_survive_and_compare_without_losing_rows() {
+    let config = json!({"npm":[{"packageFile":"package.json","deps":[
+        {"depName":"same","currentValue":"1","updates":[]},
+        {"depName":"same","currentValue":"2","updates":[]},
+        {"depName":"same","currentValue":"1","updates":[]}
+    ]}]});
+    let report = parse_logs(
+        &json!({"repository":"x/y","msg":"packageFiles with updates","config":config}).to_string(),
+    )
+    .unwrap();
+    let deps = &report.repositories[0].package_files[0].dependencies;
+    assert_eq!(deps.len(), 2);
+    assert_eq!(deps[0].occurrence.as_deref(), Some("1"));
+    assert_eq!(deps[1].occurrence.as_deref(), Some("2"));
+    assert!(
+        compare(&report, &report, &rules())
+            .unwrap()
+            .differences
+            .is_empty()
+    );
+    let mut changed = report.clone();
+    changed.repositories[0].package_files[0].dependencies[1]
+        .current
+        .value = Some("3".into());
+    let differences = compare(&report, &changed, &rules()).unwrap().differences;
+    assert_eq!(differences.len(), 1);
+    assert_eq!(differences[0].field, "current.value");
+}
+
+#[test]
+fn cargo_pre1_departure_is_limited_to_identical_breaking_targets() {
+    let mut a = parse_logs(LOG).unwrap();
+    let dep = &mut a.repositories[0].package_files[0].dependencies[0];
+    dep.manager = "cargo".into();
+    dep.current.version = Some("0.2.3".into());
+    dep.updates = vec![rustovate_report::Update {
+        new_value: Some("0.3.0".into()),
+        new_version: Some("0.3.0".into()),
+        new_digest: None,
+        update_type: "minor".into(),
+        group: None,
+        policy: None,
+    }];
+    let mut b = a.clone();
+    b.repositories[0].package_files[0].dependencies[0].updates[0].update_type = "major".into();
+    let diff = compare(&a, &b, &rules()).unwrap().differences;
+    assert_eq!(diff.len(), 1);
+    assert_eq!(diff[0].classification, Class::DeliberateDeparture);
+    assert_eq!(diff[0].departure.as_ref().unwrap().row, 20);
+    b.repositories[0].package_files[0].dependencies[0].updates[0].new_version =
+        Some("0.4.0".into());
+    assert!(
+        compare(&a, &b, &rules())
+            .unwrap()
+            .differences
+            .iter()
+            .all(|d| d.classification != Class::DeliberateDeparture)
+    );
+    a.repositories[0].package_files[0].dependencies[0]
+        .current
+        .version = Some("1.2.3".into());
+    b = a.clone();
+    b.repositories[0].package_files[0].dependencies[0].updates[0].update_type = "major".into();
+    assert_eq!(
+        compare(&a, &b, &rules()).unwrap().differences[0].classification,
+        Class::FieldMismatch
+    );
 }

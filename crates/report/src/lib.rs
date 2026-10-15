@@ -21,6 +21,8 @@ pub enum Error {
 pub struct Report {
     pub schema_version: u32,
     pub repositories: Vec<Repository>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats: Option<Stats>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +40,12 @@ pub struct Repository {
     pub status: Status,
     pub reason: Option<String>,
     pub package_files: Vec<PackageFile>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,10 +61,41 @@ pub struct Dependency {
     /// Canonical rustovate manager identifier; unknown upstream names stay literal.
     pub manager: String,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<String>,
     /// Registry identity, which may differ from the name in the manifest.
     pub package: String,
     pub current: Current,
     pub updates: Vec<Update>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<DependencyMetadata>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DependencyMetadata {
+    pub source: String,
+    pub kinds: Vec<String>,
+    pub locations: Vec<Location>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Location {
+    pub start: usize,
+    pub end: usize,
+    pub line: usize,
+    pub column: usize,
+    pub pointer: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Stats {
+    pub requests: u64,
+    pub not_modified: u64,
+    pub cache_hits: u64,
+    pub extraction_hits: u64,
+    pub lookups: u64,
+    pub phase_micros: std::collections::BTreeMap<String, u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -143,7 +182,8 @@ impl Report {
                     if dep.manager.is_empty()
                         || dep.name.is_empty()
                         || dep.package.is_empty()
-                        || !dependencies.insert((&dep.manager, &dep.name))
+                        || dep.occurrence.as_ref().is_some_and(String::is_empty)
+                        || !dependencies.insert((&dep.manager, &dep.name, &dep.occurrence))
                     {
                         return Err(Error::Invalid(
                             "empty dependency identity or ambiguous duplicate manager/name".into(),
@@ -169,10 +209,48 @@ impl Report {
     }
 }
 
+/// Merge identical occurrences and retain different current values with IDs.
+/// IDs follow sorted identities, independent of source order; singleton names
+/// keep their original identity without an occurrence field.
+pub fn normalize_dependencies(dependencies: Vec<Dependency>) -> Vec<Dependency> {
+    let mut groups = std::collections::BTreeMap::<(String, String), Vec<Dependency>>::new();
+    for mut dep in dependencies {
+        let group = groups
+            .entry((dep.manager.clone(), dep.name.clone()))
+            .or_default();
+        if let Some(existing) = group
+            .iter_mut()
+            .find(|d| d.package == dep.package && d.current == dep.current)
+        {
+            existing.updates.append(&mut dep.updates);
+            if let (Some(a), Some(mut b)) = (&mut existing.metadata, dep.metadata) {
+                a.locations.append(&mut b.locations);
+                a.kinds.append(&mut b.kinds);
+                a.kinds.sort();
+                a.kinds.dedup();
+            }
+        } else {
+            group.push(dep);
+        }
+    }
+    groups
+        .into_values()
+        .flat_map(|mut group| {
+            group.sort_by(|a, b| (&a.package, &a.current).cmp(&(&b.package, &b.current)));
+            let multiple = group.len() > 1;
+            for (i, dep) in group.iter_mut().enumerate() {
+                dep.occurrence = multiple.then(|| (i + 1).to_string());
+                dep.updates.sort();
+                dep.updates.dedup();
+            }
+            group
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn reject_future_schema_before_interpreting_payload() {
         assert!(matches!(

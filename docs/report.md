@@ -1,8 +1,7 @@
 # Batch report contract (version 1)
 
-`rustovate-report` is the shared caller interface for the future `lookup --json`
-and `run --json` results, and for CLI/server callers of the engine. Phase 0 only
-defines the contract; lookup/run still fail explicitly as unimplemented. The
+`rustovate-report` is the shared caller interface for `lookup --json`
+and future `run --json` results, and for CLI/server callers of the engine. The
 existing config-check JSON is a different command result, not a batch report.
 
 Deserialize untrusted input with `Report::from_json`, which checks `schemaVersion`
@@ -49,11 +48,23 @@ Repository status is `complete`, `skipped`, or `error`. Skipped/error repositori
 require a reason. An empty complete repository means a successful extraction with
 no supported dependencies. A caller must never convert errors into that state.
 
-Repository and file paths are unique. Within a file, `(manager, name)` identifies
-a dependency; producers merge identical occurrences and their distinct proposals.
-Ambiguous occurrences with different packages or current fields are rejected in
-v1, rather than silently losing a dependency. Supporting distinct occurrences
-will need an explicit extension before managers emit such reports.
+Repository and file paths are unique. Within a file, `(manager, name, occurrence)`
+identifies a dependency. `occurrence` is optional for singleton identities.
+Producers merge identical package/current occurrences and their proposals and
+locations. Different package/current identities receive explicit ordinal IDs
+after sorting by package/current, independently of source order. Duplicate
+unlabelled identities still fail validation. This additive v1 extension is also
+implemented by the comparison adapter, so repeated action refs and multiple mise
+tool versions survive comparison. Older strict readers must upgrade to consume
+reports with these optional extensions; the original comparison fields remain.
+
+Additional optional fields: repository `warnings`, `defaultBranch`, `commit`;
+dependency `metadata` (`source`, `kinds`, byte/line/column/semantic `locations`);
+update `policy` (`waitHours`, `windows`, merge/labels/message settings); batch
+`stats` (requests, notModified, cacheHits, extractionHits, unique lookups and
+phaseMicros). Unknown fields are still rejected. Timing windows are reported
+without delaying lookup. Engine JSON errors remain error envelopes only for
+batch-level failures; per-repository errors stay in the report.
 
 The hand-written [sample](../conformance/tests/fixtures/report.json) exercises
 aliases, ranges, grouping and digest policy. It is not a real lookup result.

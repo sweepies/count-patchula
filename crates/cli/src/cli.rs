@@ -34,10 +34,25 @@ pub enum Color {
 pub enum Command {
     /// Inspect and validate Pkl configuration.
     Config(Config),
-    /// Look up dependency updates (not implemented yet, Phase 1).
-    Lookup,
+    /// Extract dependencies and report available updates without writing repositories.
+    Lookup(Lookup),
     /// Run dependency updates (not implemented yet, Phase 1).
     Run,
+}
+
+#[derive(Args)]
+pub struct Lookup {
+    /// Repositories as owner/repo; omit to discover all accessible repositories.
+    pub repositories: Vec<String>,
+    /// Shared SQLite cache path.
+    #[usage(long, default = ".rustovate-cache.sqlite")]
+    pub cache: PathBuf,
+    /// Maximum concurrent repository and HTTP reads (1–100).
+    #[usage(long, default = "8")]
+    pub concurrency: usize,
+    /// Local Pkl override applied to every selected repository.
+    #[usage(long)]
+    pub config: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -72,5 +87,33 @@ mod tests {
         assert_eq!(app.verbose, 3);
         assert_eq!(app.color, Color::Never);
         assert!(app.json);
+    }
+
+    #[test]
+    fn exact_runner_invocation_and_optional_repositories() {
+        let words = [
+            "lookup",
+            "--config",
+            "examples/renovate-runner.pkl",
+            "--cache",
+            "tmp/cache.sqlite",
+            "--concurrency",
+            "4",
+            "--json",
+            "sweepies/renovate-runner",
+        ]
+        .map(std::ffi::OsStr::new);
+        let app = App::parse_from(&words).unwrap();
+        assert!(app.json);
+        let Command::Lookup(options) = app.command else {
+            panic!("lookup")
+        };
+        assert_eq!(options.repositories, vec!["sweepies/renovate-runner"]);
+        assert_eq!(options.concurrency, 4);
+        let app = App::parse_from(&[std::ffi::OsStr::new("lookup")]).unwrap();
+        let Command::Lookup(options) = app.command else {
+            panic!("lookup")
+        };
+        assert!(options.repositories.is_empty());
     }
 }

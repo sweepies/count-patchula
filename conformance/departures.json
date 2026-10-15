@@ -2,6 +2,14 @@
   "schemaVersion": 1,
   "rules": [
     {
+      "id": "cargo-pre1-breaking",
+      "departure": 20,
+      "classification": "field-mismatch",
+      "managers": ["cargo"],
+      "field": "updates.updateType",
+      "predicate": "cargo-pre1-breaking"
+    },
+    {
       "id": "default-added-digest",
       "departure": 7,
       "classification": "field-mismatch",

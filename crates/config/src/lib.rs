@@ -127,3 +127,6 @@ fn problem(path: &Path, source: &str, field: &str, message: &str) -> miette::Rep
 
 mod matching;
 pub use matching::Patterns;
+
+mod virtual_files;
+pub use virtual_files::load_files;
