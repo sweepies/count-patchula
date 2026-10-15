@@ -74,6 +74,9 @@ pub struct Dependency {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DependencyMetadata {
+    /// Independently observed floating action tag commits, keyed by ref.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub tag_digests: std::collections::BTreeMap<String, String>,
     pub source: String,
     pub kinds: Vec<String>,
     pub locations: Vec<Location>,
@@ -290,6 +293,7 @@ pub fn normalize_dependencies(dependencies: Vec<Dependency>) -> Vec<Dependency> 
                 a.held_back.sort();
                 a.held_back.dedup();
                 a.stale.append(&mut b.stale);
+                a.tag_digests.append(&mut b.tag_digests);
                 if let (Some(a), Some(b)) = (&mut a.lookup, b.lookup) {
                     a.disabled_updates
                         .retain(|kind| b.disabled_updates.contains(kind));

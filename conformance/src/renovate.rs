@@ -36,6 +36,7 @@ pub struct ParsedLogs {
 }
 
 struct Context<'a> {
+    evaluated_at: Option<&'a str>,
     line: usize,
     repository: Option<&'a str>,
     field: String,
@@ -308,8 +309,15 @@ fn dependency(value: &Value, source_manager: &str, ctx: &mut Context<'_>) -> Res
         current,
         updates,
         metadata: datasource.map(|source| rustovate_report::DependencyMetadata {
+            tag_digests: Default::default(),
             stale: Default::default(),
-            lookup: None,
+            lookup: ctx
+                .evaluated_at
+                .map(|time| rustovate_report::LookupEvidence {
+                    evaluated_at: time.into(),
+                    disabled_updates: Vec::new(),
+                    rejected: Vec::new(),
+                }),
             resolution: None,
             source,
             kinds: value
@@ -366,6 +374,7 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
         }
         let mut ctx = Context {
             line: index + 1,
+            evaluated_at: record.get("time").and_then(Value::as_str),
             repository: repo,
             field: "record".into(),
             warnings: &mut warnings,
@@ -503,6 +512,7 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
     for (repo, value, group, line) in summaries {
         let mut ctx = Context {
             line,
+            evaluated_at: None,
             repository: repo.as_deref(),
             field: "branch.upgrades".into(),
             warnings: &mut warnings,

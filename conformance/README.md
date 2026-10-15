@@ -143,10 +143,17 @@ are mapped to [departure 7](../docs/departures.md#departure-7). An extra pin mus
 keep the current value/version, add a digest to an unpinned dependency and have
 no group. Release-age differences map to [departure 23](../docs/departures.md#departure-23)
 only when timestamp evidence places a newer rustovate target between 24 and 72
-hours old under an explicit 24-hour policy, with an older Renovate proposal in
+hours old at Renovate's own package-snapshot log timestamp, under an explicit
+24-hour policy, with an older Renovate proposal in
 the same class. Exact npm major range edits map narrowly to
 [departure 25](../docs/departures.md#departure-25) with identical resolved targets
 and an explicit exact policy. Other version and identity differences remain actionable.
+
+Departure 45 additionally covers newer full action targets on an identical
+proposed floating major/minor tag when the declared precision is preserved.
+The rustovate report must include independent `metadata.tagDigests` evidence
+whose entry for that tag equals the proposed commit. Absent evidence or a
+different commit remains actionable; the proposal itself is not evidence.
 
 The reverse age difference is also departure 23 when Renovate's newer target
 matches any version in a rustovate `metadata.heldBack.versions` summary in the same

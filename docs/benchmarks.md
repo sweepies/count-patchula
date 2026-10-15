@@ -1,5 +1,29 @@
 # Benchmarks (SWE-88, report-only)
 
+## Phase 1 final live check (2026-10-15)
+
+The supplied final twelve-repository batch at the Phase 1 implementation took
+**37.4 s cold / 4.1 s warm / 3.8 s warm2**, producing **343 proposals on every
+run**. The fresh Renovate dry run took **261 s** and started about four minutes
+before rustovate's cold run. These are caller-supplied single observations,
+with builds outside the measured runs; they are not controlled medians.
+The observed cold/warm/warm2 speed ratios are approximately **7.0× / 63.7× /
+68.7×** relative to that Renovate run.
+
+Cold report: `/root/rustovate-conf/r12-cold.json`; fresh baseline:
+`/root/rustovate-conf/renovate12.jsonl`. Input triage was **0 missing, 0 extra,
+6 field-mismatch, 275 departures**. Final strict replay at
+`/root/rustovate-conf/out12-closed/triage.{md,json}` is **0 missing, 0 extra,
+4 field-mismatch, 277 departures**. Independent cached floating-tag evidence
+accounts for the two action fields; the four unocss fields remain because
+the log's actual evaluation timestamps are already beyond 72 hours. See
+[the timestamp evidence and report provenance](phase1-triage.md#final-live-check-2026-10-15).
+
+All twelve repositories ran through rustovate; eleven have a comparable
+Renovate baseline. remote-agent's `renovate.json` is invalid, so Renovate
+supplies no baseline for it. rustovate's own configuration for it validates.
+Proposal-count stability and timings do not establish parity for that gap.
+
 [Tak](https://github.com/jdx/tak) is pinned to 0.0.15 in mise. Its README calls it
 pre-v1 and warns that its interfaces can change. These measurements help
 investigate performance; they never gate a change. Configuration follows the

@@ -210,6 +210,22 @@
       "predicate": "mise-backend-identity"
     },
     {
+      "id": "action-floating-newVersion",
+      "departure": 45,
+      "classification": "field-mismatch",
+      "managers": ["github-actions"],
+      "field": "updates.newVersion",
+      "predicate": "action-alias-precision"
+    },
+    {
+      "id": "action-floating-newDigest",
+      "departure": 45,
+      "classification": "field-mismatch",
+      "managers": ["github-actions"],
+      "field": "updates.newDigest",
+      "predicate": "action-alias-precision"
+    },
+    {
       "id": "action-alias-precision",
       "departure": 45,
       "classification": "field-mismatch",

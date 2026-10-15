@@ -1,5 +1,62 @@
 # Phase 1 comparison follow-up
 
+## Final live check (2026-10-15)
+
+The supplied fresh release batch took **37.4 s cold / 4.1 s warm / 3.8 s
+warm2**, with **343 proposals on all three runs**. Renovate's dry run took
+**261 s**; its run started about four minutes before rustovate's cold run.
+These are caller-supplied single observations. See [benchmarks](benchmarks.md#phase-1-final-live-check-2026-10-15).
+
+Input triage was **0 missing, 0 extra, 6 field-mismatch, 275 departures**.
+Replay against `/root/rustovate-conf/renovate12.jsonl` now gives **0 missing,
+0 extra, 4 field-mismatch, 277 departures**, at
+`/root/rustovate-conf/out12-closed/triage.{md,json}`. Zero actionable rows
+cannot yet be substantiated by the supplied timestamp evidence.
+
+Departure 45 now covers a pinned action whose declared major/minor precision
+is retained in the proposed floating tag, while rustovate reports a newer
+stable release on that same line. It requires matching declarations and update
+classes, equal proposed aliases, ordered full versions, and independent
+`metadata.tagDigests` evidence that the proposed digest is the alias's peeled
+commit. The apple-actions/import-codesign-certs version and digest fields
+qualify: v7 and v7.1.0 resolve to `77ba2a2a…`, whereas v7.0.0 resolves to
+`5142e029…`. Future engine reports emit this evidence from their tag catalogs.
+
+The original cold capture lacked that additional metadata. Its original bytes
+are preserved at `/root/rustovate-conf/r12-cold.original.json`; only the observed
+v7 tag evidence was added to `r12-cold.json`, with every original proposal and
+timing retained. Evidence comes from the captured `r12.sqlite` matching-refs
+response and peeled tag catalog; its extraction is saved as
+`/root/rustovate-conf/r12-floating-tag-evidence.json`. No live data was invented
+or substituted for the captured proposal set.
+
+Departure 23 now measures the newer rustovate release's age at the timestamp
+of Renovate's own `packageFiles with updates` log record, rather than at
+rustovate's `evaluatedAt`. Missing/malformed timestamps and ages outside
+24 hours inclusive to 72 hours exclusive remain actionable. Boundary tests
+cover crossing 72 hours between the two evaluations.
+
+The four remaining fields are unocss and @unocss/reset, 66.10.5 versus
+66.11.0. The supplied 71.9-hour explanation conflicts with the actual capture:
+publication is **2026-10-12T06:41:36.594Z**, Renovate starts at
+**2026-10-15T06:42:12.998Z**, and its clips snapshot is timestamped
+**2026-10-15T06:43:43.844Z** (72 hours, 2 minutes, 7.250 seconds after
+publication). Even the run start is beyond 72 hours. The strict rule correctly
+retains those fields pending earlier evaluation evidence or another supported
+explanation; the window was not widened to force closure.
+
+Coverage remains **eleven comparable repositories and one gap**. remote-agent
+has no Renovate baseline because its `renovate.json` is invalid; rustovate's
+own configuration for that repository validates. This gap is not parity.
+
+Validation passed with `CARGO_NET_OFFLINE=true RUSTOVATE_RECORD=0 mise run ci`:
+22-cassette secret scan, formatting, workspace/all-target Clippy with
+`-D warnings`, offline workspace tests and workspace build. The initial run
+hit the existing HTTP tracing test's zero-line capture failure; that test
+passed in isolation and the complete CI retry passed unchanged. Logs:
+`/root/rustovate-conf/close-trace-retry.log` and
+`/root/rustovate-conf/r12-closed-ci-retry.log`. No push was performed.
+
 ## Round 4: fresh baseline, owner decisions and unchanged-report replay
 
 Implementation: `9271512` (local; not pushed).

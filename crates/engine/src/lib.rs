@@ -549,6 +549,10 @@ impl Engine {
                         version: version.clone(),
                     }
                 });
+                let proposals_refs: BTreeSet<_> = proposals
+                    .iter()
+                    .filter_map(|p| p.new_value.clone())
+                    .collect();
                 let value = ReportDependency {
                     manager: word(&dep.manager),
                     name: dep.name.clone(),
@@ -577,6 +581,22 @@ impl Engine {
                     },
                     updates: proposals,
                     metadata: Some(rustovate_report::DependencyMetadata {
+                        tag_digests: if dep.manager == Manager::GithubActions
+                            && dep.source == Source::GithubTags
+                        {
+                            catalog
+                                .into_iter()
+                                .flat_map(|c| &c.versions)
+                                .filter(|v| proposals_refs.contains(&v.version))
+                                .filter_map(|v| {
+                                    v.digest
+                                        .as_ref()
+                                        .map(|digest| (v.version.clone(), digest.clone()))
+                                })
+                                .collect()
+                        } else {
+                            BTreeMap::new()
+                        },
                         source: word(&dep.source),
                         kinds: vec![word(&dep.kind)],
                         locations: vec![rustovate_report::Location {

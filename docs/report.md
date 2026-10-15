@@ -75,6 +75,10 @@ versions newer than the known current version. `metadata.resolution` identifies
 the origin and value of the reported current version: declared, lockfile,
 pinned-commit, floating-ref, release-line or supported-range. Consumers should
 use this provenance when comparing installed versions with resolved candidates.
+For GitHub-tag actions, `metadata.tagDigests` maps proposed refs to independently
+observed peeled commit hashes from the tag catalog. This lets consumers verify
+that a pin matches a floating major/minor ref; the proposed digest alone cannot
+establish that relationship. Missing entries provide no such evidence.
 These entries also include `updateType`; batch
 `stats` (requests, notModified, cacheHits, extractionHits, unique lookups and
 phaseMicros). Unknown fields are still rejected. Timing windows are reported

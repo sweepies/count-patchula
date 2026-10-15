@@ -117,6 +117,14 @@ commit is separately audited under departure 7. Changed targets, supplied hashes
 upgrade classes and absent full versions remain visible. The previous newVersion
 bug is fixed separately.
 
+For release upgrades retaining a declared major/minor ref's precision, both
+sides must propose the same floating tag and update class, with stable full
+versions on that line and rustovate's target newer. The proposed commit must
+equal independent `metadata.tagDigests` evidence for the floating tag, emitted
+from the observed peeled tag catalog. This can explain both full-version and
+digest differences when Renovate pins an older release tag's commit. Missing
+evidence, changed lines/precision and unrelated hashes remain actionable.
+
 <a id="departure-46"></a>**Departure 46: Cargo compatible target resolution.**
 The fresh output resolves keepass 0.15.0 versus 0.15.2, and toml_edit 0.25.16
 versus 0.25.17+spec-1.1.0. All exceed both release-age windows. Both sides propose

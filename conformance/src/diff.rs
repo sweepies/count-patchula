@@ -128,7 +128,7 @@ impl Rules {
                     ) | (
                         Predicate::ActionAliasPrecision,
                         Classification::FieldMismatch,
-                        "updates.newValue"
+                        "updates.newValue" | "updates.newVersion" | "updates.newDigest"
                     ) | (
                         Predicate::CargoCompatibleTarget,
                         Classification::RustovateMissing | Classification::RustovateExtra,
@@ -434,7 +434,9 @@ impl Rules {
                         .zip(right.new_version.as_deref().and_then(parse_version));
                     let age = right.release_age.as_ref().and_then(|age| {
                         let published = chrono::DateTime::parse_from_rfc3339(&age.published_at).ok()?;
-                        let evaluated = chrono::DateTime::parse_from_rfc3339(&age.evaluated_at).ok()?;
+                        let evaluated = dependency.and_then(|dep| dep.metadata.as_ref())
+                            .and_then(|m| m.lookup.as_ref())
+                            .and_then(|e| chrono::DateTime::parse_from_rfc3339(&e.evaluated_at).ok())?;
                         Some(evaluated.signed_duration_since(published))
                     });
                     let held_back = rustovate.metadata.as_ref().is_some_and(|metadata| metadata.held_back.iter().any(|held| {
@@ -1443,35 +1445,86 @@ fn action_alias_precision(left: &Dependency, right: &Dependency, difference: &Di
                     .iter()
                     .any(|k| matches!(k.as_str(), "action" | "reusable-workflow"))
         })
-        && difference.paired.as_ref().is_some_and(|(a, b)| {
-            a.update_type == b.update_type
-                && matches!(b.update_type.as_str(), "pin" | "digest")
-                && a.new_version == b.new_version
-                && a.new_value == b.new_version
-                && a.new_digest
-                    .as_ref()
-                    .is_none_or(|d| Some(d) == b.new_digest.as_ref())
-                && b.new_digest
-                    .as_ref()
-                    .is_some_and(|d| d.len() == 40 && d.bytes().all(|b| b.is_ascii_hexdigit()))
-                && b.new_value == right.current.value
-                && b.new_value
-                    .as_deref()
-                    .zip(b.new_version.as_deref())
-                    .is_some_and(|(alias, full)| {
-                        let alias = alias.trim_start_matches('v');
-                        let parts = alias.split('.').collect::<Vec<_>>();
-                        (1..=2).contains(&parts.len())
-                            && parts
-                                .iter()
-                                .all(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
-                            && full
-                                .trim_start_matches('v')
-                                .strip_prefix(alias)
-                                .is_some_and(|s| s.starts_with('.'))
-                            && parse_version(full).is_some()
+        && (floating_action_target(left, right, difference)
+            || difference.paired.as_ref().is_some_and(|(a, b)| {
+                a.update_type == b.update_type
+                    && matches!(b.update_type.as_str(), "pin" | "digest")
+                    && a.new_version == b.new_version
+                    && a.new_value == b.new_version
+                    && a.new_digest
+                        .as_ref()
+                        .is_none_or(|d| Some(d) == b.new_digest.as_ref())
+                    && b.new_digest
+                        .as_ref()
+                        .is_some_and(|d| d.len() == 40 && d.bytes().all(|b| b.is_ascii_hexdigit()))
+                    && b.new_value == right.current.value
+                    && b.new_value
+                        .as_deref()
+                        .zip(b.new_version.as_deref())
+                        .is_some_and(|(alias, full)| {
+                            let alias = alias.trim_start_matches('v');
+                            let parts = alias.split('.').collect::<Vec<_>>();
+                            (1..=2).contains(&parts.len())
+                                && parts
+                                    .iter()
+                                    .all(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+                                && full
+                                    .trim_start_matches('v')
+                                    .strip_prefix(alias)
+                                    .is_some_and(|s| s.starts_with('.'))
+                                && parse_version(full).is_some()
+                        })
+            }))
+}
+
+fn floating_action_target(left: &Dependency, right: &Dependency, difference: &Difference) -> bool {
+    let alias_parts = |value: &str| {
+        let parts: Vec<_> = value.trim_start_matches('v').split('.').collect();
+        (1..=2).contains(&parts.len())
+            && parts
+                .iter()
+                .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+    };
+    difference.paired.as_ref().is_some_and(|(a, b)| {
+        let on_line = |alias: &str, version: &str| {
+            version
+                .trim_start_matches('v')
+                .strip_prefix(alias.trim_start_matches('v'))
+                .is_some_and(|tail| tail.starts_with('.'))
+        };
+        left.current.value.as_deref().is_some_and(alias_parts)
+            && left.current.digest.is_some()
+            && a.update_type == b.update_type
+            && matches!(
+                b.update_type.as_str(),
+                "major" | "minor" | "patch" | "digest" | "pin"
+            )
+            && a.new_value == b.new_value
+            && b.new_value.as_deref().is_some_and(|alias| {
+                alias_parts(alias)
+                    && left.current.value.as_deref().is_some_and(|current| {
+                        current.split('.').count() == alias.split('.').count()
                     })
-        })
+                    && a.new_version.as_deref().is_some_and(|v| on_line(alias, v))
+                    && b.new_version.as_deref().is_some_and(|v| on_line(alias, v))
+                    && right
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| m.tag_digests.get(alias))
+                        .is_some_and(|digest| {
+                            digest.len() == 40
+                                && digest.bytes().all(|b| b.is_ascii_hexdigit())
+                                && b.new_digest.as_ref() == Some(digest)
+                        })
+            })
+            && a.new_version
+                .as_deref()
+                .and_then(parse_version)
+                .zip(b.new_version.as_deref().and_then(parse_version))
+                .is_some_and(|(a, b)| {
+                    a.pre.is_empty() && b.pre.is_empty() && b.cmp_precedence(&a).is_gt()
+                })
+    })
 }
 
 fn cargo_compatible_target(left: &Dependency, right: &Dependency, difference: &Difference) -> bool {

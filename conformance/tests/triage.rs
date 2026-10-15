@@ -8,7 +8,7 @@ fn rules() -> Rules {
 }
 fn snapshot(config: Value) -> Report {
     parse_logs(
-        &json!({"repository":"example/demo","msg":"packageFiles with updates","config":config})
+        &json!({"repository":"example/demo","msg":"packageFiles with updates","time":"2026-10-15T00:00:00Z","config":config})
             .to_string(),
     )
     .unwrap()
@@ -1077,4 +1077,73 @@ fn cli_handles_a_requested_repo_present_only_in_the_actual_report() {
         serde_json::from_slice(&std::fs::read(dir.path().join("triage.json")).unwrap()).unwrap();
     assert_eq!(output["noBaseline"][0]["repository"], "example/demo");
     assert!(output["differences"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn floating_action_target_requires_observed_alias_commit_and_matching_release_line() {
+    for (current, alias, old, new) in [
+        ("v3", "v7", "v7.0.0", "v7.1.0"),
+        ("v3.0", "v3.1", "v3.1.0", "v3.1.2"),
+    ] {
+        let mut action = dep("example/action", "github-tags", current);
+        action["currentDigest"] = json!("c".repeat(40));
+        action["updates"] = json!([{"newValue":alias,"newVersion":old,"newDigest":"a".repeat(40),"updateType":"major"}]);
+        let baseline =
+            snapshot(json!({"github-actions":[{"packageFile":"ci.yml","deps":[action]}]}));
+        let mut actual = baseline.clone();
+        let d = &mut actual.repositories[0].package_files[0].dependencies[0];
+        d.metadata.as_mut().unwrap().kinds = vec!["action".into()];
+        d.metadata
+            .as_mut()
+            .unwrap()
+            .tag_digests
+            .insert(alias.into(), "b".repeat(40));
+        d.updates[0].new_version = Some(new.into());
+        d.updates[0].new_digest = Some("b".repeat(40));
+        let diffs = compare(&baseline, &actual, &rules()).unwrap().differences;
+        assert_eq!(diffs.len(), 2);
+        assert!(
+            diffs
+                .iter()
+                .all(|d| d.departure.as_ref().is_some_and(|d| d.row == 45))
+        );
+        for (field, value) in [
+            ("evidence", ""),
+            ("evidence", "a"),
+            ("target", "v8.1.0"),
+            ("target", old),
+            ("value", "v7.1.0"),
+            ("current", "v3.0.0"),
+            ("source", "github-releases"),
+            ("kind", "tool"),
+            ("type", "minor"),
+        ] {
+            let mut changed = actual.clone();
+            let d = &mut changed.repositories[0].package_files[0].dependencies[0];
+            match field {
+                "evidence" => {
+                    d.metadata
+                        .as_mut()
+                        .unwrap()
+                        .tag_digests
+                        .insert(alias.into(), value.repeat(40));
+                }
+                "target" => d.updates[0].new_version = Some(value.into()),
+                "value" => d.updates[0].new_value = Some(value.into()),
+                "current" => d.current.value = Some(value.into()),
+                "source" => d.metadata.as_mut().unwrap().source = value.into(),
+                "kind" => d.metadata.as_mut().unwrap().kinds = vec![value.into()],
+                "type" => d.updates[0].update_type = value.into(),
+                _ => unreachable!(),
+            }
+            assert!(
+                compare(&baseline, &changed, &rules())
+                    .unwrap()
+                    .differences
+                    .iter()
+                    .any(|d| d.departure.is_none()),
+                "{field}={value}"
+            );
+        }
+    }
 }

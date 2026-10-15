@@ -193,12 +193,43 @@ fn policy() -> rustovate_report::UpdatePolicy {
 }
 
 #[test]
+fn renovate_snapshot_retains_its_own_evaluation_time() {
+    let mut record = json!({"repository":"example/demo","msg":"packageFiles with updates","time":"2026-10-15T06:40:00Z","config":{"npm":[{"packageFile":"package.json","deps":[{"depName":"example","datasource":"npm","currentValue":"1.0.0","updates":[]}]}]}});
+    for time in ["2026-10-15T06:40:00Z", "malformed"] {
+        record["time"] = json!(time);
+        let report = parse_logs(&record.to_string()).unwrap();
+        assert_eq!(
+            report.repositories[0].package_files[0].dependencies[0]
+                .metadata
+                .as_ref()
+                .unwrap()
+                .lookup
+                .as_ref()
+                .unwrap()
+                .evaluated_at,
+            time
+        );
+    }
+    record.as_object_mut().unwrap().remove("time");
+    let report = parse_logs(&record.to_string()).unwrap();
+    assert!(
+        report.repositories[0].package_files[0].dependencies[0]
+            .metadata
+            .as_ref()
+            .unwrap()
+            .lookup
+            .is_none()
+    );
+}
+
+#[test]
 fn release_age_departure_requires_newer_target_and_timestamp_evidence_inside_window() {
     let mut a = parse_logs(LOG).unwrap();
     let dep = &mut a.repositories[0].package_files[0].dependencies[0];
     dep.manager = "npm".into();
     dep.current.value = Some("1.0.0".into());
     dep.updates = vec![serde_json::from_value(json!({"newValue":"1.0.1","newVersion":"1.0.1","newDigest":null,"updateType":"patch","group":null})).unwrap()];
+    dep.metadata = Some(serde_json::from_value(json!({"source":"npm","kinds":[],"locations":[],"lookup":{"evaluatedAt":"2026-10-15T12:00:00Z","disabledUpdates":[],"rejected":[]}})).unwrap());
     let mut b = a.clone();
     let update = &mut b.repositories[0].package_files[0].dependencies[0].updates[0];
     update.new_value = Some("1.0.2".into());
@@ -238,6 +269,37 @@ fn release_age_departure_requires_newer_target_and_timestamp_evidence_inside_win
             .iter()
             .all(|d| d.classification == Class::FieldMismatch)
     );
+    // The target crosses 72 h between the independent evaluations.
+    b.repositories[0].package_files[0].dependencies[0].updates[0]
+        .release_age
+        .as_mut()
+        .unwrap()
+        .evaluated_at = "2026-10-17T00:00:00Z".into();
+    for (time, expected) in [
+        (Some("2026-10-16T23:59:59Z"), Class::DeliberateDeparture),
+        (Some("2026-10-17T00:00:00Z"), Class::FieldMismatch),
+        (Some("2026-10-14T23:59:59Z"), Class::FieldMismatch),
+        (Some("malformed"), Class::FieldMismatch),
+        (None, Class::FieldMismatch),
+    ] {
+        a.repositories[0].package_files[0].dependencies[0]
+            .metadata
+            .as_mut()
+            .unwrap()
+            .lookup = time.map(|time| rustovate_report::LookupEvidence {
+            evaluated_at: time.into(),
+            disabled_updates: vec![],
+            rejected: vec![],
+        });
+        assert!(
+            compare(&a, &b, &rules())
+                .unwrap()
+                .differences
+                .iter()
+                .all(|d| d.classification == expected),
+            "{time:?}"
+        );
+    }
     b.repositories[0].package_files[0].dependencies[0].updates[0].release_age = None;
     assert!(
         compare(&a, &b, &rules())
