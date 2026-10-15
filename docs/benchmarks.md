@@ -76,8 +76,8 @@ samples verify the workflow and are not performance targets or batch baselines.
 
 ## Real batch timings
 
-No rustovate batch timing exists yet: lookup/run remain Phase 1 stubs. Record
-results here only after a real batch works, including commit, hardware, repo
+Read-only lookup is implemented; writes remain a Phase 1 stub. Record live
+results here with commit, hardware, repo
 count, dry-run/write mode, cache state and repetition count. Startup/config
 microbenchmarks are not substitutes for these measurements.
 

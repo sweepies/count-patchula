@@ -17,8 +17,17 @@ amends/import dependencies are fetched, with the bundled Rustovate.pkl available
 when not vendored. Remote and escaping imports/resources are rejected. Literal
 imports are supported; dynamic import targets require future discovery support.
 An unchanged commit/config fingerprint reuses extraction without tree/blob calls.
+The extraction fingerprint includes the mise registry snapshot; its namespace
+changes when extraction semantics change. A cached
+default-branch name permits parallel metadata/head revalidation; a changed default
+branch causes a retry against the newly reported branch. Metadata is never skipped.
 Catalog and digest/ref requests are deduplicated across the whole batch. Opaque
 action branches skip release history lookups, retaining their ref when pinned.
+Current action refs revalidate alongside catalogs; only newly proposed tag refs
+need a subsequent digest wave. `policy` measures CPU selection/report assembly;
+`digest` measures the subsequent ref wave. `extraction` includes repository
+metadata/head HTTP latency even on a warm extraction hit. No Pkl evaluation,
+tree/blob fetch or scanner work occurs on an unchanged cached repository config.
 
 Report metadata includes branch/commit, warnings, source/kinds/locations, per-update
 policy and request/cache counters plus phase timings. Unsupported managers and
@@ -40,7 +49,7 @@ mise run fixtures:check
 mise run ci
 ```
 
-The benchmarks are debug engine runs against recorded responses, not a claim
+The default benchmarks use debug engine runs against recorded responses, not a claim
 about the twelve-repo production batch. Recording timings include network and
 cassette redaction/persistence overhead. Persistent cache rows include repository
 identities and selected manifest contents; keep private run caches/reports outside
@@ -54,3 +63,28 @@ reuses two fresh validator-free Go responses without network access.
 Public recording runs measured 3.29 s / 1.36 s for sources and 7.94 s / 4.64 s
 for the batch, including recording overhead. These are individual observations,
 not statistical benchmarks or live twelve-repo/App-token measurements.
+
+Follow-up release replay on 2026-10-15 (single observations on this workspace):
+baseline `2606e71`: 109.20 ms cold / 52.59 ms warm; implementation `3029efd`:
+35.49 ms cold / 7.46 ms warm.
+The same two public repositories are replayed, with npm responses refreshed from
+abbreviated to full metadata to supply release dates. Warm requests fall from
+9 to 8 (all 304); extraction hits remain 2 and unique catalogs remain 3. After
+phases: extraction 3.17 ms, lookup 3.90 ms, CPU policy 0.37 ms. The historical
+policy counter included digest HTTP waits, so those phase timings are not
+directly comparable. Total time remains comparable. Reproduce with:
+
+```sh
+mise run benchmarks:lookup-release
+# With an existing GitHub token, run twice against the same private cache:
+mise run lookup:release --config examples/renovate-runner.pkl \
+  --cache /tmp/rustovate-runner.sqlite --concurrency 8 --json \
+  sweepies/renovate-runner > /tmp/rustovate-runner-report.json
+```
+
+Live fixture refresh needs a GitHub recording credential; this follow-up session
+had none. `mise run fixtures:refresh-npm` refreshed only public npm metadata and
+removed now-unused warm registry reads. All ordinary tests remain offline.
+The live target of well under one second is unverified; repository metadata/head
+and GitHub source/ref revalidation still require round trips. Registry max-age
+is honored rather than replaced with an arbitrary local TTL.
