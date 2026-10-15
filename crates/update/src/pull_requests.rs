@@ -74,7 +74,7 @@ fn same_repo(pr: &Value, repo: &str) -> bool {
             .as_str()
             .is_some_and(|s| s.eq_ignore_ascii_case(repo))
 }
-fn owned_pr(pr: &Value, actor: &str, repo: &str) -> bool {
+pub(crate) fn owned_pr(pr: &Value, actor: &str, repo: &str) -> bool {
     pr["user"]["login"] == actor && same_repo(pr, repo) && marker(body(pr)).is_some()
 }
 fn action(
@@ -117,6 +117,13 @@ pub struct Lifecycle {
     maintenance_group: String,
 }
 impl Lifecycle {
+    pub fn dashboard_prs(&self) -> Vec<Value> {
+        self.prs
+            .iter()
+            .filter(|p| owned_pr(p, &self.actor, &self.repo))
+            .cloned()
+            .collect()
+    }
     pub(crate) fn closed_for(&self, plan: &Plan) -> Option<&Value> {
         let key = update_key(plan);
         self.prs.iter().find(|p| {

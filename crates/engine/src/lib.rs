@@ -195,6 +195,20 @@ impl Engine {
             if repo.status != Status::Complete {
                 continue;
             }
+            let inventory = if dry_run {
+                None
+            } else {
+                match rustovate_update::Inventory::read(&self.github, &self.cache, repo, &config)
+                    .await
+                {
+                    Ok(value) => Some(value),
+                    Err(error) => {
+                        repo.status = Status::Error;
+                        repo.reason = Some(error);
+                        continue;
+                    }
+                }
+            };
             let plans = rustovate_update::plan(
                 repo,
                 &config,
@@ -226,17 +240,36 @@ impl Engine {
                 plans.push(maintenance);
             }
             if !dry_run {
-                match rustovate_update::restore_unchanged(
-                    &self.github,
+                match rustovate_update::restore_inventory(
                     &self.cache,
                     repo,
                     &config,
                     &mut plans,
                     self.recheck,
+                    inventory.as_ref().expect("write inventory"),
                 )
                 .await
                 {
                     Ok(true) => {
+                        let inventory = inventory.as_ref().expect("write inventory");
+                        if let Err(error) = rustovate_update::dashboard::reconcile(
+                            &self.github,
+                            &self.cache,
+                            repo,
+                            &config,
+                            inventory,
+                            rustovate_update::dashboard::render(
+                                repo,
+                                &plans,
+                                &inventory.pull_requests(&repo.repository),
+                                self.recheck,
+                            ),
+                        )
+                        .await
+                        {
+                            repo.status = Status::Error;
+                            repo.reason = Some(format!("dependency dashboard: {error}"));
+                        }
                         pull_requests.extend(plans.iter().filter_map(|p| {
                             p.cached_pr
                                 .as_ref()
@@ -343,6 +376,24 @@ impl Engine {
             .await;
             if let Some(state) = &mut lifecycle {
                 state.publish(&self.github, &mut plans).await;
+                if let Err(error) = rustovate_update::dashboard::reconcile(
+                    &self.github,
+                    &self.cache,
+                    repo,
+                    &config,
+                    inventory.as_ref().expect("write inventory"),
+                    rustovate_update::dashboard::render(
+                        repo,
+                        &plans,
+                        &state.dashboard_prs(),
+                        self.recheck,
+                    ),
+                )
+                .await
+                {
+                    repo.status = Status::Error;
+                    repo.reason = Some(format!("dependency dashboard: {error}"));
+                }
                 if let Err(error) = rustovate_update::lockfiles::record_refresh(
                     &self.cache,
                     &plans,

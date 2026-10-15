@@ -17,6 +17,7 @@ struct Fake {
     files: BTreeMap<String, String>,
     writes: Mutex<Vec<(String, Value)>>,
     prs: Mutex<Vec<Value>>,
+    issues: Mutex<Vec<Value>>,
     requests: Mutex<Vec<(String, String, Value)>>,
 }
 impl Fake {
@@ -33,7 +34,7 @@ impl Fake {
         files:BTreeMap::from([
             (".github/rustovate.pkl".into(),"amends \"../Rustovate.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n".into()),
             ("package.json".into(),"{\n  \"dependencies\": {\"fixture\": \"1.0.0\", \"owner-closed-a\": \"1.0.0\", \"owner-closed-b\": \"1.0.0\"}\n}\n".into()),
-        ]),writes:Default::default(),prs:Default::default(),requests:Default::default(),
+        ]),writes:Default::default(),prs:Default::default(),issues:Default::default(),requests:Default::default(),
     }
     }
     fn tree(&self) -> Value {
@@ -89,7 +90,7 @@ impl Transport for Fake {
                 })).collect();
                 (
                     200,
-                    json!({"data":{"viewer":{"login":"rustovate[bot]"},"nodes":closed,"repository":{"defaultBranchRef":{"name":"main","target":{"oid":"base"}},"refs":{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+                    json!({"data":{"viewer":{"login":"rustovate[bot]"},"nodes":closed,"repository":{"defaultBranchRef":{"name":"main","target":{"oid":"base"}},"refs":{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}},"issues":{"nodes":*self.issues.lock().unwrap(),"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
                 )
             } else {
                 assert_eq!(body["query"], rustovate_update::REF_UPDATE);
@@ -112,6 +113,10 @@ impl Transport for Fake {
                 pr["base"]["sha"] = json!("base");
                 self.prs.lock().unwrap().push(pr.clone());
                 (201, pr)
+            } else if path.ends_with("/issues") {
+                let issue = json!({"number":100,"id":"dashboard-id","title":body["title"],"body":body["body"],"state":"OPEN","author":{"__typename":"Bot","login":"rustovate"}});
+                self.issues.lock().unwrap().push(issue.clone());
+                (201, issue)
             } else if path.ends_with("/git/blobs") {
                 (
                     201,

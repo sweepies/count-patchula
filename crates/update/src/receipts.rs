@@ -8,13 +8,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const INVENTORY_QUERY: &str = r#"query($owner:String!,$name:String!,$prefix:String!,$cursor:String,$closed:[ID!]!){
+pub const INVENTORY_QUERY: &str = r#"query($owner:String!,$name:String!,$prefix:String!,$cursor:String,$issueCursor:String,$closed:[ID!]!){
  viewer{login}
  nodes(ids:$closed){... on PullRequest{id number state merged body headRefName
   author{__typename login} headRepository{nameWithOwner} baseRepository{nameWithOwner}
  }}
  repository(owner:$owner,name:$name){
   defaultBranchRef{name target{oid}}
+  issues(states:[OPEN],first:100,after:$issueCursor){pageInfo{hasNextPage endCursor} nodes{
+   id number title body state author{__typename login}
+  }}
   refs(refPrefix:$prefix,first:100,after:$cursor){pageInfo{hasNextPage endCursor} nodes{
    name target{... on Commit{oid message tree{oid} author{user{login}} committer{user{login}} signature{isValid}}}
    associatedPullRequests(states:[OPEN],first:2){pageInfo{hasNextPage} nodes{
@@ -82,7 +85,7 @@ fn pr_state(pr: &Value) -> Value {
 }
 // GraphQL Actor.login omits REST's suffix for Bots. Use the explicit type:
 // stripping/appending suffixes for arbitrary Users would conflate identities.
-fn actor_login(actor: &Value) -> Option<String> {
+pub(crate) fn actor_login(actor: &Value) -> Option<String> {
     let login = actor["login"].as_str()?;
     Some(
         if actor["__typename"] == "Bot" && !login.ends_with("[bot]") {
@@ -108,7 +111,7 @@ fn not_restored(repository: &Repository, plans: &[Plan], reason: &str) -> bool {
     false
 }
 
-fn rest_pr(pr: &Value) -> Option<Value> {
+pub(crate) fn rest_pr(pr: &Value) -> Option<Value> {
     if pr["labels"]["pageInfo"]["hasNextPage"] != false {
         return None;
     }
@@ -132,6 +135,128 @@ pub async fn restore_unchanged(
     plans: &mut [Plan],
     recheck: Recheck,
 ) -> Result<bool, String> {
+    let inventory = Inventory::read(client, cache, repository, config).await?;
+    restore_inventory(cache, repository, config, plans, recheck, &inventory).await
+}
+
+/// Fresh control and branch state shared by lookup, dashboard and write receipts.
+#[derive(Default, Debug)]
+pub struct Inventory {
+    pub actor: String,
+    pub refs: Vec<Value>,
+    pub closed: Vec<Value>,
+    pub issues: Vec<Value>,
+}
+impl Inventory {
+    pub fn pull_requests(&self, repo: &str) -> Vec<Value> {
+        self.refs
+            .iter()
+            .flat_map(|r| {
+                r["associatedPullRequests"]["nodes"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+            })
+            .filter_map(rest_pr)
+            .filter(|p| crate::pull_requests::owned_pr(p, &self.actor, repo))
+            .collect()
+    }
+    pub async fn read(
+        client: &Client,
+        cache: &Cache,
+        repository: &Repository,
+        config: &Config,
+    ) -> Result<Self, String> {
+        let receipts = cache
+            .extraction_get(&key(&repository.repository, &config.prs.branch))
+            .await
+            .map_err(|e| e.to_string())?
+            .and_then(|b| serde_json::from_slice::<Receipts>(&b).ok())
+            .unwrap_or_default();
+        let closed_ids: Vec<_> = receipts
+            .closed
+            .values()
+            .map(|r| &r.pr["node_id"])
+            .take(100)
+            .collect();
+        let (owner, name) = repository
+            .repository
+            .split_once('/')
+            .ok_or("invalid repository")?;
+        let mut result = Self::default();
+        let mut cursor = Value::Null;
+        let mut issue_cursor = Value::Null;
+        let mut refs_done = false;
+        let mut issues_done = false;
+        loop {
+            let data = client.graphql(INVENTORY_QUERY, json!({"owner":owner,"name":name,
+                "prefix":"refs/heads/","closed":closed_ids,"cursor":cursor,"issueCursor":issue_cursor}))
+                .await.map_err(|e| e.to_string())?;
+            let head = &data["repository"]["defaultBranchRef"];
+            if head["name"].as_str() != repository.default_branch.as_deref()
+                || head["target"]["oid"].as_str() != repository.commit.as_deref()
+            {
+                return Err("default branch changed since extraction; rerun".into());
+            }
+            let actor = data["viewer"]["login"]
+                .as_str()
+                .ok_or("missing viewer login")?;
+            if !result.actor.is_empty() && result.actor != actor {
+                return Err("inventory actor changed".into());
+            }
+            result.actor = actor.into();
+            result.closed = data["nodes"]
+                .as_array()
+                .cloned()
+                .ok_or("missing closed inventory")?;
+            for (path, done, next, output) in [
+                (
+                    "/repository/refs",
+                    &mut refs_done,
+                    &mut cursor,
+                    &mut result.refs,
+                ),
+                (
+                    "/repository/issues",
+                    &mut issues_done,
+                    &mut issue_cursor,
+                    &mut result.issues,
+                ),
+            ] {
+                if *done {
+                    continue;
+                }
+                let page = GraphqlPage::from_connection(&data, path).map_err(|e| e.to_string())?;
+                output.extend(page.nodes);
+                if page.has_next_page {
+                    let end = page.end_cursor.ok_or("missing inventory cursor")?;
+                    if *next == end {
+                        return Err("repeated inventory cursor".into());
+                    }
+                    *next = json!(end);
+                } else {
+                    *done = true;
+                }
+            }
+            if refs_done && issues_done {
+                break;
+            }
+            if result.refs.len() + result.issues.len() > 100_000 {
+                return Err("inventory page budget exceeded".into());
+            }
+        }
+        Ok(result)
+    }
+}
+
+pub async fn restore_inventory(
+    cache: &Cache,
+    repository: &Repository,
+    config: &Config,
+    plans: &mut [Plan],
+    recheck: Recheck,
+    inventory: &Inventory,
+) -> Result<bool, String> {
     let Some(bytes) = cache
         .extraction_get(&key(&repository.repository, &config.prs.branch))
         .await
@@ -145,40 +270,9 @@ pub async fn restore_unchanged(
     if receipts.writes.is_empty() && receipts.closed.is_empty() || receipts.closed.len() > 100 {
         return Ok(not_restored(repository, plans, "unusable-receipts"));
     }
-    let (owner, name) = repository
-        .repository
-        .split_once('/')
-        .ok_or("invalid repository")?;
-    // Use refs/heads/ as the namespace, then filter locally. This also detects
-    // legacy names and prefix changes without ignoring obsolete owned heads.
-    let mut actor = String::new();
-    let closed_ids: Vec<_> = receipts.closed.values().map(|r| &r.pr["node_id"]).collect();
-    let mut closed = Vec::new();
-    let refs: Vec<Value> = client
-        .graphql_pages(
-            INVENTORY_QUERY,
-            json!({"owner":owner,"name":name,"prefix":"refs/heads/","closed":closed_ids}),
-            |data| {
-                let head = &data["repository"]["defaultBranchRef"];
-                if head["name"].as_str() != repository.default_branch.as_deref()
-                    || head["target"]["oid"].as_str() != repository.commit.as_deref()
-                {
-                    return Err(rustovate_github::Error::Graphql);
-                }
-                let login = data["viewer"]["login"]
-                    .as_str()
-                    .ok_or(rustovate_github::Error::Json)?;
-                if !actor.is_empty() && actor != login {
-                    return Err(rustovate_github::Error::Graphql);
-                }
-                actor = login.into();
-                closed = data["nodes"].as_array().cloned().unwrap_or_default();
-                GraphqlPage::from_connection(&data, "/repository/refs")
-            },
-            |_| false,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+    let actor = inventory.actor.as_str();
+    let refs = &inventory.refs;
+    let closed = &inventory.closed;
     let desired: BTreeSet<_> = plans.iter().map(|p| p.action.branch.as_str()).collect();
     let obsolete = refs.iter().any(|r| {
         let name = r["name"].as_str().unwrap_or("");
@@ -208,7 +302,7 @@ pub async fn restore_unchanged(
                     && pr["state"] == "CLOSED"
                     && pr["merged"] == false
                     && pr["body"] == receipt.pr["body"]
-                    && actor_login(&pr["author"]).as_deref() == Some(&actor)
+                    && actor_login(&pr["author"]).as_deref() == Some(actor)
                     && pr["headRepository"]["nameWithOwner"] == repository.repository
                     && pr["baseRepository"]["nameWithOwner"] == repository.repository
             }) {
@@ -219,7 +313,7 @@ pub async fn restore_unchanged(
                 Ok(())
             }
         } else {
-            restore_write(&receipts, &refs, &actor, plan, config, recheck)
+            restore_write(&receipts, refs, actor, plan, config, recheck)
         };
         match result {
             Ok(()) => {

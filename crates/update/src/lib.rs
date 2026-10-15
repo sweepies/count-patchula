@@ -1,9 +1,12 @@
 //! Deterministic manifest plans, signed GitHub branches and pull request lifecycle.
 #![forbid(unsafe_code)]
 mod cleanup;
+pub mod dashboard;
 mod receipts;
 pub use cleanup::{cleanup, delete_owned, owned};
-pub use receipts::{INVENTORY_QUERY, restore_unchanged, save_receipts};
+pub use receipts::{
+    INVENTORY_QUERY, Inventory, restore_inventory, restore_unchanged, save_receipts,
+};
 pub mod lockfiles;
 mod plan;
 mod write;

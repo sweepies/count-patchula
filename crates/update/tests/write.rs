@@ -101,6 +101,7 @@ impl Transport for Fake {
                         "body":p["body"],"author":graphql_author(p),"headRepository":{"nameWithOwner":p["head"]["repo"]["full_name"]},"baseRepository":{"nameWithOwner":p["base"]["repo"]["full_name"]}
                     })).collect::<Vec<_>>(),"repository":{
                         "defaultBranchRef":{"name":"main","target":{"oid":state.base}},
+                        "issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
                         "refs":{"nodes":nodes,"pageInfo":{"hasNextPage":more,"endCursor":(offset+size).to_string()}}
                     }}}),
                 )

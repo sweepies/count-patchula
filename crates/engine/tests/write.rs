@@ -17,6 +17,7 @@ struct Fake {
     lock_name: &'static str,
     writes: Mutex<Vec<(String, Value)>>,
     prs: Mutex<Vec<Value>>,
+    issues: Mutex<Vec<Value>>,
     requests: Mutex<Vec<(String, String, Value)>>,
     latency: std::time::Duration,
     close_on_read: std::sync::atomic::AtomicBool,
@@ -27,7 +28,7 @@ impl Fake {
         files:BTreeMap::from([
             (".github/rustovate.pkl".into(),"amends \"../Rustovate.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n".into()),
             ("package.json".into(),"{\n  \"dependencies\": {\"fixture\": \"1.0.0\"}\n}\n".into()),
-        ]),lock,lock_name:"yarn.lock",writes:Default::default(),prs:Default::default(),requests:Default::default(),latency:Default::default(),close_on_read:Default::default(),
+        ]),lock,lock_name:"yarn.lock",writes:Default::default(),prs:Default::default(),issues:Default::default(),requests:Default::default(),latency:Default::default(),close_on_read:Default::default(),
     }
     }
     fn tree(&self) -> Value {
@@ -88,7 +89,7 @@ impl Transport for Fake {
                 })).collect();
                 (
                     200,
-                    json!({"data":{"viewer":{"login":"rustovate[bot]"},"nodes":closed,"repository":{"defaultBranchRef":{"name":"main","target":{"oid":"base"}},"refs":{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+                    json!({"data":{"viewer":{"login":"rustovate[bot]"},"nodes":closed,"repository":{"defaultBranchRef":{"name":"main","target":{"oid":"base"}},"refs":{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}},"issues":{"nodes":self.issues.lock().unwrap().iter().filter(|i|i["state"] == "OPEN").cloned().collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
                 )
             } else {
                 assert_eq!(body["query"], rustovate_update::REF_UPDATE);
@@ -98,6 +99,23 @@ impl Transport for Fake {
                     json!({"data":{"updateRefs":{"clientMutationId":null}}}),
                 )
             }
+        } else if request.method() == reqwest::Method::PATCH
+            && path.starts_with("/repos/demo/sandbox/issues/")
+        {
+            self.writes
+                .lock()
+                .unwrap()
+                .push((path.into(), body.clone()));
+            let number: u64 = path.rsplit('/').next().unwrap().parse().unwrap();
+            let mut issues = self.issues.lock().unwrap();
+            let issue = issues.iter_mut().find(|i| i["number"] == number).unwrap();
+            if let Some(text) = body.get("body") {
+                issue["body"] = text.clone();
+            }
+            if body["state"] == "closed" {
+                issue["state"] = json!("CLOSED");
+            }
+            (200, issue.clone())
         } else if request.method() == reqwest::Method::POST {
             self.writes
                 .lock()
@@ -111,6 +129,10 @@ impl Transport for Fake {
                 pr["base"]["sha"] = json!("base");
                 self.prs.lock().unwrap().push(pr.clone());
                 (201, pr)
+            } else if path.ends_with("/issues") {
+                let issue = json!({"number":100,"id":"dashboard-id","title":body["title"],"body":body["body"],"state":"OPEN","author":{"__typename":"Bot","login":"rustovate"}});
+                self.issues.lock().unwrap().push(issue.clone());
+                (201, issue)
             } else if path.ends_with("/git/blobs") {
                 (
                     201,
@@ -220,6 +242,7 @@ async fn steady_runs_only_lookup_and_one_inventory_with_open_or_closed_updates()
         let engine =
             Engine::with_transport("offline-installation", cache, 4, fake.clone()).unwrap();
         fake.requests.lock().unwrap().clear();
+        fake.writes.lock().unwrap().clear();
         let started = tokio::time::Instant::now();
         let report = engine
             .run(
@@ -233,6 +256,10 @@ async fn steady_runs_only_lookup_and_one_inventory_with_open_or_closed_updates()
             .await
             .unwrap();
         assert_eq!(report.repositories[0].status, Status::Complete);
+        assert!(
+            fake.writes.lock().unwrap().is_empty(),
+            "steady dashboard must not mutate"
+        );
         assert_eq!(
             report.actions.as_ref().unwrap().branches[0].status,
             if closed {
@@ -275,6 +302,44 @@ async fn steady_runs_only_lookup_and_one_inventory_with_open_or_closed_updates()
             started.elapsed()
         );
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn dashboard_renames_are_preserved_and_disabling_closes_only_the_owned_issue() {
+    let fake = Arc::new(Fake::new(false));
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone()).unwrap();
+    let run = |config| {
+        engine.run(
+            Options {
+                repositories: vec!["demo/sandbox".into()],
+                config,
+                ..Default::default()
+            },
+            false,
+            false,
+        )
+    };
+    run(None).await.unwrap();
+    fake.issues.lock().unwrap()[0]["title"] = json!("Owner dashboard title");
+    fake.writes.lock().unwrap().clear();
+    run(None).await.unwrap();
+    assert!(fake.writes.lock().unwrap().is_empty());
+    assert_eq!(
+        fake.issues.lock().unwrap()[0]["title"],
+        "Owner dashboard title"
+    );
+    let mut config = rustovate_config::load(std::path::Path::new("../../Rustovate.pkl")).unwrap();
+    config.prs.dashboard = false;
+    config.defaults.wait_hours = 0;
+    run(Some(config)).await.unwrap();
+    assert_eq!(fake.issues.lock().unwrap()[0]["state"], "CLOSED");
+    fake.writes.lock().unwrap().clear();
+    let mut config = rustovate_config::load(std::path::Path::new("../../Rustovate.pkl")).unwrap();
+    config.prs.dashboard = false;
+    config.defaults.wait_hours = 0;
+    run(Some(config)).await.unwrap();
+    assert!(fake.writes.lock().unwrap().is_empty());
 }
 
 #[tokio::test(start_paused = true)]
@@ -360,8 +425,16 @@ async fn token_only_run_uses_repository_config_cold_and_cached_and_reports_actio
                     .diff
                     .contains("+  \"dependencies\": {\"fixture\": \"2.0.0\"}")
             );
-            if dry_run || (lock && !allow) {
+            if dry_run {
                 assert!(fake.writes.lock().unwrap().is_empty());
+            } else if lock && !allow {
+                assert!(
+                    fake.writes
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .all(|(p, _)| p.contains("/issues"))
+                );
             }
             if repeat == 1 {
                 assert_eq!(report.stats.as_ref().unwrap().extraction_hits, 1);
@@ -414,5 +487,11 @@ async fn lockfile_failure_is_a_branch_error_and_publishes_no_manifest_only_branc
             .unwrap()
             .contains("fixture tool unavailable")
     );
-    assert!(fake.writes.lock().unwrap().is_empty());
+    assert!(
+        fake.writes
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(p, _)| p.contains("/issues"))
+    );
 }
