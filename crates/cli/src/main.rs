@@ -127,9 +127,17 @@ async fn lookup(app: &App, options: &cli::Lookup) -> Result<u8, (u8, miette::Rep
         .lookup(Options {
             repositories: options.repositories.clone(),
             config,
+            config_dir: options.config_dir.clone(),
         })
         .await
-        .map_err(|e| (1, miette::miette!("{e}")))?;
+        .map_err(|e| {
+            let code = if matches!(e, rustovate_engine::Error::Configuration(_)) {
+                2
+            } else {
+                1
+            };
+            (code, miette::miette!("{e}"))
+        })?;
     if app.json {
         serde_json::to_writer(io::stdout().lock(), &report)
             .map_err(|e| (1, miette::miette!("cannot write report: {e}")))?;

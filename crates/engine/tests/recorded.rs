@@ -45,6 +45,7 @@ async fn public_multi_repo_report_cold_and_warm() {
     let options = || Options {
         repositories: vec!["jdx/usage".into(), "jdx/mr-boxington".into()],
         config: Some(config()),
+        ..Default::default()
     };
     let now = chrono::Utc::now();
     let cold = engine.lookup_at(options(), now).await.unwrap();

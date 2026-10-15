@@ -1,5 +1,7 @@
 //! Read-only batch engine shared by CLI and future server callers.
 #![forbid(unsafe_code)]
+mod overrides;
+
 use futures_util::{StreamExt, stream};
 use rustovate_cache::{Cache, ExtractionKey};
 use rustovate_config::{Config, Manager, Source};
@@ -28,6 +30,8 @@ use std::{
 pub enum Error {
     #[error("{0}")]
     Invalid(String),
+    #[error("{0}")]
+    Configuration(String),
     #[error(transparent)]
     Github(#[from] rustovate_github::Error),
     #[error(transparent)]
@@ -42,6 +46,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct Options {
     pub repositories: Vec<String>,
     pub config: Option<Config>,
+    pub config_dir: Option<std::path::PathBuf>,
 }
 pub struct Engine {
     github: Github,
@@ -112,6 +117,11 @@ impl Engine {
         options: Options,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<Report> {
+        if options.config.is_some() && options.config_dir.is_some() {
+            return Err(Error::Configuration(
+                "--config and --config-dir are mutually exclusive".into(),
+            ));
+        }
         let total = Instant::now();
         let _total_span = PhaseTrace::new("total");
         let before_g = self.github.stats().await;
@@ -128,6 +138,7 @@ impl Engine {
         for repo in &repos {
             validate_repo(repo)?;
         }
+        let overrides = overrides::load(options.config_dir.as_deref(), &repos)?;
         let discovery = micros(started);
         drop(phase);
         let override_config = options.config.as_ref();
@@ -136,7 +147,7 @@ impl Engine {
         // discarded. Overlap source revalidation with the repository head read.
         let hint_hash = format!(
             "lookup-hint-v1:{}:{}:{}:{}",
-            hash(&serde_json::to_vec(&options.config)?),
+            hash(&serde_json::to_vec(&(&options.config, &overrides))?),
             hash(rustovate_config::SCHEMA.as_bytes()),
             hash(rustovate_manager::MISE_REGISTRY.as_bytes()),
             self.github.credential_scope()
@@ -157,9 +168,13 @@ impl Engine {
         let scans = async {
             let started = Instant::now();
             let _phase = PhaseTrace::new("extraction");
+            let overrides = &overrides;
             let work: Vec<_> = stream::iter(repos)
                 .map(|repo| async move {
-                    match self.scan(&repo, override_config).await {
+                    match self
+                        .scan(&repo, overrides.get(&repo).or(override_config))
+                        .await
+                    {
                         Ok(work) => work,
                         Err(error) => Work {
                             report: repository(&repo, Status::Error, Some(error.to_string())),

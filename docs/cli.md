@@ -71,6 +71,7 @@ Extract dependencies and report available updates without writing repositories.
 
   **Default:** `8`
 - **`--config <CONFIG>`** — Local Pkl override applied to every selected repository.
+- **`--config-dir <CONFIG_DIR>`** — Per-repository local overrides: `<dir>/<owner>/<name>.pkl` wins over `<dir>/<name>.pkl`. Unmatched repositories discover `.github/rustovate.pkl` then `rustovate.pkl`; neither means skipped. All matched files are validated before repository scans. Mutually exclusive with `--config`.
 - **`-h --help`** — Print help
 
 ## `rustovate run`

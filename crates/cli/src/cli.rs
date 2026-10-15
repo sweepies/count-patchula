@@ -51,8 +51,13 @@ pub struct Lookup {
     #[usage(long, default = "8")]
     pub concurrency: usize,
     /// Local Pkl override applied to every selected repository.
-    #[usage(long)]
+    #[usage(long, conflicts = "--config-dir")]
     pub config: Option<PathBuf>,
+    /// Per-repository local overrides: `<dir>/<owner>/<name>.pkl` wins over `<dir>/<name>.pkl`.
+    /// Unmatched repositories discover `.github/rustovate.pkl` then `rustovate.pkl`; neither means skipped.
+    /// All matched files are validated before repository scans. Mutually exclusive with `--config`.
+    #[usage(long, conflicts = "--config")]
+    pub config_dir: Option<PathBuf>,
 }
 
 #[derive(Args)]

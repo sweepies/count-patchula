@@ -303,6 +303,7 @@ async fn cold_snapshot_and_warm_branch_rename_reuse_identical_commit() {
     let options = || Options {
         repositories: vec!["demo/renamed".into()],
         config: Some(config.clone()),
+        ..Default::default()
     };
     engine.lookup(options()).await.unwrap();
     let warm = engine.lookup(options()).await.unwrap();
@@ -429,6 +430,7 @@ async fn warm_sources_start_before_head_finishes_but_new_extraction_is_authorita
     let options = || Options {
         repositories: vec!["demo/pipeline".into()],
         config: Some(config.clone()),
+        ..Default::default()
     };
     engine.lookup(options()).await.unwrap();
     gate.warm.store(true, Ordering::SeqCst);
@@ -447,5 +449,128 @@ async fn warm_sources_start_before_head_finishes_but_new_extraction_is_authorita
         1,
         "removed hints must not enter the report"
     );
+    replay.assert_finished().unwrap();
+}
+
+#[tokio::test]
+async fn config_dir_maps_overrides_and_falls_back_with_batch_dedup() {
+    use rustovate_report::Status;
+    let dir = tempfile::tempdir().unwrap();
+    let configs = dir.path().join("configs");
+    std::fs::create_dir_all(configs.join("b")).unwrap();
+    std::fs::write(configs.join("Rustovate.pkl"), rustovate_config::SCHEMA).unwrap();
+    let npm = "amends \"Rustovate.pkl\"\nmanagers = new Listing { \"npm\" }\n";
+    std::fs::write(configs.join("shared.pkl"), npm).unwrap();
+    std::fs::write(configs.join("other.pkl"), npm).unwrap();
+    std::fs::write(
+        configs.join("b/shared.pkl"),
+        "amends \"../Rustovate.pkl\"\nmanagers = new Listing {}\n",
+    )
+    .unwrap();
+    // Unselected files must not be evaluated.
+    std::fs::write(configs.join("unselected.pkl"), "invalid Pkl").unwrap();
+    let repos = [
+        "a/shared",
+        "b/shared",
+        "c/other",
+        "demo/github",
+        "demo/root",
+        "demo/skipped",
+    ];
+    let mut interactions = vec![get(
+        "user/repos?per_page=100",
+        json!(repos.map(|repo| json!({"full_name":repo}))),
+        200,
+        None,
+        None,
+        false,
+    )];
+    for repo in repos {
+        interactions.push(head(repo, Some("main")));
+        let mut tree = vec![json!({"path":"package.json","type":"blob","sha":"manifest"})];
+        if repo == "demo/github" {
+            tree.push(json!({"path":".github/rustovate.pkl","type":"blob","sha":"config"}));
+            tree.push(json!({"path":"rustovate.pkl","type":"blob","sha":"bad-config"}));
+        } else if repo == "demo/root" {
+            tree.push(json!({"path":"rustovate.pkl","type":"blob","sha":"config"}));
+        } else if repo != "demo/skipped" {
+            // Local overrides must bypass this invalid in-repository config.
+            tree.push(json!({"path":"rustovate.pkl","type":"blob","sha":"bad-config"}));
+        }
+        interactions.push(get(
+            &format!("repos/{repo}/git/trees/tree?recursive=1"),
+            json!({"truncated":false,"tree":tree}),
+            200,
+            None,
+            None,
+            false,
+        ));
+        if repo == "demo/github" || repo == "demo/root" {
+            let source = if repo == "demo/github" {
+                npm.replace("\"Rustovate.pkl\"", "\"../Rustovate.pkl\"")
+            } else {
+                npm.into()
+            };
+            interactions.push(get(
+                &format!("repos/{repo}/git/blobs/config"),
+                json!({"encoding":"base64","content":STANDARD.encode(source)}),
+                200,
+                None,
+                None,
+                false,
+            ));
+        }
+        if repo != "demo/skipped" && repo != "b/shared" {
+            interactions.push(get(
+                &format!("repos/{repo}/git/blobs/manifest"),
+                json!({"encoding":"base64","content":STANDARD.encode(r#"{"dependencies":{"fixture-spec":"1.0.0"}}"#)}), 200, None, None, false,
+            ));
+        }
+    }
+    interactions.push(get(
+        "fixture-spec",
+        json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}}}),
+        200,
+        None,
+        None,
+        true,
+    ));
+    let path = dir.path().join("overrides.json");
+    rustovate_testkit::save(
+        &path,
+        &Cassette {
+            schema_version: 1,
+            provenance: "Independently simulated per-repository config overrides and discovery"
+                .into(),
+            interactions,
+        },
+        &Default::default(),
+    )
+    .unwrap();
+    let replay = Arc::new(Replay::open(&path, Default::default()).unwrap());
+    let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
+        .await
+        .unwrap();
+    let engine = Engine::with_transport("offline", cache, 4, replay.clone()).unwrap();
+    let report = engine
+        .lookup(Options {
+            config_dir: Some(configs),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    for repo in &report.repositories {
+        if repo.repository == "demo/skipped" {
+            assert_eq!(repo.status, Status::Skipped);
+        } else {
+            assert_eq!(repo.status, Status::Complete, "{repo:?}");
+            assert_eq!(
+                repo.package_files.len(),
+                usize::from(repo.repository != "b/shared"),
+                "{repo:?}"
+            );
+        }
+    }
+    assert_eq!(report.stats.unwrap().lookups, 1);
     replay.assert_finished().unwrap();
 }
