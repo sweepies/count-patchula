@@ -47,9 +47,18 @@ pub struct Lookup {
     /// Shared SQLite cache path.
     #[usage(long, default = ".rustovate-cache.sqlite")]
     pub cache: PathBuf,
-    /// Maximum concurrent repository and HTTP reads (1–100).
+    /// Maximum concurrent repository scans (1–100); HTTP limits are per host.
     #[usage(long, default = "8")]
     pub concurrency: usize,
+    /// Override a host's HTTP limit as HOST=LIMIT (1–100); repeat per host. Default: 16.
+    #[usage(long)]
+    pub host_concurrency: Vec<String>,
+    /// Freshness seconds for OCI tag lists without validators; 0 uses upstream policy.
+    #[usage(long, default = "3600")]
+    pub registry_freshness_secs: u64,
+    /// Minimum freshness seconds for Go proxy lists/latest; 0 uses upstream policy.
+    #[usage(long, default = "3600")]
+    pub go_freshness_secs: u64,
     /// Local Pkl override applied to every selected repository.
     #[usage(long, conflicts = "--config-dir")]
     pub config: Option<PathBuf>,
@@ -120,5 +129,27 @@ mod tests {
             panic!("lookup")
         };
         assert!(options.repositories.is_empty());
+    }
+
+    #[test]
+    fn host_limits_repeat_without_consuming_repositories() {
+        let words = [
+            "lookup",
+            "--host-concurrency",
+            "api.github.com=32",
+            "--host-concurrency",
+            "ghcr.io=8",
+            "--go-freshness-secs",
+            "0",
+            "owner/repo",
+        ]
+        .map(std::ffi::OsStr::new);
+        let app = App::parse_from(&words).unwrap();
+        let Command::Lookup(options) = app.command else {
+            panic!("lookup")
+        };
+        assert_eq!(options.repositories, ["owner/repo"]);
+        assert_eq!(options.host_concurrency, ["api.github.com=32", "ghcr.io=8"]);
+        assert_eq!(options.go_freshness_secs, 0);
     }
 }

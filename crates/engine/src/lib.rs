@@ -85,6 +85,15 @@ impl Engine {
         concurrency: usize,
         transport: Arc<dyn Transport>,
     ) -> Result<Self> {
+        Self::with_http_options(token, cache, concurrency, transport, Default::default())
+    }
+    pub fn with_http_options(
+        token: &str,
+        cache: Cache,
+        concurrency: usize,
+        transport: Arc<dyn Transport>,
+        http_options: rustovate_http::Options,
+    ) -> Result<Self> {
         if concurrency == 0 || concurrency > 100 {
             return Err(Error::Invalid("concurrency must be 1..100".into()));
         }
@@ -92,12 +101,12 @@ impl Engine {
             token,
             cache.clone(),
             GithubOptions {
-                concurrency,
+                concurrency: http_options.host_limit("api.github.com"),
                 ..Default::default()
             },
             transport.clone(),
         )?;
-        let http = Cached::new(cache.clone(), transport, concurrency)
+        let http = Cached::with_options(cache.clone(), transport, http_options)
             .map_err(|e| Error::Invalid(e.to_string()))?;
         let sources = Sources::new(github.clone(), http.clone(), cache.clone());
         Ok(Self {
@@ -370,7 +379,7 @@ impl Engine {
                     .map_err(|e| e.to_string());
                 ((package, tag), result)
             })
-            .buffer_unordered(self.concurrency)
+            .buffer_unordered(100)
             .collect()
             .await;
         let digest_time = micros(started);
@@ -547,7 +556,7 @@ impl Engine {
                     .map_err(|e| e.to_string());
                 ((package, reference), result)
             })
-            .buffer_unordered(self.concurrency)
+            .buffer_unordered(100)
             .collect()
             .await
     }
@@ -584,13 +593,13 @@ impl Engine {
                                             .map_err(|e| e.to_string()),
                                     )
                                 })
-                                .buffer_unordered(self.concurrency)
+                                .buffer_unordered(100)
                                 .collect::<Catalogs>()
                                 .await
                         }
                     }
                 })
-                .buffer_unordered(self.concurrency)
+                .buffer_unordered(100)
                 .collect::<Vec<Catalogs>>()
                 .await;
             groups.into_iter().flatten().collect::<Catalogs>()
@@ -841,7 +850,7 @@ impl Engine {
                 .collect();
             let files: Files = stream::iter(selected)
                 .map(|entry| async move { Ok((entry.path, self.file(repo, &entry.sha).await?)) })
-                .buffer_unordered(self.concurrency)
+                .buffer_unordered(self.github.concurrency())
                 .collect::<Vec<Result<_>>>()
                 .await
                 .into_iter()

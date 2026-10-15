@@ -1,15 +1,19 @@
 # Sources (SWE-97)
 
 npm requests full metadata (`application/json`) for publication timestamps,
-retaining dist-tags and deprecated flags. Parsed catalogs are cached by body
-fingerprint so unchanged bodies skip JSON parsing/sorting and release merging.
+retaining dist-tags and deprecated flags. Versioned compact catalogs retain the fields used by policy; fresh hits and
+304s avoid decoding the original document.
 crates.io reads sparse-index pubtime and excludes yanked releases during policy.
-Go uses escaped module paths, @v/list, @latest and .info for new versions only.
+Go uses escaped module paths, @v/list and .info for new versions only. It skips
+@latest when the list supplies tagged versions, preferring stable releases; an
+empty list still queries @latest for a default-branch pseudo-version. Retraction
+metadata is not implemented (as before).
 All unauthenticated registries honor declared max-age freshness, including
 responses with validators, unless no-cache is present. Expired responses use
 validators when available; 304 metadata refreshes do not rewrite compressed bodies.
-Go proxy responses lack validators; aggregate list/latest requests refresh on
-expiry. npm and sparse
+Go proxy lists/latest and validator-free OCI tag pages have configurable
+one-hour local freshness windows; see [cache policy](cache.md#local-freshness-and-host-limits).
+These explicitly depart from upstream freshness. npm and sparse
 indexes are aggregate upstream responses, not paginated version endpoints.
 
 GitHub uses the batch governor. Cold release sources share GraphQL queries in
@@ -47,8 +51,9 @@ requirements use PEP 440 ordering/specifiers; mise keeps its loose version polic
 
 Wave 2 adds anonymous registry v2 authentication for Docker Hub and GHCR, bounded
 same-origin tag pagination, conditional pages, and lazy manifest/index digest
-resolution for current/proposed tags. Bearer tokens stay in memory, expire, and
-never enter SQLite. A 429 reports Retry-After without retry storms. Lexically
+resolution for current/proposed tags. Anonymous pull tokens coalesce in memory
+and persist in SQLite until their scoped expiry minus a safety margin. GitHub
+and private registry credentials are never persisted as tokens. A 429 reports Retry-After without retry storms. Lexically
 ordered tag pages cannot safely stop at a known version; full enumeration detects
 new historical tags. Numeric Docker updates keep the exact suffix variant.
 OCI charts use registry tags/manifests, translating SemVer build metadata to `_`.

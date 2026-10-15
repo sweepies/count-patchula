@@ -9,12 +9,55 @@ use serde::Serialize;
 use std::{
     collections::BTreeMap,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
+/// Batch HTTP policy, independent of repository parallelism.
+#[derive(Clone, Debug)]
+pub struct Options {
+    pub default_host_concurrency: usize,
+    pub host_concurrency: BTreeMap<String, usize>,
+    /// Freshness for validator-free OCI tag pages. Zero restores upstream policy.
+    pub registry_freshness_secs: u64,
+    /// Minimum freshness for public Go proxy lists/latest. Zero disables it.
+    pub go_freshness_secs: u64,
+}
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            default_host_concurrency: 16,
+            host_concurrency: BTreeMap::new(),
+            registry_freshness_secs: 3600,
+            go_freshness_secs: 3600,
+        }
+    }
+}
+impl Options {
+    pub fn host_limit(&self, host: &str) -> usize {
+        self.host_concurrency
+            .get(host)
+            .copied()
+            .unwrap_or(self.default_host_concurrency)
+    }
+    pub fn validate(&self) -> Result<(), Error> {
+        if !(1..=100).contains(&self.default_host_concurrency)
+            || self.host_concurrency.iter().any(|(host, limit)| {
+                !(1..=100).contains(limit)
+                    || !Url::parse(&format!("https://{host}/")).is_ok_and(|url| {
+                        url.host_str() == Some(host.as_str())
+                            && url.as_str() == format!("https://{host}/")
+                    })
+            })
+        {
+            return Err(Error::Configuration);
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -42,7 +85,8 @@ pub struct Stats {
 struct Inner {
     transport: Arc<dyn Transport>,
     cache: Cache,
-    semaphore: Semaphore,
+    hosts: Mutex<BTreeMap<String, Arc<Semaphore>>>,
+    options: Options,
     decoding: Arc<Semaphore>,
     requests: AtomicU64,
     not_modified: AtomicU64,
@@ -62,16 +106,48 @@ impl Cached {
         if concurrency == 0 {
             return Err(Error::Configuration);
         }
+        Self::with_options(
+            cache,
+            transport,
+            Options {
+                // Compatibility constructor: the supplied cap now applies per host.
+                default_host_concurrency: concurrency,
+                ..Default::default()
+            },
+        )
+    }
+    pub fn with_options(
+        cache: Cache,
+        transport: Arc<dyn Transport>,
+        options: Options,
+    ) -> Result<Self, Error> {
+        options.validate()?;
         Ok(Self(Arc::new(Inner {
             transport,
             cache,
-            semaphore: Semaphore::new(concurrency),
+            hosts: Default::default(),
+            options,
             decoding: Arc::new(Semaphore::new(4)),
             requests: AtomicU64::new(0),
             not_modified: AtomicU64::new(0),
             cache_hits: AtomicU64::new(0),
             derived_reads: Default::default(),
         })))
+    }
+    async fn acquire(&self, url: &Url) -> Result<OwnedSemaphorePermit, Error> {
+        let host = url.host_str().ok_or(Error::Configuration)?;
+        let semaphore = self
+            .0
+            .hosts
+            .lock()
+            .map_err(|_| Error::Configuration)?
+            .entry(host.to_owned())
+            .or_insert_with(|| Arc::new(Semaphore::new(self.0.options.host_limit(host))))
+            .clone();
+        semaphore
+            .acquire_owned()
+            .await
+            .map_err(|_| Error::Configuration)
     }
     pub fn stats(&self) -> Stats {
         Stats {
@@ -91,8 +167,32 @@ impl Cached {
         accept: &str,
         token: Option<&str>,
     ) -> Result<Response, Error> {
+        self.registry_representation(url, accept, token, None).await
+    }
+    pub async fn registry_get_derived(
+        &self,
+        url: &str,
+        accept: &str,
+        token: Option<&str>,
+        format: &'static str,
+        derive: Derive,
+    ) -> Result<Response, Error> {
+        self.registry_representation(url, accept, token, Some((format, derive)))
+            .await
+    }
+    async fn registry_representation(
+        &self,
+        url: &str,
+        accept: &str,
+        token: Option<&str>,
+        derived: Option<(&'static str, Derive)>,
+    ) -> Result<Response, Error> {
         let started = Instant::now();
-        let key = format!("registry:{}:{url}\n{accept}", token.is_some());
+        let key = format!(
+            "registry:{}:{url}\n{accept}\n{}",
+            token.is_some(),
+            derived.map_or("", |(format, _)| format)
+        );
         let read = self
             .0
             .derived_reads
@@ -108,7 +208,7 @@ impl Cached {
             return Ok(response.clone());
         }
         let response = self
-            .get_representation(url, accept, None, Some(token))
+            .get_representation(url, accept, derived, Some(token))
             .await?;
         if response.status.is_success() {
             *previous = Some((Instant::now(), response.clone()));
@@ -116,24 +216,20 @@ impl Cached {
         Ok(response)
     }
 
-    /// Token responses must never enter SQLite.
+    /// Fetch an anonymous token without caching the raw response. The registry
+    /// caller may persist only its scoped bearer with a validated expiry.
     pub async fn token_get(&self, url: &str) -> Result<Response, Error> {
         let url = Url::parse(url).map_err(|_| Error::Configuration)?;
         if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
             return Err(Error::Configuration);
         }
         let trace = RequestTrace::new("GET", &url);
-        let mut request = Request::new(Method::GET, url);
+        let mut request = Request::new(Method::GET, url.clone());
         request
             .headers_mut()
             .insert(header::ACCEPT, HeaderValue::from_static("application/json"));
         let queued = Instant::now();
-        let _permit = self
-            .0
-            .semaphore
-            .acquire()
-            .await
-            .map_err(|_| Error::Configuration)?;
+        let _permit = self.acquire(&url).await?;
         self.0.requests.fetch_add(1, Ordering::Relaxed);
         Ok(trace
             .send(self.0.transport.as_ref(), request, queued.elapsed(), false)
@@ -211,7 +307,27 @@ impl Cached {
         });
         let ttl = cached
             .as_ref()
-            .and_then(|entry| entry.expires_at)
+            .and_then(|entry| {
+                let floor = if registry.is_some()
+                    && url.path().ends_with("/tags/list")
+                    && entry.etag.is_none()
+                    && entry.last_modified.is_none()
+                {
+                    self.0.options.registry_freshness_secs
+                } else if url.host_str() == Some("proxy.golang.org")
+                    && (url.path().ends_with("/@v/list") || url.path().ends_with("/@latest"))
+                {
+                    self.0.options.go_freshness_secs
+                } else {
+                    0
+                };
+                let local = (floor > 0).then(|| {
+                    entry
+                        .fetched_at
+                        .saturating_add(floor.min(i64::MAX as u64) as i64)
+                });
+                entry.expires_at.into_iter().chain(local).max()
+            })
             .map(|expiry| expiry.saturating_sub(now));
         trace.cache_policy(
             if cached.is_none() {
@@ -228,7 +344,7 @@ impl Cached {
             ttl,
         );
         if let Some(entry) = &cached
-            && entry.expires_at.is_some_and(|expiry| expiry > now)
+            && ttl.is_some_and(|ttl| ttl > 0)
             && !no_cache
         {
             self.0.cache_hits.fetch_add(1, Ordering::Relaxed);
@@ -248,7 +364,7 @@ impl Cached {
             trace.fresh(&response);
             return Ok(response);
         }
-        let mut request = Request::new(Method::GET, url);
+        let mut request = Request::new(Method::GET, url.clone());
         if let Some(Some(token)) = registry {
             let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
                 .map_err(|_| Error::Configuration)?;
@@ -282,12 +398,7 @@ impl Cached {
             }
         }
         let queued = Instant::now();
-        let permit = self
-            .0
-            .semaphore
-            .acquire()
-            .await
-            .map_err(|_| Error::Configuration)?;
+        let permit = self.acquire(&url).await?;
         self.0.requests.fetch_add(1, Ordering::Relaxed);
         let mut response = trace
             .send(
@@ -407,5 +518,188 @@ impl Cached {
             }
         }
         Ok(response)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Never;
+    impl Transport for Never {
+        fn send(&self, _: Request) -> crate::Exchange<'_> {
+            panic!("unexpected network request")
+        }
+    }
+    fn key(url: &str) -> HttpKey {
+        HttpKey::new(
+            "GET",
+            url,
+            BTreeMap::from([("accept".into(), "text/plain".into())]),
+        )
+        .unwrap()
+    }
+    async fn cached_entry(
+        cache: &Cache,
+        url: &str,
+        control: Option<&str>,
+        age: i64,
+        etag: Option<&str>,
+    ) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        cache
+            .http_put(
+                &key(url),
+                &HttpEntry {
+                    status: 200,
+                    body: b"catalog".to_vec(),
+                    headers: BTreeMap::new(),
+                    etag: etag.map(str::to_owned),
+                    last_modified: None,
+                    fetched_at: now - age,
+                    expires_at: Some(now - age + 60),
+                    cache_control: control.map(str::to_owned),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    #[tokio::test]
+    async fn freshness_floors_use_fetch_time_and_can_be_disabled_on_existing_entries() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let go = "https://proxy.golang.org/example.org/mod/@v/list";
+        let tags = "https://ghcr.io/v2/example/image/tags/list?n=1000";
+        cached_entry(&cache, go, Some("max-age=60"), 300, None).await;
+        cached_entry(&cache, tags, None, 300, None).await;
+        let client =
+            Cached::with_options(cache.clone(), Arc::new(Never), Default::default()).unwrap();
+        assert_eq!(client.get(go, "text/plain").await.unwrap().body, b"catalog");
+        assert_eq!(
+            client
+                .registry_get(tags, "text/plain", None)
+                .await
+                .unwrap()
+                .body,
+            b"catalog"
+        );
+        let transport = Arc::new(Count(std::sync::atomic::AtomicUsize::new(0)));
+        let client = Cached::with_options(
+            cache.clone(),
+            transport.clone(),
+            Options {
+                go_freshness_secs: 0,
+                registry_freshness_secs: 0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        client.get(go, "text/plain").await.unwrap();
+        client.registry_get(tags, "text/plain", None).await.unwrap();
+        assert_eq!(transport.0.load(Ordering::Relaxed), 2);
+        cached_entry(&cache, go, None, 3601, None).await;
+        let client = Cached::with_options(cache, transport.clone(), Default::default()).unwrap();
+        client.get(go, "text/plain").await.unwrap();
+        assert_eq!(
+            transport.0.load(Ordering::Relaxed),
+            3,
+            "floor expires from original fetch time"
+        );
+    }
+    struct Count(std::sync::atomic::AtomicUsize);
+    impl Transport for Count {
+        fn send(&self, _: Request) -> crate::Exchange<'_> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Box::pin(async {
+                Ok(Response {
+                    status: StatusCode::OK,
+                    headers: Default::default(),
+                    body: b"new".to_vec(),
+                })
+            })
+        }
+    }
+    #[tokio::test]
+    async fn no_cache_validators_and_unrelated_urls_do_not_get_registry_grace() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let transport = Arc::new(Count(std::sync::atomic::AtomicUsize::new(0)));
+        let client =
+            Cached::with_options(cache.clone(), transport.clone(), Default::default()).unwrap();
+        for (url, control, etag) in [
+            ("https://ghcr.io/v2/a/b/tags/list", Some("no-cache"), None),
+            ("https://ghcr.io/v2/a/c/tags/list", None, Some("tag")),
+            ("https://ghcr.io/v2/a/b/manifests/latest", None, None),
+            (
+                "https://proxy.golang.org/example.org/@v/v1.0.0.info",
+                None,
+                None,
+            ),
+            ("https://other.org/example.org/@v/list", None, None),
+        ] {
+            cached_entry(&cache, url, control, 300, etag).await;
+            client.registry_get(url, "text/plain", None).await.unwrap();
+        }
+        assert_eq!(transport.0.load(Ordering::Relaxed), 5);
+    }
+    struct Blocked {
+        started: tokio::sync::mpsc::UnboundedSender<String>,
+        release: Semaphore,
+    }
+    impl Transport for Blocked {
+        fn send(&self, request: Request) -> crate::Exchange<'_> {
+            Box::pin(async move {
+                self.started
+                    .send(request.url().host_str().unwrap().into())
+                    .unwrap();
+                self.release.acquire().await.unwrap().forget();
+                Ok(Response {
+                    status: StatusCode::OK,
+                    headers: Default::default(),
+                    body: Vec::new(),
+                })
+            })
+        }
+    }
+    #[tokio::test]
+    async fn a_saturated_host_does_not_block_another_host() {
+        let (started, mut calls) = tokio::sync::mpsc::unbounded_channel();
+        let transport = Arc::new(Blocked {
+            started,
+            release: Semaphore::new(0),
+        });
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let client = Cached::with_options(
+            cache,
+            transport.clone(),
+            Options {
+                default_host_concurrency: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut jobs = Vec::new();
+        for url in ["https://a.org/1", "https://a.org/2", "https://b.org/1"] {
+            let client = client.clone();
+            jobs.push(tokio::spawn(async move {
+                client.get(url, "text/plain").await.unwrap()
+            }));
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            let mut hosts = vec![calls.recv().await.unwrap(), calls.recv().await.unwrap()];
+            hosts.sort();
+            assert_eq!(hosts, ["a.org", "b.org"]);
+            assert!(
+                calls.try_recv().is_err(),
+                "same-host second request remains queued"
+            );
+            transport.release.add_permits(3);
+            for job in jobs {
+                job.await.unwrap();
+            }
+        })
+        .await
+        .expect("another host must start while the first is blocked");
     }
 }

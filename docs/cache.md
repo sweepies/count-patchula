@@ -100,3 +100,50 @@ API references read:
 [tracing](https://docs.rs/tracing/latest/tracing/),
 [url](https://docs.rs/url/latest/url/),
 [SQLite WAL](https://www.sqlite.org/wal.html).
+
+## Local freshness and host limits
+
+`--concurrency` controls repository scan parallelism (default eight). Registry
+HTTP requests use separate per-host semaphores, default 16 each, independent of
+repository work. GitHub REST and GraphQL share their existing governor with a
+CLI default of 16; primary limits, secondary cooldowns, Retry-After and bounded
+retries remain enforced. This is below GitHub's documented 100 simultaneous
+REST/GraphQL requests, but concurrency alone does not guarantee avoiding its
+point/CPU secondary limits. `--host-concurrency api.github.com=8` overrides one
+host; repeat the flag for others. Limits must be 1–100. Catalog and digest work
+can start across hosts without waiting for a repository slot. The shared
+reqwest pool retains up to 32 idle connections per host.
+
+Two explicit freshness departures avoid redownloading validator-free catalogs:
+
+- `--registry-freshness-secs 3600`: minimum freshness for OCI `tags/list` pages
+  only when both ETag and Last-Modified are absent. Compact `oci-tags-v1` bodies
+  contain only tags; pagination Link headers survive. After expiry, every lexical
+  page is fetched again, detecting additions, deletions and retargeting anywhere.
+  Manifest/tag digests keep their upstream policy and revalidate independently.
+- `--go-freshness-secs 3600`: minimum freshness for public `proxy.golang.org`
+  `@v/list` and `@latest`, even when their upstream max-age is shorter. Version
+  `.info` documents retain upstream policy.
+
+Both flags accept zero to restore upstream freshness immediately, including on
+an existing cache. Floors are computed from original fetched-at, never extended
+by reads. `no-cache` still requires revalidation and `no-store` still removes
+entries. npm, Cargo, PyPI and other sources receive no freshness floor. New
+versions and deleted tags can remain unseen for up to the configured window.
+No release dates are invented for OCI tags, so their age evidence stays unknown.
+
+Anonymous registry pull tokens are keyed by registry and image in a separate
+`anonymous-registry-pull-token-v1` representation under the HTTP body budget.
+Only the bearer is persisted; the key includes neither credentials nor challenge
+query data. Expiry respects `issued_at`, `expires_in`, HTTP Age and a ten-second
+margin, capped at one hour; missing expires_in uses 60 seconds. `no-store`
+responses are memory-only. A 401 evicts the token and permits a single refresh;
+concurrent callers share a refresh. Token values never enter tracing, errors or
+fixtures. These are public, anonymous, pull-only credentials obtained without
+GitHub/private registry authentication. SQLite stores them unencrypted, so keep
+the cache under the same access controls as other batch cache data. Disk cache
+reopen avoids both the token request and the initial registry 401 until expiry.
+
+Protocol references: [GitHub secondary limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#about-secondary-rate-limits),
+[Go version queries](https://go.dev/ref/mod#version-queries),
+[registry authentication](https://docs.docker.com/reference/api/registry/auth/).

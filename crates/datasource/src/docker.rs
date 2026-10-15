@@ -1,15 +1,40 @@
 use super::*;
 use reqwest::Url;
+use rustovate_cache::{HttpEntry, HttpKey};
 use std::{
     collections::HashSet,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Mutex;
 
 type Token = Arc<Mutex<Option<(String, Instant)>>>;
 pub(super) type Tokens = Arc<Mutex<BTreeMap<String, Token>>>;
 const MANIFEST: &str = "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json";
+
+fn now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+fn token_key(host: &str, path: &str) -> Result<HttpKey> {
+    Ok(HttpKey::new(
+        "GET",
+        &format!("https://{host}/v2/{path}/"),
+        BTreeMap::new(),
+    )?
+    .representation("anonymous-registry-pull-token-v1"))
+}
+fn compact_tags(body: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheError> {
+    #[derive(Deserialize, Serialize)]
+    struct Page {
+        tags: Option<Vec<String>>,
+    }
+    let page: Page =
+        serde_json::from_slice(body).map_err(|_| rustovate_http::CacheError::Document)?;
+    serde_json::to_vec(&page).map_err(|_| rustovate_http::CacheError::Document)
+}
 
 pub(super) fn identity(package: &str) -> Result<(String, String)> {
     let package = package.strip_prefix("oci://").unwrap_or(package);
@@ -56,25 +81,40 @@ impl Client {
     ) -> Result<rustovate_http::Response> {
         let scope = format!("{host}/{path}");
         let token = self.tokens.lock().await.entry(scope).or_default().clone();
-        let bearer = token
-            .lock()
-            .await
+        let key = token_key(host, path)?;
+        let mut saved = token.lock().await;
+        if saved
+            .as_ref()
+            .is_none_or(|(_, expiry)| *expiry <= Instant::now())
+        {
+            *saved = None;
+            if let Some(entry) = self.cache.http_get(&key).await?
+                && let Some(expiry) = entry.expires_at.filter(|expiry| *expiry > now())
+                && let Ok(bearer) = String::from_utf8(entry.body)
+            {
+                *saved = Some((
+                    bearer,
+                    Instant::now() + Duration::from_secs((expiry - now()).max(0) as u64),
+                ));
+            }
+        }
+        let bearer = saved
             .as_ref()
             .filter(|(_, expiry)| *expiry > Instant::now())
             .map(|(v, _)| v.clone());
-        let mut response = self
-            .http
-            .registry_get(url, accept, bearer.as_deref())
-            .await?;
+        drop(saved);
+        let mut response = self.registry_read(url, accept, bearer.as_deref()).await?;
         if response.status == 401 {
-            let mut token = token.lock().await;
-            let refreshed = token
+            let mut saved_token = token.lock().await;
+            let refreshed = saved_token
                 .as_ref()
                 .filter(|(v, expiry)| *expiry > Instant::now() && Some(v) != bearer.as_ref())
                 .map(|(v, _)| v.clone());
             let next = if let Some(refreshed) = refreshed {
                 refreshed
             } else {
+                self.cache.http_remove(&key).await?;
+                *saved_token = None;
                 let challenge = response
                     .headers
                     .get("www-authenticate")
@@ -107,6 +147,7 @@ impl Client {
                 realm
                     .query_pairs_mut()
                     .append_pair("scope", &format!("repository:{path}:pull"));
+                let requested_at = now();
                 let auth = self.http.token_get(realm.as_str()).await?;
                 if !auth.status.is_success() {
                     return Err(rustovate_http::CacheError::Status(auth.status.as_u16()).into());
@@ -117,19 +158,60 @@ impl Client {
                     .or_else(|| value["access_token"].as_str())
                     .ok_or(Error::Invalid)?
                     .to_owned();
+                // Anonymous pull-only credentials, scoped to this registry and image.
+                // Honor issued_at and HTTP Age so a cached token cannot outlive issuance.
+                let issued = value["issued_at"]
+                    .as_str()
+                    .and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok())
+                    .map_or(requested_at, |v| v.timestamp().min(requested_at));
+                let age = auth
+                    .headers
+                    .get("age")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<i64>().ok())
+                    .unwrap_or(0)
+                    .max(0);
+                let expires_at = issued
+                    .saturating_add(value["expires_in"].as_u64().unwrap_or(60).min(3600) as i64)
+                    .saturating_sub(age)
+                    .saturating_sub(10);
                 let expiry = Instant::now()
-                    + Duration::from_secs(
-                        value["expires_in"]
-                            .as_u64()
-                            .unwrap_or(60)
-                            .saturating_sub(10)
-                            .min(3600),
-                    );
-                *token = Some((bearer.clone(), expiry));
+                    + Duration::from_secs(expires_at.saturating_sub(now()).max(0) as u64);
+                if expires_at > now()
+                    && !auth
+                        .headers
+                        .get("cache-control")
+                        .and_then(|v| v.to_str().ok())
+                        .is_some_and(|v| {
+                            v.split(',')
+                                .any(|v| v.trim().eq_ignore_ascii_case("no-store"))
+                        })
+                {
+                    self.cache
+                        .http_put(
+                            &key,
+                            &HttpEntry {
+                                status: 200,
+                                etag: None,
+                                last_modified: None,
+                                headers: BTreeMap::new(),
+                                body: bearer.as_bytes().to_vec(),
+                                fetched_at: requested_at,
+                                expires_at: Some(expires_at),
+                                cache_control: None,
+                            },
+                        )
+                        .await?;
+                }
+                *saved_token = Some((bearer.clone(), expiry));
                 bearer
             };
-            drop(token);
-            response = self.http.registry_get(url, accept, Some(&next)).await?;
+            drop(saved_token);
+            response = self.registry_read(url, accept, Some(&next)).await?;
+            if response.status == 401 {
+                *token.lock().await = None;
+                self.cache.http_remove(&key).await?;
+            }
         }
         if response.status == 429 {
             return Err(Error::RateLimit(
@@ -145,6 +227,26 @@ impl Client {
             return Err(rustovate_http::CacheError::Status(response.status.as_u16()).into());
         }
         Ok(response)
+    }
+
+    async fn registry_read(
+        &self,
+        url: &str,
+        accept: &str,
+        token: Option<&str>,
+    ) -> Result<rustovate_http::Response> {
+        if Url::parse(url)
+            .map_err(|_| Error::Invalid)?
+            .path()
+            .ends_with("/tags/list")
+        {
+            Ok(self
+                .http
+                .registry_get_derived(url, accept, token, "oci-tags-v1", compact_tags)
+                .await?)
+        } else {
+            Ok(self.http.registry_get(url, accept, token).await?)
+        }
     }
 
     pub(super) async fn docker(&self, package: &str) -> Result<Catalog> {

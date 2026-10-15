@@ -78,9 +78,12 @@ with identical update targets. It never excludes version or range differences.
 <a id="departure-21"></a>**Departure 21: explicit freshness and GitHub history gates.**
 GraphQL POSTs have no conditional HTTP validators, so a conditional REST head
 probe gates incremental GitHub history. Registry responses honor declared
-max-age (unless no-cache), including npm/sparse responses with validators. The
-Go proxy's list/latest responses provide max-age without validators. Fresh bodies
-are reused; expired bodies are conditionally validated where supported.
+max-age (unless no-cache), including npm/sparse responses with validators. Go proxy list/latest and validator-free OCI tag pages additionally default to a
+one-hour local freshness floor, configurable with `--go-freshness-secs` and
+`--registry-freshness-secs` (zero restores upstream policy). This can delay new
+versions and tag removals within that window. `no-cache` and `no-store` remain
+authoritative. Fresh bodies are reused; expired bodies are conditionally validated
+where supported. Other registries retain upstream freshness.
 Unchanged warm network responses are 304; fresh registries need no request.
 Historical changes behind an
 unchanged GitHub head require future invalidation/reconciliation. This affects

@@ -1,0 +1,37 @@
+amends "../Rustovate.pkl"
+
+// Bounded, reproducible public batch: real image declarations and six common
+// Go modules from root manifests. Full catalogs are still enumerated.
+managers = new Listing { "regex"; "dockerfile"; "kubernetes"; "kustomize"; "github-actions" }
+files = new Listing {
+  new FileSet { manager = "dockerfile"; paths = new Listing { "Dockerfile" } }
+  new FileSet { manager = "kubernetes"; paths = new Listing { "kustomize/deployment.yaml" } }
+  new FileSet {
+    manager = "kustomize"
+    paths = new Listing { "manifests/bases/*/kustomization.yaml"; "kustomize/kustomization.yaml" }
+  }
+}
+extractors = new Listing {
+  new Extractor {
+    paths = new Listing { "go.mod" }
+    patterns = new Listing { #"(?m)^\s*(?<dependency>golang\.org/x/(?:net|sys|text|crypto|sync|time))\s+(?<current>v\S+)"# }
+    source = "go"
+    scheme = "go"
+  }
+  new Extractor {
+    paths = new Listing { "docker/example.env" }
+    patterns = new Listing { #"(?m)^IMMICH_VERSION=(?<current>v[^\s#]+)"# }
+    source = "docker"
+    scheme = "docker"
+    dependency = "ghcr.io/immich-app/immich-server"
+    package = "ghcr.io/immich-app/immich-server"
+  }
+  new Extractor {
+    paths = new Listing { "docker/example.env" }
+    patterns = new Listing { #"(?m)^IMMICH_VERSION=(?<current>v[^\s#]+)"# }
+    source = "docker"
+    scheme = "docker"
+    dependency = "ghcr.io/immich-app/immich-machine-learning"
+    package = "ghcr.io/immich-app/immich-machine-learning"
+  }
+}

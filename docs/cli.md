@@ -67,9 +67,16 @@ Extract dependencies and report available updates without writing repositories.
 - **`--cache <CACHE>`** — Shared SQLite cache path.
 
   **Default:** `.rustovate-cache.sqlite`
-- **`--concurrency <CONCURRENCY>`** — Maximum concurrent repository and HTTP reads (1–100).
+- **`--concurrency <CONCURRENCY>`** — Maximum concurrent repository scans (1–100); HTTP limits are per host.
 
   **Default:** `8`
+- **`--host-concurrency <HOST_CONCURRENCY>`** — Override a host's HTTP limit as HOST=LIMIT (1–100); repeat per host. Default: 16.
+- **`--registry-freshness-secs <REGISTRY_FRESHNESS_SECS>`** — Freshness seconds for OCI tag lists without validators; 0 uses upstream policy.
+
+  **Default:** `3600`
+- **`--go-freshness-secs <GO_FRESHNESS_SECS>`** — Minimum freshness seconds for Go proxy lists/latest; 0 uses upstream policy.
+
+  **Default:** `3600`
 - **`--config <CONFIG>`** — Local Pkl override applied to every selected repository.
 - **`--config-dir <CONFIG_DIR>`** — Per-repository local overrides: `<dir>/<owner>/<name>.pkl` wins over `<dir>/<name>.pkl`. Unmatched repositories discover `.github/rustovate.pkl` then `rustovate.pkl`; neither means skipped. All matched files are validated before repository scans. Mutually exclusive with `--config`.
 - **`-h --help`** — Print help

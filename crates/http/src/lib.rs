@@ -51,7 +51,7 @@ impl Network {
             .read_timeout(Duration::from_secs(30))
             .timeout(Duration::from_secs(60))
             .pool_idle_timeout(Duration::from_secs(90))
-            .pool_max_idle_per_host(8)
+            .pool_max_idle_per_host(32)
             // Pagination validates origins; automatic redirects must not bypass it.
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
@@ -80,6 +80,6 @@ impl Transport for Network {
 }
 
 mod cached;
-pub use cached::{Cached, Error as CacheError, Stats};
+pub use cached::{Cached, Error as CacheError, Options, Stats};
 mod trace;
 pub use trace::{PhaseTrace, RequestTrace};

@@ -65,6 +65,7 @@ fn every_example_has_implemented_dispatch_for_the_twelve_repo_matrix() {
         }
         let name = path.file_stem().unwrap().to_str().unwrap();
         let expected: &[Manager] = match name {
+            "benchmark-batch-public" => &[Manager::GithubActions],
             "fnox" => &[Manager::Cargo, Manager::Compose],
             "immich-go" => &[Manager::Go],
             "cafeteria-order-tracker" => &[Manager::Terraform],
@@ -88,5 +89,5 @@ fn every_example_has_implemented_dispatch_for_the_twelve_repo_matrix() {
         }
         count += 1;
     }
-    assert_eq!(count, 13);
+    assert_eq!(count, 14);
 }

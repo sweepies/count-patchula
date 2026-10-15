@@ -155,27 +155,44 @@ impl Client {
                 yanked: false,
             })
             .collect();
-        // @latest can include a pseudo-version absent from @v/list.
-        let latest: Value = serde_json::from_slice(
-            &self
-                .http
-                .get(
-                    &format!("https://proxy.golang.org/{escaped}/@latest"),
-                    "application/json",
-                )
-                .await?
-                .body,
-        )?;
-        let latest_version = latest["Version"].as_str().ok_or(Error::Invalid)?;
-        if !versions.iter().any(|v| v.version == latest_version) {
+        sort(&mut versions, Ecosystem::Go);
+        // Go prefers a tagged release over prereleases and only needs a default
+        // branch pseudo-version when no tags exist. Keep @latest for that case.
+        let tagged = versions
+            .iter()
+            .find(|v| {
+                Ecosystem::Go
+                    .parse(&v.version)
+                    .is_ok_and(|v| v.0.pre.is_empty())
+            })
+            .or_else(|| {
+                versions
+                    .iter()
+                    .find(|v| Ecosystem::Go.parse(&v.version).is_ok())
+            });
+        let latest_version = if let Some(tagged) = tagged {
+            tagged.version.clone()
+        } else {
+            let latest: Value = serde_json::from_slice(
+                &self
+                    .http
+                    .get(
+                        &format!("https://proxy.golang.org/{escaped}/@latest"),
+                        "application/json",
+                    )
+                    .await?
+                    .body,
+            )?;
+            let latest_version = latest["Version"].as_str().ok_or(Error::Invalid)?.to_owned();
             versions.push(Version {
-                version: latest_version.into(),
+                version: latest_version.clone(),
                 published_at: latest["Time"].as_str().map(str::to_owned),
                 digest: None,
                 deprecated: false,
                 yanked: false,
             });
-        }
+            latest_version
+        };
         sort(&mut versions, Ecosystem::Go);
         let known = self.cache.releases("go", package).await?;
         let known: std::collections::HashMap<_, _> = known
@@ -207,7 +224,7 @@ impl Client {
         self.merge("go", package, &versions).await?;
         Ok(Catalog {
             versions,
-            dist_tags: BTreeMap::from([("latest".into(), latest_version.into())]),
+            dist_tags: BTreeMap::from([("latest".into(), latest_version)]),
         })
     }
     async fn pypi(&self, package: &str) -> Result<Catalog> {

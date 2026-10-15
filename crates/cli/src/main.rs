@@ -97,6 +97,29 @@ async fn lookup(app: &App, options: &cli::Lookup) -> Result<u8, (u8, miette::Rep
     if options.concurrency == 0 || options.concurrency > 100 {
         return Err((2, miette::miette!("concurrency must be 1..100")));
     }
+    let mut http_options = rustovate_http::Options {
+        registry_freshness_secs: options.registry_freshness_secs,
+        go_freshness_secs: options.go_freshness_secs,
+        ..Default::default()
+    };
+    for setting in &options.host_concurrency {
+        let (host, limit) = setting
+            .split_once('=')
+            .and_then(|(host, limit)| limit.parse::<usize>().ok().map(|limit| (host, limit)))
+            .ok_or_else(|| {
+                (
+                    2,
+                    miette::miette!("host-concurrency must be HOST=LIMIT (1..100)"),
+                )
+            })?;
+        http_options.host_concurrency.insert(host.to_owned(), limit);
+    }
+    http_options.validate().map_err(|_| {
+        (
+            2,
+            miette::miette!("host-concurrency requires a lowercase hostname and limit 1..100"),
+        )
+    })?;
     let config = options
         .config
         .as_ref()
@@ -121,8 +144,9 @@ async fn lookup(app: &App, options: &cli::Lookup) -> Result<u8, (u8, miette::Rep
         .map_err(|e| (1, miette::miette!("{e}")))?;
     let transport =
         Arc::new(rustovate_http::Network::new().map_err(|e| (1, miette::miette!("{e}")))?);
-    let engine = Engine::with_transport(&token, cache, options.concurrency, transport)
-        .map_err(|e| (1, miette::miette!("{e}")))?;
+    let engine =
+        Engine::with_http_options(&token, cache, options.concurrency, transport, http_options)
+            .map_err(|e| (1, miette::miette!("{e}")))?;
     let report = engine
         .lookup(Options {
             repositories: options.repositories.clone(),
