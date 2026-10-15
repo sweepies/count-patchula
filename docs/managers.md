@@ -16,8 +16,8 @@ resolved versions. Binary bun.lockb and pnpm/yarn locks remain unsupported.
 Workflow extraction follows jobs, steps, reusable workflows, services and
 composite action steps, ignoring run text, expressions and local refs. SHA pins
 expose an optional version comment as their current value and the SHA as their
-digest. Images retain tags/digests but Docker lookup
-is not implemented. Flow-style and YAML alias scalar locations currently fail
+digest. Images retain tags/digests and use registry v2 lookup.
+Workflow flow-style and YAML alias scalar locations currently fail
 explicitly; normal block YAML is supported. Regex extractors use the Pkl model.
 Literal hosted runner labels in runs-on scalars, arrays and labels mappings have
 kind `runner`, source `github-runners`, and an OS/architecture family identity.
@@ -36,3 +36,34 @@ References used for independent tests: [package.json](https://docs.npmjs.com/cli
 [Bun lockfile](https://bun.sh/docs/pm/lockfile),
 [workflow syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax),
 [mise configuration](https://mise.jdx.dev/configuration.html).
+
+Wave 2 adds Cargo workspace/development/build/target tables, renamed crates, and
+nearest-lock resolution. Inherited workspace declarations retain their member
+reference location; the editable version lives at the root declaration. Cargo
+and HCL documents/locks are parsed once per repository extraction. Lockfiles
+enrich direct declarations without emitting transitive entries.
+
+Dockerfile supports global ARG substitution, continuations, --platform and stage
+aliases; scratch/stage references are skipped. Compose reads services' images.
+Go extracts require blocks/single directives, with separate `go-directive` and
+`toolchain` kinds resolved through Go's mise backend. Terraform reads provider
+maps, registry modules and provider lock resolutions using a real HCL parser.
+Requirements retain extras/markers/hashes outside their constraint location.
+
+Kubernetes workload specs, Kustomize image/helmCharts transforms, Flux
+HelmRepository/HelmRelease/OCIRepository and Helm values repository/tag/digest
+maps are supported. Flux source references resolve by namespace/name across
+selected files. YAML event paths supply exact UTF-8 scalar locations, including
+flow collections, quoted values and repeated identical images. ConfigMaps,
+Secrets, workload annotations and Compose-as-values are excluded.
+
+Remaining extraction limits: templated/aliased image scalars require concrete
+values; Helm templates are not rendered. Cargo git/private registries, Terraform
+git/local modules and custom registries, Go replace/exclude/retract semantics,
+and pip editable/VCS/URL dependencies are not registry update targets. Lockfile
+rewriting and dependency installation remain part of the later run phase.
+
+Independent specifications: [Cargo](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html),
+[Dockerfile](https://docs.docker.com/reference/dockerfile/),
+[Go modules](https://go.dev/ref/mod#go-mod-file),
+[Flux](https://fluxcd.io/flux/components/source/helmrepositories/).

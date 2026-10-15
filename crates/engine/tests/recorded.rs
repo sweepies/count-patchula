@@ -51,7 +51,12 @@ async fn public_multi_repo_report_cold_and_warm() {
     for repo in &cold.repositories {
         assert_eq!(repo.status, Status::Complete, "{repo:?}");
         assert!(repo.commit.is_some() && repo.default_branch.is_some());
-        assert!(repo.warnings.iter().any(|w| w.contains("cargo")));
+        assert!(!repo.warnings.iter().any(|w| w.contains("not implemented")));
+        assert!(
+            repo.package_files
+                .iter()
+                .any(|f| f.path.ends_with("Cargo.toml"))
+        );
         assert!(repo.package_files.iter().any(|f| f.path == "mise.toml"));
         assert!(
             repo.package_files

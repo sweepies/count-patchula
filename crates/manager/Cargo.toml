@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 rustovate-versioning = { path = "../versioning" }
 hcl-edit = "0.9.7"
+yaml-rust2 = "0.11.0"
 rustovate-mise = { path = "../mise" }
 jsonc-parser = "0.34.0"
 regex = "1.13.1"

@@ -13,7 +13,7 @@ words!(Update { Major => "major", Minor => "minor", Patch => "patch", Digest => 
 words!(VersionPolicy { Exact => "exact", Preserve => "preserve", Widen => "widen" });
 words!(Scheme { Semver => "semver", Docker => "docker", Pep440 => "pep440", Go => "go", Hashicorp => "hashicorp", Loose => "loose" });
 words!(Rebase { Conflicts => "conflicts", Behind => "behind" });
-words!(DependencyKind { Production => "production", Development => "development", Peer => "peer", Optional => "optional", Build => "build", Action => "action", ReusableWorkflow => "reusable-workflow", Runner => "runner", ContainerImage => "container-image", Tool => "tool", GoDirective => "go-directive", Provider => "provider", Module => "module", Chart => "chart" });
+words!(DependencyKind { Production => "production", Development => "development", Peer => "peer", Optional => "optional", Build => "build", Action => "action", ReusableWorkflow => "reusable-workflow", Runner => "runner", ContainerImage => "container-image", Tool => "tool", GoDirective => "go-directive", Toolchain => "toolchain", Provider => "provider", Module => "module", Chart => "chart" });
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

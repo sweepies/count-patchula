@@ -127,3 +127,8 @@ run = ["cargo test --locked -p rustovate-datasource --test wave2 -- --nocapture"
 [tasks."benchmarks:wave2"]
 description = "Replay wave 2 source fixtures in release mode"
 run = "cargo test --release --locked -p rustovate-datasource --test wave2 -- --nocapture"
+
+[tasks."fixtures:record-engine"]
+description = "Record the public multi-repository manager/engine fixture"
+env = { RUSTOVATE_RECORD = "1" }
+run = ["cargo test --locked -p rustovate-engine --test recorded -- --nocapture", "mise run fixtures:check"]

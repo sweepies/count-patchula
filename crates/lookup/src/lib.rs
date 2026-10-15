@@ -371,7 +371,9 @@ impl Evaluator {
         });
         // Branch and opaque refs are preserved. Their digest is proposed through
         // digest_proposal after the engine resolves that same ref.
-        if baseline.is_none() && dep.manager == Manager::GithubActions {
+        if baseline.is_none()
+            && (dep.manager == Manager::GithubActions || scheme == Ecosystem::Docker)
+        {
             return Ok(Evaluation::default());
         }
         let baseline = baseline.or_else(|| {

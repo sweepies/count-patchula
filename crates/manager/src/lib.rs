@@ -5,9 +5,16 @@ pub use actions::replacement as action_replacement;
 pub use actions::runner_replacement;
 /// Included in persistent extraction fingerprints because backend mappings can change.
 pub const MISE_REGISTRY: &str = rustovate_mise::REGISTRY_JSON;
+mod cargo;
 mod custom;
+mod go;
+mod images;
 mod mise;
 mod npm;
+mod requirements;
+mod terraform;
+mod yaml;
+mod yaml_locations;
 
 use rustovate_config::{Config, DependencyKind, Manager, Patterns, Scheme, Source};
 use serde::{Deserialize, Serialize};
@@ -56,10 +63,8 @@ pub struct Extraction {
 }
 pub type Files = BTreeMap<String, String>;
 pub fn supported(manager: Manager) -> bool {
-    matches!(
-        manager,
-        Manager::Npm | Manager::Bun | Manager::GithubActions | Manager::Mise | Manager::Regex
-    )
+    let _ = manager;
+    true
 }
 
 pub struct Scanner {
@@ -108,12 +113,75 @@ impl Scanner {
                 .extractors
                 .iter()
                 .any(|e| Patterns::compile(&e.paths).is_ok_and(|p| p.matches(path))),
-            _ => false,
+            Manager::Cargo => matches!(leaf, "Cargo.toml" | "Cargo.lock"),
+            Manager::Dockerfile => {
+                leaf == "Dockerfile"
+                    || leaf.starts_with("Dockerfile.")
+                    || leaf.ends_with(".Dockerfile")
+                    || leaf.ends_with(".dockerfile")
+            }
+            Manager::Compose => {
+                (leaf.starts_with("docker-compose") || leaf.starts_with("compose"))
+                    && (leaf.ends_with(".yml") || leaf.ends_with(".yaml"))
+            }
+            Manager::Go => leaf == "go.mod",
+            Manager::Terraform => leaf.ends_with(".tf") || leaf == ".terraform.lock.hcl",
+            Manager::Kubernetes | Manager::Flux => {
+                leaf.ends_with(".yaml") || leaf.ends_with(".yml")
+            }
+            Manager::Kustomize => matches!(
+                leaf,
+                "kustomization.yaml" | "kustomization.yml" | "Kustomization"
+            ),
+            Manager::HelmValues => {
+                (leaf.starts_with("values")
+                    || leaf.ends_with("values.yaml")
+                    || leaf.ends_with("values.yml"))
+                    && (leaf.ends_with(".yaml") || leaf.ends_with(".yml"))
+            }
+            Manager::Requirements => {
+                (leaf.starts_with("requirements")
+                    && (leaf.ends_with(".txt") || leaf.ends_with(".in")))
+                    || (path.contains("requirements/")
+                        && (leaf.ends_with(".txt") || leaf.ends_with(".in")))
+            }
         }
     }
     pub fn extract(&self, files: &Files) -> Result<Extraction, String> {
         let mut result = Extraction::default();
         let locks = npm::locks(files)?;
+        let cargo = if self.config.managers.contains(&Manager::Cargo) {
+            cargo::documents(files)?
+        } else {
+            BTreeMap::new()
+        };
+        let terraform = if self.config.managers.contains(&Manager::Terraform) {
+            terraform::documents(files)?
+        } else {
+            BTreeMap::new()
+        };
+        let yaml_managers = [
+            Manager::Compose,
+            Manager::Kubernetes,
+            Manager::Kustomize,
+            Manager::Flux,
+            Manager::HelmValues,
+        ];
+        let documents: BTreeMap<_, _> = files
+            .iter()
+            .filter(|(path, _)| yaml_managers.iter().any(|m| self.selected(*m, path)))
+            .map(|(p, t)| Ok((p.as_str(), yaml::docs(t).map_err(|e| format!("{p}: {e}"))?)))
+            .collect::<Result<_, String>>()?;
+        let repos = yaml::repositories(&documents);
+        let locations: BTreeMap<_, _> = documents
+            .keys()
+            .map(|path| {
+                Ok((
+                    *path,
+                    yaml_locations::parse(&files[*path]).map_err(|e| format!("{path}: {e}"))?,
+                ))
+            })
+            .collect::<Result<_, String>>()?;
         for manager in &self.config.managers {
             if !supported(*manager) {
                 result.warnings.push(format!(
@@ -136,12 +204,43 @@ impl Scanner {
                 actions::extract(path, text)
             } else if self.selected(Manager::Mise, path) {
                 mise::extract(path, text)
+            } else if self.selected(Manager::Cargo, path) {
+                cargo::extract(path, text, &cargo)
+            } else if self.selected(Manager::Dockerfile, path) {
+                images::dockerfile(path, text)
+            } else if self.selected(Manager::Go, path) {
+                go::extract(path, text)
+            } else if self.selected(Manager::Terraform, path) {
+                terraform::extract(path, text, &terraform)
+            } else if self.selected(Manager::Requirements, path) {
+                requirements::extract(path, text)
             } else {
                 Ok(Vec::new())
             };
             result
                 .dependencies
                 .extend(extraction.map_err(|e| format!("{path}: {e}"))?);
+            for manager in [
+                Manager::Compose,
+                Manager::Kubernetes,
+                Manager::Kustomize,
+                Manager::Flux,
+                Manager::HelmValues,
+            ] {
+                if self.selected(manager, path) {
+                    result.dependencies.extend(
+                        yaml::extract(
+                            manager,
+                            path,
+                            text,
+                            &documents[path.as_str()],
+                            &locations[path.as_str()],
+                            &repos,
+                        )
+                        .map_err(|e| format!("{path}: {e}"))?,
+                    );
+                }
+            }
             if self.selected(Manager::Regex, path) {
                 result
                     .dependencies

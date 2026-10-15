@@ -12,7 +12,7 @@ typealias Scheme = "semver"|"docker"|"pep440"|"go"|"hashicorp"|"loose"
 /// production. Actions distinguish steps from reusable workflows; containers,
 /// mise tools, Go language directives, Terraform providers/modules and Helm
 /// charts have explicit roles. These are exact values, not match patterns.
-typealias DependencyKind = "production"|"development"|"peer"|"optional"|"build"|"action"|"reusable-workflow"|"runner"|"container-image"|"tool"|"go-directive"|"provider"|"module"|"chart"
+typealias DependencyKind = "production"|"development"|"peer"|"optional"|"build"|"action"|"reusable-workflow"|"runner"|"container-image"|"tool"|"go-directive"|"toolchain"|"provider"|"module"|"chart"
 
 /// Match lists are OR; populated selector fields are AND. Empty means any.
 /// Patterns are path-aware globs, or `regex:...`; prefix `!` excludes a match.

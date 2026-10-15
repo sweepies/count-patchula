@@ -805,7 +805,7 @@ impl Engine {
             repo: repo.into(),
             default_branch_commit: commit,
             config_hash: format!(
-                "extract-v2:{}:{}",
+                "extract-v3:{}:{}",
                 hash(&serde_json::to_vec(&config)?),
                 hash(rustovate_manager::MISE_REGISTRY.as_bytes())
             ),
