@@ -62,7 +62,7 @@ fn key(repo: &str, prefix: &str) -> ExtractionKey {
 fn intent(plan: &Plan, config: &Config, recheck: Recheck) -> String {
     hash(
         serde_json::to_string(&(
-            "release-notes-v2",
+            "release-notes-v3",
             &plan.identity,
             &plan.input_fingerprint,
             &plan.changes,
@@ -80,7 +80,7 @@ fn pr_state(pr: &Value) -> Value {
         .flatten()
         .filter_map(|l| l["name"].as_str())
         .collect();
-    json!({"number":pr["number"],"title":pr["title"],"body":pr["body"],
+    json!({"number":pr["number"],"title":pr["title"],"body_hash":crate::pull_requests::body_hash(pr["body"].as_str().unwrap_or("")),
         "head":{"ref":pr["head"]["ref"],"sha":pr["head"]["sha"],"repo":pr["head"]["repo"]["full_name"]},
         "base":{"ref":pr["base"]["ref"],"repo":pr["base"]["repo"]["full_name"]},"actor":pr["user"]["login"],
         "labels":labels,"merge":!pr["auto_merge"].is_null()})

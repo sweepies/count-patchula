@@ -62,6 +62,11 @@ pub fn update_key(plan: &Plan) -> String {
 fn body(pr: &Value) -> &str {
     pr["body"].as_str().unwrap_or("")
 }
+pub(crate) fn body_hash(text: &str) -> String {
+    // GitHub may return CRLF for a body published with LF. Compare the same
+    // content hash as write receipts, without treating transport newlines as edits.
+    hash(text.replace("\r\n", "\n").as_bytes())
+}
 fn branch(pr: &Value) -> &str {
     pr["head"]["ref"].as_str().unwrap_or("")
 }
@@ -386,7 +391,8 @@ impl Lifecycle {
 
     pub async fn publish(&mut self, client: &Client, plans: &mut [Plan]) {
         let sources =
-            rustovate_datasource::Client::new(client.clone(), client.public_http(), client.cache());
+            rustovate_datasource::Client::new(client.clone(), client.public_http(), client.cache())
+                .notes_batch();
         self.publish_with_sources(client, &sources, plans).await;
     }
     pub async fn publish_with_sources(
@@ -525,7 +531,9 @@ impl Lifecycle {
                 tokio::time::sleep(std::time::Duration::from_millis(100 << attempt)).await;
                 attempt += 1;
             };
-            if fresh["title"] == title && fresh["body"] == text && fresh["base"]["ref"] == self.base
+            if fresh["title"] == title
+                && body_hash(body(&fresh)) == body_hash(&text)
+                && fresh["base"]["ref"] == self.base
             {
                 (fresh, ActionStatus::Unchanged)
             } else {
@@ -716,7 +724,7 @@ impl Lifecycle {
             .collect();
         let content_hash = hash(
             &serde_json::to_vec(&(
-                "notes-render-v2",
+                "notes-render-v3",
                 &text,
                 ranges,
                 self.recheck,
@@ -728,6 +736,7 @@ impl Lifecycle {
         if let Some(pr) = existing
             && body(pr).contains(&content_marker)
             && !checked(pr)
+            && !plan.retry
             && marker(body(pr))
                 .is_some_and(|m| m.identity == plan.identity && m.update == update_key(plan))
         {
@@ -812,9 +821,7 @@ fn truncate(text: &str, limit: usize) -> String {
     text[..end].into()
 }
 fn safe(text: &str) -> String {
-    text.replace("<!--", "&lt;!--")
-        .replace("-->", "--&gt;")
-        .replace('@', "@\u{200d}")
+    text.replace("<!--", "&lt;!--").replace("-->", "--&gt;")
 }
 fn cell(text: &str) -> String {
     truncate(

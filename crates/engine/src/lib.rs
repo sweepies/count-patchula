@@ -219,6 +219,7 @@ impl Engine {
         let before = self.github.stats().await;
         let mut branches = Vec::new();
         let mut pull_requests = Vec::new();
+        let note_sources = self.sources.notes_batch();
         for mut work in work {
             let Some(config) = work.config else {
                 continue;
@@ -443,7 +444,7 @@ impl Engine {
             .await;
             if let Some(state) = &mut lifecycle {
                 state
-                    .publish_with_sources(&self.github, &self.sources, &mut plans)
+                    .publish_with_sources(&self.github, &note_sources, &mut plans)
                     .await;
                 let merge_actions = rustovate_update::automerge::reconcile(
                     &self.github,

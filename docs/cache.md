@@ -165,8 +165,8 @@ pull quota. It does not cache mutable tags beyond upstream freshness.
 
 Successful branch and PR reconciliation stores a verified-write receipt per
 branch in the extraction cache. It contains the commit/tree OIDs, base, planned
-update identity and canonical PR state (including the body, labels and native
-auto-merge flag), never credentials. Warm runs read a fresh paginated GraphQL
+update identity and canonical PR state (including a CRLF/LF-normalised body hash,
+labels and native auto-merge flag), never credentials. Warm runs read a fresh paginated GraphQL
 inventory of heads and associated open PRs. An exact head/intent/PR match skips
 history, tree and PR reads; any mismatch falls back to normal reconciliation.
 Behind-mode base moves invalidate the receipt; conflicts mode retains the

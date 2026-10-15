@@ -1,18 +1,19 @@
 //! Source metadata and release ranges, fetched only for changed pull requests.
 mod changelog;
+mod markdown;
 mod source;
 use super::*;
 pub use changelog::{Section, parse_changelog};
+pub use markdown::sanitise;
 use rustovate_cache::ExtractionKey;
 use rustovate_versioning::Parsed;
 pub use source::Repository;
 pub(crate) use source::mapped;
-use std::{
-    collections::BTreeSet,
-    sync::{Arc, LazyLock},
-};
+use std::{collections::BTreeSet, sync::Arc};
 type SharedSections = Arc<tokio::sync::Mutex<Option<Arc<Vec<Section>>>>>;
 pub(crate) type ChangelogCache = Arc<tokio::sync::Mutex<BTreeMap<String, SharedSections>>>;
+type SharedRead = Arc<tokio::sync::Mutex<Option<std::result::Result<Vec<u8>, String>>>>;
+pub(crate) type ReadCache = Arc<tokio::sync::Mutex<BTreeMap<String, SharedRead>>>;
 
 #[derive(Default, Serialize, Deserialize)]
 struct MirrorList {
@@ -167,6 +168,30 @@ fn compact_release(bytes: &[u8]) -> std::result::Result<Vec<u8>, serde_json::Err
 }
 
 impl Client {
+    /// Scope note-read memoisation to one publication batch. New batches still
+    /// revalidate mutable upstream resources, including on explicit re-checks.
+    pub fn notes_batch(&self) -> Self {
+        let mut client = self.clone();
+        client.note_reads = Some(Default::default());
+        client
+    }
+    async fn note_read(
+        &self,
+        key: &str,
+        fetch: impl std::future::Future<Output = Result<Vec<u8>>>,
+    ) -> Result<Vec<u8>> {
+        let Some(reads) = &self.note_reads else {
+            return fetch.await;
+        };
+        let read = reads.lock().await.entry(key.into()).or_default().clone();
+        let mut saved = read.lock().await;
+        if let Some(result) = &*saved {
+            return result.clone().map_err(Error::Notes);
+        }
+        let result = fetch.await.map_err(|e| e.to_string());
+        *saved = Some(result.clone());
+        result.map_err(Error::Notes)
+    }
     async fn notes_directory(&self, repo: &str, directory: &str) -> Result<changelog::Tree> {
         let mut url = reqwest::Url::parse(&format!("https://api.github.com/repos/{repo}/contents"))
             .expect("upstream URL");
@@ -175,15 +200,20 @@ impl Client {
                 .expect("HTTP URL")
                 .extend(directory.split('/'));
         }
-        let response = self
-            .github
-            .get_derived(
-                url.as_str().trim_start_matches("https://api.github.com/"),
-                "notes-changelog-directory-v1",
-                changelog::compact_tree,
-            )
+        let bytes = self
+            .note_read(url.as_str(), async {
+                Ok(self
+                    .github
+                    .get_derived(
+                        url.as_str().trim_start_matches("https://api.github.com/"),
+                        "notes-changelog-directory-v1",
+                        changelog::compact_tree,
+                    )
+                    .await?
+                    .body)
+            })
             .await?;
-        Ok(serde_json::from_slice(&response.body)?)
+        Ok(serde_json::from_slice(&bytes)?)
     }
     async fn changelog_files(
         &self,
@@ -299,19 +329,25 @@ impl Client {
         Ok(sections)
     }
     async fn notes_list(&self, repo: &str, kind: &str) -> Result<MirrorList> {
-        let response = self
-            .http
-            .get_derived(
-                &format!(
-                    "https://mise-versions.jdx.dev/data/github/{}/{kind}.json",
-                    repo.to_ascii_lowercase()
-                ),
-                "application/json",
-                "notes-mise-versions-v1",
-                compact_mirror,
-            )
+        let url = format!(
+            "https://mise-versions.jdx.dev/data/github/{}/{kind}.json",
+            repo.to_ascii_lowercase()
+        );
+        let bytes = self
+            .note_read(&url, async {
+                Ok(self
+                    .http
+                    .get_derived(
+                        &url,
+                        "application/json",
+                        "notes-mise-versions-v1",
+                        compact_mirror,
+                    )
+                    .await?
+                    .body)
+            })
             .await?;
-        Ok(serde_json::from_slice(&response.body)?)
+        Ok(serde_json::from_slice(&bytes)?)
     }
     pub async fn release_notes(
         &self,
@@ -395,16 +431,21 @@ impl Client {
                         &release.tag,
                     );
                     match self
-                        .github
-                        .get_derived(
-                            url.trim_start_matches("https://api.github.com/"),
-                            "release-notes-body-v2",
-                            compact_release,
-                        )
+                        .note_read(&url, async {
+                            Ok(self
+                                .github
+                                .get_derived(
+                                    url.trim_start_matches("https://api.github.com/"),
+                                    "release-notes-body-v2",
+                                    compact_release,
+                                )
+                                .await?
+                                .body)
+                        })
                         .await
                     {
-                        Ok(response) => {
-                            let body: ReleaseBody = serde_json::from_slice(&response.body)?;
+                        Ok(payload) => {
+                            let body: ReleaseBody = serde_json::from_slice(&payload)?;
                             if body.draft || body.prerelease && new.0.pre.is_empty() {
                                 continue;
                             }
@@ -557,32 +598,6 @@ pub fn truncate(text: &str, limit: usize) -> &str {
     &text[..end]
 }
 
-/// A zero-width joiner immediately after @ neutralises mentions. URL tokens are
-/// preserved. Bare and cross-repository issue references become explicit URLs.
-pub fn sanitise(text: &str, repo: &str) -> String {
-    static TOKENS: LazyLock<regex::Regex> = LazyLock::new(|| {
-        regex::Regex::new(r"https?://[^\s<>]+|(?P<cross>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(?P<number>[0-9]+)|(?P<issue>#[0-9]+)|(?P<at>@)").unwrap()
-    });
-    let text = text.replace("<!--", "&lt;!--").replace("-->", "--&gt;");
-    TOKENS
-        .replace_all(&text, |c: &regex::Captures<'_>| {
-            if let Some(other) = c.name("cross") {
-                format!(
-                    "https://github.com/{}/issues/{}",
-                    other.as_str(),
-                    &c["number"]
-                )
-            } else if let Some(issue) = c.name("issue") {
-                format!("https://github.com/{repo}/issues/{}", &issue.as_str()[1..])
-            } else if c.name("at").is_some() {
-                "@\u{200d}".into()
-            } else {
-                c[0].into()
-            }
-        })
-        .into_owned()
-}
-
 impl Notes {
     /// Includes the source/compare links even when no upstream text is published.
     /// Budgets count UTF-8 bytes, a conservative bound on GitHub's character cap.
@@ -590,7 +605,10 @@ impl Notes {
         if limit < 512 {
             return String::new();
         }
-        let package = sanitise(truncate(package, 160), "").replace(['\n', '\r'], " ");
+        let package = truncate(package, 160)
+            .replace(['\n', '\r'], " ")
+            .replace("<!--", "&lt;!--")
+            .replace("-->", "--&gt;");
         let package = truncate(&package, 160);
         let Some(source) = &self.source else {
             return format!(

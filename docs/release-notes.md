@@ -28,7 +28,20 @@ mirror, release-body or changelog requests. The receipt intent includes the
 renderer version so pre-existing PR bodies refresh once after this upgrade.
 Publication also reuses an existing body's notes when the table, ranges and
 rendering policy are unchanged, so a rebase or label repair does not read notes.
-An explicit checked recheck requests fresh rendering.
+An explicit PR or repository recheck requests fresh rendering. Publication
+compares the rendered body hash with fresh PR state before PATCHing; receipts
+use the same hash. CRLF and LF are equivalent, so GitHub's newline conversion
+does not produce redundant edits. Title/base changes and checked PR boxes still
+require reconciliation. Receipt restoration retains its single-inventory fast
+path without fetching notes.
+
+One publication batch shares release lists, tag lists, exact release bodies and
+changelog directory reads by upstream URL, across ecosystems and version ranges.
+Both sequential and concurrent PRs reuse these reads (including failures).
+For example, mise, Docker and GitHub updates pointing at Node share overlapping
+release-body reads and changelog discovery. The memo is discarded after the batch;
+the next run revalidates mutable resources normally. Immutable changelog blobs
+retain their existing persistent parsed-section cache.
 
 Release-note tag selection uses the public
 [mise-versions GitHub lists](https://github.com/jdx/mise-versions/blob/main/docs/github-versions.md):
@@ -81,14 +94,36 @@ or 32 candidate releases, since older bodies cannot fit. Notes that cannot be
 fetched or do not fit are explicitly marked truncated/incomplete. This is a
 bounded summary of the range, not a promise to embed unlimited upstream history.
 
-Every `@` outside URL tokens in upstream text gains a U+200D zero-width joiner
-immediately after it. Names remain readable while user/team mentions are
-neutralised. Table cells and policy notes use the same mention treatment.
-Bare `#123` becomes `https://github.com/UPSTREAM/issues/123`, and
-`owner/repo#123` becomes that repository's full issue URL. Existing URL tokens
-are preserved. HTML comment delimiters are escaped so upstream text cannot
-forge rustovate ownership markers. These choices intentionally change upstream
-Markdown to avoid notification and cross-reference noise.
+Only user/team mention tokens in upstream prose gain a U+200D zero-width joiner
+after `@`. A mention must begin at the start of text, whitespace or punctuation.
+Inline code (including multiple-backtick and multiline spans), fenced code,
+URLs, email addresses, `name@version`, scoped packages with versions and
+`@sha256:` forms are preserved. Bare scoped packages in dependency-release
+sentences such as `Bump @actions/core ... by @author` are preserved too; outside
+that package context, `@org/team` has GitHub's team-mention syntax. Existing link
+labels are preserved verbatim. Generated tables, package headings, policy text,
+source/compare links and ownership/control markers never undergo mention
+neutralisation. HTML comment delimiters in upstream or untrusted display text
+are still escaped to prevent forged bot markers.
+
+Bare `#123` and `owner/repo#123` outside links and code become Markdown links
+labelled `owner/repo#123`, using the resolved upstream for local references.
+Upstream GitHub issue, pull request, discussion and commit links (including
+existing Markdown destinations, reference definitions and autolinks) use
+`https://redirect.github.com/...`. GitHub documents this host under
+[Avoiding backlinks to linked references](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/autolinked-references-and-urls#avoiding-backlinks-to-linked-references):
+it prevents cross-reference backlinks, and also removes hover previews. This
+deliberate departure avoids upstream timeline noise from public update PRs.
+GitHub notes that this mechanism is unavailable for `ghe.com`; rustovate's
+rewrite is limited to `github.com` reference URLs. Source, compare, release and
+changelog links retain their original hosts, as do URLs shown inside code.
+
+The 2026-10-15 sandbox audit found three corrupted jq code tokens in PR #8
+(`@uri`, `@urid`, `@base64d`), plus two checkout commit pins and two scoped npm
+package names in PR #12. At the time of inspection these bodies had 79 and 61
+joiners respectively; the remaining joiners were author mentions. Offline
+regressions cover these cases and each exclusion above without storing the live
+PR bodies as fixtures.
 
 ## Validation and current limits
 

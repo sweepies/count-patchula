@@ -293,6 +293,64 @@ async fn range_merges_releases_and_package_changelog_and_reuses_blob_across_clie
         || url.ends_with("/git/blobs/root")));
 }
 
+#[tokio::test]
+async fn publication_batch_deduplicates_overlapping_upstream_reads_and_next_batch_revalidates() {
+    let routes = routes(&[
+        (
+            "https://mise-versions.jdx.dev/data/github/nodejs/node/releases.json",
+            json!({"releases":[{"tag":"v22.9.0"},{"tag":"v22.20.0"},{"tag":"v22.23.3"}]}),
+        ),
+        (
+            "https://api.github.com/repos/nodejs/node/releases/tags/v22.20.0",
+            json!({"body":"Middle release"}),
+        ),
+        (
+            "https://api.github.com/repos/nodejs/node/releases/tags/v22.23.3",
+            json!({"body":"Newest release"}),
+        ),
+        (
+            "https://api.github.com/repos/nodejs/node/contents",
+            json!([]),
+        ),
+    ]);
+    let source = client(routes.clone(), memory().await).await;
+    let batch = source.notes_batch();
+    let clone = batch.clone();
+    let (mise, github) = tokio::join!(
+        batch.release_notes(Source::Mise, "node", "22.9.0", "22.23.3"),
+        clone.release_notes(Source::GithubTags, "nodejs/node", "22.20.0", "22.23.3")
+    );
+    assert_eq!(mise.unwrap().sections.len(), 2);
+    assert_eq!(github.unwrap().sections.len(), 1);
+    let go = batch
+        .release_notes(Source::Go, "github.com/nodejs/node", "22.9.0", "22.23.3")
+        .await
+        .unwrap();
+    assert_eq!(go.sections.len(), 2);
+    {
+        let reads = routes.requests.lock().unwrap();
+        assert_eq!(
+            reads.len(),
+            4,
+            "one read per mutable upstream resource, even for sequential PRs: {reads:?}"
+        );
+        for url in routes.bodies.keys() {
+            assert_eq!(reads.iter().filter(|r| *r == url).count(), 1, "{url}");
+        }
+    }
+    source
+        .notes_batch()
+        .release_notes(Source::Mise, "node", "22.9.0", "22.23.3")
+        .await
+        .unwrap();
+    let reads = routes.requests.lock().unwrap();
+    assert_eq!(
+        reads.len(),
+        8,
+        "a later batch must revalidate, even while an old batch is alive"
+    );
+}
+
 #[test]
 fn headings_fences_setext_plain_text_and_utf8_are_sliced_once() {
     let text = "# Changelog\n\n## [v2.1.0](https://example.org/2.1.0) (2026-01-01)\nCrab 🦀\n### Fixes\nKept\n```md\n## 99.0.0\n```\n2.0.0 - 2025-01-01\n==================\nOld fixes\n\n# Footer\nNo version here\n";
@@ -336,7 +394,9 @@ fn rendering_collapses_older_versions_truncates_with_links_and_neutralises_notif
         let text = notes.render("package", limit);
         assert!(text.len() <= limit);
         assert!(text.contains("@\u{200d}alice"));
-        assert!(text.contains("https://github.com/example/upstream/issues/123"));
+        assert!(text.contains(
+            "[example/upstream#123](https://redirect.github.com/example/upstream/issues/123)"
+        ));
         assert!(!text.contains("<!-- rustovate:"));
         assert_eq!(
             text.matches("<details>").count(),
@@ -355,8 +415,154 @@ fn rendering_collapses_older_versions_truncates_with_links_and_neutralises_notif
     );
     assert_eq!(
         safe,
-        "@\u{200d}alice @\u{200d}org/team https://github.com/example/upstream/issues/12 https://github.com/org/other/issues/34 https://host/path@v1#anchor"
+        "@\u{200d}alice @\u{200d}org/team [example/upstream#12](https://redirect.github.com/example/upstream/issues/12) [org/other#34](https://redirect.github.com/org/other/issues/34) https://host/path@v1#anchor"
     );
+}
+
+#[test]
+fn mention_neutralisation_only_changes_mentions_in_upstream_prose() {
+    for text in [
+        "@alice",
+        "Thanks (@alice),",
+        "Thanks @alice.",
+        "-@org/team!",
+    ] {
+        assert_eq!(
+            sanitise(text, "example/upstream"),
+            text.replace('@', "@\u{200d}")
+        );
+    }
+    // The live jq body (#8) corrupted these code tokens; checkout (#12)
+    // corrupted commit pins. Cover each exclusion independently.
+    for text in [
+        "`@uri` and `@urid` and `@base64d`",
+        "``literal ` @alice #1``",
+        "`multiline\n@alice #1\ncode`",
+        "```sh\n@alice #1 https://github.com/a/b/pull/2\n```\n",
+        "~~~~\n@org/team #1\n~~~\n@alice #2\n~~~~\n",
+        "    ```\n@alice\n    ```\n",
+        "> ~~~\n> @alice #1\n> ~~~\n",
+        "- ~~~\n  @alice #1\n  ~~~\n",
+        "1. ~~~\n   @alice #1\n   ~~~\n",
+        "https://host/path/@alice?email=name@example.org#12",
+        "ssh://git@host/org/repo#12 www.example.org/@alice",
+        "name@example.org first.last+tag@example.org",
+        "package@version actions/checkout@692973e3d937",
+        "v4.1.7@692973e3d937 image@sha256:abcdef @sha256:abcdef",
+        "@scope/pkg@2.0.0 `@actions/core`",
+        "* Bump @actions/core and @actions/tool-cache and Remove uuid",
+        "[an @alice label](https://example.org)",
+        "\\@alice \\#12",
+        "word#12 owner/repo@version",
+    ] {
+        assert_eq!(sanitise(text, "example/upstream"), text, "{text}");
+    }
+    assert_eq!(
+        sanitise("```\n@code\n```\n@alice", "a/b"),
+        "```\n@code\n```\n@\u{200d}alice"
+    );
+    assert_eq!(
+        sanitise("* Bump @actions/core by @org/team", "a/b"),
+        "* Bump @actions/core by @\u{200d}org/team"
+    );
+}
+
+#[test]
+fn links_keep_their_labels_and_only_bare_references_gain_readable_labels() {
+    let plain = sanitise("[see #123]", "google/uuid");
+    assert_eq!(
+        plain,
+        "[see [google/uuid#123](https://redirect.github.com/google/uuid/issues/123)]"
+    );
+    for label in [
+        "label `[` #123",
+        "label `]` #123",
+        "label `` ` [ `` #123",
+        "label \\` #123",
+    ] {
+        let link = format!("[{label}](https://github.com/google/uuid/pull/123)");
+        assert_eq!(
+            sanitise(&link, "google/uuid"),
+            link.replace("https://github.com/", "https://redirect.github.com/")
+        );
+    }
+    assert_eq!(
+        sanitise(
+            "[fix #123]\n\n[fix #123]: https://github.com/google/uuid/pull/123",
+            "google/uuid"
+        ),
+        "[fix #123]\n\n[fix #123]: https://redirect.github.com/google/uuid/pull/123"
+    );
+    for link in [
+        "[anchor](#123)",
+        "[ref]: #123\n",
+        "[ref]: https://example.org \"@alice #1\"\n",
+        "[mail](mailto:user@example.org)",
+        "[nested](https://example.org/path(v1)/@alice \"@bob #1\")",
+        "[empty]()",
+        "[empty]( )",
+    ] {
+        assert_eq!(sanitise(link, "google/uuid"), link);
+    }
+    let text = "([#149](https://github.com/google/uuid/issues/149))\n[other/repo#2][ref]\n[ref]: https://github.com/other/repo/pull/2\n[#3](https://example.org/a#3 \"title\") #4 other/repo#5 `#6`";
+    assert_eq!(
+        sanitise(text, "google/uuid"),
+        "([#149](https://redirect.github.com/google/uuid/issues/149))\n[other/repo#2][ref]\n[ref]: https://redirect.github.com/other/repo/pull/2\n[#3](https://example.org/a#3 \"title\") [google/uuid#4](https://redirect.github.com/google/uuid/issues/4) [other/repo#5](https://redirect.github.com/other/repo/issues/5) `#6`"
+    );
+    let nested = "[**Fix #149** and `code #3`](https://github.com/google/uuid/issues/149)";
+    assert_eq!(
+        sanitise(nested, "google/uuid"),
+        nested.replace("https://github.com/", "https://redirect.github.com/")
+    );
+}
+
+#[test]
+fn upstream_reference_urls_use_githubs_documented_backlink_redirect() {
+    for kind in ["issues", "pull", "discussions", "commit", "commits"] {
+        let url = format!("https://github.com/other/repo/{kind}/123?x=1#issuecomment-456");
+        for text in [
+            url.clone(),
+            format!("[original #123]({url})"),
+            format!("<{url}>"),
+        ] {
+            let expected = text.replace("https://github.com/", "https://redirect.github.com/");
+            assert_eq!(sanitise(&text, "example/upstream"), expected);
+            assert_eq!(
+                sanitise(&expected, "example/upstream"),
+                expected,
+                "idempotent"
+            );
+        }
+    }
+    for url in [
+        "https://github.com/other/repo/compare/v1...v2",
+        "https://github.com/other/repo/releases/tag/v2",
+        "https://github.com/other/repo/blob/HEAD/CHANGELOG.md",
+        "https://github.com/other/repo",
+        "https://github.com.evil.example/other/repo/issues/1",
+        "https://github.example/other/repo/issues/1",
+    ] {
+        assert_eq!(sanitise(url, "example/upstream"), url);
+    }
+}
+
+#[test]
+fn generated_note_heading_source_and_comparison_are_never_mention_neutralised() {
+    let notes = Notes {
+        source: Repository::from_url("https://github.com/example/upstream"),
+        compare: Some("https://github.com/example/upstream/compare/pkg@v1...pkg@v2".into()),
+        sections: vec![Section {
+            version: "2.0.0".into(),
+            link: "https://github.com/example/upstream/releases/tag/pkg@v2".into(),
+            body: "Thanks @alice".into(),
+        }],
+        ..Default::default()
+    };
+    let text = notes.render("@scope/package", 12_000);
+    assert!(text.starts_with("### @scope/package\n"));
+    assert!(text.contains("compare/pkg@v1...pkg@v2)"));
+    assert!(text.contains("releases/tag/pkg@v2)"));
+    assert_eq!(text.matches('\u{200d}').count(), 1);
 }
 
 #[tokio::test]
@@ -398,6 +604,41 @@ async fn mirror_errors_empty_and_truncation_never_fall_back_to_github_catalogs()
                     || url.contains("/releases/tags/"))
         );
     }
+}
+
+#[tokio::test]
+async fn publication_batch_deduplicates_failed_note_reads_without_poisoning_the_next_batch() {
+    let routes = routes(&[
+        (
+            "https://mise-versions.jdx.dev/data/github/nodejs/node/releases.json",
+            json!({"status":404}),
+        ),
+        (
+            "https://mise-versions.jdx.dev/data/github/nodejs/node/tags.json",
+            json!({"status":404}),
+        ),
+        (
+            "https://api.github.com/repos/nodejs/node/contents",
+            json!({"status":404}),
+        ),
+    ]);
+    let source = client(routes.clone(), memory().await).await;
+    let batch = source.notes_batch();
+    for package in ["node", "core:node"] {
+        let notes = batch
+            .release_notes(Source::Mise, package, "22.9.0", "22.23.3")
+            .await
+            .unwrap();
+        assert!(notes.incomplete);
+        assert!(notes.sections.is_empty());
+    }
+    assert_eq!(routes.requests.lock().unwrap().len(), 3);
+    source
+        .notes_batch()
+        .release_notes(Source::Mise, "node", "22.9.0", "22.23.3")
+        .await
+        .unwrap();
+    assert_eq!(routes.requests.lock().unwrap().len(), 6);
 }
 
 #[tokio::test]

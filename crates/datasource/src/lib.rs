@@ -26,6 +26,8 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error("invalid package identity or upstream payload")]
     Invalid,
+    #[error("release-note read failed: {0}")]
+    Notes(String),
     #[error("registry rate limit reached; retry after {0} seconds")]
     RateLimit(u64),
 }
@@ -62,6 +64,7 @@ pub struct Client {
     tokens: docker::Tokens,
     dockerhub_credentials: Option<std::sync::Arc<(String, String)>>,
     changelogs: notes::ChangelogCache,
+    note_reads: Option<notes::ReadCache>,
     stale_registry: std::sync::Arc<tokio::sync::Mutex<BTreeMap<String, BTreeMap<String, i64>>>>,
 }
 impl Client {
@@ -78,6 +81,7 @@ impl Client {
             tokens: Default::default(),
             dockerhub_credentials: None,
             changelogs: Default::default(),
+            note_reads: None,
             stale_registry: Default::default(),
         }
     }

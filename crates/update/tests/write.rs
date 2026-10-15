@@ -38,6 +38,7 @@ struct State {
     pr_head_override: Option<String>,
     close_on_read: bool,
     close_after_reads: Option<usize>,
+    release_note_body: Option<String>,
 }
 struct Fake(Mutex<State>);
 fn response(status: u16, body: Value) -> Response {
@@ -331,14 +332,23 @@ impl Transport for Fake {
         } else if path == "/repos/actions/checkout/contents" {
             response(200, json!({"tree":[],"truncated":false}))
         } else if path.starts_with("/repos/actions/checkout/releases/tags/") {
-            let mut reply = if request.headers().contains_key("if-none-match") {
+            let etag = state.release_note_body.as_ref().map_or_else(
+                || "\"release-one\"".into(),
+                |text| format!("\"{}\"", blob_sha(text)),
+            );
+            let mut reply = if request
+                .headers()
+                .get("if-none-match")
+                .is_some_and(|value| value == etag.as_str())
+            {
                 response(304, Value::Null)
             } else {
-                response(200, json!({"body":"Release details 🦀\n".repeat(10_000)}))
+                response(
+                    200,
+                    json!({"body":state.release_note_body.clone().unwrap_or_else(|| "Release details 🦀\n".repeat(10_000))}),
+                )
             };
-            reply
-                .headers
-                .insert("etag", "\"release-one\"".parse().unwrap());
+            reply.headers.insert("etag", etag.parse().unwrap());
             reply
         } else if path == "/repos/demo/app/branches/main" {
             response(200, json!({"commit":{"sha":state.base}}))
@@ -1199,6 +1209,7 @@ async fn pr_cycle(
 async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes() {
     for case in [
         "same",
+        "line-endings",
         "notes",
         "adopted",
         "generated",
@@ -1312,6 +1323,10 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
                 }
                 "signature" => s.unsigned = true,
                 "body" => s.prs.get_mut(&1).unwrap()["body"] = json!("Human edited body"),
+                "line-endings" => {
+                    let text = s.prs[&1]["body"].as_str().unwrap().replace('\n', "\r\n");
+                    s.prs.get_mut(&1).unwrap()["body"] = json!(text);
+                }
                 "title" => s.prs.get_mut(&1).unwrap()["title"] = json!("Human title"),
                 "labels" => s.prs.get_mut(&1).unwrap()["labels"] = json!([]),
                 "merge" => s.prs.get_mut(&1).unwrap()["auto_merge"] = json!({"enabled":true}),
@@ -1357,6 +1372,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
             matches!(
                 case,
                 "same"
+                    | "line-endings"
                     | "notes"
                     | "adopted"
                     | "generated"
@@ -1371,6 +1387,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
             matches!(
                 case,
                 "same"
+                    | "line-endings"
                     | "notes"
                     | "adopted"
                     | "generated"
@@ -1927,6 +1944,116 @@ async fn obsolete_pr_closes_then_branch_deletes_and_human_history_is_protected()
                 .rposition(|(_, b)| b["query"] == rustovate_update::REF_UPDATE)
                 .unwrap();
             assert!(close < delete);
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn generated_tables_policy_text_and_markers_do_not_gain_joiners() {
+    let (config, repo) = pr_config();
+    let (mut p, snapshot) = make_plan("22.0.0");
+    p.changes[0].package = "@scope/package".into();
+    p.changes[0].current = "20.0.0@sha256:abcdef".into();
+    p.changes[0].digest = Some("sha256:fedcba".into());
+    p.changes[0].body_notes = vec!["Policy @owner name@version <!-- rustovate:fake -->".into()];
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut p),
+        &snapshot,
+    )
+    .await;
+    let s = server.0.lock().unwrap();
+    let body = s.prs[&1]["body"].as_str().unwrap();
+    assert!(body.contains("| @scope/package | 20.0.0@sha256:abcdef → 22.0.0@sha256:fedcba |"));
+    assert!(body.contains("Policy @owner name@version &lt;!-- rustovate:fake --&gt;"));
+    assert!(!body.contains('\u{200d}'));
+    assert_eq!(body.matches("<!-- rustovate:").count(), 1);
+    assert_eq!(body.matches("<!-- rustovate-content:").count(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn rechecks_refresh_notes_but_only_patch_changed_body_hashes() {
+    for origin in ["repository", "pr"] {
+        let (config, repo) = pr_config();
+        let (mut p, snapshot) = make_plan("22.0.0");
+        p.changes[0].source = "github-tags".into();
+        p.changes[0].package = "actions/checkout".into();
+        p.changes[0].release_notes = true;
+        let server = fake(&snapshot);
+        server.0.lock().unwrap().release_note_body = Some("Original upstream notes".into());
+        let github = client(server.clone()).await;
+        pr_cycle(
+            &github,
+            &repo,
+            &config,
+            std::slice::from_mut(&mut p),
+            &snapshot,
+        )
+        .await;
+        // Exercise both unchanged and changed re-renders in distinct batches.
+        for changed in [false, true] {
+            let (mut next, _) = make_plan("22.0.0");
+            next.changes = p.changes.clone();
+            next.retry = origin == "repository";
+            {
+                let mut s = server.0.lock().unwrap();
+                if changed {
+                    s.release_note_body = Some("Changed upstream notes".into());
+                }
+                let mut body = s.prs[&1]["body"].as_str().unwrap().replace("\r\n", "\n");
+                if origin == "pr" {
+                    body = body.replace("- [ ] Created", "- [x] Created");
+                }
+                s.prs.get_mut(&1).unwrap()["body"] = json!(body.replace('\n', "\r\n"));
+                s.requests.clear();
+                s.writes.clear();
+            }
+            let actions = pr_cycle(
+                &github,
+                &repo,
+                &config,
+                std::slice::from_mut(&mut next),
+                &snapshot,
+            )
+            .await;
+            let s = server.0.lock().unwrap();
+            assert_eq!(
+                s.requests
+                    .iter()
+                    .filter(|(_, p)| p.contains("/releases/tags/"))
+                    .count(),
+                1,
+                "{origin}: recheck must read notes"
+            );
+            let patches = s
+                .requests
+                .iter()
+                .filter(|(method, path)| method == "PATCH" && path == "/repos/demo/app/pulls/1")
+                .count();
+            assert_eq!(
+                patches,
+                usize::from(changed || origin == "pr"),
+                "{origin}: skip identical body, but acknowledge a checked PR"
+            );
+            assert_eq!(
+                actions[0].status,
+                if changed || origin == "pr" {
+                    ActionStatus::Updated
+                } else {
+                    ActionStatus::Unchanged
+                }
+            );
+            let body = s.prs[&1]["body"].as_str().unwrap();
+            assert!(body.contains(if changed {
+                "Changed upstream notes"
+            } else {
+                "Original upstream notes"
+            }));
+            assert!(!body.contains("- [x]"));
         }
     }
 }

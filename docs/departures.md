@@ -79,7 +79,7 @@ Stable comparison link: <a id="departure-7"></a>**Departure 7: default policy**
 | 45 | Action alias precision | Can expand a ref when adding a digest | Preserve the declared numeric ref precision and report the full resolved target separately | The commit pin supplies reproducibility while the ref describes the intended release line |
 | 46 | Cargo target resolution | Observed pre-1.0 upgrades can select an older release in the proposed range | Resolve the newest eligible release in that same compatibility interval | Report the available release without narrowing the manifest |
 | 47 | Branch and merge safety | No write behavior is inferred from comparison output | Leased API refs, verified bot ownership, receipt-backed later-run merges when native auto-merge is unavailable | Preserve human work and lockfile consistency without emulating another bot |
-| 48 | Release note presentation and discovery | No presentation compatibility is claimed | Ecosystem metadata, public mise-versions note lists, cached changelog sections, bounded ranges and neutralised mentions/references | Useful upstream context without steady-run reads or notification noise; see [release notes](release-notes.md) |
+| 48 | Release note presentation and discovery | No presentation compatibility is claimed | Ecosystem metadata, public mise-versions note lists, cached changelog sections, bounded ranges, prose-only mention neutralisation and readable references through GitHub's documented backlink-free redirect host | Useful upstream context without steady-run reads or notification/timeline noise; see [release notes](release-notes.md) |
 
 <a id="departure-47"></a>**Departure 47: independent write safety.**
 Phase 2 does not claim compatibility with Renovate's branch/commit behavior.
