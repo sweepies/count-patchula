@@ -1,5 +1,6 @@
 //! Shared registry lookups with conditional GETs and incremental GitHub history.
 #![forbid(unsafe_code)]
+mod compact;
 mod github;
 mod mise;
 use rustovate_cache::{Cache, Release};
@@ -88,36 +89,14 @@ impl Client {
         let encoded = package.replace('/', "%2f");
         let response = self
             .http
-            .get(
+            .get_derived(
                 &format!("https://registry.npmjs.org/{encoded}"),
                 "application/json",
+                "npm-catalog-v1",
+                compact::npm,
             )
             .await?;
-        let key = catalog_key("npm", package, &response.body);
-        if let Some(bytes) = self.cache.extraction_get(&key).await? {
-            return Ok(serde_json::from_slice(&bytes)?);
-        }
-        let json: Value = serde_json::from_slice(&response.body)?;
-        let versions = json["versions"].as_object().ok_or(Error::Invalid)?;
-        let mut result = Catalog {
-            dist_tags: serde_json::from_value(json["dist-tags"].clone())?,
-            versions: versions
-                .iter()
-                .map(|(v, node)| Version {
-                    version: v.clone(),
-                    published_at: json["time"][v].as_str().map(str::to_owned),
-                    digest: None,
-                    deprecated: node["deprecated"].as_str().is_some_and(|v| !v.is_empty()),
-                    yanked: false,
-                })
-                .collect(),
-        };
-        sort(&mut result.versions, Ecosystem::Npm);
-        self.merge("npm", package, &result.versions).await?;
-        self.cache
-            .extraction_put(&key, &serde_json::to_vec(&result)?)
-            .await?;
-        Ok(result)
+        Ok(serde_json::from_slice(&response.body)?)
     }
     async fn crates(&self, package: &str) -> Result<Catalog> {
         if !package
@@ -135,23 +114,14 @@ impl Client {
         };
         let response = self
             .http
-            .get(&format!("https://index.crates.io/{suffix}"), "text/plain")
+            .get_derived(
+                &format!("https://index.crates.io/{suffix}"),
+                "text/plain",
+                "crates-catalog-v1",
+                compact::crates,
+            )
             .await?;
-        let text = std::str::from_utf8(&response.body).map_err(|_| Error::Invalid)?;
-        let mut result = Catalog::default();
-        for line in text.lines().filter(|l| !l.is_empty()) {
-            let json: Value = serde_json::from_str(line)?;
-            result.versions.push(Version {
-                version: json["vers"].as_str().ok_or(Error::Invalid)?.into(),
-                published_at: json["pubtime"].as_str().map(str::to_owned),
-                digest: None,
-                deprecated: false,
-                yanked: json["yanked"].as_bool().ok_or(Error::Invalid)?,
-            });
-        }
-        result.versions.reverse(); // index is append-only in publication order
-        self.merge("crates", &package, &result.versions).await?;
-        Ok(result)
+        Ok(serde_json::from_slice(&response.body)?)
     }
     async fn go(&self, package: &str) -> Result<Catalog> {
         let escaped = escape_go(package)?;
@@ -235,35 +205,14 @@ impl Client {
         }
         let response = self
             .http
-            .get(
+            .get_derived(
                 &format!("https://pypi.org/pypi/{package}/json"),
                 "application/json",
+                "pypi-catalog-v1",
+                compact::pypi,
             )
             .await?;
-        let json: Value = serde_json::from_slice(&response.body)?;
-        let mut versions = Vec::new();
-        for (version, files) in json["releases"].as_object().ok_or(Error::Invalid)? {
-            let files = files.as_array().ok_or(Error::Invalid)?;
-            if files.is_empty() {
-                continue;
-            }
-            versions.push(Version {
-                version: version.clone(),
-                published_at: files
-                    .iter()
-                    .filter_map(|f| f["upload_time_iso_8601"].as_str())
-                    .min()
-                    .map(str::to_owned),
-                digest: None,
-                deprecated: false,
-                yanked: files.iter().all(|f| f["yanked"] == true),
-            });
-        }
-        sort(&mut versions, Ecosystem::Loose);
-        Ok(Catalog {
-            versions,
-            dist_tags: BTreeMap::new(),
-        })
+        Ok(serde_json::from_slice(&response.body)?)
     }
     async fn merge(&self, source: &str, package: &str, versions: &[Version]) -> Result<()> {
         let head = self.cache.release_head(source, package).await?;
@@ -280,17 +229,6 @@ impl Client {
         }
         self.cache.merge_releases(source, package, &page).await?;
         Ok(())
-    }
-}
-fn catalog_key(source: &str, package: &str, body: &[u8]) -> rustovate_cache::ExtractionKey {
-    use sha2::{Digest, Sha256};
-    rustovate_cache::ExtractionKey {
-        repo: format!("catalog:{source}:{package}"),
-        default_branch_commit: Sha256::digest(body)
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect(),
-        config_hash: "catalog-v1".into(),
     }
 }
 fn runners(package: &str) -> Result<Catalog> {

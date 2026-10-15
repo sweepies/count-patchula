@@ -49,6 +49,7 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+type Derive = fn(&[u8]) -> std::result::Result<Vec<u8>, serde_json::Error>;
 
 #[derive(Clone, Debug)]
 pub struct Options {
@@ -82,6 +83,7 @@ struct Inner {
     credential_scope: String,
     options: Options,
     governor: Governor,
+    decoding: Arc<tokio::sync::Semaphore>,
 }
 
 /// Clone this handle across the batch: token, connection pool, governor and stats
@@ -144,6 +146,7 @@ impl Client {
             .collect();
         let governor = Governor::new(options.concurrency, options.max_rate_wait);
         Ok(Self(Arc::new(Inner {
+            decoding: Arc::new(tokio::sync::Semaphore::new(4)),
             transport,
             cache,
             authorization,
@@ -279,6 +282,24 @@ impl Client {
     /// Every REST GET goes to the transport with cached validators when present.
     /// A 304 returns the original status/body with refreshed response metadata.
     pub async fn get(&self, path: &str) -> Result<Response> {
+        self.get_representation(path, None).await
+    }
+
+    /// Conditional GET whose cached body contains only caller-selected fields.
+    pub async fn get_derived(
+        &self,
+        path: &str,
+        format: &'static str,
+        derive: Derive,
+    ) -> Result<Response> {
+        self.get_representation(path, Some((format, derive))).await
+    }
+
+    async fn get_representation(
+        &self,
+        path: &str,
+        derived: Option<(&'static str, Derive)>,
+    ) -> Result<Response> {
         let mut url = self.url(path)?;
         let mut visited = HashSet::new();
         for _ in 0..10 {
@@ -288,7 +309,11 @@ impl Client {
             let mut request = self.request(Method::GET, url.clone());
             // Vary metadata is kept separately from representations so GET can
             // discover its vary key before applying stored validators.
-            let base_key = self.key(&request, [])?;
+            let representation = |key: HttpKey| match derived {
+                Some((format, _)) => key.representation(format),
+                None => key,
+            };
+            let base_key = representation(self.key(&request, [])?);
             let metadata = self
                 .0
                 .cache
@@ -300,7 +325,7 @@ impl Client {
                 .and_then(|entry| entry.headers.get("vary"))
                 .map(|vary| parse_vary(vary))
                 .unwrap_or_default();
-            let cache_key = self.key(&request, vary)?;
+            let cache_key = representation(self.key(&request, vary)?);
             let cached = if cache_key == base_key {
                 metadata
             } else {
@@ -357,6 +382,23 @@ impl Client {
             if !response.status.is_success() {
                 return Err(Error::Status(response.status.as_u16()));
             }
+            if !not_modified && let Some((_, derive)) = derived {
+                let permit = self
+                    .0
+                    .decoding
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| Error::Json)?;
+                let body = std::mem::take(&mut response.body);
+                response.body = tokio::task::spawn_blocking(move || {
+                    let _permit = permit;
+                    derive(&body)
+                })
+                .await
+                .map_err(|_| Error::Json)?
+                .map_err(|_| Error::Json)?;
+            }
             let control = comma_header(&response, "cache-control")
                 .unwrap_or_default()
                 .to_ascii_lowercase();
@@ -379,7 +421,7 @@ impl Client {
                     .map_err(|_| Error::Cache)?;
             } else {
                 let entry = cache_entry(&response);
-                let key = self.key(&request, vary)?;
+                let key = representation(self.key(&request, vary)?);
                 if not_modified {
                     self.0
                         .cache

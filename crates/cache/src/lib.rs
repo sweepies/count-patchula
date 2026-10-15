@@ -1,11 +1,18 @@
-//! Batch-shared SQLite cache. All database/compression work runs on one thread.
+//! Batch-shared SQLite cache with bounded parallel readers and one writer.
 #![forbid(unsafe_code)]
 
 mod store;
 
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, HashSet},
+    path::Path,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+};
 use store::Store;
 use tokio::sync::{mpsc, oneshot};
 
@@ -21,7 +28,7 @@ pub enum Error {
     Worker,
     #[error("cache URL must be absolute HTTP(S) without credentials")]
     Url,
-    #[error("cache schema {0} is newer than supported schema 2")]
+    #[error("cache schema {0} is newer than supported schema 3")]
     FutureSchema(i64),
     #[error("cache integrity check failed")]
     Corrupt,
@@ -52,6 +59,8 @@ pub struct HttpKey {
     method: String,
     url: String,
     headers: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    representation: Option<String>,
 }
 
 impl HttpKey {
@@ -66,6 +75,7 @@ impl HttpKey {
         }
         url.set_fragment(None);
         Ok(Self {
+            representation: None,
             method: method.to_ascii_uppercase(),
             url: url.into(),
             headers: headers
@@ -77,6 +87,12 @@ impl HttpKey {
 
     fn encoded(&self) -> Result<String> {
         Ok(serde_json::to_string(self)?)
+    }
+
+    /// Local derived format/version, never sent as an upstream request header.
+    pub fn representation(mut self, format: &str) -> Self {
+        self.representation = Some(format.into());
+        self
     }
 }
 
@@ -121,30 +137,116 @@ type Job = Box<dyn FnOnce(&mut Store) + Send>;
 #[derive(Clone)]
 pub struct Cache {
     jobs: mpsc::Sender<Job>,
+    readers: Arc<Vec<mpsc::Sender<Job>>>,
+    next_reader: Arc<AtomicUsize>,
+    readers_valid: Arc<AtomicBool>,
+    touches: Arc<Mutex<HashSet<String>>>,
 }
 
 impl Cache {
     pub async fn open(path: impl AsRef<Path>, options: Options) -> Result<Self> {
         let path = path.as_ref().to_owned();
+        let reader_path = path.clone();
+        let touches = Arc::new(Mutex::new(HashSet::new()));
+        let writer_touches = touches.clone();
+        let readers_valid = Arc::new(AtomicBool::new(true));
+        let writer_readers_valid = readers_valid.clone();
         let (jobs, mut receiver) = mpsc::channel::<Job>(128);
         let (ready, initialized) = oneshot::channel();
         std::thread::Builder::new()
             .name("rustovate-cache".into())
             .spawn(move || match Store::open(path, options) {
                 Ok(mut store) => {
-                    if ready.send(Ok(())).is_err() {
+                    let persistent = store.conn.path().is_some_and(|path| !path.is_empty());
+                    if ready.send(Ok(persistent)).is_err() {
                         return;
                     }
                     while let Some(job) = receiver.blocking_recv() {
+                        let touched =
+                            std::mem::take(&mut *writer_touches.lock().expect("cache touches"));
+                        if let Err(error) = store.touch(&touched) {
+                            tracing::warn!(%error, "cache access accounting failed");
+                        }
                         job(&mut store);
+                        if !store.conn.path().is_some_and(|path| !path.is_empty()) {
+                            writer_readers_valid.store(false, Ordering::Relaxed);
+                        }
                     }
+                    let touched =
+                        std::mem::take(&mut *writer_touches.lock().expect("cache touches"));
+                    let _ = store.touch(&touched);
                 }
                 Err(error) => {
                     let _ = ready.send(Err(error));
                 }
             })?;
-        initialized.await.map_err(|_| Error::Worker)??;
-        Ok(Self { jobs })
+        let persistent = initialized.await.map_err(|_| Error::Worker)??;
+        let mut readers = Vec::new();
+        // Read-only WAL connections neither migrate nor quarantine. Errors are
+        // retried on the writer, which remains the sole recovery coordinator.
+        // In-memory/fallback databases use the writer's connection instead.
+        if persistent && reader_path != Path::new(":memory:") && reader_path.exists() {
+            for index in 0..4 {
+                let path = reader_path.clone();
+                let (sender, mut receiver) = mpsc::channel::<Job>(32);
+                let (ready, initialized) = oneshot::channel();
+                std::thread::Builder::new()
+                    .name(format!("rustovate-cache-read-{index}"))
+                    .spawn(move || {
+                        let mut store = match Store::reader(&path) {
+                            Ok(store) => store,
+                            Err(_) => {
+                                let _ = ready.send(false);
+                                return;
+                            }
+                        };
+                        if ready.send(true).is_err() {
+                            return;
+                        }
+                        while let Some(job) = receiver.blocking_recv() {
+                            job(&mut store);
+                        }
+                    })?;
+                if !initialized.await.map_err(|_| Error::Worker)? {
+                    readers.clear();
+                    break;
+                }
+                readers.push(sender);
+            }
+        }
+        Ok(Self {
+            jobs,
+            readers: Arc::new(readers),
+            next_reader: Arc::new(AtomicUsize::new(0)),
+            readers_valid,
+            touches,
+        })
+    }
+
+    async fn read<T: Send + 'static>(
+        &self,
+        operation: impl Fn(&mut Store) -> Result<T> + Send + Sync + 'static,
+    ) -> Result<T> {
+        let operation = Arc::new(operation);
+        if !self.readers.is_empty() && self.readers_valid.load(Ordering::Relaxed) {
+            let index = self.next_reader.fetch_add(1, Ordering::Relaxed) % self.readers.len();
+            let (reply, response) = oneshot::channel();
+            let read = operation.clone();
+            self.readers[index]
+                .send(Box::new(move |store| {
+                    let _ = reply.send(read(store));
+                }))
+                .await
+                .map_err(|_| Error::Worker)?;
+            match response.await.map_err(|_| Error::Worker)? {
+                Ok(value) => return Ok(value),
+                Err(error) if store::is_corrupt(&error) => {
+                    self.readers_valid.store(false, Ordering::Relaxed);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.call(move |store| operation(store)).await
     }
 
     async fn call<T: Send + 'static>(
@@ -152,10 +254,12 @@ impl Cache {
         mut operation: impl FnMut(&mut Store) -> Result<T> + Send + 'static,
     ) -> Result<T> {
         let (reply, response) = oneshot::channel();
+        let readers_valid = self.readers_valid.clone();
         self.jobs
             .send(Box::new(move |store| {
                 let mut result = operation(store);
                 if result.as_ref().is_err_and(store::is_corrupt) {
+                    readers_valid.store(false, Ordering::Relaxed);
                     result = store.recover().and_then(|()| operation(store));
                 }
                 let _ = reply.send(result);
@@ -167,7 +271,12 @@ impl Cache {
 
     pub async fn http_get(&self, key: &HttpKey) -> Result<Option<HttpEntry>> {
         let key = key.encoded()?;
-        self.call(move |store| store.http_get(&key)).await
+        let read_key = key.clone();
+        let result = self.read(move |store| store.http_get(&read_key)).await?;
+        if result.is_some() {
+            self.touches.lock().expect("cache touches").insert(key);
+        }
+        Ok(result)
     }
 
     pub async fn http_put(&self, key: &HttpKey, entry: &HttpEntry) -> Result<()> {
@@ -240,13 +349,13 @@ impl Cache {
 
     pub async fn releases(&self, source: &str, package: &str) -> Result<ReleaseList> {
         let (source, package) = (source.to_owned(), package.to_owned());
-        self.call(move |store| store.releases(&source, &package))
+        self.read(move |store| store.releases(&source, &package))
             .await
     }
     /// Read the refresh boundary without materializing the cached history.
     pub async fn release_head(&self, source: &str, package: &str) -> Result<Option<String>> {
         let (source, package) = (source.to_owned(), package.to_owned());
-        self.call(move |store| {
+        self.read(move |store| {
             Ok(store
                 .conn
                 .query_row(
@@ -261,7 +370,7 @@ impl Cache {
 
     pub async fn extraction_get(&self, key: &ExtractionKey) -> Result<Option<Vec<u8>>> {
         let key = key.clone();
-        self.call(move |store| store.extraction_get(&key)).await
+        self.read(move |store| store.extraction_get(&key)).await
     }
 
     pub async fn extraction_put(&self, key: &ExtractionKey, serialized: &[u8]) -> Result<()> {
@@ -271,5 +380,54 @@ impl Cache {
                 rusqlite::params![key.repo, key.default_branch_commit, key.config_hash, serialized])?;
             Ok(())
         }).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn read_decoders_run_concurrently_while_writer_stays_available() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = Cache::open(directory.path().join("cache.sqlite"), Options::default())
+            .await
+            .unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(4));
+        let mut tasks = Vec::new();
+        for _ in 0..4 {
+            let cache = cache.clone();
+            let barrier = barrier.clone();
+            tasks.push(tokio::spawn(async move {
+                cache
+                    .read(move |store| {
+                        // Each read holds its worker until all four have started.
+                        barrier.wait();
+                        Ok(store
+                            .conn
+                            .query_row("SELECT 1", [], |r| r.get::<_, i64>(0))?)
+                    })
+                    .await
+                    .unwrap()
+            }));
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            cache
+                .extraction_put(
+                    &ExtractionKey {
+                        repo: "repo".into(),
+                        default_branch_commit: "sha".into(),
+                        config_hash: "config".into(),
+                    },
+                    b"data",
+                )
+                .await
+                .unwrap();
+            for task in tasks {
+                assert_eq!(task.await.unwrap(), 1);
+            }
+        })
+        .await
+        .expect("read workers must not serialize or block the writer");
     }
 }

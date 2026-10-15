@@ -18,6 +18,10 @@ use tokio::sync::Semaphore;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("invalid registry document")]
+    Document,
+    #[error("registry catalog worker failed")]
+    Worker,
     #[error("invalid registry URL or header")]
     Configuration,
     #[error("registry HTTP {0}")]
@@ -39,10 +43,12 @@ struct Inner {
     transport: Arc<dyn Transport>,
     cache: Cache,
     semaphore: Semaphore,
+    decoding: Arc<Semaphore>,
     requests: AtomicU64,
     not_modified: AtomicU64,
     cache_hits: AtomicU64,
 }
+type Derive = fn(&[u8]) -> Result<Vec<u8>, Error>;
 #[derive(Clone)]
 pub struct Cached(Arc<Inner>);
 impl Cached {
@@ -58,6 +64,7 @@ impl Cached {
             transport,
             cache,
             semaphore: Semaphore::new(concurrency),
+            decoding: Arc::new(Semaphore::new(4)),
             requests: AtomicU64::new(0),
             not_modified: AtomicU64::new(0),
             cache_hits: AtomicU64::new(0),
@@ -71,6 +78,28 @@ impl Cached {
         }
     }
     pub async fn get(&self, url: &str, accept: &str) -> Result<Response, Error> {
+        self.get_representation(url, accept, None).await
+    }
+
+    /// Derive once on a 200. Fresh hits and 304s contain only the compact body;
+    /// validators always refer to the original upstream representation.
+    pub async fn get_derived(
+        &self,
+        url: &str,
+        accept: &str,
+        format: &'static str,
+        derive: Derive,
+    ) -> Result<Response, Error> {
+        self.get_representation(url, accept, Some((format, derive)))
+            .await
+    }
+
+    async fn get_representation(
+        &self,
+        url: &str,
+        accept: &str,
+        derived: Option<(&'static str, Derive)>,
+    ) -> Result<Response, Error> {
         let url = Url::parse(url).map_err(|_| Error::Configuration)?;
         if url.scheme() != "https"
             || url.host_str().is_none()
@@ -79,11 +108,14 @@ impl Cached {
         {
             return Err(Error::Configuration);
         }
-        let key = HttpKey::new(
+        let mut key = HttpKey::new(
             "GET",
             url.as_str(),
             BTreeMap::from([("accept".into(), accept.into())]),
         )?;
+        if let Some((format, _)) = derived {
+            key = key.representation(format);
+        }
         let trace = RequestTrace::new("GET", &url);
         let cached = self.0.cache.http_get(&key).await?;
         let now = SystemTime::now()
@@ -198,6 +230,22 @@ impl Cached {
         }
         if !response.status.is_success() {
             return Err(Error::Status(response.status.as_u16()));
+        }
+        if !not_modified && let Some((_, derive)) = derived {
+            let permit = self
+                .0
+                .decoding
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| Error::Worker)?;
+            let body = std::mem::take(&mut response.body);
+            response.body = tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                derive(&body)
+            })
+            .await
+            .map_err(|_| Error::Worker)??;
         }
         let text = |name: &str| {
             response

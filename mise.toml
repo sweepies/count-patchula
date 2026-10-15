@@ -93,6 +93,12 @@ run = "cargo run --release --quiet --locked -p rustovate-cli -- lookup"
 description = "Measure release cold/warm source and engine fixtures offline"
 run = ["cargo test --release --locked -p rustovate-datasource --test recorded public_sources_cold_and_conditional_warm -- --nocapture", "cargo test --release --locked -p rustovate-engine --test recorded -- --nocapture"]
 
+[tasks."benchmarks:catalogs"]
+description = "Replay four captured public npm documents offline; arguments: input-directory new-cache-path"
+raw_args = true
+env = { CARGO_NET_OFFLINE = "true" }
+run = "cargo run --release --locked -p rustovate-datasource --example catalog_bench --"
+
 [tasks."registry:update"]
 description = "Refresh backend identities from the installed mise published registry"
 run = '''

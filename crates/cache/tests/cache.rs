@@ -252,7 +252,7 @@ async fn migrates_previous_schema_without_discarding_http_or_release_data() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        2
+        3
     );
 }
 
@@ -326,6 +326,8 @@ fn http_keys_normalize_authority_method_fragment_and_headers_but_keep_query_orde
     )
     .unwrap();
     assert!(a != reversed);
+    assert!(b.clone().representation("catalog-v1") != b);
+    assert!(b.clone().representation("catalog-v1") != b.representation("catalog-v2"));
 }
 
 #[tokio::test]
@@ -346,5 +348,50 @@ async fn future_schema_is_preserved_instead_of_being_treated_as_corruption() {
             .get::<_, String>(0))
             .unwrap(),
         "keep"
+    );
+}
+
+#[tokio::test]
+async fn migration_retires_raw_registries_and_old_content_hashed_catalogs() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("cache.sqlite");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(include_str!("../src/migrations/001.sql"))
+        .unwrap();
+    conn.execute_batch(include_str!("../src/migrations/002.sql"))
+        .unwrap();
+    for url in [
+        "https://registry.npmjs.org/vite",
+        "https://index.crates.io/he/ck/heck",
+        "https://pypi.org/pypi/pip/json",
+        "https://api.github.com/repos/example/releases",
+    ] {
+        let key = serde_json::json!({"method":"GET","url":url,"headers":{}}).to_string();
+        conn.execute(
+            "INSERT INTO http(key,status,headers,body,fetched_at) VALUES (?1,200,'{}',?2,0)",
+            rusqlite::params![key, zstd::stream::encode_all(&b"old body"[..], 3).unwrap()],
+        )
+        .unwrap();
+    }
+    conn.execute(
+        "INSERT INTO extraction VALUES ('catalog:npm:vite','hash','catalog-v1',X'00')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO extraction VALUES ('owner/repo','sha','config',X'01')",
+        [],
+    )
+    .unwrap();
+    let _cache = Cache::open(&path, Options::default()).await.unwrap();
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM http", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row("SELECT repo FROM extraction", [], |r| r.get::<_, String>(0))
+            .unwrap(),
+        "owner/repo"
     );
 }

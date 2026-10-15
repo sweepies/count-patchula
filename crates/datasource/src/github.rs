@@ -8,6 +8,17 @@ use sha2::{Digest, Sha256};
 const RELEASES: &str = "query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){releases(first:100,after:$cursor,orderBy:{field:CREATED_AT,direction:DESC}){nodes{tagName publishedAt isDraft isPrerelease}pageInfo{hasNextPage endCursor}}}}";
 const GIT_OBJECT_FIELDS: &str = "oid __typename ... on Commit{committedDate} ... on Tag{target{__typename ... on Commit{oid committedDate} ... on Tag{target{__typename ... on Commit{oid committedDate}}}}}";
 
+#[derive(Serialize, Deserialize)]
+struct ReleaseHead {
+    tag_name: String,
+    published_at: Option<String>,
+    draft: bool,
+    prerelease: bool,
+}
+fn compact_release_head(body: &[u8]) -> std::result::Result<Vec<u8>, serde_json::Error> {
+    serde_json::to_vec(&serde_json::from_slice::<Vec<ReleaseHead>>(body)?)
+}
+
 impl Client {
     pub(super) async fn github_versions(&self, source: Source, package: &str) -> Result<Catalog> {
         if source == Source::GithubTags {
@@ -88,7 +99,7 @@ impl Client {
         };
         let warm = stream::iter(warm).map(|(package, key, previous)| async move {
             let result = async {
-                let response = self.github.get(&format!("repos/{package}/releases?per_page=1")).await?;
+                let response = self.github.get_derived(&format!("repos/{package}/releases?per_page=1"), "github-release-head-v1", compact_release_head).await?;
                 let nodes: Vec<Value> = serde_json::from_slice(&response.body)?;
                 let nodes: Vec<_> = nodes.iter().map(|node| json!({"tagName":node["tag_name"],"publishedAt":node["published_at"],"isDraft":node["draft"],"isPrerelease":node["prerelease"]})).collect();
                 self.release_catalog(&package, key, previous, 1, &json!({"nodes":nodes,"pageInfo":{"hasNextPage":true,"endCursor":null}})).await

@@ -1,5 +1,5 @@
 use crate::{Error, ExtractionKey, HttpEntry, Options, Release, ReleaseList, Result};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
@@ -30,7 +30,7 @@ fn initialize(mut conn: Connection) -> Result<Connection> {
         return Err(Error::Corrupt);
     }
     let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if version > 2 {
+    if version > 3 {
         return Err(Error::FutureSchema(version));
     }
     conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -43,11 +43,42 @@ fn initialize(mut conn: Connection) -> Result<Connection> {
     if version < 2 {
         transaction.execute_batch(include_str!("migrations/002.sql"))?;
     }
+    if version < 3 {
+        transaction.execute_batch(include_str!("migrations/003.sql"))?;
+    }
     transaction.commit()?;
     Ok(conn)
 }
 
 impl Store {
+    pub fn reader(path: &Path) -> Result<Self> {
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        conn.busy_timeout(Duration::from_secs(5))?;
+        Ok(Self {
+            conn,
+            path: path.into(),
+            options: Options::default(),
+        })
+    }
+
+    pub fn touch(&mut self, keys: &HashSet<String>) -> Result<()> {
+        if keys.is_empty() {
+            return Ok(());
+        }
+        let tx = self.conn.transaction()?;
+        for key in keys {
+            tx.execute("UPDATE access_clock SET value=value+1", [])?;
+            tx.execute(
+                "UPDATE http SET last_access=(SELECT value FROM access_clock) WHERE key=?1",
+                [key],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
     pub fn open(path: PathBuf, options: Options) -> Result<Self> {
         if let Some(parent) = path
             .parent()
@@ -116,17 +147,10 @@ impl Store {
         let body = match zstd::stream::decode_all(body.as_slice()) {
             Ok(body) => body,
             Err(_) => {
-                tracing::warn!("invalid compressed HTTP cache entry; evicting body");
-                self.conn.execute("DELETE FROM http WHERE key=?1", [key])?;
+                tracing::warn!("invalid compressed HTTP cache entry; treating as a miss");
                 return Ok(None);
             }
         };
-        self.conn.execute(
-            "UPDATE http SET last_access=(SELECT value+1 FROM access_clock) WHERE key=?1",
-            [key],
-        )?;
-        self.conn
-            .execute("UPDATE access_clock SET value=value+1", [])?;
         Ok(Some(HttpEntry {
             status,
             etag,

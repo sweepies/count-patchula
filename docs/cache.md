@@ -6,14 +6,21 @@ codes; bundling avoids system SQLite version/feature drift. Zstd level 3 stores
 HTTP bodies with a small CPU cost and reuses the HTTP stack's compression
 dependency. The pinned Zig mise tasks build the native dependencies.
 
-Open one Cache per batch and clone its handle. A dedicated OS thread owns the
-connection. A bounded Tokio mpsc queue (128 jobs) and per-job oneshot reply
-serialize database access and compression without blocking async workers or
-holding an async mutex across database I/O. This is simpler than a pool for the
-small batch and SQLite's single writer; reads are also queued. If profiling
-finds that reads dominate, a read pool can be added behind the same API. Dropping
-the last handle closes the queue; the thread drains queued work and closes the
-connection. Cancelled callers may still complete their submitted cache writes.
+Open one Cache per batch and clone its handle. One dedicated OS thread owns
+writes, migrations and corruption recovery, using a bounded queue of 128 jobs.
+Four additional OS threads each own a read-only WAL connection and a bounded
+32-job queue. Round-robin dispatch runs SQLite reads and Zstd decoding in parallel,
+without blocking async workers. Release and extraction reads use the same pool.
+The in-memory/rebuild fallback uses the writer connection. Reader corruption
+disables the pool for that handle and retries through the recovery coordinator.
+Each reader keeps a short SQLite statement lifetime, so decoding holds no WAL
+read transaction. Canceled callers may still complete submitted writes. Dropping
+the last handle closes the queues; worker threads drain and close asynchronously.
+
+Read access updates are coalesced and flushed together in a transaction before
+writer jobs, including budget eviction, and on worker shutdown. Reads therefore
+do not acquire SQLite's write lock. Access within one coalesced group has
+approximate recency. Body inserts and release merges are also transactional.
 
 The database uses WAL, a five-second busy timeout and synchronous=NORMAL (cache
 data is reproducible). The usual WAL sidecars are transient; all tables live
@@ -26,8 +33,27 @@ header names/outer whitespace. Query order is retained because repeated query
 parameters may be order-sensitive. Callers select vary-relevant headers; include
 a credential namespace digest for authenticated data, never a raw token.
 HTTP entries store status, validators, response headers (e.g. pagination Link),
-compressed body, fetched-at, expiry and raw Cache-Control hints. Expiry does not
-discard validators. Bodies that cannot be decompressed are evicted as misses.
+compressed body, fetched-at, expiry and Cache-Control hints. Expiry does not
+discard validators. Invalid compressed bodies are misses and are replaced by
+the next successful fetch; their validators are never sent.
+
+Large registry bodies use an explicit, versioned local `representation` in the
+HTTP key, independent of upstream Accept/Vary. npm, Cargo sparse indexes, PyPI
+and GitHub REST release heads store derived documents, never the raw response.
+npm retains every version's publication time/deprecation flag, dist-tags and
+modified time; unused integrity/shasum and other package metadata are discarded.
+GitHub release heads omit assets/counters; complete GraphQL release/tag histories
+already use release rows/derived extraction records. Node's small index and
+repository/ref/Go metadata still use raw bodies under the same size budget.
+
+On a 200, typed serde deserialization skips unused fields without materializing
+the complete JSON tree. Registry derivation runs on `spawn_blocking` with a
+four-job limit; HTTP transfer remains independently concurrent. The transport
+still buffers one decoded response, so this is bounded parallel derivation,
+not streaming network ingestion. A 304 updates only HTTP metadata and reuses the
+compact body. Fresh hits neither hash nor parse the original packument. Uncacheable
+responses remove both compact bodies and validators. A format change requires a
+new representation version; raw and derived namespaces cannot share validators.
 
 The default 256 MiB budget counts compressed HTTP body bytes. A monotonic access
 clock approximates LRU and evicts entire HTTP rows until within budget, including
@@ -47,9 +73,14 @@ Merges are transactional. Extraction keys include repo, default-branch commit,
 and resolved config hash, and store caller-serialized bytes.
 
 Schema migrations are transactional, using SQLite user_version: v1 contains the
-three cache domains; v2 adds the HTTP access clock/LRU index. Tests create a
-populated v1 database and verify that v2 preserves its entries. A future schema
-is rejected without modifying or quarantining its database.
+three cache domains; v2 adds the HTTP access clock/LRU index; v3 introduces the
+versioned compact representation keys and retires raw registry/release-head
+bodies, obsolete npm content-hashed extractions, and duplicate npm/Cargo release
+rows. Repository extractions and other HTTP/release data survive. Migrated
+registries need one unconditional fetch; SQLite reuses freed pages without an
+automatic VACUUM. Tests cover populated v1/v2 upgrades, version namespace isolation,
+concurrent decoding, conditional compact refreshes and cache-control behavior.
+A future schema is rejected without modifying or quarantining its database.
 
 Opening runs quick_check. SQLITE_CORRUPT/NOTADB and failed integrity checks close
 the connection, quarantine the file and any remaining WAL/SHM sidecars under a
