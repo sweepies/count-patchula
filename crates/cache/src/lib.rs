@@ -1,6 +1,7 @@
 //! Batch-shared SQLite cache with bounded parallel readers and one writer.
 #![forbid(unsafe_code)]
 
+pub mod queue;
 mod store;
 
 use rusqlite::OptionalExtension;
@@ -28,7 +29,7 @@ pub enum Error {
     Worker,
     #[error("cache URL must be absolute HTTP(S) without credentials")]
     Url,
-    #[error("cache schema {0} is newer than supported schema 3")]
+    #[error("cache schema {0} is newer than supported schema 4")]
     FutureSchema(i64),
     #[error("cache integrity check failed")]
     Corrupt,
