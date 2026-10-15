@@ -205,6 +205,7 @@ fn update(value: &Value, inherited_group: Option<String>, ctx: &mut Context<'_>)
             kind
         },
         group: ctx.text(value, "groupName").or(inherited_group),
+        policy: None,
     };
     if proposed.new_value.is_none()
         && proposed.new_version.is_none()

@@ -8,3 +8,16 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+nodejs-semver = "7.0.0"
+regex = "1.13.1"
+rustovate-config = { version = "0.1.0", path = "../config" }
+rustovate-datasource = { version = "0.1.0", path = "../datasource" }
+rustovate-manager = { version = "0.1.0", path = "../manager" }
+rustovate-report = { version = "0.1.0", path = "../report" }
+rustovate-versioning = { version = "0.1.0", path = "../versioning" }
+semver = "1.0.28"
+
+[dev-dependencies]
+serde_json.workspace = true

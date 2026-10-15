@@ -69,6 +69,7 @@ fn equal_proposals_are_order_independent_and_never_paired_by_position() {
         new_digest: None,
         update_type: "major".into(),
         group: None,
+        policy: None,
     };
     dep.updates.push(u.clone());
     u.new_value = Some("6".into());
@@ -101,6 +102,7 @@ fn departures_do_not_hide_version_changes_or_other_managers() {
         new_digest: Some("digest".into()),
         update_type: "pin".into(),
         group: None,
+        policy: None,
     });
     assert_eq!(
         compare(&a, &b, &rules()).unwrap().differences[0].classification,

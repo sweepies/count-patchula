@@ -76,6 +76,27 @@ pub struct Update {
     /// major, minor, patch, digest, pin; comparison retains other upstream types.
     pub update_type: String,
     pub group: Option<String>,
+    /// Additive v1 lookup metadata; absent in black-box comparison inputs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<UpdatePolicy>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdatePolicy {
+    pub wait_hours: u32,
+    pub windows: Vec<Window>,
+    pub merge: bool,
+    pub labels: Vec<String>,
+    pub commit_prefix: String,
+    pub release_notes: bool,
+    pub body_notes: Vec<String>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Window {
+    pub cron: Vec<String>,
+    pub zone: String,
 }
 
 impl Report {
