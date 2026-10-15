@@ -1,9 +1,12 @@
 //! Verify the raw, bounded body before any JSON decoding or delivery processing.
 use crate::settings::{Reload, Settings};
 use axum::{
+    Json,
     body::Bytes,
-    extract::{State, rejection::BytesRejection},
+    extract::{Request, State, rejection::BytesRejection},
     http::{HeaderMap, StatusCode},
+    middleware::Next,
+    response::{IntoResponse, Response},
 };
 use hmac::{Hmac, KeyInit, Mac};
 use rustovate_cache::{Cache, queue::Work};
@@ -15,6 +18,75 @@ use std::sync::{
 };
 
 pub const BODY_LIMIT: usize = 2 * 1024 * 1024;
+
+#[derive(Clone)]
+struct Failure {
+    kind: &'static str,
+    event: Option<String>,
+    delivery: Option<String>,
+    installation: Option<u64>,
+    repository: Option<String>,
+}
+impl Failure {
+    fn new(kind: &'static str) -> Self {
+        Self {
+            kind,
+            event: None,
+            delivery: None,
+            installation: None,
+            repository: None,
+        }
+    }
+    fn delivery(mut self, event: &str, delivery: &str, payload: &Value) -> Self {
+        self.event = Some(event.into());
+        self.delivery = Some(delivery.into());
+        self.installation = payload["installation"]["id"].as_u64();
+        self.repository = payload["repository"]["full_name"]
+            .as_str()
+            .filter(|repo| crate::settings::valid_repo(repo))
+            .map(str::to_owned);
+        self
+    }
+    fn response(self, status: StatusCode) -> Response {
+        let mut response = (status, Json(json!({"error_kind": self.kind}))).into_response();
+        response.extensions_mut().insert(self);
+        response
+    }
+}
+
+/// Observe the final response, including framework routing/rejection paths that
+/// never reach `receive`. Only allowlisted diagnostics cross this boundary.
+pub(crate) async fn observe(request: Request, next: Next) -> Response {
+    let response = next.run(request).await;
+    let status = response.status();
+    if status.is_success() {
+        return response;
+    }
+    let failure = response
+        .extensions()
+        .get::<Failure>()
+        .cloned()
+        .unwrap_or_else(|| {
+            Failure::new(match status {
+                StatusCode::NOT_FOUND => "route-not-found",
+                StatusCode::METHOD_NOT_ALLOWED => "method-not-allowed",
+                StatusCode::INTERNAL_SERVER_ERROR => "internal-error",
+                StatusCode::SERVICE_UNAVAILABLE => "not-ready",
+                _ => "http-rejection",
+            })
+        });
+    tracing::warn!(target: "rustovate_server", status = status.as_u16(), error_kind = failure.kind,
+        event = failure.event.as_deref(), delivery_id = failure.delivery.as_deref(),
+        installation = failure.installation, repository = failure.repository.as_deref(),
+        outcome = "rejected", "request rejected");
+    let mut rejected = failure.response(status);
+    if let Some(allow) = response.headers().get(axum::http::header::ALLOW) {
+        rejected
+            .headers_mut()
+            .insert(axum::http::header::ALLOW, allow.clone());
+    }
+    rejected
+}
 #[derive(Clone)]
 pub struct Webhook {
     pub cache: Cache,
@@ -72,41 +144,43 @@ pub async fn receive(
     State(state): State<Webhook>,
     headers: HeaderMap,
     body: Result<Bytes, BytesRejection>,
-) -> StatusCode {
+) -> Response {
     let body = match body {
         Ok(body) => body,
         Err(error) => {
-            tracing::info!(target: "rustovate_server", outcome = "body rejected", status = error.status().as_u16(), "webhook received");
-            return error.status();
+            return Failure::new(if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+                "body-too-large"
+            } else {
+                "body-read-failed"
+            })
+            .response(error.status());
         }
     };
     if !state.accepting.load(Ordering::Acquire) {
-        tracing::info!(target: "rustovate_server", outcome = "draining", "webhook received");
-        return StatusCode::SERVICE_UNAVAILABLE;
+        return Failure::new("draining").response(StatusCode::SERVICE_UNAVAILABLE);
     }
     if !header(&headers, "x-hub-signature-256")
         .is_some_and(|signature| verify(&state.secret, signature, &body))
     {
-        tracing::info!(target: "rustovate_server", outcome = "bad signature", "webhook received");
-        return StatusCode::UNAUTHORIZED;
+        return Failure::new("bad-signature").response(StatusCode::UNAUTHORIZED);
     }
     let Some(delivery) = header(&headers, "x-github-delivery").filter(|s| {
         !s.is_empty() && s.len() <= 128 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
     }) else {
-        tracing::info!(target: "rustovate_server", outcome = "invalid delivery id", "webhook received");
-        return StatusCode::BAD_REQUEST;
+        return Failure::new("invalid-delivery-id").response(StatusCode::BAD_REQUEST);
     };
     let Some(event) = header(&headers, "x-github-event").filter(|s| metadata_word(s)) else {
-        tracing::info!(target: "rustovate_server", outcome = "invalid event", "webhook received");
-        return StatusCode::BAD_REQUEST;
+        return Failure::new("invalid-event").response(StatusCode::BAD_REQUEST);
     };
     let Ok(mut payload) = serde_json::from_slice::<Value>(&body) else {
-        tracing::info!(target: "rustovate_server", outcome = "invalid JSON", "webhook received");
-        return StatusCode::BAD_REQUEST;
+        return Failure::new("invalid-json").response(StatusCode::BAD_REQUEST);
     };
+    if !payload.is_object() {
+        return Failure::new("invalid-payload").response(StatusCode::BAD_REQUEST);
+    }
     if event == "ping" {
         log_delivery(event, delivery, &payload, "accepted", "ping", None);
-        return StatusCode::OK;
+        return StatusCode::OK.into_response();
     }
     let mut resolution = None;
     if payload["installation"].is_null()
@@ -124,16 +198,10 @@ pub async fn receive(
                 resolution = Some("installation-resolved");
             }
             Ok(None) => resolution = Some("installation-not-found"),
-            Err(_) => {
-                log_delivery(
-                    event,
-                    delivery,
-                    &payload,
-                    "unavailable",
-                    "installation-resolution-failed",
-                    Some("installation-resolution-failed"),
-                );
-                return StatusCode::SERVICE_UNAVAILABLE;
+            Err(kind) => {
+                return Failure::new(kind)
+                    .delivery(event, delivery, &payload)
+                    .response(StatusCode::SERVICE_UNAVAILABLE);
             }
         }
     }
@@ -162,18 +230,18 @@ pub async fn receive(
             settings.coalescing_ms as i64,
         )
         .await;
-    let outcome = match &result {
+    let outcome = match result {
         Ok(false) => "duplicate delivery ignored",
         Ok(true) if enqueued => "accepted/enqueued",
         Ok(true) => "accepted/ignored",
-        Err(_) => "persistence failed",
+        Err(error) => {
+            return Failure::new(error.kind())
+                .delivery(event, delivery, &payload)
+                .response(StatusCode::SERVICE_UNAVAILABLE);
+        }
     };
     log_delivery(event, delivery, &payload, outcome, reason, resolution);
-    if result.is_ok() {
-        StatusCode::ACCEPTED
-    } else {
-        StatusCode::SERVICE_UNAVAILABLE
-    }
+    StatusCode::ACCEPTED.into_response()
 }
 fn log_delivery(
     event: &str,

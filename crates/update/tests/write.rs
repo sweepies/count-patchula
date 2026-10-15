@@ -30,6 +30,7 @@ struct State {
     unsigned: bool,
     race: bool,
     truncated: bool,
+    malformed_base_response: bool,
     history: Vec<String>,
     merged_heads: BTreeSet<String>,
     pr_lag_reads: usize,
@@ -325,7 +326,11 @@ impl Transport for Fake {
         } else if path == "/repos/demo/app" {
             response(
                 200,
-                json!({"node_id":"repo-id","default_branch":"main","allow_auto_merge":true,"allow_squash_merge":true}),
+                if state.malformed_base_response {
+                    json!({})
+                } else {
+                    json!({"node_id":"repo-id","default_branch":"main","allow_auto_merge":true,"allow_squash_merge":true})
+                },
             )
         } else if let Some(branch) = path.strip_prefix("/repos/demo/app/git/ref/heads/") {
             // url::Url keeps percent-encoded slashes in a path segment.
@@ -732,7 +737,7 @@ async fn conflicts_mode_recreates_when_the_default_changes_a_touched_file() {
 }
 #[tokio::test(start_paused = true)]
 async fn stale_blob_content_tree_moved_base_unsigned_and_lease_race_fail_closed() {
-    for case in 0..6 {
+    for case in 0..7 {
         let (mut plan, mut snapshot) = make_plan("22.0.0");
         let server = fake(&snapshot);
         {
@@ -750,7 +755,8 @@ async fn stale_blob_content_tree_moved_base_unsigned_and_lease_race_fail_closed(
                 }
                 3 => s.unsigned = true,
                 4 => s.race = true,
-                _ => s.truncated = true,
+                5 => s.truncated = true,
+                _ => s.malformed_base_response = true,
             }
         }
         apply(
@@ -764,10 +770,15 @@ async fn stale_blob_content_tree_moved_base_unsigned_and_lease_race_fail_closed(
         .await;
         assert_eq!(
             plan.action.status,
-            ActionStatus::Error,
+            if case == 2 {
+                ActionStatus::Skipped
+            } else {
+                ActionStatus::Error
+            },
             "case={case}: {:?}",
             plan.action
         );
+        assert_eq!(rustovate_update::needs_requeue(&plan.action), case == 2);
         assert!(
             !server
                 .0
@@ -776,11 +787,41 @@ async fn stale_blob_content_tree_moved_base_unsigned_and_lease_race_fail_closed(
                 .refs
                 .contains_key(&format!("refs/heads/{}", plan.action.branch))
         );
-        if matches!(case, 0..=2 | 5) {
+        if matches!(case, 0..=2 | 5 | 6) {
             assert!(server.0.lock().unwrap().writes.is_empty());
         }
     }
 }
+#[tokio::test]
+async fn moved_default_base_skips_every_branch_in_a_shared_write_batch() {
+    let (plan, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    server
+        .0
+        .lock()
+        .unwrap()
+        .refs
+        .insert("refs/heads/main".into(), "new-base".into());
+    let (mut second, _) = make_plan("22.0.0");
+    second.action.branch = "rustovate/second".into();
+    let mut plans = [plan, second];
+    rustovate_update::apply_all(
+        &client(server.clone()).await,
+        &mut plans,
+        &snapshot,
+        "main",
+        Rebase::Behind,
+        false,
+    )
+    .await;
+    assert!(
+        plans
+            .iter()
+            .all(|plan| rustovate_update::needs_requeue(&plan.action))
+    );
+    assert!(server.0.lock().unwrap().writes.is_empty());
+}
+
 #[test]
 fn names_are_readable_and_validate_git_refs() {
     assert_eq!(

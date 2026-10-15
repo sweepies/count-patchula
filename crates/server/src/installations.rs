@@ -26,7 +26,7 @@ impl Resolver {
             self.resolve_at(payload, chrono::Utc::now().timestamp()),
         )
         .await
-        .map_err(|_| "installation lookup timed out")?
+        .map_err(|_| "installation-resolution-timeout")?
     }
     pub(crate) async fn resolve_at(
         &self,
@@ -65,7 +65,7 @@ impl Resolver {
             .cache
             .installation_get(self.app.id(), target.clone(), now)
             .await
-            .map_err(|_| "installation cache read failed")?
+            .map_err(|error| error.kind())?
         {
             entries.insert(target, mapping);
             return Ok(Some(mapping.installation));
@@ -77,7 +77,7 @@ impl Resolver {
                 .organization_installation(target.strip_prefix("orgs/").expect("target prefix"))
                 .await
         }
-        .map_err(|_| "installation lookup failed")?;
+        .map_err(|_| "installation-lookup-failed")?;
         if let Some(installation) = installation {
             let mapping = Mapping {
                 installation,
@@ -86,14 +86,14 @@ impl Resolver {
             self.cache
                 .installation_put(self.app.id(), target.clone(), mapping, now)
                 .await
-                .map_err(|_| "installation cache write failed")?;
+                .map_err(|error| error.kind())?;
             entries.insert(target, mapping);
         } else {
             entries.remove(&target);
             self.cache
                 .installation_remove(self.app.id(), target)
                 .await
-                .map_err(|_| "installation cache invalidation failed")?;
+                .map_err(|error| error.kind())?;
         }
         Ok(installation)
     }

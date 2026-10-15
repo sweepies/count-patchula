@@ -34,6 +34,116 @@ impl Logs {
     }
 }
 
+async fn error_kind(response: axum::response::Response) -> String {
+    let body = axum::body::to_bytes(response.into_body(), 1024)
+        .await
+        .unwrap();
+    serde_json::from_slice::<Value>(&body).unwrap()["error_kind"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+#[tokio::test]
+async fn every_http_rejection_logs_the_response_kind_without_sensitive_details() {
+    use tracing::instrument::WithSubscriber;
+    let _capture = LOG_TEST_LOCK.lock().await;
+    let logs = Logs::default();
+    let state = state().await;
+    let router = router(state.clone(), Arc::new(AtomicBool::new(false))).merge(
+        Router::new()
+            .route(
+                "/synthetic-error",
+                get(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "private-upstream-body") }),
+            )
+            .layer(axum::middleware::from_fn(crate::webhook::observe)),
+    );
+    let mut bad_signature = request(b"private-request-body".to_vec(), "push", "delivery");
+    bad_signature
+        .headers_mut()
+        .insert("x-hub-signature-256", "private-header".parse().unwrap());
+    let mut bad_delivery = request(b"{}".to_vec(), "push", "delivery");
+    bad_delivery.headers_mut().remove("x-github-delivery");
+    let mut bad_event = request(b"{}".to_vec(), "push", "delivery");
+    bad_event.headers_mut().remove("x-github-event");
+    let broken_body = Body::from_stream(futures_util::stream::once(async {
+        Err::<axum::body::Bytes, _>(std::io::Error::other("private-stream-error"))
+    }));
+    let cases = [
+        (bad_signature, 401, "bad-signature"),
+        (bad_delivery, 400, "invalid-delivery-id"),
+        (bad_event, 400, "invalid-event"),
+        (
+            request(b"{".to_vec(), "push", "delivery"),
+            400,
+            "invalid-json",
+        ),
+        (
+            request(b"[]".to_vec(), "push", "delivery"),
+            400,
+            "invalid-payload",
+        ),
+        (
+            request(vec![b'a'; BODY_LIMIT + 1], "push", "delivery"),
+            413,
+            "body-too-large",
+        ),
+        (
+            Request::post("/webhook").body(broken_body).unwrap(),
+            400,
+            "body-read-failed",
+        ),
+        (
+            Request::get("/webhook").body(Body::empty()).unwrap(),
+            405,
+            "method-not-allowed",
+        ),
+        (
+            Request::get("/private-path").body(Body::empty()).unwrap(),
+            404,
+            "route-not-found",
+        ),
+        (
+            Request::get("/readyz").body(Body::empty()).unwrap(),
+            503,
+            "not-ready",
+        ),
+        (
+            Request::get("/synthetic-error")
+                .body(Body::empty())
+                .unwrap(),
+            500,
+            "internal-error",
+        ),
+    ];
+    for (request, status, kind) in cases {
+        let response = router
+            .clone()
+            .oneshot(request)
+            .with_subscriber(logs.subscriber())
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), status, "{kind}");
+        assert_eq!(error_kind(response).await, kind);
+        let events = logs.events();
+        let event = events.last().unwrap();
+        assert_eq!(event["status"], status);
+        assert_eq!(event["error_kind"], kind);
+    }
+    state.accepting.store(false, Ordering::Release);
+    let response = router
+        .oneshot(request(b"{}".to_vec(), "push", "delivery"))
+        .with_subscriber(logs.subscriber())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(error_kind(response).await, "draining");
+    assert_eq!(logs.events().len(), 12);
+    let text = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    assert!(!text.contains("private-"), "{text}");
+    assert!(!text.contains("test-only-secret"), "{text}");
+}
+
 #[tokio::test]
 async fn webhook_logs_one_decision_per_delivery_without_sensitive_data() {
     let _capture = LOG_TEST_LOCK.lock().await;
@@ -110,11 +220,11 @@ async fn webhook_logs_one_decision_per_delivery_without_sensitive_data() {
     assert_eq!(events.len(), 7);
     assert_eq!(
         events[5],
-        json!({"message":"webhook received", "outcome":"bad signature"})
+        json!({"message":"request rejected", "outcome":"rejected", "error_kind":"bad-signature", "status":401})
     );
     assert_eq!(
         events[6],
-        json!({"message":"webhook received", "outcome":"body rejected", "status":413})
+        json!({"message":"request rejected", "outcome":"rejected", "error_kind":"body-too-large", "status":413})
     );
     let text = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
     for forbidden in [
@@ -309,14 +419,17 @@ async fn repository_and_org_webhooks_resolve_installations_and_ping_does_no_work
     let unavailable = self::state().await.with_app(app);
     let unavailable_router = super::router(unavailable.clone(), Arc::new(AtomicBool::new(true)));
     let body = serde_json::to_vec(&value).unwrap();
+    let response = unavailable_router
+        .clone()
+        .oneshot(request(body.clone(), "push", "retry"))
+        .with_subscriber(logs.subscriber())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(error_kind(response).await, "installation-lookup-failed");
     assert_eq!(
-        unavailable_router
-            .clone()
-            .oneshot(request(body.clone(), "push", "retry"))
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::SERVICE_UNAVAILABLE
+        logs.events().last().unwrap()["error_kind"],
+        "installation-lookup-failed"
     );
     transport.status.store(200, Ordering::SeqCst);
     assert_eq!(
@@ -329,7 +442,7 @@ async fn repository_and_org_webhooks_resolve_installations_and_ping_does_no_work
     );
     assert_eq!(unavailable.cache.queue_len().await.unwrap(), 1);
     let decisions = logs.events();
-    assert_eq!(decisions.len(), 5);
+    assert_eq!(decisions.len(), 6);
     assert_eq!(decisions[1]["reason"], "installation-resolved");
     assert_eq!(decisions[1]["installation"], 1);
 }
@@ -456,7 +569,8 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
             runner
                 .run(&[claims[0].work.clone()], &settings, &claims[0].attribution)
                 .await
-                .is_err()
+                .unwrap()
+                .failed()
         );
     }
     let paths = std::fs::read_dir(directory.path())
@@ -473,6 +587,185 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
 }
 
 struct DiscoveryAndMissingRepository;
+
+#[derive(Default)]
+struct StartupTransport {
+    mint_started: tokio::sync::Notify,
+    finish_mint: tokio::sync::Notify,
+    lookup_started: tokio::sync::Notify,
+    lookups: std::sync::atomic::AtomicUsize,
+}
+impl Transport for StartupTransport {
+    fn send(&self, request: reqwest::Request) -> rustovate_http::Exchange<'_> {
+        Box::pin(async move {
+            if request.url().path() == "/app/installations/1/access_tokens" {
+                self.mint_started.notify_one();
+                self.finish_mint.notified().await;
+            }
+            if request.url().path() == "/repos/owner/repo/installation" {
+                self.lookups.fetch_add(1, Ordering::SeqCst);
+                self.lookup_started.notify_one();
+                return Ok(rustovate_http::Response {
+                    status: reqwest::StatusCode::OK,
+                    headers: Default::default(),
+                    body: serde_json::to_vec(&json!({"id":1})).unwrap(),
+                });
+            }
+            DiscoveryAndMissingRepository.send(request).await
+        })
+    }
+}
+
+#[tokio::test]
+async fn concurrent_deliveries_during_startup_token_mint_and_database_contention_are_durable() {
+    let _capture = LOG_TEST_LOCK.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cache.sqlite");
+    let cache = Cache::open(&path, Default::default()).await.unwrap();
+    cache
+        .enqueue_attributed(
+            None,
+            vec![Work::repository(1, "")],
+            0,
+            0,
+            Attribution::reason("startup discovery"),
+        )
+        .await
+        .unwrap();
+    let transport = Arc::new(StartupTransport::default());
+    let app = lookup_app(transport.clone(), 1);
+    let settings = Reload::new(settings());
+    let state = Webhook::new(
+        cache.clone(),
+        settings.clone(),
+        "rustovate[bot]".into(),
+        b"test-only-secret".to_vec(),
+    )
+    .with_app(app.clone());
+    let runner = Arc::new(Engines {
+        app,
+        transport: transport.clone(),
+        cache: cache.clone(),
+        engines: Mutex::new(BTreeMap::new()),
+        recheck: None,
+        bot_login: "rustovate[bot]".into(),
+    });
+    let (stop, stopped) = watch::channel(false);
+    let worker = tokio::spawn(worker(cache.clone(), settings, runner, stopped));
+    tokio::time::timeout(Duration::from_secs(5), transport.mint_started.notified())
+        .await
+        .unwrap();
+    let blocker = rusqlite::Connection::open(&path).unwrap();
+    blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let router = router(state, Arc::new(AtomicBool::new(true)));
+    let mut deliveries = Vec::new();
+    for (event, action) in [("push", ""), ("issues", "edited"), ("check_run", "created")] {
+        let router = router.clone();
+        let mut value = payload();
+        value.as_object_mut().unwrap().remove("installation");
+        value["action"] = json!(action);
+        deliveries.push(tokio::spawn(async move {
+            router
+                .oneshot(request(
+                    serde_json::to_vec(&value).unwrap(),
+                    event,
+                    &event.replace('_', "-"),
+                ))
+                .await
+                .unwrap()
+        }));
+    }
+    // Lookup uses the App JWT without waiting for the startup token mint's mutex.
+    tokio::time::timeout(Duration::from_secs(5), transport.lookup_started.notified())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(deliveries.iter().all(|task| !task.is_finished()));
+    blocker.execute_batch("COMMIT").unwrap();
+    for delivery in deliveries {
+        let response = tokio::time::timeout(Duration::from_secs(5), delivery)
+            .await
+            .unwrap()
+            .unwrap();
+        if response.status() != StatusCode::ACCEPTED {
+            panic!("delivery failed: {}", error_kind(response).await);
+        }
+    }
+    assert_eq!(transport.lookups.load(Ordering::SeqCst), 1);
+    stop.send(true).unwrap();
+    transport.finish_mint.notify_one();
+    tokio::time::timeout(Duration::from_secs(5), worker)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let claims = cache.claim_batch(i64::MAX, 10).await.unwrap();
+    assert_eq!(claims.len(), 1);
+    assert_eq!(claims[0].work, Work::repository(1, "owner/repo"));
+    assert!(claims[0].attribution.reasons.contains("startup discovery"));
+    assert!(claims[0].attribution.deliveries.contains("push"));
+    assert!(
+        cache
+            .installation_get(1, "repos/owner/repo".into(), 0)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn database_busy_has_a_stable_error_kind_and_does_not_consume_the_delivery() {
+    use tracing::instrument::WithSubscriber;
+    let _capture = LOG_TEST_LOCK.lock().await;
+    let logs = Logs::default();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cache.sqlite");
+    let cache = Cache::open(&path, Default::default()).await.unwrap();
+    let state = Webhook::new(
+        cache.clone(),
+        Reload::new(settings()),
+        "rustovate[bot]".into(),
+        b"test-only-secret".to_vec(),
+    );
+    let router = router(state, Arc::new(AtomicBool::new(true)));
+    let blocker = rusqlite::Connection::open(&path).unwrap();
+    blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let body = serde_json::to_vec(&payload()).unwrap();
+    let response = tokio::time::timeout(
+        Duration::from_secs(8),
+        router
+            .clone()
+            .oneshot(request(body.clone(), "push", "retry-busy"))
+            .with_subscriber(logs.subscriber()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(error_kind(response).await, "cache-busy");
+    let events = logs.events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["error_kind"], "cache-busy");
+    assert_eq!(events[0]["status"], 503);
+    assert_eq!(events[0]["delivery_id"], "retry-busy");
+    blocker.execute_batch("COMMIT").unwrap();
+    let response = router
+        .clone()
+        .oneshot(request(body.clone(), "push", "retry-busy"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let claims = cache.claim_batch(i64::MAX, 10).await.unwrap();
+    assert_eq!(claims.len(), 1);
+    cache.finish_work(claims, true, 0, 0).await.unwrap();
+    let response = router
+        .oneshot(request(body, "push", "retry-busy"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(cache.queue_len().await.unwrap(), 0);
+}
+
 impl Transport for DiscoveryAndMissingRepository {
     fn send(&self, request: reqwest::Request) -> rustovate_http::Exchange<'_> {
         let (status, value) = match request.url().path() {
@@ -546,6 +839,7 @@ fn request(body: Vec<u8>, event: &str, id: &str) -> Request<Body> {
 }
 #[tokio::test]
 async fn signature_precedes_json_parse_and_duplicate_delivery_never_enqueues_twice() {
+    let _capture = LOG_TEST_LOCK.lock().await;
     let state = state().await;
     let router = router(state.clone(), Arc::new(AtomicBool::new(true)));
     let mut bad = request(b"not JSON".to_vec(), "push", "bad");
@@ -686,6 +980,7 @@ fn every_trigger_and_switch_and_filters() {
 }
 #[tokio::test]
 async fn only_api_endpoints_and_readiness_tracks_settings_and_auth() {
+    let _capture = LOG_TEST_LOCK.lock().await;
     let state = state().await;
     let ready = Arc::new(AtomicBool::new(false));
     let router = router(state.clone(), ready.clone());
@@ -732,22 +1027,130 @@ struct BlockingBatch {
     started: tokio::sync::Notify,
     finish: tokio::sync::Notify,
 }
+
+struct ReportBatch {
+    report: Report,
+    stop: watch::Sender<bool>,
+}
+impl Batch for ReportBatch {
+    fn run<'a>(
+        &'a self,
+        _: &'a [Work],
+        _: &'a Settings,
+        _: &'a Attribution,
+    ) -> BoxFuture<'a, Result<BatchOutcome, Error>> {
+        Box::pin(async move {
+            self.stop.send(true).unwrap();
+            Ok(BatchOutcome::report(&self.report))
+        })
+    }
+}
+
+#[tokio::test]
+async fn stale_base_requeues_without_failure_and_real_errors_have_counts() {
+    use tracing::instrument::WithSubscriber;
+    let _capture = LOG_TEST_LOCK.lock().await;
+    for (stale, errors) in [(true, false), (false, true), (true, true)] {
+        let logs = Logs::default();
+        let mut branches = Vec::new();
+        for (branch, status, reason) in [
+            (
+                "stale",
+                "skipped",
+                "default branch moved since extraction; stale blob refusal, rerun",
+            ),
+            ("error", "error", "synthetic write error"),
+        ] {
+            if (branch == "stale" && stale) || (branch == "error" && errors) {
+                branches.push(json!({"repository":"owner/repo", "branch":branch,
+                    "baseCommit":"base", "status":status, "reason":reason, "message":"",
+                    "lockfilePending":false, "files":[]}));
+            }
+        }
+        let report: Report = serde_json::from_value(json!({"schemaVersion":2,
+            "repositories":[{"repository":"owner/repo", "status":if errors {"error"} else {"complete"}, "packageFiles":[]}],
+            "actions":{"schemaVersion":1, "dryRun":false, "branches":branches,
+                "pullRequests":if errors {vec![json!({"repository":"owner/repo", "branch":"pr-error", "status":"error"})]} else {vec![]}}
+        })).unwrap();
+        let state = state().await;
+        state
+            .cache
+            .enqueue_attributed(
+                None,
+                vec![Work::repository(1, "owner/repo")],
+                0,
+                0,
+                Attribution::reason("startup discovery"),
+            )
+            .await
+            .unwrap();
+        let (stop, stopped) = watch::channel(false);
+        worker(
+            state.cache.clone(),
+            state.settings,
+            Arc::new(ReportBatch { report, stop }),
+            stopped,
+        )
+        .with_subscriber(logs.subscriber())
+        .await
+        .unwrap();
+        let events = logs.events();
+        let failure = events
+            .iter()
+            .find(|event| event["message"] == "batch failed; work will be retried");
+        assert_eq!(failure.is_some(), errors);
+        if let Some(failure) = failure {
+            assert_eq!(failure["error_count"], 3);
+            let kinds = failure["error_kinds"].as_str().unwrap();
+            assert!(kinds.contains("repository-error\": 1"));
+            assert!(kinds.contains("branch-error\": 1"));
+            assert!(kinds.contains("pull-request-error\": 1"));
+        }
+        let requeue = events
+            .iter()
+            .find(|event| event["message"] == "batch requeued");
+        assert_eq!(requeue.is_some(), stale);
+        if let Some(requeue) = requeue {
+            assert_eq!(requeue["reason"], "default branch moved; requeued");
+        }
+        let finished = events
+            .iter()
+            .find(|event| event["message"] == "batch finished")
+            .unwrap();
+        assert_eq!(finished["success"], !errors);
+        assert_eq!(finished["requeued"], true);
+        assert_eq!(state.cache.queue_len().await.unwrap(), 1);
+        assert!(
+            state
+                .cache
+                .claim_batch(Utc::now().timestamp_millis(), 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let retry = state.cache.claim_batch(i64::MAX, 10).await.unwrap();
+        assert_eq!(retry.len(), 1);
+        assert!(retry[0].attribution.reasons.contains("retry"));
+        assert!(retry[0].attribution.reasons.contains("startup discovery"));
+    }
+}
 impl Batch for BlockingBatch {
     fn run<'a>(
         &'a self,
         _: &'a [Work],
         _: &'a Settings,
         _: &'a Attribution,
-    ) -> BoxFuture<'a, Result<(), Error>> {
+    ) -> BoxFuture<'a, Result<BatchOutcome, Error>> {
         Box::pin(async move {
             self.started.notify_one();
             self.finish.notified().await;
-            Ok(())
+            Ok(BatchOutcome::default())
         })
     }
 }
 #[tokio::test]
 async fn shutdown_finishes_batch_or_requeues_at_deadline() {
+    let _capture = LOG_TEST_LOCK.lock().await;
     for finish in [false, true] {
         let state = state().await;
         state
@@ -790,6 +1193,7 @@ async fn shutdown_finishes_batch_or_requeues_at_deadline() {
 #[cfg(unix)]
 #[tokio::test]
 async fn sigterm_during_batch_retains_unfinished_work() {
+    let _capture = LOG_TEST_LOCK.lock().await;
     let mut term =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
     let state = state().await;
@@ -843,6 +1247,7 @@ fn cron_obeys_timezone_and_can_be_disabled() {
 }
 #[tokio::test]
 async fn report_directory_preserves_versioned_contract() {
+    let _capture = LOG_TEST_LOCK.lock().await;
     let dir = tempfile::tempdir().unwrap();
     let report = Report {
         schema_version: SCHEMA_VERSION,

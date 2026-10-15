@@ -2416,6 +2416,7 @@ dependencies = [
  "nix",
  "reqwest",
  "rsa",
+ "rusqlite",
  "rustovate-cache",
  "rustovate-config",
  "rustovate-engine",

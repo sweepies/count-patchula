@@ -9,6 +9,31 @@ use serde_json::{Value, json};
 pub const REF_UPDATE: &str =
     "mutation($input:UpdateRefsInput!){updateRefs(input:$input){clientMutationId}}";
 
+pub const DEFAULT_BRANCH_MOVED: &str =
+    "default branch moved since extraction; stale blob refusal, rerun";
+pub const DEFAULT_BRANCH_CHANGED: &str = "default branch changed since extraction; rerun";
+
+/// An expected extraction race: no writes were attempted against the stale base.
+pub fn needs_requeue(action: &rustovate_report::BranchAction) -> bool {
+    action.status == ActionStatus::Skipped
+        && matches!(
+            action.reason.as_deref(),
+            Some(DEFAULT_BRANCH_MOVED | DEFAULT_BRANCH_CHANGED)
+        )
+}
+
+fn refuse(plan: &mut Plan, error: String) {
+    plan.action.status = if matches!(
+        error.as_str(),
+        DEFAULT_BRANCH_MOVED | DEFAULT_BRANCH_CHANGED
+    ) {
+        ActionStatus::Skipped
+    } else {
+        ActionStatus::Error
+    };
+    plan.action.reason = Some(error);
+}
+
 fn field<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
     value[key]
         .as_str()
@@ -65,8 +90,7 @@ pub async fn apply(
         Err(error) => Err(error),
     };
     if let Err(error) = result {
-        plan.action.status = ActionStatus::Error;
-        plan.action.reason = Some(error);
+        refuse(plan, error);
     }
 }
 
@@ -85,12 +109,12 @@ async fn prepare(
     default_branch: &str,
 ) -> Result<Base, String> {
     let metadata = fresh(client, &format!("repos/{repo}")).await?;
-    if metadata["default_branch"] != default_branch {
-        return Err("default branch changed since extraction; rerun".into());
+    if field(&metadata, "default_branch")? != default_branch {
+        return Err(DEFAULT_BRANCH_CHANGED.into());
     }
     let head = fresh(client, &ref_path(repo, default_branch)).await?;
-    if head["object"]["sha"] != base_commit {
-        return Err("default branch moved since extraction; stale blob refusal, rerun".into());
+    if field(&head["object"], "sha")? != base_commit {
+        return Err(DEFAULT_BRANCH_MOVED.into());
     }
     let base = fresh(client, &format!("repos/{repo}/git/commits/{base_commit}")).await?;
     let tree_sha = field(&base["tree"], "sha")?.to_owned();
@@ -166,8 +190,7 @@ pub async fn apply_all(
                     Err(error) => Err(error.clone()),
                 };
                 if let Err(error) = result {
-                    plan.action.status = ActionStatus::Error;
-                    plan.action.reason = Some(error);
+                    refuse(plan, error);
                 }
             }
             .boxed()

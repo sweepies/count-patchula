@@ -182,7 +182,51 @@ fn router(webhook: Webhook, ready: Arc<AtomicBool>) -> Router {
             }),
         )
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
+        .layer(axum::middleware::from_fn(crate::webhook::observe))
         .with_state(webhook)
+}
+
+#[derive(Default, Debug)]
+struct BatchOutcome {
+    error_kinds: BTreeMap<&'static str, usize>,
+    requeue: bool,
+}
+impl BatchOutcome {
+    fn report(report: &Report) -> Self {
+        use rustovate_report::ActionStatus;
+        let mut outcome = Self::default();
+        for repo in &report.repositories {
+            if repo.status == Status::Error {
+                *outcome.error_kinds.entry("repository-error").or_default() += 1;
+            }
+        }
+        if let Some(actions) = &report.actions {
+            for branch in &actions.branches {
+                outcome.requeue |= rustovate_update::needs_requeue(branch);
+                let kind = match branch.status {
+                    ActionStatus::Error => "branch-error",
+                    ActionStatus::Protected => "branch-protected",
+                    _ => continue,
+                };
+                *outcome.error_kinds.entry(kind).or_default() += 1;
+            }
+            for pr in &actions.pull_requests {
+                let kind = match pr.status {
+                    ActionStatus::Error => "pull-request-error",
+                    ActionStatus::Protected => "pull-request-protected",
+                    _ => continue,
+                };
+                *outcome.error_kinds.entry(kind).or_default() += 1;
+            }
+        }
+        outcome
+    }
+    fn failed(&self) -> bool {
+        !self.error_kinds.is_empty()
+    }
+    fn retry(&self) -> bool {
+        self.requeue || self.failed()
+    }
 }
 
 trait Batch: Send + Sync + 'static {
@@ -191,7 +235,7 @@ trait Batch: Send + Sync + 'static {
         work: &'a [Work],
         settings: &'a Settings,
         attribution: &'a Attribution,
-    ) -> BoxFuture<'a, Result<(), Error>>;
+    ) -> BoxFuture<'a, Result<BatchOutcome, Error>>;
 }
 struct Engines {
     app: Arc<App>,
@@ -207,12 +251,12 @@ impl Batch for Engines {
         work: &'a [Work],
         settings: &'a Settings,
         attribution: &'a Attribution,
-    ) -> BoxFuture<'a, Result<(), Error>> {
+    ) -> BoxFuture<'a, Result<BatchOutcome, Error>> {
         Box::pin(async move {
             let id = work.first().ok_or(Error("empty batch"))?.installation;
             if !settings.installation_allowed(id) {
                 skip_report("installation not allowlisted", false);
-                return Ok(());
+                return Ok(BatchOutcome::default());
             }
             let credentials = self.app.installation(id);
             if work.iter().any(|w| w.repo.is_empty()) {
@@ -261,6 +305,8 @@ impl Batch for Engines {
                     )
                     .await
                     .map_err(|_| Error("cannot persist discovered repositories"))?;
+                tracing::info!(target: "rustovate_server", installation = id,
+                    "discovery completed; repository work queued for a separate batch");
             }
             let client = Client::with_credentials(
                 credentials.clone(),
@@ -289,7 +335,7 @@ impl Batch for Engines {
                     },
                     work.iter().all(|w| w.repo.is_empty()),
                 );
-                return Ok(());
+                return Ok(BatchOutcome::default());
             }
             let mut engines = self.engines.lock().await;
             if let std::collections::btree_map::Entry::Vacant(entry) = engines.entry(id) {
@@ -350,23 +396,11 @@ impl Batch for Engines {
                 },
             };
             output_report(&report, settings.report_directory.as_deref()).await?;
-            if result.is_err()
-                || report
-                    .repositories
-                    .iter()
-                    .any(|r| r.status == Status::Error)
-                || report.actions.as_ref().is_some_and(|a| {
-                    a.branches
-                        .iter()
-                        .any(|b| b.status == rustovate_report::ActionStatus::Error)
-                        || a.pull_requests
-                            .iter()
-                            .any(|pr| pr.status == rustovate_report::ActionStatus::Error)
-                })
-            {
-                return Err(Error("batch had errors; work will be retried"));
+            let mut outcome = BatchOutcome::report(&report);
+            if result.is_err() {
+                outcome.error_kinds.insert("engine-error", 1);
             }
-            Ok(())
+            Ok(outcome)
         })
     }
 }
@@ -437,16 +471,32 @@ async fn worker(
         }
         tracing::info!(target: "rustovate_server", installation = work[0].installation, entries = work.len(), reasons = ?attribution.reasons, delivery_ids = ?attribution.deliveries, "batch started");
         let result = runner.run(&work, &settings, &attribution).await;
-        if let Err(error) = &result {
-            tracing::error!(target: "rustovate_server", %error, "batch failed");
+        let (outcome, error) = match result {
+            Ok(outcome) => (outcome, None),
+            Err(error) => (
+                BatchOutcome {
+                    error_kinds: BTreeMap::from([("batch-operation", 1)]),
+                    requeue: false,
+                },
+                Some(error),
+            ),
+        };
+        if outcome.failed() {
+            tracing::error!(target: "rustovate_server", error = error.as_ref().map(|e| e.0),
+                error_kinds = ?outcome.error_kinds, error_count = outcome.error_kinds.values().sum::<usize>(),
+                "batch failed; work will be retried");
         }
-        tracing::info!(target: "rustovate_server", installation = work[0].installation, entries = work.len(), success = result.is_ok(), "batch finished");
+        if outcome.requeue {
+            tracing::warn!(target: "rustovate_server", reason = "default branch moved; requeued",
+                installation = work[0].installation, "batch requeued");
+        }
+        tracing::info!(target: "rustovate_server", installation = work[0].installation, entries = work.len(), success = !outcome.failed(), requeued = outcome.retry(), "batch finished");
         cache
             .finish_work(
                 claims,
-                result.is_ok(),
+                !outcome.retry(),
                 Utc::now().timestamp_millis(),
-                if result.is_ok() {
+                if !outcome.retry() {
                     settings.coalescing_ms as i64
                 } else {
                     60_000

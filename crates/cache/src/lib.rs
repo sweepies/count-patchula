@@ -40,6 +40,27 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+impl Error {
+    /// Stable diagnostics without SQLite messages, paths or serialized contents.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Database(error) => match error.sqlite_error_code() {
+                Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => {
+                    "cache-busy"
+                }
+                _ => "cache-database",
+            },
+            Self::Io(_) => "cache-io",
+            Self::Serialization(_) => "cache-serialization",
+            Self::Worker => "cache-worker-unavailable",
+            Self::Url => "cache-url",
+            Self::FutureSchema(_) => "cache-future-schema",
+            Self::Corrupt => "cache-corrupt",
+            Self::ReleaseAnchor => "cache-release-anchor",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Options {
     /// Budget for compressed HTTP bodies, not release/extraction data or SQLite pages.
