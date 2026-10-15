@@ -216,14 +216,18 @@ impl Client {
         })
     }
     async fn merge(&self, source: &str, package: &str, versions: &[Version]) -> Result<()> {
-        let page: Vec<_> = versions
-            .iter()
-            .map(|v| Release {
+        let head = self.cache.release_head(source, package).await?;
+        let mut page = Vec::new();
+        for v in versions {
+            page.push(Release {
                 version: v.version.clone(),
                 published_at: v.published_at.clone(),
                 digest: v.digest.clone(),
-            })
-            .collect();
+            });
+            if head.as_deref() == Some(&v.version) {
+                break;
+            }
+        }
         self.cache.merge_releases(source, package, &page).await?;
         Ok(())
     }

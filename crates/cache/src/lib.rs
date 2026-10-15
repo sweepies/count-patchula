@@ -3,6 +3,7 @@
 
 mod store;
 
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::Path};
 use store::Store;
@@ -220,6 +221,21 @@ impl Cache {
         let (source, package) = (source.to_owned(), package.to_owned());
         self.call(move |store| store.releases(&source, &package))
             .await
+    }
+    /// Read the refresh boundary without materializing the cached history.
+    pub async fn release_head(&self, source: &str, package: &str) -> Result<Option<String>> {
+        let (source, package) = (source.to_owned(), package.to_owned());
+        self.call(move |store| {
+            Ok(store
+                .conn
+                .query_row(
+                    "SELECT newest FROM release_heads WHERE source=?1 AND package=?2",
+                    rusqlite::params![source, package],
+                    |row| row.get(0),
+                )
+                .optional()?)
+        })
+        .await
     }
 
     pub async fn extraction_get(&self, key: &ExtractionKey) -> Result<Option<Vec<u8>>> {
