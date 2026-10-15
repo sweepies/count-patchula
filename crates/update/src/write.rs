@@ -101,6 +101,7 @@ struct Base {
     tree_sha: String,
     entries: Vec<Value>,
     default_branch: String,
+    actor: tokio::sync::OnceCell<String>,
 }
 async fn prepare(
     client: &Client,
@@ -133,6 +134,7 @@ async fn prepare(
         node_id: field(&metadata, "node_id")?.into(),
         tree_sha,
         entries: tree["tree"].as_array().ok_or("missing Git tree")?.clone(),
+        actor: tokio::sync::OnceCell::new(),
     })
 }
 
@@ -312,11 +314,17 @@ async fn apply_inner(
     plan.action.previous_commit = old.clone();
     let mut moved_base = false;
     if let Some(old) = &old {
-        let viewer = client
-            .graphql("query{viewer{login}}", json!({}))
-            .await
-            .map_err(|e| e.to_string())?;
-        let actor = field(&viewer["viewer"], "login")?;
+        let actor = base
+            .actor
+            .get_or_try_init(|| async {
+                let viewer = client
+                    .graphql("query{viewer{login}}", json!({}))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                field(&viewer["viewer"], "login").map(str::to_owned)
+            })
+            .await?;
+        let actor = actor.as_str();
         let existing_tip = fresh(client, &format!("repos/{repo}/git/commits/{old}")).await?;
         let Some(recorded) = existing_tip["message"]
             .as_str()
@@ -369,9 +377,9 @@ async fn apply_inner(
             .ok_or("missing commit message")?;
         let parent = trailer(message, "Rustovate-Base: ").ok_or("missing rustovate base marker")?;
         moved_base = parent != plan.action.base_commit;
-        if !plan.retry
-            && trailer(message, "Rustovate-Plan: ") == Some(&plan.fingerprint)
-            && (!moved_base || rebase == Rebase::Conflicts)
+        if !moved_base
+            || rebase == Rebase::Conflicts
+                && trailer(message, "Rustovate-Plan: ") == Some(&plan.fingerprint)
         {
             let existing_tree = field(&existing_tip["tree"], "sha")?;
             let existing = fresh(
@@ -379,18 +387,47 @@ async fn apply_inner(
                 &format!("repos/{repo}/git/trees/{existing_tree}?recursive=1"),
             )
             .await?;
-            let entries = existing["tree"]
+            let existing_entries = existing["tree"]
                 .as_array()
                 .filter(|_| existing["truncated"] == false)
                 .ok_or("incomplete existing branch tree")?;
-            if plan.contents.iter().all(|(p, c)| {
+            let contents_match = plan.contents.iter().all(|(p, c)| {
                 if plan.deleted.contains(p) {
-                    return !entries.iter().any(|e| e["path"] == *p);
+                    return !existing_entries.iter().any(|e| e["path"] == *p);
                 }
+                existing_entries.iter().any(|e| {
+                    e["path"] == *p
+                        && e["sha"] == blob_sha(c)
+                        && e["mode"] == snapshot.files[p].mode
+                        && e["type"] == "blob"
+                })
+            });
+            // On the same base, also reject leftover edits from an older plan.
+            // Directory OIDs change with children; compare leaf entries only.
+            let leaves = |entries: &[Value]| -> std::collections::BTreeMap<String, Value> {
                 entries
                     .iter()
-                    .any(|e| e["path"] == *p && e["sha"] == blob_sha(c))
-            }) {
+                    .filter(|e| e["type"] != "tree")
+                    .map(|e| {
+                        (
+                            e["path"].as_str().unwrap_or("").to_owned(),
+                            json!([e["sha"], e["mode"], e["type"]]),
+                        )
+                    })
+                    .collect()
+            };
+            let mut expected = leaves(entries);
+            for (path, content) in &plan.contents {
+                if plan.deleted.contains(path) {
+                    expected.remove(path);
+                } else {
+                    expected.insert(
+                        path.clone(),
+                        json!([blob_sha(content), snapshot.files[path].mode, "blob"]),
+                    );
+                }
+            }
+            if contents_match && (moved_base || leaves(existing_entries) == expected) {
                 plan.action.status = ActionStatus::Unchanged;
                 plan.action.commit = Some(old.clone());
                 plan.action.verified = Some(true);

@@ -1,5 +1,6 @@
 //! Independent metadata and range fixtures. No network client is constructed.
 #![forbid(unsafe_code)]
+mod support;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use rustovate_cache::Cache;
 use rustovate_config::Source;
@@ -18,6 +19,7 @@ use std::{
 struct Routes {
     bodies: BTreeMap<String, Value>,
     requests: Mutex<Vec<String>>,
+    queries: Mutex<Vec<Value>>,
 }
 impl Transport for Routes {
     fn send(&self, request: reqwest::Request) -> Exchange<'_> {
@@ -27,6 +29,27 @@ impl Transport for Routes {
                 assert!(!request.headers().contains_key("authorization"));
             }
             self.requests.lock().unwrap().push(url.clone());
+            if request.url().path() == "/graphql" {
+                let request: Value =
+                    serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
+                self.queries.lock().unwrap().push(request.clone());
+                let body = support::releases(&request, |repo, tag| {
+                    let mut url = reqwest::Url::parse(&format!(
+                        "https://api.github.com/repos/{repo}/releases/tags/"
+                    ))
+                    .unwrap();
+                    url.path_segments_mut().unwrap().pop_if_empty().push(tag);
+                    self.bodies
+                        .iter()
+                        .find(|(key, _)| key.eq_ignore_ascii_case(url.as_str()))
+                        .map(|(_, body)| body.clone())
+                });
+                return Ok(Response {
+                    status: reqwest::StatusCode::OK,
+                    headers: Default::default(),
+                    body: serde_json::to_vec(&body).unwrap(),
+                });
+            }
             let body = self
                 .bodies
                 .get(&url)
@@ -315,6 +338,22 @@ async fn publication_batch_deduplicates_overlapping_upstream_reads_and_next_batc
     ]);
     let source = client(routes.clone(), memory().await).await;
     let batch = source.notes_batch();
+    batch
+        .prepare_release_notes(&[
+            (
+                Source::Mise,
+                "node".into(),
+                "22.9.0".into(),
+                "22.23.3".into(),
+            ),
+            (
+                Source::GithubTags,
+                "nodejs/node".into(),
+                "22.20.0".into(),
+                "22.23.3".into(),
+            ),
+        ])
+        .await;
     let clone = batch.clone();
     let (mise, github) = tokio::join!(
         batch.release_notes(Source::Mise, "node", "22.9.0", "22.23.3"),
@@ -331,10 +370,14 @@ async fn publication_batch_deduplicates_overlapping_upstream_reads_and_next_batc
         let reads = routes.requests.lock().unwrap();
         assert_eq!(
             reads.len(),
-            4,
+            3,
             "one read per mutable upstream resource, even for sequential PRs: {reads:?}"
         );
-        for url in routes.bodies.keys() {
+        for url in routes
+            .bodies
+            .keys()
+            .filter(|url| !url.contains("/releases/tags/"))
+        {
             assert_eq!(reads.iter().filter(|r| *r == url).count(), 1, "{url}");
         }
     }
@@ -346,9 +389,108 @@ async fn publication_batch_deduplicates_overlapping_upstream_reads_and_next_batc
     let reads = routes.requests.lock().unwrap();
     assert_eq!(
         reads.len(),
-        8,
+        6,
         "a later batch must revalidate, even while an old batch is alive"
     );
+}
+
+#[tokio::test]
+async fn release_body_batches_validate_timestamps_and_fetch_only_edited_bodies_after_reopen() {
+    let cache_dir = tempfile::tempdir().unwrap();
+    let path = cache_dir.path().join("notes.sqlite");
+    let original = range_routes();
+    let ranges = vec![
+        (
+            Source::Npm,
+            "@scope/pkg".into(),
+            "1.0.0".into(),
+            "2.0.0".into(),
+        ),
+        (
+            Source::Npm,
+            "@scope/pkg".into(),
+            "1.1.0".into(),
+            "2.0.0".into(),
+        ),
+    ];
+    for step in 0..7 {
+        let mut bodies = original.bodies.clone();
+        let url = "https://api.github.com/repos/Example/Mono/releases/tags/pkg-v1.2.0";
+        if step >= 2 {
+            bodies.insert(
+                url.into(),
+                json!({"updated_at":"2026-10-16T00:00:00Z","body":"Edited release notes"}),
+            );
+        }
+        if step == 3 {
+            bodies.insert(url.into(), json!({"status":404}));
+        }
+        if step == 5 {
+            bodies.insert(url.into(), json!({"status":503}));
+        }
+        let routes = Arc::new(Routes {
+            bodies,
+            ..Default::default()
+        });
+        let cache = Cache::open(&path, Default::default()).await.unwrap();
+        let source = client(routes.clone(), cache).await;
+        let batch = source.notes_batch();
+        batch.prepare_release_notes(&ranges).await;
+        for (_, package, current, target) in &ranges {
+            let notes = batch
+                .release_notes(Source::Npm, package, current, target)
+                .await
+                .unwrap();
+            let section = notes
+                .sections
+                .iter()
+                .find(|s| s.version == "1.2.0")
+                .unwrap();
+            assert_eq!(
+                section.body,
+                match step {
+                    0 | 1 => "Release one point two @maintainer #12",
+                    3 | 5 => "Fallback one point two",
+                    _ => "Edited release notes",
+                }
+            );
+        }
+        let queries = routes.queries.lock().unwrap();
+        assert_eq!(queries.len(), if step == 2 { 2 } else { 1 });
+        assert_eq!(
+            queries[0]["variables"].as_object().unwrap().len(),
+            5,
+            "three selected tags plus owner/name"
+        );
+        assert_eq!(
+            queries[0]["query"]
+                .as_str()
+                .unwrap()
+                .matches("body:description")
+                .count(),
+            if step == 0 { 3 } else { 0 }
+        );
+        if step == 2 {
+            assert_eq!(queries[1]["variables"]["t0"], "pkg-v1.2.0");
+            assert!(queries[1]["variables"].get("t1").is_none());
+            assert_eq!(
+                queries[1]["query"]
+                    .as_str()
+                    .unwrap()
+                    .matches("body:description")
+                    .count(),
+                1
+            );
+        }
+        assert!(
+            !routes
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|url| url.contains("/releases/tags/"))
+        );
+    }
 }
 
 #[test]

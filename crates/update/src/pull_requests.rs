@@ -401,6 +401,60 @@ impl Lifecycle {
         sources: &rustovate_datasource::Client,
         plans: &mut [Plan],
     ) {
+        let mut ranges = BTreeSet::new();
+        for plan in plans.iter().filter(|p| {
+            p.cached_pr.is_none()
+                && matches!(
+                    p.action.status,
+                    ActionStatus::Created
+                        | ActionStatus::Updated
+                        | ActionStatus::Rebased
+                        | ActionStatus::Unchanged
+                )
+        }) {
+            let existing = self.prs.iter().find(|p| {
+                p["state"] == "open" && branch(p) == plan.action.branch && same_repo(p, &self.repo)
+            });
+            let (_, marker) = self.body_intent(plan);
+            if self.reusable_body(plan, existing, &marker) {
+                continue;
+            }
+            let mut plan_ranges = BTreeSet::new();
+            for change in plan
+                .changes
+                .iter()
+                .filter(|c| c.kind != "pin" && c.release_notes)
+            {
+                if let Some(target) = change.version.as_ref().or(change.value.as_ref()) {
+                    plan_ranges.insert((
+                        change.source.clone(),
+                        change.package.clone(),
+                        change
+                            .current_version
+                            .as_ref()
+                            .unwrap_or(&change.current)
+                            .clone(),
+                        target.clone(),
+                    ));
+                    if plan_ranges.len() == 8 {
+                        break;
+                    }
+                }
+            }
+            ranges.extend(plan_ranges);
+        }
+        let ranges: Vec<_> = ranges
+            .into_iter()
+            .filter_map(|(source, package, current, target)| {
+                Some((
+                    serde_json::from_value(json!(source)).ok()?,
+                    package,
+                    current,
+                    target,
+                ))
+            })
+            .collect();
+        sources.prepare_release_notes(&ranges).await;
         for plan in plans {
             if let Some(pr) = &plan.cached_pr {
                 self.actions.push(action(
@@ -654,12 +708,7 @@ impl Lifecycle {
         Ok(())
     }
 
-    async fn render(
-        &mut self,
-        sources: &rustovate_datasource::Client,
-        plan: &Plan,
-        existing: Option<&Value>,
-    ) -> String {
+    fn body_intent(&self, plan: &Plan) -> (String, String) {
         let mut text =
             String::from("| Package | Change | Type | File |\n| --- | --- | --- | --- |\n");
         if plan.maintenance {
@@ -733,13 +782,25 @@ impl Lifecycle {
             .expect("serializable body intent"),
         );
         let content_marker = format!("<!-- rustovate-content:{content_hash} -->");
-        if let Some(pr) = existing
-            && body(pr).contains(&content_marker)
-            && !checked(pr)
-            && !plan.retry
-            && marker(body(pr))
-                .is_some_and(|m| m.identity == plan.identity && m.update == update_key(plan))
-        {
+        (text, content_marker)
+    }
+    fn reusable_body(&self, plan: &Plan, existing: Option<&Value>, content_marker: &str) -> bool {
+        existing.is_some_and(|pr| {
+            body(pr).contains(content_marker)
+                && !checked(pr)
+                && !plan.retry
+                && marker(body(pr))
+                    .is_some_and(|m| m.identity == plan.identity && m.update == update_key(plan))
+        })
+    }
+    async fn render(
+        &mut self,
+        sources: &rustovate_datasource::Client,
+        plan: &Plan,
+        existing: Option<&Value>,
+    ) -> String {
+        let (mut text, content_marker) = self.body_intent(plan);
+        if let Some(pr) = existing.filter(|_| self.reusable_body(plan, existing, &content_marker)) {
             // Rebases, label reconciliation and receipt repair do not change
             // body inputs. Reuse their notes without metadata or network reads.
             return body(pr).into();

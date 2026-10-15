@@ -39,6 +39,7 @@ struct State {
     close_on_read: bool,
     close_after_reads: Option<usize>,
     release_note_body: Option<String>,
+    release_queries: Vec<Value>,
 }
 struct Fake(Mutex<State>);
 fn response(status: u16, body: Value) -> Response {
@@ -111,6 +112,21 @@ impl Transport for Fake {
                         "refs":{"nodes":nodes,"pageInfo":{"hasNextPage":more,"endCursor":(offset+size).to_string()}}
                     }}}),
                 )
+            } else if body["query"]
+                .as_str()
+                .is_some_and(|q| q.starts_with("query ReleaseNotes("))
+            {
+                state.release_queries.push(body.clone());
+                let text = state
+                    .release_note_body
+                    .clone()
+                    .unwrap_or_else(|| "Release details 🦀\n".repeat(10_000));
+                let value = if body["query"].as_str().unwrap().contains("body:description") {
+                    json!({"updatedAt":blob_sha(&text),"body":text,"draft":false,"prerelease":false})
+                } else {
+                    json!({"updatedAt":blob_sha(&text)})
+                };
+                response(200, json!({"data":{"repository":{"r0":value}}}))
             } else if body["query"] == "query{viewer{login}}" {
                 response(200, json!({"data":{"viewer":{"login":"rustovate[bot]"}}}))
             } else if body["query"]
@@ -580,6 +596,121 @@ async fn create_update_and_repeat_use_one_verified_commit_on_base_and_no_prs() {
     );
     assert_eq!(server.0.lock().unwrap().writes.len(), count);
 }
+
+#[tokio::test(start_paused = true)]
+async fn identical_forced_rechecks_never_create_git_objects_or_update_refs() {
+    for batch in [false, true] {
+        let (mut first, snapshot) = make_plan("22.0.0");
+        let server = fake(&snapshot);
+        let github = client(server.clone()).await;
+        apply(
+            &github,
+            &mut first,
+            &snapshot,
+            "main",
+            Rebase::Behind,
+            false,
+        )
+        .await;
+        let (mut repeat, _) = make_plan("22.0.0");
+        repeat.retry = true;
+        // Policy/renderer fingerprints do not require a new Git commit when
+        // the complete intended tree and base are unchanged.
+        repeat.fingerprint = "changed-policy-fingerprint".into();
+        server.0.lock().unwrap().writes.clear();
+        if batch {
+            rustovate_update::apply_all(
+                &github,
+                std::slice::from_mut(&mut repeat),
+                &snapshot,
+                "main",
+                Rebase::Behind,
+                false,
+            )
+            .await;
+        } else {
+            apply(
+                &github,
+                &mut repeat,
+                &snapshot,
+                "main",
+                Rebase::Behind,
+                false,
+            )
+            .await;
+        }
+        assert_eq!(
+            repeat.action.status,
+            ActionStatus::Unchanged,
+            "{:?}",
+            repeat.action
+        );
+        assert_eq!(repeat.action.commit, first.action.commit);
+        assert!(
+            server.0.lock().unwrap().writes.is_empty(),
+            "no tree, commit or ref mutation on forced recheck"
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn rechecks_repair_leftover_files_and_modes_even_when_planned_blobs_match() {
+    for extra_file in [false, true] {
+        let (mut first, snapshot) = make_plan("22.0.0");
+        let server = fake(&snapshot);
+        let github = client(server.clone()).await;
+        apply(
+            &github,
+            &mut first,
+            &snapshot,
+            "main",
+            Rebase::Behind,
+            false,
+        )
+        .await;
+        {
+            let mut state = server.0.lock().unwrap();
+            let entries = state
+                .trees
+                .get_mut(first.tree.as_ref().unwrap())
+                .unwrap()
+                .as_array_mut()
+                .unwrap();
+            if extra_file {
+                entries.push(json!({"path":"obsolete.lock","mode":"100644","type":"blob","sha":blob_sha("obsolete")}));
+            } else {
+                entries
+                    .iter_mut()
+                    .find(|entry| entry["path"] == "mise.toml")
+                    .unwrap()["mode"] = json!("100755");
+            }
+            state.writes.clear();
+        }
+        let (mut repeat, _) = make_plan("22.0.0");
+        repeat.retry = true;
+        apply(
+            &github,
+            &mut repeat,
+            &snapshot,
+            "main",
+            Rebase::Behind,
+            false,
+        )
+        .await;
+        assert_eq!(repeat.action.status, ActionStatus::Updated);
+        let state = server.0.lock().unwrap();
+        let entries = state.trees[repeat.tree.as_ref().unwrap()]
+            .as_array()
+            .unwrap();
+        assert!(!entries.iter().any(|entry| entry["path"] == "obsolete.lock"));
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry["path"] == "mise.toml" && entry["mode"] == "100644")
+        );
+        assert_eq!(state.writes.len(), 3);
+    }
+}
 #[tokio::test(start_paused = true)]
 async fn dry_run_plans_diffs_and_never_sends_mutations() {
     let (mut plan, snapshot) = make_plan("22.0.0");
@@ -630,6 +761,7 @@ async fn behind_rebases_and_conflicts_keeps_an_identical_manifest_on_old_base() 
         }
         let (mut next, _) = make_plan("22.0.0");
         next.action.base_commit = "base2".into();
+        next.retry = true;
         apply(&github, &mut next, &snapshot, "main", mode, false).await;
         assert_eq!(
             next.action.status,
@@ -1174,6 +1306,70 @@ async fn shared_base_write_trace_and_request_budget() {
             .iter()
             .filter(|(p, _)| p.ends_with("/git/trees"))
             .all(|(_, b)| b["tree"][0]["content"] == p.contents["mise.toml"])
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn forced_batch_recheck_has_no_mutations_and_one_shared_viewer_read() {
+    let (_, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    server.0.lock().unwrap().latency = std::time::Duration::from_millis(150);
+    let github = client(server.clone()).await;
+    let plans = || {
+        (0..17)
+            .map(|n| {
+                let (mut p, _) = make_plan("22.0.0");
+                p.action.branch = format!("rustovate/tool-{n}-22.x");
+                p.retry = true;
+                p
+            })
+            .collect::<Vec<_>>()
+    };
+    rustovate_update::apply_all(
+        &github,
+        &mut plans(),
+        &snapshot,
+        "main",
+        Rebase::Behind,
+        false,
+    )
+    .await;
+    {
+        let mut state = server.0.lock().unwrap();
+        state.requests.clear();
+        state.writes.clear();
+    }
+    let mut repeat = plans();
+    let started = tokio::time::Instant::now();
+    rustovate_update::apply_all(
+        &github,
+        &mut repeat,
+        &snapshot,
+        "main",
+        Rebase::Behind,
+        false,
+    )
+    .await;
+    assert!(
+        repeat
+            .iter()
+            .all(|p| p.action.status == ActionStatus::Unchanged)
+    );
+    let state = server.0.lock().unwrap();
+    assert!(state.writes.is_empty());
+    assert_eq!(
+        state
+            .requests
+            .iter()
+            .filter(|(_, path)| path == "/graphql")
+            .count(),
+        1
+    );
+    assert_eq!(state.requests.len(), 4 + 1 + 17 * 4);
+    eprintln!(
+        "forced 17-branch recheck: {} reads, 0 mutations, {:?} simulated at 150ms/request",
+        state.requests.len(),
+        started.elapsed()
     );
 }
 
@@ -1751,7 +1947,7 @@ async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
     )
     .await;
     assert!(retry.retry);
-    assert_eq!(retry.action.status, ActionStatus::Updated);
+    assert_eq!(retry.action.status, ActionStatus::Unchanged);
     assert_eq!(actions[0].status, ActionStatus::Updated);
     let (mut next, _) = make_plan("22.1.0");
     next.changes[0].labels = vec!["new-policy".into()];
@@ -2011,6 +2207,7 @@ async fn rechecks_refresh_notes_but_only_patch_changed_body_hashes() {
                 s.prs.get_mut(&1).unwrap()["body"] = json!(body.replace('\n', "\r\n"));
                 s.requests.clear();
                 s.writes.clear();
+                s.release_queries.clear();
             }
             let actions = pr_cycle(
                 &github,
@@ -2022,12 +2219,9 @@ async fn rechecks_refresh_notes_but_only_patch_changed_body_hashes() {
             .await;
             let s = server.0.lock().unwrap();
             assert_eq!(
-                s.requests
-                    .iter()
-                    .filter(|(_, p)| p.contains("/releases/tags/"))
-                    .count(),
-                1,
-                "{origin}: recheck must read notes"
+                s.release_queries.len(),
+                if changed { 2 } else { 1 },
+                "{origin}: recheck validates timestamps and fetches only changed bodies"
             );
             let patches = s
                 .requests
@@ -2089,13 +2283,7 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
         let body = s.prs[&1]["body"].as_str().unwrap();
         assert!(body.len() <= rustovate_update::BODY_LIMIT);
         assert!(body.contains("Release details 🦀") && body.contains("Click to re-check now."));
-        assert_eq!(
-            s.requests
-                .iter()
-                .filter(|(_, p)| p.contains("/releases/tags/"))
-                .count(),
-            1
-        );
+        assert_eq!(s.release_queries.len(), 1);
     }
     let (mut repeat, _) = make_plan("22.0.0");
     repeat.changes = p.changes.clone();
@@ -2107,14 +2295,20 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
         &snapshot,
     )
     .await;
-    assert_eq!(github.stats().await.not_modified, 1);
+    assert_eq!(server.0.lock().unwrap().release_queries.len(), 2);
+    assert!(
+        !server.0.lock().unwrap().release_queries[1]["query"]
+            .as_str()
+            .unwrap()
+            .contains("body:description")
+    );
     let reads = server
         .0
         .lock()
         .unwrap()
         .requests
         .iter()
-        .filter(|(_, p)| p.contains("/releases/tags/") || p.starts_with("/data/github/"))
+        .filter(|(_, p)| p.starts_with("/data/github/"))
         .count();
     pr_cycle(
         &github,
@@ -2141,14 +2335,7 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
         c.release_notes = false;
         c.body_notes = vec!["huge 🦀 <!-- rustovate:fake -->".repeat(5000)];
     });
-    let count = server
-        .0
-        .lock()
-        .unwrap()
-        .requests
-        .iter()
-        .filter(|(_, p)| p.contains("/releases/tags/"))
-        .count();
+    let count = server.0.lock().unwrap().release_queries.len();
     lifecycle
         .publish(&github, std::slice::from_mut(&mut repeat))
         .await;
@@ -2156,13 +2343,7 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
     let body = s.prs[&1]["body"].as_str().unwrap();
     assert!(body.len() <= rustovate_update::BODY_LIMIT);
     assert_eq!(body.matches("<!-- rustovate:").count(), 1);
-    assert_eq!(
-        s.requests
-            .iter()
-            .filter(|(_, p)| p.contains("/releases/tags/"))
-            .count(),
-        count
-    );
+    assert_eq!(s.release_queries.len(), count);
 }
 
 #[tokio::test(start_paused = true)]

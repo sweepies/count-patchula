@@ -1,11 +1,69 @@
 //! Public source evidence. Normal execution is strictly offline replay.
 #![forbid(unsafe_code)]
+mod support;
 use rustovate_cache::Cache;
 use rustovate_config::Source;
 use rustovate_datasource::Client;
-use rustovate_http::{Cached, Network};
+use rustovate_http::{Cached, Exchange, Network, Response, Transport};
 use rustovate_testkit::{Options, Redactor};
 use std::{path::Path, sync::Arc};
+
+/// Existing captures remain verbatim REST evidence. During offline replay,
+/// project their release fields into simulated GraphQL responses; other reads
+/// still use fail-closed cassette matching. Recording uses actual GraphQL.
+struct ReleaseReplay {
+    inner: Arc<dyn Transport>,
+    releases: std::collections::BTreeMap<String, serde_json::Value>,
+}
+impl Transport for ReleaseReplay {
+    fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+        if request.url().path() != "/graphql" {
+            return self.inner.send(request);
+        }
+        Box::pin(async move {
+            let request: serde_json::Value =
+                serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
+            let body = support::releases(&request, |repo, tag| {
+                let mut url = reqwest::Url::parse(&format!(
+                    "https://api.github.com/repos/{repo}/releases/tags/"
+                ))
+                .unwrap();
+                url.path_segments_mut().unwrap().pop_if_empty().push(tag);
+                self.releases.get(&url.to_string()).cloned()
+            });
+            Ok(Response {
+                status: reqwest::StatusCode::OK,
+                headers: Default::default(),
+                body: serde_json::to_vec(&body).unwrap(),
+            })
+        })
+    }
+}
+fn release_replay(inner: Arc<dyn Transport>, path: &Path, recording: bool) -> Arc<dyn Transport> {
+    if recording {
+        return inner;
+    }
+    let cassette: rustovate_testkit::Cassette =
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    if cassette
+        .interactions
+        .iter()
+        .any(|entry| entry.request.url.ends_with("/graphql"))
+    {
+        // Refreshed cassettes replay real GraphQL without the REST projection.
+        return inner;
+    }
+    let mut releases = std::collections::BTreeMap::new();
+    for entry in cassette.interactions {
+        if entry.request.url.contains("/releases/tags/")
+            && entry.response.status == 200
+            && let rustovate_testkit::Body::Json(body) = entry.response.body
+        {
+            releases.entry(entry.request.url).or_insert(body);
+        }
+    }
+    Arc::new(ReleaseReplay { inner, releases })
+}
 
 #[tokio::test]
 async fn public_note_sources_and_release_range() {
@@ -26,6 +84,7 @@ async fn public_note_sources_and_release_range() {
         || Ok(Arc::new(Network::new()?)),
     )
     .unwrap();
+    let transport = release_replay(transport, &path, recording);
     let dir = tempfile::tempdir().unwrap();
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await
@@ -171,6 +230,7 @@ async fn public_sandbox_note_ranges() {
             || Ok(Arc::new(Network::new()?)),
         )
         .unwrap();
+        let transport = release_replay(transport, &path, recording);
         let dir = tempfile::tempdir().unwrap();
         let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
             .await

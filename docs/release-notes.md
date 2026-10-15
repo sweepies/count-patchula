@@ -35,13 +35,28 @@ does not produce redundant edits. Title/base changes and checked PR boxes still
 require reconciliation. Receipt restoration retains its single-inventory fast
 path without fetching notes.
 
-One publication batch shares release lists, tag lists, exact release bodies and
-changelog directory reads by upstream URL, across ecosystems and version ranges.
+A forced recheck still validates branch ownership and signed history. It compares
+locally computed Git blob SHAs, modes and deletions against the current branch
+tree before creating Git objects. With the same base, the full intended leaf
+tree must match, including the absence of edits left over from an older plan.
+An identical tree reuses the existing commit even when the retry or policy
+fingerprint changed. A moved base still follows the configured rebase policy.
+The branch batch shares one viewer lookup; unchanged branches send no tree,
+commit or ref mutations.
+
+One publication batch shares source metadata, release lists, tag lists, exact
+release bodies and changelog directory reads across ecosystems and version ranges.
 Both sequential and concurrent PRs reuse these reads (including failures).
 For example, mise, Docker and GitHub updates pointing at Node share overlapping
-release-body reads and changelog discovery. The memo is discarded after the batch;
-the next run revalidates mutable resources normally. Immutable changelog blobs
-retain their existing persistent parsed-section cache.
+release-body reads and changelog discovery. Before rendering, publication unions
+selected tags across PRs by upstream repository. An aliased GraphQL query fetches
+all selected bodies for each upstream, bounded to 100 tags per query. Bodies are
+persisted in SQLite by repository and exact tag together with `updatedAt`.
+Later batches query only timestamps for cached tags; unchanged bodies are neither
+downloaded nor rewritten. Edited releases get one additional batch query for
+their new bodies. Missing releases and failures are memoised only within the
+batch, and are checked again next time. Immutable changelog blobs retain their
+existing persistent parsed-section cache.
 
 Release-note tag selection uses the public
 [mise-versions GitHub lists](https://github.com/jdx/mise-versions/blob/main/docs/github-versions.md):
@@ -55,8 +70,9 @@ The current mirror contract says **no direct GitHub catalog fallback on any
 error**, including 429/5xx, 403/404, empty answers and truncated lists. This is
 stricter than the initial suggestion of falling back only on transport errors.
 The implementation follows the published contract. Incomplete results are
-visible in the PR. Exact release bodies still come from GitHub's conditional
-`releases/tags/{tag}` endpoint for the selected range only.
+visible in the PR. Exact releases come from GitHub GraphQL's
+`repository { release(tagName: ...) { updatedAt description isDraft isPrerelease } }`
+for mirror-selected tags only; there is no GitHub catalog fallback.
 
 Versions are selected in `(current, target]`, using the observed current version
 where available. Docker variants/digests are removed for upstream version
@@ -89,8 +105,8 @@ The body retains the dependency table and ownership/recheck markers within a
 dependency gets at most 12,000 bytes; at most eight distinct source/package/range
 combinations are rendered. Versions are newest first. After the three newest
 versions, older notes appear in `<details>`. Truncation closes our details block
-and adds an explicit upstream link. Release-body reads stop after 12,000 bytes
-or 32 candidate releases, since older bodies cannot fit. Notes that cannot be
+and adds an explicit upstream link. Each range selects at most 32 candidate
+releases for fetching and stops rendering after 12,000 bytes. Notes that cannot be
 fetched or do not fit are explicitly marked truncated/incomplete. This is a
 bounded summary of the range, not a promise to embed unlimited upstream history.
 
@@ -131,7 +147,11 @@ PR bodies as fixtures.
 and exercises every source, monorepo namespaces, release/changelog merging,
 prereleases, Node major files, conditional responses, changed blobs, a document
 larger than 10 MB, byte budgets and notification neutralisation. Public cassettes
-cover registry source metadata and the sandbox ranges. Refresh through mise
+cover registry source metadata and the sandbox ranges. Existing REST release
+captures remain verbatim; offline tests explicitly project their fields into
+simulated GraphQL responses. These are not recorded GraphQL evidence. Independent
+fixtures assert alias batching, timestamp-only warm queries, changed/deleted
+release handling and cache reuse after reopening SQLite. Refresh through mise
 with `GH_TOKEN=$(gh auth token)` and `RUSTOVATE_RECORD=1`, then run
 `mise run fixtures:check`; normal tests never construct a network client.
 

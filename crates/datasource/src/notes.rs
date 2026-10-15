@@ -1,10 +1,12 @@
 //! Source metadata and release ranges, fetched only for changed pull requests.
 mod changelog;
 mod markdown;
+mod releases;
 mod source;
 use super::*;
 pub use changelog::{Section, parse_changelog};
 pub use markdown::sanitise;
+pub(crate) use releases::BodyCache;
 use rustovate_cache::ExtractionKey;
 use rustovate_versioning::Parsed;
 pub use source::Repository;
@@ -154,17 +156,28 @@ fn inferred_tag(
     Some(format!("{prefix}{v}{number}"))
 }
 
-#[derive(Serialize, Deserialize)]
-struct ReleaseBody {
-    #[serde(default)]
-    body: Option<String>,
-    #[serde(default)]
-    draft: bool,
-    #[serde(default)]
-    prerelease: bool,
-}
-fn compact_release(bytes: &[u8]) -> std::result::Result<Vec<u8>, serde_json::Error> {
-    serde_json::to_vec(&serde_json::from_slice::<ReleaseBody>(bytes)?)
+fn note_bounds(
+    source: Source,
+    package: &str,
+    current: &str,
+    target: &str,
+    repository: &Repository,
+) -> Option<(Parsed, Parsed)> {
+    let old = boundary(current, source)?;
+    let new = matches!(source, Source::Docker | Source::Oci)
+        .then(|| {
+            repository
+                .image_version
+                .as_deref()
+                .and_then(|v| tag_version(v, package, repository))
+                .and_then(parsed)
+        })
+        .flatten()
+        .or_else(|| boundary(target, source))?;
+    Ecosystem::Loose
+        .order(&old, &new)
+        .is_lt()
+        .then_some((old, new))
 }
 
 impl Client {
@@ -173,6 +186,7 @@ impl Client {
     pub fn notes_batch(&self) -> Self {
         let mut client = self.clone();
         client.note_reads = Some(Default::default());
+        client.release_bodies = Default::default();
         client
     }
     async fn note_read(
@@ -191,6 +205,22 @@ impl Client {
         let result = fetch.await.map_err(|e| e.to_string());
         *saved = Some(result.clone());
         result.map_err(Error::Notes)
+    }
+    async fn notes_source_repository(
+        &self,
+        source: Source,
+        package: &str,
+        target: &str,
+    ) -> Result<Option<Repository>> {
+        let key = serde_json::to_string(&("note-source", source, package, target))?;
+        let bytes = self
+            .note_read(&key, async {
+                Ok(serde_json::to_vec(
+                    &self.source_repository(source, package, target).await?,
+                )?)
+            })
+            .await?;
+        Ok(serde_json::from_slice(&bytes)?)
     }
     async fn notes_directory(&self, repo: &str, directory: &str) -> Result<changelog::Tree> {
         let mut url = reqwest::Url::parse(&format!("https://api.github.com/repos/{repo}/contents"))
@@ -357,7 +387,9 @@ impl Client {
         target: &str,
     ) -> Result<Notes> {
         let mut notes = Notes {
-            source: self.source_repository(source, package, target).await?,
+            source: self
+                .notes_source_repository(source, package, target)
+                .await?,
             ..Notes::default()
         };
         let Some(repository) = notes.source.as_ref() else {
@@ -366,24 +398,9 @@ impl Client {
         let Some(repo) = repository.github.as_deref() else {
             return Ok(notes);
         };
-        let Some(old) = boundary(current, source) else {
+        let Some((old, new)) = note_bounds(source, package, current, target, repository) else {
             return Ok(notes);
         };
-        let labelled_version = matches!(source, Source::Docker | Source::Oci)
-            .then(|| {
-                repository
-                    .image_version
-                    .as_deref()
-                    .and_then(|v| tag_version(v, package, repository))
-                    .and_then(parsed)
-            })
-            .flatten();
-        let Some(new) = labelled_version.or_else(|| boundary(target, source)) else {
-            return Ok(notes);
-        };
-        if !Ecosystem::Loose.order(&old, &new).is_lt() {
-            return Ok(notes);
-        }
         let mut old_tag = None;
         let mut new_tag = None;
         let mut template = None;
@@ -418,6 +435,12 @@ impl Client {
                     candidates.push((version, release));
                 }
                 candidates.sort_by(|(a, _), (b, _)| Ecosystem::Loose.order(b, a));
+                let tags: Vec<_> = candidates
+                    .iter()
+                    .take(32)
+                    .map(|(_, r)| r.tag.clone())
+                    .collect();
+                let bodies = self.release_bodies(repo, &tags).await?;
                 let mut bytes = 0;
                 for (index, (version, release)) in candidates.into_iter().enumerate() {
                     // A PR displays at most 12 KB per dependency. Avoid reading
@@ -426,30 +449,12 @@ impl Client {
                         notes.incomplete = true;
                         break;
                     }
-                    let url = segment_url(
-                        &format!("https://api.github.com/repos/{repo}/releases/tags/"),
-                        &release.tag,
-                    );
-                    match self
-                        .note_read(&url, async {
-                            Ok(self
-                                .github
-                                .get_derived(
-                                    url.trim_start_matches("https://api.github.com/"),
-                                    "release-notes-body-v2",
-                                    compact_release,
-                                )
-                                .await?
-                                .body)
-                        })
-                        .await
-                    {
-                        Ok(payload) => {
-                            let body: ReleaseBody = serde_json::from_slice(&payload)?;
+                    match &bodies[&release.tag] {
+                        Ok(Some(body)) => {
                             if body.draft || body.prerelease && new.0.pre.is_empty() {
                                 continue;
                             }
-                            if let Some(body) = body.body.filter(|b| !b.trim().is_empty()) {
+                            if let Some(body) = body.body.clone().filter(|b| !b.trim().is_empty()) {
                                 bytes += body.len();
                                 versions.insert(version_id(&version));
                                 notes.sections.push(Section {
@@ -462,7 +467,7 @@ impl Client {
                                 });
                             }
                         }
-                        Err(_) => notes.incomplete = true,
+                        Ok(None) | Err(_) => notes.incomplete = true,
                     }
                 }
             }

@@ -65,6 +65,7 @@ pub struct Client {
     dockerhub_credentials: Option<std::sync::Arc<(String, String)>>,
     changelogs: notes::ChangelogCache,
     note_reads: Option<notes::ReadCache>,
+    release_bodies: notes::BodyCache,
     stale_registry: std::sync::Arc<tokio::sync::Mutex<BTreeMap<String, BTreeMap<String, i64>>>>,
 }
 impl Client {
@@ -82,6 +83,7 @@ impl Client {
             dockerhub_credentials: None,
             changelogs: Default::default(),
             note_reads: None,
+            release_bodies: Default::default(),
             stale_registry: Default::default(),
         }
     }
