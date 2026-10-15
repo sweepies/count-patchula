@@ -105,40 +105,30 @@ One engine library runs every batch. The CLI and the server are thin front
 ends over it, so a batch behaves the same however it was started.
 
 - **CLI** (`rustovate run`, `rustovate lookup`): one batch per invocation,
-  with a token supplied by the caller. This is how renovate-runner uses it.
-- **Server** (`rustovate --server`): a long-running process that receives GitHub
-  webhooks (signatures verified before parsing), keeps one de-duplicated queue,
-  runs sweeps on a cron schedule, and drains work in batches with caches kept
-  warm. It serves the web UI and its JSON API.
+  with a token supplied by the caller.
+- **Server** (`rustovate --server`): a long-running process that exposes an API
+  for GitHub webhooks (signatures verified before parsing) plus health and
+  readiness endpoints, keeps one de-duplicated queue, runs sweeps on a cron
+  schedule, and drains work in batches with caches kept warm.
 
 Checkboxes rustovate adds to issues and PRs say when a click takes effect:
 "re-check now" in server mode, "re-check on the next run" in CLI mode. Operators
 can override this with `--recheck now|next-run` (or `RUSTOVATE_RECHECK`) for
-setups like renovate-runner, where a webhook-driven Worker starts CLI runs
-immediately. A hidden marker, not the text, identifies rustovate's checkboxes.
+setups where an external webhook receiver starts CLI runs immediately. A hidden marker, not the text, identifies rustovate's checkboxes.
 
 ### Server settings
 
-Operator settings (sweep schedule, triggers, concurrency, paused state,
-re-check wording) are separate from repository configs. Two exclusive modes,
-chosen with `--settings`:
+Operator settings (sweep schedule, triggers, concurrency, re-check wording)
+are separate from repository configs and come only from operator-supplied
+configuration: a Pkl file amending the published settings schema, plus flags
+and environment variables. Changes to the file are picked up when it changes;
+an invalid file keeps the last good settings and reports the error.
 
-- `file:<path>`: a Pkl file amending the published settings schema. The UI
-  shows it read-only. Changes are picked up when the file changes; an invalid
-  file keeps the last good settings and reports the error.
-- `managed`: stored in rustovate's state database and edited in the UI or the
-  API, with an audit record of each change. Managed settings can be exported
-  as a Pkl file to switch to file mode.
+Secrets (App private key, webhook secret) never appear in settings; they come
+from environment variables or files.
 
-Secrets (App private key, webhook secret, OAuth client secret) never appear in
-settings; they come from environment variables or files.
-
-### Web UI
-
-A static Svelte app compiled into the binary and served by the Rust HTTP
-server, so rustovate stays a single binary. The API and sessions are in Rust.
-Sign-in is GitHub OAuth, restricted to listed users or org members, with CSRF
-protection on every state-changing request.
+Not planned for now (decision 2026-10-15): a web UI and settings managed by
+rustovate itself. The server exposes only the webhook API and health checks.
 
 ## Tooling
 
@@ -155,5 +145,5 @@ rustovate itself.
 1. Read-only: `rustovate lookup` produces a dry-run report for all 12
    repositories, triaged against Renovate's dry-run output.
 2. Write side: branches, commits, PRs, dashboard, lockfile tools.
-   Then server mode: webhooks, queue, settings modes, web UI.
+   Then server mode: webhook API, queue, file-based operator settings.
 3. Shadow mode next to Renovate in renovate-runner, then cutover.
