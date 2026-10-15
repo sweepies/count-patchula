@@ -136,13 +136,6 @@ fn checked_actions(body: &str) -> BTreeSet<Action> {
         .collect()
 }
 impl Controls {
-    pub fn has_requests(&self) -> bool {
-        self.recheck
-            || !self.branches.is_empty()
-            || !self.create.is_empty()
-            || !self.recreate.is_empty()
-            || !self.retry.is_empty()
-    }
     pub fn apply(&mut self, plans: &mut [Plan], dependencies: &[rustovate_manager::Dependency]) {
         for plan in plans {
             let key = update_key(plan);
@@ -199,7 +192,11 @@ impl Controls {
                 plan.action.status = rustovate_report::ActionStatus::Planned;
                 plan.action.reason = None;
             }
-            if self.recheck || self.branches.contains(&plan.action.branch) {
+            if self.recheck
+                || self.branches.contains(&plan.action.branch)
+                || self.create.contains(&key)
+                || self.recreate.contains(&key)
+            {
                 plan.retry = true;
             }
         }
@@ -345,7 +342,8 @@ pub fn issue(inventory: &Inventory) -> Result<Option<&Value>, String> {
 
 /// No wall clock or lookup evaluation timestamps: unchanged evidence renders identically.
 pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck) -> String {
-    let mut sections = BTreeMap::<String, BTreeSet<String>>::new();
+    // Keep the numeric PR identity separate from the rendered Markdown.
+    let mut sections = BTreeMap::<String, BTreeSet<(Option<u64>, String)>>::new();
     for pr in prs.iter().filter(|p| {
         p["state"] == "open"
             && !plans
@@ -356,9 +354,12 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
             sections
                 .entry("Open PRs — other".into())
                 .or_default()
-                .insert(format!(
-                    "- #{number}: {}\n",
-                    safe(pr["title"].as_str().unwrap_or("Update dependencies"))
+                .insert((
+                    Some(number),
+                    format!(
+                        "- #{number}: {}\n",
+                        safe(pr["title"].as_str().unwrap_or("Update dependencies"))
+                    ),
                 ));
         }
     }
@@ -377,18 +378,24 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
                 sections
                     .entry(format!("Open PRs — {kind}"))
                     .or_default()
-                    .insert(format!("- #{number}: {}\n", safe(&plan.action.message)));
+                    .insert((
+                        Some(number),
+                        format!("- #{number}: {}\n", safe(&plan.action.message)),
+                    ));
             }
         } else if plan.action.reason.as_deref() == Some(crate::pull_requests::CLOSED_BY_OWNER) {
             sections
                 .entry("Owner-closed updates".into())
                 .or_default()
-                .insert(checkbox(
-                    &format!(
-                        "Recreate this owner-closed update: {}",
-                        safe(&plan.action.message)
+                .insert((
+                    None,
+                    checkbox(
+                        &format!(
+                            "Recreate this owner-closed update: {}",
+                            safe(&plan.action.message)
+                        ),
+                        Action::Recreate(update_key(plan)),
                     ),
-                    Action::Recreate(update_key(plan)),
                 ));
         } else if let Some(reason) = &plan.action.reason {
             let action = if reason.starts_with("prs.")
@@ -408,16 +415,16 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
             sections
                 .entry("Pending updates".into())
                 .or_default()
-                .insert(action);
+                .insert((None, action));
         }
     }
     for file in &repo.package_files {
         for dep in &file.dependencies {
             if let Some(metadata) = &dep.metadata {
                 for held in &metadata.held_back {
-                    sections.entry("Pending updates".into()).or_default().insert(checkbox(
+                    sections.entry("Pending updates".into()).or_default().insert((None, checkbox(
                         &format!("Create this held-back/limited update now: {} → {} ({}, {}; eligible at {})", safe(&dep.name), safe(&held.version), safe(&metadata.source), safe(&file.path), safe(held.target_eligible_at.as_deref().unwrap_or(&held.eligible_at))),
-                        Action::Create(held_key(&file.path, dep, &held.version, &held.update_type))));
+                        Action::Create(held_key(&file.path, dep, &held.version, &held.update_type)))));
                 }
                 let warnings: Vec<_> = repo
                     .warnings
@@ -451,7 +458,7 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
                     sections
                         .entry("Lookup warnings and errors".into())
                         .or_default()
-                        .insert(row);
+                        .insert((None, row));
                 }
             }
             sections
@@ -461,10 +468,13 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
                     safe(&file.path)
                 ))
                 .or_default()
-                .insert(format!(
-                    "- {}: {}\n",
-                    safe(&dep.name),
-                    safe(dep.current.value.as_deref().unwrap_or("unknown"))
+                .insert((
+                    None,
+                    format!(
+                        "- {}: {}\n",
+                        safe(&dep.name),
+                        safe(dep.current.value.as_deref().unwrap_or("unknown"))
+                    ),
                 ));
         }
     }
@@ -472,7 +482,7 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
         sections
             .entry("Report warnings".into())
             .or_default()
-            .insert(format!("- {}\n", safe(warning)));
+            .insert((None, format!("- {}\n", safe(warning))));
     }
     let timing = match recheck {
         Recheck::Now => "now",
@@ -483,6 +493,21 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
         "Re-check this repository",
         Action::Recheck(hash(repo.repository.as_bytes())),
     ));
+    let mut sections: Vec<_> = sections.into_iter().collect();
+    sections.sort_by_key(|(section, _)| {
+        let rank = if section.starts_with("Open PRs — ") {
+            0
+        } else {
+            match section.as_str() {
+                "Pending updates" => 1,
+                "Owner-closed updates" => 2,
+                "Lookup warnings and errors" => 3,
+                "Report warnings" => 4,
+                _ => 5,
+            }
+        };
+        (rank, section.clone())
+    });
     for (section, rows) in sections {
         let (start, end) = if let Some(label) = section.strip_prefix("Detected: ") {
             (
@@ -499,7 +524,7 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
             break;
         }
         text.push_str(&start);
-        for row in rows {
+        for (_, row) in rows {
             if text.len() + row.len() + end.len() + 150 > LIMIT {
                 text.push_str("\nAdditional entries omitted to fit GitHub's issue body limit.\n");
                 break;

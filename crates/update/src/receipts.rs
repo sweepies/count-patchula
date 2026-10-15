@@ -302,7 +302,9 @@ pub async fn restore_inventory(
         .iter_mut()
         .filter(|p| p.action.status == ActionStatus::Planned)
     {
-        let result = if let Some(receipt) = receipts.closed.get(&plan.action.branch) {
+        let result = if plan.retry {
+            Err("checkbox-recheck")
+        } else if let Some(receipt) = receipts.closed.get(&plan.action.branch) {
             if receipt.actor != actor {
                 Err("actor-mismatch")
             } else if receipt.intent != intent(plan, config, recheck) {
@@ -351,9 +353,6 @@ fn restore_write(
     config: &Config,
     recheck: Recheck,
 ) -> Result<(), &'static str> {
-    if plan.retry {
-        return Err("checkbox-recheck");
-    }
     let receipt = receipts
         .writes
         .get(&plan.action.branch)

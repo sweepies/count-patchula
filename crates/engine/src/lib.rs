@@ -230,19 +230,15 @@ impl Engine {
             }
             if !dry_run {
                 work.controls.apply(&mut plans, &work.dependencies);
-                let restored = if work.controls.has_requests() {
-                    Ok(false)
-                } else {
-                    rustovate_update::restore_inventory(
-                        &self.cache,
-                        repo,
-                        &config,
-                        &mut plans,
-                        self.recheck,
-                        inventory.as_ref().expect("write inventory"),
-                    )
-                    .await
-                };
+                let restored = rustovate_update::restore_inventory(
+                    &self.cache,
+                    repo,
+                    &config,
+                    &mut plans,
+                    self.recheck,
+                    inventory.as_ref().expect("write inventory"),
+                )
+                .await;
                 match restored {
                     Ok(true) => {
                         let inventory = inventory.as_ref().expect("write inventory");

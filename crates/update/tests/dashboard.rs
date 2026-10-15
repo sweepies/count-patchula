@@ -52,6 +52,36 @@ fn dashboard_snapshot_and_identity_do_not_depend_on_wording() {
     );
 }
 #[test]
+fn dashboard_orders_pr_numbers_numerically_and_dependency_summaries_last() {
+    let repo = repository();
+    let prs: Vec<_> = [24, 3, 11]
+        .into_iter()
+        .map(|number| json!({"number":number,"state":"open","title":format!("PR {number}")}))
+        .collect();
+    let text = dashboard::render(&repo, &[], &prs, Recheck::NextRun);
+    let positions: Vec<_> = [
+        "## Open PRs",
+        "- #3:",
+        "- #11:",
+        "- #24:",
+        "## Pending updates",
+        "## Lookup warnings",
+        "## Report warnings",
+        "<details>",
+    ]
+    .into_iter()
+    .map(|label| text.find(label).unwrap())
+    .collect();
+    assert!(positions.windows(2).all(|p| p[0] < p[1]), "{text}");
+    let mut reversed = prs;
+    reversed.reverse();
+    assert_eq!(
+        text,
+        dashboard::render(&repo, &[], &reversed, Recheck::NextRun)
+    );
+}
+
+#[test]
 fn issue_discovery_checks_marker_author_and_ambiguity_never_title() {
     let mut inventory = Inventory {
         actor: "rustovate[bot]".into(),

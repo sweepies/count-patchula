@@ -365,6 +365,30 @@ async fn dashboard_renames_are_preserved_and_disabling_closes_only_the_owned_iss
         fake.issues.lock().unwrap()[0]["title"],
         "Owner dashboard title"
     );
+    // Simulate the previous layout while retaining the cached content hash.
+    {
+        let mut issues = fake.issues.lock().unwrap();
+        let body = issues[0]["body"].as_str().unwrap();
+        let (actions, details) = body.split_once("\n<details>").unwrap();
+        let (intro, prs) = actions.split_once("\n## Open PRs").unwrap();
+        issues[0]["body"] = json!(format!("{intro}\n<details>{details}\n## Open PRs{prs}"));
+    }
+    run(None).await.unwrap();
+    {
+        let writes = fake.writes.lock().unwrap();
+        assert_eq!(
+            writes.len(),
+            1,
+            "layout migration must only patch the dashboard"
+        );
+        assert!(writes[0].0.contains("/issues/"));
+    }
+    fake.writes.lock().unwrap().clear();
+    run(None).await.unwrap();
+    assert!(
+        fake.writes.lock().unwrap().is_empty(),
+        "unchanged content hash must converge after one patch"
+    );
     let mut config = rustovate_config::load(std::path::Path::new("../../Rustovate.pkl")).unwrap();
     config.prs.dashboard = false;
     config.defaults.wait_hours = 0;
@@ -655,6 +679,137 @@ async fn dashboard_create_click_bypasses_concurrent_hourly_and_schedule_holds() 
             "{reason}"
         );
         assert_unticked(&fake);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
+    for origin in ["recreate", "create", "pr", "retry"] {
+        let mut request_counts = Vec::new();
+        for dependencies in [3, 6] {
+            let mut fake = Fake::new(false);
+            let deps: BTreeMap<_, _> = (0..dependencies)
+                .map(|i| (format!("fixture{i}"), "1.0.0"))
+                .collect();
+            fake.files.insert(
+                "package.json".into(),
+                json!({"dependencies":deps}).to_string(),
+            );
+            let fake = Arc::new(fake);
+            let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+            let engine =
+                Engine::with_transport("offline-installation", cache, 4, fake.clone()).unwrap();
+            let mut config = checkbox_config();
+            if origin == "create" {
+                config.prs.concurrent = Some(dependencies - 1);
+            }
+            let now = chrono::Utc::now();
+            checkbox_run(&engine, &config, now).await;
+            if origin == "recreate" {
+                // Include another owner-closed receipt as well as untouched open PRs.
+                for pr in fake.prs.lock().unwrap().iter_mut().take(2) {
+                    pr["state"] = json!("closed");
+                }
+                checkbox_run(&engine, &config, now).await;
+            }
+            if origin == "pr" {
+                let mut prs = fake.prs.lock().unwrap();
+                prs[0]["body"] = json!(
+                    prs[0]["body"]
+                        .as_str()
+                        .unwrap()
+                        .replace("- [ ] Created", "- [x] Created")
+                );
+            } else if origin == "retry" {
+                // An unknown/stale target is consumed without invalidating any write receipt.
+                let mut issues = fake.issues.lock().unwrap();
+                let body = issues[0]["body"].as_str().unwrap();
+                issues[0]["body"] = json!(format!(
+                    "{body}\n- [x] Retry <!-- rustovate-action:{{\"action\":\"retry\",\"target\":\"{}\"}} -->",
+                    "a".repeat(64)
+                ));
+            } else {
+                tick_dashboard(&fake, origin);
+            }
+            let untouched: Vec<_> = fake
+                .prs
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|p| origin != "pr" || !p["body"].as_str().unwrap().contains("- [x]"))
+                .map(|p| {
+                    (
+                        p["number"].as_u64().unwrap(),
+                        p["head"]["ref"].as_str().unwrap().to_owned(),
+                    )
+                })
+                .collect();
+            fake.requests.lock().unwrap().clear();
+            let report = checkbox_run(&engine, &config, now).await;
+            assert_unticked(&fake);
+            let requests = fake.requests.lock().unwrap().clone();
+            assert_eq!(
+                requests
+                    .iter()
+                    .filter(|(_, _, body)| body["query"] == rustovate_update::INVENTORY_QUERY)
+                    .count(),
+                1
+            );
+            let branch_reads: Vec<_> = requests
+                .iter()
+                .filter(|(_, path, _)| path.contains("/git/ref/heads/") && !path.ends_with("/main"))
+                .collect();
+            assert_eq!(
+                branch_reads.len(),
+                usize::from(origin != "retry"),
+                "{origin}: {requests:?}"
+            );
+            for (number, branch) in &untouched {
+                if branch_reads
+                    .iter()
+                    .any(|(_, path, _)| path.ends_with(&branch.replace("/", "%2F")))
+                {
+                    continue;
+                }
+                assert!(
+                    !requests
+                        .iter()
+                        .any(|(_, path, _)| path == &format!("/repos/demo/sandbox/pulls/{number}")),
+                    "{origin}: untouched PR #{number} was fetched"
+                );
+                assert!(
+                    report
+                        .actions
+                        .as_ref()
+                        .unwrap()
+                        .branches
+                        .iter()
+                        .any(|b| &b.branch == branch
+                            && matches!(b.status, ActionStatus::Unchanged | ActionStatus::Skipped)),
+                    "{origin}: {report:?}"
+                );
+            }
+            // Source lookups scale with dependencies; branch verification must not.
+            let write_requests = requests
+                .iter()
+                .filter(|(_, path, _)| !path.starts_with("/fixture"))
+                .count();
+            eprintln!(
+                "targeted {origin}, dependencies={dependencies}: {write_requests} repository requests"
+            );
+            request_counts.push(write_requests);
+            fake.writes.lock().unwrap().clear();
+            checkbox_run(&engine, &config, now).await;
+            assert!(
+                fake.writes.lock().unwrap().is_empty(),
+                "{origin}: next run must converge"
+            );
+        }
+        assert_eq!(
+            request_counts[0], request_counts[1],
+            "{origin}: unrelated branches added requests"
+        );
+        assert_eq!(request_counts[0], if origin == "retry" { 4 } else { 16 });
     }
 }
 

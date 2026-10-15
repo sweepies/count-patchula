@@ -77,3 +77,42 @@ these scenarios without requiring live upstream failures.
 Set `prs.dashboard = false` and rerun to close the owned issue. A human-authored
 copy of a marked issue is ignored and left untouched. No live sandbox run is
 part of the offline validation.
+
+## Polish: targeted receipts and dashboard ordering
+
+Checkboxes invalidate only matching update/branch receipts. Create and recreate
+targets are resolved to plans before restoration (including release-age targets);
+the invalidation applies to owner-closed receipts as well as successful writes.
+PR re-checks invalidate their branch, and repository re-checks still invalidate
+all plans. Lookup retries retain write receipts unless the resulting lookup
+changes a plan's intent. Unmatched/stale targets are simply consumed. Untouched
+plans retain receipt validation against the shared fresh inventory, including
+owner closures, and skip individual branch verification and PR refreshes.
+
+Offline engine coverage compares three and six dependencies for create,
+recreate, PR re-check and stale retry clicks. Each create/recreate/PR click uses
+16 repository requests, including extraction metadata/head reads, one shared
+inventory, shared lifecycle/base reads, one target's writes and the dashboard
+patch. Untouched PRs receive no individual fetches; adding dependencies adds
+only their source lookups. A stale retry uses four repository requests and no
+branch work. The following run makes no mutations in every case.
+
+For the supplied nginx recreation trace, keeping the same lookup freshness and
+repository state projects about **44 total requests / 20 write-phase requests**
+instead of 143 / 119. Sixteen untouched open branches avoid five verification
+requests and one PR refresh each, and three incidental release-note requests
+disappear: 99 requests removed. The single inventory remains in extraction;
+shared base/lifecycle/cleanup work and the target's ownership checks, atomic
+lease, PR/labels and dashboard mutation remain. This is a projection from the
+provided trace, not a new live run; source expiry, pagination, branch state and
+release-note cache misses can change totals.
+
+Dashboard sections now put open PRs first, then pending, owner-closed, warnings,
+and finally collapsible dependency summaries. PR rows sort by numeric identity
+within each section. The existing content hash and fresh-body comparison cause
+an old layout to be patched once, then remain unchanged; the engine regression
+also exercises this migration with a retained receipt and an owner-renamed title.
+
+No new SWE-104 recurrence was present in the latest retained CI diagnostics
+after `9804fde`; earlier development failures precede the latest passing wave 4
+runs. No speculative flake fix was made.
