@@ -1,8 +1,10 @@
 //! Shared registry lookups with conditional GETs and incremental GitHub history.
 #![forbid(unsafe_code)]
 mod compact;
+mod docker;
 mod github;
 mod mise;
+mod registries;
 use rustovate_cache::{Cache, Release};
 use rustovate_config::Source;
 use rustovate_http::Cached;
@@ -25,6 +27,8 @@ pub enum Error {
     Invalid,
     #[error("data source {0:?} is not implemented in this wave")]
     Unsupported(Source),
+    #[error("registry rate limit reached; retry after {0} seconds")]
+    RateLimit(u64),
 }
 pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -56,6 +60,7 @@ pub struct Client {
     pub(crate) github: rustovate_github::Client,
     pub(crate) http: Cached,
     pub(crate) cache: Cache,
+    tokens: docker::Tokens,
 }
 impl Client {
     pub fn new(github: rustovate_github::Client, http: Cached, cache: Cache) -> Self {
@@ -63,6 +68,7 @@ impl Client {
             github,
             http,
             cache,
+            tokens: Default::default(),
         }
     }
     pub async fn lookup(&self, source: Source, package: &str) -> Result<Catalog> {
@@ -82,7 +88,17 @@ impl Client {
             Source::Pypi => self.pypi(package).await,
             Source::Mise => self.mise(package).await,
             Source::GithubRunners => runners(package),
-            _ => Err(Error::Unsupported(source)),
+            Source::Docker => self.docker(package).await,
+            Source::Oci => {
+                let mut catalog = self.docker(package).await?;
+                for version in &mut catalog.versions {
+                    version.version = version.version.replace('_', "+");
+                }
+                sort(&mut catalog.versions, Ecosystem::Npm);
+                Ok(catalog)
+            }
+            Source::Terraform => self.terraform(package).await,
+            Source::Helm => self.helm(package).await,
         }
     }
     async fn npm(&self, package: &str) -> Result<Catalog> {
@@ -203,6 +219,7 @@ impl Client {
         {
             return Err(Error::Invalid);
         }
+        let package = registries::normalize_python(package)?;
         let response = self
             .http
             .get_derived(
@@ -211,7 +228,14 @@ impl Client {
                 "pypi-catalog-v1",
                 compact::pypi,
             )
-            .await?;
+            .await;
+        let response = match response {
+            Ok(v) => v,
+            Err(rustovate_http::CacheError::Status(404 | 406)) => {
+                return self.pypi_simple(&package).await;
+            }
+            Err(e) => return Err(e.into()),
+        };
         Ok(serde_json::from_slice(&response.body)?)
     }
     async fn merge(&self, source: &str, package: &str, versions: &[Version]) -> Result<()> {

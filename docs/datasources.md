@@ -42,8 +42,30 @@ index; Bun uses oven-sh/bun releases and strips bun-v tags; Go uses golang/go
 tags and strips go; Python uses CPython tags; Rust uses rust-lang/rust releases.
 Unknown tools report a warning. This resolves catalog identities, not custom
 tool_alias settings, backend platform constraints, or plugin-defined version logic.
-PyPI retains earliest file upload dates and all-files-yanked status; general PEP
-440 policy remains outside this wave (mise uses loose numeric versions).
+PyPI retains earliest file upload dates and all-files-yanked status. Python
+requirements use PEP 440 ordering/specifiers; mise keeps its loose version policy.
+
+Wave 2 adds anonymous registry v2 authentication for Docker Hub and GHCR, bounded
+same-origin tag pagination, conditional pages, and lazy manifest/index digest
+resolution for current/proposed tags. Bearer tokens stay in memory, expire, and
+never enter SQLite. A 429 reports Retry-After without retry storms. Lexically
+ordered tag pages cannot safely stop at a known version; full enumeration detects
+new historical tags. Numeric Docker updates keep the exact suffix variant.
+OCI charts use registry tags/manifests, translating SemVer build metadata to `_`.
+
+Terraform identities are `namespace/provider` or `namespace/module/system`, using
+the public registry versions APIs and compact derived catalogs. Helm identities
+are `https://repository|chart`; conditional `index.yaml` responses are compacted
+to per-chart catalogs, omitting URLs, descriptions and chart metadata. PyPI JSON
+falls back to PEP 691 JSON on 404/406; `pypi_simple` is also directly callable.
+The simple API groups wheel/sdist files by version and retains yank/upload data.
+
+Specifications: [registry v2](https://distribution.github.io/distribution/spec/api/),
+[token authentication](https://distribution.github.io/distribution/spec/auth/token/),
+[Terraform registry](https://developer.hashicorp.com/terraform/registry/api-docs),
+[Helm index](https://helm.sh/docs/topics/chart_repository/),
+[PEP 691](https://packaging.python.org/en/latest/specifications/simple-repository-api/),
+[PEP 440](https://packaging.python.org/en/latest/specifications/version-specifiers/).
 
 Hosted runner versions are maintained in `crates/datasource/src/runners.json`,
 checked against [GitHub's runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)

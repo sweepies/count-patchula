@@ -10,6 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+pep440_rs = "0.7.3"
 nodejs-semver = "7.0.0"
 rustovate-config = { version = "0.1.0", path = "../config" }
 semver = "1.0.28"

@@ -270,6 +270,7 @@ impl Engine {
         let phase = PhaseTrace::new("policy.evaluate");
         let mut proposals: Vec<Vec<Evaluation>> = Vec::with_capacity(work.len());
         let mut digest_keys = BTreeSet::new();
+        let mut image_keys = BTreeSet::new();
         for (repo, eval) in work.iter_mut().zip(&evaluators) {
             let mut deps = Vec::with_capacity(repo.dependencies.len());
             for dep in &repo.dependencies {
@@ -287,6 +288,18 @@ impl Engine {
                             .warnings
                             .push(format!("{} ({}): {error}", dep.name, dep.package)),
                         None => {}
+                    }
+                    if matches!(dep.source, Source::Docker | Source::Oci) {
+                        for proposal in &evaluation.updates {
+                            if eval.needs_digest(dep, proposal)
+                                && let Some(tag) = &proposal.new_version
+                            {
+                                image_keys.insert((dep.package.clone(), tag.clone()));
+                            }
+                        }
+                        if eval.digest_proposal(dep, "probe").is_some() {
+                            image_keys.insert((dep.package.clone(), dep.current.clone()));
+                        }
                     }
                     if dep.manager == Manager::GithubActions && dep.source == Source::GithubTags {
                         for proposal in &evaluation.updates {
@@ -333,6 +346,18 @@ impl Engine {
         let started = Instant::now();
         let phase = PhaseTrace::new("digest");
         digests.extend(self.digests(digest_keys).await);
+        let image_digests: BTreeMap<_, _> = stream::iter(image_keys)
+            .map(|(package, tag)| async move {
+                let result = self
+                    .sources
+                    .registry_digest(&package, &tag)
+                    .await
+                    .map_err(|e| e.to_string());
+                ((package, tag), result)
+            })
+            .buffer_unordered(self.concurrency)
+            .collect()
+            .await;
         let digest_time = micros(started);
         drop(phase);
         let started = Instant::now();
@@ -341,6 +366,37 @@ impl Engine {
             let mut files: BTreeMap<String, Vec<ReportDependency>> = BTreeMap::new();
             for (dep, evaluation) in repo.dependencies.iter().zip(dep_proposals) {
                 let mut proposals = evaluation.updates;
+                if let Some(eval) = eval
+                    && matches!(dep.source, Source::Docker | Source::Oci)
+                    && !eval.ignored(dep)
+                {
+                    for proposal in &mut proposals {
+                        if eval.needs_digest(dep, proposal)
+                            && let Some(tag) = &proposal.new_version
+                        {
+                            match image_digests.get(&(dep.package.clone(), tag.clone())) {
+                                Some(Ok(digest)) => proposal.new_digest = Some(digest.clone()),
+                                Some(Err(e)) => repo
+                                    .report
+                                    .warnings
+                                    .push(format!("{}@{tag}: {e}", dep.name)),
+                                None => {}
+                            }
+                        }
+                    }
+                    if let Some(result) =
+                        image_digests.get(&(dep.package.clone(), dep.current.clone()))
+                    {
+                        match result {
+                            Ok(digest) => {
+                                if let Some(p) = eval.digest_proposal(dep, digest) {
+                                    proposals.push(p);
+                                }
+                            }
+                            Err(e) => repo.report.warnings.push(format!("{}: {e}", dep.name)),
+                        }
+                    }
+                }
                 if let Some(eval) = eval
                     && dep.manager == Manager::GithubActions
                     && dep.source == Source::GithubTags

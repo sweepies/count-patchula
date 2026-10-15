@@ -4,6 +4,7 @@
 use rustovate_config::{Update, VersionPolicy};
 use semver::{Version, VersionReq};
 use std::cmp::Ordering;
+mod extended;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ecosystem {
@@ -11,6 +12,9 @@ pub enum Ecosystem {
     Cargo,
     Loose,
     Go,
+    Docker,
+    Pep440,
+    Hashicorp,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -26,7 +30,11 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Parsed once, reused while sorting/filtering a package's releases.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Parsed(pub Version);
+pub struct Parsed(
+    pub Version,
+    pub Option<pep440_rs::Version>,
+    pub Option<String>,
+);
 
 pub trait Versioning: Send + Sync {
     fn parse(&self, value: &str) -> Result<Parsed>;
@@ -38,6 +46,9 @@ pub trait Versioning: Send + Sync {
 
 impl Versioning for Ecosystem {
     fn parse(&self, value: &str) -> Result<Parsed> {
+        if matches!(self, Self::Docker | Self::Pep440 | Self::Hashicorp) {
+            return extended::parse(*self, value);
+        }
         let value = value.trim();
         let value = match self {
             Self::Cargo => value,
@@ -69,10 +80,13 @@ impl Versioning for Ecosystem {
             value
         };
         Version::parse(value)
-            .map(Parsed)
+            .map(|v| Parsed(v, None, None))
             .map_err(|_| Error::Invalid(value.into()))
     }
     fn order(&self, left: &Parsed, right: &Parsed) -> Ordering {
+        if let (Some(a), Some(b)) = (&left.1, &right.1) {
+            return a.cmp(b);
+        }
         // SemVer precedence ignores build metadata, including Go +incompatible.
         left.0.cmp_precedence(&right.0)
     }
@@ -88,6 +102,9 @@ impl Versioning for Ecosystem {
             Self::Cargo => VersionReq::parse(range)
                 .map(|req| req.matches(&version.0))
                 .map_err(|_| Error::Invalid(range.into())),
+            Self::Docker | Self::Pep440 | Self::Hashicorp => {
+                extended::matches(*self, range, version)
+            }
             Self::Loose | Self::Go => self
                 .parse(range)
                 .map(|v| self.order(&v, version) == Ordering::Equal),
@@ -95,7 +112,12 @@ impl Versioning for Ecosystem {
     }
     fn classify(&self, current: &Parsed, target: &Parsed) -> Update {
         let (a, b) = (&current.0, &target.0);
-        if a.major != b.major
+        if current
+            .1
+            .as_ref()
+            .zip(target.1.as_ref())
+            .is_some_and(|(a, b)| a.epoch() != b.epoch())
+            || a.major != b.major
             || (*self == Self::Cargo
                 && a.major == 0
                 && (a.minor != b.minor || (a.minor == 0 && a.patch != b.patch)))
@@ -108,6 +130,9 @@ impl Versioning for Ecosystem {
         }
     }
     fn new_range(&self, current: &str, target: &str, policy: VersionPolicy) -> Result<String> {
+        if matches!(self, Self::Docker | Self::Pep440 | Self::Hashicorp) {
+            return extended::new_range(*self, current, target, policy);
+        }
         let parsed = self.parse(target)?;
         let prefix = if current.starts_with('v') { "v" } else { "" };
         let exact = if *self == Self::Cargo {

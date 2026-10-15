@@ -78,7 +78,42 @@ impl Cached {
         }
     }
     pub async fn get(&self, url: &str, accept: &str) -> Result<Response, Error> {
-        self.get_representation(url, accept, None).await
+        self.get_representation(url, accept, None, None).await
+    }
+
+    /// Public registry content; bearer tokens never enter the persisted key.
+    pub async fn registry_get(
+        &self,
+        url: &str,
+        accept: &str,
+        token: Option<&str>,
+    ) -> Result<Response, Error> {
+        self.get_representation(url, accept, None, Some(token))
+            .await
+    }
+
+    /// Token responses must never enter SQLite.
+    pub async fn token_get(&self, url: &str) -> Result<Response, Error> {
+        let url = Url::parse(url).map_err(|_| Error::Configuration)?;
+        if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
+            return Err(Error::Configuration);
+        }
+        let trace = RequestTrace::new("GET", &url);
+        let mut request = Request::new(Method::GET, url);
+        request
+            .headers_mut()
+            .insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+        let queued = Instant::now();
+        let _permit = self
+            .0
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|_| Error::Configuration)?;
+        self.0.requests.fetch_add(1, Ordering::Relaxed);
+        Ok(trace
+            .send(self.0.transport.as_ref(), request, queued.elapsed(), false)
+            .await?)
     }
 
     /// Derive once on a 200. Fresh hits and 304s contain only the compact body;
@@ -90,7 +125,7 @@ impl Cached {
         format: &'static str,
         derive: Derive,
     ) -> Result<Response, Error> {
-        self.get_representation(url, accept, Some((format, derive)))
+        self.get_representation(url, accept, Some((format, derive)), None)
             .await
     }
 
@@ -99,6 +134,7 @@ impl Cached {
         url: &str,
         accept: &str,
         derived: Option<(&'static str, Derive)>,
+        registry: Option<Option<&str>>,
     ) -> Result<Response, Error> {
         let url = Url::parse(url).map_err(|_| Error::Configuration)?;
         if url.scheme() != "https"
@@ -168,6 +204,12 @@ impl Cached {
             return Ok(response);
         }
         let mut request = Request::new(Method::GET, url);
+        if let Some(Some(token)) = registry {
+            let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
+                .map_err(|_| Error::Configuration)?;
+            value.set_sensitive(true);
+            request.headers_mut().insert(header::AUTHORIZATION, value);
+        }
         request.headers_mut().insert(
             header::ACCEPT,
             HeaderValue::from_str(accept).map_err(|_| Error::Configuration)?,
@@ -228,6 +270,9 @@ impl Cached {
                 }
             }
         }
+        if registry.is_some() && matches!(response.status.as_u16(), 401 | 429) {
+            return Ok(response);
+        }
         if !response.status.is_success() {
             return Err(Error::Status(response.status.as_u16()));
         }
@@ -278,6 +323,8 @@ impl Cached {
                     "cache-control",
                     "vary",
                     "content-type",
+                    "link",
+                    "docker-content-digest",
                 ]
                 .into_iter()
                 .filter_map(|name| text(name).map(|v| (name.into(), v)))

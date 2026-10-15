@@ -22,7 +22,7 @@ impl Default for Redactor {
                     r"(?:gh[psour]_[A-Za-z0-9_.-]+|github_pat_[A-Za-z0-9_.-]+|v1\.[A-Za-z0-9_]{20,})",
                 )
                 .expect("static token regex"),
-                Regex::new(r"(?i)(?:bearer|basic)\s+[A-Za-z0-9+/_.=-]+")
+                Regex::new(r"(?i)(?:bearer|basic)\s+[A-Za-z0-9+/_-]+(?:\.[A-Za-z0-9+/_=-]+)*")
                     .expect("static authorization regex"),
             ],
             literals: Vec::new(),
@@ -81,7 +81,17 @@ impl Redactor {
             text = text.replace(literal, MARKER);
         }
         for pattern in &self.patterns {
-            text = pattern.replace_all(&text, MARKER).into_owned();
+            text = pattern
+                .replace_all(&text, |caps: &regex::Captures<'_>| {
+                    // WWW-Authenticate has a scheme followed by public parameters,
+                    // not a credential. Preserve it so recorded challenges replay.
+                    if caps[0].eq_ignore_ascii_case("Bearer realm") {
+                        caps[0].to_owned()
+                    } else {
+                        MARKER.into()
+                    }
+                })
+                .into_owned();
         }
         text
     }

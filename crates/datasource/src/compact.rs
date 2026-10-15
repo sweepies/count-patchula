@@ -102,7 +102,7 @@ pub(super) fn pypi(body: &[u8]) -> Result<Vec<u8>, CacheError> {
             digest: None,
         });
     }
-    sort(&mut catalog.versions, Ecosystem::Loose);
+    sort(&mut catalog.versions, Ecosystem::Pep440);
     encode(catalog, None)
 }
 

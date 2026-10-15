@@ -10,6 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+serde_yaml_ng = "0.10.0"
 rustovate-mise = { path = "../mise" }
 regex = "1.13.1"
 reqwest.workspace = true

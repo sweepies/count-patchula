@@ -183,10 +183,15 @@ impl Evaluator {
     }
     pub fn needs_digest(&self, dep: &Dependency, proposal: &Proposal) -> bool {
         let update = parse_update(&proposal.update_type);
-        dep.manager == Manager::GithubActions
+        (dep.source == Source::Docker
+            || dep.source == Source::Oci
+            || dep.manager == Manager::GithubActions)
             && matches!(
                 dep.kind,
-                DependencyKind::Action | DependencyKind::ReusableWorkflow
+                DependencyKind::Action
+                    | DependencyKind::ReusableWorkflow
+                    | DependencyKind::ContainerImage
+                    | DependencyKind::Chart
             )
             && self.effective(dep, update).digest
     }
@@ -369,6 +374,24 @@ impl Evaluator {
         if baseline.is_none() && dep.manager == Manager::GithubActions {
             return Ok(Evaluation::default());
         }
+        let baseline = baseline.or_else(|| {
+            if !matches!(
+                scheme,
+                Ecosystem::Cargo | Ecosystem::Hashicorp | Ecosystem::Pep440
+            ) {
+                return None;
+            }
+            let first = current
+                .split(',')
+                .next()?
+                .trim()
+                .trim_start_matches(['=', '>', '<', '~', '^', ' ']);
+            scheme.parse(first).ok().or_else(|| {
+                (scheme == Ecosystem::Cargo)
+                    .then(|| Ecosystem::Loose.parse(first).ok())
+                    .flatten()
+            })
+        });
         let baseline = baseline
             .or_else(|| {
                 catalog
@@ -397,6 +420,9 @@ impl Evaluator {
                 continue;
             };
             if scheme.order(&parsed, &baseline) != Ordering::Greater {
+                continue;
+            }
+            if scheme == Ecosystem::Docker && parsed.2 != baseline.2 {
                 continue;
             }
             let kind = scheme.classify(&baseline, &parsed);
@@ -660,9 +686,8 @@ pub fn scheme(dep: &Dependency) -> Result<Ecosystem> {
         }),
         Scheme::Go => Ok(Ecosystem::Go),
         Scheme::Loose => Ok(Ecosystem::Loose),
-        scheme => Err(format!(
-            "version scheme {} is not implemented (TODO)",
-            rustovate_manager::word(&scheme)
-        )),
+        Scheme::Docker => Ok(Ecosystem::Docker),
+        Scheme::Pep440 => Ok(Ecosystem::Pep440),
+        Scheme::Hashicorp => Ok(Ecosystem::Hashicorp),
     }
 }

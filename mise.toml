@@ -118,3 +118,12 @@ run = ["cargo test --locked -p rustovate-datasource --test recorded -- --nocaptu
 [tasks."benchmarks:lookup"]
 description = "Measure cold/warm batch and source replay with fixed public cassettes"
 run = ["cargo test --locked -p rustovate-datasource --test recorded -- --nocapture", "cargo test --locked -p rustovate-engine --test recorded -- --nocapture"]
+
+[tasks."fixtures:record-wave2"]
+description = "Record public registry v2, Terraform, PyPI and Helm fixtures"
+env = { RUSTOVATE_RECORD = "1" }
+run = ["cargo test --locked -p rustovate-datasource --test wave2 -- --nocapture", "mise run fixtures:check"]
+
+[tasks."benchmarks:wave2"]
+description = "Replay wave 2 source fixtures in release mode"
+run = "cargo test --release --locked -p rustovate-datasource --test wave2 -- --nocapture"
