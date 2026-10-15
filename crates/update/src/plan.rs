@@ -40,21 +40,9 @@ pub fn blob_sha(content: &str) -> String {
         .map(|b| format!("{b:02x}"))
         .collect()
 }
-/// Hash the full identity (including source and track), and refuse any actual
-/// name collision within a repository before applying any plans.
-pub fn branch_name(prefix: &str, label: &str, identity: &str) -> Result<String, String> {
-    let slug = label
-        .to_ascii_lowercase()
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-");
-    let slug = if slug.is_empty() { "update" } else { &slug };
-    let name = format!(
-        "{prefix}{}-{}",
-        &slug[..slug.len().min(64)],
-        &hash(identity.as_bytes())[..16]
-    );
+/// Readable branch labels; repository planning resolves manager collisions.
+pub fn branch_name(prefix: &str, label: &str, _identity: &str) -> Result<String, String> {
+    let name = format!("{prefix}{}", label.to_ascii_lowercase());
     if name.len() > 240
         || name.starts_with('/')
         || name.ends_with('.')
@@ -96,38 +84,66 @@ pub fn plan(
                         && reported.current.value.as_deref() == Some(&d.current)
                         && d.digest == reported.current.digest
                 }) {
-                    let (identity, label) = if let Some(group) = &update.group {
+                    // One best proposal per occurrence and track avoids overlapping edits.
+                    let track = |u: &Update| match u.update_type.as_str() {
+                        "pin" => "pin",
+                        "major" => "major",
+                        _ => "non-major",
+                    };
+                    let best = reported
+                        .updates
+                        .iter()
+                        .filter(|u| track(u) == track(update))
+                        .max_by(|a, b| proposal_order(dep, a, b));
+                    if best != Some(update) {
+                        continue;
+                    }
+                    let (identity, label) = if update.update_type == "pin"
+                        && (allow_pending || !needs_lockfile(dep, snapshot))
+                    {
+                        ("pins".into(), "pin-dependencies".into())
+                    } else if let Some(group) = &update.group {
+                        let major = update.update_type == "major";
                         (
-                            serde_json::json!(["group", group, update.update_type]).to_string(),
-                            group.clone(),
+                            serde_json::json!(["group", group, major]).to_string(),
+                            format!("{}{}", if major { "major-" } else { "" }, slug(group)),
                         )
                     } else {
+                        let line = line(dep, reported, update);
                         (
-                            serde_json::json!([
-                                "dependency",
-                                word(&dep.source),
-                                dep.package,
-                                update.update_type
-                            ])
-                            .to_string(),
-                            dep.package.clone(),
+                            serde_json::json!(["dependency", word(&dep.source), dep.package, line])
+                                .to_string(),
+                            format!("{}-{line}", slug(&dep.package)),
                         )
                     };
                     groups
                         .entry(identity)
-                        .or_insert_with(|| (format!("{label}-{}", update.update_type), Vec::new()))
+                        .or_insert_with(|| (label, Vec::new()))
                         .1
                         .push(Item { dep, update });
                 }
             }
         }
     }
+    let mut labels = BTreeMap::<String, usize>::new();
+    for (label, _) in groups.values() {
+        *labels.entry(label.clone()).or_default() += 1;
+    }
     let mut names = BTreeSet::new();
     let mut plans = Vec::new();
-    for (identity, (label, items)) in groups {
+    for (identity, (mut label, items)) in groups {
+        if labels[&label] > 1 {
+            let managers: BTreeSet<_> = items.iter().map(|i| manager_slug(i.dep)).collect();
+            label = format!(
+                "{}-{label}",
+                managers.into_iter().collect::<Vec<_>>().join("-")
+            );
+        }
         let branch = branch_name(&config.prs.branch, &label, &identity)?;
         if !names.insert(branch.clone()) {
-            return Err("branch name collision; refusing ambiguous plans".into());
+            return Err(
+                "branch name collision after manager disambiguation; set explicit groups".into(),
+            );
         }
         let mut changes = BTreeMap::<String, Vec<Edit>>::new();
         let mut reason = None;
@@ -316,4 +332,76 @@ fn unified(path: &str, old: &str, new: &str) -> String {
         line(' ', text);
     }
     result
+}
+
+fn slug(value: &str) -> String {
+    let s = value
+        .to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if s.is_empty() { "update".into() } else { s }
+}
+fn manager_slug(dep: &Dependency) -> String {
+    if matches!(
+        dep.source,
+        rustovate_config::Source::Docker | rustovate_config::Source::Oci
+    ) {
+        "docker".into()
+    } else {
+        word(&dep.manager)
+    }
+}
+fn proposal_order(dep: &Dependency, a: &Update, b: &Update) -> std::cmp::Ordering {
+    use rustovate_versioning::Versioning;
+    let value = |u: &Update| {
+        u.new_version
+            .clone()
+            .or_else(|| u.new_value.clone())
+            .unwrap_or_else(|| dep.current.clone())
+    };
+    if let Ok(scheme) = rustovate_lookup::scheme(dep)
+        && let (Ok(a), Ok(b)) = (scheme.parse(&value(a)), scheme.parse(&value(b)))
+    {
+        return scheme.order(&a, &b);
+    }
+    value(a).cmp(&value(b))
+}
+fn line(dep: &Dependency, reported: &rustovate_report::Dependency, update: &Update) -> String {
+    let value = if update.update_type == "major" {
+        update
+            .new_version
+            .as_deref()
+            .or(update.new_value.as_deref())
+    } else {
+        reported
+            .current
+            .version
+            .as_deref()
+            .or(dep.resolved.as_deref())
+            .or(Some(&dep.current))
+    }
+    .unwrap_or(&dep.current);
+    let normalized = value.trim_start_matches(|c: char| !c.is_ascii_digit());
+    let major = normalized
+        .split(|c: char| !c.is_ascii_digit())
+        .next()
+        .unwrap_or("");
+    if major.is_empty() {
+        return slug(&dep.current);
+    }
+    // Keep container variants independent while sharing the numeric major line.
+    let variant = if matches!(
+        dep.source,
+        rustovate_config::Source::Docker | rustovate_config::Source::Oci
+    ) {
+        dep.current
+            .split_once('-')
+            .map(|(_, v)| format!("-{}", slug(v)))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    format!("{major}.x{variant}")
 }

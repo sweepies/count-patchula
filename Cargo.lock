@@ -1879,6 +1879,7 @@ dependencies = [
  "rustovate-lookup",
  "rustovate-manager",
  "rustovate-report",
+ "rustovate-versioning",
  "serde",
  "serde_json",
  "sha1",

@@ -87,6 +87,8 @@ impl Transport for Fake {
             } else {
                 panic!("unexpected write {path}");
             }
+        } else if path == "/repos/demo/sandbox/branches" {
+            (200, json!([]))
         } else if path == "/repos/demo/sandbox" {
             (200, json!({"default_branch":"main","node_id":"repo-id"}))
         } else if path.ends_with("/git/trees/base-tree") {

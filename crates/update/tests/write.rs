@@ -112,6 +112,10 @@ impl Transport for Fake {
             } else {
                 panic!("unexpected write {path}");
             }
+        } else if path == "/repos/demo/app/branches" {
+            response(200, json!(state.refs.iter().map(|(n, sha)| json!({"name":n.strip_prefix("refs/heads/").unwrap(),"commit":{"sha":sha}})).collect::<Vec<_>>()))
+        } else if let Some(sha) = path.strip_prefix("/repos/demo/app/commits/") {
+            response(200, json!({"commit":state.commits[sha]}))
         } else if path == "/repos/demo/app" {
             response(200, json!({"node_id":"repo-id","default_branch":"main"}))
         } else if let Some(branch) = path.strip_prefix("/repos/demo/app/git/ref/heads/") {
@@ -280,7 +284,7 @@ async fn create_update_and_repeat_use_one_verified_commit_on_base_and_no_prs() {
         first.action
     );
     assert_eq!(first.action.verified, Some(true));
-    let (mut second, _) = make_plan("24.0.0");
+    let (mut second, _) = make_plan("22.1.0");
     assert_eq!(first.action.branch, second.action.branch);
     apply(
         &github,
@@ -299,7 +303,7 @@ async fn create_update_and_repeat_use_one_verified_commit_on_base_and_no_prs() {
     );
     assert_ne!(first.action.commit, second.action.commit);
     let count = server.0.lock().unwrap().writes.len();
-    let (mut repeat, _) = make_plan("24.0.0");
+    let (mut repeat, _) = make_plan("22.1.0");
     apply(
         &github,
         &mut repeat,
@@ -401,7 +405,7 @@ async fn human_commit_is_protected_even_with_copied_rustovate_markers() {
         .get_mut(first.action.commit.as_ref().unwrap())
         .unwrap()["actor"] = json!("human");
     let count = server.0.lock().unwrap().writes.len();
-    let (mut next, _) = make_plan("24.0.0");
+    let (mut next, _) = make_plan("22.1.0");
     apply(&github, &mut next, &snapshot, "main", Rebase::Behind, false).await;
     assert_eq!(
         next.action.status,
@@ -440,7 +444,7 @@ async fn a_human_below_the_bot_head_and_a_foreign_committer_are_protected() {
             }
         }
         let count = server.0.lock().unwrap().writes.len();
-        let (mut next, _) = make_plan("24.0.0");
+        let (mut next, _) = make_plan("22.1.0");
         apply(&github, &mut next, &snapshot, "main", Rebase::Behind, false).await;
         assert_eq!(
             next.action.status,
@@ -556,25 +560,13 @@ async fn stale_blob_content_tree_moved_base_unsigned_and_lease_race_fail_closed(
     }
 }
 #[test]
-fn names_are_deterministic_source_group_and_slug_collision_safe() {
+fn names_are_readable_and_validate_git_refs() {
     assert_eq!(
-        branch_name("rustovate/", "@scope/a", "one").unwrap(),
-        branch_name("rustovate/", "@scope/a", "one").unwrap()
-    );
-    assert_ne!(
-        branch_name("rustovate/", "@scope/a", "one").unwrap(),
-        branch_name("rustovate/", "scope-a", "two").unwrap()
-    );
-    assert_ne!(
-        branch_name("rustovate/", "a", "one").unwrap(),
-        branch_name("rustovate/", "a", "two").unwrap()
+        branch_name("rustovate/", "scope-a-2.x", "one").unwrap(),
+        "rustovate/scope-a-2.x"
     );
     assert!(branch_name("../bad/", "a", "one").is_err());
-    assert!(
-        branch_name("custom/deps/", "a", "one")
-            .unwrap()
-            .starts_with("custom/deps/a-")
-    );
+    assert!(branch_name("custom/deps/", "a", "one").unwrap() == "custom/deps/a");
 }
 
 #[test]
@@ -615,7 +607,7 @@ fn grouped_files_and_prefixes_are_stable_when_occurrence_order_changes() {
         .unwrap();
     assert_eq!(first.action.status, ActionStatus::Planned);
     assert_eq!(first.action.files.len(), 2);
-    assert!(first.action.branch.starts_with("deps/node-runtime-major-"));
+    assert!(first.action.branch.starts_with("deps/major-node-runtime"));
     assert!(first.action.message.starts_with("build(deps):"));
     repo.package_files.reverse();
     deps.reverse();
@@ -670,4 +662,150 @@ fn lockfile_plans_skip_by_default_and_opt_in_marks_manifest_only_updates() {
         );
         assert!(!p.action.files.is_empty());
     }
+}
+
+#[test]
+fn consolidates_minor_patch_digest_pins_and_keeps_only_latest_major() {
+    let (config, mut repo, deps, snapshot) = setup("22.0.0", false);
+    let original = repo.package_files[0].dependencies[0].updates[0].clone();
+    let updates = &mut repo.package_files[0].dependencies[0].updates;
+    updates.clear();
+    for (kind, version) in [
+        ("major", "21.0.0"),
+        ("major", "24.0.0"),
+        ("minor", "20.9.0"),
+        ("patch", "20.0.1"),
+        ("digest", "20.0.0"),
+        ("pin", "20.0.0"),
+    ] {
+        let mut u = original.clone();
+        u.update_type = kind.into();
+        u.new_value = Some(version.into());
+        u.new_version = Some(version.into());
+        updates.push(u);
+    }
+    let plans = plan(&repo, &config, &deps, &snapshot, false, chrono::Utc::now()).unwrap();
+    let names: BTreeSet<_> = plans.iter().map(|p| p.action.branch.as_str()).collect();
+    assert_eq!(
+        names,
+        BTreeSet::from([
+            "rustovate/node-20.x",
+            "rustovate/node-24.x",
+            "rustovate/pin-dependencies"
+        ])
+    );
+    let nonmajor = plans
+        .iter()
+        .find(|p| p.action.branch.ends_with("20.x"))
+        .unwrap();
+    assert!(nonmajor.contents["mise.toml"].contains("20.9.0"));
+    assert_eq!(nonmajor.action.status, ActionStatus::Planned);
+}
+
+#[tokio::test]
+async fn migration_deletes_owned_hash_branch_with_a_lease_and_preserves_human_work() {
+    let (mut p, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    apply(&github, &mut p, &snapshot, "main", Rebase::Behind, false).await;
+    let old = "rustovate/node-major-0123456789abcdef";
+    {
+        let mut s = server.0.lock().unwrap();
+        let sha = s
+            .refs
+            .remove(&format!("refs/heads/{}", p.action.branch))
+            .unwrap();
+        let commit = s.commits.get_mut(&sha).unwrap();
+        commit["message"] = json!(commit["message"].as_str().unwrap().replace(
+            "Rustovate-Base: base",
+            "Rustovate-Base: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ));
+        let mut human = commit.clone();
+        human["actor"] = json!("human");
+        s.commits.insert("human".into(), human);
+        s.refs.insert(format!("refs/heads/{old}"), sha);
+        s.refs
+            .insert("refs/heads/rustovate/human".into(), "human".into());
+    }
+    let actions = rustovate_update::cleanup(&github, "demo/app", "base", "main", &[p], false)
+        .await
+        .unwrap();
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].branch, old);
+    assert_eq!(actions[0].status, ActionStatus::Deleted);
+    let s = server.0.lock().unwrap();
+    assert_eq!(
+        s.refs[&format!("refs/heads/{old}")],
+        "0000000000000000000000000000000000000000"
+    );
+    assert!(s.refs.contains_key("refs/heads/rustovate/human"));
+    assert_eq!(s.refs["refs/heads/main"], "base");
+}
+
+#[test]
+fn container_occurrences_across_managers_share_target_and_slug_collisions_gain_manager() {
+    let (mut config, mut repo, mut deps, mut snapshot) = setup("22.0.0", false);
+    let text = "FROM node:20.0.0\n";
+    config.managers.push(Manager::Dockerfile);
+    let docker = Scanner::new(&config)
+        .unwrap()
+        .extract(&Files::from([("Dockerfile".into(), text.into())]))
+        .unwrap()
+        .dependencies
+        .remove(0);
+    let mut r = repo.package_files[0].dependencies[0].clone();
+    r.manager = "dockerfile".into();
+    r.current.value = Some(docker.current.clone());
+    repo.package_files.push(PackageFile {
+        path: "Dockerfile".into(),
+        dependencies: vec![r],
+    });
+    snapshot.files.insert(
+        "Dockerfile".into(),
+        Blob {
+            sha: blob_sha(text),
+            mode: "100644".into(),
+            content: text.into(),
+        },
+    );
+    deps.push(docker);
+    let plans = plan(&repo, &config, &deps, &snapshot, false, chrono::Utc::now()).unwrap();
+    let names: BTreeSet<_> = plans.iter().map(|p| p.action.branch.as_str()).collect();
+    assert_eq!(
+        names,
+        BTreeSet::from(["rustovate/docker-node-22.x", "rustovate/mise-node-22.x"])
+    );
+    // Same package/source/target in a second file shares the existing branch.
+    let text = "node 20.0.0\n";
+    snapshot.files.insert(
+        ".tool-versions".into(),
+        Blob {
+            sha: blob_sha(text),
+            mode: "100644".into(),
+            content: text.into(),
+        },
+    );
+    let second = Scanner::new(&config)
+        .unwrap()
+        .extract(&Files::from([(".tool-versions".into(), text.into())]))
+        .unwrap()
+        .dependencies
+        .remove(0);
+    deps.push(second);
+    repo.package_files.push(PackageFile {
+        path: ".tool-versions".into(),
+        dependencies: repo.package_files[0].dependencies.clone(),
+    });
+    let plans = plan(&repo, &config, &deps, &snapshot, false, chrono::Utc::now()).unwrap();
+    assert_eq!(plans.len(), 2);
+    assert_eq!(
+        plans
+            .iter()
+            .find(|p| p.action.branch.contains("mise-node"))
+            .unwrap()
+            .action
+            .files
+            .len(),
+        2
+    );
 }

@@ -194,6 +194,23 @@ impl Engine {
                     continue;
                 }
             };
+            match rustovate_update::cleanup(
+                &self.github,
+                &repo.repository,
+                repo.commit.as_deref().expect("extracted commit"),
+                repo.default_branch.as_deref().expect("configured branch"),
+                &plans,
+                dry_run,
+            )
+            .await
+            {
+                Ok(actions) => branches.extend(actions),
+                Err(error) => {
+                    repo.status = Status::Error;
+                    repo.reason = Some(error);
+                    continue;
+                }
+            }
             for plan in &mut plans {
                 rustovate_update::apply(
                     &self.github,

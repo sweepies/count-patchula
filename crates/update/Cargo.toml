@@ -14,6 +14,7 @@ rustovate-config = { path = "../config" }
 rustovate-manager = { path = "../manager" }
 rustovate-github = { path = "../github" }
 rustovate-report = { path = "../report" }
+rustovate-versioning = { path = "../versioning" }
 rustovate-lookup = { path = "../lookup" }
 serde.workspace = true
 serde_json.workspace = true

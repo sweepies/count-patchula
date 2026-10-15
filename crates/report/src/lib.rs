@@ -40,6 +40,7 @@ pub struct Actions {
 #[serde(rename_all = "kebab-case")]
 pub enum ActionStatus {
     Planned,
+    Deleted,
     Created,
     Updated,
     Rebased,
