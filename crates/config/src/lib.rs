@@ -124,3 +124,6 @@ fn problem(path: &Path, source: &str, field: &str, message: &str) -> miette::Rep
         span,
     })
 }
+
+mod matching;
+pub use matching::Patterns;

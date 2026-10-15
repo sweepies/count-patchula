@@ -8,3 +8,12 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+jsonc-parser = "0.34.0"
+regex = "1.13.1"
+rustovate-config = { version = "0.1.0", path = "../config" }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+serde_yaml_ng = "0.10.0"
+toml_edit = "0.25.17"
