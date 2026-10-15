@@ -8,8 +8,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const INVENTORY_QUERY: &str = r#"query($owner:String!,$name:String!,$prefix:String!,$cursor:String){
+pub const INVENTORY_QUERY: &str = r#"query($owner:String!,$name:String!,$prefix:String!,$cursor:String,$closed:[ID!]!){
  viewer{login}
+ nodes(ids:$closed){... on PullRequest{id number state merged body headRefName
+  author{login} headRepository{nameWithOwner} baseRepository{nameWithOwner}
+ }}
  repository(owner:$owner,name:$name){
   defaultBranchRef{name target{oid}}
   refs(refPrefix:$prefix,first:100,after:$cursor){pageInfo{hasNextPage endCursor} nodes{
@@ -34,11 +37,22 @@ struct Receipt {
     fingerprint: String,
     files: Vec<rustovate_report::FileAction>,
 }
+#[derive(Default, Serialize, Deserialize)]
+struct Receipts {
+    writes: BTreeMap<String, Receipt>,
+    closed: BTreeMap<String, ClosedReceipt>,
+}
+#[derive(Serialize, Deserialize)]
+struct ClosedReceipt {
+    actor: String,
+    intent: String,
+    pr: Value,
+}
 fn key(repo: &str, prefix: &str) -> ExtractionKey {
     ExtractionKey {
         repo: repo.into(),
         default_branch_commit: prefix.into(),
-        config_hash: "verified-write-receipts-v2".into(),
+        config_hash: "verified-write-receipts-v3".into(),
     }
 }
 fn intent(plan: &Plan, config: &Config, recheck: Recheck) -> String {
@@ -62,7 +76,8 @@ fn pr_state(pr: &Value) -> Value {
         .filter_map(|l| l["name"].as_str())
         .collect();
     json!({"number":pr["number"],"title":pr["title"],"body":pr["body"],
-        "head":pr["head"],"base":pr["base"],"actor":pr["user"]["login"],
+        "head":{"ref":pr["head"]["ref"],"sha":pr["head"]["sha"],"repo":pr["head"]["repo"]["full_name"]},
+        "base":{"ref":pr["base"]["ref"],"repo":pr["base"]["repo"]["full_name"]},"actor":pr["user"]["login"],
         "labels":labels,"merge":!pr["auto_merge"].is_null()})
 }
 fn rest_pr(pr: &Value) -> Option<Value> {
@@ -96,10 +111,10 @@ pub async fn restore_unchanged(
     else {
         return Ok(false);
     };
-    let Ok(receipts) = serde_json::from_slice::<BTreeMap<String, Receipt>>(&bytes) else {
+    let Ok(receipts) = serde_json::from_slice::<Receipts>(&bytes) else {
         return Ok(false);
     };
-    if receipts.is_empty() {
+    if receipts.writes.is_empty() && receipts.closed.is_empty() || receipts.closed.len() > 100 {
         return Ok(false);
     }
     let (owner, name) = repository
@@ -109,10 +124,12 @@ pub async fn restore_unchanged(
     // Use refs/heads/ as the namespace, then filter locally. This also detects
     // legacy names and prefix changes without ignoring obsolete owned heads.
     let mut actor = String::new();
+    let closed_ids: Vec<_> = receipts.closed.values().map(|r| &r.pr["node_id"]).collect();
+    let mut closed = Vec::new();
     let refs: Vec<Value> = client
         .graphql_pages(
             INVENTORY_QUERY,
-            json!({"owner":owner,"name":name,"prefix":"refs/heads/"}),
+            json!({"owner":owner,"name":name,"prefix":"refs/heads/","closed":closed_ids}),
             |data| {
                 let head = &data["repository"]["defaultBranchRef"];
                 if head["name"].as_str() != repository.default_branch.as_deref()
@@ -127,6 +144,7 @@ pub async fn restore_unchanged(
                     return Err(rustovate_github::Error::Graphql);
                 }
                 actor = login.into();
+                closed = data["nodes"].as_array().cloned().unwrap_or_default();
                 GraphqlPage::from_connection(&data, "/repository/refs")
             },
             |_| false,
@@ -136,7 +154,12 @@ pub async fn restore_unchanged(
     let desired: BTreeSet<_> = plans.iter().map(|p| p.action.branch.as_str()).collect();
     let obsolete = refs.iter().any(|r| {
         let name = r["name"].as_str().unwrap_or("");
-        !desired.contains(name)
+        Some(name) != repository.default_branch.as_deref()
+            && !desired.contains(name)
+            && r["target"]["author"]["user"]["login"] == actor
+            && (r["target"]["committer"]["user"]["login"] == actor
+                || r["target"]["committer"]["user"]["login"] == "web-flow")
+            && r["target"]["signature"]["isValid"] == true
             && (name.starts_with(&config.prs.branch)
                 || r["target"]["message"]
                     .as_str()
@@ -146,7 +169,24 @@ pub async fn restore_unchanged(
         .iter_mut()
         .filter(|p| p.action.status == ActionStatus::Planned)
     {
-        let Some(receipt) = receipts.get(&plan.action.branch) else {
+        if let Some(receipt) = receipts.closed.get(&plan.action.branch)
+            && receipt.actor == actor
+            && receipt.intent == intent(plan, config, recheck)
+            && closed.iter().any(|pr| {
+                pr["id"] == receipt.pr["node_id"]
+                    && pr["state"] == "CLOSED"
+                    && pr["merged"] == false
+                    && pr["body"] == receipt.pr["body"]
+                    && pr["author"]["login"] == actor
+                    && pr["headRepository"]["nameWithOwner"] == repository.repository
+                    && pr["baseRepository"]["nameWithOwner"] == repository.repository
+            })
+        {
+            plan.action.status = ActionStatus::Skipped;
+            plan.action.reason = Some(crate::pull_requests::CLOSED_BY_OWNER.into());
+            continue;
+        }
+        let Some(receipt) = receipts.writes.get(&plan.action.branch) else {
             continue;
         };
         let Some(r) = refs.iter().find(|r| r["name"] == plan.action.branch) else {
@@ -196,19 +236,38 @@ pub async fn save_receipts(
     plans: &[Plan],
     lifecycle: &Lifecycle,
 ) -> Result<(), String> {
-    let mut receipts = BTreeMap::new();
+    let mut receipts = Receipts::default();
     for plan in plans {
+        if plan.action.status == ActionStatus::Skipped
+            && plan.action.reason.as_deref() == Some(crate::pull_requests::CLOSED_BY_OWNER)
+            && let Some(pr) = lifecycle.closed_for(plan)
+            && pr["node_id"].is_string()
+        {
+            receipts.closed.insert(
+                plan.action.branch.clone(),
+                ClosedReceipt {
+                    actor: pr["user"]["login"]
+                        .as_str()
+                        .ok_or("missing PR author")?
+                        .into(),
+                    intent: intent(plan, config, lifecycle.recheck),
+                    pr: json!({"node_id":pr["node_id"],"body":pr["body"]}),
+                },
+            );
+        }
         if !matches!(
             plan.action.status,
             ActionStatus::Created
                 | ActionStatus::Updated
                 | ActionStatus::Rebased
                 | ActionStatus::Unchanged
-        ) || lifecycle
-            .actions
-            .iter()
-            .any(|a| a.branch == plan.action.branch && a.status == ActionStatus::Error)
-        {
+        ) || !lifecycle.actions.iter().any(|a| {
+            a.branch == plan.action.branch
+                && matches!(
+                    a.status,
+                    ActionStatus::Created | ActionStatus::Updated | ActionStatus::Unchanged
+                )
+        }) {
             continue;
         }
         let (Some(commit), Some(tree)) = (&plan.action.commit, &plan.tree) else {
@@ -222,7 +281,7 @@ pub async fn save_receipts(
         }) else {
             continue;
         };
-        receipts.insert(
+        receipts.writes.insert(
             plan.action.branch.clone(),
             Receipt {
                 actor: pr["user"]["login"]

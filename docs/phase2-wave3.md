@@ -30,6 +30,64 @@ changes, obsolete heads and pagination. This is synthetic evidence, not a live
 speed claim. The first upgraded run must establish receipts. No installation
 token is configured in this implementation session, so no live `-vv` run was made.
 
+## Wave 3 live fixes
+
+The supplied steady trace measured 22.146s total / 19.943s write and 134 network
+requests. The cache was inspected read-only: all 16 open-PR receipts existed
+under the branch-prefix key with the current base. Their PR `head`/`base` fields
+contained the full REST objects (including repository metadata), while the
+inventory reconstructed only ref/SHA/repository identity. Those objects could
+never compare equal. The synthetic server had returned minimal REST objects,
+masking the mismatch. Receipt state now explicitly selects the same fields from
+both APIs; tests include extra REST fields.
+
+Seven manually closed targets also remained planned until full PR-history
+inventory. Version 3 receipts retain their verified closed PR IDs, target intent
+and body. The same inventory query checks those nodes for closed/unmerged state,
+author, repository and unchanged marker/body. Reopening, merging, deletion,
+ownership/body edits or a new target invalidates the proof. The first upgraded
+run performs full verification and seeds v3 receipts, including existing branches
+that were not created in this run. No cache migration or live cache write was
+performed during implementation.
+
+Inventory cleanup detection excludes the default branch and tips whose
+author/committer/signature already rule out ownership. A foreign actor's branch
+does not force repeated verification; plausible obsolete owned tips still fall
+back to full history inspection and leased cleanup.
+
+After publishing a head, PR reconciliation accepts the published commit or polls
+the exact previously verified head. Six waits of 100/200/400/800/1600/3200ms allow
+seven fresh reads. An unfamiliar head fails immediately; exhaustion reports
+propagation timeout rather than claiming the head moved. Every read rechecks
+ownership and closure. An owner closure during publication or obsolete-PR
+inspection produces `skipped` with a `closed-by-owner` reason and preserves the
+PR number. It does not fail the repository. Policy/limit/closed-target skips are
+non-errors; transport/API failures, unexpected heads, exhausted propagation,
+ownership changes and protected histories still fail the repository.
+
+Offline measurement: the complete engine creates once, reopens its persistent
+SQLite cache in a fresh engine, then makes exactly **four** requests: repository
+metadata, default-branch head, npm lookup and one inventory query. Both open and
+closed cases take **600ms simulated total at 200ms/request**, with metadata/head
+reads overlapping lookup. The write inventory alone takes **200ms**, zero
+mutations. Tests also cover receipt adoption, foreign obsolete tips, pagination,
+actual rebases, propagation timeout and closure while polling. These are
+deterministic offline measurements, not new live timings.
+
+For the supplied sandbox state after v3 receipts are seeded, an unchanged run
+needs exactly **one write-phase POST /graphql query** (one refs page plus the
+seven closed PR nodes), with no per-branch ref/commit/tree/compare/pull requests,
+PR-history/branch-list/viewer requests, release-note reads or mutations.
+The supplied lookup phase made 24 network requests and 22 fresh cache hits:
+one repository-head GraphQL query, five GitHub release-list GETs, three GitHub
+tag-ref GETs, one Node catalog GET, one Cargo sparse GET and thirteen Docker
+manifest HEADs. With the same freshness and credential conditions, that projects
+to **25 total network requests**, ten to GitHub. A reusable credential-scoped
+branch hint replaces the one repository-head query with two conditional REST
+reads (repository metadata and `branches/main`), giving **26 total**, eleven to
+GitHub. Expired catalogs, changed dependencies/base/PRs, additional refs pages,
+authentication retries or another actor's concurrent edits change those counts.
+
 ## Pin wording
 
 Pin-only commits and titles use `<commitPrefix> pin dependencies`. Pin rows stay

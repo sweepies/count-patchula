@@ -32,6 +32,11 @@ struct State {
     truncated: bool,
     history: Vec<String>,
     merged_heads: BTreeSet<String>,
+    pr_lag_reads: usize,
+    pending_heads: BTreeMap<u64, Value>,
+    pr_head_override: Option<String>,
+    close_on_read: bool,
+    close_after_reads: Option<usize>,
 }
 struct Fake(Mutex<State>);
 fn response(status: u16, body: Value) -> Response {
@@ -66,7 +71,9 @@ impl Transport for Fake {
                         "headRepository":{"nameWithOwner":p["head"]["repo"]["full_name"]},"baseRepository":{"nameWithOwner":p["base"]["repo"]["full_name"]},
                         "labels":{"nodes":p["labels"],"pageInfo":{"hasNextPage":false}},"autoMergeRequest":p["auto_merge"]
                     })).collect();
-                    json!({"name":name,"target":{"oid":oid,"tree":{"oid":commit["tree"]["sha"]},"message":commit["message"]},
+                    json!({"name":name,"target":{"oid":oid,"tree":{"oid":commit["tree"]["sha"]},"message":commit["message"],
+                        "author":{"user":{"login":commit.get("actor").and_then(Value::as_str).unwrap_or("rustovate[bot]")}},
+                        "committer":{"user":{"login":"web-flow"}},"signature":{"isValid":true}},
                         "associatedPullRequests":{"nodes":prs,"pageInfo":{"hasNextPage":false}}})
                 }).collect();
                 let offset = body["variables"]["cursor"]
@@ -78,7 +85,10 @@ impl Transport for Fake {
                 let nodes: Vec<_> = nodes.into_iter().skip(offset).take(size).collect();
                 response(
                     200,
-                    json!({"data":{"viewer":{"login":"rustovate[bot]"},"repository":{
+                    json!({"data":{"viewer":{"login":"rustovate[bot]"},"nodes":state.prs.values().filter(|p|body["variables"]["closed"].as_array().unwrap().contains(&p["node_id"])).map(|p|json!({
+                        "id":p["node_id"],"state":if p["state"] == "open" {"OPEN"} else {"CLOSED"},"merged":!p["merged_at"].is_null(),
+                        "body":p["body"],"author":p["user"],"headRepository":{"nameWithOwner":p["head"]["repo"]["full_name"]},"baseRepository":{"nameWithOwner":p["base"]["repo"]["full_name"]}
+                    })).collect::<Vec<_>>(),"repository":{
                         "defaultBranchRef":{"name":"main","target":{"oid":state.base}},
                         "refs":{"nodes":nodes,"pageInfo":{"hasNextPage":more,"endCursor":(offset+size).to_string()}}
                     }}}),
@@ -128,15 +138,25 @@ impl Transport for Fake {
                             r["afterOid"].as_str().unwrap().into(),
                         );
                     }
+                    let lag = state.pr_lag_reads > 0;
+                    let mut pending = BTreeMap::new();
                     for pr in state.prs.values_mut() {
                         for r in updates {
                             if r["name"]
                                 == format!("refs/heads/{}", pr["head"]["ref"].as_str().unwrap())
                             {
-                                pr["head"]["sha"] = r["afterOid"].clone();
+                                if lag {
+                                    pending.insert(
+                                        pr["number"].as_u64().unwrap(),
+                                        r["afterOid"].clone(),
+                                    );
+                                } else {
+                                    pr["head"]["sha"] = r["afterOid"].clone();
+                                }
                             }
                         }
                     }
+                    state.pending_heads.extend(pending);
                     response(
                         200,
                         json!({"data":{"updateRefs":{"clientMutationId":null}}}),
@@ -152,6 +172,11 @@ impl Transport for Fake {
                 let sha =
                     state.refs[&format!("refs/heads/{}", body["head"].as_str().unwrap())].clone();
                 let pr = json!({"number":number,"node_id":format!("pr-{number}"),"html_url":format!("https://github.com/demo/app/pull/{number}"),"state":"open","title":body["title"],"body":body["body"],"head":{"ref":body["head"],"sha":sha,"repo":{"full_name":"demo/app"}},"base":{"ref":body["base"],"repo":{"full_name":"demo/app"}},"user":{"login":"rustovate[bot]"},"labels":[],"auto_merge":null,"merged_at":null,"created_at":chrono::Utc::now().to_rfc3339()});
+                let mut pr = pr;
+                pr["head"]["label"] = json!("demo:branch");
+                pr["head"]["repo"]["updated_at"] = json!("2026-10-15T00:00:00Z");
+                pr["base"]["sha"] = json!(state.base);
+                pr["base"]["repo"]["size"] = json!(42);
                 state.prs.insert(number, pr.clone());
                 response(
                     if std::mem::take(&mut state.pr_create_error) {
@@ -249,7 +274,26 @@ impl Transport for Fake {
             }
             reply
         } else if let Some(n) = path.strip_prefix("/repos/demo/app/pulls/") {
-            response(200, state.prs[&n.parse::<u64>().unwrap()].clone())
+            let n = n.parse::<u64>().unwrap();
+            if state.pr_lag_reads > 0 {
+                state.pr_lag_reads -= 1;
+            } else if let Some(head) = state.pending_heads.remove(&n) {
+                state.prs.get_mut(&n).unwrap()["head"]["sha"] = head;
+            }
+            if let Some(head) = state.pr_head_override.clone() {
+                state.prs.get_mut(&n).unwrap()["head"]["sha"] = json!(head);
+            }
+            if state.close_on_read {
+                state.prs.get_mut(&n).unwrap()["state"] = json!("closed");
+            }
+            if let Some(remaining) = &mut state.close_after_reads {
+                if *remaining == 0 {
+                    state.prs.get_mut(&n).unwrap()["state"] = json!("closed");
+                } else {
+                    *remaining -= 1;
+                }
+            }
+            response(200, state.prs[&n].clone())
         } else if path.starts_with("/repos/actions/checkout/releases/tags/") {
             let mut reply = if request.headers().contains_key("if-none-match") {
                 response(304, Value::Null)
@@ -1079,6 +1123,7 @@ async fn pr_cycle(
 async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes() {
     for case in [
         "same",
+        "adopted",
         "generated",
         "conflicts",
         "pages",
@@ -1091,6 +1136,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
         "base",
         "plan",
         "obsolete",
+        "foreign-obsolete",
     ] {
         let (mut config, mut repo) = pr_config();
         config.prs.rebase = Rebase::Behind;
@@ -1113,6 +1159,19 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
         let server = fake(&snapshot);
         let github = client(server.clone()).await;
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        if case == "adopted" {
+            pr_cycle(
+                &github,
+                &repo,
+                &config,
+                std::slice::from_mut(&mut p),
+                &snapshot,
+            )
+            .await;
+            let (mut next, _) = make_plan("22.0.0");
+            next.changes = p.changes.clone();
+            p = next;
+        }
         let mut lifecycle = rustovate_update::Lifecycle::prepare(
             &github,
             &repo,
@@ -1168,11 +1227,14 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
                     repo.commit = Some("base2".into());
                     next.action.base_commit = "base2".into();
                 }
-                "obsolete" => {
-                    s.refs.insert(
-                        "refs/heads/rustovate/obsolete".into(),
-                        p.action.commit.clone().unwrap(),
-                    );
+                "obsolete" | "foreign-obsolete" => {
+                    let mut commit = s.commits[p.action.commit.as_ref().unwrap()].clone();
+                    if case == "foreign-obsolete" {
+                        commit["actor"] = json!("liv-app[bot]");
+                    }
+                    s.commits.insert("obsolete".into(), commit);
+                    s.refs
+                        .insert("refs/heads/rustovate/obsolete".into(), "obsolete".into());
                 }
                 _ => {}
             }
@@ -1198,14 +1260,23 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
         }
         assert_eq!(
             all,
-            matches!(case, "same" | "generated" | "conflicts" | "pages"),
+            matches!(
+                case,
+                "same" | "adopted" | "generated" | "conflicts" | "pages" | "foreign-obsolete"
+            ),
             "{case}"
         );
         assert_eq!(
             next.action.status == ActionStatus::Unchanged,
             matches!(
                 case,
-                "same" | "generated" | "conflicts" | "pages" | "obsolete"
+                "same"
+                    | "adopted"
+                    | "generated"
+                    | "conflicts"
+                    | "pages"
+                    | "obsolete"
+                    | "foreign-obsolete"
             ),
             "{case}"
         );
@@ -1222,6 +1293,196 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
         );
     }
 }
+#[tokio::test(start_paused = true)]
+async fn published_pr_heads_wait_for_our_old_head_but_reject_foreign_commits() {
+    for case in [
+        "lag",
+        "timeout",
+        "foreign",
+        "closed",
+        "closed-while-waiting",
+    ] {
+        let (config, mut repo) = pr_config();
+        let (mut first, snapshot) = make_plan("22.0.0");
+        let server = fake(&snapshot);
+        let github = client(server.clone()).await;
+        pr_cycle(
+            &github,
+            &repo,
+            &config,
+            std::slice::from_mut(&mut first),
+            &snapshot,
+        )
+        .await;
+        let (mut next, _) = make_plan("22.1.0");
+        repo.commit = Some("base2".into());
+        next.action.base_commit = "base2".into();
+        {
+            let mut s = server.0.lock().unwrap();
+            let mut base = s.commits["base"].clone();
+            base["sha"] = json!("base2");
+            s.commits.insert("base2".into(), base);
+            s.base = "base2".into();
+            s.refs.insert("refs/heads/main".into(), "base2".into());
+        }
+        let mut lifecycle = rustovate_update::Lifecycle::prepare(
+            &github,
+            &repo,
+            std::slice::from_mut(&mut next),
+            &config,
+            chrono::Utc::now(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        {
+            let mut s = server.0.lock().unwrap();
+            s.pr_lag_reads = if case == "timeout" { usize::MAX } else { 2 };
+            s.pr_head_override = (case == "foreign").then(|| "human".into());
+            s.close_on_read = case == "closed";
+        }
+        rustovate_update::apply_all(
+            &github,
+            std::slice::from_mut(&mut next),
+            &snapshot,
+            "main",
+            Rebase::Behind,
+            false,
+        )
+        .await;
+        assert_eq!(next.action.status, ActionStatus::Rebased);
+        server.0.lock().unwrap().requests.clear();
+        if case == "closed-while-waiting" {
+            server.0.lock().unwrap().close_after_reads = Some(1);
+        }
+        let started = tokio::time::Instant::now();
+        lifecycle
+            .publish(&github, std::slice::from_mut(&mut next))
+            .await;
+        let result = &lifecycle.actions[0];
+        let s = server.0.lock().unwrap();
+        let reads = s
+            .requests
+            .iter()
+            .filter(|(m, p)| m == "GET" && p.ends_with("/pulls/1"))
+            .count();
+        match case {
+            "lag" => {
+                assert_ne!(result.status, ActionStatus::Error, "{result:?}");
+                assert_eq!(reads, 3);
+                assert!(started.elapsed() >= std::time::Duration::from_millis(300));
+            }
+            "timeout" => {
+                assert_eq!(result.status, ActionStatus::Error);
+                assert_eq!(reads, 7);
+                assert!(
+                    result
+                        .reason
+                        .as_deref()
+                        .unwrap()
+                        .contains("bounded retries")
+                );
+                assert!(!result.reason.as_deref().unwrap().contains("moved"));
+            }
+            "foreign" => {
+                assert_eq!(result.status, ActionStatus::Error);
+                assert_eq!(reads, 1);
+                assert!(
+                    result
+                        .reason
+                        .as_deref()
+                        .unwrap()
+                        .contains("unexpected commit")
+                );
+            }
+            _ => {
+                assert_eq!(result.status, ActionStatus::Skipped);
+                assert_eq!(result.number, Some(1));
+                assert!(
+                    result
+                        .reason
+                        .as_deref()
+                        .unwrap()
+                        .contains("closed-by-owner")
+                );
+                assert_eq!(reads, if case == "closed-while-waiting" { 2 } else { 1 });
+            }
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn closed_update_receipts_are_freshly_verified_and_invalidated() {
+    for case in [
+        "same", "reopened", "merged", "body", "actor", "target", "deleted",
+    ] {
+        let (config, repo) = pr_config();
+        let (mut first, snapshot) = make_plan("22.0.0");
+        let server = fake(&snapshot);
+        let github = client(server.clone()).await;
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        pr_cycle(
+            &github,
+            &repo,
+            &config,
+            std::slice::from_mut(&mut first),
+            &snapshot,
+        )
+        .await;
+        server.0.lock().unwrap().prs.get_mut(&1).unwrap()["state"] = json!("closed");
+        let (mut next, _) = make_plan("22.0.0");
+        let lifecycle = rustovate_update::Lifecycle::prepare(
+            &github,
+            &repo,
+            std::slice::from_mut(&mut next),
+            &config,
+            chrono::Utc::now(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(next.action.status, ActionStatus::Skipped);
+        rustovate_update::save_receipts(&cache, &repo, &config, &[next], &lifecycle)
+            .await
+            .unwrap();
+        {
+            let mut s = server.0.lock().unwrap();
+            match case {
+                "reopened" => s.prs.get_mut(&1).unwrap()["state"] = json!("open"),
+                "merged" => s.prs.get_mut(&1).unwrap()["merged_at"] = json!("2026-10-15T00:00:00Z"),
+                "body" => s.prs.get_mut(&1).unwrap()["body"] = json!("changed"),
+                "actor" => s.prs.get_mut(&1).unwrap()["user"]["login"] = json!("liv-app[bot]"),
+                "deleted" => {
+                    s.prs.remove(&1);
+                }
+                _ => {}
+            }
+            s.requests.clear();
+        }
+        let (mut warm, _) = make_plan(if case == "target" { "22.1.0" } else { "22.0.0" });
+        let all = rustovate_update::restore_unchanged(
+            &github,
+            &cache,
+            &repo,
+            &config,
+            std::slice::from_mut(&mut warm),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(all, case == "same", "{case}");
+        assert_eq!(
+            warm.action.status == ActionStatus::Skipped,
+            case == "same",
+            "{case}"
+        );
+        assert_eq!(
+            server.0.lock().unwrap().requests,
+            [("POST".into(), "/graphql".into())]
+        );
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
     let (config, repo) = pr_config();
@@ -1413,7 +1674,8 @@ async fn concurrent_and_hourly_limits_include_closed_creates_and_null_is_unlimit
 
 #[tokio::test(start_paused = true)]
 async fn obsolete_pr_closes_then_branch_deletes_and_human_history_is_protected() {
-    for human in [false, true] {
+    for case in ["bot", "human", "closed-by-owner"] {
+        let human = case == "human";
         let (config, repo) = pr_config();
         let (mut p, snapshot) = make_plan("22.0.0");
         let server = fake(&snapshot);
@@ -1439,6 +1701,7 @@ async fn obsolete_pr_closes_then_branch_deletes_and_human_history_is_protected()
             if human {
                 commit["actor"] = json!("human");
             }
+            s.close_on_read = case == "closed-by-owner";
         }
         let state = rustovate_update::Lifecycle::prepare(
             &github,
@@ -1454,6 +1717,8 @@ async fn obsolete_pr_closes_then_branch_deletes_and_human_history_is_protected()
             state.actions[0].status,
             if human {
                 ActionStatus::Protected
+            } else if case == "closed-by-owner" {
+                ActionStatus::Skipped
             } else {
                 ActionStatus::Closed
             }
@@ -1464,7 +1729,7 @@ async fn obsolete_pr_closes_then_branch_deletes_and_human_history_is_protected()
         assert_eq!(cleanup.len(), usize::from(!human));
         let s = server.0.lock().unwrap();
         assert_eq!(s.prs[&1]["state"], if human { "open" } else { "closed" });
-        if !human {
+        if !human && case != "closed-by-owner" {
             let close = s
                 .writes
                 .iter()

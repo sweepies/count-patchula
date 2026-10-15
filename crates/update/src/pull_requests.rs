@@ -12,6 +12,8 @@ const NOTES_LIMIT: usize = 4_000;
 const MARKER: &str = "<!-- rustovate:";
 const RECHECK: &str = "<!-- rustovate-recheck -->";
 const OBSOLETE: &str = "<!-- rustovate-closed:obsolete -->";
+pub(crate) const CLOSED_BY_OWNER: &str =
+    "closed-by-owner: this update was manually closed; waiting for a newer target";
 pub const ENABLE_AUTO_MERGE: &str = "mutation($input:EnablePullRequestAutoMergeInput!){enablePullRequestAutoMerge(input:$input){pullRequest{id}}}";
 const DISABLE_AUTO_MERGE: &str = "mutation($input:DisablePullRequestAutoMergeInput!){disablePullRequestAutoMerge(input:$input){pullRequest{id}}}";
 
@@ -115,6 +117,16 @@ pub struct Lifecycle {
     maintenance_group: String,
 }
 impl Lifecycle {
+    pub(crate) fn closed_for(&self, plan: &Plan) -> Option<&Value> {
+        let key = update_key(plan);
+        self.prs.iter().find(|p| {
+            owned_pr(p, &self.actor, &self.repo)
+                && p["state"] == "closed"
+                && p["merged_at"].is_null()
+                && !body(p).contains(OBSOLETE)
+                && marker(body(p)).is_some_and(|m| m.update == key)
+        })
+    }
     /// Authoritative inventory includes closed history and all pages. No cached
     /// decisions can suppress a newly closed PR or permit an over-budget create.
     pub async fn prepare(
@@ -187,11 +199,19 @@ impl Lifecycle {
                 .get_fresh(&format!("repos/{repo}/pulls/{number}"))
                 .await
                 .map_err(|e| e.to_string())?;
-            if fresh["state"] != "open"
-                || fresh["head"]["sha"] != sha
-                || !owned_pr(&fresh, actor, repo)
-            {
+            if !owned_pr(&fresh, actor, repo) || fresh["head"]["sha"] != sha {
                 return Err("obsolete PR changed during inspection; rerun".into());
+            }
+            if fresh["state"] != "open" {
+                state.actions.push(action(
+                    repo,
+                    &name,
+                    Some(&fresh),
+                    ActionStatus::Skipped,
+                    Some("closed-by-owner: PR closed during this run; left closed".into()),
+                ));
+                *pr = fresh;
+                continue;
             }
             // The base lease on deletion remains authoritative; don't close on
             // a stale extraction either.
@@ -266,10 +286,7 @@ impl Lifecycle {
                     && !body(p).contains(OBSOLETE)
                     && marker(body(p)).is_some_and(|m| m.update == key)
             }) {
-                limit(
-                    plan,
-                    "this update was manually closed; waiting for a newer target",
-                );
+                limit(plan, CLOSED_BY_OWNER);
                 continue;
             }
             if let Some(pr) = existing.first() {
@@ -337,25 +354,51 @@ impl Lifecycle {
             // A user can close a PR while branches are being written. Never
             // reopen it; the next inventory applies closed-target suppression.
             let number = pr["number"].as_u64().ok_or("missing PR number")?;
-            let fresh = client
-                .get_fresh(&format!("{path}/{number}"))
-                .await
-                .map_err(|e| e.to_string())?;
-            if !owned_pr(&fresh, &self.actor, &self.repo)
-                || branch(&fresh) != plan.action.branch
-                || marker(body(&fresh)) != marker(body(&pr))
-            {
-                return Err(
-                    "PR ownership marker or repository changed during this run; left untouched"
-                        .into(),
-                );
-            }
-            if fresh["state"] != "open" {
-                return Err("PR closed during this run; left closed".into());
-            }
-            if fresh["head"]["sha"] != plan.action.commit.as_deref().unwrap_or("") {
-                return Err("PR head moved after branch publication; rerun".into());
-            }
+            let mut attempt = 0;
+            let fresh = loop {
+                let fresh = client
+                    .get_fresh(&format!("{path}/{number}"))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if !owned_pr(&fresh, &self.actor, &self.repo)
+                    || branch(&fresh) != plan.action.branch
+                    || marker(body(&fresh)) != marker(body(&pr))
+                {
+                    return Err(
+                        "PR ownership marker or repository changed during this run; left untouched"
+                            .into(),
+                    );
+                }
+                if fresh["state"] != "open" {
+                    self.actions.push(action(
+                        &self.repo,
+                        &plan.action.branch,
+                        Some(&fresh),
+                        ActionStatus::Skipped,
+                        Some("closed-by-owner: PR closed during this run; left closed".into()),
+                    ));
+                    if let Some(old) = self.prs.iter_mut().find(|p| p["number"] == number) {
+                        *old = fresh;
+                    }
+                    return Ok(());
+                }
+                if fresh["head"]["sha"] == plan.action.commit.as_deref().unwrap_or("") {
+                    break fresh;
+                }
+                // Only the exact head verified before our publication is an
+                // expected stale value. Never retry an unfamiliar commit.
+                if fresh["head"]["sha"] != plan.action.previous_commit.as_deref().unwrap_or("") {
+                    return Err(
+                        "PR head moved after branch publication to an unexpected commit; rerun"
+                            .into(),
+                    );
+                }
+                if attempt == 6 {
+                    return Err("PR head has not reflected our published commit after bounded retries; rerun".into());
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100 << attempt)).await;
+                attempt += 1;
+            };
             if fresh["title"] == title && fresh["body"] == text && fresh["base"]["ref"] == self.base
             {
                 (fresh, ActionStatus::Unchanged)
