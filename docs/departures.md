@@ -33,7 +33,90 @@ Stable comparison link: <a id="departure-7"></a>**Departure 7: default policy**
 | 22 | Repeated dependencies | Manager snapshots can contain repeated dependency names | Optional occurrence IDs preserve different current values, merging identical rows | Retain all manifest occurrences without ambiguous report identities |
 | 23 | Minimum release age | The compared run waits about three days | Follow mise's default minimum_release_age of 24 hours for dated releases; choose the newest eligible release and report held-back versions | A short explicit default with release-date evidence; undated releases have no delay |
 | 24 | npm integrity | Lookup reports npm integrity as newDigest | npm manifests do not pin integrity; compare targets without npm newDigest | Lockfile integrity belongs to lockfile tooling |
-| 25 | npm major range edits | The compared policy retains a range such as ^7.0.0 | versions = "exact" proposes the exact selected release, such as 7.0.2 | Apply explicit version policy consistently on major updates |
+| 25 | npm range edits | The compared policy can retain caret/tilde ranges | versions = "exact" proposes exact releases and range pins | Apply explicit version policy consistently |
+| 26 | Kubernetes API inventory | Reports apiVersion/kind pairs as kubernetes-api dependencies | Kubernetes extraction owns workload images; API migrations require a separate schema-aware operation | Changing CRD API versions without migrating their fields is unsafe |
+| 27 | YAML image ownership | Broad helm-values file patterns can repeat Kubernetes images | Kubernetes workload images belong to kubernetes; HelmRelease values belong to flux | Apply one manager policy to each semantic image location |
+| 28 | Helm archive checksums | Lookup reports chart archive hashes as newDigest | Helm chart references contain versions, not archive hashes | Artifact verification metadata does not edit the manifest |
+| 29 | Floating tool and npm selectors | Leaves some latest selectors without proposals | Explicit exact policy pins latest to an eligible release | Reproducible toolchains and manifests |
+| 30 | Indirect Go dependencies | The compared output skips indirect requirements | Explicit go.mod requirements are maintained, including indirect ones | Security fixes should not depend on a direct dependency changing |
+| 31 | Compose test services | The compared output omits test/docker-compose.* manifests | Extract and update explicitly declared test service images | Integration test infrastructure also needs maintenance |
+| 32 | Unversioned inventory | Retains unused/unversioned provider, local module and setup-input records | Reports concrete dependency occurrences that can be looked up or edited | Avoid inventing version locations for references without versions |
+| 33 | Patch alternatives | Often proposes only the highest non-major release | Offers a patch track alongside a minor track | Let callers choose a smaller upgrade independently |
+| 34 | Go module identity | Can report a new numeric major under the old module name | Go proxy catalogs preserve module identity; /vN migrations are separate | A version-only edit cannot update module paths and imports |
+
+<a id="departure-34"></a>**Departure 34: Go major module paths.**
+Only missing `major` proposals on existing GitHub-hosted Go modules qualify,
+with matching module/current identities and Go datasource on both sides. The
+target must be a stable, build-metadata-free SemVer major >= 2, greater than
+current, with identical newValue/newVersion and no digest, while the module path
+lacks its required `/vN` suffix. `+incompatible` releases, other hosts, correct
+target module paths and digest changes remain actionable. Automatic module-path
+and import migration is future work; this rule does not claim it is implemented.
+
+<a id="departure-33"></a>**Departure 33: separate patch track.**
+Only an extra patch strictly newer than the baseline's resolved current version,
+on the same major/minor line, whose manifest value actually changes, qualifies.
+Both inputs must also contain the identical newer minor target/value/digest on
+that major line, and the patch must carry explicit policy metadata. Missing
+targets, old/unchanged patches, no-op Cargo ranges, other classes and absent minor
+alternatives remain actionable.
+
+<a id="departure-32"></a>**Departure 32: unversioned inventory.**
+Only baseline rows missing from rustovate, in terraform/github-actions/flux/npm,
+with no proposals, no resolved version or digest, and either no current value,
+a local `file:`/`./`/`../` reference or a GitHub expression are excluded and audited.
+Concrete versions, opaque selectors such as `latest`, and all proposals remain
+visible. This does not excuse missing versioned setup-action inputs.
+
+<a id="departure-29"></a>**Departure 29: exact latest pins.**
+Only extra `pin` proposals for matching `mise`/`npm` dependencies (or explicit
+GitHub setup-action tool inputs with tool-kind/GitHub-release metadata) whose current
+value is exactly `latest`, with no baseline proposals, explicit `exact` policy,
+no digest and identical parsed newValue/newVersion qualify. Numeric selectors,
+ranges, ordinary upgrades and missing dependencies remain actionable.
+
+<a id="departure-30"></a>**Departure 30: indirect Go upgrades.**
+Only extra version upgrades on an existing Go dependency marked `indirect` by
+the baseline's observable depType, with equal current values, no baseline
+proposals, a strictly newer SemVer target, identical newValue/newVersion and no
+digest qualify. Direct requirements, pseudo-version changes and extraction
+differences remain actionable. This is independent of proxy caching/freshness.
+
+<a id="departure-31"></a>**Departure 31: Compose test services.**
+Only extra `compose` dependencies in `test/**/docker-compose.*.yml` or `.yaml`,
+with Docker datasource and container-image extraction metadata qualify. Unknown
+sources, other managers and files outside that explicit test path remain visible.
+
+<a id="departure-26"></a>**Departure 26: Kubernetes API inventory.**
+The adapter excludes only `kubernetes` rows with datasource `kubernetes-api` and
+no proposals. It audits their file/dependency counts and this link in exclusions.
+Actual API migration proposals remain visible for triage.
+
+<a id="departure-27"></a>**Departure 27: one YAML image owner.**
+The adapter excludes a duplicate `helm-values` Docker row only when the baseline also has
+the same package, current fields and proposals in `kubernetes` or `flux` in the
+same file, and rustovate reports that owner/package there. Different versions,
+digests, proposals, files, missing owners and standalone values remain visible.
+The same rule recognizes a duplicate `kubernetes` image already owned by `flux`
+in a HelmRelease. All removed duplicate rows and proposals are counted in exclusions.
+
+<a id="departure-28"></a>**Departure 28: Helm archive checksums.**
+Only proposed `newDigest` with datasource `helm` is ignored, with a normalization
+count. Current digests, OCI/Docker digests and all version targets remain compared.
+Helm registry URLs in observable output are joined to chart names to compare the
+same registry identity used by rustovate; a different registry stays actionable.
+
+Comparison representation rules also canonicalize Bun's npm-sourced (or
+datasource-unspecified)
+`package.json` rows to `npm` (same manifest/dependency identity), mise version
+`v` prefixes, and Docker numeric `version` fields while retaining full variant
+tags in `value`. Regex GitHub versions and Flux chart versions also canonicalize
+numeric `v` prefixes while preserving the literal current/proposed value.
+An absent baseline currentVersion is unknown, not an assertion
+of an unresolved actual version. Redundant absent newVersion on an otherwise
+identical digest proposal is also unknown. Each normalization is counted; value,
+digest and target differences remain visible. A missing/invalid baseline is
+reported separately from dependency differences and never implies parity.
 
 <a id="departure-23"></a>**Departure 23: minimum release age.**
 The default follows [mise's minimum_release_age](https://mise.jdx.dev/configuration/settings.html#minimum_release_age):
@@ -54,7 +137,12 @@ targets and update types remain comparable. Triage counts normalized proposals.
 The narrow rule requires identical resolved targets on both sides, a major
 upgrade from a caret/tilde current range, a rustovate exact target with policy
 metadata, and a Renovate caret/tilde range with the target's major/minor and a
-no-greater patch. Other target, update-type, or range differences stay actionable.
+no-greater patch. Minor/patch range edits additionally qualify only for simple
+caret/tilde ranges that contain the identical resolved target, the correct
+numeric update class, and explicit exact policy. Extra range pins require an
+existing npm dependency, the same caret/tilde current range, no baseline pin, a
+satisfying exact target, no digest, npm datasource and explicit exact policy.
+Other target, update-type, or range differences stay actionable.
 
 <a id="departure-19"></a>**Departure 19: configuration dependency scope.**
 The fixed comparison rule `renovate-config-manager` excludes only Renovate's own

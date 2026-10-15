@@ -51,10 +51,13 @@ mise run conformance:compare --help
 ```
 
 The optional repo list selects an exact subset; a requested repository must exist
-on at least one side. Missing repositories/files emit one difference per contained
+on at least one side. A repository absent from Renovate output, or ending with
+`result: config-validation`, is recorded under `noBaseline` with a reason and
+does not produce false extra dependencies. A successful empty baseline remains
+comparable. Missing rustovate repositories/files emit one difference per contained
 dependency, including dependencies without updates. Empty files/repositories still
 emit coverage differences. An empty rustovate report is valid and makes every
-included Renovate dependency `rustovate-missing`:
+included in-scope Renovate dependency `rustovate-missing`:
 
 ```sh
 mise run conformance:compare --report /path/to/empty.json \
@@ -78,7 +81,24 @@ lookups remain dependencies, including entries without current values. It
 recognizes `datasource`, `skipReason`, and other lookup metadata without expanding
 the v1 report's comparison fields. `skipReason` and upstream warning presence are
 reported as diagnostics without copying their payloads. An absent current version
-is warned about; absent optional digest/group/target components mean null.
+is warned about and treated as unknown in comparisons. For otherwise identical
+digest proposals, an omitted baseline newVersion is also unknown; supplied
+versions and all value/digest targets still compare.
+
+Output-only, audited normalization covers Bun/npm package.json identities,
+numeric version prefixes and Docker compatibility suffixes, Helm registry
+identities and archive checksums. Narrow inventory/duplicate scope and policy
+rules are documented in [departures](../docs/departures.md). Exclusions count
+every removed dependency/proposal; normalization counts are separate from
+differences and neither implies a successful live engine rerun.
+
+Inspect a local triage or source snapshot without copying private records:
+
+```sh
+mise run conformance:inspect /path/to/private-triage/triage.json
+mise run conformance:inspect /path/to/private-triage/triage.json github-actions 2
+mise run conformance:logs /path/to/private-output.jsonl owner/repo gomod
+```
 
 Missing/non-array optional `updates` becomes an empty list with a warning;
 malformed optional string fields become null. A missing update type is retained as

@@ -468,3 +468,140 @@ fn mise_current_versions_follow_backend_tag_identity_without_proposal_filters() 
         );
     }
 }
+
+#[test]
+fn floating_action_aliases_resolve_by_commit_and_keep_comment_precision() {
+    let eval = Evaluator::new(&config("renovate-runner")).unwrap();
+    let mut dep = dependency("example/action");
+    dep.manager = Manager::GithubActions;
+    dep.source = Source::GithubTags;
+    dep.kind = DependencyKind::Action;
+    dep.scheme = Scheme::Loose;
+    dep.current = "v2".into();
+    dep.resolved = Some("v2".into());
+    dep.digest = Some("a".repeat(40));
+    let mut versions = catalog(&["v2", "v2.0.1", "v2.4.2", "v2.4.3", "v3", "v3.2.1"]);
+    versions.versions[1].digest = Some("b".repeat(40));
+    versions.versions[3].digest = Some("c".repeat(40));
+    versions.versions[4].digest = Some("d".repeat(40));
+    versions.versions[5].digest = Some("d".repeat(40));
+    assert_eq!(
+        rustovate_lookup::resolved_current_version(&dep, &versions).as_deref(),
+        Some("v2.4.2")
+    );
+    let proposals = eval.propose(&dep, &versions).unwrap();
+    assert!(
+        !proposals
+            .iter()
+            .any(|p| p.new_version.as_deref() == Some("v2.0.1"))
+    );
+    let major = proposals.iter().find(|p| p.update_type == "major").unwrap();
+    assert_eq!(major.new_value.as_deref(), Some("v3"));
+    assert_eq!(major.new_version.as_deref(), Some("v3.2.1"));
+    dep.digest = Some("e".repeat(40));
+    assert!(rustovate_lookup::resolved_current_version(&dep, &versions).is_none());
+}
+
+#[test]
+fn docker_alias_precision_prevents_patch_and_date_tag_proposals() {
+    let eval = Evaluator::new(&config("renovate-runner")).unwrap();
+    let mut dep = dependency("image");
+    dep.manager = Manager::Kubernetes;
+    dep.kind = DependencyKind::ContainerImage;
+    dep.source = Source::Docker;
+    dep.scheme = Scheme::Docker;
+    dep.current = "3.20".into();
+    dep.resolved = Some("3.20".into());
+    let p = eval
+        .propose(&dep, &catalog(&["3.20.9", "3.21", "3.21.1", "20260101"]))
+        .unwrap();
+    assert_eq!(p.len(), 1);
+    assert_eq!(p[0].new_value.as_deref(), Some("3.21"));
+    assert_eq!(p[0].update_type, "minor");
+}
+
+#[test]
+fn cargo_noop_ranges_are_not_updates_and_both_breaking_tracks_survive() {
+    let eval = Evaluator::new(&config("fnox")).unwrap();
+    let mut dep = dependency("example");
+    dep.manager = Manager::Cargo;
+    dep.source = Source::Crates;
+    dep.current = "0.2".into();
+    dep.resolved = Some("0.2.3".into());
+    let p = eval
+        .propose(&dep, &catalog(&["0.2.4", "0.3.1", "1.2.3"]))
+        .unwrap();
+    assert_eq!(p.len(), 2);
+    assert!(p.iter().all(|p| p.update_type == "major"));
+    assert!(p.iter().any(|p| p.new_value.as_deref() == Some("0.3")));
+    assert!(p.iter().any(|p| p.new_value.as_deref() == Some("1.2")));
+}
+
+#[test]
+fn satisfying_npm_range_upgrade_is_one_pin_even_with_an_older_lock() {
+    let eval = Evaluator::new(&config("renovate-runner")).unwrap();
+    let mut dep = dependency("plain");
+    dep.current = "^1.0.0".into();
+    dep.resolved = Some("1.0.0".into());
+    let p = eval
+        .propose(&dep, &catalog(&["1.0.1", "1.2.0", "2.0.0"]))
+        .unwrap();
+    let pins: Vec<_> = p.iter().filter(|p| p.update_type == "pin").collect();
+    assert_eq!(pins.len(), 1);
+    assert_eq!(pins[0].new_value.as_deref(), Some("1.2.0"));
+    assert!(
+        p.iter()
+            .all(|p| matches!(p.update_type.as_str(), "pin" | "major"))
+    );
+}
+
+#[test]
+fn numeric_mise_selectors_resolve_the_release_line_without_fake_zero_patches() {
+    let mut dep = dependency("node");
+    dep.manager = Manager::Mise;
+    dep.kind = DependencyKind::Tool;
+    dep.source = Source::Mise;
+    dep.scheme = Scheme::Loose;
+    dep.current = "24".into();
+    dep.resolved = Some("24".into());
+    let versions = catalog(&["24.0.1", "24.6.2", "26.1.0"]);
+    assert_eq!(
+        rustovate_lookup::resolved_current_version(&dep, &versions).as_deref(),
+        Some("24.6.2")
+    );
+    let p = Evaluator::new(&config("renovate-runner"))
+        .unwrap()
+        .propose(&dep, &versions)
+        .unwrap();
+    assert_eq!(p.len(), 1);
+    assert_eq!(p[0].new_version.as_deref(), Some("26.1.0"));
+}
+
+#[test]
+fn runtime_support_intervals_are_observed_without_spurious_exact_pins() {
+    let cfg = config("renovate-runner");
+    let files = rustovate_manager::Files::from([(
+        "package.json".into(),
+        r#"{"engines":{"node":">=22 <27"}}"#.into(),
+    )]);
+    let deps = rustovate_manager::Scanner::new(&cfg)
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies;
+    let dep = &deps[0];
+    assert_eq!(dep.kind, DependencyKind::Toolchain);
+    assert_eq!(dep.location.pointer, "/engines/node");
+    let versions = catalog(&["22.1.0", "24.2.0", "26.3.0", "27.0.0"]);
+    assert_eq!(
+        rustovate_lookup::resolved_current_version(dep, &versions).as_deref(),
+        Some("26.3.0")
+    );
+    assert!(
+        Evaluator::new(&cfg)
+            .unwrap()
+            .propose(dep, &versions)
+            .unwrap()
+            .is_empty()
+    );
+}

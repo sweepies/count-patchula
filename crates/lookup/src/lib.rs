@@ -139,6 +139,14 @@ impl Evaluator {
             },
             permitted: self.permitted.as_ref(),
         };
+        // Runtime constraints describe supported versions, rather than an
+        // installed package version. Explicit rules can still
+        // request exact pinning for a repository that wants it.
+        if (dep.manager == Manager::Terraform || dep.manager == Manager::Npm)
+            && dep.kind == DependencyKind::Toolchain
+        {
+            effective.policy.versions = VersionPolicy::Preserve;
+        }
         for compiled in &self.rules {
             let s = &compiled.rule.select;
             if !compiled.packages.matches(&dep.package)
@@ -275,7 +283,11 @@ impl Evaluator {
                 Some(text.into())
             }
         };
-        let current = dep.resolved.as_deref().unwrap_or(&dep.current);
+        let resolved = resolved_current_version(dep, catalog);
+        let current = resolved
+            .as_deref()
+            .or(dep.resolved.as_deref())
+            .unwrap_or(&dep.current);
         let current = normalize(current).unwrap_or_else(|| current.into());
         // Dist-tags and mise's latest are intentionally floating values. Exact
         // policy can pin them without pretending a resolved version was known.
@@ -407,7 +419,7 @@ impl Evaluator {
                     dep.name, dep.current
                 )
             })?;
-        let policies = [Update::Major, Update::Minor, Update::Patch]
+        let policies = [Update::Major, Update::Minor, Update::Patch, Update::Pin]
             .map(|kind| (kind, self.effective(dep, kind)));
         let mut best: Vec<(Parsed, &Version, String, Update, &Effective<'_>)> =
             Vec::with_capacity(3);
@@ -424,10 +436,35 @@ impl Evaluator {
             if scheme.order(&parsed, &baseline) != Ordering::Greater {
                 continue;
             }
-            if scheme == Ecosystem::Docker && parsed.2 != baseline.2 {
+            if dep.manager == Manager::GithubActions
+                && dep.source == Source::GithubTags
+                && numeric_fields(&dep.current).is_some_and(|n| n < 3)
+                && numeric_prefix(&dep.current, &normalized)
+            {
+                // The same floating alias changes only its digest. Emitting a
+                // patch/minor as well duplicates that update and can invent a
+                // zero-filled baseline when no full tag matches the pinned SHA.
                 continue;
             }
-            let kind = scheme.classify(&baseline, &parsed);
+            if scheme == Ecosystem::Docker {
+                // A floating 3.22 tag tracks the 3.22 line, not 3.22.0.
+                // Mixing precisions also turns date tags into bogus majors.
+                if parsed.2 != baseline.2
+                    || parsed.1.as_ref().map(|v| v.release().len())
+                        != baseline.1.as_ref().map(|v| v.release().len())
+                {
+                    continue;
+                }
+            }
+            let kind = if scheme == Ecosystem::Npm
+                && scheme.parse(&dep.current).is_err()
+                && self.effective(dep, Update::Pin).policy.versions == VersionPolicy::Exact
+                && scheme.matches(&dep.current, &parsed).unwrap_or(false)
+            {
+                Update::Pin
+            } else {
+                scheme.classify(&baseline, &parsed)
+            };
             let effective = &policies
                 .iter()
                 .find(|(update, _)| *update == kind)
@@ -436,6 +473,14 @@ impl Evaluator {
             if !effective.policy.active
                 || effective.permitted.is_some_and(|p| !p.matches(&normalized))
             {
+                continue;
+            }
+            if matches!(dep.manager, Manager::Npm | Manager::Terraform)
+                && dep.kind == DependencyKind::Toolchain
+                && effective.policy.versions == VersionPolicy::Preserve
+            {
+                // A supported runtime interval is not an installed-version
+                // pin. Widening its ceiling needs compatibility evidence.
                 continue;
             }
             // Prereleases require a prerelease current or an explicit permitted
@@ -449,7 +494,17 @@ impl Evaluator {
             if !eligible(version, &normalized, kind, effective)? {
                 continue;
             }
-            if let Some(existing) = best.iter_mut().find(|(_, _, _, k, _)| *k == kind) {
+            if let Some(existing) = best.iter_mut().find(|(p, _, _, k, _)| {
+                // Retain both a next pre-1.0 compatibility boundary and a
+                // numeric-major alternative, even though Cargo calls both major.
+                if kind == Update::Pin {
+                    *k == Update::Pin
+                } else {
+                    *k != Update::Pin
+                        && Ecosystem::Npm.classify(&baseline, p)
+                            == Ecosystem::Npm.classify(&baseline, &parsed)
+                }
+            }) {
                 if scheme.order(&parsed, &existing.0) == Ordering::Greater {
                     *existing = (parsed, version, normalized, kind, effective);
                 }
@@ -460,7 +515,14 @@ impl Evaluator {
         let mut result = Vec::with_capacity(best.len() + 1);
         for (_, version, normalized, kind, effective) in best {
             let new_value = if dep.manager == Manager::GithubActions {
-                version.version.clone()
+                action_value(
+                    &dep.current,
+                    if dep.kind == DependencyKind::Tool {
+                        &normalized
+                    } else {
+                        &version.version
+                    },
+                )
             } else {
                 let value = scheme
                     .new_range(&dep.current, &normalized, effective.policy.versions)
@@ -469,6 +531,15 @@ impl Evaluator {
                 // location metadata, while current/newValue describe the version.
                 value
             };
+            if (dep.manager == Manager::Cargo
+                || (matches!(dep.manager, Manager::Terraform | Manager::Npm)
+                    && dep.kind == DependencyKind::Toolchain))
+                && new_value == dep.current
+            {
+                // A satisfying release does not edit the manifest. Lockfile
+                // maintenance is a separate, explicitly enabled operation.
+                continue;
+            }
             let mut update = proposal(
                 Some(new_value),
                 Some(normalized),
@@ -654,30 +725,127 @@ fn release_age(version: &Version, now: DateTime<Utc>) -> Option<ReleaseAge> {
 /// Resolve an extracted mise version to its source identity without applying
 /// proposal filters. Aqua/Bun/Go extraction strips backend-specific tag prefixes.
 pub fn resolved_tool_version(dep: &Dependency, catalog: &Catalog) -> Option<String> {
-    if dep.manager != Manager::Mise {
+    if dep.manager != Manager::Mise
+        && !(dep.manager == Manager::GithubActions && dep.kind == DependencyKind::Tool)
+    {
         return None;
     }
     let scheme = scheme(dep).ok()?;
-    let current = scheme.parse(dep.resolved.as_deref()?).ok()?;
+    let current_text = dep.resolved.as_deref()?;
+    let current = scheme.parse(current_text).ok()?;
     let extract = dep
         .extract
         .as_ref()
         .map(|s| Regex::new(s))
         .transpose()
         .ok()?;
-    catalog.versions.iter().find_map(|version| {
-        let value = if let Some(extract) = &extract {
-            extract
-                .captures(&version.version)?
-                .name("version")?
-                .as_str()
-                .to_owned()
-        } else {
-            version.version.clone()
-        };
-        let parsed = scheme.parse(&value).ok()?;
-        scheme.order(&parsed, &current).is_eq().then_some(value)
-    })
+    catalog
+        .versions
+        .iter()
+        .filter_map(|version| {
+            let value = if let Some(extract) = &extract {
+                extract
+                    .captures(&version.version)?
+                    .name("version")?
+                    .as_str()
+                    .to_owned()
+            } else {
+                version.version.clone()
+            };
+            let parsed = scheme.parse(&value).ok()?;
+            let matches = if numeric_fields(current_text).is_some_and(|n| n < 3) {
+                numeric_prefix(current_text, &value) && parsed.0.pre.is_empty()
+            } else {
+                scheme.order(&parsed, &current).is_eq()
+            };
+            matches.then_some((parsed, value))
+        })
+        .max_by(|(a, _), (b, _)| scheme.order(a, b))
+        .map(|(_, value)| value)
+}
+
+fn numeric_fields(value: &str) -> Option<usize> {
+    let fields: Vec<_> = value.trim_start_matches('v').split('.').collect();
+    fields
+        .iter()
+        .all(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+        .then_some(fields.len())
+}
+
+fn numeric_prefix(prefix: &str, version: &str) -> bool {
+    let prefix = prefix.trim_start_matches('v');
+    let version = version.trim_start_matches('v');
+    version == prefix
+        || version
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('.'))
+}
+
+fn action_value(current: &str, target: &str) -> String {
+    if let Some(n @ 1..=2) = numeric_fields(current) {
+        let prefix = if current.starts_with('v') { "v" } else { "" };
+        format!(
+            "{prefix}{}",
+            target
+                .trim_start_matches('v')
+                .split('.')
+                .take(n)
+                .collect::<Vec<_>>()
+                .join(".")
+        )
+    } else {
+        target.into()
+    }
+}
+
+/// Resolve floating action aliases by their commit and mise numeric selectors
+/// by their release line. Never infer a pinned action's version from a different
+/// commit, or use release-age policy to rewrite the observed current version.
+pub fn resolved_current_version(dep: &Dependency, catalog: &Catalog) -> Option<String> {
+    if matches!(dep.manager, Manager::Terraform | Manager::Npm)
+        && dep.kind == DependencyKind::Toolchain
+    {
+        let scheme = scheme(dep).ok()?;
+        return catalog
+            .versions
+            .iter()
+            .filter(|v| !v.yanked && !v.deprecated)
+            .filter_map(|v| Some((scheme.parse(&v.version).ok()?, &v.version)))
+            .filter(|(parsed, _)| {
+                parsed.0.pre.is_empty() && scheme.matches(&dep.current, parsed).unwrap_or(false)
+            })
+            .max_by(|(a, _), (b, _)| scheme.order(a, b))
+            .map(|(_, version)| version.trim_start_matches('v').into());
+    }
+    if dep.manager == Manager::Mise || dep.kind == DependencyKind::Tool {
+        return resolved_tool_version(dep, catalog);
+    }
+    if dep.manager != Manager::GithubActions || dep.source != Source::GithubTags {
+        return None;
+    }
+    let current = dep.resolved.as_deref().unwrap_or(&dep.current);
+    let n = numeric_fields(current)?;
+    if n >= 3 {
+        return Some(current.into());
+    }
+    let digest = dep.digest.as_ref().or_else(|| {
+        catalog
+            .versions
+            .iter()
+            .find(|v| v.version == current)
+            .and_then(|v| v.digest.as_ref())
+    });
+    catalog
+        .versions
+        .iter()
+        .filter(|v| {
+            numeric_fields(&v.version).is_some_and(|n| n == 3)
+                && numeric_prefix(current, &v.version)
+                && digest.is_some_and(|d| v.digest.as_ref() == Some(d))
+        })
+        .filter_map(|v| Some((Ecosystem::Loose.parse(&v.version).ok()?, &v.version)))
+        .max_by(|(a, _), (b, _)| Ecosystem::Loose.order(a, b))
+        .map(|(_, v)| v.clone())
 }
 pub fn scheme(dep: &Dependency) -> Result<Ecosystem> {
     match dep.scheme {

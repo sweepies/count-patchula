@@ -28,6 +28,12 @@ fn backend(name: &str) -> Option<Resolution> {
     let mut extract = None;
     let (source, package) = match backend {
         "npm" => (Source::Npm, package),
+        "cargo" if package.starts_with("https://github.com/") => (
+            Source::GithubTags,
+            package
+                .strip_prefix("https://github.com/")?
+                .trim_end_matches(".git"),
+        ),
         "cargo" => (Source::Crates, package),
         "pypi" => (Source::Pypi, package),
         "github" | "ubi" => (Source::GithubReleases, package),

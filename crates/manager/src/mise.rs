@@ -76,6 +76,7 @@ fn add(
     {
         return;
     }
+    let version = version.strip_prefix("tag:").unwrap_or(version);
     let resolution = rustovate_mise::resolve(name);
     let (source, package, extract) = resolution.map_or_else(
         || (Source::Mise, name.into(), None),

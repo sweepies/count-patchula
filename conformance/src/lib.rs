@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 mod diff;
+mod normalize;
 mod renovate;
 mod run;
 

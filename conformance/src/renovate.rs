@@ -135,6 +135,8 @@ const DEP_METADATA: &[&str] = &[
     "skipStage",
     "prettyDepType",
     "deprecationMessage",
+    "registryUrls",
+    "lookupName",
 ];
 const UPDATE_METADATA: &[&str] = &[
     "newValue",
@@ -166,6 +168,7 @@ const UPDATE_METADATA: &[&str] = &[
     "currentVersion",
     "currentDigest",
     "datasource",
+    "isPinDigest",
 ];
 const FILE_METADATA: &[&str] = &[
     "packageFile",
@@ -233,12 +236,21 @@ fn dependency(value: &Value, source_manager: &str, ctx: &mut Context<'_>) -> Res
                 .ok_or_else(|| Error::Input("dependency needs depName or packageName".into()))?
         }
     };
-    let package = package.unwrap_or_else(|| {
+    let mut package = package.unwrap_or_else(|| {
         ctx.warn("packageName", "missing registry identity; using depName");
         name.clone()
     });
     // Datasource is metadata in report v1, but malformed values still diagnose.
     let datasource = ctx.text(value, "datasource");
+    if datasource.as_deref() == Some("helm")
+        && let Some(url) = value
+            .get("registryUrls")
+            .and_then(Value::as_array)
+            .filter(|urls| urls.len() == 1)
+            .and_then(|urls| urls[0].as_str())
+    {
+        package = format!("{url}|{package}");
+    }
     let group = ctx.text(value, "groupName");
     let current = Current {
         value: ctx.text(value, "currentValue"),
@@ -297,7 +309,12 @@ fn dependency(value: &Value, source_manager: &str, ctx: &mut Context<'_>) -> Res
         updates,
         metadata: datasource.map(|source| rustovate_report::DependencyMetadata {
             source,
-            kinds: Vec::new(),
+            kinds: value
+                .get("depType")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .into_iter()
+                .collect(),
             locations: Vec::new(),
             held_back: Vec::new(),
         }),
@@ -318,6 +335,7 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
     let mut failures = Vec::new();
     let mut warnings = Vec::new();
     let mut exclusions = Vec::new();
+    let mut unavailable = BTreeMap::new();
     for (index, line) in logs.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() || !line.starts_with('{') {
@@ -333,6 +351,16 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
             failures.push(index + 1);
         }
         let repo = record.get("repository").and_then(Value::as_str);
+        if record["msg"] == "Repository finished"
+            && record["result"] == "config-validation"
+            && let Some(repo) = repo
+        {
+            unavailable.insert(
+                repo.to_owned(),
+                "Renovate configuration validation failed; no lookup baseline".to_owned(),
+            );
+            repositories.remove(repo);
+        }
         let mut ctx = Context {
             line: index + 1,
             repository: repo,
@@ -345,6 +373,7 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
         let result = (|| {
             if record["msg"] == "packageFiles with updates" {
                 let repo = required(&record, "repository")?;
+                unavailable.remove(&repo);
                 let (field, files) = if let Some(files) =
                     record.get("config").and_then(Value::as_object)
                 {
@@ -465,7 +494,7 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
             "Renovate logged errors on lines {failures:?}; use a successful lookup log"
         )));
     }
-    if repositories.is_empty() {
+    if repositories.is_empty() && unavailable.is_empty() {
         return Err(Error::Input("no 'packageFiles with updates' records; use LOG_LEVEL=debug LOG_FORMAT=json and a successful lookup/full dry run".into()));
     }
     for (repo, value, group, line) in summaries {
@@ -580,6 +609,20 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
             commit: None,
         });
     }
+    for (repository, reason) in unavailable {
+        report.repositories.push(Repository {
+            repository,
+            status: Status::Skipped,
+            reason: Some(reason),
+            package_files: Vec::new(),
+            warnings: Vec::new(),
+            default_branch: None,
+            commit: None,
+        });
+    }
+    report
+        .repositories
+        .sort_by(|a, b| a.repository.cmp(&b.repository));
     report.validate()?;
     Ok(ParsedLogs {
         report,

@@ -328,7 +328,10 @@ impl Engine {
                     if dep.manager == Manager::GithubActions && dep.source == Source::GithubTags {
                         for proposal in &evaluation.updates {
                             if eval.needs_digest(dep, proposal)
-                                && let Some(reference) = proposal.new_value.as_deref()
+                                && let Some(reference) = proposal
+                                    .new_version
+                                    .as_deref()
+                                    .or(proposal.new_value.as_deref())
                             {
                                 digest_keys.insert((dep.package.clone(), reference.to_owned()));
                             }
@@ -428,7 +431,10 @@ impl Engine {
                 {
                     for proposal in &mut proposals {
                         if eval.needs_digest(dep, proposal)
-                            && let Some(reference) = proposal.new_value.as_deref()
+                            && let Some(reference) = proposal
+                                .new_version
+                                .as_deref()
+                                .or(proposal.new_value.as_deref())
                         {
                             match digests.get(&(dep.package.clone(), reference.to_owned())) {
                                 Some(Ok(sha)) => proposal.new_digest = Some(sha.clone()),
@@ -471,7 +477,7 @@ impl Engine {
                         version: catalogs
                             .get(&(word(&dep.source), dep.package.clone()))
                             .and_then(|c| c.as_ref().ok())
-                            .and_then(|c| rustovate_lookup::resolved_tool_version(dep, c))
+                            .and_then(|c| rustovate_lookup::resolved_current_version(dep, c))
                             .or_else(|| dep.resolved.clone())
                             .or_else(|| {
                                 rustovate_lookup::scheme(dep)
@@ -829,7 +835,7 @@ impl Engine {
             repo: repo.into(),
             default_branch_commit: commit,
             config_hash: format!(
-                "extract-v3:{}:{}",
+                "extract-v4:{}:{}",
                 hash(&serde_json::to_vec(&config)?),
                 hash(rustovate_manager::MISE_REGISTRY.as_bytes())
             ),
