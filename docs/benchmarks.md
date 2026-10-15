@@ -84,6 +84,43 @@ microbenchmarks are not substitutes for these measurements.
 | Date | Commit | Host | Repos | Mode | Cache | Runs | Median | Notes |
 |---|---|---|---:|---|---|---:|---|---|
 
+### Phase 1 exit round 4 input (2026-10-15)
+
+Caller-supplied release observations at `1826e32`, twelve test repositories in
+one batch, with an initially fresh SQLite cache:
+
+| Cache pass | Seconds | Proposals |
+|---|---:|---:|
+| Cold | 33.5 | 344 |
+| Warm | 2.9 | 344 |
+| Warm2 | 3.5 | 344 |
+
+The fresh Renovate dry run of the same repositories took **296 s**, captured
+within about ten minutes. The observed ratios are about **8.8× cold** and
+**85–102× warm**; these are single-run comparisons, not medians or guarantees.
+Host/hardware were not supplied. rustovate's proposal count is identical across
+all three captures; cold/warm differences caused by the old local pull cooldown
+are absent in this batch. Both captures retain upstream lookup/coverage limits.
+
+Inputs are `/root/rustovate-conf/r12-{cold,warm,warm2}.json` with their `.err`
+traces and the **fresh** `/root/rustovate-conf/renovate12.jsonl`; the earlier
+baseline is now `renovate12-old.jsonl`. Fresh triage started at **2 missing,
+6 extra, 13 field-mismatch, 264 departures**. The final round 4 offline replay
+of the unchanged cold report is **0 missing, 1 extra, 7 field-mismatch,
+277 departures**, under `/root/rustovate-conf/out12-r4-final/`. Its eight
+remaining rows map to fixed tag-date, peer, Cargo-floor and provider behaviors
+that require new live output; they are not accepted departures. Eleven repos
+have a comparison baseline; remote-agent is a configuration-validation coverage
+gap. Full row accounting is in [phase 1 triage](phase1-triage.md).
+
+These timings precede the round 4 changes. No lookup credential is configured
+in this implementation process, so new cold/warm timings and proposal sets are
+still required for implementation `9271512` (local; not pushed). Additional tag
+release-history and Node LTS metadata reads mean
+the earlier timings must not be attributed to this implementation. Phase 1 exit
+requires a live rerun confirming the fixes, deterministic proposals and zero
+unexplained differences.
+
 ### Phase 1 exit round 3 input (2026-10-15)
 
 Caller-supplied live observations at `1fa827c`, release build, all twelve

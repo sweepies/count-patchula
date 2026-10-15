@@ -1,5 +1,94 @@
 # Phase 1 comparison follow-up
 
+## Round 4: fresh baseline, owner decisions and unchanged-report replay
+
+Implementation: `9271512` (local; not pushed).
+
+The supplied release batch at `1826e32`, twelve repositories in one process,
+took **33.5 s cold / 2.9 s warm / 3.5 s warm2**, with **344 proposals on all
+three passes**. The fresh Renovate dry run took **296 s** and was captured within
+about ten minutes of rustovate. These are caller-supplied single observations,
+not measurements of the round 4 implementation. Proposal determinism is confirmed
+for this capture. See [benchmarks](benchmarks.md#phase-1-exit-round-4-input-2026-10-15).
+
+Fresh input triage: **2 missing, 6 extra, 13 field-mismatch, 264 departures**.
+Final replay of the unchanged cold report against the **fresh**
+`/root/rustovate-conf/renovate12.jsonl`: **0 missing, 1 extra, 7 field-mismatch,
+277 departures**, at `/root/rustovate-conf/out12-r4-final/triage.{md,json}`.
+Every original actionable row is accounted for below: 19 have narrow deliberate
+departure rules, and two expose the corrected GitHub date bug. Removing the
+obsolete Cargo/provider/peer exemptions exposes six additional old-report rows.
+Those eight rows intentionally remain actionable in this immutable capture;
+no exemption hides a fixed implementation bug.
+
+### SWE-103 owner decisions
+
+- **23:** GitHub tags use a matching release's published date, then an annotated
+  tag's tagger date; otherwise the tag is undated and has no wait. Commit dates
+  are never used. Versioned object/catalog caches discard old commit dates,
+  and late release publication revalidates independently of unchanged tags.
+- **25:** Peer ranges widen to include the new major (`^5 || ^7.0.0`), exact
+  peers bump in place, and exact policy never pins a peer range. Installed
+  dependencies/devDependencies retain exact policy. Peer pin exemptions are gone.
+- **42:** Newest eligible stable remains the default. Typed policy/rules now
+  support explicit Node `channel = "lts"` using the Node distribution index's
+  LTS metadata. See the [configuration example](lookup-policy.md#node-release-channels).
+- **21:** One-hour catalog freshness remains unchanged and grants no exemption.
+- **40/41 removed:** Cargo preserve retains satisfying floors and starts bare
+  two-component numeric-major upgrades at the major floor (`1.0` for target
+  `1.1.0`). Satisfying Terraform provider constraints remain unchanged, including
+  under exact policy. Both departures and their harness predicates are removed.
+
+### All 21 original actionable rows
+
+Row numbers refer to the fresh input's non-departure rows in order. Each row
+appears once; product policies remain independent of these twelve test inputs.
+
+| Fresh rows | Disposition | Item 1 relationship |
+|---|---|---|
+| 1–4, 13–16 | Departure 42: mise Node, setup-node and @types/node choose a newer stable major than the observed baseline line. Guard source identities, declarations, major order, digest absence and stable policy; explicit LTS, peers and same-major drift do not qualify. | Owner retains stable; explicit LTS rule added. |
+| 5–6 | apple-actions v7.1.0/version+commit: fix tag release-age provenance. The captured Oct 9 commit date is not evidence of when the tag/release appeared. Retain both fields for a live rerun using release/tagger metadata; do not call it time skew or an accepted target difference. | Directly affected by decision 23. |
+| 7–10 | New departure 46: keepass and toml_edit select newer resolved releases within the identical proposed pre-1.0 Cargo compatibility interval. Both exceed the age window. Equal range, stable ordered targets, preserve policy, sources, unchanged current identity and absence of stale/digest evidence are required. | Separate from removed floor departure 40; no changed manifest floor is exempted. |
+| 11–12 | Departure 44: the published mise registry selects bitwarden/sdk-sm and npm prettier. Retain distinct package identities; classify only the two observed backend migrations with matching latest declarations, no proposals and exact old/new source metadata. | Independent of owner decisions. |
+| 17–19 | Departure 43: declared Go language floor versus observed compiler resolution. Require go/go directive identity, declared provenance, matching declarations and digest-free exact floor updates no newer than the baseline compiler. | Independent; no generic Go-version exemption. |
+| 20–21 | Departure 45: preserve v4/v2 action alias precision when pinning. Require the identical full target and a valid commit, equal to the baseline commit when supplied; added digests remain separately audited under 7. Changed targets/hashes remain visible. | Independent; previous full-target metadata fix is verified in this fresh capture. |
+
+### Remaining replay rows and live verification
+
+The final **eight actionable replay rows** are two apple-action version/digest
+fields, three satisfying Terraform provider declarations, one azure_core floor,
+one TypeScript peer widening field and its obsolete exact range pin. All map to
+the implementation fixes above; none is unexplained. The old report is neither
+edited nor regenerated from invented upstream data.
+
+Offline regressions cover release/tagger/undated precedence, late release
+publication and old cache invalidation; peer ranges/exact peers/installed pins;
+Cargo floors/provider constraints; typed Node LTS selection and setup-node dates;
+and positive/negative conformance guards. Existing public cassettes have explicitly
+labelled synthetic empty release-history additions for the new tag reads; these
+are not fresh recordings. Date semantics are independently tested with synthetic
+transport responses. Ordinary tests do not use the network.
+
+Validation passed with `CARGO_NET_OFFLINE=true mise run ci`: 22 cassettes scanned,
+formatting, workspace/all-target Clippy with `-D warnings`, workspace tests and
+the workspace build. Log: `/root/rustovate-conf/r12-round4-ci.log`.
+
+**Phase 1 exit remains pending a live rerun**, rather than claiming that an
+unchanged report proves new behavior. This implementation process has none of
+`RUSTOVATE_TOKEN`, `GITHUB_TOKEN` or `GH_TOKEN` configured. Build the committed
+release implementation, rerun all twelve repos cold/warm/warm2 with one fresh
+cache, then compare against the fresh baseline (refresh the baseline again if
+the captures are no longer contemporaneous). Confirm the eight fixed fields,
+proposal changes expected from peer-pin removal, and deterministic
+proposal sets; remeasure timings because release-date/LTS metadata adds reads.
+
+Coverage remains **eleven comparable repositories and one gap**: remote-agent's
+Renovate configuration validation failed. This is not parity for that repo.
+All three supplied reports have six warnings: four private-GHCR 401 catalog/digest
+reads, one 1password/cli GraphQL failure and one Go proxy 404. No rate-limited
+digest differences remain. These lookup/coverage limitations are explicit and
+grant no new comparison exemptions.
+
 ## Round 3: supplied live batch and final offline replay
 
 The supplied release batch at `1fa827c`, with one fresh SQLite cache and all
