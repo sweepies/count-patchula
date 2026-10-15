@@ -22,6 +22,7 @@ pub struct Webhook {
     pub bot_login: String,
     pub accepting: Arc<AtomicBool>,
     secret: Arc<Vec<u8>>,
+    resolver: Option<Arc<crate::installations::Resolver>>,
 }
 impl Webhook {
     pub fn new(cache: Cache, settings: Reload, bot_login: String, secret: Vec<u8>) -> Self {
@@ -31,7 +32,15 @@ impl Webhook {
             bot_login,
             secret: Arc::new(secret),
             accepting: Arc::new(AtomicBool::new(true)),
+            resolver: None,
         }
+    }
+    pub fn with_app(mut self, app: Arc<rustovate_github::app::App>) -> Self {
+        self.resolver = Some(Arc::new(crate::installations::Resolver::new(
+            app,
+            self.cache.clone(),
+        )));
+        self
     }
 }
 pub fn verify(secret: &[u8], signature: &str, body: &[u8]) -> bool {
@@ -91,14 +100,53 @@ pub async fn receive(
         tracing::info!(target: "rustovate_server", outcome = "invalid event", "webhook received");
         return StatusCode::BAD_REQUEST;
     };
-    let Ok(payload) = serde_json::from_slice::<Value>(&body) else {
+    let Ok(mut payload) = serde_json::from_slice::<Value>(&body) else {
         tracing::info!(target: "rustovate_server", outcome = "invalid JSON", "webhook received");
         return StatusCode::BAD_REQUEST;
     };
+    if event == "ping" {
+        log_delivery(event, delivery, &payload, "accepted", "ping", None);
+        return StatusCode::OK;
+    }
+    let mut resolution = None;
+    if payload["installation"].is_null()
+        && !payload["sender"]["login"]
+            .as_str()
+            .is_some_and(|login| login.eq_ignore_ascii_case(&state.bot_login))
+    {
+        let resolved = match &state.resolver {
+            Some(resolver) => resolver.resolve(&payload).await,
+            None => Ok(None),
+        };
+        match resolved {
+            Ok(Some(id)) => {
+                payload["installation"] = json!({"id":id});
+                resolution = Some("installation-resolved");
+            }
+            Ok(None) => resolution = Some("installation-not-found"),
+            Err(_) => {
+                log_delivery(
+                    event,
+                    delivery,
+                    &payload,
+                    "unavailable",
+                    "installation-resolution-failed",
+                    Some("installation-resolution-failed"),
+                );
+                return StatusCode::SERVICE_UNAVAILABLE;
+            }
+        }
+    }
     let settings = state.settings.current();
     let work = classify(event, &payload, &settings, &state.bot_login);
     let reason = if work.is_empty() {
-        ignored_reason(event, &payload, &settings, &state.bot_login)
+        if resolution == Some("installation-not-found") {
+            "installation-not-found"
+        } else {
+            ignored_reason(event, &payload, &settings, &state.bot_login)
+        }
+    } else if resolution.is_some() {
+        "installation-resolved"
     } else if work.iter().any(|w| w.repo.is_empty()) {
         "installation discovery"
     } else {
@@ -120,12 +168,22 @@ pub async fn receive(
         Ok(true) => "accepted/ignored",
         Err(_) => "persistence failed",
     };
-    tracing::info!(target: "rustovate_server", event, action = payload["action"].as_str().filter(|s| metadata_word(s)).unwrap_or(""), delivery_id = delivery, installation = payload["installation"]["id"].as_u64(), repository = payload["repository"]["full_name"].as_str().filter(|s| crate::settings::valid_repo(s)), outcome, reason, "webhook received");
+    log_delivery(event, delivery, &payload, outcome, reason, resolution);
     if result.is_ok() {
         StatusCode::ACCEPTED
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     }
+}
+fn log_delivery(
+    event: &str,
+    delivery: &str,
+    payload: &Value,
+    outcome: &str,
+    reason: &str,
+    resolution: Option<&str>,
+) {
+    tracing::info!(target: "rustovate_server", event, action = payload["action"].as_str().filter(|s| metadata_word(s)).unwrap_or(""), delivery_id = delivery, installation = payload["installation"]["id"].as_u64(), repository = payload["repository"]["full_name"].as_str().filter(|s| crate::settings::valid_repo(s)), outcome, reason, installation_resolution = resolution, "webhook received");
 }
 fn metadata_word(value: &str) -> bool {
     !value.is_empty()
@@ -212,7 +270,7 @@ pub fn classify(event: &str, payload: &Value, settings: &Settings, bot: &str) ->
                 .map(|repo| Work::repository(id, repo.to_ascii_lowercase()))
                 .collect();
         }
-        // Discovery is durable too; the webhook path never waits for GitHub API calls.
+        // Discovery is durable too; repository enumeration runs in the worker.
         return vec![Work::repository(id, String::new())];
     }
     let Some(repo) = payload["repository"]["full_name"]

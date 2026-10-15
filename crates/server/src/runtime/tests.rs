@@ -134,6 +134,285 @@ fn router_for_settings(state: &Webhook, settings: Settings) -> Router {
     router(state, Arc::new(AtomicBool::new(true)))
 }
 
+struct InstallationLookup {
+    requests: std::sync::atomic::AtomicUsize,
+    status: std::sync::atomic::AtomicU16,
+}
+impl Transport for InstallationLookup {
+    fn send(&self, request: reqwest::Request) -> rustovate_http::Exchange<'_> {
+        self.requests.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(request.method(), reqwest::Method::GET);
+        assert!(matches!(
+            request.url().path(),
+            "/repos/owner/repo/installation" | "/orgs/owner/installation"
+        ));
+        let authorization = request
+            .headers()
+            .get(reqwest::header::AUTHORIZATION)
+            .unwrap();
+        assert!(authorization.is_sensitive());
+        assert_eq!(
+            authorization
+                .to_str()
+                .unwrap()
+                .strip_prefix("Bearer ")
+                .unwrap()
+                .split('.')
+                .count(),
+            3
+        );
+        let status = reqwest::StatusCode::from_u16(self.status.load(Ordering::SeqCst)).unwrap();
+        Box::pin(async move {
+            Ok(rustovate_http::Response {
+                status,
+                headers: Default::default(),
+                body: serde_json::to_vec(&json!({"id":1})).unwrap(),
+            })
+        })
+    }
+}
+fn lookup_app(transport: Arc<dyn Transport>, id: u64) -> Arc<App> {
+    use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
+    static PEM: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let pem = PEM.get_or_init(|| {
+        rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048)
+            .unwrap()
+            .to_pkcs1_pem(LineEnding::LF)
+            .unwrap()
+            .to_string()
+    });
+    App::new(id, pem.as_bytes(), transport).unwrap()
+}
+
+#[tokio::test]
+async fn repository_and_org_webhooks_resolve_installations_and_ping_does_no_work() {
+    use tracing::instrument::WithSubscriber;
+    let _capture = LOG_TEST_LOCK.lock().await;
+    let logs = Logs::default();
+    let transport = Arc::new(InstallationLookup {
+        requests: 0.into(),
+        status: 200.into(),
+    });
+    let app = lookup_app(transport.clone(), 1);
+    let state = state().await.with_app(app.clone());
+    let router = router(state.clone(), Arc::new(AtomicBool::new(true)));
+    let mut value = payload();
+    value.as_object_mut().unwrap().remove("installation");
+    // Ping is verified but requires neither an installation lookup nor queue rows.
+    let response = router
+        .clone()
+        .oneshot(request(serde_json::to_vec(&value).unwrap(), "ping", "ping"))
+        .with_subscriber(logs.subscriber())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 0);
+    assert_eq!(state.cache.queue_len().await.unwrap(), 0);
+    let mut bad_ping = request(b"{}".to_vec(), "ping", "bad-ping");
+    bad_ping.headers_mut().remove("x-hub-signature-256");
+    assert_eq!(
+        router.clone().oneshot(bad_ping).await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 0);
+    let response = router
+        .clone()
+        .oneshot(request(
+            serde_json::to_vec(&value).unwrap(),
+            "push",
+            "resolved",
+        ))
+        .with_subscriber(logs.subscriber())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 1);
+    let claims = state.cache.claim_batch(i64::MAX, 10).await.unwrap();
+    assert_eq!(claims.len(), 1);
+    assert_eq!(claims[0].work, Work::repository(1, "owner/repo"));
+    state.cache.finish_work(claims, true, 0, 0).await.unwrap();
+    // Apply installation and repository allowlists after resolution, including cache hits.
+    let mut denied = state.settings.current();
+    denied.allowed_installations = vec![2];
+    router_for_settings(&state, denied)
+        .oneshot(request(
+            serde_json::to_vec(&value).unwrap(),
+            "push",
+            "denied-installation",
+        ))
+        .with_subscriber(logs.subscriber())
+        .await
+        .unwrap();
+    assert_eq!(state.cache.queue_len().await.unwrap(), 0);
+    assert_eq!(logs.events().last().unwrap()["reason"], "not allowlisted");
+    assert_eq!(
+        logs.events().last().unwrap()["installation_resolution"],
+        "installation-resolved"
+    );
+    let mut denied = state.settings.current();
+    denied.allowed_repositories = vec!["other/repo".into()];
+    router_for_settings(&state, denied)
+        .oneshot(request(
+            serde_json::to_vec(&value).unwrap(),
+            "push",
+            "denied-repository",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(state.cache.queue_len().await.unwrap(), 0);
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 1);
+    let org = json!({"organization":{"login":"owner"}, "action":"added", "repositories_added":[{"full_name":"owner/repo"}]});
+    assert_eq!(
+        router
+            .clone()
+            .oneshot(request(
+                serde_json::to_vec(&org).unwrap(),
+                "installation_repositories",
+                "org"
+            ))
+            .with_subscriber(logs.subscriber())
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 2);
+    let claims = state.cache.claim_batch(i64::MAX, 10).await.unwrap();
+    assert_eq!(claims[0].work, Work::repository(1, "owner/repo"));
+    state.cache.finish_work(claims, true, 0, 0).await.unwrap();
+    // A new resolver with an empty cache gets a 404: accept/ignore, no org fallback.
+    let unknown = self::state().await.with_app(app.clone());
+    transport.status.store(404, Ordering::SeqCst);
+    value["organization"] = json!({"login":"owner"});
+    let unknown_router = super::router(unknown.clone(), Arc::new(AtomicBool::new(true)));
+    assert_eq!(
+        unknown_router
+            .oneshot(request(
+                serde_json::to_vec(&value).unwrap(),
+                "push",
+                "unknown"
+            ))
+            .with_subscriber(logs.subscriber())
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(unknown.cache.queue_len().await.unwrap(), 0);
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        logs.events().last().unwrap()["reason"],
+        "installation-not-found"
+    );
+    // Transient failures remain retryable, and do not consume the delivery ID.
+    transport.status.store(500, Ordering::SeqCst);
+    let unavailable = self::state().await.with_app(app);
+    let unavailable_router = super::router(unavailable.clone(), Arc::new(AtomicBool::new(true)));
+    let body = serde_json::to_vec(&value).unwrap();
+    assert_eq!(
+        unavailable_router
+            .clone()
+            .oneshot(request(body.clone(), "push", "retry"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    transport.status.store(200, Ordering::SeqCst);
+    assert_eq!(
+        unavailable_router
+            .oneshot(request(body, "push", "retry"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(unavailable.cache.queue_len().await.unwrap(), 1);
+    let decisions = logs.events();
+    assert_eq!(decisions.len(), 5);
+    assert_eq!(decisions[1]["reason"], "installation-resolved");
+    assert_eq!(decisions[1]["installation"], 1);
+}
+
+#[tokio::test]
+async fn installation_cache_uses_memory_disk_ttl_and_invalidates_on_not_found() {
+    use crate::installations::{Resolver, TTL_SECONDS};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cache.sqlite");
+    let cache = Cache::open(&path, Default::default()).await.unwrap();
+    let transport = Arc::new(InstallationLookup {
+        requests: 0.into(),
+        status: 200.into(),
+    });
+    let app = lookup_app(transport.clone(), 1);
+    let value = json!({"repository":{"full_name":"OWNER/Repo"}});
+    let resolver = Resolver::new(app.clone(), cache.clone());
+    assert_eq!(resolver.resolve_at(&value, 100).await.unwrap(), Some(1));
+    cache
+        .installation_remove(1, "repos/owner/repo".into())
+        .await
+        .unwrap();
+    assert_eq!(resolver.resolve_at(&value, 101).await.unwrap(), Some(1));
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        resolver
+            .resolve_at(&value, 100 + TTL_SECONDS)
+            .await
+            .unwrap(),
+        Some(1)
+    );
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 2);
+    drop(resolver);
+    drop(cache);
+    let cache = Cache::open(&path, Default::default()).await.unwrap();
+    let resolver = Resolver::new(app.clone(), cache.clone());
+    assert_eq!(
+        resolver
+            .resolve_at(&value, 101 + TTL_SECONDS)
+            .await
+            .unwrap(),
+        Some(1)
+    );
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 2);
+    // TTL is not extended by a disk or memory hit. A 404 removes the SQLite row too.
+    transport.status.store(404, Ordering::SeqCst);
+    assert_eq!(
+        resolver
+            .resolve_at(&value, 100 + 2 * TTL_SECONDS)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 3);
+    assert!(
+        cache
+            .installation_get(1, "repos/owner/repo".into(), 0)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // Do not negative-cache a 404: a new installation can take effect immediately.
+    transport.status.store(200, Ordering::SeqCst);
+    assert_eq!(
+        resolver
+            .resolve_at(&value, 101 + 2 * TTL_SECONDS)
+            .await
+            .unwrap(),
+        Some(1)
+    );
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 4);
+    // Another App must resolve its own installation, even when sharing SQLite.
+    let other = Resolver::new(lookup_app(transport.clone(), 2), cache);
+    assert_eq!(
+        other
+            .resolve_at(&value, 101 + 2 * TTL_SECONDS)
+            .await
+            .unwrap(),
+        Some(1)
+    );
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 5);
+}
+
 #[tokio::test]
 async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
     let _capture = LOG_TEST_LOCK.lock().await;

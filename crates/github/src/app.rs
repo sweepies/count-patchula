@@ -49,6 +49,40 @@ impl App {
             scope: format!("github-app:{}/installation:{id}", self.id),
         })
     }
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+    /// Resolve only this App's installation, authenticated with its JWT.
+    pub async fn repository_installation(&self, repo: &str) -> Result<Option<u64>> {
+        let parts: Vec<_> = repo.split('/').collect();
+        if parts.len() != 2 || !parts.iter().all(|part| valid_segment(part)) {
+            return Err(Error::Configuration);
+        }
+        self.lookup_installation(&format!("repos/{repo}/installation"))
+            .await
+    }
+    pub async fn organization_installation(&self, org: &str) -> Result<Option<u64>> {
+        if !valid_segment(org) {
+            return Err(Error::Configuration);
+        }
+        self.lookup_installation(&format!("orgs/{org}/installation"))
+            .await
+    }
+    async fn lookup_installation(&self, path: &str) -> Result<Option<u64>> {
+        let value = match self
+            .request(Method::GET, path, Utc::now().timestamp())
+            .await
+        {
+            Ok(value) => value,
+            Err(Error::Status(404)) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        value["id"]
+            .as_u64()
+            .filter(|id| *id > 0 && *id <= i64::MAX as u64)
+            .map(Some)
+            .ok_or(Error::Json)
+    }
     fn jwt(&self, now: i64) -> Result<String> {
         jsonwebtoken::encode(
             &Header::new(Algorithm::RS256),
@@ -168,6 +202,13 @@ impl App {
         );
         Ok(token.into())
     }
+}
+fn valid_segment(value: &str) -> bool {
+    !value.is_empty()
+        && !matches!(value, "." | "..")
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
 }
 struct Installation {
     app: Arc<App>,

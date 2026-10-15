@@ -61,7 +61,9 @@ mode: contents write, pull requests write, issues write for the dashboard/labels
 workflows write for workflow updates, and checks/commit statuses read for merge
 fallback. Repository metadata read is implicit. Subscribe to push, issues, pull
 request, installation, installation repositories, check suite and check run
-events, and configure a webhook secret. Keep branch protection and the existing
+events, and configure a webhook secret. A repository or organization webhook may
+also point at this server, using its configured webhook secret; the App's own
+webhook URL can remain with another system. Keep branch protection and the existing
 [merge fallback gates](auto-merge.md) in place.
 
 Set environment variables (or the equivalent flags):
@@ -114,9 +116,19 @@ before opening the listener. Logs are JSON on stderr with sanitized fields;
 The webhook route limits bodies to 2 MiB. It verifies `X-Hub-Signature-256` using
 HMAC-SHA256 and a constant-time MAC comparison on the raw bytes **before** parsing
 JSON. Missing/invalid signatures return 401; signed invalid JSON or missing
-event/delivery headers return 400; oversized bodies return 413. There is no
-GitHub API call on the webhook path. Durable acceptance returns 202; SQLite
-failure or draining returns 503, allowing redelivery.
+event/delivery headers return 400; oversized bodies return 413. A signed `ping`
+returns 200 without installation lookup or enqueue. Durable acceptance returns
+202; SQLite failure or draining returns 503, allowing redelivery.
+
+Repository and organization webhook payloads can omit `installation`. The server
+resolves the repository with the [App JWT installation endpoint](https://docs.github.com/en/rest/apps/apps#get-a-repository-installation-for-the-authenticated-app),
+or resolves `organization.login` when there is no repository. It never falls back
+to the organization endpoint when a repository lookup fails. Successful mappings
+are cached in memory and SQLite for five minutes, scoped to the App ID; cache
+hits do not extend expiry. A lookup returning 404 removes the mapping and accepts
+the delivery without enqueue; absence is not cached. Other lookup failures or a
+five-second resolution timeout return 503 so GitHub can redeliver. Allowlists
+apply to the resolved installation and repositories before enqueue.
 
 `X-GitHub-Delivery` is deduplicated transactionally with enqueue and retained for
 seven days. Ignored events also return 202. Ignore rules cover this App's sender,
@@ -124,6 +136,10 @@ disabled triggers, disallowed installations/repositories and unrelated events.
 Each delivery emits one INFO decision with event, action, delivery ID,
 installation, repository and outcome/reason. Invalid signatures emit only the
 decision, without delivery metadata.
+Resolved deliveries use reason `installation-resolved`, or
+`installation-not-found` when no installation exists. The
+`installation_resolution` field retains the lookup outcome when another rule,
+such as `not allowlisted`, explains why the delivery was ignored.
 Triggers are:
 
 - A non-deletion push to the repository's default branch.

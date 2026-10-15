@@ -104,7 +104,8 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
         recheck: options.recheck,
         bot_login: bot.clone(),
     });
-    let webhook = Webhook::new(cache.clone(), settings.clone(), bot, options.webhook_secret);
+    let webhook = Webhook::new(cache.clone(), settings.clone(), bot, options.webhook_secret)
+        .with_app(app.clone());
     let ready = Arc::new(AtomicBool::new(false));
     let listener = TcpListener::bind(options.listen)
         .await

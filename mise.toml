@@ -202,7 +202,7 @@ const body = new Uint8Array(await Bun.file(path).arrayBuffer());
 const signature = "sha256=" + createHmac("sha256", secret).update(body).digest("hex");
 const response = await fetch(destination, {method:"POST", body, redirect:"error", headers:{"content-type":"application/json", "x-hub-signature-256":signature, "x-github-event":event, "x-github-delivery":delivery}});
 console.log(`HTTP ${response.status}`);
-if (response.status !== 202) process.exitCode = 1;
+if (response.status !== (event === "ping" ? 200 : 202)) process.exitCode = 1;
 ' "$@"
 '''
 
