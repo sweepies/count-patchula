@@ -50,9 +50,20 @@ pub fn load(path: &Path) -> miette::Result<Config> {
     let source = std::fs::read_to_string(&path)
         .into_diagnostic()
         .wrap_err_with(|| format!("cannot read config {}", path.display()))?;
+    let json = evaluate_local(&path, "Rustovate.pkl", SCHEMA)?;
+    decode(&path, &source, json)
+}
+
+/// Restricted operator modules share the repository evaluator's offline boundary.
+/// The bundled schema resolves even when it has not been copied beside the file.
+pub fn evaluate_local(
+    path: &Path,
+    schema_name: &str,
+    schema: &str,
+) -> miette::Result<serde_json::Value> {
     // Evaluate exactly like API-supplied repository modules. In particular a
     // missing schema must be a real module, so Pkl retains nested class defaults.
-    let absolute = std::path::absolute(&path).into_diagnostic()?;
+    let absolute = std::path::absolute(path).into_diagnostic()?;
     let mut files = std::collections::BTreeMap::new();
     let mut pending = vec![absolute.clone()];
     let imports = regex::Regex::new(r#"(?:amends|extends|import\*?)\s*\(?\s*"([^"]+)""#)
@@ -69,11 +80,9 @@ pub fn load(path: &Path) -> miette::Result<Config> {
             Ok(text) => text,
             Err(error)
                 if error.kind() == std::io::ErrorKind::NotFound
-                    && module
-                        .file_name()
-                        .is_some_and(|name| name == "Rustovate.pkl") =>
+                    && module.file_name().is_some_and(|name| name == schema_name) =>
             {
-                SCHEMA.into()
+                schema.into()
             }
             Err(error) => {
                 return Err(error)
@@ -92,8 +101,7 @@ pub fn load(path: &Path) -> miette::Result<Config> {
         }
         files.insert(virtual_path, text);
     }
-    let json = virtual_files::evaluate(&virtual_files::local_path(&absolute)?, files)?;
-    decode(&path, &source, json)
+    virtual_files::evaluate(&virtual_files::local_path(&absolute)?, files)
 }
 
 fn decode(path: &Path, source: &str, json: serde_json::Value) -> miette::Result<Config> {
