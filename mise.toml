@@ -9,6 +9,8 @@ node = "24.21.0"
 
 [env]
 MBX_DISPLAY = "plain"
+# CI checks run sequentially; share the target instead of duplicating a check lane.
+MBX_TARGET_LANES = "0"
 CC = "{{config_root}}/mise-tasks/cc"
 AR = "{{config_root}}/mise-tasks/ar"
 

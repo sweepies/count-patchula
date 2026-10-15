@@ -22,13 +22,18 @@ jobs:
       # Default-branch pushes publish in the post step; PRs only restore.
       - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
         id: mbx
+        # The pinned action has no nonfatal-cache input. This also covers its post step.
+        continue-on-error: true
         with:
           backend: github
           github-cache-mode: objects
           isolate-objects-cache: true
-          cache-generation: v2-objects
+          # All target consumers finish before the post step; keep only portable objects.
+          clean-target-before-export: true
+          cache-generation: v3-ci-objects
           save-on-pull-request: false
       - name: Inspect cache configuration
+        continue-on-error: true
         env:
           CACHE_KEY: ${{ steps.mbx.outputs.cache-primary-key }}
           CACHE_HIT: ${{ steps.mbx.outputs.cache-hit }}
@@ -38,6 +43,10 @@ jobs:
           printf 'mbx key=%s exact-hit=%s save=%s (%s)\n' "$CACHE_KEY" "$CACHE_HIT" "$CACHE_SAVE_ELIGIBLE" "$CACHE_SAVE_REASON"
           mise run cache:doctor
       - run: mise run ci
+      - name: Measure build storage before cache export
+        run: |
+          du -sh target/.
+          df -h . "${RUNNER_TEMP}"
 
   benchmarks:
     name: Benchmarks (report only)
@@ -52,11 +61,14 @@ jobs:
         with:
           cache: false
       - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
+        continue-on-error: true
         with:
           backend: github
           github-cache-mode: objects
           isolate-objects-cache: true
-          cache-generation: v2-objects
+          clean-target-before-export: true
+          # Release benchmarks must not publish or restore the CI debug bundle.
+          cache-generation: v3-benchmarks-objects
           save-on-pull-request: false
       # No Valgrind entry in mise's registry; host installation is CI-only.
       # If unavailable, tak still reports wall time. Nothing here gates CI.
@@ -74,6 +86,10 @@ jobs:
         run: mise run benchmarks:record
       - name: Export portable measurement artifact
         run: mise run benchmarks:export
+      - name: Measure build storage before cache export
+        run: |
+          du -sh target/.
+          df -h . "${RUNNER_TEMP}"
       - name: Publish timing summary
         if: always()
         run: |

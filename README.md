@@ -47,7 +47,13 @@ CI explicitly uses isolated `objects` bundles: the action imports the previous
 compatible bundle, then exports the closure of all build commands in its post
 step. The generated keys include the Rust toolchain and commit, with shared
 restore prefixes. An exact-hit re-run restores but does not overwrite its
-immutable entry. `mise run cache:doctor` checks the local setup; Actions logs
+immutable entry. CI and release benchmarks use separate generations; cache
+failures are nonfatal. After all target consumers finish, the action removes
+the managed target before exporting portable objects to avoid staging another
+copy of the workspace. Dev/test builds keep line tables for workspace crates
+and omit dependency debug information; sequential checks share the build target.
+See [cache verification](docs/ci-cache.md) for measurements and the two-run check.
+`mise run cache:doctor` checks the local setup; Actions logs
 also show the key and save eligibility. Archive traffic is reported by the
 action, not mbx's per-command remote byte counters.
 Tak benchmarks are [report-only](docs/benchmarks.md); `mise run benchmarks:run`
