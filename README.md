@@ -36,9 +36,10 @@ rustovate is opinionated here. `pnpm-lock.yaml`, `package-lock.json` and
 `npm-shrinkwrap.json` are regenerated with [aube](https://aube.sh) by default
 rather than pnpm or npm ([SWE-149](https://linear.app/sweepies/issue/SWE-149)).
 aube reads and writes both formats in place and never introduces its own
-`aube-lock.yaml`. On a project with 266 locked packages, refreshing the lock
-after a manifest edit took 0.11s with aube against 2.48s with pnpm 10 and 1.46s
-with npm 11, with warm local metadata caches for both tools. aube's pnpm output
+`aube-lock.yaml`. On a project with 265 locked packages, refreshing the lock
+after a manifest edit took 0.11s with aube on the pnpm lock and 0.12s on the
+npm lock, against 2.48s with pnpm 10 and 1.46s with npm 11, with warm local
+metadata caches for both tools. aube's pnpm output
 matched pnpm's byte for byte on a small project, but on larger graphs it may
 keep a second copy of a package that pnpm would deduplicate. npm lockfiles stay
 valid for `npm ci`, but a later `npm install` may rewrite a few lines
