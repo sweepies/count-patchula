@@ -6,7 +6,9 @@ use rustovate_cache::Cache;
 use rustovate_config::Source;
 use rustovate_datasource::{
     Client,
-    notes::{Notes, Repository, Section, parse_changelog, sanitise},
+    notes::{
+        Notes, Repository, Section, parse_changelog, parse_go_history, parse_release_sgml, sanitise,
+    },
 };
 use rustovate_http::{Cached, Exchange, Response, Transport};
 use serde_json::{Value, json};
@@ -20,6 +22,7 @@ struct Routes {
     bodies: BTreeMap<String, Value>,
     requests: Mutex<Vec<String>>,
     queries: Mutex<Vec<Value>>,
+    not_modified: Mutex<Vec<String>>,
 }
 impl Transport for Routes {
     fn send(&self, request: reqwest::Request) -> Exchange<'_> {
@@ -62,6 +65,9 @@ impl Transport for Routes {
                 .headers()
                 .get("if-none-match")
                 .is_some_and(|v| v == etag);
+            if conditional {
+                self.not_modified.lock().unwrap().push(url.clone());
+            }
             Ok(Response {
                 status: if let Some(status) = body.get("status").and_then(Value::as_u64) {
                     reqwest::StatusCode::from_u16(status as u16).unwrap()
@@ -937,4 +943,363 @@ async fn a_changed_changelog_blob_is_reparsed_once_with_new_sections() {
             .count(),
         1
     );
+}
+
+/// A hand-written excerpt of the PostgreSQL SGML release notes.
+const POSTGRES_SGML: &str = r#"<!-- doc/src/sgml/release-17.sgml -->
+<!-- Author: Someone <someone@example.org> -->
+
+ <sect1 id="release-17-6">
+  <title>Release 17.6</title>
+
+  <formalpara>
+  <title>Release date:</title>
+  <para>2025-08-14</para>
+  </formalpara>
+
+  <para>
+   This release contains a variety of fixes from 17.5 &amp; later.
+   See <xref linkend="release-17-5"/> for the previous one.
+  </para>
+
+  <sect2 id="release-17-6-migration">
+   <title>Migration to Version 17.6</title>
+
+   <para>
+    A dump/restore is not required, but BRIN
+    <literal>numeric_minmax_multi_ops</literal> indexes need a reindex.
+   </para>
+  </sect2>
+
+  <sect2 id="release-17-6-changes">
+   <title>Changes</title>
+
+   <itemizedlist>
+
+    <listitem>
+<!--
+Author: Dean Rasheed <dean.a.rasheed@gmail.com>
+Branch: REL_17_STABLE [a85eddab2] 2025-08-11 09:09:12 +0100
+-->
+     <para>
+      Tighten security checks in planner estimation functions
+      (Dean Rasheed)
+      <ulink url="&commit_baseurl;a85eddab2">&sect;</ulink>
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Prevent <application>pg_dump</application> scripts from being used
+      to attack the user, and repair <link
+      linkend="app-pgbasebackup">backups</link>.
+     </para>
+
+     <itemizedlist>
+      <listitem>
+       <para>
+        Nested item, see <ulink url="https://www.postgresql.org/">the
+        documentation</ulink>.
+       </para>
+      </listitem>
+     </itemizedlist>
+    </listitem>
+   </itemizedlist>
+  </sect2>
+ </sect1>
+
+ <sect1 id="release-17">
+  <title>Release 17</title>
+
+  <para>
+   <productname>PostgreSQL</productname> 17 contains many new features.
+  </para>
+ </sect1>
+"#;
+
+/// A hand-written excerpt of the Go website release history.
+const GO_HISTORY: &str = r#"// Copyright 2020 The Go Authors. All rights reserved.
+
+package history
+
+import "html/template"
+
+var Releases = []*Release{
+	{
+		Date: Date{2026, 10, 8}, Version: Version{1, 27, 2},
+		Security: &FixSummary{
+			Components: []template.HTML{"the <code>go</code> command"},
+			Packages:   []string{"crypto/tls", "net/http"},
+		},
+		Bug: &FixSummary{
+			Components: []template.HTML{"the compiler", "the runtime"},
+			Packages:   []string{"encoding/json", "net/http"},
+		},
+	},
+	{
+		Date: Date{2026, 9, 1}, Version: Version{1, 27, 1},
+		Bug: &FixSummary{
+			Components: []template.HTML{"cgo"},
+			Packages:   []string{"net/http"},
+		},
+	},
+	{
+		Date: Date{2026, 8, 19}, Version: Version{1, 27, 0},
+	},
+	{
+		Date: Date{2019, 4, 11}, Version: Version{1, 12, 4},
+		CustomSummary: `fixes an issue where using the prebuilt binary
+releases on older versions of GNU/Linux
+<a href="/issues/31293">led to failures</a>
+when linking programs that used cgo.`,
+	},
+}
+"#;
+
+#[test]
+fn postgres_sgml_becomes_compact_markdown() {
+    let sections = parse_release_sgml(POSTGRES_SGML);
+    assert_eq!(
+        sections
+            .iter()
+            .map(|s| s.version.as_str())
+            .collect::<Vec<_>>(),
+        ["17.6", "17.0"]
+    );
+    assert_eq!(
+        sections[0].link,
+        "https://www.postgresql.org/docs/release/17.6/"
+    );
+    assert_eq!(
+        sections[1].link,
+        "https://www.postgresql.org/docs/release/17/"
+    );
+    assert_eq!(
+        sections[0].body,
+        "This release contains a variety of fixes from 17.5 & later. See release-17-5 for the previous one.\n\n**Migration to Version 17.6**\n\nA dump/restore is not required, but BRIN `numeric_minmax_multi_ops` indexes need a reindex.\n\n**Changes**\n\n- Tighten security checks in planner estimation functions (Dean Rasheed) [§](https://postgr.es/c/a85eddab2)\n- Prevent `pg_dump` scripts from being used to attack the user, and repair backups.\n  - Nested item, see [the documentation](https://www.postgresql.org/)."
+    );
+    assert!(!sections[0].body.contains("Release date"));
+    assert!(!sections[0].body.contains("Author"));
+    assert!(
+        sections[1]
+            .body
+            .contains("`PostgreSQL` 17 contains many new features.")
+    );
+}
+
+#[test]
+fn go_release_history_becomes_one_sentence_per_release() {
+    let sections = parse_go_history(GO_HISTORY);
+    assert_eq!(
+        sections
+            .iter()
+            .map(|s| s.version.as_str())
+            .collect::<Vec<_>>(),
+        ["1.27.2", "1.27.1", "1.27.0", "1.12.4"]
+    );
+    assert_eq!(
+        sections[0].link,
+        "https://go.dev/doc/devel/release#go1.27.2"
+    );
+    assert_eq!(
+        sections[0].body,
+        "go1.27.2 (released 2026-10-08) includes security fixes to the `go` command, and the `crypto/tls` and `net/http` packages, as well as bug fixes to the compiler, the runtime, and the `encoding/json` and `net/http` packages. See the [Go 1.27.2 milestone](https://github.com/golang/go/issues?q=milestone%3AGo1.27.2+label%3ACherryPickApproved) on our issue tracker for details."
+    );
+    assert_eq!(
+        sections[1].body,
+        "go1.27.1 (released 2026-09-01) includes fixes to cgo and the `net/http` package. See the [Go 1.27.1 milestone](https://github.com/golang/go/issues?q=milestone%3AGo1.27.1+label%3ACherryPickApproved) on our issue tracker for details."
+    );
+    assert_eq!(
+        sections[2].body,
+        "Go 1.27.0 (released 2026-08-19) is a major release of Go. Read the [Go 1.27 Release Notes](https://go.dev/doc/go1.27) for more information."
+    );
+    assert_eq!(
+        sections[2].link,
+        "https://go.dev/doc/devel/release#go1.27.0"
+    );
+    assert_eq!(
+        sections[3].body,
+        "go1.12.4 (released 2019-04-11) fixes an issue where using the prebuilt binary\nreleases on older versions of GNU/Linux\n[led to failures](/issues/31293)\nwhen linking programs that used cgo."
+    );
+}
+
+fn adapter_routes() -> Arc<Routes> {
+    routes(&[
+        (
+            "https://mise-versions.jdx.dev/data/github/postgres/postgres/releases.json",
+            json!({"releases":[]}),
+        ),
+        (
+            "https://mise-versions.jdx.dev/data/github/postgres/postgres/tags.json",
+            json!({"tags":[{"tag":"REL_17_2"},{"tag":"REL_17_6"}]}),
+        ),
+        (
+            "https://api.github.com/repos/postgres/postgres/contents",
+            json!([]),
+        ),
+        (
+            "https://api.github.com/repos/postgres/postgres/contents/doc/src/sgml?ref=REL_17_6",
+            json!([{"type":"file","name":"release-17.sgml","path":"doc/src/sgml/release-17.sgml","sha":"sgml"}]),
+        ),
+        (
+            "https://api.github.com/repos/postgres/postgres/git/blobs/sgml",
+            json!({"content":STANDARD.encode(POSTGRES_SGML)}),
+        ),
+        (
+            "https://mise-versions.jdx.dev/data/github/golang/go/releases.json",
+            json!({"releases":[]}),
+        ),
+        (
+            "https://mise-versions.jdx.dev/data/github/golang/go/tags.json",
+            json!({"tags":[{"tag":"go1.27.0"},{"tag":"go1.27.2"}]}),
+        ),
+        ("https://api.github.com/repos/golang/go/contents", json!([])),
+        (
+            "https://api.github.com/repos/golang/website/contents/internal/history",
+            json!([{"type":"file","name":"release.go","path":"internal/history/release.go","sha":"history"}]),
+        ),
+        (
+            "https://api.github.com/repos/golang/website/git/blobs/history",
+            json!({"content":STANDARD.encode(GO_HISTORY)}),
+        ),
+    ])
+}
+
+#[tokio::test]
+async fn upstream_adapters_fill_ranges_without_github_releases() {
+    let routes = adapter_routes();
+    let client = client(routes.clone(), memory().await).await;
+    let postgres = client
+        .release_notes(Source::GithubTags, "postgres/postgres", "17.2", "17.6")
+        .await
+        .unwrap();
+    assert_eq!(
+        postgres
+            .sections
+            .iter()
+            .map(|s| s.version.as_str())
+            .collect::<Vec<_>>(),
+        ["17.6"]
+    );
+    assert_eq!(
+        postgres.sections[0].link,
+        "https://www.postgresql.org/docs/release/17.6/"
+    );
+    assert!(
+        postgres.sections[0].body.contains("**Changes**"),
+        "{}",
+        postgres.sections[0].body
+    );
+    assert_eq!(
+        postgres.compare.as_deref(),
+        Some("https://github.com/postgres/postgres/compare/REL_17_2...REL_17_6")
+    );
+    assert!(!postgres.incomplete);
+
+    let go = client
+        .release_notes(Source::GithubTags, "golang/go", "1.27.0", "1.27.2")
+        .await
+        .unwrap();
+    assert_eq!(
+        go.sections
+            .iter()
+            .map(|s| s.version.as_str())
+            .collect::<Vec<_>>(),
+        ["1.27.2", "1.27.1"]
+    );
+    assert_eq!(
+        go.sections[0].link,
+        "https://go.dev/doc/devel/release#go1.27.2"
+    );
+    assert!(go.sections[0].body.contains("includes security fixes"));
+    assert_eq!(
+        go.compare.as_deref(),
+        Some("https://github.com/golang/go/compare/go1.27.0...go1.27.2")
+    );
+    assert!(!go.incomplete);
+}
+
+#[tokio::test]
+async fn unchanged_adapter_blobs_are_neither_downloaded_nor_parsed_again() {
+    let routes = adapter_routes();
+    let cache = memory().await;
+    for _ in 0..2 {
+        let client = client(routes.clone(), cache.clone()).await;
+        let notes = client
+            .release_notes(Source::GithubTags, "golang/go", "1.27.0", "1.27.2")
+            .await
+            .unwrap();
+        assert_eq!(notes.sections.len(), 2);
+    }
+    let reads = routes.requests.lock().unwrap();
+    assert_eq!(
+        reads
+            .iter()
+            .filter(|url| url.contains("/git/blobs/"))
+            .count(),
+        1,
+        "an unchanged blob is not downloaded again: {reads:?}"
+    );
+    let conditional = routes.not_modified.lock().unwrap();
+    assert!(
+        conditional
+            .iter()
+            .any(|url| url.ends_with("/contents/internal/history")),
+        "the listing is revalidated instead of downloaded again"
+    );
+}
+
+#[tokio::test]
+async fn a_range_spanning_postgres_majors_keeps_the_earlier_major_incomplete() {
+    let mut bodies = adapter_routes().bodies.clone();
+    bodies.insert(
+        "https://mise-versions.jdx.dev/data/github/postgres/postgres/tags.json".into(),
+        json!({"tags":[{"tag":"REL_16_9"},{"tag":"REL_17"}]}),
+    );
+    bodies.insert(
+        "https://api.github.com/repos/postgres/postgres/contents/doc/src/sgml?ref=REL_17".into(),
+        json!([{"type":"file","name":"release-17.sgml","path":"doc/src/sgml/release-17.sgml","sha":"sgml"}]),
+    );
+    let routes = Arc::new(Routes {
+        bodies,
+        ..Default::default()
+    });
+    let notes = client(routes.clone(), memory().await)
+        .await
+        .release_notes(Source::GithubTags, "postgres/postgres", "16.9", "17")
+        .await
+        .unwrap();
+    assert_eq!(
+        notes
+            .sections
+            .iter()
+            .map(|s| s.version.as_str())
+            .collect::<Vec<_>>(),
+        ["17.0"]
+    );
+    assert_eq!(
+        notes.sections[0].link,
+        "https://www.postgresql.org/docs/release/17/"
+    );
+    assert!(notes.incomplete, "the earlier major's notes are missing");
+}
+
+#[tokio::test]
+async fn a_failing_adapter_marks_the_notes_incomplete_without_failing() {
+    let mut bodies = adapter_routes().bodies.clone();
+    bodies.insert(
+        "https://api.github.com/repos/golang/website/contents/internal/history".into(),
+        json!({"status":404}),
+    );
+    let routes = Arc::new(Routes {
+        bodies,
+        ..Default::default()
+    });
+    let notes = client(routes.clone(), memory().await)
+        .await
+        .release_notes(Source::GithubTags, "golang/go", "1.27.0", "1.27.2")
+        .await
+        .unwrap();
+    assert!(notes.sections.is_empty());
+    assert!(notes.incomplete);
 }

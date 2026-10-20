@@ -1,9 +1,11 @@
 //! Source metadata and release ranges, fetched only for changed pull requests.
+mod adapters;
 mod changelog;
 mod markdown;
 mod releases;
 mod source;
 use super::*;
+pub use adapters::{parse_go_history, parse_release_sgml};
 pub use changelog::{Section, parse_changelog};
 pub use markdown::sanitise;
 pub(crate) use releases::BodyCache;
@@ -568,6 +570,21 @@ impl Client {
             }
         } else if notes.sections.is_empty() {
             notes.incomplete = true;
+        }
+        // Upstreams without GitHub releases publish their notes elsewhere.
+        if notes.sections.is_empty()
+            && let Some(adapter) = adapters::adapter(repo)
+        {
+            match self.adapter_notes(adapter, &old, &new).await {
+                Ok((sections, complete)) => {
+                    notes.incomplete |= !complete;
+                    if sections.is_empty() {
+                        notes.incomplete = true;
+                    }
+                    notes.sections.extend(sections);
+                }
+                Err(_) => notes.incomplete = true,
+            }
         }
         // Sort parsed versions once, rather than reparsing inside the comparator.
         let mut sections: Vec<_> = notes

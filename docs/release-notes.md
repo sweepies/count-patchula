@@ -98,6 +98,12 @@ and parsed section objects coalesce concurrent reads, and other ranges reuse the
 same object. A changed blob is parsed once again; an unchanged blob is neither
 downloaded nor parsed again, even after restarting the client.
 
+Upstreams without GitHub releases fall back to one upstream-specific adapter
+when the range still lacks sections. The adapter table is data-driven, and each
+adapter reads a directory listing to find an immutable blob, then caches the
+parsed notes by blob SHA like a changelog. A range that spans two PostgreSQL
+majors keeps only the target major's notes and is marked incomplete.
+
 ## Rendering and deliberate choices (departure 48)
 
 The body retains the dependency table and ownership/recheck markers within a
@@ -155,9 +161,18 @@ release handling and cache reuse after reopening SQLite. Refresh through mise
 with `GH_TOKEN=$(gh auth token)` and `RUSTOVATE_RECORD=1`, then run
 `mise run fixtures:check`; normal tests never construct a network client.
 
-Upstream websites and non-heading formats such as PostgreSQL SGML and Go's
-website-only release documents need explicit adapters in a later change. A
-resolved GitHub repository with no supported text still gets source/compare
-links and an honest missing-text explanation. The general mise tool TOML/index
-catalog migration is also deferred: it must preserve release-age provenance,
-coverage markers and current version/digest behavior before replacing lookup.
+Upstreams that publish their notes outside GitHub releases have explicit
+adapters. PostgreSQL keeps its release notes as SGML in
+`doc/src/sgml/release-{major}.sgml`, which exists only on that major's branch:
+the adapter reads the file at the target version's tag, turns paragraphs, list
+items, section titles and inline tags into compact Markdown, and links every
+release to its documentation page. Go publishes its release history as data in
+the website repository's `internal/history/release.go`: the adapter parses the
+release entries into the one-sentence summary the website renders, and links
+every release to the release history page. Both adapters read an immutable
+blob, cache the parsed notes by blob SHA and report incomplete notes when the
+upstream text cannot be read. A resolved GitHub repository with no supported
+text still gets source/compare links and an honest missing-text explanation.
+The general mise tool TOML/index catalog migration is also deferred: it must
+preserve release-age provenance, coverage markers and current version/digest
+behavior before replacing lookup.
