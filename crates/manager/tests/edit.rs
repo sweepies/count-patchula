@@ -176,3 +176,38 @@ fn overlapping_invalid_and_expanded_locations_refuse_edits() {
         .dependencies;
     assert!(edits(&deps[0], text, "2.0-alpine", None).is_err());
 }
+#[test]
+fn pnpm_and_yarn_catalogs_keep_yaml_quoting_and_named_catalogs() {
+    let old = "packages:\n  - packages/*\ncatalog:\n  zod: 3.23.8 # keep\n  '@scope/x': \"^1.0.0\"\n  local: workspace:*\ncatalogs:\n  legacy:\n    hono: '4.6.0'\n    alias: npm:real@1.0.0\n";
+    for path in ["pnpm-workspace.yaml", ".yarnrc.yml"] {
+        assert_eq!(
+            replace(Manager::Npm, path, old, "2.0.0", None),
+            old.replace("3.23.8", "2.0.0")
+                .replace("^1.0.0", "2.0.0")
+                .replace("'4.6.0'", "'2.0.0'")
+                .replace("real@1.0.0", "real@2.0.0"),
+            "{path}"
+        );
+    }
+}
+#[test]
+fn bun_catalogs_in_the_root_manifest_are_edited_in_place() {
+    let old = "{\n  \"workspaces\": {\n    \"packages\": [\"packages/*\"],\n    \"catalog\": {\"zod\": \"3.23.8\"},\n    \"catalogs\": {\"legacy\": {\"hono\": \"4.6.0\"}}\n  },\n  \"catalog\": {\"react\": \"^18.0.0\"}\n}\n";
+    assert_eq!(
+        replace(Manager::Npm, "package.json", old, "2.0.0", None),
+        old.replace("3.23.8", "2.0.0")
+            .replace("4.6.0", "2.0.0")
+            .replace("^18.0.0", "2.0.0")
+    );
+}
+#[test]
+fn node_version_files_keep_the_v_prefix_and_trailing_text() {
+    assert_eq!(
+        replace(Manager::Npm, ".nvmrc", "v20.11.0\n", "22.1.0", None),
+        "v22.1.0\n"
+    );
+    assert_eq!(
+        replace(Manager::Npm, "app/.node-version", "20\n", "22", None),
+        "22\n"
+    );
+}

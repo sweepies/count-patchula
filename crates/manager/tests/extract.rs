@@ -185,3 +185,42 @@ fn npm_is_strict_json_and_bun_lock_is_jsonc() {
         );
     }
 }
+#[test]
+fn catalogs_and_node_version_files_are_npm_dependencies() {
+    let mut config = config();
+    config.managers = vec![Manager::Npm];
+    let scanner = Scanner::new(&config).unwrap();
+    for path in [
+        "pnpm-workspace.yaml",
+        ".yarnrc.yml",
+        ".nvmrc",
+        "web/.node-version",
+    ] {
+        assert!(scanner.needs(path), "{path}");
+    }
+    let files = Files::from([
+        (
+            "pnpm-workspace.yaml".into(),
+            "packages: [packages/*]\ncatalog:\n  zod: 3.23.8\n  local: link:../x\ncatalogs:\n  legacy:\n    hono: 4.6.0\n".into(),
+        ),
+        (".nvmrc".into(), "lts/iron\n".into()),
+        ("web/.node-version".into(), "v22.1.0\n".into()),
+    ]);
+    let deps = scanner.extract(&files).unwrap().dependencies;
+    let names: Vec<_> = deps
+        .iter()
+        .map(|d| (d.file.as_str(), d.name.as_str(), d.current.as_str()))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("pnpm-workspace.yaml", "zod", "3.23.8"),
+            ("pnpm-workspace.yaml", "hono", "4.6.0"),
+            ("web/.node-version", "node", "22.1.0"),
+        ],
+        "aliases like lts/iron and local links are not registry versions"
+    );
+    let node = deps.iter().find(|d| d.name == "node").unwrap();
+    assert_eq!(node.kind, DependencyKind::Toolchain);
+    assert_eq!(node.resolved.as_deref(), Some("22.1.0"));
+}

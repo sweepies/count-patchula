@@ -2474,6 +2474,7 @@ dependencies = [
  "rustovate-versioning",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "sha1",
  "sha2 0.11.1",
  "tempfile",

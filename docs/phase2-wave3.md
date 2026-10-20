@@ -147,7 +147,13 @@ Yarn's version comes from the
 `packageManager` field of `package.json`, then the repository pin, then the
 format of the committed lockfile. Yarn Berry has no `--ignore-scripts` flag and
 runs `--mode=update-lockfile`, which updates the lockfile without linking
-`node_modules`, so `nodeLinker: pnp` projects are supported.
+`node_modules`, so `nodeLinker: pnp` projects are supported. Yarn reads registries, cache
+keys and catalogs from `.yarnrc.yml`, so the checkout includes it. Yarn runs
+with `YARN_IGNORE_PATH=1` on a scratch copy without `yarnPath`, `plugins` and
+`${VAR}` values: a committed Yarn release and plugins are repository code, and
+interpolations name credentials the runner never passes. The committed file is
+restored before the tree is collected. A catalog edit in `pnpm-workspace.yaml`
+or `.yarnrc.yml` counts as a dependency change for the unchanged-lockfile rule.
 
 Cargo toolchain-only changes use `cargo update --workspace`; maintenance uses
 untargeted `cargo update`. Both npm and Bun locks are regenerated when both are

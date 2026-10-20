@@ -95,6 +95,11 @@ pub fn edits(
     }])
 }
 
+/// npm and Bun dependencies live in JSON manifests, YAML catalogs and plain
+/// Node version files, so their syntax follows the file rather than the manager.
+fn json(dep: &Dependency) -> bool {
+    matches!(dep.manager, Manager::Npm | Manager::Bun) && dep.file.ends_with("package.json")
+}
 fn yaml(dep: &Dependency) -> bool {
     matches!(
         dep.manager,
@@ -104,13 +109,14 @@ fn yaml(dep: &Dependency) -> bool {
             | Manager::Kustomize
             | Manager::Flux
             | Manager::HelmValues
-    )
+    ) || (matches!(dep.manager, Manager::Npm | Manager::Bun)
+        && (dep.file.ends_with(".yaml") || dep.file.ends_with(".yml")))
 }
 fn toml(dep: &Dependency) -> bool {
     matches!(dep.manager, Manager::Cargo | Manager::Mise) && !dep.file.ends_with(".tool-versions")
 }
 fn scalar(dep: &Dependency, raw: &str) -> Result<String, String> {
-    if matches!(dep.manager, Manager::Npm | Manager::Bun) {
+    if json(dep) {
         serde_json::from_str(raw).map_err(|e| e.to_string())
     } else if yaml(dep) {
         let value: serde_yaml_ng::Value =
@@ -135,7 +141,7 @@ fn quote(dep: &Dependency, raw: &str, target: &str) -> Result<String, String> {
     if target.contains(['\n', '\r', '\0']) {
         return Err("multiline or NUL update is not supported".into());
     }
-    if matches!(dep.manager, Manager::Npm | Manager::Bun) || raw.starts_with('"') {
+    if json(dep) || raw.starts_with('"') {
         if raw.starts_with("\"\"\"") {
             if target.contains(['"', '\\']) {
                 return Err("unsafe multiline TOML replacement".into());

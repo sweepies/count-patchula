@@ -65,6 +65,15 @@ pub(crate) fn job(
                 target: update.new_version.clone().or(update.new_value.clone()),
             }));
         }
+        // Node version files pin the runtime, which no lockfile records.
+        Manager::Npm | Manager::Bun
+            if matches!(
+                dep.file.rsplit('/').next(),
+                Some(".nvmrc" | ".node-version")
+            ) =>
+        {
+            return Ok(None);
+        }
         Manager::Npm | Manager::Bun => {
             let Some(root) = nearest(
                 &dep.file,
@@ -759,6 +768,7 @@ fn materialized(path: &str) -> bool {
                 | "go.work"
                 | "go.work.sum"
                 | "pnpm-workspace.yaml"
+                | ".yarnrc.yml"
         )
         || path.ends_with(".go")
         || path.ends_with(".rs")

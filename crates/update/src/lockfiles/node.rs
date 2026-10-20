@@ -10,6 +10,9 @@ pub(super) const LOCKS: [&str; 5] = [
     "yarn.lock",
 ];
 
+/// Workspace files whose `catalog`/`catalogs` feed `catalog:` specifiers.
+const CATALOGS: [&str; 2] = ["pnpm-workspace.yaml", ".yarnrc.yml"];
+
 /// The tool that owns a Node lockfile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Engine {
@@ -210,7 +213,12 @@ impl Runner {
             (Some(_), None) => true,
             (None, Some(_)) => true,
             (None, None) => false,
-        };
+        } || CATALOGS.iter().any(|leaf| {
+            // A catalog edit changes recorded dependencies as much as a manifest edit.
+            let path = join(directory, leaf);
+            baseline.get(&path).map(|b| b.content.clone())
+                != std::fs::read_to_string(root.join(&path)).ok()
+        });
         if !changed {
             return false;
         }
@@ -351,28 +359,43 @@ impl Runner {
         };
         // The manifest as planned, before Yarn may rewrite it in its own layout.
         let planned = manifest.clone();
-        self.tool(
-            driver,
-            Invocation {
-                tools: vec![
-                    ("node".into(), version(versions, "node")?),
-                    ("yarn".into(), yarn),
-                ],
-                bin: "yarn".into(),
-                cwd: Some(cwd.to_path_buf()),
-                env: vec![
-                    ("YARN_ENABLE_IMMUTABLE_INSTALLS".into(), "0".into()),
-                    ("YARN_ENABLE_TELEMETRY".into(), "0".into()),
-                    ("YARN_ENABLE_PROGRESS_BARS".into(), "0".into()),
-                    (
-                        "YARN_GLOBAL_FOLDER".into(),
-                        driver.join("home/yarn").to_string_lossy().into_owned(),
-                    ),
-                ],
-                args,
-            },
-        )
-        .await?;
+        // Yarn reads registries, cache keys and catalogs from `.yarnrc.yml`, but
+        // its `yarnPath` release and `plugins` are repository code, and `${VAR}`
+        // references need credentials the runner never passes. Run Yarn on a
+        // copy without them and restore the committed file afterwards.
+        let rc = cwd.join(".yarnrc.yml");
+        let committed = std::fs::read_to_string(&rc).ok();
+        if let Some(text) = &committed {
+            std::fs::write(&rc, yarnrc(text)?).map_err(|e| e.to_string())?;
+        }
+        let result = self
+            .tool(
+                driver,
+                Invocation {
+                    tools: vec![
+                        ("node".into(), version(versions, "node")?),
+                        ("yarn".into(), yarn),
+                    ],
+                    bin: "yarn".into(),
+                    cwd: Some(cwd.to_path_buf()),
+                    env: vec![
+                        ("YARN_ENABLE_IMMUTABLE_INSTALLS".into(), "0".into()),
+                        ("YARN_IGNORE_PATH".into(), "1".into()),
+                        ("YARN_ENABLE_TELEMETRY".into(), "0".into()),
+                        ("YARN_ENABLE_PROGRESS_BARS".into(), "0".into()),
+                        (
+                            "YARN_GLOBAL_FOLDER".into(),
+                            driver.join("home/yarn").to_string_lossy().into_owned(),
+                        ),
+                    ],
+                    args,
+                },
+            )
+            .await;
+        if let Some(text) = &committed {
+            std::fs::write(&rc, text).map_err(|e| e.to_string())?;
+        }
+        result?;
         // Berry rewrites the manifest in its own layout. Keep the planned text
         // when only the formatting changed, and refuse a real manifest edit.
         if let Some(planned) = planned
@@ -504,4 +527,24 @@ pub(super) fn yarn_version(
         return Err("missing pinned Yarn version".into());
     }
     Ok(fallback.to_string())
+}
+
+/// `.yarnrc.yml` without repository code (`yarnPath`, `plugins`) or `${VAR}`
+/// interpolations, which would fail without the credentials they name.
+pub(super) fn yarnrc(text: &str) -> Result<String, String> {
+    fn clean(value: &mut serde_yaml_ng::Value) {
+        if let Some(map) = value.as_mapping_mut() {
+            map.retain(|key, value| {
+                !matches!(key.as_str(), Some("yarnPath" | "plugins"))
+                    && !value.as_str().is_some_and(|s| s.contains("${"))
+            });
+            for (_, value) in map.iter_mut() {
+                clean(value);
+            }
+        }
+    }
+    let mut value: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(text).map_err(|e| e.to_string())?;
+    clean(&mut value);
+    serde_yaml_ng::to_string(&value).map_err(|e| e.to_string())
 }

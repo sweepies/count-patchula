@@ -29,6 +29,9 @@ pub(super) fn locks(files: &Files) -> Result<BTreeMap<&str, Value<'_>>, String> 
         .map(|(path, text)| Ok((path.as_str(), ast(text, path.ends_with("bun.lock"))?)))
         .collect()
 }
+fn escape(name: &str) -> String {
+    name.replace('~', "~0").replace('/', "~1")
+}
 fn alias<'a>(name: &'a str, value: &'a str) -> (&'a str, &'a str) {
     value
         .strip_prefix("npm:")
@@ -83,6 +86,42 @@ pub(super) fn extract(
                 true,
                 &mut deps,
             );
+        }
+    }
+    // Bun declares catalogs in the root manifest, at the top level or under
+    // `workspaces`; members refer to them with `catalog:` specifiers.
+    let workspaces = object.get_object("workspaces");
+    for (parent, base) in [(Some(object), ""), (workspaces, "/workspaces")] {
+        let Some(parent) = parent else { continue };
+        if let Some(values) = parent.get_object("catalog") {
+            let pointer = format!("{base}/catalog");
+            collect(
+                path,
+                text,
+                manager,
+                values,
+                DependencyKind::Production,
+                &pointer,
+                false,
+                &mut deps,
+            );
+        }
+        if let Some(catalogs) = parent.get_object("catalogs") {
+            for prop in &catalogs.properties {
+                if let Some(values) = prop.value.as_object() {
+                    let pointer = format!("{base}/catalogs/{}", escape(prop.name.as_str()));
+                    collect(
+                        path,
+                        text,
+                        manager,
+                        values,
+                        DependencyKind::Production,
+                        &pointer,
+                        false,
+                        &mut deps,
+                    );
+                }
+            }
         }
     }
     if let Some(pm) = object.get_string("packageManager")
@@ -149,7 +188,7 @@ fn collect(
 ) {
     for prop in &object.properties {
         let name = prop.name.as_str();
-        let ptr = format!("{pointer}/{}", name.replace('~', "~0").replace('/', "~1"));
+        let ptr = format!("{pointer}/{}", escape(name));
         if let Some(value) = prop.value.as_string_lit() {
             if !registry(&value.value) {
                 continue;
@@ -253,4 +292,96 @@ fn resolved(
         directory = directory.rsplit_once('/').map_or("", |(p, _)| p);
     }
     Ok(None)
+}
+
+/// pnpm (`pnpm-workspace.yaml`) and Yarn (`.yarnrc.yml`) declare a default
+/// `catalog` and named `catalogs` of package ranges for `catalog:` specifiers.
+pub(super) fn catalogs(
+    path: &str,
+    text: &str,
+    manager: Manager,
+) -> Result<Vec<Dependency>, String> {
+    let locations = crate::yaml_locations::parse(text)?;
+    let Some(document) = crate::yaml::docs(text)?.into_iter().next() else {
+        return Ok(Vec::new());
+    };
+    let mut groups = Vec::new();
+    if let Some(catalog) = document.get("catalog").and_then(|v| v.as_mapping()) {
+        groups.push(("/0/catalog".to_string(), catalog));
+    }
+    if let Some(named) = document.get("catalogs").and_then(|v| v.as_mapping()) {
+        for (name, catalog) in named {
+            if let (Some(name), Some(catalog)) = (name.as_str(), catalog.as_mapping()) {
+                groups.push((format!("/0/catalogs/{}", escape(name)), catalog));
+            }
+        }
+    }
+    let mut deps = Vec::new();
+    for (pointer, catalog) in groups {
+        for (name, value) in catalog {
+            let (Some(name), Some(value)) = (name.as_str(), value.as_str()) else {
+                continue;
+            };
+            if !registry(value) {
+                continue;
+            }
+            let pointer = format!("{pointer}/{}", escape(name));
+            let location = locations
+                .get(&pointer)
+                .cloned()
+                .ok_or_else(|| format!("cannot locate catalog entry {pointer}"))?;
+            let (package, current) = alias(name, value);
+            deps.push(Dependency {
+                manager,
+                file: path.into(),
+                location,
+                name: name.into(),
+                package: package.into(),
+                kind: DependencyKind::Production,
+                current: current.into(),
+                resolved: None,
+                digest: None,
+                source: Source::Npm,
+                scheme: Scheme::Semver,
+                extract: None,
+            });
+        }
+    }
+    Ok(deps)
+}
+
+/// `.nvmrc` and `.node-version` pin Node with a single version, optionally
+/// `v`-prefixed. Aliases such as `lts/*` or `node` are not versions.
+pub(super) fn node_version(path: &str, text: &str, manager: Manager) -> Vec<Dependency> {
+    let Some(token) = text.split_whitespace().next() else {
+        return Vec::new();
+    };
+    let version = token.strip_prefix('v').unwrap_or(token);
+    if version.is_empty()
+        || !version
+            .split('.')
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return Vec::new();
+    }
+    let start = text.find(token).expect("token from text") + (token.len() - version.len());
+    let resolution = rustovate_mise::resolve("node");
+    let (source, package, extract) = resolution.map_or_else(
+        || (Source::Mise, "node".into(), None),
+        |r| (r.source, r.package, r.extract),
+    );
+    vec![Dependency {
+        manager,
+        file: path.into(),
+        location: Location::new(text, start, start + version.len(), "/node".into()),
+        name: "node".into(),
+        package,
+        kind: DependencyKind::Toolchain,
+        current: version.into(),
+        resolved: Some(version.into()),
+        digest: None,
+        source,
+        scheme: Scheme::Loose,
+        extract,
+    }]
 }

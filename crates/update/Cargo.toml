@@ -30,6 +30,7 @@ cron = "0.17"
 tokio = { workspace = true, features = ["process", "io-util"] }
 tempfile = "3"
 toml_edit = "0.25.17"
+serde_yaml_ng = "0.10.0"
 rustix = { version = "1", features = ["process"] }
 base64 = "0.22"
 tracing = "0.1"

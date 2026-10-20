@@ -117,7 +117,16 @@ impl Scanner {
         let leaf = path.rsplit('/').next().unwrap_or(path);
         match manager {
             Manager::Npm | Manager::Bun => {
-                matches!(leaf, "package.json" | "package-lock.json" | "bun.lock")
+                matches!(
+                    leaf,
+                    "package.json"
+                        | "package-lock.json"
+                        | "bun.lock"
+                        | "pnpm-workspace.yaml"
+                        | ".yarnrc.yml"
+                        | ".nvmrc"
+                        | ".node-version"
+                )
             }
             Manager::GithubActions => {
                 (path.starts_with(".github/workflows/")
@@ -209,6 +218,14 @@ impl Scanner {
         for (path, text) in files {
             let extraction = if self.selected(node, path) && path.ends_with("package.json") {
                 npm::extract(path, text, node, &locks)
+            } else if self.selected(node, path)
+                && (path.ends_with("pnpm-workspace.yaml") || path.ends_with(".yarnrc.yml"))
+            {
+                npm::catalogs(path, text, node)
+            } else if self.selected(node, path)
+                && (path.ends_with(".nvmrc") || path.ends_with(".node-version"))
+            {
+                Ok(npm::node_version(path, text, node))
             } else if self.selected(Manager::GithubActions, path) {
                 actions::extract(path, text)
             } else if self.selected(Manager::Mise, path) {

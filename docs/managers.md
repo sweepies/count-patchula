@@ -10,7 +10,12 @@ are enabled, avoiding duplicate manifest updates.
 
 npm supports production/dev/peer/optional dependencies, aliases, nested overrides,
 resolutions and packageManager. Workspace/file/link/catalog refs are local and
-not registry dependencies. bun.lock JSONC and npm lock versions 1–3 provide
+not registry dependencies. Catalog entries are dependencies where they are
+declared: `catalog` and named `catalogs` in `pnpm-workspace.yaml` (pnpm),
+`.yarnrc.yml` (Yarn 4) and the root `package.json`, top level or under
+`workspaces` (Bun). YAML catalogs keep their quoting and comments. `.nvmrc` and
+`.node-version` pin Node with a numeric version, optionally `v`-prefixed;
+aliases such as `lts/*` are not versions. These files have no lockfile job. bun.lock JSONC and npm lock versions 1–3 provide
 resolved versions. Binary bun.lockb remains unsupported, and pnpm and Yarn
 locks are not parsed for resolved versions; the lockfile runner regenerates them
 with aube and Yarn instead.

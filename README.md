@@ -68,7 +68,10 @@ repository. Fixtures are recorded from real registries by rustovate itself.
 Install [mise](https://mise.jdx.dev), then run `mise trust` and `mise install`.
 All tool versions are pinned in `mise.toml`; Rust uses edition 2024. On x86_64
 Linux, the `cc` mise task supplies the pinned Zig C linker, including in
-minimal images without system development packages.
+minimal images without system development packages. Tools that only tests
+need, such as the aube and Yarn lockfile engines the real-tool tests run, are
+task-scoped `tools` on `test` and `test:stress`: `mise install` skips them and
+mise installs them when those tasks run.
 
 - `mise run build` builds the workspace.
 - `mise run test` runs offline unit and integration tests (Cargo may download dependencies).
