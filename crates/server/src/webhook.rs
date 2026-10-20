@@ -402,9 +402,11 @@ pub fn classify(event: &str, payload: &Value, settings: &Settings, bot: &str) ->
             (settings.triggers.pull_request_closed && action == "closed")
                 || (settings.triggers.pull_request_edited
                     && action == "edited"
-                    && rustovate_update::pull_requests::checked(pr)
                     && before.is_some_and(|before| {
-                        !rustovate_update::pull_requests::checked(&json!({"body":before}))
+                        rustovate_update::pull_requests::controls_edited(
+                            before,
+                            pr["body"].as_str().unwrap_or(""),
+                        )
                     }))
         }
         _ => false,

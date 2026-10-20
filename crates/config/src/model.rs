@@ -120,6 +120,7 @@ pub struct PullRequests {
     pub dashboard: bool,
     pub branch: String,
     pub rebase: Rebase,
+    pub batch_merge: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

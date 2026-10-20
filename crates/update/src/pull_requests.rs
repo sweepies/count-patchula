@@ -101,6 +101,53 @@ fn limit(plan: &mut Plan, reason: &str) {
     plan.action.status = ActionStatus::Skipped;
     plan.action.reason = Some(reason.into());
 }
+/// Ticked checkbox lines outside fenced code, trimmed.
+pub(crate) fn ticked_lines(text: &str) -> Vec<&str> {
+    let mut fence = None;
+    let mut out = Vec::new();
+    for line in text.lines().map(str::trim) {
+        if line.starts_with("```") || line.starts_with("~~~") {
+            let kind = &line[..3];
+            if fence == Some(kind) {
+                fence = None;
+            } else if fence.is_none() {
+                fence = Some(kind);
+            }
+            continue;
+        }
+        if fence.is_none() && (line.starts_with("- [x] ") || line.starts_with("- [X] ")) {
+            out.push(line);
+        }
+    }
+    out
+}
+/// The update key recorded by a rustovate PR's ownership marker.
+pub(crate) fn marker_update(text: &str) -> Option<String> {
+    marker(text).map(|m| m.update)
+}
+/// Whether an edit ticked a rustovate control: re-check, add to batch or
+/// remove from batch.
+pub fn controls_edited(before: &str, after: &str) -> bool {
+    let controls = |text| -> BTreeSet<String> {
+        ticked_lines(text)
+            .into_iter()
+            .filter(|l| {
+                l.ends_with(RECHECK)
+                    || l.ends_with(crate::batch::ADD)
+                    || l.contains(crate::batch::REMOVE)
+            })
+            .map(str::to_owned)
+            .collect()
+    };
+    let (before, after) = (controls(before), controls(after));
+    after.difference(&before).next().is_some()
+}
+/// Batched closures and batch PRs never suppress an update.
+fn suppresses(pr: &Value) -> bool {
+    !body(pr).contains(OBSOLETE)
+        && !body(pr).contains(crate::batch::BATCHED)
+        && !body(pr).contains(crate::batch::ITEMS)
+}
 pub fn checked(pr: &Value) -> bool {
     if body(pr).matches(RECHECK).count() != 1 {
         return false;
@@ -150,6 +197,8 @@ pub struct Lifecycle {
     maintenance_policy: rustovate_config::Policy,
     maintenance_group: String,
     branch_permits: BTreeMap<String, BTreeSet<String>>,
+    /// Update keys now carried by the batch PR; their PRs close as batched.
+    batched: BTreeSet<String>,
 }
 impl Lifecycle {
     pub fn set_merge_settings(&mut self, settings: crate::automerge::Settings) {
@@ -180,7 +229,7 @@ impl Lifecycle {
             owned_pr(p, &self.actor, &self.repo)
                 && p["state"] == "closed"
                 && p["merged_at"].is_null()
-                && !body(p).contains(OBSOLETE)
+                && suppresses(p)
                 && marker(body(p)).is_some_and(|m| m.update == key)
         })
     }
@@ -249,6 +298,7 @@ impl Lifecycle {
             maintenance_policy: config.defaults.clone(),
             maintenance_group: config.lockfiles.group.clone(),
             branch_permits: controls.branch_permits.clone(),
+            batched: controls.batched.clone(),
         };
         let desired: BTreeSet<_> = plans.iter().map(|p| p.action.branch.as_str()).collect();
         for pr in &mut state.prs {
@@ -256,6 +306,7 @@ impl Lifecycle {
                 || pr["state"] != "open"
                 || !owned_pr(pr, actor, repo)
                 || desired.contains(branch(pr))
+                || marker(body(pr)).is_some_and(|m| state.batched.contains(&m.update))
             {
                 continue;
             }
@@ -363,7 +414,7 @@ impl Lifecycle {
                 && owned.iter().any(|p| {
                     p["state"] == "closed"
                         && p["merged_at"].is_null()
-                        && !body(p).contains(OBSOLETE)
+                        && suppresses(p)
                         && marker(body(p)).is_some_and(|m| m.update == key)
                 })
             {
@@ -371,6 +422,12 @@ impl Lifecycle {
                 continue;
             }
             if let Some(pr) = existing.first() {
+                // A newer target must not take over a PR that just moved into
+                // the batch; it gets its own PR once that one closes.
+                if marker(body(pr)).is_some_and(|m| state.batched.contains(&m.update)) {
+                    limit(plan, "waiting for its batched PR to close");
+                    continue;
+                }
                 plan.retry |= checked(pr);
                 continue;
             }
@@ -485,6 +542,79 @@ impl Lifecycle {
                 ));
             }
         }
+    }
+    /// Close each open update PR the batch now carries, once the batch PR is
+    /// published. The batched marker keeps the closure from suppressing the
+    /// update, so removing it from the batch brings back an individual PR.
+    pub async fn close_batched(&mut self, client: &Client, plans: &[Plan]) -> Result<(), String> {
+        let Some(plan) = plans.iter().find(|p| p.batch.is_some()) else {
+            return Ok(());
+        };
+        if !matches!(
+            plan.action.status,
+            ActionStatus::Created
+                | ActionStatus::Updated
+                | ActionStatus::Rebased
+                | ActionStatus::Unchanged
+        ) {
+            return Ok(());
+        }
+        let Some(number) = self
+            .prs
+            .iter()
+            .find(|p| {
+                p["state"] == "open" && branch(p) == plan.action.branch && same_repo(p, &self.repo)
+            })
+            .and_then(|p| p["number"].as_u64())
+        else {
+            return Ok(());
+        };
+        let targets: Vec<_> = self
+            .prs
+            .iter()
+            .filter(|p| {
+                p["state"] == "open"
+                    && branch(p) != plan.action.branch
+                    && owned_pr(p, &self.actor, &self.repo)
+                    && marker(body(p)).is_some_and(|m| self.batched.contains(&m.update))
+            })
+            .filter_map(|p| p["number"].as_u64())
+            .collect();
+        for target in targets {
+            let path = format!("repos/{}/pulls/{target}", self.repo);
+            let fresh = client.get_fresh(&path).await.map_err(|e| e.to_string())?;
+            if fresh["state"] != "open"
+                || !owned_pr(&fresh, &self.actor, &self.repo)
+                || !marker(body(&fresh)).is_some_and(|m| self.batched.contains(&m.update))
+            {
+                continue;
+            }
+            client
+                .post(
+                    &format!("repos/{}/issues/{target}/comments", self.repo),
+                    json!({"body":format!("Moved to the batch PR #{number}. Tick its box there to bring this update back.")}),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+            let mut text = truncate(body(&fresh), BODY_LIMIT - 100);
+            text.push_str("\n\n");
+            text.push_str(crate::batch::BATCHED);
+            let closed = client
+                .patch(&path, json!({"state":"closed","body":text}))
+                .await
+                .map_err(|e| e.to_string())?;
+            self.actions.push(action(
+                &self.repo,
+                branch(&closed),
+                Some(&closed),
+                ActionStatus::Closed,
+                Some(format!("moved to the batch PR #{number}")),
+            ));
+            if let Some(old) = self.prs.iter_mut().find(|p| p["number"] == target) {
+                *old = closed;
+            }
+        }
+        Ok(())
     }
     /// A failed branch attempt is acknowledged too; its diagnostic remains in
     /// the report and the operator can explicitly request another attempt.
@@ -751,6 +881,9 @@ impl Lifecycle {
                 "\nLockfile pending: regenerate and validate before merging (SWE-109).\n",
             );
         }
+        if let Some(items) = &plan.batch {
+            text.push_str(&crate::batch::render(items));
+        }
         let body_notes: BTreeSet<_> = plan.changes.iter().flat_map(|c| &c.body_notes).collect();
         for note in body_notes {
             append(&mut text, &format!("\n{}\n", safe(note)), 22_000);
@@ -805,9 +938,22 @@ impl Lifecycle {
             // body inputs. Reuse their notes without metadata or network reads.
             return body(pr).into();
         }
+        // The reviewed targets travel with the PR, so batching keeps them even
+        // after a newer release changes this branch's plan. A group too large
+        // to record within the body budget cannot be batched.
+        let targets = crate::batch::hidden_marker(crate::batch::TARGETS, &plan.changes);
+        let controls = if plan.batch.is_none() && !plan.maintenance && targets.len() <= 12_000 {
+            format!(
+                "- [ ] Add to the batch PR; this one closes. {}\n{targets}\n",
+                crate::batch::ADD,
+            )
+        } else {
+            String::new()
+        };
+        let reserve = controls.len();
         let mut releases = BTreeSet::new();
         for change in &plan.changes {
-            if releases.len() >= 8 || text.len() > BODY_LIMIT - 2500 {
+            if releases.len() >= 8 || text.len() + reserve > BODY_LIMIT - 2500 {
                 text.push_str("\nAdditional release notes truncated to fit this PR. Consult the source repositories for the remaining updates.\n");
                 break;
             }
@@ -840,7 +986,7 @@ impl Lifecycle {
                 self.notes.insert(key.clone(), note);
             }
             let budget = (BODY_LIMIT - 1500)
-                .saturating_sub(text.len() + 2)
+                .saturating_sub(text.len() + reserve + 2)
                 .min(12_000);
             text.push('\n');
             text.push_str(&self.notes[&key].render(&change.package, budget));
@@ -849,7 +995,10 @@ impl Lifecycle {
         if let Some(permits) = self.branch_permits.get(&plan.action.branch) {
             let marker = crate::dashboard::permit_marker(permits);
             // Keep policy evidence with the PR even if its local cache is lost.
-            text = truncate(&text, BODY_LIMIT.saturating_sub(marker.len() + 1000));
+            text = truncate(
+                &text,
+                BODY_LIMIT.saturating_sub(marker.len() + reserve + 1000),
+            );
             text.push('\n');
             text.push_str(&marker);
         }
@@ -860,8 +1009,10 @@ impl Lifecycle {
             Recheck::NextRun => "on the next run",
         };
         text.push_str(&format!(
-            "\n- [ ] Created by rustovate. Click to re-check {timing}. {RECHECK}\n\n"
+            "\n- [ ] Created by rustovate. Click to re-check {timing}. {RECHECK}\n"
         ));
+        text.push_str(&controls);
+        text.push('\n');
         let m = Marker {
             version: 1,
             identity: plan.identity.clone(),

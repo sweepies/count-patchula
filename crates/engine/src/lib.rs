@@ -302,6 +302,25 @@ impl Engine {
             }
             if !dry_run {
                 work.controls.apply(&mut plans, &work.dependencies);
+                let open = inventory.as_ref().expect("write inventory");
+                match rustovate_update::batch::apply(
+                    &mut plans,
+                    repo,
+                    &config,
+                    &work.dependencies,
+                    &work.snapshot,
+                    &open.pull_requests(&repo.repository),
+                    &open.actor,
+                    allow_lockfile_pending,
+                    now,
+                ) {
+                    Ok(batched) => work.controls.batched = batched,
+                    Err(error) => {
+                        repo.status = Status::Error;
+                        repo.reason = Some(error);
+                        continue;
+                    }
+                }
                 let restored = rustovate_update::restore_inventory(
                     &self.cache,
                     repo,
@@ -494,6 +513,9 @@ impl Engine {
                 )
                 .await;
                 state.record_merges(&plans, merge_actions);
+                if let Err(error) = state.close_batched(&self.github, &plans).await {
+                    repo.warnings.push(format!("batched PR closure: {error}"));
+                }
                 if let Err(error) = state.acknowledge_rechecks(&self.github).await {
                     repo.warnings
                         .push(format!("PR checkbox acknowledgement: {error}"));

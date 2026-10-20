@@ -302,6 +302,8 @@ impl Transport for Fake {
                 pr["base"]["sha"] = json!("base");
                 self.prs.lock().unwrap().push(pr.clone());
                 (201, pr)
+            } else if path.contains("/issues/") && path.ends_with("/comments") {
+                (201, json!({"id":1,"body":body["body"]}))
             } else if path.ends_with("/issues") {
                 let number = 100 + self.issues.lock().unwrap().len();
                 let issue = json!({"number":number,"id":format!("dashboard-{number}"),"title":body["title"],"body":body["body"],"state":"OPEN","author":{"__typename":"Bot","login":"rustovate"}});
@@ -357,6 +359,19 @@ impl Transport for Fake {
             (
                 200,
                 json!({"encoding":"base64","content":STANDARD.encode(content)}),
+            )
+        } else if let Some(sha) = path.strip_prefix("/repos/demo/sandbox/commits/") {
+            // Every head the fake publishes is one signed rustovate commit.
+            (
+                200,
+                json!({"sha":sha,"commit":{"message":format!("update\n\nRustovate: v1\nRustovate-Branch: b\nRustovate-Base: {}", "b".repeat(40))}}),
+            )
+        } else if let Some(spec) = path.strip_prefix("/repos/demo/sandbox/compare/") {
+            let head = spec.split("...").nth(1).unwrap().split('?').next().unwrap();
+            (
+                200,
+                json!({"total_commits":1,"commits":[{"sha":head,"author":{"login":"rustovate[bot]"},"committer":{"login":"web-flow"},
+                    "commit":{"message":"update\n\nRustovate: v1\nRustovate-Branch: b","verification":{"verified":true}}}]}),
             )
         } else if path.ends_with("/git/commits/base") {
             (200, json!({"tree":{"sha":"base-tree"}}))
@@ -1629,4 +1644,111 @@ async fn lockfile_failure_is_a_branch_error_and_publishes_no_manifest_only_branc
             .iter()
             .all(|(p, _)| p.contains("/issues"))
     );
+}
+
+fn open_prs(fake: &Fake) -> Vec<Value> {
+    fake.prs
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|p| p["state"] == "open")
+        .cloned()
+        .collect()
+}
+fn tick_pr(fake: &Fake, number: u64, label: &str) {
+    let mut prs = fake.prs.lock().unwrap();
+    let pr = prs.iter_mut().find(|p| p["number"] == number).unwrap();
+    let body = pr["body"].as_str().unwrap();
+    let line = body.lines().find(|l| l.contains(label)).unwrap();
+    pr["body"] = json!(body.replace(line, &line.replacen("- [ ]", "- [x]", 1)));
+}
+
+#[tokio::test(start_paused = true)]
+async fn batching_moves_updates_into_one_pr_and_never_suppresses_them() {
+    let fake = Arc::new(Fake::new(false));
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    let config = checkbox_config();
+    let now = chrono::Utc::now();
+    checkbox_run(&engine, &config, now).await;
+    let update = open_prs(&fake);
+    assert_eq!(update.len(), 1);
+    let (number, branch) = (
+        update[0]["number"].as_u64().unwrap(),
+        update[0]["head"]["ref"].as_str().unwrap().to_owned(),
+    );
+    assert!(
+        update[0]["body"]
+            .as_str()
+            .unwrap()
+            .contains("rustovate-batch-add")
+    );
+
+    // Ticking the box moves the update into the batch PR and closes the PR.
+    tick_pr(&fake, number, "rustovate-batch-add");
+    checkbox_run(&engine, &config, now).await;
+    let open = open_prs(&fake);
+    assert_eq!(open.len(), 1, "{open:?}");
+    assert_eq!(open[0]["head"]["ref"], "rustovate/batch");
+    let batch = open[0]["number"].as_u64().unwrap();
+    let body = open[0]["body"].as_str().unwrap();
+    assert!(body.contains(&format!("(from #{number})")), "{body}");
+    let closed = fake
+        .prs
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|p| p["number"] == number)
+        .unwrap()
+        .clone();
+    assert_eq!(closed["state"], "closed");
+    assert!(
+        closed["body"]
+            .as_str()
+            .unwrap()
+            .contains("rustovate-closed:batched")
+    );
+    assert!(fake.writes.lock().unwrap().iter().any(|(p, b)| {
+        p.ends_with(&format!("/issues/{number}/comments"))
+            && b["body"].as_str().unwrap().contains(&format!("#{batch}"))
+    }));
+
+    let dashboard = fake.issues.lock().unwrap()[0]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(dashboard.contains("Batched updates"), "{dashboard}");
+
+    // A steady run keeps the batch and does not reopen the update.
+    checkbox_run(&engine, &config, now).await;
+    let open = open_prs(&fake);
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0]["number"], batch);
+
+    // Removing the item returns the update to its own PR; the empty batch closes.
+    tick_pr(&fake, batch, "rustovate-batch-remove");
+    checkbox_run(&engine, &config, now).await;
+    let open = open_prs(&fake);
+    assert_eq!(open.len(), 1, "{open:?}");
+    assert_eq!(open[0]["head"]["ref"], branch.as_str());
+    let returned = open[0]["number"].as_u64().unwrap();
+
+    // Closing a batch without merging returns its updates too.
+    tick_pr(&fake, returned, "rustovate-batch-add");
+    checkbox_run(&engine, &config, now).await;
+    let open = open_prs(&fake);
+    assert_eq!(open[0]["head"]["ref"], "rustovate/batch");
+    let second = open[0]["number"].as_u64().unwrap();
+    fake.prs
+        .lock()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p["number"] == second)
+        .unwrap()["state"] = json!("closed");
+    checkbox_run(&engine, &config, now).await;
+    let open = open_prs(&fake);
+    assert_eq!(open.len(), 1, "{open:?}");
+    assert_eq!(open[0]["head"]["ref"], branch.as_str());
 }

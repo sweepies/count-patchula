@@ -28,6 +28,9 @@ amends "org.pkl"
 prs { dashboard = true }
 ```
 
+`prs.batchMerge` (default `false`) lets the [batch PR](batch.md) auto-merge
+behind the usual check gates; otherwise the batch waits for a person.
+
 Local `import` works too. pklr 5.1.1 evaluates everything in process. This
 build deliberately enables only local evaluation: HTTP/package imports and
 external resource reads (including environment variables) are disabled.

@@ -79,6 +79,8 @@ pub struct Controls {
     /// Accepted release-age targets survive unticking and later process restarts.
     pub age_permits: BTreeSet<String>,
     pub branch_permits: BTreeMap<String, BTreeSet<String>>,
+    /// Update keys the batch PR carries; set by `batch::apply`.
+    pub batched: BTreeSet<String>,
 }
 fn checked_actions(body: &str) -> BTreeSet<Action> {
     let mut counts = BTreeMap::<Action, (usize, bool)>::new();
@@ -412,6 +414,12 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
                         ),
                     ));
             }
+        } else if plan.action.reason.as_deref() == Some(crate::batch::BATCHED_REASON) {
+            // The batch PR is listed with the open PRs; these are its items.
+            sections
+                .entry("Batched updates".into())
+                .or_default()
+                .insert((None, format!("- {}\n", safe(&plan.action.message))));
         } else if plan.action.reason.as_deref() == Some(crate::pull_requests::CLOSED_BY_OWNER) {
             sections
                 .entry("Owner-closed updates".into())

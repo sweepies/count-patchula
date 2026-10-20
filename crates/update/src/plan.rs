@@ -32,8 +32,10 @@ pub struct Plan {
     pub lockfiles_ready: bool,
     pub deleted: BTreeSet<String>,
     pub maintenance: bool,
+    /// The batch PR's items; `None` for every other plan.
+    pub batch: Option<Vec<crate::batch::Item>>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Change {
     pub source: String,
     pub package: String,
@@ -202,168 +204,194 @@ pub fn plan(
                 "branch name collision after manager disambiguation; set explicit groups".into(),
             );
         }
-        let mut changes = BTreeMap::<String, Vec<Edit>>::new();
-        let mut reason = None;
-        let mut pending = false;
-        let mut lock_jobs = BTreeSet::new();
-        let mut prefixes = BTreeSet::new();
-        let mut titles = BTreeSet::new();
-        for item in &items {
-            let dep = item.dep;
-            let update = item.update;
-            if evaluator.needs_digest(dep, update) && update.new_digest.is_none() {
-                reason = Some(format!(
-                    "{}: required target digest is unavailable; retry lookup",
-                    dep.name
-                ));
-            }
-            if let Some(policy) = &update.policy {
-                prefixes.insert(policy.commit_prefix.clone());
-                if !in_window(&policy.windows, now) {
-                    reason = Some("outside the configured update windows".into());
-                }
-            }
-            match crate::lockfiles::job(dep, update, snapshot) {
-                Ok(Some(job)) => {
-                    lock_jobs.insert(job);
-                }
-                Ok(None) => {}
-                Err(_) => pending = true,
-            }
-            let value = update.new_value.as_deref().unwrap_or(&dep.current);
-            titles.insert(format!(
-                "{} to {}",
-                dep.name,
-                update
-                    .new_value
-                    .as_deref()
-                    .or(update.new_version.as_deref())
-                    .or(update.new_digest.as_deref())
-                    .unwrap_or(value)
-            ));
-            let Some(blob) = snapshot.files.get(&dep.file) else {
-                return Err(format!("missing extracted file {}", dep.file));
-            };
-            if !matches!(blob.mode.as_str(), "100644" | "100755") {
-                reason = Some(format!("unsupported manifest mode {}", blob.mode));
-                continue;
-            }
-            match rustovate_manager::edits(dep, &blob.content, value, update.new_digest.as_deref())
-            {
-                Ok(edits) => changes.entry(dep.file.clone()).or_default().extend(edits),
-                Err(error) => reason = Some(format!("{}: {error}", dep.file)),
-            }
-        }
-        if prefixes.len() > 1 {
-            reason = Some("group has conflicting commitPrefix policies".into());
-        }
-        let prefix = prefixes.first().unwrap_or(&config.defaults.commit_prefix);
-        let message = if items.iter().all(|item| item.update.update_type == "pin") {
-            format!("{prefix} pin dependencies")
-        } else {
-            format!(
-                "{prefix} update {}",
-                titles.into_iter().collect::<Vec<_>>().join(", ")
-            )
-        };
-        let mut contents = BTreeMap::new();
-        let mut files = Vec::new();
-        for (path, edits) in changes {
-            let blob = &snapshot.files[&path];
-            match rustovate_manager::apply(&blob.content, edits) {
-                Ok(content) if content != blob.content => {
-                    files.push(FileAction {
-                        path: path.clone(),
-                        blob_sha: blob.sha.clone(),
-                        diff: unified(&path, &blob.content, &content),
-                    });
-                    contents.insert(path, content);
-                }
-                Ok(_) => {}
-                Err(error) => reason = Some(format!("{path}: {error}")),
-            }
-        }
-        if contents.is_empty() && reason.is_none() {
-            reason = Some(
-                "no editable manifest change (inherited declarations are owned by their workspace)"
-                    .into(),
-            );
-        }
-        if pending && !allow_pending {
-            reason = Some("lockfile pending: unsupported binary bun lockfile; --allow-lockfile-pending permits manifest-only testing".into());
-        }
-        let fingerprint = hash(
-            serde_json::to_string(&(&contents, &message, pending, &lock_jobs))
-                .expect("serializable plan")
-                .as_bytes(),
-        );
-        let action = BranchAction {
-            repository: repo.repository.clone(),
+        plans.push(build(
+            repo,
+            config,
+            &evaluator,
+            snapshot,
+            allow_pending,
+            now,
+            &identity,
             branch,
-            base_commit: repo.commit.clone().ok_or("missing extraction commit")?,
-            status: if reason.is_some() {
-                ActionStatus::Skipped
-            } else {
-                ActionStatus::Planned
-            },
-            reason,
-            message,
-            previous_commit: None,
-            commit: None,
-            verified: None,
-            lockfile_pending: pending,
-            files,
-        };
-        let changes: BTreeSet<_> = items
-            .iter()
-            .map(|item| {
-                let u = item.update;
-                let p = u.policy.as_ref();
-                Change {
-                    current_version: item.current_version.map(str::to_owned),
-                    source: word(&item.dep.source),
-                    package: item.dep.package.clone(),
-                    file: item.dep.file.clone(),
-                    current: format!(
-                        "{}{}",
-                        item.dep.current,
-                        item.dep
-                            .digest
-                            .as_ref()
-                            .map(|d| format!("@{d}"))
-                            .unwrap_or_default()
-                    ),
-                    value: u.new_value.clone(),
-                    version: u.new_version.clone(),
-                    digest: u.new_digest.clone(),
-                    kind: u.update_type.clone(),
-                    merge: p.map_or(config.defaults.merge, |p| p.merge),
-                    labels: p.map_or_else(|| config.defaults.labels.clone(), |p| p.labels.clone()),
-                    release_notes: p.map_or(config.defaults.release_notes, |p| p.release_notes),
-                    body_notes: p.map_or_else(
-                        || config.defaults.body_notes.clone(),
-                        |p| p.body_notes.clone(),
-                    ),
-                }
-            })
-            .collect();
-        plans.push(Plan {
-            action,
-            contents,
-            identity: hash(identity.as_bytes()),
-            fingerprint: fingerprint.clone(),
-            changes: changes.into_iter().collect(),
-            retry: false,
-            tree: None,
-            cached_pr: None,
-            input_fingerprint: fingerprint.clone(),
-            lockfiles_ready: lock_jobs.is_empty(),
-            lock_jobs: lock_jobs.into_iter().collect(),
-            deleted: BTreeSet::new(),
-            maintenance: false,
-        });
+            &items,
+        )?);
     }
     Ok(plans)
+}
+
+/// One branch plan from its items: edits, lock jobs, message and changes.
+#[allow(clippy::too_many_arguments)]
+fn build(
+    repo: &Repository,
+    config: &Config,
+    evaluator: &rustovate_lookup::Evaluator,
+    snapshot: &Snapshot,
+    allow_pending: bool,
+    now: chrono::DateTime<chrono::Utc>,
+    identity: &str,
+    branch: String,
+    items: &[Item<'_>],
+) -> Result<Plan, String> {
+    let mut changes = BTreeMap::<String, Vec<Edit>>::new();
+    let mut reason = None;
+    let mut pending = false;
+    let mut lock_jobs = BTreeSet::new();
+    let mut prefixes = BTreeSet::new();
+    let mut titles = BTreeSet::new();
+    for item in items {
+        let dep = item.dep;
+        let update = item.update;
+        if evaluator.needs_digest(dep, update) && update.new_digest.is_none() {
+            reason = Some(format!(
+                "{}: required target digest is unavailable; retry lookup",
+                dep.name
+            ));
+        }
+        if let Some(policy) = &update.policy {
+            prefixes.insert(policy.commit_prefix.clone());
+            if !in_window(&policy.windows, now) {
+                reason = Some("outside the configured update windows".into());
+            }
+        }
+        match crate::lockfiles::job(dep, update, snapshot) {
+            Ok(Some(job)) => {
+                lock_jobs.insert(job);
+            }
+            Ok(None) => {}
+            Err(_) => pending = true,
+        }
+        let value = update.new_value.as_deref().unwrap_or(&dep.current);
+        titles.insert(format!(
+            "{} to {}",
+            dep.name,
+            update
+                .new_value
+                .as_deref()
+                .or(update.new_version.as_deref())
+                .or(update.new_digest.as_deref())
+                .unwrap_or(value)
+        ));
+        let Some(blob) = snapshot.files.get(&dep.file) else {
+            return Err(format!("missing extracted file {}", dep.file));
+        };
+        if !matches!(blob.mode.as_str(), "100644" | "100755") {
+            reason = Some(format!("unsupported manifest mode {}", blob.mode));
+            continue;
+        }
+        match rustovate_manager::edits(dep, &blob.content, value, update.new_digest.as_deref()) {
+            Ok(edits) => changes.entry(dep.file.clone()).or_default().extend(edits),
+            Err(error) => reason = Some(format!("{}: {error}", dep.file)),
+        }
+    }
+    if prefixes.len() > 1 {
+        reason = Some("group has conflicting commitPrefix policies".into());
+    }
+    let prefix = prefixes.first().unwrap_or(&config.defaults.commit_prefix);
+    let message = if items.iter().all(|item| item.update.update_type == "pin") {
+        format!("{prefix} pin dependencies")
+    } else {
+        format!(
+            "{prefix} update {}",
+            titles.into_iter().collect::<Vec<_>>().join(", ")
+        )
+    };
+    let mut contents = BTreeMap::new();
+    let mut files = Vec::new();
+    for (path, edits) in changes {
+        let blob = &snapshot.files[&path];
+        match rustovate_manager::apply(&blob.content, edits) {
+            Ok(content) if content != blob.content => {
+                files.push(FileAction {
+                    path: path.clone(),
+                    blob_sha: blob.sha.clone(),
+                    diff: unified(&path, &blob.content, &content),
+                });
+                contents.insert(path, content);
+            }
+            Ok(_) => {}
+            Err(error) => reason = Some(format!("{path}: {error}")),
+        }
+    }
+    if contents.is_empty() && reason.is_none() {
+        reason = Some(
+            "no editable manifest change (inherited declarations are owned by their workspace)"
+                .into(),
+        );
+    }
+    if pending && !allow_pending {
+        reason = Some("lockfile pending: unsupported binary bun lockfile; --allow-lockfile-pending permits manifest-only testing".into());
+    }
+    let fingerprint = hash(
+        serde_json::to_string(&(&contents, &message, pending, &lock_jobs))
+            .expect("serializable plan")
+            .as_bytes(),
+    );
+    let action = BranchAction {
+        repository: repo.repository.clone(),
+        branch,
+        base_commit: repo.commit.clone().ok_or("missing extraction commit")?,
+        status: if reason.is_some() {
+            ActionStatus::Skipped
+        } else {
+            ActionStatus::Planned
+        },
+        reason,
+        message,
+        previous_commit: None,
+        commit: None,
+        verified: None,
+        lockfile_pending: pending,
+        files,
+    };
+    let changes: BTreeSet<_> = items
+        .iter()
+        .map(|item| {
+            let u = item.update;
+            let p = u.policy.as_ref();
+            Change {
+                current_version: item.current_version.map(str::to_owned),
+                source: word(&item.dep.source),
+                package: item.dep.package.clone(),
+                file: item.dep.file.clone(),
+                current: format!(
+                    "{}{}",
+                    item.dep.current,
+                    item.dep
+                        .digest
+                        .as_ref()
+                        .map(|d| format!("@{d}"))
+                        .unwrap_or_default()
+                ),
+                value: u.new_value.clone(),
+                version: u.new_version.clone(),
+                digest: u.new_digest.clone(),
+                kind: u.update_type.clone(),
+                merge: p.map_or(config.defaults.merge, |p| p.merge),
+                labels: p.map_or_else(|| config.defaults.labels.clone(), |p| p.labels.clone()),
+                release_notes: p.map_or(config.defaults.release_notes, |p| p.release_notes),
+                body_notes: p.map_or_else(
+                    || config.defaults.body_notes.clone(),
+                    |p| p.body_notes.clone(),
+                ),
+            }
+        })
+        .collect();
+    Ok(Plan {
+        action,
+        contents,
+        identity: hash(identity.as_bytes()),
+        fingerprint: fingerprint.clone(),
+        changes: changes.into_iter().collect(),
+        retry: false,
+        tree: None,
+        cached_pr: None,
+        input_fingerprint: fingerprint.clone(),
+        lockfiles_ready: lock_jobs.is_empty(),
+        lock_jobs: lock_jobs.into_iter().collect(),
+        deleted: BTreeSet::new(),
+        maintenance: false,
+        batch: None,
+    })
 }
 
 pub(crate) fn in_window(
@@ -497,4 +525,108 @@ fn line(dep: &Dependency, reported: &rustovate_report::Dependency, update: &Upda
         String::new()
     };
     format!("{major}.x{variant}")
+}
+
+/// The batch branch: the approved targets of every batched update, applied to
+/// the current extraction. Targets the base already satisfies are complete.
+pub fn batch_plan(
+    repo: &Repository,
+    config: &Config,
+    dependencies: &[Dependency],
+    snapshot: &Snapshot,
+    targets: &[Change],
+    allow_pending: bool,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Option<Plan>, String> {
+    let evaluator = rustovate_lookup::Evaluator::new(config)?;
+    let mut pending = Vec::new();
+    for target in targets {
+        let candidates: Vec<_> = dependencies
+            .iter()
+            .filter(|d| {
+                d.file == target.file
+                    && d.package == target.package
+                    && word(&d.source) == target.source
+            })
+            .collect();
+        let current = |d: &Dependency| {
+            format!(
+                "{}{}",
+                d.current,
+                d.digest
+                    .as_ref()
+                    .map(|x| format!("@{x}"))
+                    .unwrap_or_default()
+            )
+        };
+        let Some(dep) = candidates
+            .iter()
+            .find(|d| current(d) == target.current)
+            .or_else(|| candidates.first())
+        else {
+            continue;
+        };
+        let applied =
+            target.value.as_deref().is_none_or(|v| v == dep.current) && target.digest == dep.digest;
+        if applied {
+            continue;
+        }
+        pending.push((
+            *dep,
+            Update {
+                new_value: target.value.clone(),
+                new_version: target.version.clone(),
+                new_digest: target.digest.clone(),
+                update_type: target.kind.clone(),
+                group: None,
+                policy: None,
+                release_age: None,
+            },
+        ));
+    }
+    if pending.is_empty() {
+        return Ok(None);
+    }
+    let items: Vec<_> = pending
+        .iter()
+        .map(|(dep, update)| Item {
+            dep,
+            update,
+            current_version: None,
+        })
+        .collect();
+    let branch = branch_name(&config.prs.branch, "batch", "batch")?;
+    let mut plan = build(
+        repo,
+        config,
+        &evaluator,
+        snapshot,
+        allow_pending,
+        now,
+        "[\"batch\"]",
+        branch,
+        &items,
+    )?;
+    // The batch is merged by a person unless explicitly configured otherwise.
+    for change in &mut plan.changes {
+        change.merge = config.prs.batch_merge;
+    }
+    plan.action.message = format!(
+        "{} batch {} dependency update{}",
+        config.defaults.commit_prefix,
+        plan.changes.len(),
+        if plan.changes.len() == 1 { "" } else { "s" }
+    );
+    plan.fingerprint = hash(
+        serde_json::to_string(&(
+            &plan.contents,
+            &plan.action.message,
+            plan.action.lockfile_pending,
+            &plan.lock_jobs,
+        ))
+        .expect("serializable plan")
+        .as_bytes(),
+    );
+    plan.input_fingerprint = plan.fingerprint.clone();
+    Ok(Some(plan))
 }

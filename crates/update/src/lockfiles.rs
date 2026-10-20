@@ -237,6 +237,7 @@ pub fn maintenance(
         lockfiles_ready: false,
         deleted: BTreeSet::new(),
         maintenance: true,
+        batch: None,
     }))
 }
 

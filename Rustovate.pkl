@@ -109,6 +109,9 @@ class PullRequests {
   dashboard: Boolean = false
   branch: String = "rustovate/"
   rebase: "conflicts"|"behind" = "conflicts"
+  /// The batch PR collects updates whose "Add to batch" box was ticked. It
+  /// only auto-merges when this is true, behind the usual check gates.
+  batchMerge: Boolean = false
 }
 
 class Lockfiles {

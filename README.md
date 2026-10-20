@@ -25,6 +25,7 @@ labels and mise registry backends are supported by read-only lookup.
 - Design: [docs/design.md](docs/design.md)
 - API server and sandbox replay: [docs/server.md](docs/server.md)
 - Deliberate departures from Renovate: [docs/departures.md](docs/departures.md)
+- Batching reviewed updates into one PR: [docs/batch.md](docs/batch.md)
 - Progress: the `rustovate` project in Linear (sweepies team)
 
 ## Package managers and speed

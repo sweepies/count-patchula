@@ -32,6 +32,8 @@ Additional settings and defaults:
 - `triggers { push = true; dashboard = true; pullRequestEdited = true;
   pullRequestClosed = true; installation = true; checks = true }` (put each
   property on its own line in Pkl).
+  `pullRequestEdited` reacts to any newly ticked rustovate control on an owned PR:
+  re-check, add to batch or remove from batch ([batch PR](batch.md)).
 - `sweepCron = "0 0 * * * *"`, `sweepTimezone = "UTC"`: hourly, six cron fields
   including seconds (optional seventh year field). Named IANA timezones are
   supported. `sweepCron = null` disables recurring sweeps. Startup always
