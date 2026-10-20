@@ -138,7 +138,12 @@ by aube, which reads and writes the committed format in place. aube is told the
 committed lockfile name, so a second lockfile in the same directory cannot
 redirect it, and a branch that gains an `aube-lock.yaml` fails. The
 `lockfiles.npmEngine` setting selects `"aube"` (the default) or native `"npm"`
-for npm lockfiles only; pnpm always uses aube. Yarn's version comes from the
+for npm lockfiles only; pnpm always uses aube.
+Native npm also regenerates the npm lockfiles aube 2.8.0 cannot keep valid:
+format v1 locks, which aube cannot read, and trees whose manifests declare
+`file:` or `link:` dependencies, whose entries aube drops so `npm ci` rejects
+the lock ([aube#1796](https://github.com/aubepkg/aube/issues/1796)).
+Yarn's version comes from the
 `packageManager` field of `package.json`, then the repository pin, then the
 format of the committed lockfile. Yarn Berry has no `--ignore-scripts` flag and
 runs `--mode=update-lockfile`, which updates the lockfile without linking

@@ -171,7 +171,11 @@ resolved versions: aube's npm lockfile stays valid for `npm ci`, but it may
 differ from npm's own output in hoisting and in the shape of `funding`
 metadata, and a later `npm install` rewrites those lines. `lockfiles.npmEngine
 = "npm"` keeps native npm for npm lockfiles; pnpm always uses aube and Yarn
-always uses Yarn, because aube's Yarn Berry output is rejected by Yarn. A
+always uses Yarn, because aube's Yarn Berry output is rejected by Yarn.
+Native npm also regenerates the npm lockfiles aube 2.8.0 cannot keep valid:
+format v1 locks, which aube cannot read, and trees whose manifests declare
+`file:` or `link:` dependencies, whose entries aube drops so `npm ci` rejects
+the lock ([aube#1796](https://github.com/aubepkg/aube/issues/1796)). A
 lockfile that does not change after a manifest edit that changes recorded
 dependencies fails the branch, so a tool that reports "up to date" without
 re-resolving cannot publish a stale lock. This entry grants no lookup

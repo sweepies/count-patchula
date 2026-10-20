@@ -747,20 +747,37 @@ async fn real_tools_produce_deterministic_lockfiles_from_local_offline_fixtures(
 }
 
 /// aube regenerates pnpm and npm locks in place from local offline fixtures.
+/// npm trees with local `file:` dependencies stay on native npm (aube#1796).
 #[tokio::test]
 async fn real_aube_rewrites_pnpm_and_npm_locks_in_place() {
-    for (leaf, seed) in [
-        ("pnpm-lock.yaml", "lockfileVersion: '9.0'\n"),
+    let npm_seed = "{\"name\":\"fixture\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"name\":\"fixture\",\"version\":\"1.0.0\"}}}\n";
+    let local = "{\"name\":\"fixture\",\"version\":\"1.0.0\",\"dependencies\":{\"local-fixture\":\"file:./local\"}}\n";
+    let plain = "{\"name\":\"fixture\",\"version\":\"1.0.0\"}\n";
+    for (leaf, seed, manifest, tool, entry) in [
+        (
+            "pnpm-lock.yaml",
+            "lockfileVersion: '9.0'\n",
+            local,
+            "aube@2.8.0",
+            "local-fixture",
+        ),
         (
             "package-lock.json",
-            "{\"name\":\"fixture\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"name\":\"fixture\",\"version\":\"1.0.0\"}}}\n",
+            npm_seed,
+            local,
+            "node@24.21.0",
+            "local-fixture",
+        ),
+        (
+            "package-lock.json",
+            npm_seed,
+            plain,
+            "aube@2.8.0",
+            "lockfileVersion",
         ),
     ] {
         let files = BTreeMap::from([
-            (
-                "package.json".into(),
-                "{\"name\":\"fixture\",\"version\":\"1.0.0\",\"dependencies\":{\"local-fixture\":\"file:./local\"}}\n".into(),
-            ),
+            ("package.json".into(), manifest.into()),
             (
                 "local/package.json".into(),
                 "{\"name\":\"local-fixture\",\"version\":\"1.0.0\"}\n".into(),
@@ -778,13 +795,17 @@ async fn real_aube_rewrites_pnpm_and_npm_locks_in_place() {
             .unwrap();
         p.maintenance = false;
         runner.prepare(&mut p, &mut snapshot, &config).await;
-        assert_eq!(
-            p.action.status,
-            ActionStatus::Planned,
-            "{leaf}: {:?}",
+        // An already-current lock is skipped; that still proves the engine choice.
+        assert!(
+            matches!(
+                p.action.status,
+                ActionStatus::Planned | ActionStatus::Skipped
+            ),
+            "{leaf} via {tool}: {:?}",
             p.action
         );
-        assert!(p.contents[leaf].contains("local-fixture"), "{leaf}");
+        let lock = p.contents.get(leaf).map_or(seed, String::as_str);
+        assert!(lock.contains(entry), "{leaf} via {tool}");
         assert!(
             !p.contents.contains_key("aube-lock.yaml"),
             "{leaf}: aube must not introduce its own lockfile"
@@ -792,10 +813,8 @@ async fn real_aube_rewrites_pnpm_and_npm_locks_in_place() {
         let calls = executor.calls.lock().unwrap();
         let commands = recorded(&calls);
         assert!(
-            commands
-                .iter()
-                .any(|(specs, _)| specs.as_slice() == ["aube@2.8.0"]),
-            "{leaf}: missing aube command {commands:?}"
+            commands.iter().any(|(specs, _)| specs.as_slice() == [tool]),
+            "{leaf}: expected {tool} in {commands:?}"
         );
     }
 }
@@ -1283,4 +1302,91 @@ fn mise_lock_maintenance_respects_refresh_and_unlocked_manifests_need_no_job() {
         .unwrap();
     assert_eq!(plan.lock_jobs.len(), 1);
     assert_eq!(plan.lock_jobs[0].ecosystem, Ecosystem::Mise);
+}
+
+fn npm_change(value: &str) -> crate::plan::Change {
+    crate::plan::Change {
+        source: "npm".into(),
+        package: "fixture".into(),
+        file: "package.json".into(),
+        current: "1.0.0".into(),
+        current_version: Some("1.0.0".into()),
+        value: Some(value.into()),
+        version: Some(value.into()),
+        digest: None,
+        kind: "major".into(),
+        merge: false,
+        labels: Vec::new(),
+        release_notes: false,
+        body_notes: Vec::new(),
+    }
+}
+
+/// A lock the runner reads back must prove the target; only pnpm and Yarn locks,
+/// which it cannot read, defer to the unchanged-lockfile rule.
+#[test]
+fn readable_locks_must_resolve_the_requested_version() {
+    let config = config();
+    let seed = BTreeMap::from([("package-lock.json".to_string(), "{}\n".to_string())]);
+    let mut p = maintenance(&repo(), &config, &snapshot(&seed), monday())
+        .unwrap()
+        .unwrap();
+    p.changes = vec![npm_change("2.0.0")];
+    let manifest = "{\"dependencies\":{\"fixture\":\"2.0.0\"}}\n";
+    let lost = "{\"name\":\"t\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"dependencies\":{\"fixture\":\"2.0.0\"}}}}\n";
+    let files = BTreeMap::from([
+        ("package.json".to_string(), manifest.to_string()),
+        ("package-lock.json".to_string(), lost.to_string()),
+    ]);
+    let error = validate_targets(&p, &config, &files).unwrap_err();
+    assert!(error.contains("did not resolve fixture"), "{error}");
+    for lock in ["pnpm-lock.yaml", "yarn.lock"] {
+        let files = BTreeMap::from([
+            ("package.json".to_string(), manifest.to_string()),
+            (lock.to_string(), "unread\n".to_string()),
+        ]);
+        validate_targets(&p, &config, &files).unwrap_or_else(|e| panic!("{lock}: {e}"));
+    }
+}
+
+/// aube cannot keep npm v1 locks or trees with local dependencies valid.
+#[test]
+fn npm_locks_aube_cannot_write_stay_on_native_npm() {
+    let case = |files: &[(&str, &str)]| {
+        let temp = tempfile::tempdir().unwrap();
+        for (path, content) in files {
+            write(temp.path(), path, content).unwrap();
+        }
+        node::aube_cannot_write_npm(temp.path(), "package-lock.json").unwrap()
+    };
+    let v3 = "{\"lockfileVersion\":3}\n";
+    assert!(!case(&[
+        ("package.json", "{\"dependencies\":{\"a\":\"1.0.0\"}}"),
+        ("package-lock.json", v3),
+    ]));
+    assert!(case(&[
+        ("package.json", "{}"),
+        ("package-lock.json", "{\"lockfileVersion\":1}\n"),
+    ]));
+    assert!(case(&[
+        ("package.json", "{\"dependencies\":{\"a\":\"file:./a\"}}"),
+        ("package-lock.json", v3),
+    ]));
+    assert!(case(&[
+        ("package.json", "{\"workspaces\":[\"packages/*\"]}"),
+        (
+            "packages/b/package.json",
+            "{\"devDependencies\":{\"a\":\"link:../a\"}}"
+        ),
+        ("package-lock.json", v3),
+    ]));
+    // Installed packages are not part of the project's own manifests.
+    assert!(!case(&[
+        ("package.json", "{}"),
+        (
+            "node_modules/x/package.json",
+            "{\"dependencies\":{\"a\":\"file:./a\"}}"
+        ),
+        ("package-lock.json", v3),
+    ]));
 }

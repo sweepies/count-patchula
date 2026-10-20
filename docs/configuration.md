@@ -162,7 +162,11 @@ lockfiles {
 `npm-shrinkwrap.json`. pnpm locks always use aube and Yarn locks always use
 Yarn; there is no pnpm engine option. Native npm writes the lockfile exactly
 as npm does; aube writes a lockfile that stays valid for `npm ci` but may
-differ in hoisting and in the shape of `funding` metadata. See
+differ in hoisting and in the shape of `funding` metadata.
+Native npm also regenerates the npm lockfiles aube 2.8.0 cannot keep valid:
+format v1 locks, which aube cannot read, and trees whose manifests declare
+`file:` or `link:` dependencies, whose entries aube drops so `npm ci` rejects
+the lock ([aube#1796](https://github.com/aubepkg/aube/issues/1796)). See
 [departures](departures.md).
 
 Yarn's version comes from the `packageManager` field of `package.json`

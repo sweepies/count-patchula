@@ -637,6 +637,7 @@ fn validate_targets(
         return Ok(());
     }
     let extraction = rustovate_manager::Scanner::new(config)?.extract(files)?;
+    let paths: BTreeSet<String> = files.keys().cloned().collect();
     for change in &plan.changes {
         let leaf = change.file.rsplit('/').next().unwrap_or("");
         if !matches!(leaf, "package.json" | "Cargo.toml" | "go.mod")
@@ -657,16 +658,20 @@ fn validate_targets(
                 change.package, change.file
             ));
         };
-        // Only lockfiles this runner can read back prove a resolution. pnpm and
-        // Yarn locks are checked by the unchanged-lockfile rule instead.
-        if (matches!(dep.manager, Manager::Npm | Manager::Bun | Manager::Cargo)
-            || (dep.source == Source::Terraform
-                && dep.kind == rustovate_config::DependencyKind::Provider))
+        // pnpm and Yarn locks are not read back, so the unchanged-lockfile rule
+        // checks them instead. Every lock this runner reads must prove the target.
+        let unread = matches!(dep.manager, Manager::Npm | Manager::Bun)
+            && nearest(&change.file, &paths, &node::LOCKS).is_some_and(|dir| {
+                !["package-lock.json", "npm-shrinkwrap.json", "bun.lock"]
+                    .iter()
+                    .any(|leaf| paths.contains(&node::join(dir, leaf)))
+            });
+        if !unread
+            && (matches!(dep.manager, Manager::Npm | Manager::Bun | Manager::Cargo)
+                || (dep.source == Source::Terraform
+                    && dep.kind == rustovate_config::DependencyKind::Provider))
             && let Some(version) = &change.version
-            && dep
-                .resolved
-                .as_deref()
-                .is_some_and(|resolved| resolved != version)
+            && dep.resolved.as_deref() != Some(version)
         {
             return Err(format!(
                 "lockfile did not resolve {} to requested version {version}",
