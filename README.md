@@ -40,7 +40,10 @@ produced a byte-identical pnpm lockfile. npm lockfiles stay valid for `npm ci`,
 but a later `npm install` may rewrite a few lines (hoisting and `funding`
 metadata). We think npm projects should move to pnpm or aube anyway. A setting
 will keep native npm for repositories that need it. Yarn and Bun lockfiles keep
-using Yarn and Bun, because aube 2.7.0 does not yet update them faithfully.
+using Yarn and Bun. aube 2.8.0 writes Yarn Berry lockfiles that Yarn rejects
+([aube#1794](https://github.com/aubepkg/aube/issues/1794),
+[aube#1795](https://github.com/aubepkg/aube/issues/1795)), and its `bun.lock`
+entry order still differs from Bun's.
 
 ## Clean-room rule
 
