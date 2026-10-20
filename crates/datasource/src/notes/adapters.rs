@@ -115,11 +115,9 @@ impl Client {
     /// The file at the target tag is immutable, so read it there.
     async fn postgres_notes(&self, old: &Parsed, new: &Parsed) -> Result<(Vec<Section>, bool)> {
         let major = new.0.major;
-        let tag = if new.0.minor == 0 {
-            format!("REL_{major}")
-        } else {
-            format!("REL_{major}_{}", new.0.minor)
-        };
+        // PostgreSQL tags every release, including the major one, as
+        // `REL_{major}_{minor}`. There is no `REL_{major}` tag.
+        let tag = format!("REL_{major}_{}", new.0.minor);
         let listing = self
             .adapter_listing("postgres/postgres", "doc/src/sgml", &format!("?ref={tag}"))
             .await?;
@@ -655,12 +653,25 @@ fn sgml_list_blocks(list: &Node, blocks: &mut Vec<String>, depth: usize) {
         if name != "listitem" {
             continue;
         }
-        let mut text = String::new();
+        let mut paragraphs = Vec::new();
         let mut lists = Vec::new();
-        sgml_item(item, &mut text, &mut lists);
-        let text = collapse(&text);
-        if !text.is_empty() {
-            blocks.push(format!("{}- {text}", "  ".repeat(depth)));
+        sgml_item(item, &mut paragraphs, &mut lists);
+        // The first paragraph is the bullet. Later paragraphs continue it.
+        let indent = "  ".repeat(depth);
+        let mut block = String::new();
+        for paragraph in paragraphs {
+            let paragraph = collapse(&paragraph);
+            if paragraph.is_empty() {
+                continue;
+            }
+            if block.is_empty() {
+                block.push_str(&format!("{indent}- {paragraph}"));
+            } else {
+                block.push_str(&format!("\n\n{indent}  {paragraph}"));
+            }
+        }
+        if !block.is_empty() {
+            blocks.push(block);
         }
         for list in lists {
             sgml_list_blocks(list, blocks, depth + 1);
@@ -668,23 +679,30 @@ fn sgml_list_blocks(list: &Node, blocks: &mut Vec<String>, depth: usize) {
     }
 }
 
-/// The text of a list item, and the lists nested in it.
-fn sgml_item<'a>(nodes: &'a [Node], text: &mut String, lists: &mut Vec<&'a Node>) {
+/// The paragraphs of a list item, and the lists nested in it.
+fn sgml_item<'a>(nodes: &'a [Node], paragraphs: &mut Vec<String>, lists: &mut Vec<&'a Node>) {
+    let mut current = String::new();
     for node in nodes {
         match node {
-            Node::Text(value) => text.push_str(&expand_entities(value)),
+            Node::Text(value) => current.push_str(&expand_entities(value)),
             Node::Element { name, .. } if sgml_list(name) => lists.push(node),
             Node::Element { name, children, .. } if name == "para" => {
+                if !current.trim().is_empty() {
+                    paragraphs.push(std::mem::take(&mut current));
+                }
                 for child in children {
                     match child {
-                        Node::Text(value) => text.push_str(&expand_entities(value)),
+                        Node::Text(value) => current.push_str(&expand_entities(value)),
                         Node::Element { name, .. } if sgml_list(name) => lists.push(child),
-                        child => text.push_str(&sgml_inline(child)),
+                        child => current.push_str(&sgml_inline(child)),
                     }
                 }
             }
-            node => text.push_str(&sgml_inline(node)),
+            node => current.push_str(&sgml_inline(node)),
         }
+    }
+    if !current.trim().is_empty() {
+        paragraphs.push(current);
     }
 }
 
@@ -1105,38 +1123,273 @@ fn go_target(fixes: &GoFixes) -> String {
     target
 }
 
+/// A node of the small HTML subset used by the Go release history.
+enum GoHtml {
+    Text(String),
+    Element {
+        name: String,
+        href: Option<String>,
+        children: Vec<GoHtml>,
+    },
+}
+
+/// An open HTML element of the Go history.
+type GoFrame = (String, Option<String>, Vec<GoHtml>);
+
 /// The HTML of the Go history as Markdown.
 fn go_html(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
+    go_html_render(&go_html_nodes(text)).trim().to_string()
+}
+
+/// The HTML nodes of the Go history.
+fn go_html_nodes(text: &str) -> Vec<GoHtml> {
+    let mut root: Vec<GoHtml> = Vec::new();
+    let mut stack: Vec<GoFrame> = Vec::new();
     let mut rest = text;
     while let Some(index) = rest.find('<') {
-        out.push_str(&rest[..index]);
-        let tail = &rest[index..];
-        if let Some(end) = tail.find("</code>") {
-            out.push('`');
-            out.push_str(&tail[6..end]);
-            out.push('`');
-            rest = &tail[end + 7..];
+        if index > 0 {
+            go_html_text(&mut stack, &mut root, &rest[..index]);
+        }
+        rest = &rest[index..];
+        let Some((name, href, closing, empty, end)) = go_html_tag(rest) else {
+            // Not a tag: keep the literal character.
+            go_html_text(&mut stack, &mut root, "<");
+            rest = &rest[1..];
+            continue;
+        };
+        rest = &rest[end..];
+        if closing {
+            go_html_close(&mut stack, &mut root, &name);
             continue;
         }
-        if tail.starts_with("<a href=")
-            && let Some(end) = tail.find('>')
-        {
-            let href = tail[9..end].trim_matches('"');
-            let after = &tail[end + 1..];
-            if let Some(close) = after.find("</a>") {
-                out.push('[');
-                out.push_str(&after[..close]);
-                out.push_str("](");
-                out.push_str(href);
-                out.push(')');
-                rest = &after[close + 4..];
-                continue;
+        stack.push((name.clone(), href, Vec::new()));
+        if empty {
+            go_html_close(&mut stack, &mut root, &name);
+        }
+    }
+    if !rest.is_empty() {
+        go_html_text(&mut stack, &mut root, rest);
+    }
+    while let Some((name, href, children)) = stack.pop() {
+        go_html_element(&mut stack, &mut root, name, href, children);
+    }
+    root
+}
+
+/// The name, href, kind and end of one HTML tag at the start of `text`.
+fn go_html_tag(text: &str) -> Option<(String, Option<String>, bool, bool, usize)> {
+    let bytes = text.as_bytes();
+    let mut index = 1;
+    let closing = bytes.get(index) == Some(&b'/');
+    if closing {
+        index += 1;
+    }
+    let start = index;
+    while index < bytes.len()
+        && (bytes[index].is_ascii_alphanumeric() || matches!(bytes[index], b'-' | b'_'))
+    {
+        index += 1;
+    }
+    if index == start {
+        return None;
+    }
+    let name = text[start..index].to_ascii_lowercase();
+    let mut href = None;
+    let mut empty = false;
+    loop {
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        let byte = bytes.get(index).copied()?;
+        match byte {
+            b'>' => {
+                index += 1;
+                break;
+            }
+            b'/' => {
+                empty = true;
+                index += 1;
+            }
+            _ => {
+                // An attribute. Its value may span lines, so the quotes end it.
+                let key_start = index;
+                while index < bytes.len()
+                    && !bytes[index].is_ascii_whitespace()
+                    && !matches!(bytes[index], b'=' | b'>' | b'/')
+                {
+                    index += 1;
+                }
+                if index == key_start {
+                    index += 1;
+                    continue;
+                }
+                let key = text[key_start..index].to_ascii_lowercase();
+                while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+                    index += 1;
+                }
+                if bytes.get(index) != Some(&b'=') {
+                    continue;
+                }
+                index += 1;
+                while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+                    index += 1;
+                }
+                let value = match bytes.get(index).copied() {
+                    Some(quote @ (b'"' | b'\'')) => {
+                        index += 1;
+                        let value_start = index;
+                        while index < bytes.len() && bytes[index] != quote {
+                            index += 1;
+                        }
+                        let value = text[value_start..index].to_string();
+                        index += 1;
+                        value
+                    }
+                    Some(_) => {
+                        let value_start = index;
+                        while index < bytes.len()
+                            && !bytes[index].is_ascii_whitespace()
+                            && bytes[index] != b'>'
+                        {
+                            index += 1;
+                        }
+                        text[value_start..index].to_string()
+                    }
+                    None => return None,
+                };
+                if key == "href" {
+                    href = Some(value);
+                }
             }
         }
-        out.push('<');
-        rest = &tail[1..];
     }
-    out.push_str(&expand_entities(rest));
+    Some((name, href, closing, empty, index))
+}
+
+/// Add text to the open element, or to the document.
+fn go_html_text(stack: &mut [GoFrame], root: &mut Vec<GoHtml>, text: &str) {
+    let nodes = match stack.last_mut() {
+        Some(frame) => &mut frame.2,
+        None => root,
+    };
+    match nodes.last_mut() {
+        Some(GoHtml::Text(existing)) => existing.push_str(text),
+        _ => nodes.push(GoHtml::Text(text.to_string())),
+    }
+}
+
+/// Add an element to the open element, or to the document.
+fn go_html_element(
+    stack: &mut [GoFrame],
+    root: &mut Vec<GoHtml>,
+    name: String,
+    href: Option<String>,
+    children: Vec<GoHtml>,
+) {
+    let nodes = match stack.last_mut() {
+        Some(frame) => &mut frame.2,
+        None => root,
+    };
+    nodes.push(GoHtml::Element {
+        name,
+        href,
+        children,
+    });
+}
+
+/// Close the innermost element with the given name.
+fn go_html_close(stack: &mut Vec<GoFrame>, root: &mut Vec<GoHtml>, name: &str) {
+    let Some(index) = stack.iter().rposition(|frame| frame.0 == name) else {
+        return;
+    };
+    while stack.len() > index {
+        let (name, href, children) = stack.pop().expect("open element");
+        go_html_element(stack, root, name, href, children);
+    }
+}
+
+/// The HTML nodes as Markdown.
+fn go_html_render(nodes: &[GoHtml]) -> String {
+    let mut out = String::new();
+    for node in nodes {
+        out.push_str(&go_html_render_node(node));
+    }
+    out
+}
+
+/// One HTML node as Markdown.
+fn go_html_render_node(node: &GoHtml) -> String {
+    match node {
+        GoHtml::Text(text) => normalize(&expand_entities(text)),
+        GoHtml::Element {
+            name,
+            href,
+            children,
+        } => match name.as_str() {
+            "code" => format!("`{}`", go_html_plain(children)),
+            "a" => match href {
+                Some(href) => {
+                    format!("[{}]({})", go_html_render(children).trim(), go_href(href))
+                }
+                None => go_html_render(children),
+            },
+            "i" | "em" => format!("*{}*", go_html_render(children)),
+            "b" | "strong" => format!("**{}**", go_html_render(children)),
+            _ => go_html_render(children),
+        },
+    }
+}
+
+/// The text of nodes, without any markup.
+fn go_html_plain(nodes: &[GoHtml]) -> String {
+    let mut out = String::new();
+    for node in nodes {
+        match node {
+            GoHtml::Text(text) => out.push_str(&normalize(&expand_entities(text))),
+            GoHtml::Element { children, .. } => out.push_str(&go_html_plain(children)),
+        }
+    }
+    out
+}
+
+/// The absolute URL of a link in the Go history. Root-relative links point
+/// at the website, which redirects them to the issue tracker.
+fn go_href(href: &str) -> String {
+    // A target may be split across lines inside the tag. URLs carry no
+    // whitespace, so it is dropped rather than kept.
+    let href: String = expand_entities(href)
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    if href.starts_with("http://") || href.starts_with("https://") {
+        return href;
+    }
+    if let Some(rest) = href.strip_prefix("//") {
+        return format!("https://{rest}");
+    }
+    if href.starts_with('/') {
+        return format!("https://go.dev{href}");
+    }
+    format!("https://go.dev/{href}")
+}
+
+/// Replace whitespace runs with single spaces, keeping the edges.
+fn normalize(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut space = false;
+    for character in text.chars() {
+        if character.is_whitespace() {
+            space = true;
+            continue;
+        }
+        if space {
+            out.push(' ');
+            space = false;
+        }
+        out.push(character);
+    }
+    if space {
+        out.push(' ');
+    }
     out
 }

@@ -1004,6 +1004,16 @@ Branch: REL_17_STABLE [a85eddab2] 2025-08-11 09:09:12 +0100
       </listitem>
      </itemizedlist>
     </listitem>
+
+    <listitem>
+     <para>
+      Fix a crash in the <function>vacuum</function> function.
+     </para>
+
+     <para>
+      This is a second paragraph of the same item.
+     </para>
+    </listitem>
    </itemizedlist>
   </sect2>
  </sect1>
@@ -1056,6 +1066,48 @@ when linking programs that used cgo.`,
 }
 "#;
 
+/// A hand-written excerpt of the Go website release history with links.
+const GO_HISTORY_LINKS: &str = r#"package history
+
+import "html/template"
+
+var Releases = []*Release{
+	{
+		Date: Date{2019, 10, 31}, Version: Version{1, 13, 4},
+		Bug: &FixSummary{
+			Packages: []string{"net/http", "syscall"},
+		},
+		More: `It also fixes an issue on macOS 10.15 Catalina
+where the non-notarized installer and binaries were being
+<a href="/issue/34986">rejected by Gatekeeper</a>.`,
+	},
+	{
+		Date: Date{2019, 10, 31}, Version: Version{1, 12, 13},
+		CustomSummary: `fixes an issue on macOS 10.15 Catalina
+where the non-notarized installer and binaries were being
+<a href="/issue/34986">rejected by Gatekeeper</a>.
+Only macOS users who hit this issue need to update.`,
+	},
+	{
+		Date: Date{2018, 12, 14}, Version: Version{1, 10, 7},
+		CustomSummary: `includes a fix to a bug introduced in Go 1.10.6
+that broke <code>go</code> <code>get</code> for import path patterns containing
+"<code>...</code>".
+See the <a href="https://github.com/golang/go/issues?q=milestone%3AGo1.10.7
++label%3ACherryPickApproved">
+Go 1.10.7 milestone</a> on our issue tracker for details.`,
+	},
+	{
+		Date: Date{2018, 6, 5}, Version: Version{1, 10, 3},
+		Bug: &FixSummary{
+			Components: []template.HTML{"the go command"},
+			Packages:   []string{"crypto/tls", "crypto/x509", "strings"},
+		},
+		More: `Fixes &amp; improves <code>go</code> builds.`,
+	},
+}
+"#;
+
 #[test]
 fn postgres_sgml_becomes_compact_markdown() {
     let sections = parse_release_sgml(POSTGRES_SGML);
@@ -1076,7 +1128,7 @@ fn postgres_sgml_becomes_compact_markdown() {
     );
     assert_eq!(
         sections[0].body,
-        "This release contains a variety of fixes from 17.5 & later. See release-17-5 for the previous one.\n\n**Migration to Version 17.6**\n\nA dump/restore is not required, but BRIN `numeric_minmax_multi_ops` indexes need a reindex.\n\n**Changes**\n\n- Tighten security checks in planner estimation functions (Dean Rasheed) [§](https://postgr.es/c/a85eddab2)\n- Prevent `pg_dump` scripts from being used to attack the user, and repair backups.\n  - Nested item, see [the documentation](https://www.postgresql.org/)."
+        "This release contains a variety of fixes from 17.5 & later. See release-17-5 for the previous one.\n\n**Migration to Version 17.6**\n\nA dump/restore is not required, but BRIN `numeric_minmax_multi_ops` indexes need a reindex.\n\n**Changes**\n\n- Tighten security checks in planner estimation functions (Dean Rasheed) [§](https://postgr.es/c/a85eddab2)\n- Prevent `pg_dump` scripts from being used to attack the user, and repair backups.\n  - Nested item, see [the documentation](https://www.postgresql.org/).\n- Fix a crash in the `vacuum` function.\n\n  This is a second paragraph of the same item."
     );
     assert!(!sections[0].body.contains("Release date"));
     assert!(!sections[0].body.contains("Author"));
@@ -1119,8 +1171,46 @@ fn go_release_history_becomes_one_sentence_per_release() {
     );
     assert_eq!(
         sections[3].body,
-        "go1.12.4 (released 2019-04-11) fixes an issue where using the prebuilt binary\nreleases on older versions of GNU/Linux\n[led to failures](/issues/31293)\nwhen linking programs that used cgo."
+        "go1.12.4 (released 2019-04-11) fixes an issue where using the prebuilt binary releases on older versions of GNU/Linux [led to failures](https://go.dev/issues/31293) when linking programs that used cgo."
     );
+}
+
+/// Links keep their text, their target and their markup.
+#[test]
+fn go_links_are_converted_without_garbling_the_text() {
+    let sections = parse_go_history(GO_HISTORY_LINKS);
+    assert_eq!(
+        sections
+            .iter()
+            .map(|s| s.version.as_str())
+            .collect::<Vec<_>>(),
+        ["1.13.4", "1.12.13", "1.10.7", "1.10.3"]
+    );
+    // A relative link is resolved against the website, and the text around a
+    // code span keeps its spaces.
+    assert_eq!(
+        sections[0].body,
+        "go1.13.4 (released 2019-10-31) includes fixes to the `net/http` and `syscall` packages. It also fixes an issue on macOS 10.15 Catalina where the non-notarized installer and binaries were being [rejected by Gatekeeper](https://go.dev/issue/34986). See the [Go 1.13.4 milestone](https://github.com/golang/go/issues?q=milestone%3AGo1.13.4+label%3ACherryPickApproved) on our issue tracker for details."
+    );
+    assert_eq!(
+        sections[1].body,
+        "go1.12.13 (released 2019-10-31) fixes an issue on macOS 10.15 Catalina where the non-notarized installer and binaries were being [rejected by Gatekeeper](https://go.dev/issue/34986). Only macOS users who hit this issue need to update."
+    );
+    // A link whose target is split across lines keeps its target, and the
+    // link text may span lines too.
+    assert_eq!(
+        sections[2].body,
+        "go1.10.7 (released 2018-12-14) includes a fix to a bug introduced in Go 1.10.6 that broke `go` `get` for import path patterns containing \"`...`\". See the [Go 1.10.7 milestone](https://github.com/golang/go/issues?q=milestone%3AGo1.10.7+label%3ACherryPickApproved) on our issue tracker for details."
+    );
+    // An entity before a tag is expanded, and the tag is still a tag.
+    assert_eq!(
+        sections[3].body,
+        "go1.10.3 (released 2018-06-05) includes fixes to the go command, and the `crypto/tls`, `crypto/x509`, and `strings` packages. Fixes & improves `go` builds. See the [Go 1.10.3 milestone](https://github.com/golang/go/issues?q=milestone%3AGo1.10.3+label%3ACherryPickApproved) on our issue tracker for details."
+    );
+    for section in &sections {
+        assert!(!section.body.contains("<"), "{}", section.body);
+        assert!(!section.body.contains("](/"), "{}", section.body);
+    }
 }
 
 fn adapter_routes() -> Arc<Routes> {
@@ -1254,10 +1344,10 @@ async fn a_range_spanning_postgres_majors_keeps_the_earlier_major_incomplete() {
     let mut bodies = adapter_routes().bodies.clone();
     bodies.insert(
         "https://mise-versions.jdx.dev/data/github/postgres/postgres/tags.json".into(),
-        json!({"tags":[{"tag":"REL_16_9"},{"tag":"REL_17"}]}),
+        json!({"tags":[{"tag":"REL_16_9"},{"tag":"REL_17_0"}]}),
     );
     bodies.insert(
-        "https://api.github.com/repos/postgres/postgres/contents/doc/src/sgml?ref=REL_17".into(),
+        "https://api.github.com/repos/postgres/postgres/contents/doc/src/sgml?ref=REL_17_0".into(),
         json!([{"type":"file","name":"release-17.sgml","path":"doc/src/sgml/release-17.sgml","sha":"sgml"}]),
     );
     let routes = Arc::new(Routes {
@@ -1282,6 +1372,20 @@ async fn a_range_spanning_postgres_majors_keeps_the_earlier_major_incomplete() {
         "https://www.postgresql.org/docs/release/17/"
     );
     assert!(notes.incomplete, "the earlier major's notes are missing");
+    // PostgreSQL tags the major release `REL_17_0`, not `REL_17`.
+    let reads = routes.requests.lock().unwrap();
+    assert!(
+        reads
+            .iter()
+            .any(|url| url.ends_with("/contents/doc/src/sgml?ref=REL_17_0")),
+        "the major release is read at its own tag: {reads:?}"
+    );
+    assert!(
+        !reads
+            .iter()
+            .any(|url| url.ends_with("/contents/doc/src/sgml?ref=REL_17")),
+        "there is no `REL_17` tag: {reads:?}"
+    );
 }
 
 #[tokio::test]
