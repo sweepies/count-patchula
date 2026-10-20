@@ -116,6 +116,9 @@ class Lockfiles {
   waitHours: Int = 0
   group: String = "lockfile refresh"
   tidyGo: Boolean = false
+  /// Engine that regenerates npm lockfiles: aube by default, or native npm.
+  /// pnpm and Yarn lockfiles always use aube and Yarn respectively.
+  npmEngine: "aube"|"npm" = "aube"
 }
 
 /// All first-release managers are selected unless a repository replaces this list.

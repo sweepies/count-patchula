@@ -14,6 +14,7 @@ words!(VersionPolicy { Exact => "exact", Preserve => "preserve", Widen => "widen
 words!(ReleaseChannel { Stable => "stable", Lts => "lts" });
 words!(Scheme { Semver => "semver", Docker => "docker", Pep440 => "pep440", Go => "go", Hashicorp => "hashicorp", Loose => "loose" });
 words!(Rebase { Conflicts => "conflicts", Behind => "behind" });
+words!(NpmEngine { Aube => "aube", Npm => "npm" });
 words!(DependencyKind { Production => "production", Development => "development", Peer => "peer", Optional => "optional", Build => "build", Action => "action", ReusableWorkflow => "reusable-workflow", Runner => "runner", ContainerImage => "container-image", Tool => "tool", GoDirective => "go-directive", Toolchain => "toolchain", Provider => "provider", Module => "module", Chart => "chart" });
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -135,4 +136,5 @@ pub struct Lockfiles {
     pub wait_hours: u32,
     pub group: String,
     pub tidy_go: bool,
+    pub npm_engine: NpmEngine,
 }

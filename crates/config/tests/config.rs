@@ -38,6 +38,18 @@ fn every_repository_example_validates() {
 }
 
 #[test]
+fn the_npm_lockfile_engine_is_aube_by_default_and_can_stay_native() {
+    use rustovate_config::NpmEngine;
+    let (_directory, path) = fixture("");
+    assert_eq!(load(&path).unwrap().lockfiles.npm_engine, NpmEngine::Aube);
+    let (_directory, path) = fixture("lockfiles { npmEngine = \"npm\" }");
+    assert_eq!(load(&path).unwrap().lockfiles.npm_engine, NpmEngine::Npm);
+    let (_directory, path) = fixture("lockfiles { npmEngine = \"pnpm\" }");
+    let error = load(&path).unwrap_err().to_string();
+    assert!(error.contains("npmEngine"), "{error}");
+}
+
+#[test]
 fn defaults_are_explicit_safe_and_unlimited() {
     let (_directory, path) = fixture("");
     let config = load(&path).unwrap();
