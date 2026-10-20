@@ -57,6 +57,20 @@ Go extracts require blocks/single directives, with separate `go-directive` and
 maps, registry modules and provider lock resolutions using a real HCL parser.
 Requirements retain extras/markers/hashes outside their constraint location.
 
+`pyproject` reads PEP 621 `[project]` dependencies and optional dependencies,
+PEP 735 `[dependency-groups]`, uv's `dev-dependencies`,
+`constraint-dependencies` and `override-dependencies`, and Poetry's
+`dependencies`, `dev-dependencies` and `group.*.dependencies`. PEP 508 strings
+are edited at their version specifier only, leaving names, extras and markers;
+strings with escapes, URL requirements, unversioned names, group includes and
+Poetry `git`/`path`/`url` sources are skipped. Poetry constraints use the
+`poetry` scheme: `^` keeps the leftmost nonzero component, `~` allows patch
+changes (minor for a bare major) and `||` separates alternatives. Names are PEP
+503 normalised and resolved from the nearest `uv.lock` or `poetry.lock`.
+`.python-version` pins CPython with a numeric version, like mise's `python`.
+A release that already satisfies a range is left to lockfile maintenance, as
+for Cargo. `[build-system] requires` and `requires-python` are not updated.
+
 Kubernetes workload specs, Kustomize image/helmCharts transforms, Flux
 HelmRepository/HelmRelease/OCIRepository and Helm values repository/tag/digest
 maps are supported. Flux source references resolve by namespace/name across

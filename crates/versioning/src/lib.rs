@@ -14,6 +14,8 @@ pub enum Ecosystem {
     Go,
     Docker,
     Pep440,
+    /// Poetry constraints: PEP 440 versions with `^`/`~` ranges and `||`.
+    Poetry,
     Hashicorp,
 }
 
@@ -44,7 +46,10 @@ pub trait Versioning: Send + Sync {
 
 impl Versioning for Ecosystem {
     fn parse(&self, value: &str) -> Result<Parsed> {
-        if matches!(self, Self::Docker | Self::Pep440 | Self::Hashicorp) {
+        if matches!(
+            self,
+            Self::Docker | Self::Pep440 | Self::Poetry | Self::Hashicorp
+        ) {
             return extended::parse(*self, value);
         }
         let value = value.trim();
@@ -100,7 +105,7 @@ impl Versioning for Ecosystem {
             Self::Cargo => VersionReq::parse(range)
                 .map(|req| req.matches(&version.0))
                 .map_err(|_| Error::Invalid(range.into())),
-            Self::Docker | Self::Pep440 | Self::Hashicorp => {
+            Self::Docker | Self::Pep440 | Self::Poetry | Self::Hashicorp => {
                 extended::matches(*self, range, version)
             }
             Self::Loose | Self::Go => self
@@ -128,7 +133,10 @@ impl Versioning for Ecosystem {
         }
     }
     fn new_range(&self, current: &str, target: &str, policy: VersionPolicy) -> Result<String> {
-        if matches!(self, Self::Docker | Self::Pep440 | Self::Hashicorp) {
+        if matches!(
+            self,
+            Self::Docker | Self::Pep440 | Self::Poetry | Self::Hashicorp
+        ) {
             return extended::new_range(*self, current, target, policy);
         }
         let parsed = self.parse(target)?;

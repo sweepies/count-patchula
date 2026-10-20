@@ -136,6 +136,10 @@ impl Executor for Fixture {
                 "yarn.lock".into()
             } else if spec.args.iter().any(|s| s == "npm") {
                 "package-lock.json".into()
+            } else if spec.args.iter().any(|s| s == "uv") {
+                "uv.lock".into()
+            } else if spec.args.iter().any(|s| s == "poetry") {
+                "poetry.lock".into()
             } else if spec.args.iter().any(|s| s == "cargo") {
                 "Cargo.lock".into()
             } else if spec.args.iter().any(|s| s == "go") {
@@ -1506,5 +1510,116 @@ async fn real_yarn_berry_uses_a_sanitised_yarnrc_and_restores_it() {
     assert!(
         !p.contents.contains_key(".yarnrc.yml"),
         "the committed .yarnrc.yml must be restored"
+    );
+}
+
+/// uv and Poetry run targeted against the pinned or `.python-version` interpreter.
+#[tokio::test]
+async fn python_locks_use_uv_and_poetry_with_the_project_interpreter() {
+    for (lock, tool, command, python) in [
+        (
+            "uv.lock",
+            "uv@0.13.1",
+            &["uv", "lock", "--directory"][..],
+            "python@3.12.4",
+        ),
+        (
+            "poetry.lock",
+            "poetry@2.5.1",
+            &[
+                "poetry",
+                "lock",
+                "--no-interaction",
+                "--no-plugins",
+                "--directory",
+            ][..],
+            "python@3.14.8",
+        ),
+    ] {
+        let mut files = BTreeMap::from([
+            (
+                "pyproject.toml".to_string(),
+                "[project]\ndependencies = [\"ruff==0.6.0\"]\n".to_string(),
+            ),
+            (lock.to_string(), "seed\n".to_string()),
+        ]);
+        if lock == "uv.lock" {
+            files.insert(".python-version".into(), "3.12.4\n".into());
+        }
+        let executor = fixture(files.clone(), false, false);
+        let temp = tempfile::tempdir().unwrap();
+        let runner =
+            Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
+        let mut snapshot = snapshot(&files);
+        let config = config();
+        let mut p = maintenance(&repo(), &config, &snapshot, monday())
+            .unwrap()
+            .unwrap();
+        p.maintenance = false;
+        p.lock_jobs = vec![Job {
+            ecosystem: Ecosystem::Python,
+            directory: String::new(),
+            package: Some("ruff".into()),
+            current: Some("0.6.0".into()),
+            target: Some("0.6.9".into()),
+        }];
+        p.contents.insert(
+            "pyproject.toml".into(),
+            "[project]\ndependencies = [\"ruff==0.6.9\"]\n".into(),
+        );
+        runner.prepare(&mut p, &mut snapshot, &config).await;
+        let calls = executor.calls.lock().unwrap();
+        let commands = recorded(&calls);
+        let (specs, args) = commands
+            .iter()
+            .find(|(specs, _)| specs.iter().any(|s| s == tool))
+            .unwrap_or_else(|| panic!("{lock}: {commands:?}"));
+        assert!(specs.iter().any(|s| s == python), "{lock}: {specs:?}");
+        assert!(starts(args, command), "{lock}: {args:?}");
+        if lock == "uv.lock" {
+            assert!(contains(args, &["--upgrade-package", "ruff"]), "{args:?}");
+        }
+    }
+}
+
+/// A targeted Python upgrade that leaves the lock untouched is a stale lock.
+#[tokio::test]
+async fn an_unchanged_python_lock_after_a_targeted_upgrade_fails() {
+    let files = BTreeMap::from([
+        (
+            "pyproject.toml".to_string(),
+            "[project]\ndependencies = [\"ruff>=0.6\"]\n".to_string(),
+        ),
+        (
+            "uv.lock".to_string(),
+            "fixture deterministic lock\n".to_string(),
+        ),
+    ]);
+    let executor = fixture(files.clone(), false, false);
+    let temp = tempfile::tempdir().unwrap();
+    let runner =
+        Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snapshot, monday())
+        .unwrap()
+        .unwrap();
+    p.maintenance = false;
+    p.lock_jobs = vec![Job {
+        ecosystem: Ecosystem::Python,
+        directory: String::new(),
+        package: Some("ruff".into()),
+        current: Some("0.6.0".into()),
+        target: Some("0.6.9".into()),
+    }];
+    runner.prepare(&mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+    assert!(
+        p.action
+            .reason
+            .as_deref()
+            .is_some_and(|r| r.contains("uv.lock did not change")),
+        "{:?}",
+        p.action.reason
     );
 }

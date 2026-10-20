@@ -471,7 +471,7 @@ pub(super) fn join(directory: &str, leaf: &str) -> String {
     }
 }
 
-fn version(versions: &BTreeMap<String, String>, tool: &str) -> Result<String, String> {
+pub(super) fn version(versions: &BTreeMap<String, String>, tool: &str) -> Result<String, String> {
     versions
         .get(tool)
         .cloned()

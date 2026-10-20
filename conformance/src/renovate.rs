@@ -93,6 +93,7 @@ fn manager(name: &str) -> String {
     match name {
         "gomod" => "go",
         "pip_requirements" => "requirements",
+        "pep621" | "poetry" | "pyenv" => "pyproject",
         "docker-compose" => "compose",
         "custom.regex" => "regex",
         other => other,
@@ -446,6 +447,7 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
                             | "npm"
                             | "go"
                             | "requirements"
+                            | "pyproject"
                             | "compose"
                             | "regex"
                             | "dockerfile"

@@ -211,3 +211,25 @@ fn node_version_files_keep_the_v_prefix_and_trailing_text() {
         "22\n"
     );
 }
+#[test]
+fn pyproject_edits_specifiers_inside_strings_and_poetry_scalars() {
+    let old = "[project]\ndependencies = [\"httpx>=0.27.0\", 'ruff[x] (==0.6.0) ; python_version > \"3\"']\n[tool.poetry.dependencies]\nrich = \"^13.7\"\nattrs = { version = '~23.2' }\n";
+    let new = replace(Manager::Pyproject, "pyproject.toml", old, "==2.0.0", None);
+    assert_eq!(
+        new,
+        old.replace(">=0.27.0", "==2.0.0")
+            .replace("==0.6.0", "==2.0.0")
+            .replace("^13.7", "==2.0.0")
+            .replace("~23.2", "==2.0.0")
+    );
+    assert_eq!(
+        replace(
+            Manager::Pyproject,
+            ".python-version",
+            "3.12.4\n",
+            "3.13.1",
+            None
+        ),
+        "3.13.1\n"
+    );
+}

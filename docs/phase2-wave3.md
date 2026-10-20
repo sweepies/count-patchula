@@ -131,7 +131,17 @@ go -C <root> get <module>@<target>
 go -C <root> mod tidy       # lockfiles.tidyGo=true
 go -C <root> mod download   # otherwise
 terraform -chdir=<root> providers lock
+uv lock --directory <root> --upgrade-package <package>   # maintenance: --upgrade
+poetry lock --no-interaction --no-plugins --directory <root>   # maintenance: --regenerate
 ```
+
+uv and Poetry resolve against Python from mise: the nearest `.python-version`,
+then a repository pin, then the runner default (3.14.8). uv never downloads its
+own interpreter (`UV_PYTHON_DOWNLOADS=never`), Poetry runs without plugins and
+without creating a virtualenv. Poetry 2's `poetry lock` keeps existing pins and
+re-resolves changed constraints. A targeted upgrade or manifest edit that
+leaves the lock unchanged fails the branch, and the requested version must be
+the one the regenerated lock records.
 
 `pnpm-lock.yaml`, `package-lock.json` and `npm-shrinkwrap.json` are regenerated
 by aube, which reads and writes the committed format in place. aube is told the
@@ -181,7 +191,7 @@ and the selected manifest/lock resolution still matches its requested targets.
 Lock additions and deletions join the manifest in the same verified API commit.
 
 Text Bun locks, npm package locks/shrinkwrap, pnpm locks, Yarn Classic and Berry
-locks, Cargo, Go and Terraform are covered. A lockfile that does not change
+locks, Cargo, Go, Terraform, `uv.lock` and `poetry.lock` are covered. A lockfile that does not change
 after a manifest edit that changes recorded dependencies is a branch failure,
 so a tool that reports "up to date" without re-resolving cannot publish a
 stale lock; an edit outside the recorded dependencies cannot affect the lock

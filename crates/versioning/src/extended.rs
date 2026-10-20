@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 pub(super) fn parse(scheme: Ecosystem, value: &str) -> Result<Parsed> {
     let invalid = || Error::Invalid(value.into());
-    if scheme == Ecosystem::Pep440 {
+    if matches!(scheme, Ecosystem::Pep440 | Ecosystem::Poetry) {
         let pep = pep440_rs::Version::from_str(value).map_err(|_| invalid())?;
         let r = pep.release();
         let mut v = Version::new(r[0], *r.get(1).unwrap_or(&0), *r.get(2).unwrap_or(&0));
@@ -41,6 +41,19 @@ pub(super) fn parse(scheme: Ecosystem, value: &str) -> Result<Parsed> {
 }
 
 pub(super) fn matches(scheme: Ecosystem, range: &str, version: &Parsed) -> Result<bool> {
+    if scheme == Ecosystem::Poetry {
+        let version = version.1.as_ref().expect("PEP parsed version");
+        for alternative in range.split("||") {
+            let specifiers = poetry_specifiers(alternative)?;
+            if pep440_rs::VersionSpecifiers::from_str(&specifiers)
+                .map_err(|_| Error::Invalid(range.into()))?
+                .contains(version)
+            {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
+    }
     if scheme == Ecosystem::Docker {
         let current = scheme.parse(range)?;
         return Ok(current.2 == version.2 && scheme.order(&current, version).is_eq());
@@ -117,6 +130,9 @@ pub(super) fn new_range(
     if policy == VersionPolicy::Exact {
         return Ok(exact);
     }
+    if scheme == Ecosystem::Poetry {
+        return poetry_range(current, target, &parsed);
+    }
     let clauses = current.split(',').collect::<Vec<_>>();
     if clauses.len() != 1 {
         return Err(Error::Compound(current.into()));
@@ -129,6 +145,94 @@ pub(super) fn new_range(
         return Ok(format!("<={target}"));
     }
     Ok(format!("{operator}{target}"))
+}
+
+/// One Poetry alternative (comma-separated clauses) as PEP 440 specifiers.
+/// Caret allows changes that keep the leftmost nonzero component; tilde allows
+/// patch changes, or minor changes for a bare major.
+fn poetry_specifiers(alternative: &str) -> Result<String> {
+    let mut out = Vec::new();
+    for clause in alternative.split(',') {
+        let clause = clause.trim();
+        let invalid = || Error::Invalid(clause.into());
+        if clause.is_empty() {
+            return Err(invalid());
+        }
+        if clause == "*" {
+            out.push(">=0".to_string());
+            continue;
+        }
+        let (op, body) = if let Some(body) = clause.strip_prefix('^') {
+            ("^", body.trim())
+        } else if let Some(body) = clause.strip_prefix('~').filter(|b| !b.starts_with('=')) {
+            ("~", body.trim())
+        } else if clause.starts_with(|c: char| c.is_ascii_digit()) {
+            out.push(format!("=={clause}"));
+            continue;
+        } else {
+            out.push(clause.to_string());
+            continue;
+        };
+        // Bounds come from the release segment; prerelease suffixes stay in the floor.
+        let parts = pep440_rs::Version::from_str(body)
+            .map_err(|_| invalid())?
+            .release()
+            .to_vec();
+        if parts.is_empty() || parts.len() > 3 {
+            return Err(invalid());
+        }
+        let bump = if op == "^" {
+            parts
+                .iter()
+                .position(|p| *p != 0)
+                .unwrap_or(parts.len() - 1)
+        } else if parts.len() == 1 {
+            0
+        } else {
+            1
+        };
+        let mut upper: Vec<u64> = (0..=bump).map(|i| *parts.get(i).unwrap_or(&0)).collect();
+        upper[bump] += 1;
+        let upper = upper
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(".");
+        out.push(format!(">={body}"));
+        out.push(format!("<{upper}"));
+    }
+    Ok(out.join(","))
+}
+
+/// Keep a single caret, tilde, comparison or exact constraint's operator and
+/// precision. Compound constraints cannot be rewritten safely.
+fn poetry_range(current: &str, target: &str, parsed: &Parsed) -> Result<String> {
+    let text = current.trim();
+    if text.contains([',', '|']) || text == "*" {
+        return Err(Error::Compound(current.into()));
+    }
+    let n = text
+        .find(|c: char| c.is_ascii_digit())
+        .ok_or_else(|| Error::Invalid(current.into()))?;
+    let (operator, body) = text.split_at(n);
+    let precision = body.split('.').count();
+    let release = parsed.1.as_ref().expect("PEP parsed version");
+    let plain =
+        !release.is_pre() && !release.is_post() && !release.is_dev() && release.local().is_empty();
+    let version = if plain && release.release().len() >= precision && !body.contains('*') {
+        release.release()[..precision]
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(".")
+    } else {
+        target.to_string()
+    };
+    let out = format!("{}{version}", operator.trim());
+    if !Ecosystem::Poetry.matches(&out, parsed)? {
+        return Err(Error::Compound(current.into()));
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -192,5 +296,59 @@ mod tests {
         );
         assert!(!h.matches("~> 1.2.0", &h.parse("1.3.0").unwrap()).unwrap());
         assert!(h.matches("~> 1.2", &h.parse("1.9.0").unwrap()).unwrap());
+    }
+    #[test]
+    fn poetry_caret_tilde_and_alternatives() {
+        let p = Ecosystem::Poetry;
+        for (range, v, yes) in [
+            ("^1.2.3", "1.9.0", true),
+            ("^1.2.3", "2.0.0", false),
+            ("^0.2.3", "0.2.9", true),
+            ("^0.2.3", "0.3.0", false),
+            ("^0.0.3", "0.0.4", false),
+            ("^0", "0.9.0", true),
+            ("^0.0", "0.1.0", false),
+            ("~1.2.3", "1.2.9", true),
+            ("~1.2.3", "1.3.0", false),
+            ("~1.2", "1.2.5", true),
+            ("~1", "1.9.0", true),
+            ("~1", "2.0.0", false),
+            ("~=1.4.5", "1.4.9", true),
+            ("1.2.*", "1.2.7", true),
+            ("1.2.3", "1.2.3", true),
+            (">=1.2, <1.5", "1.4.0", true),
+            (">=1.2, <1.5", "1.5.0", false),
+            ("^1.0 || ^3.0", "3.1.0", true),
+            ("*", "9.0.0", true),
+        ] {
+            assert_eq!(
+                p.matches(range, &p.parse(v).unwrap()).unwrap(),
+                yes,
+                "{range} {v}"
+            );
+        }
+        for (old, new, expected) in [
+            ("^0.27.0", "0.28.1", "^0.28.1"),
+            ("^1.2", "2.3.4", "^2.3"),
+            ("~2.8.0", "2.9.1", "~2.9.1"),
+            ("0.6.0", "0.6.9", "0.6.9"),
+            ("==1.0", "2.1.0", "==2.1"),
+            ("^1.0", "2.0.0rc1", "^2.0.0rc1"),
+        ] {
+            assert_eq!(
+                p.new_range(old, new, VersionPolicy::Preserve).unwrap(),
+                expected,
+                "{old} -> {new}"
+            );
+        }
+        assert_eq!(
+            p.new_range("^1.2", "1.9.0", VersionPolicy::Preserve)
+                .unwrap(),
+            "^1.2"
+        );
+        assert!(
+            p.new_range(">=1.2, <2", "3.0.0", VersionPolicy::Preserve)
+                .is_err()
+        );
     }
 }

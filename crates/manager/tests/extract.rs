@@ -224,3 +224,90 @@ fn catalogs_and_node_version_files_are_npm_dependencies() {
     assert_eq!(node.kind, DependencyKind::Toolchain);
     assert_eq!(node.resolved.as_deref(), Some("22.1.0"));
 }
+#[test]
+fn pyproject_tables_lock_resolutions_and_python_version() {
+    let mut config = config();
+    config.managers = vec![Manager::Pyproject];
+    let scanner = Scanner::new(&config).unwrap();
+    for path in [
+        "pyproject.toml",
+        "uv.lock",
+        "poetry.lock",
+        "svc/.python-version",
+    ] {
+        assert!(scanner.needs(path), "{path}");
+    }
+    let pyproject = r#"[project]
+name = "demo"
+dependencies = [
+  "httpx>=0.27.0",
+  "Pydantic_Core[email] (==2.8.0) ; python_version >= '3.12'",
+  "local @ file:///tmp/x",
+  "anyio",
+  "escaped\u0020>=1",
+]
+[project.optional-dependencies]
+cli = ['click~=8.1.0']
+[dependency-groups]
+dev = ["pytest>=8.0", {include-group = "lint"}]
+lint = ["ruff==0.6.0"]
+[tool.uv]
+constraint-dependencies = ["idna<4"]
+[tool.poetry.dependencies]
+python = "^3.12"
+rich = "^13.7"
+attrs = { version = "~23.2", extras = ["x"] }
+gitdep = { git = "https://example.test/x.git" }
+any = "*"
+[tool.poetry.group.test.dependencies]
+coverage = "7.6.0"
+"#;
+    let lock = "version = 1\n[[package]]\nname = \"httpx\"\nversion = \"0.27.2\"\n[[package]]\nname = \"pydantic-core\"\nversion = \"2.8.0\"\n";
+    let files = Files::from([
+        ("pyproject.toml".into(), pyproject.into()),
+        ("uv.lock".into(), lock.into()),
+        ("svc/.python-version".into(), "3.12.4\n".into()),
+        ("web/.python-version".into(), "pypy3.10\n".into()),
+    ]);
+    let deps = scanner.extract(&files).unwrap().dependencies;
+    let got: Vec<_> = deps
+        .iter()
+        .map(|d| {
+            (
+                d.package.as_str(),
+                d.current.as_str(),
+                d.resolved.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("httpx", ">=0.27.0", Some("0.27.2")),
+            ("pydantic-core", "==2.8.0", Some("2.8.0")),
+            ("click", "~=8.1.0", None),
+            ("pytest", ">=8.0", None),
+            ("ruff", "==0.6.0", None),
+            ("idna", "<4", None),
+            ("rich", "^13.7", None),
+            ("attrs", "~23.2", None),
+            ("coverage", "7.6.0", None),
+            ("python/cpython", "3.12.4", Some("3.12.4")),
+        ]
+    );
+    for dep in &deps {
+        let text = &files[&dep.file];
+        let slice = &text[dep.location.start..dep.location.end];
+        // Poetry constraints are whole TOML strings; PEP 508 locations are the
+        // specifier inside a string.
+        if dep.location.pointer.starts_with("/tool/poetry/") {
+            assert_eq!(slice.trim_matches(['"', '\'']), dep.current, "{}", dep.name);
+        } else {
+            assert_eq!(slice, dep.current, "{}", dep.name);
+        }
+    }
+    let poetry = deps.iter().find(|d| d.name == "rich").unwrap();
+    assert_eq!(poetry.scheme, rustovate_config::Scheme::Poetry);
+    let groups = deps.iter().find(|d| d.name == "ruff").unwrap();
+    assert_eq!(groups.kind, DependencyKind::Development);
+}

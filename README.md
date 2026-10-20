@@ -9,11 +9,12 @@ process, so it is designed around shared caching and concurrency rather than
 one repository at a time.
 
 Status: Phase 2, wave 3. Read-only lookup covers the bundled managers and public
-sources, including Cargo, Docker/Compose, Go, Terraform, Kubernetes/Flux/Helm and
-Python requirements. `run` plans and publishes readable dependency branches and pull requests, with
-closed-update suppression, PR limits, labels and native auto-merge policy. Verified
-write receipts make unchanged repeats inexpensive. npm/Bun, Cargo, Go and
-Terraform lockfiles are generated with real tools through mise before publication;
+sources, including Cargo, Docker/Compose, Go, Terraform, Kubernetes/Flux/Helm,
+Python requirements and `pyproject.toml` (PEP 621, uv, Poetry). `run` plans and
+publishes readable dependency branches and pull requests, with closed-update
+suppression, PR limits, labels and native auto-merge policy. Verified write
+receipts make unchanged repeats inexpensive. npm, pnpm, Yarn, Bun, Cargo, Go,
+Terraform, uv and Poetry lockfiles are generated with real tools through mise before publication;
 scheduled lock maintenance is opt-in. Dashboard work remains pending.
 See [lockfile tools, warm runs and sandbox prerequisites](docs/phase2-wave3.md),
 [PR lifecycle](docs/phase2-wave2.md)

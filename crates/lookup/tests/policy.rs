@@ -918,3 +918,47 @@ fn runtime_support_intervals_are_observed_without_spurious_exact_pins() {
             .is_empty()
     );
 }
+#[test]
+fn pyproject_pins_move_poetry_ranges_keep_form_and_satisfied_ranges_wait() {
+    let mut cfg = config("renovate-runner");
+    cfg.defaults.wait_hours = 0;
+    let eval = Evaluator::new(&cfg).unwrap();
+    let mut dep = dependency("ruff");
+    dep.manager = Manager::Pyproject;
+    dep.kind = DependencyKind::Production;
+    dep.source = Source::Pypi;
+    dep.scheme = Scheme::Pep440;
+    dep.current = "==0.6.0".into();
+    dep.resolved = Some("0.6.0".into());
+    let releases = catalog(&["0.6.0", "0.6.9", "0.7.1"]);
+    let values: Vec<_> = eval
+        .propose(&dep, &releases)
+        .unwrap()
+        .into_iter()
+        .filter_map(|p| p.new_value)
+        .collect();
+    assert_eq!(values, ["==0.6.9", "==0.7.1"]);
+    // A release inside an open range needs no manifest edit; lock maintenance
+    // refreshes it.
+    dep.current = ">=0.6".into();
+    let mut preserve = cfg.clone();
+    preserve.defaults.versions = rustovate_config::VersionPolicy::Preserve;
+    let eval = Evaluator::new(&preserve).unwrap();
+    let open = eval.propose(&dep, &releases).unwrap();
+    assert!(
+        open.is_empty(),
+        "{:?}",
+        open.iter()
+            .map(|p| (&p.new_value, &p.new_version, &p.update_type))
+            .collect::<Vec<_>>()
+    );
+    dep.scheme = Scheme::Poetry;
+    dep.current = "^0.6.0".into();
+    let values: Vec<_> = eval
+        .propose(&dep, &releases)
+        .unwrap()
+        .into_iter()
+        .filter_map(|p| p.new_value)
+        .collect();
+    assert_eq!(values, ["^0.7.1"]);
+}

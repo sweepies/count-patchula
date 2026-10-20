@@ -113,7 +113,10 @@ fn yaml(dep: &Dependency) -> bool {
         && (dep.file.ends_with(".yaml") || dep.file.ends_with(".yml")))
 }
 fn toml(dep: &Dependency) -> bool {
-    matches!(dep.manager, Manager::Cargo | Manager::Mise) && !dep.file.ends_with(".tool-versions")
+    (matches!(dep.manager, Manager::Cargo | Manager::Mise) && !dep.file.ends_with(".tool-versions"))
+        // Poetry constraints are whole TOML strings; PEP 508 specifiers are
+        // spans inside one and are replaced as raw text.
+        || (dep.manager == Manager::Pyproject && dep.location.pointer.starts_with("/tool/poetry/"))
 }
 fn scalar(dep: &Dependency, raw: &str) -> Result<String, String> {
     if json(dep) {
@@ -140,6 +143,9 @@ fn scalar(dep: &Dependency, raw: &str) -> Result<String, String> {
 fn quote(dep: &Dependency, raw: &str, target: &str) -> Result<String, String> {
     if target.contains(['\n', '\r', '\0']) {
         return Err("multiline or NUL update is not supported".into());
+    }
+    if dep.manager == Manager::Pyproject && !toml(dep) && target.contains(['"', '\'', '\\']) {
+        return Err("unsafe replacement inside a TOML string".into());
     }
     if json(dep) || raw.starts_with('"') {
         if raw.starts_with("\"\"\"") {

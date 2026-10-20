@@ -3,6 +3,7 @@ mod checkout;
 mod mise;
 mod node;
 mod process;
+mod python;
 use crate::{
     Blob, Plan, Snapshot, blob_sha,
     plan::{hash, unified},
@@ -25,6 +26,7 @@ pub enum Ecosystem {
     Go,
     Terraform,
     Mise,
+    Python,
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Job {
@@ -103,13 +105,23 @@ pub(crate) fn job(
             nearest(&dep.file, &snapshot.paths, &["Cargo.lock"]).unwrap_or(directory(&dep.file)),
         ),
         Manager::Go => (Ecosystem::Go, directory(&dep.file)),
+        // `.python-version` pins the interpreter, which no lockfile records.
+        Manager::Pyproject if dep.file.ends_with(".python-version") => return Ok(None),
+        Manager::Pyproject => {
+            let Some(root) = nearest(&dep.file, &snapshot.paths, &python::LOCKS) else {
+                return Ok(None);
+            };
+            (Ecosystem::Python, root)
+        }
         Manager::Terraform if dep.source == Source::Terraform => {
             (Ecosystem::Terraform, directory(&dep.file))
         }
         _ => return Ok(None),
     };
-    let targeted = matches!(ecosystem, Ecosystem::Cargo | Ecosystem::Go)
-        && matches!(dep.source, Source::Crates | Source::Go);
+    let targeted = matches!(
+        ecosystem,
+        Ecosystem::Cargo | Ecosystem::Go | Ecosystem::Python
+    ) && matches!(dep.source, Source::Crates | Source::Go | Source::Pypi);
     Ok(Some(Job {
         ecosystem,
         directory: root.into(),
@@ -154,6 +166,9 @@ pub fn maintenance(
                 Ecosystem::Node
             }
             "Cargo.lock" if config.managers.contains(&Manager::Cargo) => Ecosystem::Cargo,
+            "uv.lock" | "poetry.lock" if config.managers.contains(&Manager::Pyproject) => {
+                Ecosystem::Python
+            }
             "mise.lock" if config.managers.contains(&Manager::Mise) => Ecosystem::Mise,
             "go.mod" if config.managers.contains(&Manager::Go) => Ecosystem::Go,
             ".terraform.lock.hcl" if config.managers.contains(&Manager::Terraform) => {
@@ -392,6 +407,21 @@ impl Runner {
                 .collect();
             let cwd = root.join(&directory);
             match ecosystem {
+                Ecosystem::Python => {
+                    self.python_locks(
+                        node::NodeContext {
+                            driver: &driver,
+                            root: &root,
+                            baseline: &baseline,
+                            directory: &directory,
+                            config,
+                            versions: &versions,
+                            maintenance: plan.maintenance,
+                        },
+                        &jobs,
+                    )
+                    .await?;
+                }
                 Ecosystem::Mise => {
                     self.mise_lock(&driver, &root, &baseline, &jobs, plan.maintenance, config)
                         .await?;
@@ -649,8 +679,10 @@ fn validate_targets(
     let paths: BTreeSet<String> = files.keys().cloned().collect();
     for change in &plan.changes {
         let leaf = change.file.rsplit('/').next().unwrap_or("");
-        if !matches!(leaf, "package.json" | "Cargo.toml" | "go.mod")
-            && !change.file.ends_with(".tf")
+        if !matches!(
+            leaf,
+            "package.json" | "Cargo.toml" | "go.mod" | "pyproject.toml"
+        ) && !change.file.ends_with(".tf")
         {
             continue;
         }
@@ -676,9 +708,11 @@ fn validate_targets(
                     .any(|leaf| paths.contains(&node::join(dir, leaf)))
             });
         if !unread
-            && (matches!(dep.manager, Manager::Npm | Manager::Bun | Manager::Cargo)
-                || (dep.source == Source::Terraform
-                    && dep.kind == rustovate_config::DependencyKind::Provider))
+            && (matches!(
+                dep.manager,
+                Manager::Npm | Manager::Bun | Manager::Cargo | Manager::Pyproject
+            ) || (dep.source == Source::Terraform
+                && dep.kind == rustovate_config::DependencyKind::Provider))
             && let Some(version) = &change.version
             && dep.resolved.as_deref() != Some(version)
         {
@@ -697,7 +731,18 @@ fn versions(
 ) -> Result<BTreeMap<String, String>, String> {
     let defaults = tool_defaults()?;
     let mut versions = BTreeMap::new();
-    for tool in ["node", "bun", "rust", "go", "terraform", "aube", "yarn"] {
+    for tool in [
+        "node",
+        "bun",
+        "rust",
+        "go",
+        "terraform",
+        "aube",
+        "yarn",
+        "python",
+        "uv",
+        "poetry",
+    ] {
         versions.insert(
             tool.into(),
             defaults["tools"][tool]
@@ -756,6 +801,9 @@ fn writable(path: &str) -> bool {
             | "go.sum"
             | ".terraform.lock.hcl"
             | "mise.lock"
+            | "pyproject.toml"
+            | "uv.lock"
+            | "poetry.lock"
     ) || path.ends_with(".tf")
 }
 fn materialized(path: &str) -> bool {
@@ -769,6 +817,9 @@ fn materialized(path: &str) -> bool {
                 | "go.work.sum"
                 | "pnpm-workspace.yaml"
                 | ".yarnrc.yml"
+                | ".python-version"
+                | "uv.toml"
+                | "poetry.toml"
         )
         || path.ends_with(".go")
         || path.ends_with(".rs")

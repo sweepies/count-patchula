@@ -539,7 +539,7 @@ impl Evaluator {
         let baseline = baseline.or_else(|| {
             if !matches!(
                 scheme,
-                Ecosystem::Cargo | Ecosystem::Hashicorp | Ecosystem::Pep440
+                Ecosystem::Cargo | Ecosystem::Hashicorp | Ecosystem::Pep440 | Ecosystem::Poetry
             ) {
                 return None;
             }
@@ -717,7 +717,7 @@ impl Evaluator {
                 // location metadata, while current/newValue describe the version.
                 value
             };
-            if (dep.manager == Manager::Cargo
+            if (matches!(dep.manager, Manager::Cargo | Manager::Pyproject)
                 || (matches!(dep.manager, Manager::Terraform | Manager::Npm)
                     && dep.kind == DependencyKind::Toolchain))
                 && new_value == dep.current
@@ -1064,6 +1064,7 @@ pub fn scheme(dep: &Dependency) -> Result<Ecosystem> {
         Scheme::Loose => Ok(Ecosystem::Loose),
         Scheme::Docker => Ok(Ecosystem::Docker),
         Scheme::Pep440 => Ok(Ecosystem::Pep440),
+        Scheme::Poetry => Ok(Ecosystem::Poetry),
         Scheme::Hashicorp => Ok(Ecosystem::Hashicorp),
     }
 }

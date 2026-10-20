@@ -13,6 +13,7 @@ mod go;
 mod images;
 mod mise;
 mod npm;
+mod pyproject;
 mod requirements;
 mod terraform;
 mod yaml;
@@ -80,6 +81,7 @@ pub fn supported(manager: Manager) -> bool {
         | Manager::Flux
         | Manager::HelmValues
         | Manager::Requirements
+        | Manager::Pyproject
         | Manager::Regex => true,
     }
 }
@@ -165,6 +167,10 @@ impl Scanner {
                     || leaf.ends_with("values.yml"))
                     && (leaf.ends_with(".yaml") || leaf.ends_with(".yml"))
             }
+            Manager::Pyproject => matches!(
+                leaf,
+                "pyproject.toml" | "uv.lock" | "poetry.lock" | ".python-version"
+            ),
             Manager::Requirements => {
                 (leaf.starts_with("requirements")
                     && (leaf.ends_with(".txt") || leaf.ends_with(".in")))
@@ -238,6 +244,8 @@ impl Scanner {
                 go::extract(path, text)
             } else if self.selected(Manager::Terraform, path) {
                 terraform::extract(path, text, &terraform)
+            } else if self.selected(Manager::Pyproject, path) {
+                pyproject::extract(path, text, files)
             } else if self.selected(Manager::Requirements, path) {
                 requirements::extract(path, text)
             } else {
