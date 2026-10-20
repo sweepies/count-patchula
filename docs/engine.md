@@ -139,10 +139,11 @@ concurrent human pushes and base movements. Object writes never enter the read
 cache. Transport/server failures are not blindly retried; a later run reconciles
 the current ref. Rate-limit refusals retain the existing governor behavior.
 
-SWE-109 generates supported npm/Bun, Cargo, Go and Terraform lockfiles with real
-tools through mise, in disposable trees backed by a persistent partial clone.
+SWE-109 generates supported npm/Bun, pnpm, Yarn, Cargo, Go and Terraform
+lockfiles with real tools through mise, in disposable trees backed by a
+persistent partial clone.
 Tool success and target validation precede API commits; failures are reported per
-branch without publishing manifest-only work. Yarn, pnpm and binary Bun locks
+branch without publishing manifest-only work. Binary Bun locks
 retain the explicit `--allow-lockfile-pending` testing escape hatch. Scheduled
 lock maintenance is opt-in. See [wave-3 behavior and prerequisites](phase2-wave3.md).
 

@@ -113,7 +113,8 @@ version strings or version-table entries for relevant tools are read from
 ancestor repository `mise.toml` / `.mise.toml` files. Repository environment
 blocks, hooks and unrelated tools are not loaded. Defaults live in
 `crates/update/src/lockfiles/defaults.toml`: node 24.21.0, Bun 1.4.3, Rust 1.99.0,
-Go 1.27.2 and Terraform 1.14.7. Rust uses its pinned rustup toolchain behind mise
+Go 1.27.2, Terraform 1.14.7, aube 2.8.0, Yarn Classic 1.22.22 and Yarn Berry
+4.18.1. Rust uses its pinned rustup toolchain behind mise
 while keeping Cargo's configuration and credentials home isolated. Go is also
 pinned in this repository's mise config for offline fixture tests.
 
@@ -121,7 +122,10 @@ The commands are:
 
 ```text
 bun install --cwd <root> --lockfile-only --ignore-scripts
+aube -C <root> install --lockfile-only --ignore-scripts
 npm install --prefix <root> --package-lock-only --ignore-scripts --no-audit --no-fund
+yarn install --ignore-scripts                            # Yarn Classic 1
+yarn install --mode=update-lockfile                      # Yarn Berry 2+
 cargo update --manifest-path <root>/Cargo.toml -p <crate>@<old> --precise <target>
 go -C <root> get <module>@<target>
 go -C <root> mod tidy       # lockfiles.tidyGo=true
@@ -129,10 +133,23 @@ go -C <root> mod download   # otherwise
 terraform -chdir=<root> providers lock
 ```
 
+`pnpm-lock.yaml`, `package-lock.json` and `npm-shrinkwrap.json` are regenerated
+by aube, which reads and writes the committed format in place. aube is told the
+committed lockfile name, so a second lockfile in the same directory cannot
+redirect it, and a branch that gains an `aube-lock.yaml` fails. The
+`lockfiles.npmEngine` setting selects `"aube"` (the default) or native `"npm"`
+for npm lockfiles only; pnpm always uses aube. Yarn's version comes from the
+`packageManager` field of `package.json`, then the repository pin, then the
+format of the committed lockfile. Yarn Berry has no `--ignore-scripts` flag and
+runs `--mode=update-lockfile`, which updates the lockfile without linking
+`node_modules`, so `nodeLinker: pnp` projects are supported.
+
 Cargo toolchain-only changes use `cargo update --workspace`; maintenance uses
 untargeted `cargo update`. Both npm and Bun locks are regenerated when both are
-present. Maintenance uses npm `update --package-lock-only` and regenerates the
-Bun lock. Terraform regenerates provider selections from the manifest
+present. Maintenance refreshes a lockfile within the manifest ranges: aube
+`update --lockfile-only --no-save`, npm `update --package-lock-only`, a
+regenerated Bun lock, and Yarn Classic `install --ignore-scripts`. Terraform
+regenerates provider selections from the manifest
 constraints without initializing or accessing a backend. Missing module
 initialization, unavailable providers or other tool errors are branch failures.
 
@@ -142,7 +159,9 @@ Basic header in its process environment for installation-token access. It is
 absent from remote URLs, argv, stored Git config and every ecosystem process.
 Git errors redact the header, encoded credentials and token. Parent tokens,
 cloud credentials, Git helpers and tool configuration are not inherited.
-Each command has a 180s deadline; timeout kills the process group on Unix.
+Yarn keeps its own cache and global folder inside the isolated HOME and never
+receives registry credentials. Each command has a 180s deadline; timeout kills
+the process group on Unix.
 Output is drained with bounded buffers and retained in diagnostics only on
 failure (at most 4KiB stdout plus 4KiB stderr). Successful scratch trees are
 removed, as are failed scratch trees. Only the partial clone and tool cache
@@ -150,12 +169,14 @@ remain. No API commit/ref is created until every tool for that branch succeeds
 and the selected manifest/lock resolution still matches its requested targets.
 Lock additions and deletions join the manifest in the same verified API commit.
 
-Text Bun locks, npm package locks/shrinkwrap, Cargo, Go and Terraform are covered.
-npm and pnpm locks are planned to move to aube by default; see
-[package managers and speed](../README.md#package-managers-and-speed).
-Yarn, pnpm and binary `bun.lockb` remain unsupported. The retained
+Text Bun locks, npm package locks/shrinkwrap, pnpm locks, Yarn Classic and Berry
+locks, Cargo, Go and Terraform are covered. A lockfile that does not change
+after a manifest edit that changes recorded dependencies is a branch failure,
+so a tool that reports "up to date" without re-resolving cannot publish a
+stale lock; an edit outside the recorded dependencies cannot affect the lock
+and is not a failure. Binary `bun.lockb` remains unsupported. The retained
 `--allow-lockfile-pending` flag is an explicit manifest-only testing escape hatch
-for those formats; supported formats always require successful tooling.
+for that format; supported formats always require successful tooling.
 
 `lockfiles.refresh=true` maintains `<prs.branch>lock-file-maintenance` (default
 `rustovate/lock-file-maintenance`). It groups all enabled ecosystems, uses default
@@ -169,10 +190,13 @@ not consume the successful-maintenance checkpoint. Closed maintenance updates
 can retry in a later week.
 
 Offline tests use local path packages, a local vendored Cargo registry, a local
-Git remote and disabled tool auto-installation. They exercise actual npm, Bun,
-Cargo and Go commands, deterministic output, targeted Cargo/Go updates, clone
-reuse/incremental fetch, environment scrubbing, tool failure without API writes,
-output bounds, timeouts, weekly maintenance and API additions/deletions. Terraform
+Git remote and disabled tool auto-installation. They exercise actual npm, aube,
+Bun, Yarn, Cargo and Go commands, deterministic output, targeted Cargo/Go
+updates, clone reuse/incremental fetch, environment scrubbing, tool failure
+without API writes, output bounds, timeouts, weekly maintenance and API
+additions/deletions. The aube tests regenerate real pnpm and npm lockfiles from
+local path packages; pnpm itself is not a test dependency, so the byte-for-byte
+comparison against pnpm was made in a scratch project. Terraform
 command construction/failure boundaries are covered without contacting a
 provider registry; live registry/signature behavior remains a sandbox check.
 
@@ -239,22 +263,21 @@ separately designed opt-in, not inherited process secrets.
 
 ## Validation
 
-`CARGO_NET_OFFLINE=true mise run ci` passed: 247 tests across 55 suites,
+`CARGO_NET_OFFLINE=true mise run ci` passed: 356 tests across 61 suites,
 zero failures and one intentionally ignored recording test. The fixture scan
 checked 22 cassettes; formatting, Clippy with `-D warnings`, tests and the workspace
-build passed. Full log: `/tmp/rustovate-wave3-ci.log`; stage logs:
-`/tmp/rustovate-ci.f5imma/`. `mise run docs` regenerated the CLI reference.
-The release CLI also built successfully; its log is
-`/tmp/rustovate-wave3-release.log` (the linker emitted its deprecated optimization
-setting diagnostic). No live sandbox mutation or push was performed.
+build passed. Full log: `/tmp/ci.log`; stage logs are kept under
+`$RUSTOVATE_CI_LOG_DIR` (default `/tmp/rustovate-ci.XXXXXX`). `mise run docs`
+regenerated the CLI reference. No live sandbox mutation or push was performed.
 
 CI tail:
 
 ```text
 [build] $ cargo build --workspace --locked
    Compiling rustovate-update v0.1.0 (/root/rustovate/crates/update)
-   Compiling rustovate-testkit v0.1.0 (/root/rustovate/crates/testkit)
+   Compiling rustovate-conformance v0.1.0 (/root/rustovate/conformance)
    Compiling rustovate-engine v0.1.0 (/root/rustovate/crates/engine)
+   Compiling rustovate-server v0.1.0 (/root/rustovate/crates/server)
    Compiling rustovate-cli v0.1.0 (/root/rustovate/crates/cli)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.00s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.63s
 ```

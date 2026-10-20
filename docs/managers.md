@@ -11,7 +11,9 @@ are enabled, avoiding duplicate manifest updates.
 npm supports production/dev/peer/optional dependencies, aliases, nested overrides,
 resolutions and packageManager. Workspace/file/link/catalog refs are local and
 not registry dependencies. bun.lock JSONC and npm lock versions 1–3 provide
-resolved versions. Binary bun.lockb and pnpm/yarn locks remain unsupported.
+resolved versions. Binary bun.lockb remains unsupported, and pnpm and Yarn
+locks are not parsed for resolved versions; the lockfile runner regenerates them
+with aube and Yarn instead.
 
 Workflow extraction follows jobs, steps, reusable workflows, services and
 composite action steps, ignoring run text, expressions and local refs. SHA pins

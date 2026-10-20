@@ -4,7 +4,7 @@ rustovate is not a Renovate clone. Each entry records a behaviour that differs
 on purpose, and why. The comparison harness links differences it finds to
 entries here; a difference with no entry is treated as a bug.
 
-Review map (46 entries; IDs below remain stable):
+Review map (49 entries; IDs below remain stable):
 
 - **Policy:** 2–8, 10, 12, 14, 16–18, 20, 23, 25, 29–31, 33–35,
   37–38, 42–43, 45–46 cover explicit activation, reproducibility, update tracks,
@@ -20,6 +20,9 @@ Review map (46 entries; IDs below remain stable):
   normalizations, not extra product policies.
 - **Write safety:** 47 records independent branch identity, verification, ref
   leases and the temporary lockfile gate. It grants no lookup comparison exemption.
+- **Lockfile engines:** 51 selects aube for npm and pnpm lockfiles and Yarn for
+  Yarn lockfiles, with an explicit native-npm setting. It grants no lookup
+  comparison exemption.
 
 **SWE-103 owner decisions (round 4):** keep the one-hour catalog floor
 (21) and newest stable by default (42); Node LTS requires an explicit channel
@@ -82,6 +85,7 @@ Stable comparison link: <a id="departure-7"></a>**Departure 7: default policy**
 | 48 | Release note presentation and discovery | No presentation compatibility is claimed | Ecosystem metadata, public mise-versions note lists, cached changelog sections, bounded ranges, prose-only mention neutralisation and readable references through GitHub's documented backlink-free redirect host | Useful upstream context without steady-run reads or notification/timeline noise; see [release notes](release-notes.md) |
 | 49 | Catalog transport and mise tool metadata | Upstream API catalogs | Public mise-versions release/tag lists and tool metadata, conditional by ETag; `useVersionsHost = false` restores direct sources | Fewer GitHub API reads; authenticated non-registry repos route directly, transient mirror errors may fall back, while 403/404/empty answers do not. Tool first-seen dates retain mise's provenance; tag commit dates are not release-age evidence. Partial index subsets are never cached as full catalogs. |
 | 50 | Release-age catalog reuse | Revalidate on every run | Reuse successful complete catalog views for `clamp(waitHours - 1, 1, 24)` hours; zero keeps existing freshness, and checked controls bypass reuse | Recompute all eligibility and held-back decisions at run time; report snapshot fetch time and reuse state. Credentials/source modes stay isolated, quota-stale failures are not promoted, and mutable digests remain independently fresh. |
+| 51 | Node lockfile engine | Regenerate npm and pnpm locks with npm and pnpm | Regenerate `pnpm-lock.yaml`, `package-lock.json` and `npm-shrinkwrap.json` with aube, which writes the committed format in place; `lockfiles.npmEngine = "npm"` restores native npm for npm lockfiles only | Much faster lockfile updates; aube's npm lockfiles stay valid for `npm ci` but may differ in hoisting and `funding` metadata from npm's own output |
 
 <a id="departure-47"></a>**Departure 47: independent write safety.**
 Phase 2 does not claim compatibility with Renovate's branch/commit behavior.
@@ -155,6 +159,23 @@ proposed `0.minor` intervals, explicit preserve policy, no proposed digests,
 and the observed minor-to-major Cargo taxonomy. Both missing/extra rows remain
 separately audited. Changed ranges, different compatibility intervals, stale
 lookups and unrelated taxonomy remain actionable. Tests cover negative cases.
+
+<a id="departure-51"></a>**Departure 51: aube for npm and pnpm lockfiles.**
+rustovate regenerates `pnpm-lock.yaml`, `package-lock.json` and
+`npm-shrinkwrap.json` with aube instead of pnpm and npm, and regenerates
+`yarn.lock` with Yarn itself, Classic and Berry. aube reads and writes the
+committed format in place and is told the committed lockfile name, so it never
+introduces `aube-lock.yaml` and a second lockfile in the same directory cannot
+redirect it. The departure is the lockfile content aube produces, not the
+resolved versions: aube's npm lockfile stays valid for `npm ci`, but it may
+differ from npm's own output in hoisting and in the shape of `funding`
+metadata, and a later `npm install` rewrites those lines. `lockfiles.npmEngine
+= "npm"` keeps native npm for npm lockfiles; pnpm always uses aube and Yarn
+always uses Yarn, because aube's Yarn Berry output is rejected by Yarn. A
+lockfile that does not change after a manifest edit that changes recorded
+dependencies fails the branch, so a tool that reports "up to date" without
+re-resolving cannot publish a stale lock. This entry grants no lookup
+comparison exemption.
 
 <a id="departure-37"></a>**Departure 37: effective disabled classes.**
 Only missing proposals on matching package/current identities with a valid
