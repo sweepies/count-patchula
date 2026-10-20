@@ -100,12 +100,12 @@ description = "Test the workspace through mbx"
 # Lockfile engines the offline real-tool tests run, matching
 # crates/update/src/lockfiles/defaults.toml. Task-scoped so a development
 # `mise install` does not fetch them.
-tools = { aube = "2.8.0", yarn = "4.18.1" }
+tools = { aube = "2.8.0", yarn = "4.18.1", python = "3.14.8", uv = "0.13.1", poetry = "2.5.1" }
 run = "cargo test --workspace --locked --no-fail-fast"
 
 [tasks."test:stress"]
 description = "Repeat the offline suite with varied test thread counts; logs stay outside the repository"
-tools = { aube = "2.8.0", yarn = "4.18.1" }
+tools = { aube = "2.8.0", yarn = "4.18.1", python = "3.14.8", uv = "0.13.1", poetry = "2.5.1" }
 env = { CARGO_NET_OFFLINE = "true", RUSTOVATE_RECORD = "0" }
 run = '''
 log_dir="${RUSTOVATE_STRESS_LOG_DIR:-/tmp/rustovate-stress}"

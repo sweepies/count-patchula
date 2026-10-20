@@ -107,6 +107,7 @@ impl Executor for Fixture {
                     ("MISE_EXEC_AUTO_INSTALL", "false"),
                     ("CARGO_NET_OFFLINE", "true"),
                     ("NPM_CONFIG_OFFLINE", "true"),
+                    ("UV_OFFLINE", "1"),
                     ("GOPROXY", "off"),
                     ("GOSUMDB", "off"),
                 ] {
@@ -1413,6 +1414,13 @@ fn lockfile_engine_pins_match_the_repository_mise_config() {
             defaults["yarn"]["berry"].as_str(),
             "{task}"
         );
+        for tool in ["python", "uv", "poetry"] {
+            assert_eq!(
+                tools[tool].as_str(),
+                defaults["tools"][tool].as_str(),
+                "{task} {tool}"
+            );
+        }
     }
 }
 
@@ -1622,4 +1630,62 @@ async fn an_unchanged_python_lock_after_a_targeted_upgrade_fails() {
         "{:?}",
         p.action.reason
     );
+}
+
+/// Real uv and Poetry regenerate stale locks offline for a dependency-free
+/// project, against the runner's mise Python.
+#[tokio::test]
+async fn real_uv_and_poetry_regenerate_python_locks() {
+    let project = "[project]\nname = \"fixture\"\nversion = \"1.0.0\"\nrequires-python = \">=3.12\"\ndependencies = []\n";
+    for (lock, manifest, seed, tool, expected) in [
+        (
+            "uv.lock",
+            project.to_string(),
+            "version = 1\nrequires-python = \">=3.9\"\n",
+            "uv@0.13.1",
+            "name = \"fixture\"",
+        ),
+        (
+            "poetry.lock",
+            format!("{project}[tool.poetry]\npackage-mode = false\n"),
+            "[metadata]\nlock-version = \"2.1\"\npython-versions = \">=3.9\"\ncontent-hash = \"0\"\n",
+            "poetry@2.5.1",
+            "python-versions = \">=3.12\"",
+        ),
+    ] {
+        let files = BTreeMap::from([
+            ("pyproject.toml".to_string(), manifest),
+            (lock.to_string(), seed.to_string()),
+            (".python-version".to_string(), "3.14.8\n".to_string()),
+        ]);
+        let executor = fixture(files.clone(), false, true);
+        let temp = tempfile::tempdir().unwrap();
+        let runner =
+            Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
+        let mut snapshot = snapshot(&files);
+        let config = config();
+        let mut p = maintenance(&repo(), &config, &snapshot, monday())
+            .unwrap()
+            .unwrap();
+        runner.prepare(&mut p, &mut snapshot, &config).await;
+        assert_eq!(
+            p.action.status,
+            ActionStatus::Planned,
+            "{lock}: {:?}",
+            p.action
+        );
+        assert!(
+            p.contents[lock].contains(expected),
+            "{lock}: {}",
+            p.contents[lock]
+        );
+        let calls = executor.calls.lock().unwrap();
+        assert!(
+            recorded(&calls)
+                .iter()
+                .any(|(specs, _)| specs.iter().any(|s| s == tool)
+                    && specs.iter().any(|s| s == "python@3.14.8")),
+            "{lock}"
+        );
+    }
 }
