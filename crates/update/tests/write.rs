@@ -1075,7 +1075,8 @@ fn unsupported_lockfile_plans_skip_and_opt_in_marks_manifest_only_updates() {
         },
     )]);
     snapshot.paths.remove("bun.lock");
-    snapshot.paths.insert("yarn.lock".into());
+    // Binary Bun locks stay unsupported; pnpm and Yarn locks are supported.
+    snapshot.paths.insert("bun.lockb".into());
     for allow in [false, true] {
         let p = plan(&repo, &config, &deps, &snapshot, allow, chrono::Utc::now())
             .unwrap()
@@ -1091,6 +1092,53 @@ fn unsupported_lockfile_plans_skip_and_opt_in_marks_manifest_only_updates() {
             }
         );
         assert!(!p.action.files.is_empty());
+    }
+}
+
+#[test]
+fn pnpm_and_yarn_locks_are_supported_and_never_pending() {
+    let (config, mut repo, _, mut snapshot) = setup("22.0.0", true);
+    let text = "{\"dependencies\":{\"fixture\":\"1.0.0\"}}\n";
+    let mut config = config;
+    config.managers = vec![Manager::Npm];
+    let deps = Scanner::new(&config)
+        .unwrap()
+        .extract(&Files::from([("package.json".into(), text.into())]))
+        .unwrap()
+        .dependencies;
+    let d = &deps[0];
+    repo.package_files[0].path = "package.json".into();
+    let r = &mut repo.package_files[0].dependencies[0];
+    r.manager = "npm".into();
+    r.name = d.name.clone();
+    r.package = d.package.clone();
+    r.current.value = Some(d.current.clone());
+    r.updates[0].new_value = Some("2.0.0".into());
+    snapshot.files = BTreeMap::from([(
+        "package.json".into(),
+        Blob {
+            sha: blob_sha(text),
+            mode: "100644".into(),
+            content: text.into(),
+        },
+    )]);
+    for lock in ["pnpm-lock.yaml", "yarn.lock"] {
+        snapshot.paths.remove("bun.lock");
+        snapshot.paths.insert(lock.into());
+        for allow in [false, true] {
+            let p = plan(&repo, &config, &deps, &snapshot, allow, chrono::Utc::now())
+                .unwrap()
+                .pop()
+                .unwrap();
+            assert!(!p.action.lockfile_pending, "{lock}");
+            assert_eq!(p.action.status, ActionStatus::Planned, "{lock}");
+            assert_eq!(p.lock_jobs.len(), 1, "{lock}");
+            assert_eq!(
+                p.lock_jobs[0].ecosystem,
+                rustovate_update::lockfiles::Ecosystem::Node,
+                "{lock}"
+            );
+        }
     }
 }
 

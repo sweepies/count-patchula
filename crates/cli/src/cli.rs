@@ -74,7 +74,7 @@ pub struct Run {
     /// Print planned branches, files and unified diffs without writing to GitHub.
     #[usage(long)]
     pub dry_run: bool,
-    /// Permit manifest-only test branches for unsupported yarn/pnpm/binary bun locks.
+    /// Permit manifest-only test branches for unsupported binary bun locks.
     #[usage(long)]
     pub allow_lockfile_pending: bool,
 }

@@ -139,5 +139,5 @@ Create or update dependency branches and pull requests with verified API commits
 - **`--config <CONFIG>`** — Local Pkl override applied to every selected repository.
 - **`--config-dir <CONFIG_DIR>`** — Per-repository local overrides: `<dir>/<owner>/<name>.pkl` wins over `<dir>/<name>.pkl`. Unmatched repositories discover `.github/rustovate.pkl` then `rustovate.pkl`; neither means skipped. All matched files are validated before repository scans. Mutually exclusive with `--config`.
 - **`--dry-run`** — Print planned branches, files and unified diffs without writing to GitHub.
-- **`--allow-lockfile-pending`** — Permit manifest-only test branches for unsupported yarn/pnpm/binary bun locks.
+- **`--allow-lockfile-pending`** — Permit manifest-only test branches for unsupported binary bun locks.
 - **`-h --help`** — Print help

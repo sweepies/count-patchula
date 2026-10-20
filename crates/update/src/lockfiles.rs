@@ -1,13 +1,14 @@
 //! Real ecosystem tools run before any Git Data mutation, in disposable trees.
 mod checkout;
 mod mise;
+mod node;
 mod process;
 use crate::{
     Blob, Plan, Snapshot, blob_sha,
     plan::{hash, unified},
 };
 pub use process::{CommandSpec, Executor, SystemExecutor};
-use rustovate_config::{Config, Manager, Source};
+use rustovate_config::{Config, Manager, NpmEngine, Source};
 use rustovate_manager::Dependency;
 use rustovate_report::{ActionStatus, BranchAction, FileAction, Repository, Update};
 use serde::{Deserialize, Serialize};
@@ -79,13 +80,11 @@ pub(crate) fn job(
             ) else {
                 return Ok(None);
             };
-            if snapshot.paths.iter().any(|p| {
-                directory(p) == root
-                    && matches!(
-                        p.rsplit('/').next().unwrap(),
-                        "bun.lockb" | "pnpm-lock.yaml" | "yarn.lock"
-                    )
-            }) {
+            if snapshot
+                .paths
+                .iter()
+                .any(|p| directory(p) == root && p.rsplit('/').next() == Some("bun.lockb"))
+            {
                 return Err("unsupported lockfile format".into());
             }
             (Ecosystem::Node, root)
@@ -133,7 +132,11 @@ pub fn maintenance(
     for path in &snapshot.paths {
         let leaf = path.rsplit('/').next().unwrap();
         let ecosystem = match leaf {
-            "package-lock.json" | "npm-shrinkwrap.json" | "bun.lock"
+            "package-lock.json"
+            | "npm-shrinkwrap.json"
+            | "bun.lock"
+            | "pnpm-lock.yaml"
+            | "yarn.lock"
                 if config
                     .managers
                     .iter()
@@ -385,82 +388,16 @@ impl Runner {
                         .await?;
                 }
                 Ecosystem::Node => {
-                    for (leaf, tool, args) in [
-                        (
-                            "bun.lock",
-                            "bun",
-                            vec!["install", "--lockfile-only", "--ignore-scripts"],
-                        ),
-                        (
-                            "package-lock.json",
-                            "node",
-                            vec![
-                                "install",
-                                "--package-lock-only",
-                                "--ignore-scripts",
-                                "--no-audit",
-                                "--no-fund",
-                            ],
-                        ),
-                        (
-                            "npm-shrinkwrap.json",
-                            "node",
-                            vec![
-                                "install",
-                                "--package-lock-only",
-                                "--ignore-scripts",
-                                "--no-audit",
-                                "--no-fund",
-                            ],
-                        ),
-                    ] {
-                        if !cwd.join(leaf).exists() {
-                            continue;
-                        }
-                        if tool == "bun"
-                            && versions.get("bun").is_some_and(|v| {
-                                let mut parts = v.split('.').filter_map(|s| s.parse::<u32>().ok());
-                                matches!(
-                                    (parts.next(), parts.next()),
-                                    (Some(0), _) | (Some(1), Some(0 | 1))
-                                )
-                            })
-                        {
-                            return Err(format!(
-                                "bun.lock requires Bun >=1.2; repository pins {}; update its mise.toml first",
-                                versions["bun"]
-                            ));
-                        }
-                        let mut args: Vec<String> = args.into_iter().map(str::to_owned).collect();
-                        if tool == "bun" {
-                            args.splice(1..1, ["--cwd".into(), cwd.to_string_lossy().into_owned()]);
-                        } else {
-                            args.splice(
-                                1..1,
-                                ["--prefix".into(), cwd.to_string_lossy().into_owned()],
-                            );
-                        }
-                        if plan.maintenance {
-                            if tool == "bun" {
-                                std::fs::remove_file(cwd.join(leaf)).map_err(|e| e.to_string())?;
-                            } else if let Some(install) =
-                                args.iter_mut().find(|a| a.as_str() == "install")
-                            {
-                                *install = "update".into();
-                            }
-                        }
-                        self.tool(
-                            &driver,
-                            &versions,
-                            tool,
-                            if tool == "bun" { "bun" } else { "npm" },
-                            args,
-                        )
-                        .await?;
-                        if !cwd.join(leaf).is_file() {
-                            return Err(format!("tool did not produce {leaf}"));
-                        }
-                    }
+                    self.node(node::NodeContext {
+                        driver: &driver,
+                        root: &root,
+                        baseline: &baseline,
+                        directory: &directory,
+                        config,
+                        versions: &versions,
+                        maintenance: plan.maintenance,
+                    })
+                    .await?;
                 }
                 Ecosystem::Cargo => {
                     for job in jobs {
@@ -479,7 +416,17 @@ impl Runner {
                         } else if !plan.maintenance {
                             args.push("--workspace".into());
                         }
-                        self.tool(&driver, &versions, "rust", "cargo", args).await?;
+                        self.tool(
+                            &driver,
+                            Invocation {
+                                tools: vec![("rust".into(), versions["rust"].clone())],
+                                bin: "cargo".into(),
+                                cwd: None,
+                                env: Vec::new(),
+                                args,
+                            },
+                        )
+                        .await?;
                     }
                 }
                 Ecosystem::Go => {
@@ -487,19 +434,22 @@ impl Runner {
                         if let Some(package) = &job.package {
                             self.tool(
                                 &driver,
-                                &versions,
-                                "go",
-                                "go",
-                                vec![
-                                    "-C".into(),
-                                    cwd.to_string_lossy().into_owned(),
-                                    "get".into(),
-                                    format!(
-                                        "{}@{}",
-                                        package,
-                                        job.target.as_deref().ok_or("missing Go target")?
-                                    ),
-                                ],
+                                Invocation {
+                                    tools: vec![("go".into(), versions["go"].clone())],
+                                    bin: "go".into(),
+                                    cwd: None,
+                                    env: Vec::new(),
+                                    args: vec![
+                                        "-C".into(),
+                                        cwd.to_string_lossy().into_owned(),
+                                        "get".into(),
+                                        format!(
+                                            "{}@{}",
+                                            package,
+                                            job.target.as_deref().ok_or("missing Go target")?
+                                        ),
+                                    ],
+                                },
                             )
                             .await?;
                         }
@@ -514,7 +464,17 @@ impl Runner {
                             "download".into()
                         },
                     ];
-                    self.tool(&driver, &versions, "go", "go", args).await?;
+                    self.tool(
+                        &driver,
+                        Invocation {
+                            tools: vec![("go".into(), versions["go"].clone())],
+                            bin: "go".into(),
+                            cwd: None,
+                            env: Vec::new(),
+                            args,
+                        },
+                    )
+                    .await?;
                 }
                 Ecosystem::Terraform => {
                     if cwd.join(".terraform.lock.hcl").exists() {
@@ -523,14 +483,17 @@ impl Runner {
                     }
                     self.tool(
                         &driver,
-                        &versions,
-                        "terraform",
-                        "terraform",
-                        vec![
-                            format!("-chdir={}", cwd.display()),
-                            "providers".into(),
-                            "lock".into(),
-                        ],
+                        Invocation {
+                            tools: vec![("terraform".into(), versions["terraform"].clone())],
+                            bin: "terraform".into(),
+                            cwd: None,
+                            env: Vec::new(),
+                            args: vec![
+                                format!("-chdir={}", cwd.display()),
+                                "providers".into(),
+                                "lock".into(),
+                            ],
+                        },
                     )
                     .await?;
                 }
@@ -599,19 +562,26 @@ impl Runner {
         }
         Ok(())
     }
-    async fn tool(
-        &self,
-        driver: &Path,
-        versions: &BTreeMap<String, String>,
-        tool: &str,
-        bin: &str,
-        args: Vec<String>,
-    ) -> Result<(), String> {
-        let version = versions.get(tool).ok_or("missing tool version")?;
+    async fn tool(&self, driver: &Path, call: Invocation) -> Result<(), String> {
         let mut spec = self.command(driver);
-        spec.args
-            .extend(["exec".into(), format!("{tool}@{version}"), "--".into()]);
-        if tool == "rust" {
+        if let Some(cwd) = &call.cwd {
+            spec.cwd = cwd.clone();
+        }
+        for (key, value) in &call.env {
+            spec.env.insert(key.into(), value.into());
+        }
+        spec.args.push("exec".into());
+        for (tool, version) in &call.tools {
+            spec.args.push(format!("{tool}@{version}"));
+        }
+        spec.args.push("--".into());
+        if call.tools.iter().any(|(tool, _)| tool == "rust") {
+            let version = call
+                .tools
+                .iter()
+                .find(|(tool, _)| tool == "rust")
+                .map(|(_, version)| version.clone())
+                .ok_or("missing tool version")?;
             spec.env
                 .insert("RUSTUP_HOME".into(), self.rustup_home.as_os_str().into());
             let cargo_home = spec
@@ -632,19 +602,30 @@ impl Runner {
                 format!("CARGO_HOME={}", cargo_home.to_string_lossy()),
                 self.rustup.to_string_lossy().into_owned(),
                 "run".into(),
-                version.clone(),
-                bin.into(),
+                version,
+                call.bin.clone(),
             ]);
         } else {
-            spec.args.push(bin.into());
+            spec.args.push(call.bin.clone());
         }
-        spec.args.extend(args);
+        spec.args.extend(call.args);
+        let bin = call.bin;
         self.executor
             .run(spec)
             .await
             .map(|_| ())
             .map_err(|e| format!("{bin}: {e}"))
     }
+}
+
+/// One ecosystem tool invocation: the mise tools it needs, the binary to run
+/// and the arguments to pass.
+struct Invocation {
+    tools: Vec<(String, String)>,
+    bin: String,
+    cwd: Option<PathBuf>,
+    env: Vec<(String, String)>,
+    args: Vec<String>,
 }
 
 fn validate_targets(
@@ -676,11 +657,16 @@ fn validate_targets(
                 change.package, change.file
             ));
         };
+        // Only lockfiles this runner can read back prove a resolution. pnpm and
+        // Yarn locks are checked by the unchanged-lockfile rule instead.
         if (matches!(dep.manager, Manager::Npm | Manager::Bun | Manager::Cargo)
             || (dep.source == Source::Terraform
                 && dep.kind == rustovate_config::DependencyKind::Provider))
             && let Some(version) = &change.version
-            && dep.resolved.as_deref() != Some(version)
+            && dep
+                .resolved
+                .as_deref()
+                .is_some_and(|resolved| resolved != version)
         {
             return Err(format!(
                 "lockfile did not resolve {} to requested version {version}",
@@ -695,10 +681,9 @@ fn versions(
     baseline: &BTreeMap<String, Blob>,
     directory: &str,
 ) -> Result<BTreeMap<String, String>, String> {
-    let defaults = toml_edit::Document::parse(include_str!("lockfiles/defaults.toml"))
-        .map_err(|e| e.to_string())?;
+    let defaults = tool_defaults()?;
     let mut versions = BTreeMap::new();
-    for tool in ["node", "bun", "rust", "go", "terraform"] {
+    for tool in ["node", "bun", "rust", "go", "terraform", "aube", "yarn"] {
         versions.insert(
             tool.into(),
             defaults["tools"][tool]
@@ -738,12 +723,18 @@ fn versions(
     }
     Ok(versions)
 }
+/// The pinned tool versions used when a repository does not pin its own.
+fn tool_defaults() -> Result<toml_edit::Document<&'static str>, String> {
+    toml_edit::Document::parse(include_str!("lockfiles/defaults.toml")).map_err(|e| e.to_string())
+}
 fn writable(path: &str) -> bool {
     matches!(
         path.rsplit('/').next().unwrap_or(path),
         "package.json"
             | "package-lock.json"
             | "npm-shrinkwrap.json"
+            | "pnpm-lock.yaml"
+            | "yarn.lock"
             | "bun.lock"
             | "Cargo.toml"
             | "Cargo.lock"
@@ -757,7 +748,12 @@ fn materialized(path: &str) -> bool {
     writable(path)
         || matches!(
             path.rsplit('/').next().unwrap_or(path),
-            "mise.toml" | ".mise.toml" | ".tool-versions" | "go.work" | "go.work.sum"
+            "mise.toml"
+                | ".mise.toml"
+                | ".tool-versions"
+                | "go.work"
+                | "go.work.sum"
+                | "pnpm-workspace.yaml"
         )
         || path.ends_with(".go")
         || path.ends_with(".rs")
@@ -783,7 +779,7 @@ fn collect(root: &Path) -> Result<BTreeMap<String, String>, String> {
             let path = entry.path();
             if matches!(
                 entry.file_name().to_str(),
-                Some("node_modules" | ".terraform" | "target" | ".git")
+                Some("node_modules" | ".terraform" | "target" | ".git" | ".yarn" | ".aube")
             ) {
                 continue;
             }
