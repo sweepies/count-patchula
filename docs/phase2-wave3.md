@@ -151,6 +151,8 @@ and the selected manifest/lock resolution still matches its requested targets.
 Lock additions and deletions join the manifest in the same verified API commit.
 
 Text Bun locks, npm package locks/shrinkwrap, Cargo, Go and Terraform are covered.
+npm and pnpm locks are planned to move to aube by default; see
+[package managers and speed](../README.md#package-managers-and-speed).
 Yarn, pnpm and binary `bun.lockb` remain unsupported. The retained
 `--allow-lockfile-pending` flag is an explicit manifest-only testing escape hatch
 for those formats; supported formats always require successful tooling.

@@ -26,6 +26,22 @@ labels and mise registry backends are supported by read-only lookup.
 - Deliberate departures from Renovate: [docs/departures.md](docs/departures.md)
 - Progress: the `rustovate` project in Linear (sweepies team)
 
+## Package managers and speed
+
+Lockfile updates run the ecosystem's own tool, so a repository's package
+manager choice sets a floor on how fast rustovate can update it. Manifest edits
+and API commits take milliseconds; the lockfile tool usually takes seconds.
+
+rustovate is opinionated here. `pnpm-lock.yaml` and `package-lock.json` will be
+regenerated with [aube](https://aube.sh) by default rather than pnpm or npm
+([SWE-149](https://linear.app/sweepies/issue/SWE-149)). aube reads and writes
+both formats in place. On a small project it was about 4× faster than pnpm and
+produced a byte-identical pnpm lockfile. npm lockfiles stay valid for `npm ci`,
+but a later `npm install` may rewrite a few lines (hoisting and `funding`
+metadata). We think npm projects should move to pnpm or aube anyway. A setting
+will keep native npm for repositories that need it. Yarn and Bun lockfiles keep
+using Yarn and Bun, because aube 2.7.0 does not yet update them faithfully.
+
 ## Clean-room rule
 
 rustovate is an independent implementation under the MIT licence. Renovate
