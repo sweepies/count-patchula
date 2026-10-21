@@ -57,3 +57,9 @@ and exit. `patchula --server` is a long-running [GitHub App
 server](/guide/server): it verifies webhooks, keeps a deduplicated queue, sweeps
 on a cron schedule and keeps every cache warm between batches. Both use the same
 engine, so a batch behaves the same however it started.
+
+`--local <dir>` reads one repository from a directory on disk instead of
+GitHub, with the same config discovery and file selection. Lookups still reach
+the registries, and nothing is written, so it works with `lookup` and
+`run --dry-run`. The Count's own CI uses it to look up a corpus of about 2,600
+real dependencies on every pull request.

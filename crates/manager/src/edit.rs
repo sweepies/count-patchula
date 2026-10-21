@@ -98,7 +98,9 @@ pub fn edits(
 /// npm and Bun dependencies live in JSON manifests, YAML catalogs and plain
 /// Node version files, so their syntax follows the file rather than the manager.
 fn json(dep: &Dependency) -> bool {
-    matches!(dep.manager, Manager::Npm | Manager::Bun) && dep.file.ends_with("package.json")
+    (matches!(dep.manager, Manager::Npm | Manager::Bun) && dep.file.ends_with("package.json"))
+        // HCL version strings are quoted like JSON strings, without interpolation.
+        || (dep.manager == Manager::Terraform && dep.file.ends_with(".tf"))
 }
 fn yaml(dep: &Dependency) -> bool {
     matches!(
@@ -188,10 +190,11 @@ fn quote(dep: &Dependency, raw: &str, target: &str) -> Result<String, String> {
         {
             return Err("unsafe replacement inside a Gradle string".into());
         }
-    } else if dep.manager == Manager::Bundler {
-        // Gem requirements sit inside a Ruby string and may contain spaces.
+    } else if matches!(dep.manager, Manager::Bundler | Manager::Composer) {
+        // Gem requirements sit inside a Ruby string and Composer constraints
+        // inside a JSON string; both may contain spaces (`^7.0 || ^8.0`).
         if target.contains(['"', '\'', '\\']) {
-            return Err("unsafe replacement inside a Ruby string".into());
+            return Err("unsafe replacement inside a quoted requirement".into());
         }
     } else if target.chars().any(char::is_whitespace) && dep.manager != Manager::Regex {
         return Err("unsafe unquoted replacement".into());

@@ -111,6 +111,7 @@ Extract dependencies and report available updates without writing repositories.
   **Default:** `3600`
 - **`--config <CONFIG>`** — Local Pkl override applied to every selected repository.
 - **`--config-dir <CONFIG_DIR>`** — Per-repository local overrides: `<dir>/<owner>/<name>.pkl` wins over `<dir>/<name>.pkl`. Unmatched repositories discover `.github/patchula.pkl` then `patchula.pkl`; neither means skipped. All matched files are validated before repository scans. Mutually exclusive with `--config`.
+- **`--local <LOCAL>`** — Read one repository from this local directory instead of GitHub. Lookups still reach registries, and nothing is written: use it with `lookup` or `run --dry-run`.
 - **`-h --help`** — Print help
 
 ## `patchula run`
@@ -138,6 +139,7 @@ Create or update dependency branches and pull requests with verified API commits
   **Default:** `3600`
 - **`--config <CONFIG>`** — Local Pkl override applied to every selected repository.
 - **`--config-dir <CONFIG_DIR>`** — Per-repository local overrides: `<dir>/<owner>/<name>.pkl` wins over `<dir>/<name>.pkl`. Unmatched repositories discover `.github/patchula.pkl` then `patchula.pkl`; neither means skipped. All matched files are validated before repository scans. Mutually exclusive with `--config`.
+- **`--local <LOCAL>`** — Read one repository from this local directory instead of GitHub. Lookups still reach registries, and nothing is written: use it with `lookup` or `run --dry-run`.
 - **`--dry-run`** — Print planned branches, files and unified diffs without writing to GitHub.
 - **`--allow-lockfile-pending`** — Permit manifest-only test branches for unsupported binary bun locks.
 - **`-h --help`** — Print help

@@ -144,6 +144,10 @@ pub struct Lookup {
     /// All matched files are validated before repository scans. Mutually exclusive with `--config`.
     #[usage(long, conflicts = "--config")]
     pub config_dir: Option<PathBuf>,
+    /// Read one repository from this local directory instead of GitHub. Lookups still reach
+    /// registries, and nothing is written: use it with `lookup` or `run --dry-run`.
+    #[usage(long, conflicts = "--config-dir")]
+    pub local: Option<PathBuf>,
 }
 
 #[derive(Args)]

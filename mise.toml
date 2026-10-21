@@ -206,6 +206,16 @@ tools = { node = "24.21.0", aube = "2.8.0" }
 usage = 'arg "<alias>" help="Preview alias, such as pr-42 (lowercase letters, digits and dashes)"'
 run = 'aube exec wrangler versions upload --preview-alias "${usage_alias?}" --message "Preview ${usage_alias?}"'
 
+[tasks."corpus:snapshot"]
+description = "Regenerate tests/corpus-extraction.tsv after an intended extraction change"
+env = { PATCHULA_UPDATE_SNAPSHOT = "1" }
+run = "cargo test --locked -p patchula-manager --test corpus"
+
+[tasks."corpus:check"]
+description = "Look up every corpus dependency against live registries and plan its branches without writing; needs a GitHub token; forwards run flags"
+raw_args = true
+run = "cargo run --release --locked -p patchula-cli -- run --dry-run --json --local tests/corpus"
+
 [tasks.lookup]
 description = "Run read-only lookup; forwards repository and lookup flags"
 raw_args = true

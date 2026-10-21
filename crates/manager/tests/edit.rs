@@ -367,3 +367,32 @@ fn gradle_variable_versions_are_edited_at_their_definition() {
         assert!(edits(dep, text, "${x}", None).is_err());
     }
 }
+#[test]
+fn terraform_versions_are_replaced_inside_their_quotes() {
+    let text = "terraform {\n  required_version = \">= 1.5.7\"\n  required_providers {\n    aws = {\n      source  = \"hashicorp/aws\"\n      version = \">= 6.59\"\n    }\n  }\n}\nmodule \"vpc\" {\n  source  = \"terraform-aws-modules/vpc/aws\"\n  version = \"5.0.0\"\n}\n";
+    let deps = Scanner::new(&config(Manager::Terraform))
+        .unwrap()
+        .extract(&Files::from([("versions.tf".into(), text.into())]))
+        .unwrap()
+        .dependencies;
+    let aws = deps.iter().find(|d| d.name == "aws").unwrap();
+    let changed = apply(text, edits(aws, text, ">= 6.60", None).unwrap()).unwrap();
+    assert_eq!(changed, text.replace("\">= 6.59\"", "\">= 6.60\""));
+    let vpc = deps.iter().find(|d| d.current == "5.0.0").unwrap();
+    let changed = apply(text, edits(vpc, text, "5.1.0", None).unwrap()).unwrap();
+    assert_eq!(changed, text.replace("\"5.0.0\"", "\"5.1.0\""));
+}
+#[test]
+fn composer_constraints_with_spaces_are_replaced() {
+    let manifest = "{\n    \"require\": {\n        \"guzzlehttp/guzzle\": \"^7.8.2\"\n    }\n}\n";
+    assert_eq!(
+        replace(
+            Manager::Composer,
+            "composer.json",
+            manifest,
+            "^7.8.2 || ^8.0",
+            None
+        ),
+        manifest.replace("^7.8.2", "^7.8.2 || ^8.0")
+    );
+}

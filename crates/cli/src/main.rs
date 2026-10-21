@@ -307,6 +307,7 @@ async fn batch(
         repositories: options.repositories.clone(),
         config,
         config_dir: options.config_dir.clone(),
+        local: options.local.clone(),
     };
     let report = if let Some(run) = run {
         engine

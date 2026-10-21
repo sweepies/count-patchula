@@ -50,6 +50,65 @@ jobs:
           du -sh target/.
           df -h . "${RUNNER_TEMP}"
 
+  corpus:
+    name: Corpus lookup
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          cache: true
+      - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
+        continue-on-error: true
+        with:
+          backend: github
+          github-cache-mode: objects
+          isolate-objects-cache: true
+          clean-target-before-export: true
+          cache-generation: v3-corpus-objects
+          save-on-pull-request: false
+      # Registry validators and catalogs carry over between runs, like a real
+      # deployment's cache; a cold run still works, just slower.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/corpus-cache
+          key: corpus-${{ github.run_id }}
+          restore-keys: corpus-
+      # A dry run looks every dependency up and plans every branch, editing
+      # each manifest in memory, without writing anything.
+      - name: Look up and plan every corpus dependency
+        env:
+          PATCHULA_TOKEN: ${{ github.token }}
+          CACHE_DIR: ${{ runner.temp }}/corpus-cache
+        run: |
+          mkdir -p "$CACHE_DIR"
+          mise run corpus:check --cache "$CACHE_DIR/cache.sqlite" > corpus-report.json 2> corpus.log || { grep -v '^[-+@ ]' corpus.log | tail -40; exit 1; }
+          jq='mise exec jq@1.8.2 -- jq'
+          {
+            echo '### Corpus'
+            echo '```'
+            grep -E 'dependencies,|visited|timings|^  warning' corpus.log
+            $jq -r '.actions.branches | group_by(.status) | map("\(.[0].status): \(length) branches") | .[]' corpus-report.json
+            $jq -r '.actions.branches[] | select(.status == "skipped" or .status == "error") | "\(.status) \(.branch): \(.reason)"' corpus-report.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          errors=$($jq '[.actions.branches[] | select(.status == "error")] | length' corpus-report.json)
+          if [ "$errors" != 0 ]; then
+            echo "::error::$errors corpus branches failed to plan"
+            exit 1
+          fi
+      - name: Publish the corpus report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: corpus-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: corpus-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
   docs:
     name: Documentation site
     runs-on: ubuntu-latest

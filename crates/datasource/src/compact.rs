@@ -27,7 +27,24 @@ struct Npm {
 }
 #[derive(Deserialize)]
 struct NpmVersion {
-    deprecated: Option<String>,
+    #[serde(default)]
+    deprecated: Option<Deprecated>,
+}
+/// npm writes a deprecation message, but some publishers wrote a boolean
+/// (react has `"deprecated": false` on a few versions).
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Deprecated {
+    Message(String),
+    Flag(bool),
+}
+impl Deprecated {
+    fn active(&self) -> bool {
+        match self {
+            Deprecated::Message(text) => !text.is_empty(),
+            Deprecated::Flag(flag) => *flag,
+        }
+    }
 }
 
 pub(super) fn npm(body: &[u8]) -> Result<Vec<u8>, CacheError> {
@@ -40,7 +57,7 @@ pub(super) fn npm(body: &[u8]) -> Result<Vec<u8>, CacheError> {
             .map(|(version, node)| Version {
                 published_at: document.time.remove(&version),
                 version,
-                deprecated: node.deprecated.is_some_and(|v| !v.is_empty()),
+                deprecated: node.deprecated.is_some_and(|d| d.active()),
                 digest: None, // npm integrity/shasum is not consumed by lookup.
                 yanked: false,
             })
@@ -121,5 +138,22 @@ mod tests {
             catalog.versions[1].published_at.as_deref(),
             Some("2026-01-01T00:00:00Z")
         );
+    }
+}
+
+#[cfg(test)]
+mod npm_tests {
+    #[test]
+    fn npm_deprecation_flags_and_messages() {
+        let body = br#"{"dist-tags":{"latest":"2.0.0"},"time":{},"versions":{"1.0.0":{"deprecated":false},"1.1.0":{"deprecated":true},"1.2.0":{"deprecated":"use 2"},"1.3.0":{"deprecated":""},"2.0.0":{}}}"#;
+        let stored: serde_json::Value = serde_json::from_slice(&super::npm(body).unwrap()).unwrap();
+        let deprecated: Vec<_> = stored["versions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|v| v["deprecated"] == true)
+            .map(|v| v["version"].as_str().unwrap())
+            .collect();
+        assert_eq!(deprecated, ["1.2.0", "1.1.0"]);
     }
 }

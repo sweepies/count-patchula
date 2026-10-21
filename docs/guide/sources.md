@@ -74,7 +74,10 @@ when the origin changes.
 
 ## Dates and release age
 
-Publication dates feed the [release-age wait](/guide/lookup-policy). npm, crates,
+Publication dates feed the [release-age wait](/guide/lookup-policy). Go dates
+releases through the proxy's `.info` documents, only for the 20 newest on a cold
+lookup, since a module can list hundreds and older releases are outside any
+wait; versions the proxy lists but cannot describe are dropped. npm, crates,
 PyPI, RubyGems, NuGet and Packagist report them directly. Maven Central's search
 API lags by months, so Maven uses each POM's `Last-Modified` header, for the ten
 newest versions only. GitHub tags use the release date, then the annotated tag

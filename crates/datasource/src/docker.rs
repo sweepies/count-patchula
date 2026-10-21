@@ -72,10 +72,16 @@ pub(super) fn identity(package: &str) -> Result<(String, String)> {
             },
         )
     };
-    let host = if matches!(host.as_str(), "docker.io" | "index.docker.io") {
-        "registry-1.docker.io".into()
+    let (host, path) = if matches!(host.as_str(), "docker.io" | "index.docker.io") {
+        // `docker.io/busybox` is the official image `library/busybox`.
+        let path = if path.contains('/') {
+            path
+        } else {
+            format!("library/{path}")
+        };
+        ("registry-1.docker.io".to_string(), path)
     } else {
-        host
+        (host, path)
     };
     if path.is_empty()
         || !path
@@ -532,5 +538,30 @@ impl Client {
             return Err(Error::Invalid);
         }
         Ok(digest)
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    #[test]
+    fn docker_hub_names_resolve_to_one_identity() {
+        for name in [
+            "busybox",
+            "docker.io/busybox",
+            "index.docker.io/library/busybox",
+        ] {
+            assert_eq!(
+                super::identity(name).unwrap(),
+                (
+                    "registry-1.docker.io".to_string(),
+                    "library/busybox".to_string()
+                ),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            super::identity("docker.io/bitnami/redis").unwrap().1,
+            "bitnami/redis"
+        );
     }
 }

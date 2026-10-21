@@ -49,6 +49,9 @@ pub struct Options {
     pub repositories: Vec<String>,
     pub config: Option<Config>,
     pub config_dir: Option<std::path::PathBuf>,
+    /// Read one repository from a local directory instead of GitHub. Lookups
+    /// still reach registries; nothing is ever written.
+    pub local: Option<std::path::PathBuf>,
 }
 pub struct Engine {
     lockfiles: Option<patchula_update::lockfiles::Runner>,
@@ -250,6 +253,11 @@ impl Engine {
         allow_lockfile_pending: bool,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<Report> {
+        if options.local.is_some() && !dry_run {
+            return Err(Error::Configuration(
+                "--local never writes; use it with lookup or run --dry-run".into(),
+            ));
+        }
         let started = Instant::now();
         let (mut report, work) = self.lookup_work_at(options, now, !dry_run).await?;
         let write_started = Instant::now();
@@ -613,6 +621,12 @@ impl Engine {
                 "--config and --config-dir are mutually exclusive".into(),
             ));
         }
+        if options.local.is_some() && !options.repositories.is_empty() {
+            return Err(Error::Configuration(
+                "--local reads one directory; omit repository arguments".into(),
+            ));
+        }
+        let local = options.local.clone();
         let sources = self.sources.catalog_batch();
         let total = Instant::now();
         let _total_span = PhaseTrace::new("total");
@@ -621,7 +635,9 @@ impl Engine {
         let before_hits = self.extraction_hits.load(Ordering::Relaxed);
         let started = Instant::now();
         let phase = PhaseTrace::new("discovery");
-        let repos = if options.repositories.is_empty() {
+        let repos = if let Some(dir) = &local {
+            vec![local_name(dir)]
+        } else if options.repositories.is_empty() {
             self.repositories().await?
         } else {
             options.repositories
@@ -664,12 +680,17 @@ impl Engine {
             let started = Instant::now();
             let _phase = PhaseTrace::new("extraction");
             let overrides = &overrides;
+            let local = local.as_deref();
             let work: Vec<_> = stream::iter(repos)
                 .map(|repo| async move {
-                    let mut work = match self
-                        .scan(&repo, overrides.get(&repo).or(override_config))
-                        .await
-                    {
+                    let scanned = match local {
+                        Some(dir) => self.scan_local(dir, &repo, override_config).await,
+                        None => {
+                            self.scan(&repo, overrides.get(&repo).or(override_config))
+                                .await
+                        }
+                    };
+                    let mut work = match scanned {
                         Ok(work) => work,
                         Err(error) => Work {
                             report: repository(&repo, Status::Error, Some(error.to_string())),
@@ -1501,6 +1522,118 @@ impl Engine {
         self.extract(repo, override_config, report, commit, &tree_sha)
             .await
     }
+    /// A repository read from disk: the same config discovery, file selection
+    /// and Git blob identities as one read through the API.
+    async fn scan_local(
+        &self,
+        dir: &std::path::Path,
+        repo: &str,
+        override_config: Option<&Config>,
+    ) -> Result<Work> {
+        let config = match override_config {
+            Some(config) => config.clone(),
+            None => {
+                match patchula_config::discover(dir).map_err(|e| Error::Invalid(e.to_string()))? {
+                    Some(path) => tokio::task::spawn_blocking(move || {
+                        patchula_config::load(&path).map_err(|e| format!("{e:?}"))
+                    })
+                    .await
+                    .map_err(|e| Error::Invalid(e.to_string()))?
+                    .map_err(Error::Invalid)?,
+                    None => {
+                        return Ok(Work {
+                        report: repository(
+                            repo,
+                            Status::Skipped,
+                            Some(
+                                "the Count was not invited: no .github/patchula.pkl or patchula.pkl"
+                                    .into(),
+                            ),
+                        ),
+                        config: None,
+                        dependencies: Vec::new(),
+                        snapshot: Default::default(),
+                        inventory: None,
+                        controls: Default::default(),
+                    });
+                    }
+                }
+            }
+        };
+        let scanner = Scanner::new(&config).map_err(Error::Invalid)?;
+        let dir = dir.to_owned();
+        let (paths, blobs, extraction) = tokio::task::spawn_blocking(move || {
+            let mut paths = BTreeSet::new();
+            let mut blobs = BTreeMap::new();
+            let mut pending = vec![dir.clone()];
+            while let Some(next) = pending.pop() {
+                for entry in std::fs::read_dir(&next)? {
+                    let entry = entry?;
+                    let kind = entry.file_type()?;
+                    let path = entry.path();
+                    if kind.is_dir() {
+                        if entry.file_name() != ".git" {
+                            pending.push(path);
+                        }
+                        continue;
+                    }
+                    if !kind.is_file() {
+                        continue;
+                    }
+                    let relative = path
+                        .strip_prefix(&dir)
+                        .expect("walked below the root")
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    if scanner.needs(&relative) {
+                        // Non-UTF-8 files cannot hold an editable declaration.
+                        if let Ok(content) = std::fs::read_to_string(&path) {
+                            blobs.insert(
+                                relative.clone(),
+                                patchula_update::Blob {
+                                    sha: patchula_update::blob_sha(&content),
+                                    mode: "100644".into(),
+                                    content,
+                                },
+                            );
+                        }
+                    }
+                    paths.insert(relative);
+                }
+            }
+            let files: Files = blobs
+                .iter()
+                .map(|(p, b): (&String, &patchula_update::Blob)| (p.clone(), b.content.clone()))
+                .collect();
+            let extraction = scanner.extract(&files).map_err(std::io::Error::other)?;
+            std::io::Result::Ok((paths, blobs, extraction))
+        })
+        .await
+        .map_err(|e| Error::Invalid(e.to_string()))?
+        .map_err(|e| Error::Invalid(e.to_string()))?;
+        let mut report = repository(repo, Status::Complete, None);
+        report.warnings = extraction.warnings;
+        // Plans are based on a commit; a directory's stands in as a hash of
+        // its selected files, stable until they change.
+        report.commit = Some(hash(&serde_json::to_vec(
+            &blobs
+                .iter()
+                .map(|(path, blob)| (path, &blob.sha))
+                .collect::<Vec<_>>(),
+        )?));
+        report.default_branch = Some("local".into());
+        Ok(Work {
+            report,
+            config: Some(config),
+            dependencies: extraction.dependencies,
+            snapshot: patchula_update::Snapshot {
+                paths,
+                files: blobs,
+            },
+            inventory: None,
+            controls: Default::default(),
+        })
+    }
     async fn head(&self, repo: &str, branch: &str) -> Result<Value> {
         let mut url =
             reqwest::Url::parse(&format!("https://api.github.com/repos/{repo}/branches/"))
@@ -1723,6 +1856,15 @@ fn validate_repo(repo: &str) -> Result<()> {
         return Err(Error::Invalid("invalid repository identity".into()));
     }
     Ok(())
+}
+/// A local directory reports as `local/<directory name>`.
+fn local_name(dir: &std::path::Path) -> String {
+    let name = dir
+        .canonicalize()
+        .ok()
+        .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "directory".into());
+    format!("local/{name}")
 }
 fn repository(repo: &str, status: Status, reason: Option<String>) -> Repository {
     Repository {

@@ -38,6 +38,8 @@ pub enum Error {
     RateLimit(u64),
 }
 pub type Result<T> = std::result::Result<T, Error>;
+/// Go releases dated through `.info` on a cold lookup, newest first.
+const GO_DATED_RELEASES: usize = 20;
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Catalog {
     pub versions: Vec<Version>,
@@ -254,25 +256,39 @@ impl Client {
             .collect();
         // Fetch .info only for new releases; retain publication timestamps for
         // older ones. Never refetch full per-version history on a warm lookup.
+        // A cold lookup dates only the newest releases: older ones are outside
+        // any release-age wait, and a module can list hundreds of versions.
+        // The proxy lists some versions it cannot describe (404); those are
+        // not installable releases and are dropped.
         let mut reached_known = false;
+        let mut fetched = 0;
+        let mut missing = std::collections::HashSet::new();
         for version in &mut versions {
             if let Some(time) = known.get(&version.version) {
                 version.published_at = time.clone();
                 reached_known = true;
-            } else if !reached_known {
-                let info: Value = serde_json::from_slice(
-                    &self
-                        .http
-                        .get(
-                            &format!("{prefix}/{}.info", version.version),
-                            "application/json",
-                        )
-                        .await?
-                        .body,
-                )?;
+            } else if !reached_known && fetched < GO_DATED_RELEASES {
+                fetched += 1;
+                let response = self
+                    .http
+                    .get(
+                        &format!("{prefix}/{}.info", version.version),
+                        "application/json",
+                    )
+                    .await;
+                let response = match response {
+                    Ok(response) => response,
+                    Err(patchula_http::CacheError::Status(404 | 410)) => {
+                        missing.insert(version.version.clone());
+                        continue;
+                    }
+                    Err(error) => return Err(error.into()),
+                };
+                let info: Value = serde_json::from_slice(&response.body)?;
                 version.published_at = info["Time"].as_str().map(str::to_owned);
             }
         }
+        versions.retain(|v| !missing.contains(&v.version));
         self.merge("go", package, &versions).await?;
         Ok(Catalog {
             versions,

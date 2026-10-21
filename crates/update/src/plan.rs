@@ -315,7 +315,7 @@ fn build(
     }
     if contents.is_empty() && reason.is_none() {
         reason = Some(
-            "no editable manifest change (inherited declarations are owned by their workspace)"
+            "no editable manifest change: the declaration already allows the target, or is inherited from its workspace root"
                 .into(),
         );
     }

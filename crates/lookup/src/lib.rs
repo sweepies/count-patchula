@@ -539,15 +539,25 @@ impl Evaluator {
         let baseline = baseline.or_else(|| {
             if !matches!(
                 scheme,
-                Ecosystem::Cargo | Ecosystem::Hashicorp | Ecosystem::Pep440 | Ecosystem::Poetry
+                Ecosystem::Cargo
+                    | Ecosystem::Hashicorp
+                    | Ecosystem::Pep440
+                    | Ecosystem::Poetry
+                    | Ecosystem::Composer
+                    | Ecosystem::Rubygems
             ) {
                 return None;
             }
+            // A range's lowest version only classifies the update; it is never
+            // reported as what is installed. `^5.4 || ^6.0` and `>=1.0 <2.0`
+            // start at their first alternative's first bound.
             let first = current
-                .split(',')
+                .split([',', '|'])
                 .next()?
                 .trim()
-                .trim_start_matches(['=', '>', '<', '~', '^', ' ']);
+                .trim_start_matches(['=', '>', '<', '~', '^', '!', ' '])
+                .split_whitespace()
+                .next()?;
             scheme.parse(first).ok().or_else(|| {
                 (scheme == Ecosystem::Cargo)
                     .then(|| Ecosystem::Loose.parse(first).ok())

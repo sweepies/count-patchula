@@ -990,3 +990,40 @@ fn maven_variants_are_kept_and_ordered_by_maven_rules() {
         .collect();
     assert_eq!(values, ["33.7.2-android"]);
 }
+/// Without a lockfile, Composer and RubyGems ranges classify their updates from
+/// the range's lowest version instead of failing.
+#[test]
+fn unlocked_composer_and_gem_ranges_classify_from_their_floor() {
+    let mut cfg = config("renovate-runner");
+    cfg.defaults.wait_hours = 0;
+    let eval = Evaluator::new(&cfg).unwrap();
+    let mut dep = dependency("symfony/console");
+    dep.manager = Manager::Composer;
+    dep.kind = DependencyKind::Production;
+    dep.source = Source::Packagist;
+    dep.scheme = Scheme::Composer;
+    dep.resolved = None;
+    for current in ["^6.4 || ^7.0", ">=6.4 <7.0", "^6.4"] {
+        dep.current = current.into();
+        let proposals = eval
+            .propose(&dep, &catalog(&["6.4.0", "7.2.0", "8.0.1"]))
+            .unwrap();
+        assert!(
+            proposals.iter().any(|p| p.update_type == "major"),
+            "{current}: {proposals:?}"
+        );
+    }
+    let mut gem = dependency("wdm");
+    gem.manager = Manager::Bundler;
+    gem.kind = DependencyKind::Production;
+    gem.source = Source::Rubygems;
+    gem.scheme = Scheme::Rubygems;
+    gem.resolved = None;
+    gem.current = ">= 0.1.0".into();
+    assert!(
+        !eval
+            .propose(&gem, &catalog(&["0.1.0", "0.2.0"]))
+            .unwrap()
+            .is_empty()
+    );
+}
