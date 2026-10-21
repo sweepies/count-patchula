@@ -644,7 +644,7 @@ flags. `no-cache`/`no-store`, other registries and mutable manifest digests reta
 their upstream rules. Anonymous image-scoped pull tokens are reused only within
 their expiry minus a margin; private/GitHub credentials are never stored as tokens.
 See [cache policy](/internals/cache#local-freshness-and-host-limits) and
-[departure 21](/renovate/departures#departure-21). New versions/deletions can be delayed
+[conditional source refresh](/renovate/departures#source-refresh). New versions/deletions can be delayed
 within the chosen freshness window; OCI publication dates remain unknown.
 
 A live GitHub Packages versions probe returned 403: the supplied OAuth token

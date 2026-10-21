@@ -42,7 +42,8 @@ pub struct Difference {
 #[serde(rename_all = "camelCase")]
 pub struct Departure {
     pub rule: String,
-    pub row: u32,
+    /// The departure's section anchor in docs/renovate/departures.md.
+    pub id: String,
     pub link: String,
 }
 
@@ -57,7 +58,8 @@ pub struct Rules {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Rule {
     id: String,
-    departure: u32,
+    /// The departure's section anchor, such as `minimum-release-age`.
+    departure: String,
     classification: Classification,
     managers: Vec<String>,
     field: String,
@@ -106,7 +108,7 @@ impl Rules {
                 || rule.managers.is_empty()
                 || !include_str!("../../docs/renovate/departures.md")
                     .lines()
-                    .any(|line| line.starts_with(&format!("| {} |", rule.departure)))
+                    .any(|line| line.ends_with(&format!("{{#{}}}", rule.departure)))
                 || !matches!(
                     (&rule.predicate, rule.classification, rule.field.as_str()),
                     (
@@ -195,7 +197,7 @@ impl Rules {
                 )
             {
                 return Err(Error::Input(
-                    "invalid departure rule, duplicate ID or missing docs/renovate/departures.md row".into(),
+                    "invalid departure rule, duplicate ID or missing docs/renovate/departures.md section".into(),
                 ));
             }
         }
@@ -536,8 +538,8 @@ impl Rules {
                 difference.classification = Classification::DeliberateDeparture;
                 difference.departure = Some(Departure {
                     rule: rule.id.clone(),
-                    row: rule.departure,
-                    link: format!("docs/renovate/departures.md#departure-{}", rule.departure),
+                    id: rule.departure.clone(),
+                    link: format!("docs/renovate/departures.md#{}", rule.departure),
                 });
                 return;
             }
@@ -625,7 +627,7 @@ impl Triage {
             out.push_str("Excluded Renovate output (outside patchula's manager scope):\n\n");
             for e in &self.exclusions {
                 out.push_str(&format!(
-                    "- {} / {}: {} files, {} dependencies, {} updates ([departure {}]({})).\n",
+                    "- {} / {}: {} files, {} dependencies, {} updates ([{}]({})).\n",
                     cell(&e.repository),
                     cell(&e.manager),
                     e.package_files,
@@ -666,7 +668,7 @@ impl Triage {
             let departure = d
                 .departure
                 .as_ref()
-                .map(|p| format!("[row {}]({}) ({})", p.row, p.link, cell(&p.rule)))
+                .map(|p| format!("[{}]({}) ({})", p.id, p.link, cell(&p.rule)))
                 .unwrap_or_default();
             out.push_str(&format!(
                 "| {} | {} | {} | {} | {} | {} |\n",

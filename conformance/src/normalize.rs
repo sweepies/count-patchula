@@ -92,7 +92,8 @@ pub(super) fn reports(
             .iter_mut()
             .find(|r| r.repository == repo.repository);
         let has_actual_repo = actual_repo.is_some();
-        let mut counts = BTreeMap::<(String, String, u32), (BTreeSet<String>, usize, usize)>::new();
+        let mut counts =
+            BTreeMap::<(String, String, &str), (BTreeSet<String>, usize, usize)>::new();
         for file in &mut repo.package_files {
             let owners = file.dependencies.clone();
             let mut actual_file = actual_repo
@@ -116,12 +117,20 @@ pub(super) fn reports(
                     && dep.current.value.as_deref().is_none_or(|v| {
                         ["file:", "./", "../"].iter().any(|p| v.starts_with(p)) || v.contains("${{")
                     }) {
-                    Some((dep.manager.as_str(), "unversioned-inventory", 32))
+                    Some((
+                        dep.manager.as_str(),
+                        "unversioned-inventory",
+                        "unversioned-references",
+                    ))
                 } else if dep.manager == "kubernetes"
                     && source(dep) == Some("kubernetes-api")
                     && dep.updates.is_empty()
                 {
-                    Some(("kubernetes", "api-version-inventory", 26))
+                    Some((
+                        "kubernetes",
+                        "api-version-inventory",
+                        "kubernetes-api-versions",
+                    ))
                 } else if matches!(dep.manager.as_str(), "helm-values" | "kubernetes")
                     && source(dep) == Some("docker")
                     && owners.iter().any(|owner| {
@@ -139,7 +148,11 @@ pub(super) fn reports(
                             })
                     })
                 {
-                    Some((dep.manager.as_str(), "yaml-image-single-owner", 27))
+                    Some((
+                        dep.manager.as_str(),
+                        "yaml-image-single-owner",
+                        "yaml-image-ownership",
+                    ))
                 } else {
                     None
                 };
@@ -179,8 +192,8 @@ pub(super) fn reports(
                 dependencies,
                 updates,
                 rule,
-                departure,
-                link: format!("docs/renovate/departures.md#departure-{departure}"),
+                departure: departure.into(),
+                link: format!("docs/renovate/departures.md#{departure}"),
             });
         }
     }
