@@ -2,7 +2,7 @@
   <img src="docs/public/logo.png" width="180" alt="Count Patchula, a bat holding a wrench">
   <h1>Count Patchula</h1>
   <p><strong>Count Patchula vants to update your deps. He never sleeps. Neither do your CVEs.</strong></p>
-  <p>A dependency update bot for GitHub that does a whole batch of repositories in one fast, cached run.</p>
+  <p>A modern dependency updater with strong defaults.</p>
   <p>
     <a href="docs/getting-started.md">Get started</a> ·
     <a href="docs/">Documentation</a> ·

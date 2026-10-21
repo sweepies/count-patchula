@@ -96,7 +96,7 @@ The `3029efd` follow-up had no GitHub recording credential and refreshed only
 public npm metadata. The subsequent live investigation refreshed both public
 source and engine cassettes for GraphQL head batches and matching-ref hydration.
 All ordinary tests remain offline. Current live results and reproduction commands
-are in [benchmarks](/benchmarks#live-network-investigation-2026-10-15).
+are in [benchmarks](/internals/history/benchmarks#live-network-investigation-2026-10-15).
 Registry max-age is honored rather than replaced with an arbitrary local TTL.
 
 ## Branch write path
