@@ -754,6 +754,11 @@ impl Runner {
     }
     async fn tool(&self, driver: &Path, call: Invocation) -> Result<(), String> {
         let mut spec = self.command(driver);
+        // A first use installs the tool inside this call, from scratch.
+        if !self.installed(&call.tools) {
+            self.clear_unproven(&call.tools).await;
+            spec.timeout = tools::INSTALL_TIMEOUT;
+        }
         if let Some(cwd) = &call.cwd {
             spec.cwd = cwd.clone();
         }

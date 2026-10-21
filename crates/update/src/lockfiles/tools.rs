@@ -5,6 +5,11 @@
 use super::*;
 
 const USAGE: &str = "rustovate-usage.json";
+/// mise itself, which is not in mise's registry under its own name.
+pub(super) const MISE: &str = "aqua:jdx/mise";
+/// Time allowed for installing tools. Some hosts are slow: static-php.dev
+/// served about 44 KB/s when measured.
+pub(super) const INSTALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1800);
 
 /// `RUSTOVATE_TOOLS_DIR`, or `<cache>.tools` beside the SQLite cache.
 pub fn tools_dir(workspace: &Path) -> PathBuf {
@@ -36,6 +41,7 @@ pub(super) fn defaults() -> Result<Vec<(String, String)>, String> {
             if !matches!(tool, "rust" | "php" | "composer")
                 && let Some(version) = version.as_str()
             {
+                let tool = if tool == "mise" { MISE } else { tool };
                 tools.push((tool.to_string(), version.to_string()));
             }
         }
@@ -58,6 +64,29 @@ pub(super) fn defaults() -> Result<Vec<(String, String)>, String> {
 }
 
 impl Runner {
+    /// Whether every `tool@version` has run before, so mise will not install
+    /// it within this call; pruning forgets versions as it removes them.
+    pub(super) fn installed(&self, tools: &[(String, String)]) -> bool {
+        let usage = read_usage(&self.mise_data);
+        tools
+            .iter()
+            .all(|(tool, version)| usage.contains_key(&format!("{tool}@{version}")))
+    }
+    /// Uninstall versions no run has completed with. An install cut short (a
+    /// timeout, a crash) can leave a directory mise treats as installed but
+    /// that holds no binaries; only a recorded run proves an install works.
+    pub(super) async fn clear_unproven(&self, tools: &[(String, String)]) {
+        let usage = read_usage(&self.mise_data);
+        for (tool, version) in tools {
+            let spec = format!("{tool}@{version}");
+            if tool != "rust"
+                && !usage.contains_key(&spec)
+                && let Err(error) = self.mise(vec!["uninstall".into(), spec]).await
+            {
+                tracing::warn!(%error, "unproven tool install was not removed");
+            }
+        }
+    }
     pub(super) fn record_use(&self, tools: &[(String, String)]) {
         let _guard = self
             .usage
@@ -79,6 +108,7 @@ impl Runner {
     async fn mise(&self, args: Vec<String>) -> Result<(), String> {
         let driver = tempfile::tempdir().map_err(|e| e.to_string())?;
         let mut spec = self.command(driver.path());
+        spec.timeout = 2 * INSTALL_TIMEOUT;
         spec.args.extend(args);
         self.executor
             .run(spec)
@@ -89,6 +119,7 @@ impl Runner {
     /// Install the pinned default toolchains, e.g. while building an image.
     pub async fn prewarm(&self) -> Result<Vec<String>, String> {
         let tools = defaults()?;
+        self.clear_unproven(&tools).await;
         let specs: Vec<String> = tools.iter().map(|(t, v)| format!("{t}@{v}")).collect();
         let mut args = vec!["install".to_string()];
         args.extend(specs.iter().cloned());

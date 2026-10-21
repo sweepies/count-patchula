@@ -177,7 +177,7 @@ impl Runner {
         let mut command = self.command(driver);
         command.args.extend([
             "exec".into(),
-            format!("mise@{version}"),
+            format!("{}@{version}", tools::MISE),
             "--".into(),
             "env".into(),
             "-u".into(),

@@ -180,7 +180,15 @@ pub(super) fn matches(constraint: &str, version: &Parsed) -> Result<bool> {
 pub(super) fn new_range(current: &str, target: &str, policy: VersionPolicy) -> Result<String> {
     let parsed = parse(target)?;
     if policy == VersionPolicy::Exact {
-        return Ok(target.into());
+        // Packagist reports tags (`v8.1.9`); constraints conventionally
+        // omit the prefix unless the current one uses it.
+        let keep = current.trim_start().starts_with(['v', 'V']);
+        return Ok(if keep {
+            target
+        } else {
+            target.trim_start_matches(['v', 'V'])
+        }
+        .into());
     }
     if matches(current, &parsed)? {
         return Ok(current.into());
@@ -273,5 +281,13 @@ mod tests {
             );
         }
         assert!(new_range(">=1.0 <2.0", "3.0.0", VersionPolicy::Preserve).is_err());
+        assert_eq!(
+            new_range("^6.4", "v8.1.9", VersionPolicy::Exact).unwrap(),
+            "8.1.9"
+        );
+        assert_eq!(
+            new_range("v2.1.0", "v2.3.0", VersionPolicy::Exact).unwrap(),
+            "v2.3.0"
+        );
     }
 }

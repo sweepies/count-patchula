@@ -103,7 +103,7 @@ pub fn plan(
     let mut package_names = BTreeMap::<String, BTreeSet<(String, String)>>::new();
     for dep in dependencies {
         package_names
-            .entry(slug(&dep.package))
+            .entry(package_slug(&dep.package))
             .or_default()
             .insert((word(&dep.source), dep.package.clone()));
     }
@@ -149,7 +149,7 @@ pub fn plan(
                             serde_json::json!(["dependency", word(&dep.source), dep.package, line])
                                 .to_string(),
                             {
-                                let package = slug(&dep.package);
+                                let package = package_slug(&dep.package);
                                 let manager = if package_names[&package].len() > 1 {
                                     format!("{}-", manager_slug(dep))
                                 } else {
@@ -264,10 +264,11 @@ fn build(
         titles.insert(format!(
             "{} to {}",
             dep.name,
+            // The version reads better than a specifier such as `==2.0.0`.
             update
-                .new_value
+                .new_version
                 .as_deref()
-                .or(update.new_version.as_deref())
+                .or(update.new_value.as_deref())
                 .or(update.new_digest.as_deref())
                 .unwrap_or(value)
         ));
@@ -455,6 +456,11 @@ pub(crate) fn unified(path: &str, old: &str, new: &str) -> String {
     result
 }
 
+/// Registry-qualified identities (`registry|name`) name their branch after the
+/// package, not the registry URL.
+fn package_slug(package: &str) -> String {
+    slug(package.rsplit_once('|').map_or(package, |(_, name)| name))
+}
 fn slug(value: &str) -> String {
     let s = value
         .to_ascii_lowercase()

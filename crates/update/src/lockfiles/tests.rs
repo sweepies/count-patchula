@@ -16,6 +16,11 @@ impl Executor for Fixture {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
         Box::pin(async move {
             self.calls.lock().unwrap().push(spec.args.clone());
+            // Real tools come from the developer's store, which tests never
+            // modify; the runner's own store starts empty.
+            if spec.args.iter().any(|s| s == "uninstall") {
+                return Ok(Vec::new());
+            }
             if spec.args.iter().any(|s| s == "git") {
                 assert!(
                     spec.env
@@ -1179,7 +1184,11 @@ impl Executor for MiseFixture {
                     .keys()
                     .any(|key| key.to_string_lossy().contains("TOKEN"))
             );
-            assert!(spec.args.iter().any(|arg| arg == "mise@2026.10.11"));
+            assert!(
+                spec.args
+                    .iter()
+                    .any(|arg| arg == "aqua:jdx/mise@2026.10.11")
+            );
             let work =
                 Path::new(&spec.args[spec.args.iter().position(|arg| arg == "--cd").unwrap() + 1]);
             let text = std::fs::read_to_string(work.join("mise.toml")).unwrap();
@@ -1911,6 +1920,31 @@ async fn tool_store_prunes_unused_versions_and_prewarms_defaults() {
             && installed.contains(&"yarn@4.18.1".to_string())
     );
     assert!(!installed.iter().any(|s| s.starts_with("rust@")));
+    assert!(installed.contains(&"aqua:jdx/mise@2026.10.11".to_string()));
+}
+
+/// Every prewarmed spec is one real mise can install: a dry run resolves
+/// names and backends offline without downloading.
+#[test]
+fn real_mise_accepts_every_prewarm_spec() {
+    let store = tempfile::tempdir().unwrap();
+    let specs: Vec<String> = tools::defaults()
+        .unwrap()
+        .iter()
+        .map(|(t, v)| format!("{t}@{v}"))
+        .collect();
+    let output = std::process::Command::new("mise")
+        .args(["--no-config", "install", "--dry-run"])
+        .args(&specs)
+        .env("MISE_DATA_DIR", store.path())
+        .env("MISE_OFFLINE", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 /// Real dotnet restores a project's packages.lock.json offline and leaves no
@@ -2110,5 +2144,52 @@ async fn real_composer_relocks_offline() {
         p.contents["composer.lock"].contains("content-hash"),
         "{}",
         p.contents["composer.lock"]
+    );
+}
+
+struct Timeouts(Mutex<Vec<std::time::Duration>>);
+impl Executor for Timeouts {
+    fn run(
+        &self,
+        spec: CommandSpec,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+        Box::pin(async move {
+            if spec.args.iter().any(|a| a == "exec") {
+                self.0.lock().unwrap().push(spec.timeout);
+            } else {
+                assert!(
+                    spec.args.iter().any(|a| a == "uninstall"),
+                    "{:?}",
+                    spec.args
+                );
+            }
+            Ok(Vec::new())
+        })
+    }
+}
+
+/// A tool version the store has not run yet is reinstalled from scratch within
+/// the call, so it gets the install allowance; known versions keep the normal
+/// limit.
+#[tokio::test]
+async fn first_tool_use_allows_for_the_install() {
+    let temp = tempfile::tempdir().unwrap();
+    let timeouts = Arc::new(Timeouts(Mutex::new(Vec::new())));
+    let runner = Runner::new(temp.path().join("cache"), "x").with_executor(timeouts.clone());
+    let driver = temp.path().join("driver");
+    std::fs::create_dir_all(&driver).unwrap();
+    let call = || Invocation {
+        tools: vec![("uv".into(), "0.13.1".into())],
+        bin: "uv".into(),
+        cwd: None,
+        env: Vec::new(),
+        args: vec!["lock".into()],
+    };
+    runner.tool(&driver, call()).await.unwrap();
+    runner.tool(&driver, call()).await.unwrap();
+    let normal = runner.command(&driver).timeout;
+    assert_eq!(
+        *timeouts.0.lock().unwrap(),
+        [tools::INSTALL_TIMEOUT, normal]
     );
 }

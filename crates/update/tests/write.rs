@@ -2882,3 +2882,19 @@ async fn merged_pr_branch_can_be_reused_for_the_next_update_on_its_major_line() 
     assert_eq!(actions[0].status, ActionStatus::Created);
     assert_eq!(server.0.lock().unwrap().prs.len(), 2);
 }
+
+#[tokio::test(start_paused = true)]
+async fn titles_name_versions_and_branches_skip_registry_urls() {
+    let (config, mut repo, mut deps, snapshot) = setup("22.0.0", false);
+    let package = "https://charts.example.test/repo|node".to_string();
+    deps[0].package = package.clone();
+    let dep = &mut repo.package_files[0].dependencies[0];
+    dep.package = package;
+    dep.updates[0].new_value = Some("==22.0.0".into());
+    let plans = plan(&repo, &config, &deps, &snapshot, false, chrono::Utc::now()).unwrap();
+    assert_eq!(
+        plans[0].action.message,
+        "chore(deps): update node to 22.0.0"
+    );
+    assert_eq!(plans[0].action.branch, "rustovate/node-22.x");
+}
