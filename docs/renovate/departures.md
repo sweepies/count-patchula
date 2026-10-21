@@ -1,12 +1,7 @@
 # Deliberate departures
 
 The Count is not a Renovate clone. Where he behaves differently on purpose, the
-difference is written down here with a reason. The comparison harness that runs
-Renovate as a black box links every difference it finds to one of these
-sections; a difference with no section is treated as a bug.
-
-Each section's anchor is its stable identifier, so links and the harness's
-rules keep pointing at the same departure.
+difference is written down here with a reason.
 
 ## Configuration
 
