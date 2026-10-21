@@ -282,7 +282,7 @@ fn discovery_reads_only_the_root_and_reports_absence() {
     let (directory, root) = fixture("");
     assert_eq!(discover(directory.path()).unwrap(), Some(root));
     let github_only = tempfile::tempdir().unwrap();
-    std::fs::create_dir(github_only.path().join(".github")).unwrap();
+    std::fs::create_dir_all(github_only.path().join(".github")).unwrap();
     std::fs::write(
         github_only.path().join(".github/patchula.pkl"),
         "amends \"patchula-schema.pkl\"\nprs { concurrent = 3 }\n",

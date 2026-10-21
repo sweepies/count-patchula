@@ -204,7 +204,7 @@ fn config_validation_and_json_results_use_documented_exit_codes() {
     assert!(output.status.success(), "{output:?}");
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["schemaVersion"], 1);
-    assert_eq!(json["valid"], true);
+    assert_eq!(json["valid"].as_bool(), Some(true));
     assert!(output.stderr.is_empty());
 
     let directory = tempfile::tempdir().unwrap();
@@ -263,7 +263,7 @@ fn config_check_directory_uses_bundled_nested_defaults() {
     let output = cli(&["config", "check", dir.path().to_str().unwrap(), "--json"]);
     assert!(output.status.success(), "{output:?}");
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["valid"], true);
+    assert_eq!(json["valid"].as_bool(), Some(true));
 }
 
 #[test]

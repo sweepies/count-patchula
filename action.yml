@@ -55,6 +55,9 @@ runs:
         INPUT_VERSION: ${{ inputs.version }}
         INPUT_ARGS: ${{ inputs.args }}
         ACTION_REF: ${{ github.action_ref }}
+        # Lets mise list releases from GitHub itself when the version is
+        # "latest"; the public versions mirror can lag behind a new release.
+        MISE_GITHUB_TOKEN: ${{ github.token }}
         CACHE_DIR: ${{ runner.temp }}/patchula
       run: |
         set -euo pipefail
@@ -85,5 +88,8 @@ runs:
         mkdir -p "$CACHE_DIR"
         # The workflow chose this version by pinning the action, so mise's
         # release-age wait does not apply to it.
+        if [ "$version" = latest ]; then
+          export MISE_USE_VERSIONS_HOST=0
+        fi
         bin=$(cd "$RUNNER_TEMP" && MISE_MINIMUM_RELEASE_AGE=0 mise exec "packslip:github.com/sweepies/count-patchula@$version" -- sh -c 'command -v patchula')
         "$bin" "${args[@]}"

@@ -696,9 +696,9 @@ impl Engine {
                             report: repository(&repo, Status::Error, Some(error.to_string())),
                             config: None,
                             dependencies: Vec::new(),
-                            snapshot: Default::default(),
+                            snapshot: patchula_update::Snapshot::default(),
                             inventory: None,
-                            controls: Default::default(),
+                            controls: patchula_update::dashboard::Controls::default(),
                         },
                     };
                     if read_controls
@@ -1549,9 +1549,9 @@ impl Engine {
                             ),
                             config: None,
                             dependencies: Vec::new(),
-                            snapshot: Default::default(),
+                            snapshot: patchula_update::Snapshot::default(),
                             inventory: None,
-                            controls: Default::default(),
+                            controls: patchula_update::dashboard::Controls::default(),
                         });
                     }
                 }
@@ -1628,7 +1628,7 @@ impl Engine {
                 files: blobs,
             },
             inventory: None,
-            controls: Default::default(),
+            controls: patchula_update::dashboard::Controls::default(),
         })
     }
     async fn head(&self, repo: &str, branch: &str) -> Result<Value> {
@@ -1687,9 +1687,9 @@ impl Engine {
                 report,
                 config: None,
                 dependencies: Vec::new(),
-                snapshot: Default::default(),
+                snapshot: patchula_update::Snapshot::default(),
                 inventory: None,
-                controls: Default::default(),
+                controls: patchula_update::dashboard::Controls::default(),
             });
         };
         let key = ExtractionKey {
@@ -1764,7 +1764,7 @@ impl Engine {
             dependencies: cached.extraction.dependencies,
             snapshot: cached.snapshot,
             inventory: None,
-            controls: Default::default(),
+            controls: patchula_update::dashboard::Controls::default(),
         })
     }
     async fn config(&self, repo: &str, path: &str, entries: &[Entry]) -> Result<Config> {
