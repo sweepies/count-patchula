@@ -411,56 +411,14 @@ impl Runner {
     }
 }
 
-/// npm lockfiles aube 2.8.0 cannot keep valid: format v1, which it cannot read,
-/// and trees with local `file:`/`link:` dependencies, whose entries it drops so
-/// `npm ci` rejects the lock (aube#1796). Native npm owns these locks.
+/// npm lockfiles aube cannot keep valid: format v1, which aube 2.8.1 still
+/// cannot read. Native npm owns these locks.
 pub(super) fn aube_cannot_write_npm(cwd: &Path, leaf: &str) -> Result<bool, String> {
     let lock = std::fs::read_to_string(cwd.join(leaf)).map_err(|e| e.to_string())?;
-    if serde_json::from_str::<serde_json::Value>(&lock)
+    Ok(serde_json::from_str::<serde_json::Value>(&lock)
         .ok()
         .and_then(|value| value.get("lockfileVersion")?.as_u64())
-        .is_some_and(|version| version < 2)
-    {
-        return Ok(true);
-    }
-    fn local(dir: &Path) -> Result<bool, String> {
-        for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let path = entry.path();
-            let name = entry.file_name();
-            if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
-                if !matches!(name.to_str(), Some("node_modules" | ".git")) && local(&path)? {
-                    return Ok(true);
-                }
-                continue;
-            }
-            if name != "package.json" {
-                continue;
-            }
-            let Ok(text) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&text) else {
-                continue;
-            };
-            let found = [
-                "dependencies",
-                "devDependencies",
-                "optionalDependencies",
-                "peerDependencies",
-            ]
-            .iter()
-            .filter_map(|field| manifest.get(*field)?.as_object())
-            .flat_map(|deps| deps.values())
-            .filter_map(serde_json::Value::as_str)
-            .any(|spec| spec.starts_with("file:") || spec.starts_with("link:"));
-            if found {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-    local(cwd)
+        .is_some_and(|version| version < 2))
 }
 
 pub(super) fn join(directory: &str, leaf: &str) -> String {

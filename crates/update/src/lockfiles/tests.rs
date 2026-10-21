@@ -337,7 +337,7 @@ async fn all_tools_are_targeted_scrubbed_and_versions_are_read_without_loading_r
     let calls = executor.calls.lock().unwrap();
     for sequence in [
         vec!["bun@1.4.3", "--", "bun"],
-        vec!["aube@2.8.0", "--", "aube", "-C"],
+        vec!["aube@2.8.1", "--", "aube", "-C"],
         vec!["-p", "serde@1.0.200", "--precise", "1.0.229"],
         vec!["get", "example.com/mod@v1.1.0"],
         vec!["mod", "tidy"],
@@ -415,7 +415,7 @@ async fn node_lockfiles_use_aube_yarn_and_bun_by_lockfile_format() {
     assert!(
         commands
             .iter()
-            .any(|(specs, command)| specs.as_slice() == ["aube@2.8.0"]
+            .any(|(specs, command)| specs.as_slice() == ["aube@2.8.1"]
                 && starts(command, &["aube", "-C"])
                 && contains(command, &["install", "--lockfile-only", "--ignore-scripts"])),
         "missing aube command {commands:?}"
@@ -439,7 +439,7 @@ async fn node_lockfiles_use_aube_yarn_and_bun_by_lockfile_format() {
     assert_eq!(
         commands
             .iter()
-            .filter(|(specs, _)| specs.as_slice() == ["aube@2.8.0"])
+            .filter(|(specs, _)| specs.as_slice() == ["aube@2.8.1"])
             .count(),
         2,
         "one aube call per pnpm and npm lock"
@@ -488,7 +488,7 @@ async fn the_npm_engine_setting_restores_native_npm_for_npm_locks() {
     assert!(
         commands
             .iter()
-            .any(|(specs, command)| specs.as_slice() == ["aube@2.8.0"]
+            .any(|(specs, command)| specs.as_slice() == ["aube@2.8.1"]
                 && starts(command, &["aube", "-C"])),
         "pnpm must keep aube {commands:?}"
     );
@@ -694,7 +694,7 @@ async fn maintenance_refreshes_node_lockfiles_within_the_manifest_ranges() {
     assert!(
         commands
             .iter()
-            .any(|(specs, command)| specs.as_slice() == ["aube@2.8.0"]
+            .any(|(specs, command)| specs.as_slice() == ["aube@2.8.1"]
                 && starts(command, &["aube", "-C"])
                 && contains(
                     command,
@@ -766,8 +766,9 @@ async fn real_tools_produce_deterministic_lockfiles_from_local_offline_fixtures(
     }
 }
 
-/// aube regenerates pnpm and npm locks in place from local offline fixtures.
-/// npm trees with local `file:` dependencies stay on native npm (aube#1796).
+/// aube regenerates pnpm and npm locks in place from local offline fixtures,
+/// including npm trees with local `file:` dependencies (fixed in aube 2.8.1,
+/// aube#1796).
 #[tokio::test]
 async fn real_aube_rewrites_pnpm_and_npm_locks_in_place() {
     let npm_seed = "{\"name\":\"fixture\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"name\":\"fixture\",\"version\":\"1.0.0\"}}}\n";
@@ -778,21 +779,21 @@ async fn real_aube_rewrites_pnpm_and_npm_locks_in_place() {
             "pnpm-lock.yaml",
             "lockfileVersion: '9.0'\n",
             local,
-            "aube@2.8.0",
+            "aube@2.8.1",
             "local-fixture",
         ),
         (
             "package-lock.json",
             npm_seed,
             local,
-            "node@24.21.0",
+            "aube@2.8.1",
             "local-fixture",
         ),
         (
             "package-lock.json",
             npm_seed,
             plain,
-            "aube@2.8.0",
+            "aube@2.8.1",
             "lockfileVersion",
         ),
     ] {
@@ -1373,7 +1374,9 @@ fn readable_locks_must_resolve_the_requested_version() {
     }
 }
 
-/// aube cannot keep npm v1 locks or trees with local dependencies valid.
+/// aube cannot read npm v1 locks; every newer lock stays with aube, including
+/// trees with local `file:` dependencies, which aube 2.8.1 keeps valid
+/// (aube#1796).
 #[test]
 fn npm_locks_aube_cannot_write_stay_on_native_npm() {
     let case = |files: &[(&str, &str)]| {
@@ -1392,25 +1395,8 @@ fn npm_locks_aube_cannot_write_stay_on_native_npm() {
         ("package.json", "{}"),
         ("package-lock.json", "{\"lockfileVersion\":1}\n"),
     ]));
-    assert!(case(&[
-        ("package.json", "{\"dependencies\":{\"a\":\"file:./a\"}}"),
-        ("package-lock.json", v3),
-    ]));
-    assert!(case(&[
-        ("package.json", "{\"workspaces\":[\"packages/*\"]}"),
-        (
-            "packages/b/package.json",
-            "{\"devDependencies\":{\"a\":\"link:../a\"}}"
-        ),
-        ("package-lock.json", v3),
-    ]));
-    // Installed packages are not part of the project's own manifests.
     assert!(!case(&[
-        ("package.json", "{}"),
-        (
-            "node_modules/x/package.json",
-            "{\"dependencies\":{\"a\":\"file:./a\"}}"
-        ),
+        ("package.json", "{\"dependencies\":{\"a\":\"file:./a\"}}"),
         ("package-lock.json", v3),
     ]));
 }

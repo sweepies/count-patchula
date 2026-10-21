@@ -100,12 +100,12 @@ description = "Test the workspace through mbx"
 # Lockfile engines the offline real-tool tests run, matching
 # crates/update/src/lockfiles/defaults.toml. Task-scoped so a development
 # `mise install` does not fetch them.
-tools = { aube = "2.8.0", yarn = "4.18.1", python = "3.14.8", uv = "0.13.1", poetry = "2.5.1", dotnet = "9.0.319", ruby = "3.4.11", "http:php[url=https://dl.static-php.dev/static-php-cli/common/php-{{version}}-cli-linux-x86_64.tar.gz]" = "8.5.8", "http:composer[url=https://getcomposer.org/download/{{version}}/composer.phar,bin=composer]" = "2.10.3" }
+tools = { aube = "2.8.1", yarn = "4.18.1", python = "3.14.8", uv = "0.13.1", poetry = "2.5.1", dotnet = "9.0.319", ruby = "3.4.11", "http:php[url=https://dl.static-php.dev/static-php-cli/common/php-{{version}}-cli-linux-x86_64.tar.gz]" = "8.5.8", "http:composer[url=https://getcomposer.org/download/{{version}}/composer.phar,bin=composer]" = "2.10.3" }
 run = "cargo test --workspace --locked --no-fail-fast"
 
 [tasks."test:stress"]
 description = "Repeat the offline suite with varied test thread counts; logs stay outside the repository"
-tools = { aube = "2.8.0", yarn = "4.18.1", python = "3.14.8", uv = "0.13.1", poetry = "2.5.1", dotnet = "9.0.319", ruby = "3.4.11", "http:php[url=https://dl.static-php.dev/static-php-cli/common/php-{{version}}-cli-linux-x86_64.tar.gz]" = "8.5.8", "http:composer[url=https://getcomposer.org/download/{{version}}/composer.phar,bin=composer]" = "2.10.3" }
+tools = { aube = "2.8.1", yarn = "4.18.1", python = "3.14.8", uv = "0.13.1", poetry = "2.5.1", dotnet = "9.0.319", ruby = "3.4.11", "http:php[url=https://dl.static-php.dev/static-php-cli/common/php-{{version}}-cli-linux-x86_64.tar.gz]" = "8.5.8", "http:composer[url=https://getcomposer.org/download/{{version}}/composer.phar,bin=composer]" = "2.10.3" }
 env = { CARGO_NET_OFFLINE = "true", PATCHULA_RECORD = "0" }
 run = '''
 log_dir="${PATCHULA_STRESS_LOG_DIR:-/tmp/patchula-stress}"
@@ -174,35 +174,35 @@ done
 [tasks."docs:install"]
 description = "Install the documentation site's packages from its lockfile"
 dir = "docs"
-tools = { node = "24.21.0", aube = "2.8.0" }
+tools = { node = "24.21.0", aube = "2.8.1" }
 run = "aube ci"
 
 [tasks."docs:dev"]
 description = "Serve the documentation site with live reload"
 depends = ["docs:install"]
 dir = "docs"
-tools = { node = "24.21.0", aube = "2.8.0" }
+tools = { node = "24.21.0", aube = "2.8.1" }
 run = "aube run dev"
 
 [tasks."docs:build"]
 description = "Build the documentation site into docs/.vitepress/dist"
 depends = ["docs:install"]
 dir = "docs"
-tools = { node = "24.21.0", aube = "2.8.0" }
+tools = { node = "24.21.0", aube = "2.8.1" }
 run = "aube run build"
 
 [tasks."docs:deploy"]
 description = "Deploy the built site to Cloudflare Workers; needs CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID"
 depends = ["docs:build"]
 dir = "docs"
-tools = { node = "24.21.0", aube = "2.8.0" }
+tools = { node = "24.21.0", aube = "2.8.1" }
 run = "aube exec wrangler deploy"
 
 [tasks."docs:preview"]
 description = "Upload the built site as a Cloudflare preview version under an alias, without deploying it"
 depends = ["docs:build"]
 dir = "docs"
-tools = { node = "24.21.0", aube = "2.8.0" }
+tools = { node = "24.21.0", aube = "2.8.1" }
 usage = 'arg "<alias>" help="Preview alias, such as pr-42 (lowercase letters, digits and dashes)"'
 run = 'aube exec wrangler versions upload --preview-alias "${usage_alias?}" --message "Preview ${usage_alias?}"'
 

@@ -49,9 +49,10 @@ The trade-offs are honest ones. aube's npm lockfiles stay valid for `npm ci`,
 but a later `npm install` may rewrite a few lines (hoisting and `funding`
 metadata). On larger pnpm graphs aube may keep a second copy of a package pnpm
 would deduplicate. `lockfiles.npmEngine = "npm"` restores native npm for
-`package-lock.json`. Native npm is also used automatically where aube 2.8 cannot
-keep a lock valid: format v1 locks, and trees with `file:` or `link:`
-dependencies ([aube#1796](https://github.com/aubepkg/aube/issues/1796)).
+`package-lock.json`. Native npm is also used automatically for format v1 locks,
+which aube cannot read. Trees with local `file:` dependencies stay with aube,
+which keeps them valid since 2.8.1
+([aube#1796](https://github.com/aubepkg/aube/issues/1796)).
 
 `yarn.lock` stays with Yarn, because aube's Yarn Berry output is rejected by Yarn
 ([aube#1794](https://github.com/aubepkg/aube/issues/1794),
@@ -71,7 +72,7 @@ pinned defaults apply:
 | Tool | Default |
 |---|---|
 | Node | 24.21.0 |
-| aube | 2.8.0 |
+| aube | 2.8.1 |
 | Yarn | 1.22.22 (Classic), 4.18.1 (Berry) |
 | Bun | 1.4.3 |
 | Rust | 1.99.0 |

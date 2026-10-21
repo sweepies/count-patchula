@@ -164,7 +164,9 @@ for npm lockfiles only; pnpm always uses aube.
 Native npm also regenerates the npm lockfiles aube 2.8.0 cannot keep valid:
 format v1 locks, which aube cannot read, and trees whose manifests declare
 `file:` or `link:` dependencies, whose entries aube drops so `npm ci` rejects
-the lock ([aube#1796](https://github.com/aubepkg/aube/issues/1796)).
+the lock ([aube#1796](https://github.com/aubepkg/aube/issues/1796)). aube
+2.8.1 fixed that, and only v1 locks still go to native npm; see the
+[lockfiles guide](/guide/lockfiles#why-aube-for-npm-and-pnpm).
 Yarn's version comes from the
 `packageManager` field of `package.json`, then the repository pin, then the
 format of the committed lockfile. Yarn Berry has no `--ignore-scripts` flag and
