@@ -3,8 +3,9 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "count-patchula",
   "compatibility_date": "2026-10-21",
-  // workers.dev serves production; preview URLs serve each PR's uploaded
-  // version under its own alias, such as pr-42.
+  // Production is served on count-patchula.sweepy.dev. Preview URLs, which live
+  // on workers.dev, serve each branch's uploaded version under its own alias.
+  "routes": [{ "pattern": "count-patchula.sweepy.dev", "custom_domain": true }],
   "workers_dev": true,
   "preview_urls": true,
   "assets": {

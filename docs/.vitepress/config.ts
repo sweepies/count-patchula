@@ -5,8 +5,9 @@ const repo = "https://github.com/sweepies/count-patchula";
 export default defineConfig({
   title: "Count Patchula",
   description:
-    "A fast dependency update bot for GitHub. He never sleeps. Neither do your CVEs.",
+    "A modern dependency updater with strong defaults. He never sleeps. Neither do your CVEs.",
   lang: "en-US",
+  sitemap: { hostname: "https://count-patchula.sweepy.dev" },
   cleanUrls: true,
   lastUpdated: true,
   srcExclude: ["README.md"],

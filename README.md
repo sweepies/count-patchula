@@ -5,7 +5,7 @@
   <p>A modern dependency updater with strong defaults.</p>
   <p>
     <a href="docs/getting-started.md">Get started</a> ·
-    <a href="docs/">Documentation</a> ·
+    <a href="https://count-patchula.sweepy.dev">Documentation</a> ·
     <a href="docs/renovate/compatibility.md">Coming from Renovate</a> ·
     <a href="docs/benchmarks.md">Benchmarks</a>
   </p>

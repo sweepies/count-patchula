@@ -37,3 +37,10 @@
 .VPFeature .title {
   font-weight: 700;
 }
+
+/* The big hero title alone gets Righteous; it only ships a 400 weight. */
+.VPHero .name {
+  font-family: "Righteous", var(--vp-font-family-base);
+  font-weight: 400;
+  letter-spacing: 0;
+}

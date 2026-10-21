@@ -8,9 +8,12 @@ importers:
 
   .:
     devDependencies:
+      '@fontsource/righteous':
+        specifier: 5.3.0
+        version: 5.3.0
       vitepress:
         specifier: 1.6.4
-        version: 1.6.4
+        version: 1.6.4(postcss@8.5.31)
       vue:
         specifier: 3.5.44
         version: 3.5.44
@@ -479,6 +482,9 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
+
+  '@fontsource/righteous@5.3.0':
+    resolution: {integrity: sha512-xr3w0E1jtc7xoXLfgJrcaKqWjvh5XiAAthVLrl9v9HKC7TfwMy3nARytetfi2GIgo51+aWsEJ51Uyd3XEXbj/A==}
 
   '@iconify-json/simple-icons@1.2.100':
     resolution: {integrity: sha512-536pN2RCEQyy5bYwzayrs4e9egr8cmtVcbdSHLaQl/ULUsihzn1eZ0+Hhn50zgz9cbEotiynKsKQSEjFJ7qKmw==}
@@ -1454,23 +1460,24 @@ snapshots:
 
   '@docsearch/css@3.8.2': {}
 
-  '@docsearch/js@3.8.2':
+  '@docsearch/js@3.8.2(search-insights@2.17.3)':
     dependencies:
-      '@docsearch/react': 3.8.2
+      '@docsearch/react': 3.8.2(search-insights@2.17.3)
       preact: 10.29.8
     transitivePeerDependencies:
       - '@types/react'
       - preact-render-to-string
       - react
       - react-dom
-      - search-insights
 
-  '@docsearch/react@3.8.2':
+  '@docsearch/react@3.8.2(search-insights@2.17.3)':
     dependencies:
       '@algolia/autocomplete-core': 1.17.7(@algolia/client-search@5.60.0)(algoliasearch@5.60.0)(search-insights@2.17.3)
       '@algolia/autocomplete-preset-algolia': 1.17.7(@algolia/client-search@5.60.0)(algoliasearch@5.60.0)
       '@docsearch/css': 3.8.2
       algoliasearch: 5.60.0
+    optionalDependencies:
+      search-insights: 2.17.3
 
   '@emnapi/runtime@1.11.3':
     dependencies:
@@ -1623,6 +1630,8 @@ snapshots:
 
   '@esbuild/win32-x64@0.28.2':
     optional: true
+
+  '@fontsource/righteous@5.3.0': {}
 
   '@iconify-json/simple-icons@1.2.100':
     dependencies:
@@ -2384,10 +2393,10 @@ snapshots:
     optionalDependencies:
       fsevents: 2.3.3
 
-  vitepress@1.6.4:
+  vitepress@1.6.4(postcss@8.5.31):
     dependencies:
       '@docsearch/css': 3.8.2
-      '@docsearch/js': 3.8.2
+      '@docsearch/js': 3.8.2(search-insights@2.17.3)
       '@iconify-json/simple-icons': 1.2.100
       '@shikijs/core': 2.5.0
       '@shikijs/transformers': 2.5.0
@@ -2404,6 +2413,8 @@ snapshots:
       shiki: 2.5.0
       vite: 5.4.21
       vue: 3.5.44
+    optionalDependencies:
+      postcss: 8.5.31
     transitivePeerDependencies:
       - '@types/node'
       - '@types/react'
@@ -2423,7 +2434,6 @@ snapshots:
       - react-dom
       - sass
       - sass-embedded
-      - search-insights
       - sortablejs
       - stylus
       - sugarss
