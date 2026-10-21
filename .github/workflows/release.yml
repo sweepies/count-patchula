@@ -23,9 +23,11 @@ defaults:
   run:
     shell: bash
 
+# A tag's release always finishes; a newer push to a pull request supersedes
+# its older test runs.
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
