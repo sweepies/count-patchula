@@ -906,7 +906,7 @@ impl Lifecycle {
             .collect();
         let content_hash = hash(
             &serde_json::to_vec(&(
-                "notes-render-v3",
+                "notes-render-v4",
                 &text,
                 ranges,
                 self.recheck,
