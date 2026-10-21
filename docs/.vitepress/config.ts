@@ -1,13 +1,14 @@
 import { defineConfig } from "vitepress";
 
 const repo = "https://github.com/sweepies/count-patchula";
+const site = "https://count-patchula.sweepy.dev";
 
 export default defineConfig({
   title: "Count Patchula",
   description:
     "A modern dependency updater with strong defaults. He never sleeps. Neither do your CVEs.",
   lang: "en-US",
-  sitemap: { hostname: "https://count-patchula.sweepy.dev" },
+  sitemap: { hostname: site },
   cleanUrls: true,
   lastUpdated: true,
   srcExclude: ["README.md"],
@@ -16,10 +17,28 @@ export default defineConfig({
     ["link", { rel: "apple-touch-icon", href: "/apple-touch-icon.png" }],
     ["meta", { name: "theme-color", content: "#e85a4f" }],
     ["meta", { property: "og:type", content: "website" }],
-    ["meta", { property: "og:title", content: "Count Patchula" }],
-    ["meta", { property: "og:image", content: "/og.png" }],
+    ["meta", { property: "og:site_name", content: "Count Patchula" }],
+    // Link previews only load absolute image URLs.
+    ["meta", { property: "og:image", content: `${site}/og.png` }],
+    ["meta", { property: "og:image:width", content: "1200" }],
+    ["meta", { property: "og:image:height", content: "630" }],
+    ["meta", { property: "og:image:alt", content: "Count Patchula, a bat holding a wrench" }],
     ["meta", { name: "twitter:card", content: "summary_large_image" }],
+    ["meta", { name: "twitter:image", content: `${site}/og.png` }],
   ],
+  // Each page's own title, description and address, for link previews and search.
+  transformHead({ pageData, title, description }) {
+    const path = pageData.relativePath.replace(/(^|\/)index\.md$/, "$1").replace(/\.md$/, "");
+    const url = `${site}/${path}`;
+    return [
+      ["link", { rel: "canonical", href: url }],
+      ["meta", { property: "og:url", content: url }],
+      ["meta", { property: "og:title", content: title }],
+      ["meta", { property: "og:description", content: description }],
+      ["meta", { name: "twitter:title", content: title }],
+      ["meta", { name: "twitter:description", content: description }],
+    ];
+  },
   markdown: {
     theme: { light: "github-light", dark: "github-dark" },
     // Shiki has no Pkl grammar. Swift shares its #"..."# raw strings and
