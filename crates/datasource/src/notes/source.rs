@@ -9,8 +9,68 @@ static UPSTREAMS: LazyLock<BTreeMap<String, BTreeMap<String, String>>> = LazyLoc
 pub struct Repository {
     pub url: String,
     pub github: Option<String>,
+    /// A GitLab or Gitea/Forgejo upstream; GitHub upstreams use `github`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forge: Option<Forge>,
     pub directory: Option<String>,
     pub image_version: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ForgeKind {
+    Gitlab,
+    /// Gitea and Forgejo (including Codeberg) share one API.
+    Gitea,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Forge {
+    pub kind: ForgeKind,
+    pub host: String,
+    /// `group/subgroup/project` on GitLab, `owner/repo` on Gitea.
+    pub path: String,
+}
+impl Forge {
+    /// Recognise a forge from its host. Unknown self-hosted instances stay
+    /// unsupported rather than being probed.
+    fn detect(host: &str, segments: &[&str]) -> Option<Self> {
+        let kind = if host == "gitlab.com" || host.split('.').any(|l| l == "gitlab") {
+            ForgeKind::Gitlab
+        } else if matches!(host, "codeberg.org" | "gitea.com")
+            || host.split('.').any(|l| matches!(l, "gitea" | "forgejo"))
+        {
+            ForgeKind::Gitea
+        } else {
+            return None;
+        };
+        // GitLab paths may nest groups; `-` starts a project sub-route.
+        let mut parts: Vec<_> = segments
+            .iter()
+            .take_while(|s| **s != "-")
+            .copied()
+            .collect();
+        if kind == ForgeKind::Gitea {
+            parts.truncate(2);
+        }
+        if let Some(last) = parts.last_mut() {
+            *last = last.trim_end_matches(".git");
+        }
+        let valid = |p: &&str| {
+            !p.is_empty()
+                && p.len() <= 100
+                && !matches!(*p, "." | "..")
+                && p.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+        };
+        (parts.len() >= 2 && parts.iter().all(valid)).then(|| Self {
+            kind,
+            host: host.to_ascii_lowercase(),
+            path: parts.join("/"),
+        })
+    }
+    pub fn web(&self) -> String {
+        format!("https://{}/{}", self.host, self.path)
+    }
 }
 
 impl Repository {
@@ -18,6 +78,12 @@ impl Repository {
         let raw = raw.trim().trim_start_matches("git+");
         let raw = if let Some(path) = raw.strip_prefix("git@github.com:") {
             format!("https://github.com/{path}")
+        } else if let Some((host, path)) = raw
+            .strip_prefix("git@")
+            .and_then(|rest| rest.split_once(':'))
+            .filter(|(host, _)| !host.contains('/'))
+        {
+            format!("https://{host}/{path}")
         } else if let Some(path) = raw.strip_prefix("github:") {
             format!("https://github.com/{path}")
         } else if !raw.contains("://") && raw.split('/').count() == 2 {
@@ -54,8 +120,13 @@ impl Repository {
                 ..Self::default()
             })
         } else if matches!(url.scheme(), "https" | "http" | "git" | "ssh") {
+            let segments: Vec<_> = url.path_segments().into_iter().flatten().collect();
+            let forge = url
+                .host_str()
+                .and_then(|host| Forge::detect(host, &segments));
             Some(Self {
-                url: url.into(),
+                url: forge.as_ref().map_or_else(|| url.to_string(), Forge::web),
+                forge,
                 ..Self::default()
             })
         } else {

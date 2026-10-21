@@ -3,7 +3,40 @@ use std::{collections::BTreeSet, sync::LazyLock};
 
 /// Only upstream prose passes through this function. Generated tables, package
 /// names, source links and ownership markers must never be mention-neutralised.
-pub fn sanitise(text: &str, repo: &str) -> String {
+/// Where references in upstream text point: a GitHub repository (through
+/// `redirect.github.com`, avoiding backlinks) or another forge.
+#[derive(Clone, Copy)]
+pub enum Links<'a> {
+    Github(&'a str),
+    Forge(&'a super::source::Forge),
+}
+impl Links<'_> {
+    fn issue(&self, owner: Option<&str>, number: &str) -> Option<String> {
+        match self {
+            Self::Github(repo) => {
+                let owner = owner.unwrap_or(repo);
+                (!owner.is_empty()).then(|| {
+                    format!(
+                        "[{owner}#{number}](https://redirect.github.com/{owner}/issues/{number})"
+                    )
+                })
+            }
+            Self::Forge(forge) => {
+                let path = owner.unwrap_or(&forge.path);
+                let route = match forge.kind {
+                    super::source::ForgeKind::Gitlab => "-/issues",
+                    super::source::ForgeKind::Gitea => "issues",
+                };
+                Some(format!(
+                    "[{path}#{number}](https://{}/{path}/{route}/{number})",
+                    forge.host
+                ))
+            }
+        }
+    }
+}
+
+pub fn sanitise(text: &str, links: Links<'_>) -> String {
     static TOKENS: LazyLock<regex::Regex> = LazyLock::new(|| {
         regex::Regex::new(concat!(
             r"\A(?:",
@@ -166,16 +199,13 @@ pub fn sanitise(text: &str, repo: &str) -> String {
                 output.push_str(&without_backlink(token));
             } else if boundary && (c.name("cross").is_some() || c.name("issue").is_some()) {
                 let (owner, number) = if let Some(owner) = c.name("cross") {
-                    (owner.as_str(), &c["number"])
+                    (Some(owner.as_str()), &c["number"])
                 } else {
-                    (repo, &c["issue"][1..])
+                    (None, &c["issue"][1..])
                 };
-                if owner.is_empty() {
-                    output.push_str(token);
-                } else {
-                    output.push_str(&format!(
-                        "[{owner}#{number}](https://redirect.github.com/{owner}/issues/{number})"
-                    ));
+                match links.issue(owner, number) {
+                    Some(link) => output.push_str(&link),
+                    None => output.push_str(token),
                 }
             } else if let Some(mention) = c.name("mention") {
                 let following = &rest[token.len()..];

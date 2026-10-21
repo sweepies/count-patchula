@@ -7,7 +7,8 @@ use rustovate_config::Source;
 use rustovate_datasource::{
     Client,
     notes::{
-        Notes, Repository, Section, parse_changelog, parse_go_history, parse_release_sgml, sanitise,
+        Links, Notes, Repository, Section, parse_changelog, parse_go_history, parse_release_sgml,
+        sanitise,
     },
 };
 use rustovate_http::{Cached, Exchange, Response, Transport};
@@ -560,7 +561,7 @@ fn rendering_collapses_older_versions_truncates_with_links_and_neutralises_notif
     }
     let safe = sanitise(
         "@alice @org/team #12 org/other#34 https://host/path@v1#anchor",
-        "example/upstream",
+        Links::Github("example/upstream"),
     );
     assert_eq!(
         safe,
@@ -577,7 +578,7 @@ fn mention_neutralisation_only_changes_mentions_in_upstream_prose() {
         "-@org/team!",
     ] {
         assert_eq!(
-            sanitise(text, "example/upstream"),
+            sanitise(text, Links::Github("example/upstream")),
             text.replace('@', "@\u{200d}")
         );
     }
@@ -604,21 +605,25 @@ fn mention_neutralisation_only_changes_mentions_in_upstream_prose() {
         "\\@alice \\#12",
         "word#12 owner/repo@version",
     ] {
-        assert_eq!(sanitise(text, "example/upstream"), text, "{text}");
+        assert_eq!(
+            sanitise(text, Links::Github("example/upstream")),
+            text,
+            "{text}"
+        );
     }
     assert_eq!(
-        sanitise("```\n@code\n```\n@alice", "a/b"),
+        sanitise("```\n@code\n```\n@alice", Links::Github("a/b")),
         "```\n@code\n```\n@\u{200d}alice"
     );
     assert_eq!(
-        sanitise("* Bump @actions/core by @org/team", "a/b"),
+        sanitise("* Bump @actions/core by @org/team", Links::Github("a/b")),
         "* Bump @actions/core by @\u{200d}org/team"
     );
 }
 
 #[test]
 fn links_keep_their_labels_and_only_bare_references_gain_readable_labels() {
-    let plain = sanitise("[see #123]", "google/uuid");
+    let plain = sanitise("[see #123]", Links::Github("google/uuid"));
     assert_eq!(
         plain,
         "[see [google/uuid#123](https://redirect.github.com/google/uuid/issues/123)]"
@@ -631,14 +636,14 @@ fn links_keep_their_labels_and_only_bare_references_gain_readable_labels() {
     ] {
         let link = format!("[{label}](https://github.com/google/uuid/pull/123)");
         assert_eq!(
-            sanitise(&link, "google/uuid"),
+            sanitise(&link, Links::Github("google/uuid")),
             link.replace("https://github.com/", "https://redirect.github.com/")
         );
     }
     assert_eq!(
         sanitise(
             "[fix #123]\n\n[fix #123]: https://github.com/google/uuid/pull/123",
-            "google/uuid"
+            Links::Github("google/uuid")
         ),
         "[fix #123]\n\n[fix #123]: https://redirect.github.com/google/uuid/pull/123"
     );
@@ -651,16 +656,16 @@ fn links_keep_their_labels_and_only_bare_references_gain_readable_labels() {
         "[empty]()",
         "[empty]( )",
     ] {
-        assert_eq!(sanitise(link, "google/uuid"), link);
+        assert_eq!(sanitise(link, Links::Github("google/uuid")), link);
     }
     let text = "([#149](https://github.com/google/uuid/issues/149))\n[other/repo#2][ref]\n[ref]: https://github.com/other/repo/pull/2\n[#3](https://example.org/a#3 \"title\") #4 other/repo#5 `#6`";
     assert_eq!(
-        sanitise(text, "google/uuid"),
+        sanitise(text, Links::Github("google/uuid")),
         "([#149](https://redirect.github.com/google/uuid/issues/149))\n[other/repo#2][ref]\n[ref]: https://redirect.github.com/other/repo/pull/2\n[#3](https://example.org/a#3 \"title\") [google/uuid#4](https://redirect.github.com/google/uuid/issues/4) [other/repo#5](https://redirect.github.com/other/repo/issues/5) `#6`"
     );
     let nested = "[**Fix #149** and `code #3`](https://github.com/google/uuid/issues/149)";
     assert_eq!(
-        sanitise(nested, "google/uuid"),
+        sanitise(nested, Links::Github("google/uuid")),
         nested.replace("https://github.com/", "https://redirect.github.com/")
     );
 }
@@ -675,9 +680,9 @@ fn upstream_reference_urls_use_githubs_documented_backlink_redirect() {
             format!("<{url}>"),
         ] {
             let expected = text.replace("https://github.com/", "https://redirect.github.com/");
-            assert_eq!(sanitise(&text, "example/upstream"), expected);
+            assert_eq!(sanitise(&text, Links::Github("example/upstream")), expected);
             assert_eq!(
-                sanitise(&expected, "example/upstream"),
+                sanitise(&expected, Links::Github("example/upstream")),
                 expected,
                 "idempotent"
             );
@@ -691,7 +696,7 @@ fn upstream_reference_urls_use_githubs_documented_backlink_redirect() {
         "https://github.com.evil.example/other/repo/issues/1",
         "https://github.example/other/repo/issues/1",
     ] {
-        assert_eq!(sanitise(url, "example/upstream"), url);
+        assert_eq!(sanitise(url, Links::Github("example/upstream")), url);
     }
 }
 
@@ -1406,4 +1411,153 @@ async fn a_failing_adapter_marks_the_notes_incomplete_without_failing() {
         .unwrap();
     assert!(notes.sections.is_empty());
     assert!(notes.incomplete);
+}
+
+#[test]
+fn gitlab_and_gitea_sources_are_recognised_from_their_urls() {
+    use rustovate_datasource::notes::ForgeKind;
+    for (raw, kind, path, web) in [
+        (
+            "git+https://gitlab.com/grp/sub/proj.git",
+            Some(ForgeKind::Gitlab),
+            "grp/sub/proj",
+            "https://gitlab.com/grp/sub/proj",
+        ),
+        (
+            "https://gitlab.com/grp/proj/-/tree/main",
+            Some(ForgeKind::Gitlab),
+            "grp/proj",
+            "https://gitlab.com/grp/proj",
+        ),
+        (
+            "git@gitlab.com:grp/proj.git",
+            Some(ForgeKind::Gitlab),
+            "grp/proj",
+            "https://gitlab.com/grp/proj",
+        ),
+        (
+            "https://gitlab.example.com/a/b",
+            Some(ForgeKind::Gitlab),
+            "a/b",
+            "https://gitlab.example.com/a/b",
+        ),
+        (
+            "https://codeberg.org/owner/repo/src/branch/main",
+            Some(ForgeKind::Gitea),
+            "owner/repo",
+            "https://codeberg.org/owner/repo",
+        ),
+        (
+            "https://git.example.com/a/b",
+            None,
+            "",
+            "https://git.example.com/a/b",
+        ),
+    ] {
+        let repository = Repository::from_url(raw).unwrap();
+        assert_eq!(repository.forge.as_ref().map(|f| f.kind), kind, "{raw}");
+        assert_eq!(
+            repository.forge.as_ref().map_or("", |f| f.path.as_str()),
+            path,
+            "{raw}"
+        );
+        assert_eq!(repository.url, web, "{raw}");
+        assert!(repository.github.is_none());
+    }
+}
+
+#[tokio::test]
+async fn gitlab_releases_link_to_gitlab_and_keep_references_on_that_forge() {
+    let routes = routes(&[
+        (
+            "https://registry.npmjs.org/gl-pkg/1.2.0",
+            json!({"repository":{"url":"git+https://gitlab.com/grp/sub/proj.git"}}),
+        ),
+        (
+            "https://gitlab.com/api/v4/projects/grp%2Fsub%2Fproj/releases?per_page=100",
+            json!([
+                {"tag_name":"gl-pkg@2.0.0","description":"Out of range","upcoming_release":false},
+                {"tag_name":"other-pkg@1.2.0","description":"Another package","upcoming_release":false},
+                {"tag_name":"gl-pkg@1.3.0","description":"Not published yet","upcoming_release":true},
+                {"tag_name":"gl-pkg@1.2.0","description":"Fixes #12, thanks @alice","upcoming_release":false},
+                {"tag_name":"gl-pkg@1.1.0","description":"Adds things","upcoming_release":false},
+                {"tag_name":"gl-pkg@1.0.0","description":"Base","upcoming_release":false}
+            ]),
+        ),
+    ]);
+    let client = client(routes.clone(), memory().await).await;
+    let notes = client
+        .release_notes(Source::Npm, "gl-pkg", "1.0.0", "1.2.0")
+        .await
+        .unwrap();
+    let versions: Vec<_> = notes.sections.iter().map(|s| s.version.as_str()).collect();
+    assert_eq!(versions, ["1.2.0", "1.1.0"]);
+    assert_eq!(
+        notes.sections[0].link,
+        "https://gitlab.com/grp/sub/proj/-/releases/gl-pkg@1.2.0"
+    );
+    assert_eq!(
+        notes.compare.as_deref(),
+        Some("https://gitlab.com/grp/sub/proj/-/compare/gl-pkg@1.0.0...gl-pkg@1.2.0")
+    );
+    assert!(!notes.incomplete);
+    let text = notes.render("gl-pkg", 12_000);
+    assert!(
+        text.contains("[grp/sub/proj#12](https://gitlab.com/grp/sub/proj/-/issues/12)"),
+        "{text}"
+    );
+    assert!(text.contains("@\u{200d}alice"), "{text}");
+    assert!(!text.contains("redirect.github.com"));
+    assert!(
+        !routes
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|u| u.contains("api.github.com"))
+    );
+}
+
+#[tokio::test]
+async fn gitea_without_release_text_falls_back_to_its_root_changelog() {
+    let base = "https://codeberg.org/api/v1/repos/owner/repo";
+    let routes = routes(&[
+        (
+            "https://registry.npmjs.org/cb-pkg/1.2.0",
+            json!({"repository":"https://codeberg.org/owner/repo"}),
+        ),
+        (&format!("{base}/releases?limit=50"), json!([])),
+        (
+            &format!("{base}/tags?limit=50"),
+            json!([{"name":"v1.2.0"},{"name":"v1.1.0"},{"name":"v1.0.0"}]),
+        ),
+        (
+            &format!("{base}/contents"),
+            json!([{"name":"src","path":"src","type":"dir"},{"name":"CHANGELOG.md","path":"CHANGELOG.md","type":"file"}]),
+        ),
+        (
+            &format!("{base}/raw/CHANGELOG.md"),
+            json!({"html":"# Changelog\n\n## 1.2.0\n\n- Fixed #3\n\n## 1.1.0\n\n- Added x\n\n## 1.0.0\n\n- First\n"}),
+        ),
+    ]);
+    let client = client(routes, memory().await).await;
+    let notes = client
+        .release_notes(Source::Npm, "cb-pkg", "1.0.0", "1.2.0")
+        .await
+        .unwrap();
+    let versions: Vec<_> = notes.sections.iter().map(|s| s.version.as_str()).collect();
+    assert_eq!(versions, ["1.2.0", "1.1.0"]);
+    assert_eq!(
+        notes.sections[0].link,
+        "https://codeberg.org/owner/repo/src/HEAD/CHANGELOG.md#120"
+    );
+    assert_eq!(
+        notes.compare.as_deref(),
+        Some("https://codeberg.org/owner/repo/compare/v1.0.0...v1.2.0")
+    );
+    let text = notes.render("cb-pkg", 12_000);
+    assert!(
+        text.contains("[owner/repo#3](https://codeberg.org/owner/repo/issues/3)"),
+        "{text}"
+    );
 }

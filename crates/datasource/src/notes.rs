@@ -1,18 +1,20 @@
 //! Source metadata and release ranges, fetched only for changed pull requests.
 mod adapters;
 mod changelog;
+mod forge;
 mod markdown;
 mod releases;
 mod source;
 use super::*;
 pub use adapters::{parse_go_history, parse_release_sgml};
 pub use changelog::{Section, parse_changelog};
-pub use markdown::sanitise;
+use forge::releases_url;
+pub use markdown::{Links, sanitise};
 pub(crate) use releases::BodyCache;
 use rustovate_cache::ExtractionKey;
 use rustovate_versioning::Parsed;
-pub use source::Repository;
 pub(crate) use source::mapped;
+pub use source::{Forge, ForgeKind, Repository};
 use std::{collections::BTreeSet, sync::Arc};
 type SharedSections = Arc<tokio::sync::Mutex<Option<Arc<Vec<Section>>>>>;
 pub(crate) type ChangelogCache = Arc<tokio::sync::Mutex<BTreeMap<String, SharedSections>>>;
@@ -81,13 +83,14 @@ fn tag_version<'a>(tag: &'a str, package: &str, repository: &Repository) -> Opti
     if parsed(tag).is_some() {
         return Some(tag);
     }
-    let repo = repository.github.as_deref()?;
-    let special = match repo {
-        "golang/go" => Some("go"),
-        "jqlang/jq" => Some("jq-"),
-        "oven-sh/bun" => Some("bun-v"),
-        "nginx/nginx" => Some("release-"),
-        "postgres/postgres" => Some("REL_"),
+    // Upstream-specific prefixes exist only for these GitHub repositories;
+    // namespaced monorepo tags apply to every forge.
+    let special = match repository.github.as_deref() {
+        Some("golang/go") => Some("go"),
+        Some("jqlang/jq") => Some("jq-"),
+        Some("oven-sh/bun") => Some("bun-v"),
+        Some("nginx/nginx") => Some("release-"),
+        Some("postgres/postgres") => Some("REL_"),
         _ => None,
     };
     if let Some(version) = special
@@ -398,7 +401,14 @@ impl Client {
             return Ok(notes);
         };
         let Some(repo) = repository.github.as_deref() else {
-            return Ok(notes);
+            let forge = repository.forge.clone();
+            let bounds = note_bounds(source, package, current, target, repository);
+            return match (forge, bounds) {
+                (Some(forge), Some((old, new))) => {
+                    self.forge_notes(notes, &forge, &old, &new, package).await
+                }
+                _ => Ok(notes),
+            };
         };
         let Some((old, new)) = note_bounds(source, package, current, target, repository) else {
             return Ok(notes);
@@ -658,11 +668,15 @@ impl Notes {
                 source.url
             );
         }
-        let Some(repo) = source.github.as_deref() else {
-            text.push_str(
-                "Source found, unsupported host. Release notes currently support GitHub.\n",
-            );
-            return text;
+        let links = match (source.github.as_deref(), source.forge.as_ref()) {
+            (Some(repo), _) => Links::Github(repo),
+            (None, Some(forge)) => Links::Forge(forge),
+            (None, None) => {
+                text.push_str(
+                    "Source found, unsupported host. Release notes support GitHub, GitLab and Gitea/Forgejo.\n",
+                );
+                return text;
+            }
         };
         if self.sections.is_empty() {
             text.push_str("No upstream release text or changelog sections found for this range.\n");
@@ -684,7 +698,7 @@ impl Notes {
                 details = true;
             }
             let heading = format!("#### [{}]({})\n\n", section.version, section.link);
-            let body = sanitise(&section.body, repo);
+            let body = sanitise(&section.body, links);
             if text.len() + heading.len() + reserve >= limit {
                 truncated = true;
                 break;
@@ -714,8 +728,11 @@ impl Notes {
         }
         if truncated {
             text.push_str(&format!(
-                "Release notes truncated or incomplete; [view upstream history]({}/releases).\n",
-                source.url
+                "Release notes truncated or incomplete; [view upstream history]({}).\n",
+                source
+                    .forge
+                    .as_ref()
+                    .map_or_else(|| format!("{}/releases", source.url), releases_url)
             ));
         }
         if text.len() > limit {

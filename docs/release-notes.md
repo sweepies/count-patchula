@@ -16,9 +16,26 @@ read does not change the pinned index digest. Only the two labels enter the
 HTTP cache. Official Docker Hub images without a usable source label fall back
 to `crates/datasource/src/upstreams.json`; the same data file maps mise core
 tools to their upstreams. Other mise backends use the published mise registry
-identities. Discovered non-GitHub repositories remain explicit: **source found,
-unsupported host**. Unresolved repositories and missing upstream text are
-reported separately.
+identities. Unresolved repositories and missing upstream text are reported
+separately.
+
+## GitLab and Gitea/Forgejo upstreams
+
+Sources on gitlab.com, hosts with a `gitlab` label (`gitlab.example.com`),
+codeberg.org, gitea.com and hosts with a `gitea` or `forgejo` label use those
+forges' public APIs, without credentials. GitLab paths may nest groups, and
+`/-/` sub-routes and ssh `git@host:path` forms are normalised. Other hosts are
+reported as **source found, unsupported host**; they are never probed.
+
+Notes come from the first releases page (GitLab `releases?per_page=100`, Gitea
+`releases?limit=50`), skipping GitLab upcoming releases, Gitea drafts and
+prereleases for stable targets. Tags fill missing compare endpoints. Without
+release text in the range, the first root changelog file is parsed like a
+GitHub changelog. Links use each forge's own release, compare and file routes,
+and `#123` and `owner/repo#123` link to that forge's issues; mentions are still
+neutralised, because the text lands in a GitHub PR. Namespaced monorepo tags
+such as `@gitlab/ui@138.6.3` match as on GitHub. Checked live against
+`@gitlab/ui` on gitlab.com and `codeberg-cli` on codeberg.org.
 
 ## Range discovery and cost
 
