@@ -3,10 +3,11 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "count-patchula",
   "compatibility_date": "2026-10-21",
-  // Production is served on count-patchula.sweepy.dev. Preview URLs, which live
-  // on workers.dev, serve each branch's uploaded version under its own alias.
+  // Production is served only on count-patchula.sweepy.dev, so search engines
+  // see one copy. Preview URLs, on workers.dev, still serve each branch's
+  // uploaded version under its own alias.
   "routes": [{ "pattern": "count-patchula.sweepy.dev", "custom_domain": true }],
-  "workers_dev": true,
+  "workers_dev": false,
   "preview_urls": true,
   "assets": {
     "directory": "./.vitepress/dist",
