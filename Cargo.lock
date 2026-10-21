@@ -1630,6 +1630,307 @@ dependencies = [
 ]
 
 [[package]]
+name = "patchula-cache"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
+ "zstd",
+]
+
+[[package]]
+name = "patchula-cli"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "miette",
+ "patchula-cache",
+ "patchula-config",
+ "patchula-engine",
+ "patchula-http",
+ "patchula-report",
+ "patchula-server",
+ "patchula-update",
+ "reqwest",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "usage-rs",
+]
+
+[[package]]
+name = "patchula-config"
+version = "0.1.0"
+dependencies = [
+ "chrono-tz",
+ "cron",
+ "globset",
+ "miette",
+ "pklr",
+ "regex",
+ "semver",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "patchula-conformance"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "patchula-report",
+ "semver",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "usage-rs",
+]
+
+[[package]]
+name = "patchula-datasource"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "futures-util",
+ "patchula-cache",
+ "patchula-config",
+ "patchula-github",
+ "patchula-http",
+ "patchula-mise",
+ "patchula-testkit",
+ "patchula-versioning",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "toml_edit",
+]
+
+[[package]]
+name = "patchula-engine"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "futures-util",
+ "patchula-cache",
+ "patchula-config",
+ "patchula-datasource",
+ "patchula-github",
+ "patchula-http",
+ "patchula-lookup",
+ "patchula-manager",
+ "patchula-report",
+ "patchula-testkit",
+ "patchula-update",
+ "patchula-versioning",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "patchula-github"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "httpdate",
+ "jsonwebtoken",
+ "patchula-cache",
+ "patchula-http",
+ "patchula-testkit",
+ "reqwest",
+ "rsa",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "patchula-http"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "httpdate",
+ "patchula-cache",
+ "percent-encoding",
+ "reqwest",
+ "serde",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "patchula-lookup"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "nodejs-semver",
+ "patchula-config",
+ "patchula-datasource",
+ "patchula-manager",
+ "patchula-report",
+ "patchula-versioning",
+ "regex",
+ "semver",
+ "serde_json",
+]
+
+[[package]]
+name = "patchula-manager"
+version = "0.1.0"
+dependencies = [
+ "hcl-edit",
+ "jsonc-parser",
+ "patchula-config",
+ "patchula-mise",
+ "patchula-versioning",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "toml_edit",
+ "yaml-rust2",
+]
+
+[[package]]
+name = "patchula-mise"
+version = "0.1.0"
+dependencies = [
+ "patchula-config",
+ "serde_json",
+]
+
+[[package]]
+name = "patchula-report"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "patchula-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "chrono-tz",
+ "cron",
+ "futures-util",
+ "hmac 0.13.0",
+ "miette",
+ "nix",
+ "patchula-cache",
+ "patchula-config",
+ "patchula-engine",
+ "patchula-github",
+ "patchula-http",
+ "patchula-report",
+ "patchula-update",
+ "reqwest",
+ "rsa",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "patchula-testkit"
+version = "0.1.0"
+dependencies = [
+ "patchula-http",
+ "percent-encoding",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "patchula-update"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "chrono-tz",
+ "cron",
+ "futures-util",
+ "patchula-cache",
+ "patchula-config",
+ "patchula-datasource",
+ "patchula-github",
+ "patchula-http",
+ "patchula-lookup",
+ "patchula-manager",
+ "patchula-report",
+ "patchula-versioning",
+ "reqwest",
+ "rustix",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha1",
+ "sha2 0.11.1",
+ "tempfile",
+ "tokio",
+ "toml_edit",
+ "tracing",
+]
+
+[[package]]
+name = "patchula-versioning"
+version = "0.1.0"
+dependencies = [
+ "nodejs-semver",
+ "patchula-config",
+ "pep440_rs",
+ "semver",
+ "thiserror",
+]
+
+[[package]]
 name = "pem"
 version = "3.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2191,307 +2492,6 @@ dependencies = [
  "ring",
  "rustls-pki-types",
  "untrusted",
-]
-
-[[package]]
-name = "patchula-cache"
-version = "0.1.0"
-dependencies = [
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "tracing",
- "url",
- "zstd",
-]
-
-[[package]]
-name = "patchula-cli"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "miette",
- "reqwest",
- "patchula-cache",
- "patchula-config",
- "patchula-engine",
- "patchula-http",
- "patchula-report",
- "patchula-server",
- "patchula-update",
- "serde_json",
- "sha2 0.11.1",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "usage-rs",
-]
-
-[[package]]
-name = "patchula-config"
-version = "0.1.0"
-dependencies = [
- "chrono-tz",
- "cron",
- "globset",
- "miette",
- "pklr",
- "regex",
- "semver",
- "serde",
- "serde_json",
- "serde_path_to_error",
- "tempfile",
- "thiserror",
-]
-
-[[package]]
-name = "patchula-conformance"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "patchula-report",
- "semver",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "usage-rs",
-]
-
-[[package]]
-name = "patchula-datasource"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "futures-util",
- "regex",
- "reqwest",
- "patchula-cache",
- "patchula-config",
- "patchula-github",
- "patchula-http",
- "patchula-mise",
- "patchula-testkit",
- "patchula-versioning",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "sha2 0.11.1",
- "tempfile",
- "thiserror",
- "tokio",
- "toml_edit",
-]
-
-[[package]]
-name = "patchula-engine"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "futures-util",
- "regex",
- "reqwest",
- "patchula-cache",
- "patchula-config",
- "patchula-datasource",
- "patchula-github",
- "patchula-http",
- "patchula-lookup",
- "patchula-manager",
- "patchula-report",
- "patchula-testkit",
- "patchula-update",
- "patchula-versioning",
- "serde",
- "serde_json",
- "sha2 0.11.1",
- "tempfile",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "patchula-github"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "httpdate",
- "jsonwebtoken",
- "reqwest",
- "rsa",
- "patchula-cache",
- "patchula-http",
- "patchula-testkit",
- "serde",
- "serde_json",
- "sha2 0.11.1",
- "tempfile",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "patchula-http"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "httpdate",
- "percent-encoding",
- "reqwest",
- "patchula-cache",
- "serde",
- "thiserror",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "patchula-lookup"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "nodejs-semver",
- "regex",
- "patchula-config",
- "patchula-datasource",
- "patchula-manager",
- "patchula-report",
- "patchula-versioning",
- "semver",
- "serde_json",
-]
-
-[[package]]
-name = "patchula-manager"
-version = "0.1.0"
-dependencies = [
- "hcl-edit",
- "jsonc-parser",
- "regex",
- "patchula-config",
- "patchula-mise",
- "patchula-versioning",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "toml_edit",
- "yaml-rust2",
-]
-
-[[package]]
-name = "patchula-mise"
-version = "0.1.0"
-dependencies = [
- "patchula-config",
- "serde_json",
-]
-
-[[package]]
-name = "patchula-report"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
-name = "patchula-server"
-version = "0.1.0"
-dependencies = [
- "axum",
- "chrono",
- "chrono-tz",
- "cron",
- "futures-util",
- "hmac 0.13.0",
- "miette",
- "nix",
- "reqwest",
- "rsa",
- "rusqlite",
- "patchula-cache",
- "patchula-config",
- "patchula-engine",
- "patchula-github",
- "patchula-http",
- "patchula-report",
- "patchula-update",
- "serde",
- "serde_json",
- "serde_path_to_error",
- "sha2 0.11.1",
- "tempfile",
- "thiserror",
- "tokio",
- "tower",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "patchula-testkit"
-version = "0.1.0"
-dependencies = [
- "percent-encoding",
- "regex",
- "reqwest",
- "patchula-http",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "patchula-update"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "chrono-tz",
- "cron",
- "futures-util",
- "reqwest",
- "rustix",
- "patchula-cache",
- "patchula-config",
- "patchula-datasource",
- "patchula-github",
- "patchula-http",
- "patchula-lookup",
- "patchula-manager",
- "patchula-report",
- "patchula-versioning",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "sha1",
- "sha2 0.11.1",
- "tempfile",
- "tokio",
- "toml_edit",
- "tracing",
-]
-
-[[package]]
-name = "patchula-versioning"
-version = "0.1.0"
-dependencies = [
- "nodejs-semver",
- "pep440_rs",
- "patchula-config",
- "semver",
- "thiserror",
 ]
 
 [[package]]

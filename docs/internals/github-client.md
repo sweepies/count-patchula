@@ -85,7 +85,7 @@ a real 200/304 exchange. Tags and GraphQL stop on the first nonempty page;
 simulated two-page cassettes prove that pagination stops at known history even
 when GitHub advertises another page. Other simulations cover rate limits,
 permission errors and cache policy. All replay by default in CI. See
-[recording instructions](http-testing.md); use `mise run fixtures:record` with
+[recording instructions](/internals/http-testing); use `mise run fixtures:record` with
 GITHUB_TOKEN or GH_TOKEN already in the environment, then `mise run test` to
 replay and `mise run fixtures:check` to scan. Recording replaces scenarios, so
 inspect the fixture diff and provenance before committing.

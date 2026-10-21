@@ -1,41 +1,31 @@
-# Deliberate departures from Renovate
+# Deliberate departures
 
-patchula is not a Renovate clone. Each entry records a behaviour that differs
-on purpose, and why. The comparison harness links differences it finds to
-entries here; a difference with no entry is treated as a bug.
+The Count is not a Renovate clone. Where he behaves differently on purpose,
+the difference is written down here with a reason. The comparison harness that
+runs Renovate as a black box links every difference it finds to one of these
+entries; a difference with no entry is treated as a bug.
 
-Review map (49 entries; IDs below remain stable):
+The table is the short version. Below it, the longer entries spell out exactly
+which comparison differences each one explains, so that a departure can never
+quietly excuse something it was not meant to. IDs are stable and some numbers
+are retired.
 
-- **Policy:** 2–8, 10, 12, 14, 16–18, 20, 23, 25, 29–31, 33–35,
-  37–38, 42–43, 45–46 cover explicit activation, reproducibility, update tracks,
-  release timing and editable declarations. patchula is developed independently;
-  the twelve public repositories are test inputs, not product requirements.
-- **Performance and strategy:** 21 and 36 describe conditional history probes,
-  local freshness and quota fallbacks. They grant no comparison exemption.
-- **Model and representation:** 1, 9, 11, 13, 15, 19, 22, 26–27, 32, 39,
-  43–45 describe typed configuration, ownership and observed identity.
-- **Comparison-only normalization:** 24 and 28 remove lock/archive verification
-  fields from manifest comparisons; 19, 26 and 27 also scope/audit duplicate or
-  uneditable inventory. Numeric prefixes and missing optional fields are counted
-  normalizations, not extra product policies.
-- **Write safety:** 47 records independent branch identity, verification, ref
-  leases and the temporary lockfile gate. It grants no lookup comparison exemption.
-- **Lockfile engines:** 51 selects aube for npm and pnpm lockfiles and Yarn for
-  Yarn lockfiles, with an explicit native-npm setting. It grants no lookup
-  comparison exemption.
+Roughly, the entries fall into a few groups:
 
-**SWE-103 owner decisions (round 4):** keep the one-hour catalog floor
-(21) and newest stable by default (42); Node LTS requires an explicit channel
-rule. GitHub tag age uses release publication, then annotated tagger time,
-never commit time (23). Peer ranges widen and exact peers bump in place (25).
-Cargo floors and satisfying Terraform provider constraints now follow the
-observed baseline; departures 40 and 41 and their harness rules are removed.
-These choices apply independently of the twelve comparison repositories.
+- policy: typed config, opt-in repositories, reproducible pins, release timing
+  and editable declarations (2 to 8, 10, 12, 14, 16 to 18, 20, 23, 25, 29 to 31,
+  33 to 35, 37, 38, 42, 43, 45, 46);
+- performance strategy: conditional history probes and local freshness (21, 36);
+- model and representation: typed configuration, ownership and observed
+  identity (1, 9, 11, 13, 15, 19, 22, 26, 27, 32, 39, 43 to 45);
+- comparison-only normalisation of lockfile and archive verification fields
+  (24, 28);
+- write safety: branch identity, verification and ref leases (47);
+- lockfile engines: aube for npm and pnpm, Yarn for Yarn (51).
 
-Stable comparison link: <a id="departure-7"></a>**Departure 7: default policy**
-(table row 7 below). IDs are retained when descriptions change.
+<a id="departure-7"></a>
 
-| # | Area | Renovate | patchula | Why |
+| # | Area | Renovate | Count Patchula | Why |
 |---|---|---|---|---|
 | 1 | Config | JSON/JSON5 with presets, migrations | Pkl only, typed schema, unknown fields are errors | Typed, composable config with real diagnostics |
 | 2 | Onboarding | Opens an onboarding PR in repos without config | Repos without config are skipped | Configs are added deliberately |
@@ -82,7 +72,7 @@ Stable comparison link: <a id="departure-7"></a>**Departure 7: default policy**
 | 45 | Action alias precision | Can expand a ref when adding a digest | Preserve the declared numeric ref precision and report the full resolved target separately | The commit pin supplies reproducibility while the ref describes the intended release line |
 | 46 | Cargo target resolution | Observed pre-1.0 upgrades can select an older release in the proposed range | Resolve the newest eligible release in that same compatibility interval | Report the available release without narrowing the manifest |
 | 47 | Branch and merge safety | No write behavior is inferred from comparison output | Leased API refs, verified bot ownership, receipt-backed later-run merges when native auto-merge is unavailable | Preserve human work and lockfile consistency without emulating another bot |
-| 48 | Release note presentation and discovery | No presentation compatibility is claimed | Ecosystem metadata, public mise-versions note lists, cached changelog sections, bounded ranges, prose-only mention neutralisation and readable references through GitHub's documented backlink-free redirect host | Useful upstream context without steady-run reads or notification/timeline noise; see [release notes](release-notes.md) |
+| 48 | Release note presentation and discovery | No presentation compatibility is claimed | Ecosystem metadata, public mise-versions note lists, cached changelog sections, bounded ranges, prose-only mention neutralisation and readable references through GitHub's documented backlink-free redirect host | Useful upstream context without steady-run reads or notification/timeline noise; see [release notes](/guide/release-notes) |
 | 49 | Catalog transport and mise tool metadata | Upstream API catalogs | Public mise-versions release/tag lists and tool metadata, conditional by ETag; `useVersionsHost = false` restores direct sources | Fewer GitHub API reads; authenticated non-registry repos route directly, transient mirror errors may fall back, while 403/404/empty answers do not. Tool first-seen dates retain mise's provenance; tag commit dates are not release-age evidence. Partial index subsets are never cached as full catalogs. |
 | 50 | Release-age catalog reuse | Revalidate on every run | Reuse successful complete catalog views for `clamp(waitHours - 1, 1, 24)` hours; zero keeps existing freshness, and checked controls bypass reuse | Recompute all eligibility and held-back decisions at run time; report snapshot fetch time and reuse state. Credentials/source modes stay isolated, quota-stale failures are not promoted, and mutable digests remain independently fresh. |
 | 51 | Node lockfile engine | Regenerate npm and pnpm locks with npm and pnpm | Regenerate `pnpm-lock.yaml`, `package-lock.json` and `npm-shrinkwrap.json` with aube, which writes the committed format in place; `lockfiles.npmEngine = "npm"` restores native npm for npm lockfiles only | Much faster lockfile updates; aube's npm lockfiles stay valid for `npm ci` but may differ in hoisting and `funding` metadata from npm's own output |
@@ -96,7 +86,7 @@ guard both the base and update branch against concurrent changes. GitHub supplie
 commit authorship/signing, and unverified objects are never published. Lockfile
 updates are skipped until tooling exists; manifest-only test branches require an
 explicit flag and remain marked pending in reports and commits. This entry grants
-no lookup comparison exemption. See [write-path contract](report.md#branch-actions-swe-106).
+no lookup comparison exemption. See [write-path contract](/reference/report#branch-actions-swe-106).
 
 <a id="departure-42"></a>**Departure 42: explicit stable channels.**
 Newest eligible stable remains the default. The reviewed Node differences
@@ -107,7 +97,7 @@ specific source identities, equal declarations/digests, explicit stable policy
 Other packages, peer ranges, same-major target drift and explicit LTS policy do
 not qualify. This explains the observed channel choice without guessing LTS
 membership from an even major number. For an opt-in Node LTS rule, see
-[lookup policy](lookup-policy.md#node-release-channels).
+[lookup policy](/guide/lookup-policy#node-release-channels).
 
 <a id="departure-43"></a>**Departure 43: Go language directives.**
 A go.mod `go` directive declares a language floor, distinct from an installed
@@ -407,9 +397,9 @@ needed. Unlabelled duplicate identities remain invalid.
 Phase 2 branch naming follows the observed `<dependency>-<major>.x`, shared pins,
 and `major-<group>` output. When multiple container variants occur, names retain the major and variant
 (`3.x-slim`); unresolved manager-prefixed slug collisions require explicit groups.
-See [wave 2](phase2-wave2.md) for ownership and migration behavior.
+See [wave 2](/internals/history/phase2-wave2) for ownership and migration behavior.
 
-Departure 47 also covers the independently specified [auto-merge fallback](auto-merge.md).
+Departure 47 also covers the independently specified [auto-merge fallback](/guide/auto-merge).
 The supplied black-box comparisons do not exercise Renovate merging PRs, so no
 observed merge-behavior difference or new conformance exemption is claimed.
 The explicit patchula policy requires a prior successful head receipt, at least

@@ -156,18 +156,55 @@ description = "Opt in to live HTTP recording, then scan the resulting cassettes"
 env = { PATCHULA_RECORD = "1" }
 run = ["cargo test --workspace --locked", "mise run fixtures:check"]
 
-[tasks.docs]
+[tasks."docs:cli"]
 description = "Generate CLI Markdown, man page and bash/zsh/fish completions from usage derive"
 run = '''
 mkdir -p generated/completions
 cargo run --quiet --locked -p patchula-cli -- __usage_spec__ > generated/patchula.usage.kdl
 usage lint generated/patchula.usage.kdl
-usage generate markdown --file generated/patchula.usage.kdl --out-file docs/cli.md
+usage generate markdown --file generated/patchula.usage.kdl --out-file docs/reference/cli.md
 usage generate manpage --file generated/patchula.usage.kdl --out-file generated/patchula.1
 for shell in bash zsh fish; do
   usage generate completion "$shell" patchula --file generated/patchula.usage.kdl > "generated/completions/patchula.$shell"
 done
 '''
+
+# The documentation site. Node and aube are task-scoped, like the test-only
+# lockfile engines, so a development `mise install` does not fetch them.
+[tasks."docs:install"]
+description = "Install the documentation site's packages from its lockfile"
+dir = "docs"
+tools = { node = "24.21.0", aube = "2.8.0" }
+run = "aube ci"
+
+[tasks."docs:dev"]
+description = "Serve the documentation site with live reload"
+depends = ["docs:install"]
+dir = "docs"
+tools = { node = "24.21.0", aube = "2.8.0" }
+run = "aube run dev"
+
+[tasks."docs:build"]
+description = "Build the documentation site into docs/.vitepress/dist"
+depends = ["docs:install"]
+dir = "docs"
+tools = { node = "24.21.0", aube = "2.8.0" }
+run = "aube run build"
+
+[tasks."docs:deploy"]
+description = "Deploy the built site to Cloudflare Workers; needs CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID"
+depends = ["docs:build"]
+dir = "docs"
+tools = { node = "24.21.0", aube = "2.8.0" }
+run = "aube exec wrangler deploy"
+
+[tasks."docs:preview"]
+description = "Upload the built site as a Cloudflare preview version under an alias, without deploying it"
+depends = ["docs:build"]
+dir = "docs"
+tools = { node = "24.21.0", aube = "2.8.0" }
+usage = 'arg "<alias>" help="Preview alias, such as pr-42 (lowercase letters, digits and dashes)"'
+run = 'aube exec wrangler versions upload --preview-alias "${usage_alias?}" --message "Preview ${usage_alias?}"'
 
 [tasks.lookup]
 description = "Run read-only lookup; forwards repository and lookup flags"

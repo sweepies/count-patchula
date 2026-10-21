@@ -430,7 +430,7 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
                                 .sum(),
                             rule: "renovate-config-manager".into(),
                             departure: 19,
-                            link: "docs/departures.md#departure-19".into(),
+                            link: "docs/renovate/departures.md#departure-19".into(),
                         });
                         continue;
                     }

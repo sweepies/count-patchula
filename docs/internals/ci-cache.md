@@ -1,4 +1,4 @@
-# CI cache verification (SWE-81)
+# CI cache verification
 
 Inspected run `38642667666`, attempts 1 and 2, with `mise exec -- gh run view
 38642667666 -R sweepies/count-patchula --attempt 1 --log` (and attempt 2).

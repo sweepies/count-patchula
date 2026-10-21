@@ -180,7 +180,7 @@ pub(super) fn reports(
                 updates,
                 rule,
                 departure,
-                link: format!("docs/departures.md#departure-{departure}"),
+                link: format!("docs/renovate/departures.md#departure-{departure}"),
             });
         }
     }

@@ -76,11 +76,12 @@ fn run(app: App) -> Result<(), Error> {
     std::fs::create_dir_all(&app.output)?;
     // Local reports may be written anywhere; use an absolute documentation link.
     let docs = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../docs/departures.md")
+        .join("../docs/renovate/departures.md")
         .canonicalize()?;
-    let markdown = triage
-        .markdown()
-        .replace("(docs/departures.md#", &format!("({}#", docs.display()));
+    let markdown = triage.markdown().replace(
+        "(docs/renovate/departures.md#",
+        &format!("({}#", docs.display()),
+    );
     std::fs::write(app.output.join("triage.md"), markdown)?;
     std::fs::write(
         app.output.join("triage.json"),

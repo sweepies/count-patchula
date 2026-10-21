@@ -104,7 +104,7 @@ Release notes now resolve ecosystem upstream metadata, select a version range
 through the public mise-versions mirror and use GitHub releases with cached
 changelog sections as a fallback. PR bodies retain a 32,000-byte budget, with
 older versions collapsed and explicit truncation links. Unchanged bodies and
-receipt-backed steady runs avoid note reads. See [release notes](release-notes.md)
+receipt-backed steady runs avoid note reads. See [release notes](/guide/release-notes)
 for source mappings, cache identities, notification neutralisation, mirror
 failure semantics and supported formats. `releaseNotes = false` skips both text
 and requests.
@@ -115,7 +115,7 @@ that order, with an expected-head lease. Repository settings are included in the
 shared inventory, so availability adds no steady-run request. Where native
 auto-merge is off or unavailable, a later run can merge through GitHub's normal
 merge endpoint after restoring the exact head and intent from a prior successful
-write receipt. See [fallback merge gates and the sandbox rule](auto-merge.md).
+write receipt. See [fallback merge gates and the sandbox rule](/guide/auto-merge).
 Required checks and GitHub protections remain authoritative; no bypass or direct
 base write is used. Mixed merge policy and lockfile-pending branches disable
 existing native auto-merge and cannot use the fallback.

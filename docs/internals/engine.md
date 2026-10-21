@@ -1,4 +1,4 @@
-# Batch engine (SWE-95 / SWE-106)
+# Batch engine
 
 `patchula-engine::Engine` accepts a token, shared SQLite cache, concurrency cap
 and transport. The CLI constructs one network pool; tests inject cassette replay.
@@ -96,7 +96,7 @@ The `3029efd` follow-up had no GitHub recording credential and refreshed only
 public npm metadata. The subsequent live investigation refreshed both public
 source and engine cassettes for GraphQL head batches and matching-ref hydration.
 All ordinary tests remain offline. Current live results and reproduction commands
-are in [benchmarks](benchmarks.md#live-network-investigation-2026-10-15).
+are in [benchmarks](/benchmarks#live-network-investigation-2026-10-15).
 Registry max-age is honored rather than replaced with an arbitrary local TTL.
 
 ## Branch write path
@@ -145,11 +145,11 @@ persistent partial clone.
 Tool success and target validation precede API commits; failures are reported per
 branch without publishing manifest-only work. Binary Bun locks
 retain the explicit `--allow-lockfile-pending` testing escape hatch. Scheduled
-lock maintenance is opt-in. See [wave-3 behavior and prerequisites](phase2-wave3.md).
+lock maintenance is opt-in. See [wave-3 behavior and prerequisites](/internals/history/phase2-wave3).
 
 Warm runs validate cached successful writes against a fresh GraphQL head/PR
 inventory. Exact commit, update and PR matches bypass history/tree/PR reads and
 tool execution. Changed inputs fall back to the full safety checks; tool-generated
 branches also regenerate on base changes in conflicts mode. PR lifecycle,
 closed-target suppression, labels and native auto-merge are documented in
-[wave 2](phase2-wave2.md). Dashboard writes remain unimplemented.
+[wave 2](/internals/history/phase2-wave2). Dashboard writes remain unimplemented.

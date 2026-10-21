@@ -5,7 +5,7 @@
 The supplied fresh release batch took **37.4 s cold / 4.1 s warm / 3.8 s
 warm2**, with **343 proposals on all three runs**. Renovate's dry run took
 **261 s**; its run started about four minutes before patchula's cold run.
-These are caller-supplied single observations. See [benchmarks](benchmarks.md#phase-1-final-live-check-2026-10-15).
+These are caller-supplied single observations. See [benchmarks](/benchmarks#phase-1-final-live-check-2026-10-15).
 
 Input triage was **0 missing, 0 extra, 6 field-mismatch, 275 departures**.
 Replay against `/root/rustovate-conf/renovate12.jsonl` now gives **0 missing,
@@ -74,7 +74,7 @@ took **33.5 s cold / 2.9 s warm / 3.5 s warm2**, with **344 proposals on all
 three passes**. The fresh Renovate dry run took **296 s** and was captured within
 about ten minutes of patchula. These are caller-supplied single observations,
 not measurements of the round 4 implementation. Proposal determinism is confirmed
-for this capture. See [benchmarks](benchmarks.md#phase-1-exit-round-4-input-2026-10-15).
+for this capture. See [benchmarks](/benchmarks#phase-1-exit-round-4-input-2026-10-15).
 
 Fresh input triage: **2 missing, 6 extra, 13 field-mismatch, 264 departures**.
 Final replay of the unchanged cold report against the **fresh**
@@ -97,7 +97,7 @@ no exemption hides a fixed implementation bug.
   dependencies/devDependencies retain exact policy. Peer pin exemptions are gone.
 - **42:** Newest eligible stable remains the default. Typed policy/rules now
   support explicit Node `channel = "lts"` using the Node distribution index's
-  LTS metadata. See the [configuration example](lookup-policy.md#node-release-channels).
+  LTS metadata. See the [configuration example](/guide/lookup-policy#node-release-channels).
 - **21:** One-hour catalog freshness remains unchanged and grants no exemption.
 - **40/41 removed:** Cargo preserve retains satisfying floors and starts bare
   two-component numeric-major upgrades at the major floor (`1.0` for target
@@ -374,5 +374,5 @@ fingerprints were bumped so a warm cache will not resurrect the old extraction.
 | Missing baseline | Invalid configuration and absent snapshots are coverage failures, not a collection of extra dependencies. A successful empty baseline remains comparable. | `invalid_or_absent_baseline_is_coverage_and_empty_success_is_comparable` |
 
 The full comparison rules, including negative conditions, are in
-[departures](departures.md) and the conformance regression tests. Exclusions,
+[departures](/renovate/departures) and the conformance regression tests. Exclusions,
 normalizations, departures and no-baseline coverage remain separately visible.

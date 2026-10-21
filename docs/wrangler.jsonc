@@ -1,0 +1,15 @@
+// Count Patchula's site: VitePress output served as Workers static assets.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "count-patchula",
+  "compatibility_date": "2026-10-21",
+  // workers.dev serves production; preview URLs serve each PR's uploaded
+  // version under its own alias, such as pr-42.
+  "workers_dev": true,
+  "preview_urls": true,
+  "assets": {
+    "directory": "./.vitepress/dist",
+    "not_found_handling": "404-page",
+    "html_handling": "auto-trailing-slash"
+  }
+}

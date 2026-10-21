@@ -104,7 +104,7 @@ impl Rules {
             if rule.id.is_empty()
                 || !ids.insert(&rule.id)
                 || rule.managers.is_empty()
-                || !include_str!("../../docs/departures.md")
+                || !include_str!("../../docs/renovate/departures.md")
                     .lines()
                     .any(|line| line.starts_with(&format!("| {} |", rule.departure)))
                 || !matches!(
@@ -195,7 +195,7 @@ impl Rules {
                 )
             {
                 return Err(Error::Input(
-                    "invalid departure rule, duplicate ID or missing docs/departures.md row".into(),
+                    "invalid departure rule, duplicate ID or missing docs/renovate/departures.md row".into(),
                 ));
             }
         }
@@ -537,7 +537,7 @@ impl Rules {
                 difference.departure = Some(Departure {
                     rule: rule.id.clone(),
                     row: rule.departure,
-                    link: format!("docs/departures.md#departure-{}", rule.departure),
+                    link: format!("docs/renovate/departures.md#departure-{}", rule.departure),
                 });
                 return;
             }

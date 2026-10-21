@@ -35,7 +35,11 @@ fn hand_written_output_classifies_all_four_cases_and_keeps_registry_identity() {
             "{class:?}"
         );
     }
-    assert!(triage.markdown().contains("docs/departures.md#departure-7"));
+    assert!(
+        triage
+            .markdown()
+            .contains("docs/renovate/departures.md#departure-7")
+    );
     assert!(
         triage
             .differences
@@ -603,7 +607,7 @@ fn real_lookup_shape_retains_skipped_and_digest_only_deps_and_audits_exclusion()
         ),
         (1, 1, 0)
     );
-    assert_eq!(excluded.link, "docs/departures.md#departure-19");
+    assert_eq!(excluded.link, "docs/renovate/departures.md#departure-19");
     assert_eq!(
         parsed
             .warnings

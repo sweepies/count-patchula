@@ -1,6 +1,70 @@
-# Benchmarks (SWE-88, report-only)
+# Benchmarks
 
-## Release-age catalog reuse (2026-10-15, departure 50)
+Speed is the reason the Count exists, so it gets measured. The numbers below
+are real runs, with the method next to them. Benchmarks in CI are
+report-only: they are published as artifacts and never fail a build.
+
+## Against Renovate on large repositories (2026-10-21)
+
+Patchula `e89e99c` against Renovate 44.173.1 (the latest release that day) on
+six large public repositories. Both ran read-only lookups: `patchula lookup`
+with the default policy, and Renovate with `dryRun=lookup` and each
+repository's own Renovate config. Each tool ran each repository alone, cold
+(empty cache and, for Renovate, no clone) and then warm (cache and clone
+kept), on an on-demand c7i.xlarge in us-east-1a (4 vCPU Xeon Platinum 8488C,
+8 GiB, gp3) running Ubuntu 26.04. `systemd-run --wait` measured each run's
+wall time, CPU time and cgroup memory peak, child processes included.
+Renovate ran under Node 24.21.0, already installed. GitHub access was a
+read-only installation token per run.
+
+| Repository | patchula cold | patchula warm | Renovate cold | Renovate warm |
+|---|---|---|---|---|
+| mastodon/mastodon | 16.6 s, 383 MB | 2.0 s, 100 MB | 98.1 s, 1.8 GB | 96.4 s, 1.1 GB |
+| getsentry/sentry | 8.3 s, 186 MB | 3.6 s, 97 MB | 53.7 s, 1.8 GB | 44.9 s, 1.6 GB |
+| grafana/grafana | 109.7 s, 494 MB | 5.5 s, 212 MB | 706.9 s, 3.6 GB | 89.4 s, 2.2 GB |
+| monicahq/monica | 7.5 s, 195 MB | 1.1 s, 45 MB | 16.8 s, 978 MB | 9.0 s, 568 MB |
+| jellyfin/jellyfin | 4.9 s, 73 MB | 1.3 s, 54 MB | 14.1 s, 823 MB | 11.7 s, 747 MB |
+| apache/kafka | 3.5 s, 57 MB | 1.3 s, 21 MB | 31.0 s, 905 MB | 22.9 s, 754 MB |
+| **Total wall time** | **150.5 s** | **14.8 s** | **920.6 s** | **274.3 s** |
+
+CPU time follows the same pattern. For grafana it was 92.4 s cold and 4.6 s
+warm for patchula, against 538.9 s and 129.1 s for Renovate. Across all six
+repositories patchula was 6.1× faster cold and 18.5× faster warm, and used a
+fifth to a sixteenth of the memory. Renovate's cold time includes cloning (2 GB
+for grafana); patchula reads trees and files through the API and never
+clones. Its cold grafana run made 33,916 HTTP requests, mostly registry
+catalogs for 1,076 Go modules and 936 npm packages; the warm run made 317.
+
+Coverage, as unique dependency names (Renovate's unskipped dependencies):
+
+| Repository | patchula | Renovate | Both | Renovate only | patchula only |
+|---|---|---|---|---|---|
+| mastodon | 294 | 342 | 292 | 50 | 2 |
+| sentry | 439 | 438 | 433 | 5 | 6 |
+| grafana | 1,369 | 1,286 | 1,280 | 6 | 89 |
+| monica | 121 | 114 | 114 | 0 | 7 |
+| jellyfin | 108 | 108 | 106 | 2 | 2 |
+| kafka | 46 | 128 | 35 | 93 | 11 |
+
+Mastodon's gap is 47 Gemfile gems without a version requirement
+(`gem 'chewy'`). Every release satisfies them, so patchula leaves them to
+lockfile maintenance, which is off by default. Kafka's gap is 70 versions in
+`gradle/dependencies.gradle`, a Groovy map that the gradle manager does not
+read, plus Gradle plugin and property declarations.
+
+The first pass also found two extraction bugs, fixed before the numbers above
+were taken. One file that did not parse failed the whole repository
+(mastodon's ERB-templated `config/email.yml`, grafana's malformed compose
+files; `ebaca8b`). YAML locations were lost after a block scalar holding
+non-ASCII text (`e89e99c`). Two valid grafana YAML files are still skipped
+with a warning: yaml-rust2 rejects a flow collection that closes left of its
+items (`crowdin.yml`), which libyaml accepts.
+
+## Earlier measurements
+
+The measurements taken while the Count was being built, kept as a record.
+
+### Release-age catalog reuse (2026-10-15, departure 50)
 
 The same release CLI and primed primary-host SQLite caches were reopened with
 the example configs' effective age rules. No remote writes or fixture recording
@@ -36,7 +100,7 @@ controls bypass only the relevant cached views. Raw reports and traces are in
 `/tmp/patchula-followup-bench/`, with summaries `item3-results.json` and
 `item3-final-results.json`. The cold primary-host comparison follows below.
 
-## Mise-versions catalogs (2026-10-15, departure 49)
+### Mise-versions catalogs (2026-10-15, departure 49)
 
 Release CLI, concurrency 8, identical per-repository example overrides and an
 independent new SQLite cache for each workload/mode. Builds and GitHub CLI
@@ -66,7 +130,7 @@ summaries are under `/tmp/patchula-followup-bench/`: `item2-results.json`,
 `item2-final-results.json` and `item2-steady-results.json`. The following
 release-age catalog reuse measurement builds on these baseline paths.
 
-## Phase 1 final live check (2026-10-15)
+### Phase 1 final live check (2026-10-15)
 
 The supplied final twelve-repository batch at the Phase 1 implementation took
 **37.4 s cold / 4.1 s warm / 3.8 s warm2**, producing **343 proposals on every
@@ -83,7 +147,7 @@ Cold report: `/root/rustovate-conf/r12-cold.json`; fresh baseline:
 4 field-mismatch, 277 departures**. Independent cached floating-tag evidence
 accounts for the two action fields; the four unocss fields remain because
 the log's actual evaluation timestamps are already beyond 72 hours. See
-[the timestamp evidence and report provenance](phase1-triage.md#final-live-check-2026-10-15).
+[the timestamp evidence and report provenance](/internals/history/phase1-triage#final-live-check-2026-10-15).
 
 All twelve repositories ran through patchula; eleven have a comparable
 Renovate baseline. remote-agent's `renovate.json` is invalid, so Renovate
@@ -96,7 +160,7 @@ investigate performance; they never gate a change. Configuration follows the
 [benchmark docs](https://tak.jdx.dev/guide/configuration), verified against the
 pinned executable's CLI help.
 
-## Running and recording
+### Running and recording
 
 ```sh
 mise install
@@ -139,7 +203,7 @@ The default is ten timed runs and two warmups for each of fourteen benchmarks:
   wall time includes process/runtime, temporary DB and replay-fixture setup;
   this is a micro workload, not a network latency or batch throughput claim.
 
-## Instruction counts and CI
+### Instruction counts and CI
 
 Tak optionally uses Valgrind for instruction counts. Valgrind is absent on the
 current local host and has no entry in the checked mise registry. Local
@@ -164,7 +228,7 @@ Local validation on 2026-10-14 completed all 14 subjects with
 Linux host produced substantial timing variance and tak outlier warnings; these
 samples verify the workflow and are not performance targets or batch baselines.
 
-## Real batch timings
+### Real batch timings
 
 Read-only lookup is implemented; writes remain a Phase 1 stub. Record live
 results here with commit, hardware, repo
@@ -174,7 +238,7 @@ microbenchmarks are not substitutes for these measurements.
 | Date | Commit | Host | Repos | Mode | Cache | Runs | Median | Notes |
 |---|---|---|---:|---|---|---:|---|---|
 
-### Phase 1 exit round 4 input (2026-10-15)
+#### Phase 1 exit round 4 input (2026-10-15)
 
 Caller-supplied release observations at `1826e32`, twelve test repositories in
 one batch, with an initially fresh SQLite cache:
@@ -201,7 +265,7 @@ of the unchanged cold report is **0 missing, 1 extra, 7 field-mismatch,
 remaining rows map to fixed tag-date, peer, Cargo-floor and provider behaviors
 that require new live output; they are not accepted departures. Eleven repos
 have a comparison baseline; remote-agent is a configuration-validation coverage
-gap. Full row accounting is in [phase 1 triage](phase1-triage.md).
+gap. Full row accounting is in [phase 1 triage](/internals/history/phase1-triage).
 
 These timings precede the round 4 changes. No lookup credential is configured
 in this implementation process, so new cold/warm timings and proposal sets are
@@ -211,7 +275,7 @@ the earlier timings must not be attributed to this implementation. Phase 1 exit
 requires a live rerun confirming the fixes, deterministic proposals and zero
 unexplained differences.
 
-### Phase 1 exit round 3 input (2026-10-15)
+#### Phase 1 exit round 3 input (2026-10-15)
 
 Caller-supplied live observations at `1fa827c`, release build, all twelve
 comparison repositories in one batch with an initially fresh SQLite cache:
@@ -226,7 +290,7 @@ Each is one sample, not a median; host/hardware were not supplied for these
 captures. The baseline lookup log predates evaluation by about one hour.
 Artifacts are `/root/rustovate-conf/r12-{cold,warm,warm2}.{json,err}` and
 `renovate12.jsonl`, outside the repository. Warm2 has 27 warnings, reviewed in
-[phase1-triage.md](phase1-triage.md). The 12 repositories are external test
+[phase1-triage.md](/internals/history/phase1-triage). The 12 repositories are external test
 inputs; patchula is developed independently of any runner in that set.
 
 The three extra proposals are two vaultwarden/server and one hashicorp/vault
@@ -246,7 +310,7 @@ build and contemporaneous baseline should verify lookup completeness, stable
 proposal sets for the same inputs/evaluation time and remaining source errors.
 Implementation `af88256` passed `CARGO_NET_OFFLINE=true mise run ci`.
 
-Historical Renovate baselines from [design.md](design.md), not remeasured here:
+Historical Renovate baselines from [design.md](/internals/design), not remeasured here:
 Renovate 44.155.6, warm caches, one EC2 c7i.large.
 
 | Workload | Baseline |
@@ -258,12 +322,12 @@ Renovate 44.155.6, warm caches, one EC2 c7i.large.
 The design targets (unconfirmed) are under 5 seconds for an unchanged warm batch
 and 10–30 seconds with updates, bounded by lockfile tools and GitHub writes.
 
-## Live network investigation (2026-10-15)
+### Live network investigation (2026-10-15)
 
 This investigation builds on `ca4bcdd` and uses only public repositories and
 registries. The primary workload is `sweepies/remote-agent` at
 `74449eb704b8dcb6a1a05d11d22c533b8b884f19`, with
-[`examples/benchmark-public.pkl`](../examples/benchmark-public.pkl). It selects
+[`examples/benchmark-public.pkl`](https://github.com/sweepies/count-patchula/blob/main/examples/benchmark-public.pkl). It selects
 package.json, GitHub workflows, mise tools, and a regex extraction of
 `min_version` in mise.toml as a jdx/mise dependency: 16 dependencies and 15 unique
 source/package catalogs. The existing opaque workflow SHA has no version comment;
@@ -276,7 +340,7 @@ outside the measured commands. These are individual live observations, not
 medians or a North America production baseline. Raw reports, request logs and
 wall times are kept locally under ignored `benchmark-results/`.
 
-### Measurements
+#### Measurements
 
 Selected comparison: `ca4bcdd` versus implementation `f09bc51` plus the held-back
 report normalization in `4df528e`. Both release binaries were built first, then
@@ -316,7 +380,7 @@ All seven added requests were expired npm entries, revalidated in parallel, with
 no release-history refresh. That variant used GraphQL warm heads; its request
 totals are diagnostic evidence for registry expiry, not the selected warm totals.
 
-### Causes established from live requests
+#### Causes established from live requests
 
 - The shared pool negotiated HTTP/2. Independent requests overlapped; ordinary
   governor acquisition was near zero, with queueing when the eight-request cap
@@ -360,7 +424,7 @@ distinguish them. A 304 count alone is no longer a useful warm efficiency metric
 the first warm run also primes REST validators after cold GraphQL discovery,
 while later release probes may be 200 solely because counters changed.
 
-### Diagnostics and limitations
+#### Diagnostics and limitations
 
 `-vv` (including `-vvv`) or `PATCHULA_LOG=debug` enables one stderr line per HTTP
 attempt and fresh-cache read, plus start/end phase spans. `PATCHULA_LOG` accepts
@@ -384,7 +448,7 @@ different sources run concurrently. Cold tag hydration and upstream GraphQL
 service latency remain material. No history was truncated to manufacture a fast
 result. Private renovate-runner and a North America host were not benchmarked.
 
-### Reproduce public and renovate-runner runs
+#### Reproduce public and renovate-runner runs
 
 The following commands keep builds outside measurement and use a new cache for
 cold, then the same cache for two warm samples. Each process authenticates using
@@ -427,7 +491,7 @@ This includes fixture secret scanning, formatting, Clippy with `-D warnings`,
 workspace tests and build. Public recordings were refreshed explicitly with the
 existing opt-in recording workflow; normal replay constructs no live transport.
 
-## Compact catalogs and parallel cache readers (2026-10-15)
+### Compact catalogs and parallel cache readers (2026-10-15)
 
 Baseline: `bd94910` (including the three previously unpushed commits);
 implementation: `e0427bd`. This
@@ -436,7 +500,7 @@ above. No Renovate implementation source or private renovate-runner data was
 used. All builds use mise; every test/replay is offline. Live CLI samples use
 `GH_TOKEN="$(gh auth token)"`, release builds, concurrency eight and `-vv`.
 
-### npm format choice
+#### npm format choice
 
 The [npm registry metadata specification](https://github.com/npm/registry/blob/main/docs/responses/package-metadata.md)
 documents per-version publication times in full metadata; abbreviated metadata
@@ -480,7 +544,7 @@ The read pool has four read-only WAL connections on dedicated workers. Access
 updates are coalesced in writer transactions, keeping decoding independent of
 both writes and async runtime scheduling. No version history is truncated.
 
-### Live public comparison
+#### Live public comparison
 
 The same shared host, repository commit and config from the earlier public
 investigation were used: `sweepies/remote-agent` at
@@ -518,7 +582,7 @@ Raw public artifacts: `benchmark-results/compact-catalogs/{before,after}-public-
 contain JSON reports, `-vv` logs and wall times. The reproducible public command
 above is unchanged; use distinct cache paths/binaries to alternate variants.
 
-### Large-document offline replay
+#### Large-document offline replay
 
 The four exact full documents in the npm format probe total 137,474,801 decoded
 bytes. The new example was copied unchanged into a detached `bd94910` checkout
@@ -551,7 +615,7 @@ single small-fixture observations, including scheduling variance, rather than
 large-packument performance evidence. Logs are `benchmark-results/compact-replay-before.log`
 and `compact-replay-after-final.log`.
 
-### Cache footprint and validation
+#### Cache footprint and validation
 
 Sizes below were collected after warm 2 and a SQLite WAL checkpoint/truncate,
 without VACUUM. HTTP bytes sum `length(body)` across the HTTP table; database
@@ -580,7 +644,7 @@ Existing discovery tests caught and verified the fix for documents without a
 constructs a live transport except the already-ignored, explicit recording paths.
 All commits remain local; no push, PR or private fixture recording was performed.
 
-### Reproduce the large offline replay
+#### Reproduce the large offline replay
 
 Capture public documents explicitly, outside tests (the four files are ignored
 benchmark inputs, not committed cassettes):
@@ -610,7 +674,7 @@ API and can be copied unchanged into a detached baseline checkout for A/B runs.
 Tests never record or fetch these inputs.
 
 
-## Twelve-repository host queues and registry freshness (2026-10-15)
+### Twelve-repository host queues and registry freshness (2026-10-15)
 
 Baseline: `4182a1f`; implementation: `acf42c2`, `832936f` and `ecec03b`. This work uses
 independent protocol documentation and public manifests, never Renovate
@@ -620,7 +684,7 @@ process with `GH_TOKEN="$(gh auth token)"`, concurrency eight and `-vv`. Own
 build/CI jobs finished before live samples; the host is shared. Measurements are
 individual observations, not medians or a controlled latency guarantee.
 
-### Confirmed causes and selected behavior
+#### Confirmed causes and selected behavior
 
 The registry client had one semaphore across every registry host. GitHub already
 had a separate governor: it did not literally wait behind GHCR's semaphore, but
@@ -640,8 +704,8 @@ from fetched-at and can be disabled immediately with their `--*-freshness-secs 0
 flags. `no-cache`/`no-store`, other registries and mutable manifest digests retain
 their upstream rules. Anonymous image-scoped pull tokens are reused only within
 their expiry minus a margin; private/GitHub credentials are never stored as tokens.
-See [cache policy](cache.md#local-freshness-and-host-limits) and
-[departure 21](departures.md#departure-21). New versions/deletions can be delayed
+See [cache policy](/internals/cache#local-freshness-and-host-limits) and
+[departure 21](/renovate/departures#departure-21). New versions/deletions can be delayed
 within the chosen freshness window; OCI publication dates remain unknown.
 
 A live GitHub Packages versions probe returned 403: the supplied OAuth token
@@ -663,7 +727,7 @@ recovery, exhaustion and isolating a throttled host. Final runs below are checke
 for full enumeration, stable proposal counts and warnings, not status alone.
 
 
-### Final public twelve-repository comparison
+#### Final public twelve-repository comparison
 
 The committed `examples/benchmark-batch-public.pkl` reads actual public workflow,
 Dockerfile, Kubernetes/Kustomize and Go declarations. It restricts Go extraction
@@ -750,7 +814,7 @@ normalized report hashes. Earlier `public-before`, `public-after`,
 `public-final` and original-workload attempts are diagnostic samples, not part
 of this final A/B comparison.
 
-### Original workload and limits of verification
+#### Original workload and limits of verification
 
 The supplied successful baseline remains 99.6 / 73.4 / 69.6 seconds with 442
 proposals and about 1,815 / 630 / 632 requests. The exact supplied warm-2 trace
@@ -776,7 +840,7 @@ repositories, not an identical replacement for the supplied private workload.
 Private workload reports/caches/logs remain outside this repository at
 `/root/rustovate-conf/performance-{after,final}/`; no private fixtures were added.
 
-### Validation and reproduction
+#### Validation and reproduction
 
 `CARGO_NET_OFFLINE=true PATCHULA_RECORD=0 mise run ci` passed on the final code:
 22-cassette secret scan, formatting, Clippy `-D warnings`, workspace tests and
@@ -827,59 +891,3 @@ compare the earlier invalid-rate-limit samples. To restore upstream catalog
 freshness for a diagnostic run, pass both `--registry-freshness-secs 0` and
 `--go-freshness-secs 0`; doing so deliberately restores repeated downloads.
 All implementation and documentation commits remain local; nothing was pushed.
-
-## Large public repositories on EC2 (2026-10-21)
-
-Patchula `e89e99c` against Renovate 44.173.1 (the latest release that day) on
-six large public repositories. Both ran read-only lookups: `patchula lookup`
-with the default policy, and Renovate with `dryRun=lookup` and each
-repository's own Renovate config. Each tool ran each repository alone, cold
-(empty cache and, for Renovate, no clone) and then warm (cache and clone
-kept), on an on-demand c7i.xlarge in us-east-1a (4 vCPU Xeon Platinum 8488C,
-8 GiB, gp3) running Ubuntu 26.04. `systemd-run --wait` measured each run's
-wall time, CPU time and cgroup memory peak, child processes included.
-Renovate ran under Node 24.21.0, already installed. GitHub access was a
-read-only installation token per run.
-
-| Repository | patchula cold | patchula warm | Renovate cold | Renovate warm |
-|---|---|---|---|---|
-| mastodon/mastodon | 16.6 s, 383 MB | 2.0 s, 100 MB | 98.1 s, 1.8 GB | 96.4 s, 1.1 GB |
-| getsentry/sentry | 8.3 s, 186 MB | 3.6 s, 97 MB | 53.7 s, 1.8 GB | 44.9 s, 1.6 GB |
-| grafana/grafana | 109.7 s, 494 MB | 5.5 s, 212 MB | 706.9 s, 3.6 GB | 89.4 s, 2.2 GB |
-| monicahq/monica | 7.5 s, 195 MB | 1.1 s, 45 MB | 16.8 s, 978 MB | 9.0 s, 568 MB |
-| jellyfin/jellyfin | 4.9 s, 73 MB | 1.3 s, 54 MB | 14.1 s, 823 MB | 11.7 s, 747 MB |
-| apache/kafka | 3.5 s, 57 MB | 1.3 s, 21 MB | 31.0 s, 905 MB | 22.9 s, 754 MB |
-| **Total wall time** | **150.5 s** | **14.8 s** | **920.6 s** | **274.3 s** |
-
-CPU time follows the same pattern. For grafana it was 92.4 s cold and 4.6 s
-warm for patchula, against 538.9 s and 129.1 s for Renovate. Across all six
-repositories patchula was 6.1× faster cold and 18.5× faster warm, and used a
-fifth to a sixteenth of the memory. Renovate's cold time includes cloning (2 GB
-for grafana); patchula reads trees and files through the API and never
-clones. Its cold grafana run made 33,916 HTTP requests, mostly registry
-catalogs for 1,076 Go modules and 936 npm packages; the warm run made 317.
-
-Coverage, as unique dependency names (Renovate's unskipped dependencies):
-
-| Repository | patchula | Renovate | Both | Renovate only | patchula only |
-|---|---|---|---|---|---|
-| mastodon | 294 | 342 | 292 | 50 | 2 |
-| sentry | 439 | 438 | 433 | 5 | 6 |
-| grafana | 1,369 | 1,286 | 1,280 | 6 | 89 |
-| monica | 121 | 114 | 114 | 0 | 7 |
-| jellyfin | 108 | 108 | 106 | 2 | 2 |
-| kafka | 46 | 128 | 35 | 93 | 11 |
-
-Mastodon's gap is 47 Gemfile gems without a version requirement
-(`gem 'chewy'`). Every release satisfies them, so patchula leaves them to
-lockfile maintenance, which is off by default. Kafka's gap is 70 versions in
-`gradle/dependencies.gradle`, a Groovy map that the gradle manager does not
-read, plus Gradle plugin and property declarations.
-
-The first pass also found two extraction bugs, fixed before the numbers above
-were taken. One file that did not parse failed the whole repository
-(mastodon's ERB-templated `config/email.yml`, grafana's malformed compose
-files; `ebaca8b`). YAML locations were lost after a block scalar holding
-non-ASCII text (`e89e99c`). Two valid grafana YAML files are still skipped
-with a warning: yaml-rust2 rejects a flow collection that closes left of its
-items (`crowdin.yml`), which libyaml accepts.

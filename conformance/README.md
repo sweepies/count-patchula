@@ -88,7 +88,7 @@ versions and all value/digest targets still compare.
 Output-only, audited normalization covers Bun/npm package.json identities,
 numeric version prefixes and Docker compatibility suffixes, Helm registry
 identities and archive checksums. Narrow inventory/duplicate scope and policy
-rules are documented in [departures](../docs/departures.md). Exclusions count
+rules are documented in [departures](../docs/renovate/departures.md). Exclusions count
 every removed dependency/proposal; normalization counts are separate from
 differences and neither implies a successful live engine rerun.
 
@@ -122,12 +122,12 @@ are tolerated; errors never echo raw input. Parsing the supplied real lookup log
 verified; invoking the harness's live installation/execution path is still unverified.
 
 Outputs are `triage.md` and `triage.json`. JSON includes both normalized inputs
-using the [v1 batch report](../docs/report.md), plus differences, parser `warnings`
+using the [v1 batch report](../docs/reference/report.md), plus differences, parser `warnings`
 and audited `exclusions`. `normalizations` counts skipped group comparisons,
 npm digest normalization and ignored empty-file-only coverage. Markdown includes
 these counts, warnings and exclusions too.
 The fixed `renovate-config-manager` scope rule excludes Renovate's own configuration
-manager (snapshots and upgrade summaries) under [departure 19](../docs/departures.md#departure-19);
+manager (snapshots and upgrade summaries) under [departure 19](../docs/renovate/departures.md#departure-19);
 patchula has no equivalent. Every other manager remains in comparison. Classification
 is `patchula-missing`, `patchula-extra`, `field-mismatch`, or
 `deliberate-departure`; mapped entries retain `originalClassification` and a
@@ -139,14 +139,14 @@ report-only. Input or execution failures exit nonzero.
 
 [departures.json](departures.json) is a versioned, deliberately small rules file;
 `--rules PATH` selects a replacement. Digest additions for actions/images
-are mapped to [departure 7](../docs/departures.md#departure-7). An extra pin must
+are mapped to [departure 7](../docs/renovate/departures.md#departure-7). An extra pin must
 keep the current value/version, add a digest to an unpinned dependency and have
-no group. Release-age differences map to [departure 23](../docs/departures.md#departure-23)
+no group. Release-age differences map to [departure 23](../docs/renovate/departures.md#departure-23)
 only when timestamp evidence places a newer patchula target at least 24 and less than 96
 hours old (an empirical ceiling, not Renovate's exact rule) at Renovate's own package-snapshot log timestamp, under an explicit
 24-hour policy, with an older Renovate proposal in
 the same class. Exact npm major range edits map narrowly to
-[departure 25](../docs/departures.md#departure-25) with identical resolved targets
+[departure 25](../docs/renovate/departures.md#departure-25) with identical resolved targets
 and an explicit exact policy. Other version and identity differences remain actionable.
 
 Departure 45 additionally covers newer full action targets on an identical
@@ -167,7 +167,7 @@ explain range edits. Held-back versions use the same extracted version identity
 as proposals, including when an extractor removes a tag prefix.
 
 Proposed npm integrity digests are ignored under
-[departure 24](../docs/departures.md#departure-24), including regex dependencies
+[departure 24](../docs/renovate/departures.md#departure-24), including regex dependencies
 whose datasource is npm. Other-source and current digests remain comparable.
 Groups compare only when Renovate supplies a group on that update, including
 enrichment from unambiguous branch summaries. Missing group metadata is unknown.

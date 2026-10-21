@@ -88,10 +88,10 @@ phaseMicros). Unknown fields are still rejected. Timing windows are reported
 without delaying lookup. Engine JSON errors remain error envelopes only for
 batch-level failures; per-repository errors stay in the report.
 
-The hand-written [sample](../conformance/tests/fixtures/report.json) exercises
+The hand-written [sample](https://github.com/sweepies/count-patchula/blob/main/conformance/tests/fixtures/report.json) exercises
 aliases, ranges, grouping and digest policy. It is not a real lookup result.
 
-## Branch actions (SWE-106)
+## Branch actions
 
 Version 2 adds the optional top-level `actions` object for `run`. `lookup` omits
 it. The batch version increments because previous readers reject unknown fields;
