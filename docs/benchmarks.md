@@ -827,3 +827,59 @@ compare the earlier invalid-rate-limit samples. To restore upstream catalog
 freshness for a diagnostic run, pass both `--registry-freshness-secs 0` and
 `--go-freshness-secs 0`; doing so deliberately restores repeated downloads.
 All implementation and documentation commits remain local; nothing was pushed.
+
+## Large public repositories on EC2 (2026-10-21)
+
+Rustovate `e89e99c` against Renovate 44.173.1 (the latest release that day) on
+six large public repositories. Both ran read-only lookups: `rustovate lookup`
+with the default policy, and Renovate with `dryRun=lookup` and each
+repository's own Renovate config. Each tool ran each repository alone, cold
+(empty cache and, for Renovate, no clone) and then warm (cache and clone
+kept), on an on-demand c7i.xlarge in us-east-1a (4 vCPU Xeon Platinum 8488C,
+8 GiB, gp3) running Ubuntu 26.04. `systemd-run --wait` measured each run's
+wall time, CPU time and cgroup memory peak, child processes included.
+Renovate ran under Node 24.21.0, already installed. GitHub access was a
+read-only installation token per run.
+
+| Repository | rustovate cold | rustovate warm | Renovate cold | Renovate warm |
+|---|---|---|---|---|
+| mastodon/mastodon | 16.6 s, 383 MB | 2.0 s, 100 MB | 98.1 s, 1.8 GB | 96.4 s, 1.1 GB |
+| getsentry/sentry | 8.3 s, 186 MB | 3.6 s, 97 MB | 53.7 s, 1.8 GB | 44.9 s, 1.6 GB |
+| grafana/grafana | 109.7 s, 494 MB | 5.5 s, 212 MB | 706.9 s, 3.6 GB | 89.4 s, 2.2 GB |
+| monicahq/monica | 7.5 s, 195 MB | 1.1 s, 45 MB | 16.8 s, 978 MB | 9.0 s, 568 MB |
+| jellyfin/jellyfin | 4.9 s, 73 MB | 1.3 s, 54 MB | 14.1 s, 823 MB | 11.7 s, 747 MB |
+| apache/kafka | 3.5 s, 57 MB | 1.3 s, 21 MB | 31.0 s, 905 MB | 22.9 s, 754 MB |
+| **Total wall time** | **150.5 s** | **14.8 s** | **920.6 s** | **274.3 s** |
+
+CPU time follows the same pattern. For grafana it was 92.4 s cold and 4.6 s
+warm for rustovate, against 538.9 s and 129.1 s for Renovate. Across all six
+repositories rustovate was 6.1× faster cold and 18.5× faster warm, and used a
+fifth to a sixteenth of the memory. Renovate's cold time includes cloning (2 GB
+for grafana); rustovate reads trees and files through the API and never
+clones. Its cold grafana run made 33,916 HTTP requests, mostly registry
+catalogs for 1,076 Go modules and 936 npm packages; the warm run made 317.
+
+Coverage, as unique dependency names (Renovate's unskipped dependencies):
+
+| Repository | rustovate | Renovate | Both | Renovate only | rustovate only |
+|---|---|---|---|---|---|
+| mastodon | 294 | 342 | 292 | 50 | 2 |
+| sentry | 439 | 438 | 433 | 5 | 6 |
+| grafana | 1,369 | 1,286 | 1,280 | 6 | 89 |
+| monica | 121 | 114 | 114 | 0 | 7 |
+| jellyfin | 108 | 108 | 106 | 2 | 2 |
+| kafka | 46 | 128 | 35 | 93 | 11 |
+
+Mastodon's gap is 47 Gemfile gems without a version requirement
+(`gem 'chewy'`). Every release satisfies them, so rustovate leaves them to
+lockfile maintenance, which is off by default. Kafka's gap is 70 versions in
+`gradle/dependencies.gradle`, a Groovy map that the gradle manager does not
+read, plus Gradle plugin and property declarations.
+
+The first pass also found two extraction bugs, fixed before the numbers above
+were taken. One file that did not parse failed the whole repository
+(mastodon's ERB-templated `config/email.yml`, grafana's malformed compose
+files; `ebaca8b`). YAML locations were lost after a block scalar holding
+non-ASCII text (`e89e99c`). Two valid grafana YAML files are still skipped
+with a warning: yaml-rust2 rejects a flow collection that closes left of its
+items (`crowdin.yml`), which libyaml accepts.
