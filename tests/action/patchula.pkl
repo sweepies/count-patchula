@@ -1,0 +1,5 @@
+// The Action workflow's dry run uses this in place of a repository config:
+// GitHub Actions only, so it plans real updates without running lockfile tools.
+amends "Patchula.pkl"
+
+managers = new Listing { "github-actions" }

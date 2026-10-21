@@ -40,7 +40,8 @@ patchula run sweepies/my-app             # then let him bite
 ```
 
 Lockfile tools come from [mise](https://mise.jdx.dev), so it needs to be on the
-`PATH`. See [getting started](docs/getting-started.md).
+`PATH`. See [getting started](docs/getting-started.md), or run him on a schedule
+with the [GitHub Action](docs/guide/github-actions.md).
 
 ## What you get
 

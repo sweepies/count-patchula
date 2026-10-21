@@ -81,6 +81,8 @@ Without a repository argument the Count works on the current directory's
 checkout, through its `origin` remote (or its only remote) on github.com. Pass
 `--all-repos` to process every repository the token can reach.
 
+To run him on a schedule, use the [GitHub Action](/guide/github-actions).
+
 ## Where to go next
 
 - [Configuration](/guide/configuration) for rules, groups, schedules and limits.

@@ -1,0 +1,89 @@
+name: Count Patchula
+description: Count Patchula vants to update your deps. Opens a pull request per dependency update, with real lockfiles.
+author: Sweepy
+branding:
+  icon: package
+  color: red
+
+inputs:
+  token:
+    description: >-
+      GitHub token the Count reads and writes with. Use a GitHub App
+      installation token, so his pull requests run your checks.
+    required: true
+  repositories:
+    description: Repositories as owner/repo, separated by spaces or newlines. Empty means the repository running the workflow.
+    default: ""
+  all-repos:
+    description: Process every repository the token can reach.
+    default: "false"
+  dry-run:
+    description: Print the planned branches and diffs without writing to GitHub.
+    default: "false"
+  version:
+    description: Count Patchula version to run. Empty means the version of this action, or the latest release when the action is not used at a release tag.
+    default: ""
+  args:
+    description: Extra arguments for `patchula run`, such as `--config-dir policy`, separated by spaces or newlines.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # mise runs outside the workspace, so the repository's own mise config is
+    # never loaded or exported into later steps.
+    - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+      with:
+        install: false
+        cache: false
+        env: "false"
+        working_directory: ${{ runner.temp }}
+    # The cache holds HTTP validators, write receipts and the lockfile tool
+    # store. Each run saves a new entry and restores the newest one.
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/patchula
+        key: patchula-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: patchula-${{ runner.os }}-${{ runner.arch }}-
+    - name: Run Count Patchula
+      shell: bash
+      env:
+        PATCHULA_TOKEN: ${{ inputs.token }}
+        INPUT_REPOSITORIES: ${{ inputs.repositories }}
+        INPUT_ALL_REPOS: ${{ inputs.all-repos }}
+        INPUT_DRY_RUN: ${{ inputs.dry-run }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_ARGS: ${{ inputs.args }}
+        ACTION_REF: ${{ github.action_ref }}
+        CACHE_DIR: ${{ runner.temp }}/patchula
+      run: |
+        set -euo pipefail
+        version="$INPUT_VERSION"
+        if [ -z "$version" ]; then
+          if [[ "$ACTION_REF" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            version="${BASH_REMATCH[1]}"
+          else
+            version=latest
+          fi
+        fi
+        args=(run --cache "$CACHE_DIR/cache.sqlite")
+        if [ "$INPUT_DRY_RUN" = true ]; then
+          args+=(--dry-run)
+        fi
+        if [ "$INPUT_ALL_REPOS" = true ]; then
+          args+=(--all-repos)
+        elif [ -n "${INPUT_REPOSITORIES//[[:space:]]/}" ]; then
+          read -r -d '' -a repositories <<< "$INPUT_REPOSITORIES" || true
+          args+=("${repositories[@]}")
+        else
+          args+=("$GITHUB_REPOSITORY")
+        fi
+        if [ -n "${INPUT_ARGS//[[:space:]]/}" ]; then
+          read -r -d '' -a extra <<< "$INPUT_ARGS" || true
+          args+=("${extra[@]}")
+        fi
+        mkdir -p "$CACHE_DIR"
+        # The workflow chose this version by pinning the action, so mise's
+        # release-age wait does not apply to it.
+        bin=$(cd "$RUNNER_TEMP" && MISE_MINIMUM_RELEASE_AGE=0 mise exec "packslip:github.com/sweepies/count-patchula@$version" -- sh -c 'command -v patchula')
+        "$bin" "${args[@]}"

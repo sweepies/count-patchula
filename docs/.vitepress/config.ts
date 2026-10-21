@@ -107,6 +107,7 @@ export default defineConfig({
       {
         text: "Run it",
         items: [
+          { text: "GitHub Actions", link: "/guide/github-actions" },
           { text: "Terminal UI", link: "/guide/tui" },
           { text: "GitHub App server", link: "/guide/server" },
         ],
