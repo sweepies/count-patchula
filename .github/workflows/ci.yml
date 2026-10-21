@@ -14,6 +14,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# The build jobs run on Namespace. Pull requests from forks use GitHub's runners
+# instead, so untrusted code never reaches the Namespace machines.
 jobs:
   # The workflow always runs, so "CI result" can be a required check. Changes
   # that only touch the docs site (built by docs.yml) skip the Rust jobs.
@@ -55,7 +57,7 @@ jobs:
   ci:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'namespace-profile-ubuntu-amd64-md' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -100,7 +102,7 @@ jobs:
     name: Corpus lookup
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'namespace-profile-ubuntu-amd64-md' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -161,7 +163,7 @@ jobs:
     name: Benchmarks (report only)
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'namespace-profile-ubuntu-amd64-md' }}
     continue-on-error: true
     timeout-minutes: 20
     steps:
