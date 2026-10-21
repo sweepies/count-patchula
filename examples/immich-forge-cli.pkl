@@ -1,4 +1,4 @@
-amends "patchula-schema.pkl"
+amends "PatchulaConfig.pkl"
 
 prs { branch = "renovate/" }
 extractors = new Listing {

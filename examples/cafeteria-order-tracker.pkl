@@ -1,4 +1,4 @@
-amends "patchula-schema.pkl"
+amends "PatchulaConfig.pkl"
 
 rules = new Listing {
   new Rule {

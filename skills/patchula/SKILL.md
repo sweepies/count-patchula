@@ -16,7 +16,7 @@ Count skips it. Configs are
 [Pkl](https://pkl-lang.org) amending the published schema:
 
 ```pkl
-amends "patchula-schema.pkl"
+amends "PatchulaConfig.pkl"
 
 prs { dashboard = true }
 rules {
@@ -34,8 +34,8 @@ invalid config and names the file and line:
 patchula config check .
 ```
 
-The Count supplies `patchula-schema.pkl` when the repository has no copy.
-`patchula config schema > patchula-schema.pkl` vendors it for editor
+The Count supplies `PatchulaConfig.pkl` when the repository has no copy.
+`patchula config schema > PatchulaConfig.pkl` vendors it for editor
 completion; a vendored copy is the one evaluated.
 
 Unknown fields are errors, so read the schema rather than guessing a field:

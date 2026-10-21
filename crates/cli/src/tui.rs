@@ -1050,7 +1050,7 @@ mod tests {
         std::fs::write(dir.path().join("package.json"), manifest).unwrap();
         std::fs::write(
             dir.path().join("patchula.pkl"),
-            "amends \"patchula-schema.pkl\"\n",
+            "amends \"PatchulaConfig.pkl\"\n",
         )
         .unwrap();
         let config = patchula_config::load(dir.path()).unwrap();

@@ -15,7 +15,7 @@ and you are close.
 
 ```pkl
 // patchula.pkl
-amends "patchula-schema.pkl"
+amends "PatchulaConfig.pkl"
 
 prs { dashboard = true }
 ```
@@ -91,7 +91,7 @@ use `null`.
 becomes
 
 ```pkl
-amends "patchula-schema.pkl"
+amends "PatchulaConfig.pkl"
 
 defaults {
   windows {

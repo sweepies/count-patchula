@@ -21,7 +21,7 @@ at the repository root:
 
 ```pkl
 // patchula.pkl
-amends "patchula-schema.pkl"
+amends "PatchulaConfig.pkl"
 
 prs { dashboard = true }
 ```
@@ -30,12 +30,12 @@ That is a complete config. Everything else comes from the schema's defaults:
 every supported manager, exact version pins, digest pins for actions and
 images, a 24-hour release-age wait, one PR per update and no auto-merge.
 
-`patchula-schema.pkl` does not need to exist in the repository. When the Count
+`PatchulaConfig.pkl` does not need to exist in the repository. When the Count
 reads a config he supplies the schema himself. Vendor it if you want completion
 in an editor, and check the config locally:
 
 ```sh
-patchula config schema > patchula-schema.pkl
+patchula config schema > PatchulaConfig.pkl
 patchula config check .
 ```
 

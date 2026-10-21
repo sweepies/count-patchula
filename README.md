@@ -27,7 +27,7 @@ Other ways to install him are on the [installation page](https://count-patchula.
 Invite the Count into a repository with `patchula.pkl`:
 
 ```pkl
-amends "patchula-schema.pkl"
+amends "PatchulaConfig.pkl"
 
 prs { dashboard = true }
 ```

@@ -111,7 +111,7 @@ async fn discovered_config_precedence_skips_errors_and_cached_extraction() {
     for (sha, text) in [
         (
             "config",
-            "amends \"patchula-schema.pkl\"\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n",
+            "amends \"PatchulaConfig.pkl\"\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n",
         ),
         (
             "manifest",
@@ -297,7 +297,7 @@ async fn cold_snapshot_and_warm_branch_rename_reuse_identical_commit() {
         "/repo/config.pkl",
         BTreeMap::from([(
             "/repo/config.pkl".into(),
-            "amends \"patchula-schema.pkl\"\nmanagers = new Listing {}".into(),
+            "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing {}".into(),
         )]),
     )
     .unwrap();
@@ -406,7 +406,7 @@ async fn warm_catalogs_wait_for_current_extraction_and_skip_removed_sources() {
         "/repo/config.pkl",
         BTreeMap::from([(
             "/repo/config.pkl".into(),
-            "amends \"patchula-schema.pkl\"\nmanagers = new Listing { \"npm\" }".into(),
+            "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"npm\" }".into(),
         )]),
     )
     .unwrap();
@@ -441,12 +441,12 @@ async fn config_dir_maps_overrides_and_falls_back_with_batch_dedup() {
     let dir = tempfile::tempdir().unwrap();
     let configs = dir.path().join("configs");
     std::fs::create_dir_all(configs.join("b")).unwrap();
-    let npm = "amends \"patchula-schema.pkl\"\nmanagers = new Listing { \"npm\" }\n";
+    let npm = "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"npm\" }\n";
     std::fs::write(configs.join("shared.pkl"), npm).unwrap();
     std::fs::write(configs.join("other.pkl"), npm).unwrap();
     std::fs::write(
         configs.join("b/shared.pkl"),
-        "amends \"patchula-schema.pkl\"\nmanagers = new Listing {}\n",
+        "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing {}\n",
     )
     .unwrap();
     // Unselected files must not be evaluated.

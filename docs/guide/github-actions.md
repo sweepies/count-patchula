@@ -100,12 +100,12 @@ runner can opt repositories in without committing to them:
 
 ```pkl
 // my-org/patchula-runner/policy/my-app.pkl
-amends "patchula-schema.pkl"
+amends "PatchulaConfig.pkl"
 
 prs { dashboard = true }
 ```
 
-Policy files amend `patchula-schema.pkl` like any config, and the Count supplies it. See
+Policy files amend `PatchulaConfig.pkl` like any config, and the Count supplies it. See
 [sharing policy](/guide/configuration#sharing-policy-across-repositories) to
 build these files on one organization module.
 

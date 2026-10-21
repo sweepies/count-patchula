@@ -211,7 +211,7 @@ fn config_validation_and_json_results_use_documented_exit_codes() {
     let invalid = directory.path().join("patchula.pkl");
     std::fs::write(
         &invalid,
-        "amends \"patchula-schema.pkl\"\nunknownPolicy = true\n",
+        "amends \"PatchulaConfig.pkl\"\nunknownPolicy = true\n",
     )
     .unwrap();
     let invalid = invalid.to_str().unwrap();
@@ -257,7 +257,7 @@ fn config_check_directory_uses_bundled_nested_defaults() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
         dir.path().join("patchula.pkl"),
-        "amends \"patchula-schema.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\n",
+        "amends \"PatchulaConfig.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\n",
     )
     .unwrap();
     let output = cli(&["config", "check", dir.path().to_str().unwrap(), "--json"]);
@@ -271,13 +271,13 @@ fn lookup_config_dir_validates_all_matches_before_repository_reads() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
         dir.path().join("first.pkl"),
-        "amends \"patchula-schema.pkl\"\n",
+        "amends \"PatchulaConfig.pkl\"\n",
     )
     .unwrap();
     let bad = dir.path().join("second.pkl");
     std::fs::write(
         &bad,
-        "amends \"patchula-schema.pkl\"\nunknownPolicy = true\n",
+        "amends \"PatchulaConfig.pkl\"\nunknownPolicy = true\n",
     )
     .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_patchula"))

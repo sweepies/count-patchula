@@ -18,7 +18,7 @@ fn versions_host_is_enabled_by_default_and_can_be_disabled() {
 fn fixture(body: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("patchula.pkl");
-    std::fs::write(&path, format!("amends \"patchula-schema.pkl\"\n{body}\n")).unwrap();
+    std::fs::write(&path, format!("amends \"PatchulaConfig.pkl\"\n{body}\n")).unwrap();
     (directory, path)
 }
 
@@ -70,7 +70,7 @@ fn nested_amendments_keep_class_defaults_locally_and_through_the_api() {
     use std::collections::BTreeMap;
     let dir = tempfile::tempdir().unwrap();
     let source =
-        "amends \"patchula-schema.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\n";
+        "amends \"PatchulaConfig.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\n";
     std::fs::write(dir.path().join("patchula.pkl"), source).unwrap();
     let files = BTreeMap::from([("/repo/patchula.pkl".into(), source.into())]);
     let local = load(dir.path()).unwrap();
@@ -89,7 +89,7 @@ fn nested_amendments_keep_class_defaults_locally_and_through_the_api() {
 fn a_vendored_schema_overrides_the_built_in_one() {
     let (dir, path) = fixture("prs { dashboard = true }");
     std::fs::write(
-        dir.path().join("patchula-schema.pkl"),
+        dir.path().join("PatchulaConfig.pkl"),
         SCHEMA.replace("patchula/", "custom/"),
     )
     .unwrap();
@@ -262,7 +262,7 @@ fn local_organisation_amends_and_imports_work() {
     let (directory, path) = fixture("");
     std::fs::write(
         directory.path().join("org.pkl"),
-        "amends \"patchula-schema.pkl\"\nprs { concurrent = 8 }\ndefaults { releaseNotes = false }\n",
+        "amends \"PatchulaConfig.pkl\"\nprs { concurrent = 8 }\ndefaults { releaseNotes = false }\n",
     )
     .unwrap();
     std::fs::write(
@@ -285,7 +285,7 @@ fn discovery_reads_only_the_root_and_reports_absence() {
     std::fs::create_dir_all(github_only.path().join(".github")).unwrap();
     std::fs::write(
         github_only.path().join(".github/patchula.pkl"),
-        "amends \"patchula-schema.pkl\"\nprs { concurrent = 3 }\n",
+        "amends \"PatchulaConfig.pkl\"\nprs { concurrent = 3 }\n",
     )
     .unwrap();
     assert_eq!(discover(github_only.path()).unwrap(), None);
@@ -303,7 +303,7 @@ fn discovery_reads_only_the_root_and_reports_absence() {
 fn remote_imports_and_environment_reads_are_rejected_without_network() {
     for body in [
         "amends \"https://invalid.example/config.pkl\"",
-        "amends \"patchula-schema.pkl\"\ndefaults { commitPrefix = read(\"env:PATH\") }",
+        "amends \"PatchulaConfig.pkl\"\ndefaults { commitPrefix = read(\"env:PATH\") }",
     ] {
         let (directory, path) = fixture("");
         std::fs::write(&path, body).unwrap();

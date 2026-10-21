@@ -108,10 +108,10 @@ mod tests {
     #[test]
     fn isolated_modules_and_no_host_imports() {
         let files = BTreeMap::from([
-            ("/repo/patchula-schema.pkl".into(), SCHEMA.into()),
+            ("/repo/PatchulaConfig.pkl".into(), SCHEMA.into()),
             (
                 "/repo/patchula.pkl".into(),
-                "amends \"patchula-schema.pkl\"\nmanagers = new Listing {\"npm\"}\n".into(),
+                "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing {\"npm\"}\n".into(),
             ),
         ]);
         let config = load_files("/repo/patchula.pkl", files.clone()).unwrap();

@@ -13,7 +13,7 @@ patchula.pkl at the root; absence is skipped. Local --config
 applies to every selected repository and is evaluated before network access.
 
 Repository configs evaluate with an isolated supplied-file capability. Local
-amends/import dependencies are fetched, with the bundled patchula-schema.pkl
+amends/import dependencies are fetched, with the bundled PatchulaConfig.pkl
 available when not vendored. Remote and escaping imports/resources are
 rejected. Literal imports are supported;
 dynamic import targets require future discovery support. `config check` and

@@ -171,7 +171,7 @@ pub struct Config {
 pub enum ConfigCommand {
     /// Validate a Pkl config file or discover one in a repository directory.
     Check(Check),
-    /// Print the bundled patchula-schema.pkl schema as Pkl source.
+    /// Print the bundled PatchulaConfig.pkl schema as Pkl source.
     Schema,
     /// Print the bundled PatchulaServer.pkl operator schema.
     ServerSchema,

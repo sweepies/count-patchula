@@ -9,11 +9,11 @@ use miette::{Diagnostic, IntoDiagnostic, NamedSource, SourceSpan, WrapErr};
 use std::path::{Path, PathBuf};
 
 /// The schema is part of the executable, independent of the current directory.
-pub const SCHEMA: &str = include_str!("../../../patchula-schema.pkl");
+pub const SCHEMA: &str = include_str!("../../../PatchulaConfig.pkl");
 
 /// The schema module's file name. A config amends it; the Count supplies it
 /// when the repository has no copy of its own.
-pub const SCHEMA_NAME: &str = "patchula-schema.pkl";
+pub const SCHEMA_NAME: &str = "PatchulaConfig.pkl";
 
 /// A repository's config file, relative to its root.
 pub const CONFIG_PATH: &str = "patchula.pkl";

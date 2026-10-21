@@ -67,7 +67,7 @@ Validate a Pkl config file or discover one in a repository directory.
 
 - **Usage:** `patchula config schema`
 
-Print the bundled patchula-schema.pkl schema as Pkl source.
+Print the bundled PatchulaConfig.pkl schema as Pkl source.
 
 ### Flags
 

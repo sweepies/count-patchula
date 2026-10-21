@@ -441,7 +441,7 @@ fn setup(
         "/repo/patchula.pkl",
         BTreeMap::from([(
             "/repo/patchula.pkl".into(),
-            "amends \"patchula-schema.pkl\"".into(),
+            "amends \"PatchulaConfig.pkl\"".into(),
         )]),
     )
     .unwrap();
