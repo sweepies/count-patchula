@@ -12,28 +12,28 @@ No interactive prompts are used. Future prompts require both stdin and stdout to
 - **Usage:** `patchula [FLAGS] [SUBCOMMAND]`
 
 ## Global Flags
-- **`--recheck <RECHECK>`** — Checkbox wording; also PATCHULA_RECHECK. Default: now in server, next-run in CLI.
 
-  **Choices:** `now`, `next-run`
-- **`-v --verbose`** — Increase diagnostic verbosity; repeat for more detail.
-- **`--color <COLOR>`** — Control ANSI colors in diagnostics.
-
-  **Choices:** `auto`, `always`, `never`
-
-  **Default:** `auto`
-- **`--json`** — Emit machine-readable command results and errors (schema stays Pkl).
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--recheck <RECHECK>` | Checkbox wording; also PATCHULA_RECHECK. Default: now in server, next-run in CLI. One of `now`, `next-run`. |  |
+| `-v --verbose` | Increase diagnostic verbosity; repeat for more detail. |  |
+| `--color <COLOR>` | Control ANSI colors in diagnostics. One of `auto`, `always`, `never`. | `auto` |
+| `--json` | Emit machine-readable command results and errors (schema stays Pkl). |  |
 
 ## Flags
-- **`--server`** — Run the API-only GitHub App webhook server (no subcommand).
-- **`--settings <SETTINGS>`** — Operator Pkl settings file; also PATCHULA_SERVER_SETTINGS.
-- **`--listen <LISTEN>`** — Server bind address; also PATCHULA_LISTEN (default 127.0.0.1:8080).
-- **`--server-cache <SERVER_CACHE>`** — Persistent server cache/queue; also PATCHULA_SERVER_CACHE.
-- **`--app-id <APP_ID>`** — GitHub App ID; also PATCHULA_APP_ID.
-- **`--private-key-file <PRIVATE_KEY_FILE>`** — PEM private key file; also PATCHULA_APP_PRIVATE_KEY_FILE.
-- **`--webhook-secret-file <WEBHOOK_SECRET_FILE>`** — Webhook secret file; also PATCHULA_WEBHOOK_SECRET_FILE.
-- **`--shutdown-timeout-secs <SHUTDOWN_TIMEOUT_SECS>`** — Graceful server drain deadline; also PATCHULA_SHUTDOWN_TIMEOUT_SECS (default 60).
-- **`-h --help`** — Print help
-- **`-V --version`** — Print version
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--server` | Run the API-only GitHub App webhook server (no subcommand). |  |
+| `--settings <SETTINGS>` | Operator Pkl settings file; also PATCHULA_SERVER_SETTINGS. |  |
+| `--listen <LISTEN>` | Server bind address; also PATCHULA_LISTEN (default 127.0.0.1:8080). |  |
+| `--server-cache <SERVER_CACHE>` | Persistent server cache/queue; also PATCHULA_SERVER_CACHE. |  |
+| `--app-id <APP_ID>` | GitHub App ID; also PATCHULA_APP_ID. |  |
+| `--private-key-file <PRIVATE_KEY_FILE>` | PEM private key file; also PATCHULA_APP_PRIVATE_KEY_FILE. |  |
+| `--webhook-secret-file <WEBHOOK_SECRET_FILE>` | Webhook secret file; also PATCHULA_WEBHOOK_SECRET_FILE. |  |
+| `--shutdown-timeout-secs <SHUTDOWN_TIMEOUT_SECS>` | Graceful server drain deadline; also PATCHULA_SHUTDOWN_TIMEOUT_SECS (default 60). |  |
+| `-h --help` | Print help |  |
+| `-V --version` | Print version |  |
 
 ## `patchula config`
 
@@ -42,7 +42,10 @@ No interactive prompts are used. Future prompts require both stdin and stdout to
 Inspect and validate Pkl configuration.
 
 ### Flags
-- **`-h --help`** — Print help
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `-h --help` | Print help |  |
 
 ## `patchula config check`
 
@@ -51,10 +54,16 @@ Inspect and validate Pkl configuration.
 Validate a Pkl config file or discover one in a repository directory.
 
 ### Arguments
-- **`<PATH>`** — Pkl file or repository directory to check.
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<PATH>` | Pkl file or repository directory to check. |  |
 
 ### Flags
-- **`-h --help`** — Print help
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `-h --help` | Print help |  |
 
 ## `patchula config schema`
 
@@ -63,7 +72,10 @@ Validate a Pkl config file or discover one in a repository directory.
 Print the bundled Patchula.pkl schema as Pkl source.
 
 ### Flags
-- **`-h --help`** — Print help
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `-h --help` | Print help |  |
 
 ## `patchula config server-schema`
 
@@ -72,7 +84,10 @@ Print the bundled Patchula.pkl schema as Pkl source.
 Print the bundled PatchulaServer.pkl operator schema.
 
 ### Flags
-- **`-h --help`** — Print help
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `-h --help` | Print help |  |
 
 ## `patchula config check-server`
 
@@ -81,10 +96,16 @@ Print the bundled PatchulaServer.pkl operator schema.
 Validate an operator Pkl server settings file without credentials or network.
 
 ### Arguments
-- **`<PATH>`** — Pkl file or repository directory to check.
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<PATH>` | Pkl file or repository directory to check. |  |
 
 ### Flags
-- **`-h --help`** — Print help
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `-h --help` | Print help |  |
 
 ## `patchula lookup`
 
@@ -93,27 +114,25 @@ Validate an operator Pkl server settings file without credentials or network.
 Extract dependencies and report available updates without writing repositories.
 
 ### Arguments
-- **`[REPOSITORIES]…`** — Repositories as owner/repo; omit to use the current directory's GitHub remote.
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[REPOSITORIES]…` | Repositories as owner/repo; omit to use the current directory's GitHub remote. |  |
 
 ### Flags
-- **`--all-repos`** — Process every repository the token can reach instead of naming them.
-- **`--cache <CACHE>`** — Shared SQLite cache path.
 
-  **Default:** `.patchula-cache.sqlite`
-- **`--concurrency <CONCURRENCY>`** — Maximum concurrent repository scans (1–100); HTTP limits are per host.
-
-  **Default:** `8`
-- **`--host-concurrency <HOST_CONCURRENCY>`** — Override a host's HTTP limit as HOST=LIMIT (1–100); repeat per host. Default: 16.
-- **`--registry-freshness-secs <REGISTRY_FRESHNESS_SECS>`** — Freshness seconds for OCI tag lists without validators; 0 uses upstream policy.
-
-  **Default:** `3600`
-- **`--go-freshness-secs <GO_FRESHNESS_SECS>`** — Minimum freshness seconds for Go proxy lists/latest; 0 uses upstream policy.
-
-  **Default:** `3600`
-- **`--config <CONFIG>`** — Local Pkl override applied to every selected repository.
-- **`--config-dir <CONFIG_DIR>`** — Per-repository local overrides: `<dir>/<owner>/<name>.pkl` wins over `<dir>/<name>.pkl`. Unmatched repositories discover `.github/patchula.pkl` then `patchula.pkl`; neither means skipped. All matched files are validated before repository scans. Mutually exclusive with `--config`.
-- **`--local <LOCAL>`** — Read one repository from this local directory instead of GitHub. Lookups still reach registries, and nothing is written: use it with `lookup` or `run --dry-run`.
-- **`-h --help`** — Print help
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--all-repos` | Process every repository the token can reach instead of naming them. |  |
+| `--cache <CACHE>` | Shared SQLite cache path. | `.patchula-cache.sqlite` |
+| `--concurrency <CONCURRENCY>` | Maximum concurrent repository scans (1–100); HTTP limits are per host. | `8` |
+| `--host-concurrency <HOST_CONCURRENCY>` | Override a host's HTTP limit as HOST=LIMIT (1–100); repeat per host. Default: 16. |  |
+| `--registry-freshness-secs <REGISTRY_FRESHNESS_SECS>` | Freshness seconds for OCI tag lists without validators; 0 uses upstream policy. | `3600` |
+| `--go-freshness-secs <GO_FRESHNESS_SECS>` | Minimum freshness seconds for Go proxy lists/latest; 0 uses upstream policy. | `3600` |
+| `--config <CONFIG>` | Local Pkl override applied to every selected repository. |  |
+| `--config-dir <CONFIG_DIR>` | Per-repository local overrides: `<dir>/<owner>/<name>.pkl` wins over `<dir>/<name>.pkl`. Unmatched repositories discover `.github/patchula.pkl` then `patchula.pkl`; neither means skipped. All matched files are validated before repository scans. Mutually exclusive with `--config`. |  |
+| `--local <LOCAL>` | Read one repository from this local directory instead of GitHub. Lookups still reach registries, and nothing is written: use it with `lookup` or `run --dry-run`. |  |
+| `-h --help` | Print help |  |
 
 ## `patchula run`
 
@@ -122,29 +141,27 @@ Extract dependencies and report available updates without writing repositories.
 Create or update dependency branches and pull requests with verified API commits.
 
 ### Arguments
-- **`[REPOSITORIES]…`** — Repositories as owner/repo; omit to use the current directory's GitHub remote.
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[REPOSITORIES]…` | Repositories as owner/repo; omit to use the current directory's GitHub remote. |  |
 
 ### Flags
-- **`--all-repos`** — Process every repository the token can reach instead of naming them.
-- **`--cache <CACHE>`** — Shared SQLite cache path.
 
-  **Default:** `.patchula-cache.sqlite`
-- **`--concurrency <CONCURRENCY>`** — Maximum concurrent repository scans (1–100); HTTP limits are per host.
-
-  **Default:** `8`
-- **`--host-concurrency <HOST_CONCURRENCY>`** — Override a host's HTTP limit as HOST=LIMIT (1–100); repeat per host. Default: 16.
-- **`--registry-freshness-secs <REGISTRY_FRESHNESS_SECS>`** — Freshness seconds for OCI tag lists without validators; 0 uses upstream policy.
-
-  **Default:** `3600`
-- **`--go-freshness-secs <GO_FRESHNESS_SECS>`** — Minimum freshness seconds for Go proxy lists/latest; 0 uses upstream policy.
-
-  **Default:** `3600`
-- **`--config <CONFIG>`** — Local Pkl override applied to every selected repository.
-- **`--config-dir <CONFIG_DIR>`** — Per-repository local overrides: `<dir>/<owner>/<name>.pkl` wins over `<dir>/<name>.pkl`. Unmatched repositories discover `.github/patchula.pkl` then `patchula.pkl`; neither means skipped. All matched files are validated before repository scans. Mutually exclusive with `--config`.
-- **`--local <LOCAL>`** — Read one repository from this local directory instead of GitHub. Lookups still reach registries, and nothing is written: use it with `lookup` or `run --dry-run`.
-- **`--dry-run`** — Print planned branches, files and unified diffs without writing to GitHub.
-- **`--allow-lockfile-pending`** — Permit manifest-only test branches for unsupported binary bun locks.
-- **`-h --help`** — Print help
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--all-repos` | Process every repository the token can reach instead of naming them. |  |
+| `--cache <CACHE>` | Shared SQLite cache path. | `.patchula-cache.sqlite` |
+| `--concurrency <CONCURRENCY>` | Maximum concurrent repository scans (1–100); HTTP limits are per host. | `8` |
+| `--host-concurrency <HOST_CONCURRENCY>` | Override a host's HTTP limit as HOST=LIMIT (1–100); repeat per host. Default: 16. |  |
+| `--registry-freshness-secs <REGISTRY_FRESHNESS_SECS>` | Freshness seconds for OCI tag lists without validators; 0 uses upstream policy. | `3600` |
+| `--go-freshness-secs <GO_FRESHNESS_SECS>` | Minimum freshness seconds for Go proxy lists/latest; 0 uses upstream policy. | `3600` |
+| `--config <CONFIG>` | Local Pkl override applied to every selected repository. |  |
+| `--config-dir <CONFIG_DIR>` | Per-repository local overrides: `<dir>/<owner>/<name>.pkl` wins over `<dir>/<name>.pkl`. Unmatched repositories discover `.github/patchula.pkl` then `patchula.pkl`; neither means skipped. All matched files are validated before repository scans. Mutually exclusive with `--config`. |  |
+| `--local <LOCAL>` | Read one repository from this local directory instead of GitHub. Lookups still reach registries, and nothing is written: use it with `lookup` or `run --dry-run`. |  |
+| `--dry-run` | Print planned branches, files and unified diffs without writing to GitHub. |  |
+| `--allow-lockfile-pending` | Permit manifest-only test branches for unsupported binary bun locks. |  |
+| `-h --help` | Print help |  |
 
 ## `patchula tools`
 
@@ -153,7 +170,10 @@ Create or update dependency branches and pull requests with verified API commits
 Manage the lockfile runner's tool store (`PATCHULA_TOOLS_DIR`, or `<cache>.tools`).
 
 ### Flags
-- **`-h --help`** — Print help
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `-h --help` | Print help |  |
 
 ## `patchula tools install`
 
@@ -162,10 +182,11 @@ Manage the lockfile runner's tool store (`PATCHULA_TOOLS_DIR`, or `<cache>.tools
 Install the pinned lockfile toolchains ahead of time, e.g. in an image build.
 
 ### Flags
-- **`--cache <CACHE>`** — Shared SQLite cache path; the tool store sits beside it.
 
-  **Default:** `.patchula-cache.sqlite`
-- **`-h --help`** — Print help
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--cache <CACHE>` | Shared SQLite cache path; the tool store sits beside it. | `.patchula-cache.sqlite` |
+| `-h --help` | Print help |  |
 
 ## `patchula tools prune`
 
@@ -174,13 +195,12 @@ Install the pinned lockfile toolchains ahead of time, e.g. in an image build.
 Uninstall tool versions no run has used recently; pinned defaults stay.
 
 ### Flags
-- **`--cache <CACHE>`** — Shared SQLite cache path; the tool store sits beside it.
 
-  **Default:** `.patchula-cache.sqlite`
-- **`--days <DAYS>`** — Remove versions unused for at least this many days.
-
-  **Default:** `30`
-- **`-h --help`** — Print help
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--cache <CACHE>` | Shared SQLite cache path; the tool store sits beside it. | `.patchula-cache.sqlite` |
+| `--days <DAYS>` | Remove versions unused for at least this many days. | `30` |
+| `-h --help` | Print help |  |
 
 ## `patchula tui`
 
@@ -189,25 +209,23 @@ Uninstall tool versions no run has used recently; pinned defaults stay.
 Browse dependencies and updates in the terminal; with `--local`, apply selected updates.
 
 ### Arguments
-- **`[REPOSITORIES]…`** — Repositories as owner/repo; omit to use the current directory's GitHub remote.
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[REPOSITORIES]…` | Repositories as owner/repo; omit to use the current directory's GitHub remote. |  |
 
 ### Flags
-- **`--all-repos`** — Process every repository the token can reach instead of naming them.
-- **`--cache <CACHE>`** — Shared SQLite cache path.
 
-  **Default:** `.patchula-cache.sqlite`
-- **`--concurrency <CONCURRENCY>`** — Maximum concurrent repository scans (1–100); HTTP limits are per host.
-
-  **Default:** `8`
-- **`--host-concurrency <HOST_CONCURRENCY>`** — Override a host's HTTP limit as HOST=LIMIT (1–100); repeat per host. Default: 16.
-- **`--registry-freshness-secs <REGISTRY_FRESHNESS_SECS>`** — Freshness seconds for OCI tag lists without validators; 0 uses upstream policy.
-
-  **Default:** `3600`
-- **`--go-freshness-secs <GO_FRESHNESS_SECS>`** — Minimum freshness seconds for Go proxy lists/latest; 0 uses upstream policy.
-
-  **Default:** `3600`
-- **`--config <CONFIG>`** — Local Pkl override applied to every selected repository.
-- **`--config-dir <CONFIG_DIR>`** — Per-repository local overrides: `<dir>/<owner>/<name>.pkl` wins over `<dir>/<name>.pkl`. Unmatched repositories discover `.github/patchula.pkl` then `patchula.pkl`; neither means skipped. All matched files are validated before repository scans. Mutually exclusive with `--config`.
-- **`--local <LOCAL>`** — Read one repository from this local directory instead of GitHub. Lookups still reach registries, and nothing is written: use it with `lookup` or `run --dry-run`.
-- **`--once`** — Print a plain-text snapshot of the updates and exit, for pipes and CI logs.
-- **`-h --help`** — Print help
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--all-repos` | Process every repository the token can reach instead of naming them. |  |
+| `--cache <CACHE>` | Shared SQLite cache path. | `.patchula-cache.sqlite` |
+| `--concurrency <CONCURRENCY>` | Maximum concurrent repository scans (1–100); HTTP limits are per host. | `8` |
+| `--host-concurrency <HOST_CONCURRENCY>` | Override a host's HTTP limit as HOST=LIMIT (1–100); repeat per host. Default: 16. |  |
+| `--registry-freshness-secs <REGISTRY_FRESHNESS_SECS>` | Freshness seconds for OCI tag lists without validators; 0 uses upstream policy. | `3600` |
+| `--go-freshness-secs <GO_FRESHNESS_SECS>` | Minimum freshness seconds for Go proxy lists/latest; 0 uses upstream policy. | `3600` |
+| `--config <CONFIG>` | Local Pkl override applied to every selected repository. |  |
+| `--config-dir <CONFIG_DIR>` | Per-repository local overrides: `<dir>/<owner>/<name>.pkl` wins over `<dir>/<name>.pkl`. Unmatched repositories discover `.github/patchula.pkl` then `patchula.pkl`; neither means skipped. All matched files are validated before repository scans. Mutually exclusive with `--config`. |  |
+| `--local <LOCAL>` | Read one repository from this local directory instead of GitHub. Lookups still reach registries, and nothing is written: use it with `lookup` or `run --dry-run`. |  |
+| `--once` | Print a plain-text snapshot of the updates and exit, for pipes and CI logs. |  |
+| `-h --help` | Print help |  |

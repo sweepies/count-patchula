@@ -170,7 +170,7 @@ run = '''
 mkdir -p generated/completions
 ${PATCHULA_BIN:-cargo run --quiet --locked -p patchula-cli --} __usage_spec__ > generated/patchula.usage.kdl
 usage lint generated/patchula.usage.kdl
-usage generate markdown --file generated/patchula.usage.kdl --out-file docs/reference/cli.md
+usage generate markdown --file generated/patchula.usage.kdl --template command=docs/.usage/command.md.tera --out-file docs/reference/cli.md
 usage generate manpage --file generated/patchula.usage.kdl --out-file generated/patchula.1
 for shell in bash zsh fish; do
   usage generate completion "$shell" patchula --file generated/patchula.usage.kdl > "generated/completions/patchula.$shell"

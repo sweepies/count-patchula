@@ -67,11 +67,11 @@ Lockfile tools come from [mise](https://mise.jdx.dev), so it needs to be on the
 Against Renovate 44.173.1 on six large public repositories (mastodon, sentry,
 grafana, monica, jellyfin, kafka), each tool alone on the same c7i.xlarge:
 
-| | Count Patchula | Renovate |
-|---|---|---|
-| All six, cold | 150.5 s | 920.6 s |
-| All six, warm | 14.8 s | 274.3 s |
-| Peak memory, grafana cold | 494 MB | 3.6 GB |
+| | Count Patchula | Renovate | |
+|---|---|---|---|
+| All six, cold | **150.5 s** | 920.6 s | 6.1× faster |
+| All six, warm | **14.8 s** | 274.3 s | 18.5× faster |
+| Peak memory, grafana cold | **494 MB** | 3.6 GB | 7.3× less |
 
 The [benchmarks page](docs/benchmarks.md) has
 the method and every run.
