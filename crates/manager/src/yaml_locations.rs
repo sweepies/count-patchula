@@ -1,5 +1,8 @@
 //! Event paths prevent identical scalars elsewhere in a document from stealing
-//! a location. Parser character marks are translated to UTF-8 byte offsets.
+//! a location. Parser marks are translated to UTF-8 byte offsets through their
+//! line and character column: yaml-rust2's index switches from characters to
+//! bytes after a block scalar holding non-ASCII text, which would misplace
+//! every later location.
 use crate::Location;
 use std::collections::BTreeMap;
 use yaml_rust2::{
@@ -15,12 +18,23 @@ struct Frame {
 }
 struct Receiver<'a> {
     text: &'a str,
-    bytes: Vec<usize>,
+    lines: Vec<usize>,
     doc: usize,
     stack: Vec<Frame>,
     locations: BTreeMap<String, Location>,
 }
 impl Receiver<'_> {
+    /// The byte offset of a 1-indexed line and 0-indexed character column.
+    fn offset(&self, mark: Marker) -> Option<usize> {
+        let start = *self.lines.get(mark.line().checked_sub(1)?)?;
+        let line = &self.text[start..];
+        let column = line
+            .char_indices()
+            .map(|(n, _)| n)
+            .chain(std::iter::once(line.len()))
+            .nth(mark.col())?;
+        Some(start + column)
+    }
     fn next(&mut self) -> String {
         if let Some(frame) = self.stack.last_mut() {
             if frame.mapping {
@@ -96,7 +110,7 @@ impl MarkedEventReceiver for Receiver<'_> {
                     return;
                 }
                 let pointer = self.next();
-                if let Some(start) = self.bytes.get(mark.index()).copied()
+                if let Some(start) = self.offset(mark)
                     && let Some(end) = self.end(start, style, &value)
                 {
                     self.locations.insert(
@@ -115,10 +129,8 @@ impl MarkedEventReceiver for Receiver<'_> {
 pub(super) fn parse(text: &str) -> Result<BTreeMap<String, Location>, String> {
     let mut receiver = Receiver {
         text,
-        bytes: text
-            .char_indices()
-            .map(|(n, _)| n)
-            .chain(std::iter::once(text.len()))
+        lines: std::iter::once(0)
+            .chain(text.match_indices('\n').map(|(n, _)| n + 1))
             .collect(),
         doc: 0,
         stack: Vec::new(),
@@ -128,4 +140,20 @@ pub(super) fn parse(text: &str) -> Result<BTreeMap<String, Location>, String> {
         .load(&mut receiver, true)
         .map_err(|e| e.to_string())?;
     Ok(receiver.locations)
+}
+#[cfg(test)]
+mod tests {
+    /// Non-ASCII text in a block scalar must not shift later locations.
+    #[test]
+    fn locations_after_non_ascii_block_scalars() {
+        for text in [
+            "a: |\n  x \u{2192} y\nb: c\n",
+            "a: >\n  caf\u{e9} \u{2014} ok\n\nb: c\n",
+            "a: \u{2192}\nb: c\n",
+        ] {
+            let locations = super::parse(text).unwrap();
+            let b = &locations["/0/b"];
+            assert_eq!(&text[b.start..b.end], "c", "{text:?}");
+        }
+    }
 }
