@@ -1,0 +1,13 @@
+#:schema https://fnox.jdx.dev/schema.json
+# Release secrets, age-encrypted. Add one with `fnox set NAME`; CI decrypts with
+# the FNOX_AGE_KEY repository secret, whose public key is the second recipient.
+default_provider = "age"
+
+[providers.age]
+type = "age"
+recipients = [
+  "age1sjnzu8mtvg9p5pdg48kr3rm6qq2q4029l628yzvls5ler6gmdcns7szp76", # Sweepy
+  "age10lezwfteqesaq7fr4ca4e4hkcm4dhtxgnz0ne85mavljjdrmdq4qkavrpw", # GitHub Actions (FNOX_AGE_KEY)
+]
+
+[secrets]
