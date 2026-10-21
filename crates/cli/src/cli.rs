@@ -1,12 +1,9 @@
 use std::path::PathBuf;
 use usage_rs::{Args, Cli, Subcommands, ValueEnum};
 
-/// Count Patchula vants to update your deps. A fast dependency update bot for GitHub.
+/// Count Patchula vants to update your deps. A modern dependency updater with strong defaults.
 ///
 /// Exit codes: 0 = success; 1 = runtime error; 2 = usage or configuration error.
-///
-/// No interactive prompts are used. Future prompts require both stdin and stdout
-/// to be TTYs and use demand.
 #[derive(Cli)]
 #[usage(bin = "patchula", version)]
 pub struct App {
