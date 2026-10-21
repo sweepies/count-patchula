@@ -156,9 +156,10 @@ impl Runner {
             // one rename. Another run seeding the same version either finishes
             // first, and this rename fails, or finds a complete install.
             let staging = to.join(format!(".patchula-seed-{}-{version}", std::process::id()));
+            // The tool's backend metadata goes first: once the version is
+            // published, mise treats it as installed, so nothing may fail after.
             let linked = std::fs::create_dir_all(&to)
                 .and_then(|()| link_tree(&from, &to.join(version), &from, &staging))
-                .and_then(|()| std::fs::rename(&staging, to.join(version)))
                 .and_then(|()| {
                     let backend = installs.join(".mise.backend.toml");
                     if backend.is_file() && !to.join(".mise.backend.toml").exists() {
@@ -166,7 +167,8 @@ impl Runner {
                     } else {
                         Ok(())
                     }
-                });
+                })
+                .and_then(|()| std::fs::rename(&staging, to.join(version)));
             match linked {
                 Ok(()) => tracing::info!(tool = %spec, "seeded from the user's mise install"),
                 Err(error) => {

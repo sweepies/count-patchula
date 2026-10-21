@@ -9,6 +9,17 @@ use cli::{App, Command, ConfigCommand, ToolsCommand};
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 
+/// Environment variables the CLI reads. Their meanings are in
+/// docs/reference/environment.md.
+const TOKEN_VARS: [&str; 3] = ["PATCHULA_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"];
+const LOG_VAR: &str = "PATCHULA_LOG";
+const RECHECK_VAR: &str = "PATCHULA_RECHECK";
+const DOCKERHUB_USERNAME_VAR: &str = "PATCHULA_DOCKERHUB_USERNAME";
+const DOCKERHUB_TOKEN_VAR: &str = "PATCHULA_DOCKERHUB_TOKEN";
+const MISE_DATA_VAR: &str = "MISE_DATA_DIR";
+const XDG_DATA_VAR: &str = "XDG_DATA_HOME";
+const HOME_VAR: &str = "HOME";
+
 // Only the token and transport are replaced in offline CLI tests. Dispatch,
 // configuration, disk-cache opening and engine construction stay on this path.
 #[derive(Default)]
@@ -24,9 +35,9 @@ impl Services {
         if let Some(token) = &self.token {
             return Ok(token.clone());
         }
-        std::env::var("PATCHULA_TOKEN")
-            .or_else(|_| std::env::var("GITHUB_TOKEN"))
-            .or_else(|_| std::env::var("GH_TOKEN"))
+        std::env::var(TOKEN_VARS[0])
+            .or_else(|_| std::env::var(TOKEN_VARS[1]))
+            .or_else(|_| std::env::var(TOKEN_VARS[2]))
     }
     fn transport(
         &self,
@@ -197,7 +208,7 @@ async fn main() -> ExitCode {
     // Only our explicitly sanitized events reach stderr. Dependency HTTP debug
     // logs can contain headers even when the user requests maximum verbosity.
     use tracing_subscriber::{filter::Targets, prelude::*};
-    let level = std::env::var("PATCHULA_LOG")
+    let level = std::env::var(LOG_VAR)
         .ok()
         .and_then(|value| value.parse::<tracing::level_filters::LevelFilter>().ok())
         .unwrap_or(if app.verbose >= 2 {
@@ -404,7 +415,7 @@ fn recheck(app: &App, run: bool) -> Result<patchula_engine::Recheck, (u8, miette
     Ok(match app.recheck {
         Some(cli::Recheck::Now) => patchula_engine::Recheck::Now,
         Some(cli::Recheck::NextRun) => patchula_engine::Recheck::NextRun,
-        None if run => match std::env::var("PATCHULA_RECHECK").as_deref() {
+        None if run => match std::env::var(RECHECK_VAR).as_deref() {
             Ok("now") => patchula_engine::Recheck::Now,
             Ok("next-run") | Err(std::env::VarError::NotPresent) => {
                 patchula_engine::Recheck::NextRun
@@ -423,8 +434,8 @@ fn recheck(app: &App, run: bool) -> Result<patchula_engine::Recheck, (u8, miette
 /// Docker Hub credentials, when both variables are set.
 fn dockerhub_credentials() -> Result<Option<(String, String)>, (u8, miette::Report)> {
     match (
-        std::env::var("PATCHULA_DOCKERHUB_USERNAME").ok(),
-        std::env::var("PATCHULA_DOCKERHUB_TOKEN").ok(),
+        std::env::var(DOCKERHUB_USERNAME_VAR).ok(),
+        std::env::var(DOCKERHUB_TOKEN_VAR).ok(),
     ) {
         (None, None) => Ok(None),
         (Some(username), Some(token)) if !username.is_empty() && !token.is_empty() => {
@@ -443,11 +454,11 @@ fn dockerhub_credentials() -> Result<Option<(String, String)>, (u8, miette::Repo
 /// borrow matching tool versions from it instead of downloading them.
 fn user_mise_data() -> Option<std::path::PathBuf> {
     use std::path::PathBuf;
-    std::env::var_os("MISE_DATA_DIR")
+    std::env::var_os(MISE_DATA_VAR)
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("XDG_DATA_HOME").map(|dir| PathBuf::from(dir).join("mise")))
+        .or_else(|| std::env::var_os(XDG_DATA_VAR).map(|dir| PathBuf::from(dir).join("mise")))
         .or_else(|| {
-            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share/mise"))
+            std::env::var_os(HOME_VAR).map(|home| PathBuf::from(home).join(".local/share/mise"))
         })
         .filter(|dir| dir.join("installs").is_dir())
 }
