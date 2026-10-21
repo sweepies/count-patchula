@@ -141,3 +141,39 @@ Create or update dependency branches and pull requests with verified API commits
 - **`--dry-run`** — Print planned branches, files and unified diffs without writing to GitHub.
 - **`--allow-lockfile-pending`** — Permit manifest-only test branches for unsupported binary bun locks.
 - **`-h --help`** — Print help
+
+## `rustovate tools`
+
+- **Usage:** `rustovate tools <SUBCOMMAND>`
+
+Manage the lockfile runner's tool store (`RUSTOVATE_TOOLS_DIR`, or `<cache>.tools`).
+
+### Flags
+- **`-h --help`** — Print help
+
+## `rustovate tools install`
+
+- **Usage:** `rustovate tools install [--cache <CACHE>]`
+
+Install the pinned lockfile toolchains ahead of time, e.g. in an image build.
+
+### Flags
+- **`--cache <CACHE>`** — Shared SQLite cache path; the tool store sits beside it.
+
+  **Default:** `.rustovate-cache.sqlite`
+- **`-h --help`** — Print help
+
+## `rustovate tools prune`
+
+- **Usage:** `rustovate tools prune [--cache <CACHE>] [--days <DAYS>]`
+
+Uninstall tool versions no run has used recently; pinned defaults stay.
+
+### Flags
+- **`--cache <CACHE>`** — Shared SQLite cache path; the tool store sits beside it.
+
+  **Default:** `.rustovate-cache.sqlite`
+- **`--days <DAYS>`** — Remove versions unused for at least this many days.
+
+  **Default:** `30`
+- **`-h --help`** — Print help

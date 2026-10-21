@@ -65,6 +65,38 @@ pub enum Command {
     Lookup(Lookup),
     /// Create or update dependency branches and pull requests with verified API commits.
     Run(Run),
+    /// Manage the lockfile runner's tool store (`RUSTOVATE_TOOLS_DIR`, or `<cache>.tools`).
+    Tools(Tools),
+}
+
+#[derive(Args)]
+pub struct Tools {
+    #[usage(subcommand)]
+    pub command: ToolsCommand,
+}
+
+#[derive(Subcommands)]
+pub enum ToolsCommand {
+    /// Install the pinned lockfile toolchains ahead of time, e.g. in an image build.
+    Install(ToolStore),
+    /// Uninstall tool versions no run has used recently; pinned defaults stay.
+    Prune(Prune),
+}
+
+#[derive(Args)]
+pub struct ToolStore {
+    /// Shared SQLite cache path; the tool store sits beside it.
+    #[usage(long, default = ".rustovate-cache.sqlite")]
+    pub cache: PathBuf,
+}
+
+#[derive(Args)]
+pub struct Prune {
+    #[usage(flatten)]
+    pub store: ToolStore,
+    /// Remove versions unused for at least this many days.
+    #[usage(long, default = "30")]
+    pub days: i64,
 }
 
 #[derive(Args)]

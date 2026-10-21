@@ -4,7 +4,7 @@
 mod cli;
 mod server;
 
-use cli::{App, Command, ConfigCommand};
+use cli::{App, Command, ConfigCommand, ToolsCommand};
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 
@@ -104,6 +104,43 @@ async fn run(app: &App, services: &Services) -> Result<u8, (u8, miette::Report)>
         },
         Command::Lookup(options) => batch(app, options, None, services).await,
         Command::Run(options) => batch(app, &options.lookup, Some(options), services).await,
+        Command::Tools(tools) => {
+            let (store, days) = match &tools.command {
+                ToolsCommand::Install(store) => (store, None),
+                ToolsCommand::Prune(prune) => (&prune.store, Some(prune.days)),
+            };
+            if days.is_some_and(|d| d < 1) {
+                return Err((2, miette::miette!("--days must be at least 1")));
+            }
+            let path = if store.cache.is_absolute() {
+                store.cache.clone()
+            } else {
+                std::env::current_dir()
+                    .unwrap_or_default()
+                    .join(&store.cache)
+            };
+            let runner =
+                rustovate_update::lockfiles::Runner::new(path.with_extension("worktrees"), "");
+            let (action, specs) = match days {
+                None => ("installed", runner.prewarm().await),
+                Some(days) => ("pruned", runner.prune(days).await),
+            };
+            let specs = specs.map_err(|e| (1, miette::miette!("{e}")))?;
+            let result = if app.json {
+                serde_json::json!({"schemaVersion":1,"store":runner.tools(),action:specs})
+                    .to_string()
+            } else {
+                format!(
+                    "{} {} tool versions in {}",
+                    action,
+                    specs.len(),
+                    runner.tools().display()
+                )
+            };
+            writeln!(io::stdout().lock(), "{result}")
+                .map(|_| 0)
+                .map_err(|error| (1, miette::miette!("{error}")))
+        }
     }
 }
 

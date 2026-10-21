@@ -15,9 +15,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Cache mise installs, including the task-scoped lockfile toolchains the
+      # real-tool tests install (Python, Ruby, .NET, PHP), keyed on mise.toml.
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
-          cache: false
+          cache: true
       # Transport mbx objects, predictions and build-script state between runners.
       # Default-branch pushes publish in the post step; PRs only restore.
       - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2

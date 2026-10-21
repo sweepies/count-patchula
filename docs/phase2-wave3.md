@@ -108,6 +108,18 @@ with Git and the API extraction before edits are applied. Symlinks, special
 files, unexpected generated changes, oversized files and non-UTF-8 output fail
 the branch. The source tree is never pushed or committed with Git.
 
+Tools are installed into the runner's own tool store: `RUSTOVATE_TOOLS_DIR`,
+or `<cache>.tools` beside the SQLite cache (for example
+`.rustovate-cache.tools`). It is separate from the operator's mise installs and
+persists across runs, so mount it as a volume in containers. Every successful
+tool run records its `tool@version` with a timestamp in
+`rustovate-usage.json`. `rustovate tools install` prewarms every pinned default
+(Rust excepted, which runs through rustup), for example in an image build,
+since some downloads are slow (the static PHP host served about 44 KB/s when
+measured). `rustovate tools prune --days 30` uninstalls versions no run has used
+for that long; pinned defaults are never pruned. In CI, mise-action caches the
+same task-scoped toolchains the real-tool tests install.
+
 Tools run through `mise --no-config exec` with an explicit tool version. Only
 version strings or version-table entries for relevant tools are read from
 ancestor repository `mise.toml` / `.mise.toml` files. Repository environment

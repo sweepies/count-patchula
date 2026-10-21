@@ -4,6 +4,8 @@ mod mise;
 mod node;
 mod process;
 mod python;
+mod tools;
+pub use tools::tools_dir;
 mod wrapper;
 use crate::{
     Blob, Plan, Snapshot, blob_sha,
@@ -358,15 +360,15 @@ pub struct Runner {
     rustup_home: PathBuf,
     /// Fetches the Gradle wrapper checksum; injectable for offline tests.
     http: Arc<dyn rustovate_http::Transport>,
+    /// Serialises tool usage records within this process.
+    usage: Arc<std::sync::Mutex<()>>,
 }
 impl Runner {
     pub fn new(cache: PathBuf, token: &str) -> Self {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(std::env::temp_dir);
-        let mise_data = std::env::var_os("MISE_DATA_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".local/share/mise"));
+        let mise_data = tools::tools_dir(&cache);
         let mise = std::env::var_os("PATH")
             .and_then(|p| {
                 std::env::split_paths(&p)
@@ -396,6 +398,7 @@ impl Runner {
             rustup,
             rustup_home,
             http: Arc::new(NetworkTransport),
+            usage: Default::default(),
         }
     }
     pub fn with_http(mut self, http: Arc<dyn rustovate_http::Transport>) -> Self {
@@ -708,8 +711,9 @@ impl Runner {
         self.executor
             .run(spec)
             .await
-            .map(|_| ())
-            .map_err(|e| format!("{bin}: {e}"))
+            .map_err(|e| format!("{bin}: {e}"))?;
+        self.record_use(&call.tools);
+        Ok(())
     }
 }
 

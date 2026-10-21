@@ -26,12 +26,12 @@ rustovate-report = { version = "0.1.0", path = "../report" }
 tokio.workspace = true
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "registry", "json"] }
+rustovate-update = { path = "../update" }
 
 [dev-dependencies]
 tempfile = "3"
 base64 = "0.22"
 reqwest.workspace = true
-rustovate-update = { path = "../update" }
 sha2 = "0.11.1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tokio = { workspace = true, features = ["test-util"] }

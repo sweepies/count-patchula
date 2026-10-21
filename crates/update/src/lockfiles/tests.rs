@@ -102,6 +102,15 @@ impl Executor for Fixture {
                 if spec.args.iter().any(|a| a == "bun") {
                     spec.args.push("--offline".into());
                 }
+                // Real tools come from the developer's mise store, where the
+                // test task installs them, not the runner's empty tool store.
+                let store = std::env::var_os("MISE_DATA_DIR")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| {
+                        PathBuf::from(std::env::var_os("HOME").unwrap()).join(".local/share/mise")
+                    });
+                spec.env
+                    .insert("MISE_DATA_DIR".into(), store.into_os_string());
                 for (key, value) in [
                     ("MISE_AUTO_INSTALL", "false"),
                     ("MISE_EXEC_AUTO_INSTALL", "false"),
@@ -1834,4 +1843,60 @@ async fn gradle_wrapper_checksums_follow_the_distribution() {
         .await
         .unwrap();
     assert!(transport.requests.lock().unwrap().is_empty());
+}
+
+struct Recorder(Mutex<Vec<Vec<String>>>);
+impl Executor for Recorder {
+    fn run(
+        &self,
+        spec: CommandSpec,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+        Box::pin(async move {
+            assert!(spec.env.contains_key(std::ffi::OsStr::new("MISE_DATA_DIR")));
+            self.0.lock().unwrap().push(spec.args.clone());
+            Ok(Vec::new())
+        })
+    }
+}
+
+/// Unused tool versions are pruned from the runner's own store; pinned
+/// defaults and recently used versions stay, and prewarming installs defaults.
+#[tokio::test]
+async fn tool_store_prunes_unused_versions_and_prewarms_defaults() {
+    let temp = tempfile::tempdir().unwrap();
+    let recorder = Arc::new(Recorder(Mutex::new(Vec::new())));
+    let runner =
+        Runner::new(temp.path().join("cache.worktrees"), "x").with_executor(recorder.clone());
+    assert_eq!(runner.tools(), temp.path().join("cache.tools"));
+    runner.record_use(&[
+        ("node".into(), "20.0.0".into()),
+        ("uv".into(), "0.13.1".into()),
+    ]);
+    runner.record_use(&[("bun".into(), "1.3.0".into())]);
+    // Age the node and uv records past the window.
+    let path = runner.tools().join("rustovate-usage.json");
+    let mut usage: BTreeMap<String, i64> =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for spec in ["node@20.0.0", "uv@0.13.1"] {
+        usage.insert(spec.into(), 0);
+    }
+    std::fs::write(&path, serde_json::to_vec(&usage).unwrap()).unwrap();
+    let pruned = runner.prune(30).await.unwrap();
+    assert_eq!(pruned, ["node@20.0.0"], "uv 0.13.1 is a pinned default");
+    let calls = recorder.0.lock().unwrap().clone();
+    assert!(
+        calls
+            .iter()
+            .any(|a| a.ends_with(&["uninstall".into(), "node@20.0.0".into()])),
+        "{calls:?}"
+    );
+    let remaining: BTreeMap<String, i64> =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert!(remaining.contains_key("bun@1.3.0") && !remaining.contains_key("node@20.0.0"));
+    let installed = runner.prewarm().await.unwrap();
+    assert!(
+        installed.contains(&"uv@0.13.1".to_string())
+            && installed.contains(&"yarn@4.18.1".to_string())
+    );
+    assert!(!installed.iter().any(|s| s.starts_with("rust@")));
 }
