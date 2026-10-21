@@ -470,12 +470,13 @@ impl Runner {
                     }
                 }
                 Ecosystem::Go => {
+                    let go = go_version(&cwd, &versions["go"])?;
                     for job in jobs {
                         if let Some(package) = &job.package {
                             self.tool(
                                 &driver,
                                 Invocation {
-                                    tools: vec![("go".into(), versions["go"].clone())],
+                                    tools: vec![("go".into(), go.clone())],
                                     bin: "go".into(),
                                     cwd: None,
                                     env: Vec::new(),
@@ -507,7 +508,7 @@ impl Runner {
                     self.tool(
                         &driver,
                         Invocation {
-                            tools: vec![("go".into(), versions["go"].clone())],
+                            tools: vec![("go".into(), go.clone())],
                             bin: "go".into(),
                             cwd: None,
                             env: Vec::new(),
@@ -782,6 +783,33 @@ fn versions(
         }
     }
     Ok(versions)
+}
+/// The Go to run: the newest of the pin and the edited `go.mod`'s `go` and
+/// `toolchain` directives. With GOTOOLCHAIN=local, an older Go refuses a
+/// module that requires a newer one, which an update itself may introduce.
+fn go_version(cwd: &Path, pinned: &str) -> Result<String, String> {
+    use rustovate_versioning::{Ecosystem as Scheme, Versioning};
+    let text = std::fs::read_to_string(cwd.join("go.mod")).map_err(|e| e.to_string())?;
+    let mut best = pinned.to_string();
+    for line in text.lines() {
+        let mut words = line.split_whitespace();
+        let version = match (words.next(), words.next()) {
+            (Some("go"), Some(v)) => v,
+            (Some("toolchain"), Some(v)) => v.strip_prefix("go").unwrap_or(v),
+            _ => continue,
+        };
+        // Only plain release versions select a toolchain.
+        if !version.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
+            continue;
+        }
+        if let (Ok(candidate), Ok(current)) =
+            (Scheme::Loose.parse(version), Scheme::Loose.parse(&best))
+            && Scheme::Loose.order(&candidate, &current).is_gt()
+        {
+            best = version.to_string();
+        }
+    }
+    Ok(best)
 }
 /// The pinned tool versions used when a repository does not pin its own.
 fn tool_defaults() -> Result<toml_edit::Document<&'static str>, String> {

@@ -1689,3 +1689,22 @@ async fn real_uv_and_poetry_regenerate_python_locks() {
         );
     }
 }
+
+/// An update that raises the go or toolchain directive runs that Go.
+#[test]
+fn go_runs_at_the_version_the_edited_module_requires() {
+    let temp = tempfile::tempdir().unwrap();
+    for (module, expected) in [
+        ("module m\n\ngo 1.22\n", "1.27.2"),
+        ("module m\n\ngo 1.27.3\n", "1.27.3"),
+        ("module m\n\ngo 1.27.3\n\ntoolchain go1.28.1\n", "1.28.1"),
+        ("module m\n\ngo 1.29rc1\n", "1.27.2"),
+    ] {
+        std::fs::write(temp.path().join("go.mod"), module).unwrap();
+        assert_eq!(
+            go_version(temp.path(), "1.27.2").unwrap(),
+            expected,
+            "{module}"
+        );
+    }
+}
