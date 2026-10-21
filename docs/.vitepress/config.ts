@@ -37,8 +37,7 @@ export default defineConfig({
     },
     socialLinks: [{ icon: "github", link: repo }],
     footer: {
-      message: "MIT licensed. Clean-room: no Renovate source was read in the making of this bat.",
-      copyright: "Copyright © 2026 Sweepy",
+      copyright: '© 2026 <a href="https://sweepy.dev">Sweepy</a>',
     },
     nav: [
       { text: "Guide", link: "/getting-started", activeMatch: "^/(getting-started|installation|guide/)" },
