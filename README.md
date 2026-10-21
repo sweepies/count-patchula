@@ -19,8 +19,10 @@ however many repositories use it.
 ## Get started
 
 ```sh
-cargo install --git https://github.com/sweepies/count-patchula --locked patchula-cli
+mise use -g packslip:github.com/sweepies/count-patchula
 ```
+
+Other ways to install him are on the [installation page](docs/installation.md).
 
 Invite the Count into a repository with `.github/patchula.pkl`:
 

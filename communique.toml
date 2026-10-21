@@ -1,0 +1,20 @@
+# Release notes for Count Patchula. The release workflow runs
+# `communique generate <tag> --github-release` with ANTHROPIC_API_KEY from fnox.
+
+context = """
+Count Patchula is a dependency update bot for GitHub, written in Rust, with a
+CLI (`patchula`) and a GitHub App server mode. It reads manifests through the
+GitHub API, looks up newer versions, regenerates lockfiles with the real tools
+and opens one pull request per update. It is an independent, MIT-licensed
+alternative to Renovate.
+"""
+
+system_extra = """
+The Count is referred to as "he". A light touch of his vampire whimsy is
+welcome in the opening line; the rest stays plain and specific.
+"""
+
+[defaults]
+model = "claude-haiku-5-5"
+repo = "sweepies/count-patchula"
+emoji = false
