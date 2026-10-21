@@ -30,10 +30,14 @@ inputs:
 runs:
   using: composite
   steps:
+    # mise runs outside the workspace, so the repository's own mise config is
+    # never loaded or exported into later steps.
     - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
       with:
         install: false
         cache: false
+        env: "false"
+        working_directory: ${{ runner.temp }}
     # The cache holds HTTP validators, write receipts and the lockfile tool
     # store. Each run saves a new entry and restores the newest one.
     - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -79,4 +83,7 @@ runs:
           args+=("${extra[@]}")
         fi
         mkdir -p "$CACHE_DIR"
-        mise exec "packslip:github.com/sweepies/count-patchula@$version" -- patchula "${args[@]}"
+        # The workflow chose this version by pinning the action, so mise's
+        # release-age wait does not apply to it.
+        bin=$(cd "$RUNNER_TEMP" && MISE_MINIMUM_RELEASE_AGE=0 mise exec "packslip:github.com/sweepies/count-patchula@$version" -- sh -c 'command -v patchula')
+        "$bin" "${args[@]}"
