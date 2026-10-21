@@ -138,6 +138,7 @@ jobs:
             completion/zsh=archive:share/zsh/site-functions/_patchula
             completion/fish=archive:share/fish/vendor_completions.d/patchula.fish
             cli-spec/usage=asset:dist/patchula.usage.kdl
+            skill/patchula=repo:skills/patchula
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -13,6 +13,10 @@ Each release carries a [packslip](https://packslip.dev) manifest signed by the
 release workflow, so mise checks every download against it. Pin a version with
 `packslip:github.com/sweepies/count-patchula@0.1.0`.
 
+The manifest also ships a `patchula` skill for coding agents, from
+[`skills/patchula`](https://github.com/sweepies/count-patchula/tree/main/skills/patchula):
+how to configure, validate and run the Count, with links back to these docs.
+
 ## From a release
 
 Download the archive for your platform from the [releases
