@@ -87,7 +87,10 @@ export default defineConfig({
       },
       {
         text: "Run it",
-        items: [{ text: "GitHub App server", link: "/guide/server" }],
+        items: [
+          { text: "Terminal UI", link: "/guide/tui" },
+          { text: "GitHub App server", link: "/guide/server" },
+        ],
       },
       {
         text: "Coming from Renovate",

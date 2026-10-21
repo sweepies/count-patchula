@@ -67,6 +67,17 @@ pub enum Command {
     Run(Run),
     /// Manage the lockfile runner's tool store (`PATCHULA_TOOLS_DIR`, or `<cache>.tools`).
     Tools(Tools),
+    /// Browse dependencies and updates in the terminal; with `--local`, apply selected updates.
+    Tui(Tui),
+}
+
+#[derive(Args)]
+pub struct Tui {
+    #[usage(flatten)]
+    pub lookup: Lookup,
+    /// Print a plain-text snapshot of the updates and exit, for pipes and CI logs.
+    #[usage(long)]
+    pub once: bool,
 }
 
 #[derive(Args)]

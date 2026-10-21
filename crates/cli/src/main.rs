@@ -3,6 +3,7 @@
 
 mod cli;
 mod server;
+mod tui;
 
 use cli::{App, Command, ConfigCommand, ToolsCommand};
 use std::io::{self, IsTerminal, Write};
@@ -102,6 +103,40 @@ async fn run(app: &App, services: &Services) -> Result<u8, (u8, miette::Report)>
         },
         Command::Lookup(options) => batch(app, options, None, services).await,
         Command::Run(options) => batch(app, &options.lookup, Some(options), services).await,
+        Command::Tui(tui) => {
+            if !tui.once && !(io::stdin().is_terminal() && io::stdout().is_terminal()) {
+                return Err((
+                    2,
+                    miette::miette!(
+                        "patchula tui needs a terminal; use --once for a plain snapshot"
+                    ),
+                ));
+            }
+            let report = report(app, &tui.lookup, None, services).await?;
+            let local = match &tui.lookup.local {
+                Some(dir) => {
+                    let config = tui
+                        .lookup
+                        .config
+                        .as_ref()
+                        .map(|path| patchula_config::load(path))
+                        .transpose()
+                        .map_err(|e| (2, e))?;
+                    Some(tui::local(dir, config).map_err(|e| (2, miette::miette!("{e}")))?)
+                }
+                None => None,
+            };
+            let model = tui::Model::new(&report, local);
+            if tui.once {
+                write!(io::stdout().lock(), "{}", tui::snapshot(&model))
+                    .map(|_| 0)
+                    .map_err(|e| (1, miette::miette!("{e}")))
+            } else {
+                tui::interact(model)
+                    .map(|_| 0)
+                    .map_err(|e| (1, miette::miette!("terminal error: {e}")))
+            }
+        }
         Command::Tools(tools) => {
             let (store, days) = match &tools.command {
                 ToolsCommand::Install(store) => (store, None),
@@ -215,115 +250,8 @@ async fn batch(
     run: Option<&cli::Run>,
     services: &Services,
 ) -> Result<u8, (u8, miette::Report)> {
-    use patchula_engine::{Engine, Options};
     use patchula_report::Status;
-    if options.concurrency == 0 || options.concurrency > 100 {
-        return Err((2, miette::miette!("concurrency must be 1..100")));
-    }
-    let mut http_options = patchula_http::Options {
-        registry_freshness_secs: options.registry_freshness_secs,
-        go_freshness_secs: options.go_freshness_secs,
-        ..Default::default()
-    };
-    for setting in &options.host_concurrency {
-        let (host, limit) = setting
-            .split_once('=')
-            .and_then(|(host, limit)| limit.parse::<usize>().ok().map(|limit| (host, limit)))
-            .ok_or_else(|| {
-                (
-                    2,
-                    miette::miette!("host-concurrency must be HOST=LIMIT (1..100)"),
-                )
-            })?;
-        http_options.host_concurrency.insert(host.to_owned(), limit);
-    }
-    http_options.validate().map_err(|_| {
-        (
-            2,
-            miette::miette!("host-concurrency requires a lowercase hostname and limit 1..100"),
-        )
-    })?;
-    let recheck = match app.recheck {
-        Some(cli::Recheck::Now) => patchula_engine::Recheck::Now,
-        Some(cli::Recheck::NextRun) => patchula_engine::Recheck::NextRun,
-        None if run.is_some() => match std::env::var("PATCHULA_RECHECK").as_deref() {
-            Ok("now") => patchula_engine::Recheck::Now,
-            Ok("next-run") | Err(std::env::VarError::NotPresent) => {
-                patchula_engine::Recheck::NextRun
-            }
-            _ => {
-                return Err((
-                    2,
-                    miette::miette!("PATCHULA_RECHECK must be now or next-run"),
-                ));
-            }
-        },
-        None => patchula_engine::Recheck::NextRun,
-    };
-    let config = options
-        .config
-        .as_ref()
-        .map(|path| patchula_config::load(path))
-        .transpose()
-        .map_err(|e| (2, e))?;
-    let token = services.token().map_err(|_| {
-        (
-            1,
-            miette::miette!("lookup/run requires PATCHULA_TOKEN, GITHUB_TOKEN or GH_TOKEN"),
-        )
-    })?;
-    if let Some(parent) = options.cache.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| (1, miette::miette!("cannot create cache directory: {e}")))?;
-    }
-    let cache = patchula_cache::Cache::open(&options.cache, Default::default())
-        .await
-        .map_err(|e| (1, miette::miette!("{e}")))?;
-    let transport = services
-        .transport()
-        .map_err(|e| (1, miette::miette!("{e}")))?;
-    let mut engine =
-        Engine::with_http_options(&token, cache, options.concurrency, transport, http_options)
-            .map_err(|e| (1, miette::miette!("{e}")))?
-            .with_recheck(recheck);
-    match (
-        std::env::var("PATCHULA_DOCKERHUB_USERNAME").ok(),
-        std::env::var("PATCHULA_DOCKERHUB_TOKEN").ok(),
-    ) {
-        (None, None) => {}
-        (Some(username), Some(token)) if !username.is_empty() && !token.is_empty() => {
-            engine = engine.with_dockerhub_credentials(username, token);
-        }
-        _ => {
-            return Err((
-                2,
-                miette::miette!(
-                    "set both PATCHULA_DOCKERHUB_USERNAME and PATCHULA_DOCKERHUB_TOKEN to nonempty values"
-                ),
-            ));
-        }
-    }
-    let options = Options {
-        repositories: options.repositories.clone(),
-        config,
-        config_dir: options.config_dir.clone(),
-        local: options.local.clone(),
-    };
-    let report = if let Some(run) = run {
-        engine
-            .run(options, run.dry_run, run.allow_lockfile_pending)
-            .await
-    } else {
-        engine.lookup(options).await
-    }
-    .map_err(|e| {
-        let code = if matches!(e, patchula_engine::Error::Configuration(_)) {
-            2
-        } else {
-            1
-        };
-        (code, miette::miette!("{e}"))
-    })?;
+    let report = report(app, options, run, services).await?;
     if app.json {
         serde_json::to_writer(io::stdout().lock(), &report)
             .map_err(|e| (1, miette::miette!("cannot write report: {e}")))?;
@@ -431,3 +359,121 @@ async fn batch(
 
 #[cfg(test)]
 mod tests;
+
+/// Build the engine from lookup flags and run one lookup or run batch.
+async fn report(
+    app: &App,
+    options: &cli::Lookup,
+    run: Option<&cli::Run>,
+    services: &Services,
+) -> Result<patchula_report::Report, (u8, miette::Report)> {
+    use patchula_engine::{Engine, Options};
+    if options.concurrency == 0 || options.concurrency > 100 {
+        return Err((2, miette::miette!("concurrency must be 1..100")));
+    }
+    let mut http_options = patchula_http::Options {
+        registry_freshness_secs: options.registry_freshness_secs,
+        go_freshness_secs: options.go_freshness_secs,
+        ..Default::default()
+    };
+    for setting in &options.host_concurrency {
+        let (host, limit) = setting
+            .split_once('=')
+            .and_then(|(host, limit)| limit.parse::<usize>().ok().map(|limit| (host, limit)))
+            .ok_or_else(|| {
+                (
+                    2,
+                    miette::miette!("host-concurrency must be HOST=LIMIT (1..100)"),
+                )
+            })?;
+        http_options.host_concurrency.insert(host.to_owned(), limit);
+    }
+    http_options.validate().map_err(|_| {
+        (
+            2,
+            miette::miette!("host-concurrency requires a lowercase hostname and limit 1..100"),
+        )
+    })?;
+    let recheck = match app.recheck {
+        Some(cli::Recheck::Now) => patchula_engine::Recheck::Now,
+        Some(cli::Recheck::NextRun) => patchula_engine::Recheck::NextRun,
+        None if run.is_some() => match std::env::var("PATCHULA_RECHECK").as_deref() {
+            Ok("now") => patchula_engine::Recheck::Now,
+            Ok("next-run") | Err(std::env::VarError::NotPresent) => {
+                patchula_engine::Recheck::NextRun
+            }
+            _ => {
+                return Err((
+                    2,
+                    miette::miette!("PATCHULA_RECHECK must be now or next-run"),
+                ));
+            }
+        },
+        None => patchula_engine::Recheck::NextRun,
+    };
+    let config = options
+        .config
+        .as_ref()
+        .map(|path| patchula_config::load(path))
+        .transpose()
+        .map_err(|e| (2, e))?;
+    let token = services.token().map_err(|_| {
+        (
+            1,
+            miette::miette!("lookup/run requires PATCHULA_TOKEN, GITHUB_TOKEN or GH_TOKEN"),
+        )
+    })?;
+    if let Some(parent) = options.cache.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| (1, miette::miette!("cannot create cache directory: {e}")))?;
+    }
+    let cache = patchula_cache::Cache::open(&options.cache, Default::default())
+        .await
+        .map_err(|e| (1, miette::miette!("{e}")))?;
+    let transport = services
+        .transport()
+        .map_err(|e| (1, miette::miette!("{e}")))?;
+    let mut engine =
+        Engine::with_http_options(&token, cache, options.concurrency, transport, http_options)
+            .map_err(|e| (1, miette::miette!("{e}")))?
+            .with_recheck(recheck);
+    match (
+        std::env::var("PATCHULA_DOCKERHUB_USERNAME").ok(),
+        std::env::var("PATCHULA_DOCKERHUB_TOKEN").ok(),
+    ) {
+        (None, None) => {}
+        (Some(username), Some(token)) if !username.is_empty() && !token.is_empty() => {
+            engine = engine.with_dockerhub_credentials(username, token);
+        }
+        _ => {
+            return Err((
+                2,
+                miette::miette!(
+                    "set both PATCHULA_DOCKERHUB_USERNAME and PATCHULA_DOCKERHUB_TOKEN to nonempty values"
+                ),
+            ));
+        }
+    }
+    let options = Options {
+        repositories: options.repositories.clone(),
+        config,
+        config_dir: options.config_dir.clone(),
+        local: options.local.clone(),
+    };
+    let report = if let Some(run) = run {
+        engine
+            .run(options, run.dry_run, run.allow_lockfile_pending)
+            .await
+    } else {
+        engine.lookup(options).await
+    }
+    .map_err(|e| {
+        let code = if matches!(e, patchula_engine::Error::Configuration(_)) {
+            2
+        } else {
+            1
+        };
+        (code, miette::miette!("{e}"))
+    })?;
+    Ok(report)
+}

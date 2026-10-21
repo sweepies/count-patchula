@@ -59,6 +59,8 @@ Lockfile tools come from [mise](https://mise.jdx.dev), so it needs to be on the
   you reviewed.
 - A dependency dashboard, schedule windows, PR limits, grouping, auto-merge
   behind check gates, and a GitHub App server mode driven by webhooks.
+- A terminal UI (`patchula tui`) to browse updates, and with `--local`, pick
+  some and write them into your files.
 
 ## How fast
 
