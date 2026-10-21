@@ -38,14 +38,14 @@ fn hand_written_output_classifies_all_four_cases_and_keeps_registry_identity() {
     assert!(
         triage
             .markdown()
-            .contains("docs/renovate/departures.md#departure-7")
+            .contains("docs/renovate/departures.md#explicit-defaults")
     );
     assert!(
         triage
             .differences
             .iter()
             .filter_map(|d| d.departure.as_ref())
-            .all(|p| p.row == 7)
+            .all(|p| p.id == "explicit-defaults")
     );
     let npm = renovate.repositories[0]
         .package_files
@@ -246,7 +246,7 @@ fn release_age_departure_requires_newer_target_and_timestamp_evidence_inside_win
         diffs
             .iter()
             .all(|d| d.classification == Class::DeliberateDeparture
-                && d.departure.as_ref().unwrap().row == 23)
+                && d.departure.as_ref().unwrap().id == "minimum-release-age")
     );
     for date in ["2026-10-15T01:00:00Z", "2026-10-11T12:00:00Z", "malformed"] {
         let mut changed = b.clone();
@@ -285,7 +285,7 @@ fn release_age_departure_requires_newer_target_and_timestamp_evidence_inside_win
         diffs
             .iter()
             .all(|d| d.classification == Class::DeliberateDeparture
-                && d.departure.as_ref().unwrap().row == 23)
+                && d.departure.as_ref().unwrap().id == "minimum-release-age")
     );
     assert!(
         compare(&b, &a, &rules())
@@ -358,7 +358,7 @@ fn older_patchula_target_requires_the_exact_held_back_release_and_24_hour_eviden
         diffs
             .iter()
             .all(|d| d.classification == Class::DeliberateDeparture
-                && d.departure.as_ref().unwrap().row == 23)
+                && d.departure.as_ref().unwrap().id == "minimum-release-age")
     );
     let mut summarized = b.clone();
     let held = &mut summarized.repositories[0].package_files[0].dependencies[0]
@@ -448,7 +448,7 @@ fn npm_exact_major_departure_requires_identical_resolved_targets_and_explicit_po
     update.policy = Some(policy());
     let diff = compare(&a, &b, &rules()).unwrap().differences;
     assert_eq!(diff.len(), 1);
-    assert_eq!(diff[0].departure.as_ref().unwrap().row, 25);
+    assert_eq!(diff[0].departure.as_ref().unwrap().id, "npm-range-edits");
     b.repositories[0].package_files[0].dependencies[0].updates[0].new_version =
         Some("7.0.3".into());
     assert!(
@@ -607,7 +607,10 @@ fn real_lookup_shape_retains_skipped_and_digest_only_deps_and_audits_exclusion()
         ),
         (1, 1, 0)
     );
-    assert_eq!(excluded.link, "docs/renovate/departures.md#departure-19");
+    assert_eq!(
+        excluded.link,
+        "docs/renovate/departures.md#configuration-dependencies"
+    );
     assert_eq!(
         parsed
             .warnings
@@ -750,9 +753,12 @@ fn cli_accepts_one_sided_repo_coverage_and_writes_diagnostics() {
         serde_json::from_slice(&std::fs::read(dir.path().join("triage.json")).unwrap()).unwrap();
     assert_eq!(triage["differences"].as_array().unwrap().len(), 6);
     assert!(!triage["warnings"].as_array().unwrap().is_empty());
-    assert_eq!(triage["exclusions"][0]["departure"], 19);
+    assert_eq!(
+        triage["exclusions"][0]["departure"],
+        "configuration-dependencies"
+    );
     let md = std::fs::read_to_string(dir.path().join("triage.md")).unwrap();
-    assert!(md.contains("departure-19"));
+    assert!(md.contains("configuration-dependencies"));
     assert!(md.contains("Parser warnings:"));
 }
 
@@ -839,7 +845,10 @@ fn cargo_pre1_departure_is_limited_to_identical_breaking_targets() {
     let diff = compare(&a, &b, &rules()).unwrap().differences;
     assert_eq!(diff.len(), 1);
     assert_eq!(diff[0].classification, Class::DeliberateDeparture);
-    assert_eq!(diff[0].departure.as_ref().unwrap().row, 20);
+    assert_eq!(
+        diff[0].departure.as_ref().unwrap().id,
+        "cargo-compatibility"
+    );
     b.repositories[0].package_files[0].dependencies[0].updates[0].new_version =
         Some("0.4.0".into());
     assert!(

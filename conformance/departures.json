@@ -3,7 +3,7 @@
   "rules": [
     {
       "id": "release-age-action-digest",
-      "departure": 23,
+      "departure": "minimum-release-age",
       "classification": "field-mismatch",
       "managers": ["github-actions"],
       "field": "updates.newDigest",
@@ -11,7 +11,7 @@
     },
     {
       "id": "npm-satisfying-range-pin",
-      "departure": 25,
+      "departure": "npm-range-edits",
       "classification": "patchula-missing",
       "managers": ["npm"],
       "field": "updates",
@@ -19,7 +19,7 @@
     },
     {
       "id": "explicit-disabled-class",
-      "departure": 37,
+      "departure": "disabled-update-types",
       "classification": "patchula-missing",
       "managers": ["npm", "mise", "cargo", "go", "regex", "github-actions", "kubernetes", "flux", "terraform"],
       "field": "updates",
@@ -27,7 +27,7 @@
     },
     {
       "id": "rejected-release",
-      "departure": 38,
+      "departure": "rejected-releases",
       "classification": "patchula-missing",
       "managers": ["npm", "cargo", "requirements"],
       "field": "updates",
@@ -35,7 +35,7 @@
     },
     {
       "id": "observed-current-resolution",
-      "departure": 39,
+      "departure": "current-versions",
       "classification": "field-mismatch",
       "managers": ["npm", "github-actions"],
       "field": "current.version",
@@ -43,7 +43,7 @@
     },
     {
       "id": "release-age-missing-target",
-      "departure": 23,
+      "departure": "minimum-release-age",
       "classification": "patchula-missing",
       "managers": ["npm", "mise", "cargo", "go", "regex", "github-actions", "flux", "terraform", "requirements"],
       "field": "updates",
@@ -51,7 +51,7 @@
     },
     {
       "id": "cargo-manifest-noop",
-      "departure": 35,
+      "departure": "cargo-no-ops",
       "classification": "patchula-missing",
       "managers": ["cargo"],
       "field": "updates",
@@ -59,7 +59,7 @@
     },
     {
       "id": "go-major-module-path",
-      "departure": 34,
+      "departure": "go-major-versions",
       "classification": "patchula-missing",
       "managers": ["go"],
       "field": "updates",
@@ -67,7 +67,7 @@
     },
     {
       "id": "npm-exact-minor-patch-range",
-      "departure": 25,
+      "departure": "npm-range-edits",
       "classification": "field-mismatch",
       "managers": ["npm"],
       "field": "updates.newValue",
@@ -75,7 +75,7 @@
     },
     {
       "id": "npm-exact-range-pin",
-      "departure": 25,
+      "departure": "npm-range-edits",
       "classification": "patchula-extra",
       "managers": ["npm"],
       "field": "updates",
@@ -83,7 +83,7 @@
     },
     {
       "id": "separate-patch-track",
-      "departure": 33,
+      "departure": "patch-track",
       "classification": "patchula-extra",
       "managers": ["npm", "mise", "regex", "cargo", "github-actions", "go", "kubernetes", "flux"],
       "field": "updates",
@@ -91,7 +91,7 @@
     },
     {
       "id": "exact-latest-pins",
-      "departure": 29,
+      "departure": "floating-selectors",
       "classification": "patchula-extra",
       "managers": ["mise", "npm", "github-actions"],
       "field": "updates",
@@ -99,7 +99,7 @@
     },
     {
       "id": "indirect-go-upgrades",
-      "departure": 30,
+      "departure": "indirect-go-requirements",
       "classification": "patchula-extra",
       "managers": ["go"],
       "field": "updates",
@@ -107,7 +107,7 @@
     },
     {
       "id": "compose-test-fixtures",
-      "departure": 31,
+      "departure": "compose-test-services",
       "classification": "patchula-extra",
       "managers": ["compose"],
       "field": "dependency",
@@ -115,7 +115,7 @@
     },
     {
       "id": "release-age-new-value",
-      "departure": 23,
+      "departure": "minimum-release-age",
       "classification": "field-mismatch",
       "managers": ["npm", "bun", "mise", "regex", "github-actions", "cargo", "go", "requirements"],
       "field": "updates.newValue",
@@ -123,7 +123,7 @@
     },
     {
       "id": "release-age-new-version",
-      "departure": 23,
+      "departure": "minimum-release-age",
       "classification": "field-mismatch",
       "managers": ["npm", "bun", "mise", "regex", "github-actions", "cargo", "go", "requirements"],
       "field": "updates.newVersion",
@@ -131,7 +131,7 @@
     },
     {
       "id": "npm-exact-major",
-      "departure": 25,
+      "departure": "npm-range-edits",
       "classification": "field-mismatch",
       "managers": ["npm", "bun"],
       "field": "updates.newValue",
@@ -139,7 +139,7 @@
     },
     {
       "id": "cargo-pre1-breaking",
-      "departure": 20,
+      "departure": "cargo-compatibility",
       "classification": "field-mismatch",
       "managers": ["cargo"],
       "field": "updates.updateType",
@@ -147,7 +147,7 @@
     },
     {
       "id": "default-added-digest",
-      "departure": 7,
+      "departure": "explicit-defaults",
       "classification": "field-mismatch",
       "managers": ["github-actions", "dockerfile", "compose"],
       "field": "updates.newDigest",
@@ -155,7 +155,7 @@
     },
     {
       "id": "default-digest-only-pin",
-      "departure": 7,
+      "departure": "explicit-defaults",
       "classification": "patchula-extra",
       "managers": ["github-actions", "dockerfile", "compose"],
       "field": "updates",
@@ -163,7 +163,7 @@
     },
     {
       "id": "stable-node-extra",
-      "departure": 42,
+      "departure": "release-channels",
       "classification": "patchula-extra",
       "managers": ["mise"],
       "field": "updates",
@@ -171,7 +171,7 @@
     },
     {
       "id": "stable-node-value",
-      "departure": 42,
+      "departure": "release-channels",
       "classification": "field-mismatch",
       "managers": ["github-actions", "npm"],
       "field": "updates.newValue",
@@ -179,7 +179,7 @@
     },
     {
       "id": "stable-node-version",
-      "departure": 42,
+      "departure": "release-channels",
       "classification": "field-mismatch",
       "managers": ["github-actions", "npm"],
       "field": "updates.newVersion",
@@ -187,7 +187,7 @@
     },
     {
       "id": "declared-go-current",
-      "departure": 43,
+      "departure": "go-language-floor",
       "classification": "field-mismatch",
       "managers": ["go"],
       "field": "current.version",
@@ -195,7 +195,7 @@
     },
     {
       "id": "declared-go-upgrades",
-      "departure": 43,
+      "departure": "go-language-floor",
       "classification": "patchula-extra",
       "managers": ["go"],
       "field": "updates",
@@ -203,7 +203,7 @@
     },
     {
       "id": "published-mise-backends",
-      "departure": 44,
+      "departure": "mise-backends",
       "classification": "field-mismatch",
       "managers": ["mise"],
       "field": "package",
@@ -211,7 +211,7 @@
     },
     {
       "id": "action-floating-newVersion",
-      "departure": 45,
+      "departure": "action-ref-precision",
       "classification": "field-mismatch",
       "managers": ["github-actions"],
       "field": "updates.newVersion",
@@ -219,7 +219,7 @@
     },
     {
       "id": "action-floating-newDigest",
-      "departure": 45,
+      "departure": "action-ref-precision",
       "classification": "field-mismatch",
       "managers": ["github-actions"],
       "field": "updates.newDigest",
@@ -227,7 +227,7 @@
     },
     {
       "id": "action-alias-precision",
-      "departure": 45,
+      "departure": "action-ref-precision",
       "classification": "field-mismatch",
       "managers": ["github-actions"],
       "field": "updates.newValue",
@@ -235,7 +235,7 @@
     },
     {
       "id": "cargo-compatible-missing",
-      "departure": 46,
+      "departure": "cargo-target-resolution",
       "classification": "patchula-missing",
       "managers": ["cargo"],
       "field": "updates",
@@ -243,7 +243,7 @@
     },
     {
       "id": "cargo-compatible-extra",
-      "departure": 46,
+      "departure": "cargo-target-resolution",
       "classification": "patchula-extra",
       "managers": ["cargo"],
       "field": "updates",

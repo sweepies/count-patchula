@@ -69,10 +69,10 @@ fn stable_node_departures_require_identity_major_order_and_stable_policy() {
         d.updates = vec![update("26.1.0", "major")];
         let triage = compare(&baseline, &actual, &rules()).unwrap();
         assert!(
-            triage
-                .differences
-                .iter()
-                .all(|d| d.departure.as_ref().is_some_and(|d| d.row == 42)),
+            triage.differences.iter().all(|d| d
+                .departure
+                .as_ref()
+                .is_some_and(|d| d.id == "release-channels")),
             "{manager}: {:?}",
             triage.differences
         );
@@ -114,7 +114,10 @@ fn stable_node_departures_require_identity_major_order_and_stable_policy() {
                     .unwrap()
                     .differences
                     .iter()
-                    .all(|d| d.departure.as_ref().is_some_and(|d| d.row == 42))
+                    .all(|d| d
+                        .departure
+                        .as_ref()
+                        .is_some_and(|d| d.id == "release-channels"))
             );
         }
     }
@@ -143,12 +146,11 @@ fn declared_go_floor_requires_provenance_and_limits_targets_to_observed_compiler
     d.updates = vec![update("1.26.9", "patch"), update("1.27.2", "minor")];
     let triage = compare(&baseline, &actual, &rules()).unwrap();
     assert_eq!(triage.differences.len(), 3);
-    assert!(
-        triage
-            .differences
-            .iter()
-            .all(|d| d.departure.as_ref().is_some_and(|d| d.row == 43))
-    );
+    assert!(triage.differences.iter().all(|d| {
+        d.departure
+            .as_ref()
+            .is_some_and(|d| d.id == "go-language-floor")
+    }));
     actual.repositories[0].package_files[0].dependencies[0].updates[1] = update("1.28.0", "minor");
     assert!(
         compare(&baseline, &actual, &rules())
@@ -194,7 +196,10 @@ fn mise_migrations_keep_distinct_identities_and_reject_other_sources_or_targets(
         d.metadata.as_mut().unwrap().kinds = vec!["tool".into()];
         let triage = compare(&baseline, &actual, &rules()).unwrap();
         assert_eq!(triage.differences.len(), 1);
-        assert_eq!(triage.differences[0].departure.as_ref().unwrap().row, 44);
+        assert_eq!(
+            triage.differences[0].departure.as_ref().unwrap().id,
+            "mise-backends"
+        );
         assert_ne!(
             triage.differences[0].renovate,
             triage.differences[0].patchula
@@ -229,7 +234,10 @@ fn action_alias_rule_requires_identical_full_version_and_commit() {
             .unwrap()
             .differences
             .iter()
-            .all(|d| d.departure.as_ref().is_some_and(|d| d.row == 45))
+            .all(|d| d
+                .departure
+                .as_ref()
+                .is_some_and(|d| d.id == "action-ref-precision"))
     );
     for (version, digest) in [("v4.5.0", "a".repeat(40)), ("v4.4.0", "b".repeat(40))] {
         let u = &mut actual.repositories[0].package_files[0].dependencies[0].updates[0];
@@ -259,12 +267,11 @@ fn cargo_resolved_targets_require_the_identical_compatibility_interval() {
     d.updates[0].policy.as_mut().unwrap().versions = Some("preserve".into());
     let triage = compare(&baseline, &actual, &rules()).unwrap();
     assert_eq!(triage.differences.len(), 2);
-    assert!(
-        triage
-            .differences
-            .iter()
-            .all(|d| d.departure.as_ref().is_some_and(|d| d.row == 46))
-    );
+    assert!(triage.differences.iter().all(|d| {
+        d.departure
+            .as_ref()
+            .is_some_and(|d| d.id == "cargo-target-resolution")
+    }));
     for (target, range) in [("0.16.0", "0.15"), ("0.15.2", "0.16"), ("0.15.0", "0.15")] {
         let d = &mut actual.repositories[0].package_files[0].dependencies[0];
         d.updates[0].new_version = Some(target.into());
@@ -274,7 +281,10 @@ fn cargo_resolved_targets_require_the_identical_compatibility_interval() {
                 .unwrap()
                 .differences
                 .iter()
-                .any(|d| d.departure.as_ref().is_none_or(|d| d.row != 46))
+                .any(|d| d
+                    .departure
+                    .as_ref()
+                    .is_none_or(|d| d.id != "cargo-target-resolution"))
         );
     }
     let d = &mut actual.repositories[0].package_files[0].dependencies[0];
@@ -353,7 +363,10 @@ fn retired_cargo_floor_exemption_stays_actionable_and_npm_pins_require_the_same_
             .unwrap()
             .differences
             .iter()
-            .all(|d| d.departure.as_ref().is_some_and(|d| d.row == 25))
+            .all(|d| d
+                .departure
+                .as_ref()
+                .is_some_and(|d| d.id == "npm-range-edits"))
     );
     actual.repositories[0].package_files[0].dependencies[0].updates[0] = update("22.20.6", "pin");
     assert!(
@@ -384,7 +397,10 @@ fn action_age_digest_does_not_excuse_equal_version_hash_differences() {
             .unwrap()
             .differences
             .iter()
-            .all(|d| d.departure.as_ref().is_some_and(|d| d.row == 23))
+            .all(|d| d
+                .departure
+                .as_ref()
+                .is_some_and(|d| d.id == "minimum-release-age"))
     );
     actual.repositories[0].package_files[0].dependencies[0].updates[0].new_version =
         Some("v5.1.0".into());
@@ -583,7 +599,7 @@ fn disabled_rejected_and_age_departures_require_new_report_evidence() {
         (
             json!({"evaluatedAt":"2026-10-15T00:00:00Z","disabledUpdates":["minor"],"rejected":[]}),
             json!([]),
-            Some(37),
+            Some("disabled-update-types"),
         ),
         (
             json!({"evaluatedAt":"2026-10-15T00:00:00Z","disabledUpdates":["major"],"rejected":[]}),
@@ -593,7 +609,7 @@ fn disabled_rejected_and_age_departures_require_new_report_evidence() {
         (
             json!({"evaluatedAt":"2026-10-15T00:00:00Z","disabledUpdates":[],"rejected":[{"version":"1.1.0","reason":"deprecated"}]}),
             json!([]),
-            Some(38),
+            Some("rejected-releases"),
         ),
         (
             json!({"evaluatedAt":"2026-10-15T00:00:00Z","disabledUpdates":[],"rejected":[{"version":"1.2.0","reason":"deprecated"}]}),
@@ -603,7 +619,7 @@ fn disabled_rejected_and_age_departures_require_new_report_evidence() {
         (
             json!({"evaluatedAt":"2026-10-15T00:00:00Z","disabledUpdates":[],"rejected":[]}),
             json!([{"version":"1.1.0","updateType":"minor","publishedAt":"2026-10-14T12:00:00Z","eligibleAt":"2026-10-15T12:00:00Z"}]),
-            Some(23),
+            Some("minimum-release-age"),
         ),
         (
             json!({"evaluatedAt":"2026-10-16T00:00:00Z","disabledUpdates":[],"rejected":[]}),
@@ -618,7 +634,10 @@ fn disabled_rejected_and_age_departures_require_new_report_evidence() {
         d.metadata.as_mut().unwrap().held_back = serde_json::from_value(held).unwrap();
         let triage = compare(&baseline, &actual, &rules()).unwrap();
         assert_eq!(
-            triage.differences[0].departure.as_ref().map(|d| d.row),
+            triage.differences[0]
+                .departure
+                .as_ref()
+                .map(|d| d.id.as_str()),
             expected
         );
         actual.repositories[0].package_files[0].dependencies[0]
@@ -649,8 +668,8 @@ fn current_resolution_departure_does_not_hide_lock_or_digest_changes() {
             .departure
             .as_ref()
             .unwrap()
-            .row,
-        39
+            .id,
+        "current-versions"
     );
     actual.repositories[0].package_files[0].dependencies[0]
         .current
@@ -763,8 +782,18 @@ fn api_inventory_and_identical_yaml_duplicates_are_audited_but_proposals_survive
             .sum::<usize>(),
         2
     );
-    assert!(triage.exclusions.iter().any(|e| e.departure == 26));
-    assert!(triage.exclusions.iter().any(|e| e.departure == 27));
+    assert!(
+        triage
+            .exclusions
+            .iter()
+            .any(|e| e.departure == "kubernetes-api-versions")
+    );
+    assert!(
+        triage
+            .exclusions
+            .iter()
+            .any(|e| e.departure == "yaml-image-ownership")
+    );
     let mut changed = baseline.clone();
     let deps = &mut changed.repositories[0].package_files[0].dependencies;
     deps.iter_mut()
@@ -853,8 +882,8 @@ fn latest_pin_departure_requires_exact_policy_and_literal_latest() {
             .departure
             .as_ref()
             .unwrap()
-            .row,
-        29
+            .id,
+        "floating-selectors"
     );
     actual.repositories[0].package_files[0].dependencies[0].updates[0]
         .policy
@@ -892,8 +921,8 @@ fn indirect_go_and_test_compose_departures_do_not_extend_to_direct_or_production
             .departure
             .as_ref()
             .unwrap()
-            .row,
-        30
+            .id,
+        "indirect-go-requirements"
     );
     let mut direct = baseline.clone();
     direct.repositories[0].package_files[0].dependencies[0]
@@ -920,8 +949,8 @@ fn indirect_go_and_test_compose_departures_do_not_extend_to_direct_or_production
             .departure
             .as_ref()
             .unwrap()
-            .row,
-        31
+            .id,
+        "compose-test-services"
     );
     actual.repositories[0].package_files[0].path = "production/docker-compose.demo.yml".into();
     assert_eq!(
@@ -943,8 +972,8 @@ fn npm_exact_range_rules_require_the_same_satisfying_target_and_policy() {
             .departure
             .as_ref()
             .unwrap()
-            .row,
-        25
+            .id,
+        "npm-range-edits"
     );
     actual.repositories[0].package_files[0].dependencies[0].updates[0] = update("1.3.2", "minor");
     assert!(
@@ -966,8 +995,8 @@ fn npm_exact_range_rules_require_the_same_satisfying_target_and_policy() {
             .departure
             .as_ref()
             .unwrap()
-            .row,
-        25
+            .id,
+        "npm-range-edits"
     );
     actual.repositories[0].package_files[0].dependencies[0].updates[0] = update("2.0.0", "pin");
     assert_eq!(
@@ -990,8 +1019,8 @@ fn patch_track_departure_requires_an_identical_minor_and_a_newer_manifest_edit()
             .departure
             .as_ref()
             .unwrap()
-            .row,
-        33
+            .id,
+        "patch-track"
     );
     actual.repositories[0].package_files[0].dependencies[0].updates[1] = update("1.2.0", "patch");
     assert_eq!(
@@ -1023,8 +1052,8 @@ fn go_major_path_rule_preserves_incompatible_releases_and_other_sources() {
             .departure
             .as_ref()
             .unwrap()
-            .row,
-        34
+            .id,
+        "go-major-versions"
     );
     let mut incompatible = baseline.clone();
     incompatible.repositories[0].package_files[0].dependencies[0].updates[0] =
@@ -1102,11 +1131,11 @@ fn floating_action_target_requires_observed_alias_commit_and_matching_release_li
         d.updates[0].new_digest = Some("b".repeat(40));
         let diffs = compare(&baseline, &actual, &rules()).unwrap().differences;
         assert_eq!(diffs.len(), 2);
-        assert!(
-            diffs
-                .iter()
-                .all(|d| d.departure.as_ref().is_some_and(|d| d.row == 45))
-        );
+        assert!(diffs.iter().all(|d| {
+            d.departure
+                .as_ref()
+                .is_some_and(|d| d.id == "action-ref-precision")
+        }));
         for (field, value) in [
             ("evidence", ""),
             ("evidence", "a"),
