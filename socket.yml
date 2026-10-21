@@ -1,0 +1,7 @@
+# Socket scans the Count's own dependencies: the Cargo workspace and the docs
+# site. The corpus and fixtures are other projects' manifests, kept as test data.
+version: 2
+projectIgnorePaths:
+  - "tests/corpus/"
+  - "fixtures/"
+  - "examples/"

@@ -1,0 +1,29 @@
+version = 1
+
+# The corpus and fixtures are other projects' files, kept as test data.
+exclude_patterns = [
+  "tests/corpus/**",
+  "fixtures/**",
+  "generated/**",
+  "docs/internals/history/**",
+]
+
+test_patterns = [
+  "crates/*/tests/**",
+  "crates/testkit/**",
+]
+
+[[analyzers]]
+name = "rust"
+
+  [analyzers.meta]
+  msrv = "1.99"
+
+[[analyzers]]
+name = "javascript"
+
+[[analyzers]]
+name = "shell"
+
+[[analyzers]]
+name = "secrets"
