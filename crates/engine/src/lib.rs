@@ -191,6 +191,11 @@ impl Engine {
         self.lockfiles = Some(runner);
         self
     }
+    /// Seed the lockfile tool store from this mise data directory's installs.
+    pub fn with_tool_seed(mut self, mise_data: std::path::PathBuf) -> Self {
+        self.lockfiles = self.lockfiles.map(|runner| runner.with_seed(mise_data));
+        self
+    }
     pub fn with_versions_host(mut self, enabled: bool) -> Self {
         self.versions_host_override = Some(enabled);
         self

@@ -107,6 +107,14 @@ between runs, so keep it on a volume. Each successful tool run records its
   timeout or crash can leave a directory mise treats as installed but which has
   no binaries, and this is how the Count recovers from it.
 - Known versions keep a 180-second limit per command.
+- On a local run, a version you already have in your own mise is hard-linked
+  into the store instead of downloaded: Node, Go, Bun, aube, Yarn, uv and
+  Terraform. That takes no time and no extra disk, and the store's links are
+  its own, so pruning never touches your installs. Python, Ruby, PHP and .NET
+  are always installed fresh, because their installs depend on where they
+  live. Each version is borrowed once; if it fails, mise installs it normally.
+  Your mise directory is `MISE_DATA_DIR`, or `~/.local/share/mise`, and it has
+  to be on the same filesystem as the store. The server never borrows.
 
 ## Isolation
 

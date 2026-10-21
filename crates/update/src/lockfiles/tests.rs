@@ -1909,6 +1909,60 @@ async fn tool_store_prunes_unused_versions_and_prewarms_defaults() {
     assert!(installed.contains(&"aqua:jdx/mise@2026.10.11".to_string()));
 }
 
+/// A version the user already has is hard-linked into the store instead of
+/// downloaded, once; tools whose installs embed their path are left to mise.
+#[cfg(unix)]
+#[test]
+fn tool_store_seeds_relocatable_tools_from_the_users_mise_once() {
+    use std::os::unix::fs::MetadataExt;
+    let temp = tempfile::tempdir().unwrap();
+    let user = temp.path().join("user-mise");
+    for (tool, version) in [("node", "24.21.0"), ("python", "3.14.8")] {
+        let dir = user.join("installs").join(tool).join(version).join("bin");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(tool), "binary").unwrap();
+        std::os::unix::fs::symlink(tool, dir.join(format!("{tool}-alias"))).unwrap();
+    }
+    std::fs::write(user.join("installs/node/.mise.backend.toml"), "backend").unwrap();
+    // uv's version points into a root shared with other versions.
+    let shared = user.join("uv-root/bin");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::write(shared.join("uv"), "binary").unwrap();
+    std::fs::create_dir_all(user.join("installs/uv")).unwrap();
+    std::os::unix::fs::symlink(user.join("uv-root"), user.join("installs/uv/0.13.1")).unwrap();
+    let runner = Runner::new(temp.path().join("cache.worktrees"), "x").with_seed(user.clone());
+    let tools = [
+        ("node".to_string(), "24.21.0".to_string()),
+        ("python".to_string(), "3.14.8".to_string()),
+        ("go".to_string(), "1.27.2".to_string()),
+        ("uv".to_string(), "0.13.1".to_string()),
+    ];
+    runner.seed(&tools);
+    let store = runner.tools().join("installs");
+    let linked = store.join("node/24.21.0/bin/node");
+    assert_eq!(
+        std::fs::metadata(&linked).unwrap().ino(),
+        std::fs::metadata(user.join("installs/node/24.21.0/bin/node"))
+            .unwrap()
+            .ino(),
+        "a hard link, not a copy"
+    );
+    assert_eq!(
+        std::fs::read_link(store.join("node/24.21.0/bin/node-alias")).unwrap(),
+        std::path::Path::new("node")
+    );
+    assert!(store.join("node/.mise.backend.toml").is_file());
+    assert!(!store.join("python").exists(), "python is not relocatable");
+    assert!(!store.join("go").exists(), "the user has no go install");
+    assert!(!store.join("uv").exists(), "a shared root is not copied");
+    // Removing the seeded copy, as clearing an unproven install does, leaves
+    // the user's install alone and is not undone by seeding again.
+    std::fs::remove_dir_all(store.join("node/24.21.0")).unwrap();
+    assert!(user.join("installs/node/24.21.0/bin/node").is_file());
+    runner.seed(&tools);
+    assert!(!store.join("node/24.21.0").exists());
+}
+
 /// Every prewarmed spec is one real mise can install: a dry run resolves
 /// names and backends offline without downloading.
 #[test]

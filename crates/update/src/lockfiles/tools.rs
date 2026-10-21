@@ -5,6 +5,13 @@
 use super::*;
 
 const USAGE: &str = "patchula-usage.json";
+/// `tool@version`s already seeded from the user's mise installs. Each is seeded
+/// at most once, so a copy that fails falls back to a normal install.
+const SEEDED: &str = "patchula-seeded.json";
+/// Tools whose mise installs are relocatable, so a hard-linked copy works from
+/// the Count's store. Python, Ruby and PHP builds embed their install path,
+/// .NET versions share one SDK root, and Rust goes through rustup.
+const SEEDABLE: &[&str] = &["node", "go", "bun", "aube", "yarn", "uv", "terraform"];
 /// mise itself, which is not in mise's registry under its own name.
 pub(super) const MISE: &str = "aqua:jdx/mise";
 /// Time allowed for installing tools. Some hosts are slow: static-php.dev
@@ -63,7 +70,98 @@ pub(super) fn defaults() -> Result<Vec<(String, String)>, String> {
     Ok(tools)
 }
 
+/// Recreate `from` at `to` with hard links, keeping symlinks as symlinks. The
+/// copy shares the user's files but is the Count's own directory: removing it
+/// never touches the original.
+#[cfg(unix)]
+fn link_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let (source, target) = (entry.path(), to.join(entry.file_name()));
+        let kind = entry.file_type()?;
+        if kind.is_symlink() {
+            std::os::unix::fs::symlink(std::fs::read_link(&source)?, &target)?;
+        } else if kind.is_dir() {
+            link_tree(&source, &target)?;
+        } else {
+            std::fs::hard_link(&source, &target)?;
+        }
+    }
+    Ok(())
+}
+
 impl Runner {
+    /// Before downloading a tool, borrow the user's own mise install of the
+    /// same version when there is one: hard links make it instant and use no
+    /// extra disk. Only relocatable tools, only once per version, and only
+    /// when both stores are on one filesystem; otherwise mise installs it.
+    #[cfg(unix)]
+    pub(super) fn seed(&self, tools: &[(String, String)]) {
+        let Some(source) = &self.seed else {
+            return;
+        };
+        if source == &self.mise_data {
+            return;
+        }
+        let _guard = self
+            .usage
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let path = self.mise_data.join(SEEDED);
+        let mut seeded: BTreeSet<String> = std::fs::read(&path)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
+        let mut changed = false;
+        for (tool, version) in tools {
+            let spec = format!("{tool}@{version}");
+            if !SEEDABLE.contains(&tool.as_str()) || seeded.contains(&spec) {
+                continue;
+            }
+            let installs = source.join("installs").join(tool);
+            let Ok(from) = installs.join(version).canonicalize() else {
+                continue;
+            };
+            let to = self.mise_data.join("installs").join(tool);
+            // A version that resolves outside its tool's directory lives in a
+            // root shared with other versions, which a copy cannot reproduce.
+            let own = installs
+                .canonicalize()
+                .is_ok_and(|dir| from.starts_with(dir));
+            if !own || !from.is_dir() || to.join(version).exists() {
+                continue;
+            }
+            seeded.insert(spec.clone());
+            changed = true;
+            let linked = std::fs::create_dir_all(&to)
+                .and_then(|()| link_tree(&from, &to.join(version)))
+                .and_then(|()| {
+                    let backend = installs.join(".mise.backend.toml");
+                    match backend.is_file() && !to.join(".mise.backend.toml").exists() {
+                        true => std::fs::copy(backend, to.join(".mise.backend.toml")).map(drop),
+                        false => Ok(()),
+                    }
+                });
+            match linked {
+                Ok(()) => tracing::info!(tool = %spec, "seeded from the user's mise install"),
+                Err(error) => {
+                    let _ = std::fs::remove_dir_all(to.join(version));
+                    tracing::debug!(tool = %spec, %error, "not seeded; mise will install it");
+                }
+            }
+        }
+        if changed {
+            let write = std::fs::create_dir_all(&self.mise_data).and_then(|()| {
+                std::fs::write(&path, serde_json::to_vec(&seeded).expect("set serializes"))
+            });
+            if let Err(error) = write {
+                tracing::warn!(%error, "seeded tools were not recorded");
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    pub(super) fn seed(&self, _: &[(String, String)]) {}
     /// Whether every `tool@version` has run before, so mise will not install
     /// it within this call; pruning forgets versions as it removes them.
     pub(super) fn installed(&self, tools: &[(String, String)]) -> bool {
@@ -82,6 +180,7 @@ impl Runner {
             if tool != "rust"
                 && !usage.contains_key(&spec)
                 && let Err(error) = self.mise(vec!["uninstall".into(), spec]).await
+                && !error.contains("is not installed")
             {
                 tracing::warn!(%error, "unproven tool install was not removed");
             }
@@ -120,6 +219,7 @@ impl Runner {
     pub async fn prewarm(&self) -> Result<Vec<String>, String> {
         let tools = defaults()?;
         self.clear_unproven(&tools).await;
+        self.seed(&tools);
         let specs: Vec<String> = tools.iter().map(|(t, v)| format!("{t}@{v}")).collect();
         let mut args = vec!["install".to_string()];
         args.extend(specs.iter().cloned());

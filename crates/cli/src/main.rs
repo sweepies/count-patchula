@@ -152,8 +152,11 @@ async fn run(app: &App, services: &Services) -> Result<u8, (u8, miette::Report)>
                     .unwrap_or_default()
                     .join(&store.cache)
             };
-            let runner =
+            let mut runner =
                 patchula_update::lockfiles::Runner::new(path.with_extension("worktrees"), "");
+            if let Some(mise_data) = user_mise_data() {
+                runner = runner.with_seed(mise_data);
+            }
             let (action, specs) = match days {
                 None => ("installed", runner.prewarm().await),
                 Some(days) => ("pruned", runner.prune(days).await),
@@ -357,6 +360,19 @@ async fn batch(
     Ok(if errors == 0 { 0 } else { 1 })
 }
 
+/// The invoking user's mise data directory, when it has installs. Local runs
+/// borrow matching tool versions from it instead of downloading them.
+fn user_mise_data() -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+    std::env::var_os("MISE_DATA_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("XDG_DATA_HOME").map(|dir| PathBuf::from(dir).join("mise")))
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share/mise"))
+        })
+        .filter(|dir| dir.join("installs").is_dir())
+}
+
 /// The repositories a batch covers: the ones named, every one the token can
 /// reach with `--all-repos` (an empty list, which the engine discovers), or the
 /// GitHub repository the current directory's Git remote points at.
@@ -539,6 +555,9 @@ async fn report(
         Engine::with_http_options(&token, cache, options.concurrency, transport, http_options)
             .map_err(|e| (1, miette::miette!("{e}")))?
             .with_recheck(recheck);
+    if let Some(mise_data) = user_mise_data() {
+        engine = engine.with_tool_seed(mise_data);
+    }
     match (
         std::env::var("PATCHULA_DOCKERHUB_USERNAME").ok(),
         std::env::var("PATCHULA_DOCKERHUB_TOKEN").ok(),
