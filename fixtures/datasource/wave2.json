@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "provenance": "Recorded by rustovate from the request URLs; never imported from other bots; manifest HEAD interactions independently simulated from OCI distribution semantics and recorded GET headers, with no response bodies",
+  "provenance": "Recorded by patchula from the request URLs; never imported from other bots; manifest HEAD interactions independently simulated from OCI distribution semantics and recorded GET headers, with no response bodies",
   "interactions": [
     {
       "request": {

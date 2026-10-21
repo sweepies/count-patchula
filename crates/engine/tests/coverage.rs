@@ -1,7 +1,7 @@
 //! Config coverage uses authored representative manifests, never upstream source
 //! from the comparison subjects (particularly the clean-room excluded project).
-use rustovate_config::Manager;
-use rustovate_manager::{Files, Scanner};
+use patchula_config::Manager;
+use patchula_manager::{Files, Scanner};
 use std::path::Path;
 
 #[test]
@@ -27,27 +27,27 @@ fn every_example_has_implemented_dispatch_for_the_twelve_repo_matrix() {
         if path.extension().is_none_or(|v| v != "pkl") {
             continue;
         }
-        let config = rustovate_config::load(&path).unwrap();
+        let config = patchula_config::load(&path).unwrap();
         assert!(
             config
                 .managers
                 .iter()
-                .all(|m| rustovate_manager::supported(*m))
+                .all(|m| patchula_manager::supported(*m))
         );
         let scanner = Scanner::new(&config).unwrap();
         let extraction = scanner
             .extract(&files)
             .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         assert!(extraction.warnings.is_empty());
-        let evaluator = rustovate_lookup::Evaluator::new(&config).unwrap();
+        let evaluator = patchula_lookup::Evaluator::new(&config).unwrap();
         for dep in &extraction.dependencies {
-            rustovate_lookup::scheme(dep).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            patchula_lookup::scheme(dep).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
             if evaluator.needs_lookup(dep) {
-                let mut catalog = rustovate_datasource::Catalog::default();
-                catalog.versions.push(rustovate_datasource::Version {
-                    version: if dep.source == rustovate_config::Source::Go {
+                let mut catalog = patchula_datasource::Catalog::default();
+                catalog.versions.push(patchula_datasource::Version {
+                    version: if dep.source == patchula_config::Source::Go {
                         "v2.0.0"
-                    } else if dep.source == rustovate_config::Source::Docker {
+                    } else if dep.source == patchula_config::Source::Docker {
                         "2.0.0-alpine"
                     } else {
                         "2.0.0"

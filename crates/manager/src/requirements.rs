@@ -27,8 +27,8 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
                 .filter(|v| {
                     !v.starts_with('=')
                         && !v.contains(['*', ','])
-                        && rustovate_versioning::Versioning::parse(
-                            &rustovate_versioning::Ecosystem::Pep440,
+                        && patchula_versioning::Versioning::parse(
+                            &patchula_versioning::Ecosystem::Pep440,
                             v,
                         )
                         .is_ok()

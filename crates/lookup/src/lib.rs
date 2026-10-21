@@ -1,14 +1,14 @@
 //! Ordered repository policy evaluated over looked-up, batch-shared catalogs.
 #![forbid(unsafe_code)]
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
-use regex::Regex;
-use rustovate_config::{
+use patchula_config::{
     Config, DependencyKind, Manager, Patterns, Policy, Rule, Scheme, Source, Update, VersionPolicy,
 };
-use rustovate_datasource::{Catalog, Version};
-use rustovate_manager::Dependency;
-use rustovate_report::{HeldBack, ReleaseAge, Update as Proposal, UpdatePolicy, Window};
-use rustovate_versioning::{Ecosystem, Parsed, Versioning};
+use patchula_datasource::{Catalog, Version};
+use patchula_manager::Dependency;
+use patchula_report::{HeldBack, ReleaseAge, Update as Proposal, UpdatePolicy, Window};
+use patchula_versioning::{Ecosystem, Parsed, Versioning};
+use regex::Regex;
 use std::cmp::Ordering;
 
 pub type Result<T> = std::result::Result<T, String>;
@@ -102,7 +102,7 @@ impl Evaluator {
                 || !effective.policy.active
                 || (*kind == Update::Digest && !effective.digest)
         })
-        .map(|kind| rustovate_manager::word(&kind))
+        .map(|kind| patchula_manager::word(&kind))
         .collect()
     }
     pub fn lookup_evidence(
@@ -110,7 +110,7 @@ impl Evaluator {
         dep: &Dependency,
         catalog: Option<&Catalog>,
         now: DateTime<Utc>,
-    ) -> rustovate_report::LookupEvidence {
+    ) -> patchula_report::LookupEvidence {
         let scheme = scheme(dep).ok();
         let current = dep.resolved.as_deref().unwrap_or(&dep.current);
         let baseline = scheme.and_then(|s| s.parse(current).ok());
@@ -137,7 +137,7 @@ impl Evaluator {
                     .parse(value)
                     .is_ok_and(|v| scheme.order(&v, baseline).is_gt())
             {
-                rejected.push(rustovate_report::RejectedVersion {
+                rejected.push(patchula_report::RejectedVersion {
                     version: value.into(),
                     reason: if version.yanked {
                         "yanked"
@@ -150,7 +150,7 @@ impl Evaluator {
         }
         rejected.sort_by(|a, b| a.version.cmp(&b.version).then(a.reason.cmp(&b.reason)));
         rejected.dedup();
-        rustovate_report::LookupEvidence {
+        patchula_report::LookupEvidence {
             evaluated_at: timestamp(now),
             disabled_updates: self.disabled_updates(dep),
             rejected,
@@ -370,7 +370,7 @@ impl Evaluator {
                             kind: Update,
                             effective: &Effective<'_>|
          -> Result<bool> {
-            if effective.policy.channel == rustovate_config::ReleaseChannel::Lts {
+            if effective.policy.channel == patchula_config::ReleaseChannel::Lts {
                 let node = (dep.source == Source::Mise
                     && matches!(dep.package.as_str(), "node" | "core:node"))
                     || (dep.source == Source::GithubReleases
@@ -393,7 +393,7 @@ impl Evaluator {
             // The gate chooses proposals; it never removes extracted/current releases.
             if effective.policy.wait_hours == 0
                 || version.published_at.is_none()
-                || overrides.contains(&(selected.into(), rustovate_manager::word(&kind)))
+                || overrides.contains(&(selected.into(), patchula_manager::word(&kind)))
             {
                 return Ok(true);
             }
@@ -408,7 +408,7 @@ impl Evaluator {
                 version: selected.into(),
                 versions: vec![selected.into()],
                 count: 1,
-                update_type: rustovate_manager::word(&kind),
+                update_type: patchula_manager::word(&kind),
                 published_at: timestamp(published),
                 eligible_at: timestamp(until),
                 target_eligible_at: Some(timestamp(until)),
@@ -595,8 +595,8 @@ impl Evaluator {
                 continue;
             }
             if scheme == Ecosystem::Maven
-                && rustovate_versioning::maven_variant(&normalized)
-                    != rustovate_versioning::maven_variant(
+                && patchula_versioning::maven_variant(&normalized)
+                    != patchula_versioning::maven_variant(
                         baseline.2.as_deref().unwrap_or(&dep.current),
                     )
             {
@@ -878,11 +878,11 @@ fn proposal(
         new_value: value,
         new_version: version,
         new_digest: digest,
-        update_type: rustovate_manager::word(&update),
+        update_type: patchula_manager::word(&update),
         group: policy.group.clone().filter(|g| !g.is_empty()),
         policy: Some(UpdatePolicy {
-            versions: Some(rustovate_manager::word(&policy.versions)),
-            channel: Some(rustovate_manager::word(&policy.channel)),
+            versions: Some(patchula_manager::word(&policy.versions)),
+            channel: Some(patchula_manager::word(&policy.channel)),
             wait_hours: policy.wait_hours,
             windows: policy
                 .windows

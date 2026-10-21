@@ -10,9 +10,9 @@ pub use adapters::{parse_go_history, parse_release_sgml};
 pub use changelog::{Section, parse_changelog};
 use forge::releases_url;
 pub use markdown::{Links, sanitise};
+use patchula_cache::ExtractionKey;
+use patchula_versioning::Parsed;
 pub(crate) use releases::BodyCache;
-use rustovate_cache::ExtractionKey;
-use rustovate_versioning::Parsed;
 pub(crate) use source::mapped;
 pub use source::{Forge, ForgeKind, Repository};
 use std::{collections::BTreeSet, sync::Arc};
@@ -36,10 +36,10 @@ struct MirrorVersion {
     #[serde(default)]
     prerelease: bool,
 }
-fn compact_mirror(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheError> {
+fn compact_mirror(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     let list: MirrorList =
-        serde_json::from_slice(bytes).map_err(|_| rustovate_http::CacheError::Document)?;
-    serde_json::to_vec(&list).map_err(|_| rustovate_http::CacheError::Document)
+        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
+    serde_json::to_vec(&list).map_err(|_| patchula_http::CacheError::Document)
 }
 
 #[derive(Clone, Debug, Default)]

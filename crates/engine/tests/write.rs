@@ -1,10 +1,10 @@
 //! The same in-repo Pkl and token-only engine entry point used by the sandbox.
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use rustovate_cache::Cache;
-use rustovate_engine::{Engine, Options};
-use rustovate_http::{Exchange, Response, Transport};
-use rustovate_report::{ActionStatus, Report, Status};
-use rustovate_update::blob_sha;
+use patchula_cache::Cache;
+use patchula_engine::{Engine, Options};
+use patchula_http::{Exchange, Response, Transport};
+use patchula_report::{ActionStatus, Report, Status};
+use patchula_update::blob_sha;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -44,11 +44,11 @@ impl Transport for Authenticated {
         self.0.send(request)
     }
 }
-impl rustovate_github::Credentials for Rotating {
+impl patchula_github::Credentials for Rotating {
     fn scope(&self) -> &str {
         "offline-app:1/installation:10"
     }
-    fn token(&self) -> rustovate_github::Token<'_> {
+    fn token(&self) -> patchula_github::Token<'_> {
         let count = self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Box::pin(async move { Ok(format!("offline-token-{count}")) })
     }
@@ -66,7 +66,7 @@ async fn installation_and_caller_token_batches_match_and_token_rotation_keeps_re
     let cli = Engine::with_transport("offline-caller-token", cli_cache, 4, cli_fake)
         .unwrap()
         .with_versions_host(false)
-        .with_recheck(rustovate_engine::Recheck::Now);
+        .with_recheck(patchula_engine::Recheck::Now);
     let server = Engine::with_credentials(
         credentials.clone(),
         server_cache,
@@ -74,7 +74,7 @@ async fn installation_and_caller_token_batches_match_and_token_rotation_keeps_re
         Arc::new(Authenticated(server_fake.clone())),
     )
     .unwrap()
-    .with_recheck(rustovate_engine::Recheck::Now);
+    .with_recheck(patchula_engine::Recheck::Now);
     let options = || Options {
         repositories: vec!["demo/sandbox".into()],
         ..Default::default()
@@ -97,7 +97,7 @@ impl Fake {
     fn new(lock: bool) -> Self {
         Self {
         files:BTreeMap::from([
-            (".github/rustovate.pkl".into(),"amends \"../Rustovate.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n".into()),
+            (".github/patchula.pkl".into(),"amends \"../Patchula.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n".into()),
             ("package.json".into(),"{\n  \"dependencies\": {\"fixture\": \"1.0.0\"}\n}\n".into()),
         ]),lock,lock_name:"bun.lockb",writes:Default::default(),prs:Default::default(),issues:Default::default(),requests:Default::default(),latency:Default::default(),close_on_read:Default::default(),catalog:Mutex::new(json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}}})),fail_lookup:Default::default(),
         merge_settings: Mutex::new(json!({"id":"repo-id","autoMergeAllowed":false,"squashMergeAllowed":true,"mergeCommitAllowed":true,"rebaseMergeAllowed":true,"deleteBranchOnMerge":false})),
@@ -143,14 +143,14 @@ impl Transport for Fake {
             )
         } else if path == "/graphql" {
             assert!(request.headers()["authorization"].is_sensitive());
-            if body["query"] == rustovate_engine::REPOSITORY_HEAD_QUERY {
+            if body["query"] == patchula_engine::REPOSITORY_HEAD_QUERY {
                 (
                     200,
                     json!({"data":{"repository":{"defaultBranchRef":{"name":"main","target":{"oid":"base","tree":{"oid":"base-tree"}}}}}}),
                 )
             } else if body["query"] == "query{viewer{login}}" {
-                (200, json!({"data":{"viewer":{"login":"rustovate[bot]"}}}))
-            } else if body["query"] == rustovate_update::INVENTORY_QUERY {
+                (200, json!({"data":{"viewer":{"login":"patchula[bot]"}}}))
+            } else if body["query"] == patchula_update::INVENTORY_QUERY {
                 let prs = self.prs.lock().unwrap();
                 let nodes: Vec<_> = prs.iter().filter(|p|p["state"] == "open").map(|p|json!({
                     "name":p["head"]["ref"],"target":{"oid":p["head"]["sha"],"tree":{"oid":"updated-tree"},"signature":{"isValid":true}},
@@ -172,9 +172,9 @@ impl Transport for Fake {
                 repository["issues"] = json!({"nodes":self.issues.lock().unwrap().iter().filter(|i|i["state"] == "OPEN").cloned().collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false,"endCursor":null}});
                 (
                     200,
-                    json!({"data":{"viewer":{"login":"rustovate[bot]"},"nodes":closed,"repository":repository}}),
+                    json!({"data":{"viewer":{"login":"patchula[bot]"},"nodes":closed,"repository":repository}}),
                 )
-            } else if body["query"] == rustovate_update::automerge::CHECKS_QUERY {
+            } else if body["query"] == patchula_update::automerge::CHECKS_QUERY {
                 if self
                     .change_head_on_checks
                     .load(std::sync::atomic::Ordering::Relaxed)
@@ -215,7 +215,7 @@ impl Transport for Fake {
                     json!({"data":if enabled {json!({"enablePullRequestAutoMerge":{"pullRequest":{"id":"pr-1"}}})} else {json!({"disablePullRequestAutoMerge":{"pullRequest":{"id":"pr-1"}}})}}),
                 )
             } else {
-                assert_eq!(body["query"], rustovate_update::REF_UPDATE);
+                assert_eq!(body["query"], patchula_update::REF_UPDATE);
                 let deleting = body["variables"]["input"]["refUpdates"]
                     .as_array()
                     .unwrap()
@@ -239,7 +239,7 @@ impl Transport for Fake {
             let mut prs = self.prs.lock().unwrap();
             let pr = &mut prs[0];
             assert_eq!(body["sha"], pr["head"]["sha"]);
-            assert_eq!(pr["user"]["login"], "rustovate[bot]");
+            assert_eq!(pr["user"]["login"], "patchula[bot]");
             assert_eq!(pr["mergeable_state"], "clean");
             self.writes.lock().unwrap().push((path.into(), body));
             let merged = !self
@@ -292,7 +292,7 @@ impl Transport for Fake {
                 .push((path.into(), body.clone()));
             if path.ends_with("/pulls") {
                 let number = self.prs.lock().unwrap().len() + 1;
-                let pr = json!({"number":number,"node_id":format!("pr-{number}"),"html_url":format!("https://github.com/demo/sandbox/pull/{number}"),"title":body["title"],"body":body["body"],"state":"open","user":{"login":"rustovate[bot]"},"head":{"ref":body["head"],"sha":"new-commit","repo":{"full_name":"demo/sandbox"}},"base":{"ref":"main","repo":{"full_name":"demo/sandbox"}},"labels":[{"name":"dependencies"}],"auto_merge":null,"created_at":chrono::Utc::now().to_rfc3339(),"merged_at":null});
+                let pr = json!({"number":number,"node_id":format!("pr-{number}"),"html_url":format!("https://github.com/demo/sandbox/pull/{number}"),"title":body["title"],"body":body["body"],"state":"open","user":{"login":"patchula[bot]"},"head":{"ref":body["head"],"sha":"new-commit","repo":{"full_name":"demo/sandbox"}},"base":{"ref":"main","repo":{"full_name":"demo/sandbox"}},"labels":[{"name":"dependencies"}],"auto_merge":null,"created_at":chrono::Utc::now().to_rfc3339(),"merged_at":null});
                 let mut pr = pr;
                 pr["draft"] = json!(false);
                 pr["mergeable"] = json!(true);
@@ -306,7 +306,7 @@ impl Transport for Fake {
                 (201, json!({"id":1,"body":body["body"]}))
             } else if path.ends_with("/issues") {
                 let number = 100 + self.issues.lock().unwrap().len();
-                let issue = json!({"number":number,"id":format!("dashboard-{number}"),"title":body["title"],"body":body["body"],"state":"OPEN","author":{"__typename":"Bot","login":"rustovate"}});
+                let issue = json!({"number":number,"id":format!("dashboard-{number}"),"title":body["title"],"body":body["body"],"state":"OPEN","author":{"__typename":"Bot","login":"patchula"}});
                 self.issues.lock().unwrap().push(issue.clone());
                 (201, issue)
             } else if path.ends_with("/git/blobs") {
@@ -361,17 +361,17 @@ impl Transport for Fake {
                 json!({"encoding":"base64","content":STANDARD.encode(content)}),
             )
         } else if let Some(sha) = path.strip_prefix("/repos/demo/sandbox/commits/") {
-            // Every head the fake publishes is one signed rustovate commit.
+            // Every head the fake publishes is one signed patchula commit.
             (
                 200,
-                json!({"sha":sha,"commit":{"message":format!("update\n\nRustovate: v1\nRustovate-Branch: b\nRustovate-Base: {}", "b".repeat(40))}}),
+                json!({"sha":sha,"commit":{"message":format!("update\n\nPatchula: v1\nPatchula-Branch: b\nPatchula-Base: {}", "b".repeat(40))}}),
             )
         } else if let Some(spec) = path.strip_prefix("/repos/demo/sandbox/compare/") {
             let head = spec.split("...").nth(1).unwrap().split('?').next().unwrap();
             (
                 200,
-                json!({"total_commits":1,"commits":[{"sha":head,"author":{"login":"rustovate[bot]"},"committer":{"login":"web-flow"},
-                    "commit":{"message":"update\n\nRustovate: v1\nRustovate-Branch: b","verification":{"verified":true}}}]}),
+                json!({"total_commits":1,"commits":[{"sha":head,"author":{"login":"patchula[bot]"},"committer":{"login":"web-flow"},
+                    "commit":{"message":"update\n\nPatchula: v1\nPatchula-Branch: b","verification":{"verified":true}}}]}),
             )
         } else if path.ends_with("/git/commits/base") {
             (200, json!({"tree":{"sha":"base-tree"}}))
@@ -475,7 +475,7 @@ async fn steady_runs_only_lookup_and_one_inventory_with_open_or_closed_updates()
             requests
                 .iter()
                 .filter(|(_, path, body)| path == "/graphql"
-                    && body["query"] == rustovate_update::INVENTORY_QUERY)
+                    && body["query"] == patchula_update::INVENTORY_QUERY)
                 .count(),
             1
         );
@@ -556,13 +556,13 @@ async fn dashboard_renames_are_preserved_and_disabling_closes_only_the_owned_iss
         fake.writes.lock().unwrap().is_empty(),
         "unchanged content hash must converge after one patch"
     );
-    let mut config = rustovate_config::load(std::path::Path::new("../../Rustovate.pkl")).unwrap();
+    let mut config = patchula_config::load(std::path::Path::new("../../Patchula.pkl")).unwrap();
     config.prs.dashboard = false;
     config.defaults.wait_hours = 0;
     run(Some(config)).await.unwrap();
     assert_eq!(fake.issues.lock().unwrap()[0]["state"], "CLOSED");
     fake.writes.lock().unwrap().clear();
-    let mut config = rustovate_config::load(std::path::Path::new("../../Rustovate.pkl")).unwrap();
+    let mut config = patchula_config::load(std::path::Path::new("../../Patchula.pkl")).unwrap();
     config.prs.dashboard = false;
     config.defaults.wait_hours = 0;
     run(Some(config)).await.unwrap();
@@ -719,7 +719,7 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
                 .unwrap()
                 .iter()
                 .any(|(_, path, body)| path.ends_with("/merge")
-                    || body["query"] == rustovate_update::automerge::CHECKS_QUERY),
+                    || body["query"] == patchula_update::automerge::CHECKS_QUERY),
             "{case}: new PR must wait for another run"
         );
         match case {
@@ -791,7 +791,7 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
         let deletes: Vec<_> = requests
             .iter()
             .filter(|(_, _, b)| {
-                b["query"] == rustovate_update::REF_UPDATE
+                b["query"] == patchula_update::REF_UPDATE
                     && b["variables"]["input"]["refUpdates"][1]["afterOid"]
                         == "0000000000000000000000000000000000000000"
             })
@@ -813,13 +813,13 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
             .to_owned();
         if merges {
             assert!(
-                dashboard.contains("## Merged PRs") && dashboard.contains("merged by rustovate"),
+                dashboard.contains("## Merged PRs") && dashboard.contains("merged by patchula"),
                 "{case}: {dashboard}"
             );
             let bytes = cache
-                .extraction_get(&rustovate_cache::ExtractionKey {
+                .extraction_get(&patchula_cache::ExtractionKey {
                     repo: "demo/sandbox".into(),
-                    default_branch_commit: "rustovate/".into(),
+                    default_branch_commit: "patchula/".into(),
                     config_hash: "verified-write-receipts-v3".into(),
                 })
                 .await
@@ -832,23 +832,19 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
                     .is_empty(),
                 "merged heads must not remain eligible for another merge"
             );
-            let github = rustovate_github::Client::with_transport(
+            let github = patchula_github::Client::with_transport(
                 "offline-installation",
                 cache.clone(),
                 Default::default(),
                 fake.clone(),
             )
             .unwrap();
-            let inventory = rustovate_update::Inventory::read(
-                &github,
-                &cache,
-                &report.repositories[0],
-                &config,
-            )
-            .await
-            .unwrap();
-            let prs = rustovate_update::automerge::dashboard_prs(&inventory, "demo/sandbox", &[]);
-            let next_dashboard = rustovate_update::dashboard::render(
+            let inventory =
+                patchula_update::Inventory::read(&github, &cache, &report.repositories[0], &config)
+                    .await
+                    .unwrap();
+            let prs = patchula_update::automerge::dashboard_prs(&inventory, "demo/sandbox", &[]);
+            let next_dashboard = patchula_update::dashboard::render(
                 &report.repositories[0],
                 &[],
                 &prs,
@@ -856,7 +852,7 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
             );
             assert!(
                 next_dashboard.contains("## Merged PRs")
-                    && next_dashboard.contains("merged by rustovate"),
+                    && next_dashboard.contains("merged by patchula"),
                 "merged outcomes must survive the next inventory: {next_dashboard}"
             );
         } else if !matches!(case, "human-head" | "head-race" | "human-owner") {
@@ -873,7 +869,7 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
             assert_eq!(
                 requests
                     .iter()
-                    .filter(|(_, _, b)| b["query"] == rustovate_update::automerge::CHECKS_QUERY)
+                    .filter(|(_, _, b)| b["query"] == patchula_update::automerge::CHECKS_QUERY)
                     .count(),
                 2
             );
@@ -882,7 +878,7 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
             assert!(
                 !requests
                     .iter()
-                    .any(|(_, _, b)| b["query"] == rustovate_update::automerge::CHECKS_QUERY)
+                    .any(|(_, _, b)| b["query"] == patchula_update::automerge::CHECKS_QUERY)
             );
         }
     }
@@ -926,7 +922,7 @@ async fn auto_merge_uses_inventory_methods_and_prefers_native_without_status_rea
         assert_eq!(
             requests
                 .iter()
-                .filter(|(_, _, b)| b["query"] == rustovate_update::INVENTORY_QUERY)
+                .filter(|(_, _, b)| b["query"] == patchula_update::INVENTORY_QUERY)
                 .count(),
             1
         );
@@ -941,13 +937,13 @@ async fn auto_merge_uses_inventory_methods_and_prefers_native_without_status_rea
         assert!(
             !requests
                 .iter()
-                .any(|(_, _, b)| b["query"] == rustovate_update::REF_UPDATE),
+                .any(|(_, _, b)| b["query"] == patchula_update::REF_UPDATE),
             "GitHub deletes branches in this case"
         );
         if method == "native" {
             assert!(!fake.prs.lock().unwrap()[0]["auto_merge"].is_null());
             assert!(!requests.iter().any(|(_, path, b)| path.ends_with("/merge")
-                || b["query"] == rustovate_update::automerge::CHECKS_QUERY));
+                || b["query"] == patchula_update::automerge::CHECKS_QUERY));
             assert_eq!(
                 requests.len(),
                 4,
@@ -982,7 +978,7 @@ async fn manual_create_age_and_schedule_permits_do_not_authorize_fallback_mergin
             config.defaults.wait_hours = 24;
             *fake.catalog.lock().unwrap() = json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}},"time":{"2.0.0":now.to_rfc3339()}});
         } else {
-            config.defaults.windows = vec![rustovate_config::Window {
+            config.defaults.windows = vec![patchula_config::Window {
                 cron: vec!["0 0 1 1 *".into()],
                 zone: "UTC".into(),
             }];
@@ -1000,7 +996,7 @@ async fn manual_create_age_and_schedule_permits_do_not_authorize_fallback_mergin
                 .unwrap()
                 .iter()
                 .any(|(_, path, b)| path.ends_with("/merge")
-                    || b["query"] == rustovate_update::automerge::CHECKS_QUERY),
+                    || b["query"] == patchula_update::automerge::CHECKS_QUERY),
             "{hold}"
         );
         if hold == "age" {
@@ -1017,8 +1013,8 @@ async fn manual_create_age_and_schedule_permits_do_not_authorize_fallback_mergin
     }
 }
 
-fn checkbox_config() -> rustovate_config::Config {
-    let mut config = rustovate_config::load(std::path::Path::new("../../Rustovate.pkl")).unwrap();
+fn checkbox_config() -> patchula_config::Config {
+    let mut config = patchula_config::load(std::path::Path::new("../../Patchula.pkl")).unwrap();
     config.prs.dashboard = true;
     config.defaults.wait_hours = 0;
     config
@@ -1154,7 +1150,7 @@ async fn age_cached_catalogs_refresh_for_checked_pr_and_repository_controls_only
 }
 async fn checkbox_run(
     engine: &Engine,
-    config: &rustovate_config::Config,
+    config: &patchula_config::Config,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Report {
     let report = engine
@@ -1185,10 +1181,10 @@ fn tick_dashboard(fake: &Fake, action: &str) {
         .find(|l| l.contains(&format!("\"action\":\"{action}\"")))
         .unwrap();
     // Wording deliberately changes: only the hidden marker may select behavior.
-    let marker = line.split_once("<!-- rustovate-action:").unwrap().1;
+    let marker = line.split_once("<!-- patchula-action:").unwrap().1;
     issues[0]["body"] = json!(body.replace(
         line,
-        &format!("- [X] Operator-edited wording <!-- rustovate-action:{marker}")
+        &format!("- [X] Operator-edited wording <!-- patchula-action:{marker}")
     ));
 }
 fn assert_unticked(fake: &Fake) {
@@ -1197,7 +1193,7 @@ fn assert_unticked(fake: &Fake) {
         .lock()
         .unwrap()
         .iter()
-        .filter(|i| i["state"] == "OPEN" && i["author"]["login"] == "rustovate")
+        .filter(|i| i["state"] == "OPEN" && i["author"]["login"] == "patchula")
     {
         let body = issue["body"].as_str().unwrap();
         assert!(!body.contains("- [x]") && !body.contains("- [X]"), "{body}");
@@ -1303,7 +1299,7 @@ async fn dashboard_create_click_bypasses_concurrent_hourly_and_schedule_holds() 
             config.prs.per_hour = Some(1);
         }
         if reason == "schedule" {
-            config.defaults.windows = vec![rustovate_config::Window {
+            config.defaults.windows = vec![patchula_config::Window {
                 cron: vec!["0 0 1 1 *".into()],
                 zone: "UTC".into(),
             }];
@@ -1378,7 +1374,7 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
                 let mut issues = fake.issues.lock().unwrap();
                 let body = issues[0]["body"].as_str().unwrap();
                 issues[0]["body"] = json!(format!(
-                    "{body}\n- [x] Retry <!-- rustovate-action:{{\"action\":\"retry\",\"target\":\"{}\"}} -->",
+                    "{body}\n- [x] Retry <!-- patchula-action:{{\"action\":\"retry\",\"target\":\"{}\"}} -->",
                     "a".repeat(64)
                 ));
             } else {
@@ -1404,7 +1400,7 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
             assert_eq!(
                 requests
                     .iter()
-                    .filter(|(_, _, body)| body["query"] == rustovate_update::INVENTORY_QUERY)
+                    .filter(|(_, _, body)| body["query"] == patchula_update::INVENTORY_QUERY)
                     .count(),
                 1
             );
@@ -1593,10 +1589,10 @@ async fn human_authored_dashboard_checkboxes_never_request_branch_work() {
     );
     assert_eq!(fake.issues.lock().unwrap().len(), 2);
 }
-impl rustovate_update::lockfiles::Executor for FailTools {
+impl patchula_update::lockfiles::Executor for FailTools {
     fn run(
         &self,
-        _: rustovate_update::lockfiles::CommandSpec,
+        _: patchula_update::lockfiles::CommandSpec,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + Send + '_>>
     {
         Box::pin(async { Err("fixture tool unavailable".into()) })
@@ -1609,7 +1605,7 @@ async fn lockfile_failure_is_a_branch_error_and_publishes_no_manifest_only_branc
     let fake = Arc::new(fake);
     let temp = tempfile::tempdir().unwrap();
     let runner =
-        rustovate_update::lockfiles::Runner::new(temp.path().into(), "offline-installation")
+        patchula_update::lockfiles::Runner::new(temp.path().into(), "offline-installation")
             .with_executor(Arc::new(FailTools));
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
@@ -1683,15 +1679,15 @@ async fn batching_moves_updates_into_one_pr_and_never_suppresses_them() {
         update[0]["body"]
             .as_str()
             .unwrap()
-            .contains("rustovate-batch-add")
+            .contains("patchula-batch-add")
     );
 
     // Ticking the box moves the update into the batch PR and closes the PR.
-    tick_pr(&fake, number, "rustovate-batch-add");
+    tick_pr(&fake, number, "patchula-batch-add");
     checkbox_run(&engine, &config, now).await;
     let open = open_prs(&fake);
     assert_eq!(open.len(), 1, "{open:?}");
-    assert_eq!(open[0]["head"]["ref"], "rustovate/batch");
+    assert_eq!(open[0]["head"]["ref"], "patchula/batch");
     let batch = open[0]["number"].as_u64().unwrap();
     let body = open[0]["body"].as_str().unwrap();
     assert!(body.contains(&format!("(from #{number})")), "{body}");
@@ -1708,7 +1704,7 @@ async fn batching_moves_updates_into_one_pr_and_never_suppresses_them() {
         closed["body"]
             .as_str()
             .unwrap()
-            .contains("rustovate-closed:batched")
+            .contains("patchula-closed:batched")
     );
     assert!(fake.writes.lock().unwrap().iter().any(|(p, b)| {
         p.ends_with(&format!("/issues/{number}/comments"))
@@ -1728,7 +1724,7 @@ async fn batching_moves_updates_into_one_pr_and_never_suppresses_them() {
     assert_eq!(open[0]["number"], batch);
 
     // Removing the item returns the update to its own PR; the empty batch closes.
-    tick_pr(&fake, batch, "rustovate-batch-remove");
+    tick_pr(&fake, batch, "patchula-batch-remove");
     checkbox_run(&engine, &config, now).await;
     let open = open_prs(&fake);
     assert_eq!(open.len(), 1, "{open:?}");
@@ -1736,10 +1732,10 @@ async fn batching_moves_updates_into_one_pr_and_never_suppresses_them() {
     let returned = open[0]["number"].as_u64().unwrap();
 
     // Closing a batch without merging returns its updates too.
-    tick_pr(&fake, returned, "rustovate-batch-add");
+    tick_pr(&fake, returned, "patchula-batch-add");
     checkbox_run(&engine, &config, now).await;
     let open = open_prs(&fake);
-    assert_eq!(open[0]["head"]["ref"], "rustovate/batch");
+    assert_eq!(open[0]["head"]["ref"], "patchula/batch");
     let second = open[0]["number"].as_u64().unwrap();
     fake.prs
         .lock()

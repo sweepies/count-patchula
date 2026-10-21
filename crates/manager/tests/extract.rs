@@ -1,7 +1,7 @@
-use rustovate_config::{DependencyKind, Manager};
-use rustovate_manager::{Files, Scanner};
-fn config() -> rustovate_config::Config {
-    rustovate_config::load(std::path::Path::new(concat!(
+use patchula_config::{DependencyKind, Manager};
+use patchula_manager::{Files, Scanner};
+fn config() -> patchula_config::Config {
+    patchula_config::load(std::path::Path::new(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../examples/renovate-runner.pkl"
     )))
@@ -100,7 +100,7 @@ fn action_comment_digest_only_and_ref_models_keep_edit_format() {
         Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     );
     assert_eq!(
-        rustovate_manager::action_replacement(&deps[0], text, "v2.0.0", Some(&"c".repeat(40)))
+        patchula_manager::action_replacement(&deps[0], text, "v2.0.0", Some(&"c".repeat(40)))
             .unwrap(),
         format!(
             "'org/action/path@{}' #  v2.0.0 trailing note",
@@ -151,7 +151,7 @@ fn hosted_runner_locations_do_not_select_identical_self_hosted_labels_or_run_tex
     assert_eq!(deps.len(), 1);
     assert_eq!(deps[0].location.start, text.rfind("ubuntu-22.04").unwrap());
     assert_eq!(
-        rustovate_manager::runner_replacement(&deps[0], text, "24.04").unwrap(),
+        patchula_manager::runner_replacement(&deps[0], text, "24.04").unwrap(),
         "ubuntu-24.04"
     );
 }
@@ -189,11 +189,11 @@ fn npm_is_strict_json_and_bun_lock_is_jsonc() {
 /// skipped with a warning while the rest of the repository is extracted.
 #[test]
 fn unparseable_files_are_skipped_with_a_warning() {
-    let defaults = rustovate_config::load_files(
-        "/repo/rustovate.pkl",
+    let defaults = patchula_config::load_files(
+        "/repo/patchula.pkl",
         std::collections::BTreeMap::from([(
-            "/repo/rustovate.pkl".into(),
-            "amends \"Rustovate.pkl\"".into(),
+            "/repo/patchula.pkl".into(),
+            "amends \"Patchula.pkl\"".into(),
         )]),
     )
     .unwrap();
@@ -338,7 +338,7 @@ coverage = "7.6.0"
         }
     }
     let poetry = deps.iter().find(|d| d.name == "rich").unwrap();
-    assert_eq!(poetry.scheme, rustovate_config::Scheme::Poetry);
+    assert_eq!(poetry.scheme, patchula_config::Scheme::Poetry);
     let groups = deps.iter().find(|d| d.name == "ruff").unwrap();
     assert_eq!(groups.kind, DependencyKind::Development);
 }
@@ -369,7 +369,7 @@ fn pre_commit_revs_use_github_or_forge_tags() {
         .iter()
         .map(|d| (d.source, d.package.as_str(), d.current.as_str()))
         .collect();
-    use rustovate_config::Source;
+    use patchula_config::Source;
     assert_eq!(
         got,
         [

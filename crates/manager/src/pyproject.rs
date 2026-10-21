@@ -289,7 +289,7 @@ fn python_version(path: &str, text: &str) -> Vec<Dependency> {
         return Vec::new();
     }
     let start = text.find(token).expect("token from text");
-    let resolution = rustovate_mise::resolve("python");
+    let resolution = patchula_mise::resolve("python");
     let (source, package, extract) = resolution.map_or_else(
         || (Source::Mise, "python".into(), None),
         |r| (r.source, r.package, r.extract),

@@ -1,7 +1,7 @@
 //! Resolve non-App webhooks without persisting JWTs or installation tokens.
 use crate::settings::valid_repo;
-use rustovate_cache::{Cache, installations::Mapping};
-use rustovate_github::app::App;
+use patchula_cache::{Cache, installations::Mapping};
+use patchula_github::app::App;
 use serde_json::Value;
 use std::{collections::BTreeMap, sync::Arc};
 use tokio::sync::Mutex;

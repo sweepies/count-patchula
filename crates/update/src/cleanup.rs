@@ -1,6 +1,6 @@
 use crate::{Plan, REF_UPDATE};
-use rustovate_github::Client;
-use rustovate_report::{ActionStatus, BranchAction};
+use patchula_github::Client;
+use patchula_report::{ActionStatus, BranchAction};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
@@ -18,7 +18,7 @@ pub async fn owned(client: &Client, repo: &str, head: &str, actor: &str) -> Resu
         .await
         .map_err(|e| e.to_string())?;
     let message = tip["commit"]["message"].as_str().unwrap_or("");
-    let Some(base) = trailer(message, "Rustovate-Base: ") else {
+    let Some(base) = trailer(message, "Patchula-Base: ") else {
         return Ok(false);
     };
     if !base.bytes().all(|b| b.is_ascii_hexdigit()) || base.len() != 40 {
@@ -41,8 +41,8 @@ pub async fn owned(client: &Client, repo: &str, head: &str, actor: &str) -> Resu
             c["author"]["login"] == actor
                 && (c["committer"]["login"] == actor || c["committer"]["login"] == "web-flow")
                 && c["commit"]["verification"]["verified"] == true
-                && trailer(message, "Rustovate: ") == Some("v1")
-                && trailer(message, "Rustovate-Branch: ").is_some()
+                && trailer(message, "Patchula: ") == Some("v1")
+                && trailer(message, "Patchula-Branch: ").is_some()
         }))
 }
 
@@ -105,7 +105,7 @@ pub async fn cleanup(
             branch: name.into(),
             base_commit: base.into(),
             status: ActionStatus::Deleted,
-            reason: Some("obsolete rustovate update".into()),
+            reason: Some("obsolete patchula update".into()),
             message: String::new(),
             previous_commit: Some(head.into()),
             commit: None,

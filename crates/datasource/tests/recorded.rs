@@ -1,10 +1,10 @@
 //! Public endpoints recorded by this implementation; normal tests only replay.
-use rustovate_cache::{Cache, Options as CacheOptions};
-use rustovate_config::Source;
-use rustovate_datasource::Client;
-use rustovate_github::Options as GithubOptions;
-use rustovate_http::{Cached, Network};
-use rustovate_testkit::{Options, Redactor};
+use patchula_cache::{Cache, Options as CacheOptions};
+use patchula_config::Source;
+use patchula_datasource::Client;
+use patchula_github::Options as GithubOptions;
+use patchula_http::{Cached, Network};
+use patchula_testkit::{Options, Redactor};
 use std::{path::Path, sync::Arc};
 
 /// Explicit public-only refresh when a GitHub recording credential is absent.
@@ -12,9 +12,9 @@ use std::{path::Path, sync::Arc};
 #[tokio::test]
 #[ignore = "live public npm recording; use mise run fixtures:refresh-npm"]
 async fn refresh_public_npm_metadata() {
-    use rustovate_http::Transport;
-    use rustovate_testkit::{Cassette, Recorder};
-    assert_eq!(std::env::var("RUSTOVATE_RECORD").as_deref(), Ok("1"));
+    use patchula_http::Transport;
+    use patchula_testkit::{Cassette, Recorder};
+    assert_eq!(std::env::var("PATCHULA_RECORD").as_deref(), Ok("1"));
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
     for relative in ["datasource/public-sources.json", "engine/public-batch.json"] {
         let path = root.join(relative);
@@ -26,7 +26,7 @@ async fn refresh_public_npm_metadata() {
             &recorded,
             Options::default(),
             Arc::new(Network::new().unwrap()),
-            "Full public npm metadata recorded by rustovate".into(),
+            "Full public npm metadata recorded by patchula".into(),
         );
         for interaction in &mut cassette.interactions {
             if interaction
@@ -55,14 +55,14 @@ async fn refresh_public_npm_metadata() {
                 && (i.request.url.starts_with("https://registry.npmjs.org/")
                     || i.request.url.starts_with("https://index.crates.io/")))
         });
-        cassette.provenance.push_str("; npm full metadata refreshed from public registry by rustovate on 2026-10-15; unused warm registry 304 reads removed for HTTP freshness");
-        rustovate_testkit::save(&path, &cassette, &Redactor::default()).unwrap();
+        cassette.provenance.push_str("; npm full metadata refreshed from public registry by patchula on 2026-10-15; unused warm registry 304 reads removed for HTTP freshness");
+        patchula_testkit::save(&path, &cassette, &Redactor::default()).unwrap();
     }
 }
 
 #[tokio::test]
 async fn public_sources_cold_and_conditional_warm() {
-    let token = if std::env::var("RUSTOVATE_RECORD").as_deref() == Ok("1") {
+    let token = if std::env::var("PATCHULA_RECORD").as_deref() == Ok("1") {
         std::env::var("GH_TOKEN")
             .or_else(|_| std::env::var("GITHUB_TOKEN"))
             .expect("recording needs token")
@@ -71,7 +71,7 @@ async fn public_sources_cold_and_conditional_warm() {
     };
     let path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/datasource/public-sources.json");
-    let transport = rustovate_testkit::from_env(
+    let transport = patchula_testkit::from_env(
         &path,
         Options {
             redactor: Redactor::default().with_literals([token.clone()]),
@@ -84,7 +84,7 @@ async fn public_sources_cold_and_conditional_warm() {
     let cache = Cache::open(dir.path().join("cache.sqlite"), CacheOptions::default())
         .await
         .unwrap();
-    let github = rustovate_github::Client::with_transport(
+    let github = patchula_github::Client::with_transport(
         &token,
         cache.clone(),
         GithubOptions::default(),
@@ -137,7 +137,7 @@ async fn public_sources_cold_and_conditional_warm() {
         4,
         "warm GitHub has release and tag-release heads, one tag namespace and one ref read"
     );
-    if std::env::var("RUSTOVATE_RECORD").as_deref() != Ok("1") {
+    if std::env::var("PATCHULA_RECORD").as_deref() != Ok("1") {
         assert_eq!(after_g.not_modified - before_g.not_modified, 2);
     }
     assert!(

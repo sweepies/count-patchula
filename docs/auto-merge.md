@@ -5,7 +5,7 @@ and mixed policies cannot merge. The shared GraphQL inventory reads
 `autoMergeAllowed`, enabled merge methods, repository ID and
 `deleteBranchOnMerge`. It adds no settings-only request to a steady run.
 
-When native auto-merge is allowed, rustovate enables GitHub's native mechanism
+When native auto-merge is allowed, patchula enables GitHub's native mechanism
 using the enabled squash, merge, or rebase method, in that preference order.
 The mutation includes `expectedHeadOid`; no status polling is added for native
 auto-merge. Permission failures remain errors and are not silently converted
@@ -44,7 +44,7 @@ are the public API evidence used here. The native availability fields are in the
 No Renovate implementation source was used.
 
 After an acknowledged fallback merge, GitHub auto-deletes the head if configured.
-Otherwise rustovate atomically deletes only the exact receipt head with a lease
+Otherwise patchula atomically deletes only the exact receipt head with a lease
 on the returned merged base SHA. A moved base/head or changed protection cannot
 delete unfamiliar work: cleanup is deferred and included in the merged outcome.
 Ordinary later-run obsolete-branch cleanup can retry it. Transport/5xx merge
@@ -60,7 +60,7 @@ for newly created heads, disabled/mixed policies, policy holds or native mode.
 ## Sandbox configuration
 
 Keep the existing `amends`, dashboard and zero-age sandbox settings. Append this
-rule to `.github/rustovate.pkl` (or add the rule inside its existing `rules` list):
+rule to `.github/patchula.pkl` (or add the rule inside its existing `rules` list):
 
 ```pkl
 rules = new Listing {
@@ -87,7 +87,7 @@ sandbox with native auto-merge unavailable, the second eligible run should show
 `merged` and the dashboard outcome. No successful checks means no merge. The
 existing installation needs read access to checks/statuses plus the PR/contents
 write permissions already needed for publication. Missing access is reported;
-rustovate never changes repository auto-merge settings or branch protections.
+patchula never changes repository auto-merge settings or branch protections.
 
 Offline engine tests cover successful check/status combinations, neutral/skipped,
 no checks, pending/failure/cancellation, failure beyond the first page, drafts,

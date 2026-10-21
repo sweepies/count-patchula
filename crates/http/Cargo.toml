@@ -1,5 +1,5 @@
 [package]
-name = "rustovate-http"
+name = "patchula-http"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,7 +13,7 @@ workspace = true
 base64 = "0.22"
 httpdate = "1"
 reqwest.workspace = true
-rustovate-cache = { version = "0.1.0", path = "../cache" }
+patchula-cache = { version = "0.1.0", path = "../cache" }
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
 tokio.workspace = true

@@ -1,15 +1,15 @@
 //! Comparison CLI; lookup/run themselves remain Phase 1 work.
 #![forbid(unsafe_code)]
 
-use rustovate_conformance::{Error, Rules, compare, parse_logs_with_diagnostics, run_renovate};
-use rustovate_report::Report;
+use patchula_conformance::{Error, Rules, compare, parse_logs_with_diagnostics, run_renovate};
+use patchula_report::Report;
 use std::{path::PathBuf, process::ExitCode};
 use usage_rs::Cli;
 
 #[derive(Cli)]
-#[usage(bin = "rustovate-conformance", version)]
+#[usage(bin = "patchula-conformance", version)]
 struct App {
-    /// Versioned rustovate report JSON (required).
+    /// Versioned patchula report JSON (required).
     #[usage(long)]
     report: PathBuf,
     /// Existing Renovate debug JSON-lines log; omit to run pinned Renovate.
@@ -92,7 +92,7 @@ fn run(app: App) -> Result<(), Error> {
             .renovate
             .repositories
             .iter()
-            .filter(|r| r.status == rustovate_report::Status::Complete)
+            .filter(|r| r.status == patchula_report::Status::Complete)
             .count(),
         triage.no_baseline.len(),
         triage.differences.len(),

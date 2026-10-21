@@ -1,4 +1,4 @@
-amends "../Rustovate.pkl"
+amends "../Patchula.pkl"
 
 prs { dashboard = true }
 defaults { waitHours = 0 }

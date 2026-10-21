@@ -2,9 +2,9 @@
 //! with their release times. Minified entries always carry version and time.
 use super::*;
 
-fn versions(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheError> {
+fn versions(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     let document: serde_json::Value =
-        serde_json::from_slice(bytes).map_err(|_| rustovate_http::CacheError::Document)?;
+        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
     let entries = document["packages"]
         .as_object()
         .and_then(|p| p.values().next())
@@ -23,7 +23,7 @@ fn versions(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheE
             })
         })
         .collect();
-    serde_json::to_vec(&versions).map_err(|_| rustovate_http::CacheError::Document)
+    serde_json::to_vec(&versions).map_err(|_| patchula_http::CacheError::Document)
 }
 
 impl Client {

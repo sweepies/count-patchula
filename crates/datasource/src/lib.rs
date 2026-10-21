@@ -11,10 +11,10 @@ mod nuget;
 mod packagist;
 mod registries;
 mod rubygems;
-use rustovate_cache::{Cache, Release};
-use rustovate_config::Source;
-use rustovate_http::Cached;
-use rustovate_versioning::{Ecosystem, Versioning};
+use patchula_cache::{Cache, Release};
+use patchula_config::Source;
+use patchula_http::Cached;
+use patchula_versioning::{Ecosystem, Versioning};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -23,11 +23,11 @@ mod versions_host;
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
-    Http(#[from] rustovate_http::CacheError),
+    Http(#[from] patchula_http::CacheError),
     #[error(transparent)]
-    Github(#[from] rustovate_github::Error),
+    Github(#[from] patchula_github::Error),
     #[error(transparent)]
-    Cache(#[from] rustovate_cache::Error),
+    Cache(#[from] patchula_cache::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error("invalid package identity or upstream payload")]
@@ -64,7 +64,7 @@ impl From<Release> for Version {
 }
 #[derive(Clone)]
 pub struct Client {
-    pub(crate) github: rustovate_github::Client,
+    pub(crate) github: patchula_github::Client,
     pub(crate) http: Cached,
     pub(crate) cache: Cache,
     tokens: docker::Tokens,
@@ -82,7 +82,7 @@ impl Client {
         client.http = client.http.revalidating();
         client
     }
-    pub fn new(github: rustovate_github::Client, http: Cached, cache: Cache) -> Self {
+    pub fn new(github: patchula_github::Client, http: Cached, cache: Cache) -> Self {
         Self {
             github,
             http,
@@ -298,7 +298,7 @@ impl Client {
             .await;
         let response = match response {
             Ok(v) => v,
-            Err(rustovate_http::CacheError::Status(404 | 406)) => {
+            Err(patchula_http::CacheError::Status(404 | 406)) => {
                 return self.pypi_simple(&package).await;
             }
             Err(e) => return Err(e.into()),

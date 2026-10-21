@@ -1,7 +1,7 @@
-use rustovate_config::{DependencyKind, Manager, Source};
-use rustovate_manager::{Files, Scanner};
-fn extract(files: &Files) -> Vec<rustovate_manager::Dependency> {
-    let config = rustovate_config::load(std::path::Path::new(concat!(
+use patchula_config::{DependencyKind, Manager, Source};
+use patchula_manager::{Files, Scanner};
+fn extract(files: &Files) -> Vec<patchula_manager::Dependency> {
+    let config = patchula_config::load(std::path::Path::new(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../examples/maccrae-infra.pkl"
     )))

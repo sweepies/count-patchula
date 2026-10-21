@@ -1,9 +1,9 @@
 //! Independently simulated registry metadata from ecosystem specifications.
-use rustovate_cache::Cache;
-use rustovate_config::Source;
-use rustovate_datasource::{Client, escape_go};
-use rustovate_http::Cached;
-use rustovate_testkit::{Body, Cassette, Interaction, RecordedRequest, RecordedResponse, Replay};
+use patchula_cache::Cache;
+use patchula_config::Source;
+use patchula_datasource::{Client, escape_go};
+use patchula_http::Cached;
+use patchula_testkit::{Body, Cassette, Interaction, RecordedRequest, RecordedResponse, Replay};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
 #[tokio::test]
@@ -12,12 +12,12 @@ async fn registry_flags_tags_and_sparse_layout_are_preserved() {
     let path = dir.path().join("metadata.json");
     let interactions=[("https://registry.npmjs.org/spec-package","application/json",Body::Json(json!({"dist-tags":{"latest":"2.0.0","next":"3.0.0-beta.1"},"time":{"2.0.0":"2026-10-14T00:00:00Z"},"versions":{"1.0.0":{"deprecated":"use new API"},"2.0.0":{},"3.0.0-beta.1":{}}}))),
         ("https://index.crates.io/sp/ec/spec-package","text/plain",Body::Text("{\"vers\":\"1.0.0\",\"yanked\":false}\n{\"vers\":\"2.0.0\",\"yanked\":true}\n".into()))].into_iter().map(|(url,accept,body)|Interaction{request:RecordedRequest{method:"GET".into(),url:url.into(),headers:BTreeMap::from([("accept".into(),vec![accept.into()])]),body:Body::Text(String::new())},response:RecordedResponse{status:200,headers:Default::default(),body}}).collect();
-    rustovate_testkit::save(&path,&Cassette{schema_version:1,provenance:"Simulated from npm metadata and Cargo sparse-index specifications, independently written".into(),interactions},&Default::default()).unwrap();
+    patchula_testkit::save(&path,&Cassette{schema_version:1,provenance:"Simulated from npm metadata and Cargo sparse-index specifications, independently written".into(),interactions},&Default::default()).unwrap();
     let replay = Arc::new(Replay::open(&path, Default::default()).unwrap());
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await
         .unwrap();
-    let github = rustovate_github::Client::with_transport(
+    let github = patchula_github::Client::with_transport(
         "offline",
         cache.clone(),
         Default::default(),

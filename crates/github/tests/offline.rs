@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
 
-use rustovate_cache::{Cache, Options as CacheOptions};
-use rustovate_github::{Client, Error, GraphqlPage, Options};
-use rustovate_http::{Exchange, Response, Transport};
-use rustovate_testkit::{Options as FixtureOptions, Replay};
+use patchula_cache::{Cache, Options as CacheOptions};
+use patchula_github::{Client, Error, GraphqlPage, Options};
+use patchula_http::{Exchange, Response, Transport};
+use patchula_testkit::{Options as FixtureOptions, Replay};
 use serde_json::{Value, json};
 use std::{
     path::Path,
@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-const QUERY: &str = "query($cursor: String) { repository(owner: \"rustovate\", name: \"simulated\") { releases(first: 2, after: $cursor) { nodes { name } pageInfo { hasNextPage endCursor } } } }";
+const QUERY: &str = "query($cursor: String) { repository(owner: \"patchula\", name: \"simulated\") { releases(first: 2, after: $cursor) { nodes { name } pageInfo { hasNextPage endCursor } } } }";
 const TOKEN: &str = "ghp_privateTestCredential123";
 
 async fn client(name: &str, options: Options) -> (tempfile::TempDir, Client, Arc<Replay>) {
@@ -202,7 +202,7 @@ impl Transport for Concurrent {
     fn send(&self, request: reqwest::Request) -> Exchange<'_> {
         Box::pin(async move {
             assert!(request.headers()["authorization"].is_sensitive());
-            assert_eq!(request.headers()["user-agent"], "rustovate/0.1.0");
+            assert_eq!(request.headers()["user-agent"], "patchula/0.1.0");
             let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
             self.maximum.fetch_max(active, Ordering::SeqCst);
             tokio::time::sleep(Duration::from_millis(10)).await;

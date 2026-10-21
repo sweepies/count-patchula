@@ -1,9 +1,9 @@
 //! Receipts are proof of previously verified writes, never proof from a marker alone.
 use crate::{Lifecycle, Plan, Recheck, plan::hash};
-use rustovate_cache::{Cache, ExtractionKey};
-use rustovate_config::{Config, Rebase};
-use rustovate_github::{Client, GraphqlPage};
-use rustovate_report::{ActionStatus, Repository};
+use patchula_cache::{Cache, ExtractionKey};
+use patchula_config::{Config, Rebase};
+use patchula_github::{Client, GraphqlPage};
+use patchula_report::{ActionStatus, Repository};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -39,7 +39,7 @@ struct Receipt {
     intent: String,
     pr: Value,
     fingerprint: String,
-    files: Vec<rustovate_report::FileAction>,
+    files: Vec<patchula_report::FileAction>,
 }
 #[derive(Default, Serialize, Deserialize)]
 struct Receipts {
@@ -98,7 +98,7 @@ pub(crate) fn actor_login(actor: &Value) -> Option<String> {
     )
 }
 fn fallback(repository: &Repository, plan: &Plan, reason: &str) {
-    tracing::debug!(target: "rustovate_update::receipts", repo = %repository.repository,
+    tracing::debug!(target: "patchula_update::receipts", repo = %repository.repository,
         branch = %plan.action.branch, reason, "write receipt verification fallback");
 }
 fn not_restored(repository: &Repository, plans: &[Plan], reason: &str) -> bool {
@@ -108,7 +108,7 @@ fn not_restored(repository: &Repository, plans: &[Plan], reason: &str) -> bool {
     {
         fallback(repository, plan, reason);
     }
-    tracing::debug!(target: "rustovate_update::receipts", repo = %repository.repository,
+    tracing::debug!(target: "patchula_update::receipts", repo = %repository.repository,
         restored = 0, complete = false, reason, "write receipts restored");
     false
 }
@@ -303,7 +303,7 @@ pub async fn restore_inventory(
             && (name.starts_with(&config.prs.branch)
                 || r["target"]["message"]
                     .as_str()
-                    .is_some_and(|m| m.contains("\nRustovate: v1")))
+                    .is_some_and(|m| m.contains("\nPatchula: v1")))
     });
     let mut restored = 0;
     for plan in plans
@@ -338,7 +338,7 @@ pub async fn restore_inventory(
         match result {
             Ok(()) => {
                 restored += 1;
-                tracing::debug!(target: "rustovate_update::receipts", repo = %repository.repository,
+                tracing::debug!(target: "patchula_update::receipts", repo = %repository.repository,
                     branch = %plan.action.branch, "write receipt restored");
             }
             Err(reason) => fallback(repository, plan, reason),
@@ -348,7 +348,7 @@ pub async fn restore_inventory(
         && plans
             .iter()
             .all(|p| p.action.status != ActionStatus::Planned);
-    tracing::debug!(target: "rustovate_update::receipts", repo = %repository.repository,
+    tracing::debug!(target: "patchula_update::receipts", repo = %repository.repository,
         restored, complete, obsolete, "write receipts restored");
     Ok(complete)
 }
@@ -531,7 +531,7 @@ pub async fn save_receipts(
         )
         .await
         .map_err(|e| e.to_string())?;
-    tracing::debug!(target: "rustovate_update::receipts", repo = %repository.repository,
+    tracing::debug!(target: "patchula_update::receipts", repo = %repository.repository,
         count = receipts.writes.len() + receipts.closed.len(), writes = receipts.writes.len(),
         closed = receipts.closed.len(), "write receipts saved");
     Ok(())

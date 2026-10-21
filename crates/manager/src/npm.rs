@@ -365,7 +365,7 @@ pub(super) fn node_version(path: &str, text: &str, manager: Manager) -> Vec<Depe
         return Vec::new();
     }
     let start = text.find(token).expect("token from text") + (token.len() - version.len());
-    let resolution = rustovate_mise::resolve("node");
+    let resolution = patchula_mise::resolve("node");
     let (source, package, extract) = resolution.map_or_else(
         || (Source::Mise, "node".into(), None),
         |r| (r.source, r.package, r.extract),

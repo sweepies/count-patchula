@@ -1,5 +1,5 @@
 use crate::{Error, Result};
-use rustovate_report::{
+use patchula_report::{
     Current, Dependency, PackageFile, Report, Repository, SCHEMA_VERSION, Status, Update,
 };
 use serde::Serialize;
@@ -310,12 +310,12 @@ fn dependency(value: &Value, source_manager: &str, ctx: &mut Context<'_>) -> Res
         occurrence: None,
         current,
         updates,
-        metadata: datasource.map(|source| rustovate_report::DependencyMetadata {
+        metadata: datasource.map(|source| patchula_report::DependencyMetadata {
             tag_digests: Default::default(),
             stale: Default::default(),
             lookup: ctx
                 .evaluated_at
-                .map(|time| rustovate_report::LookupEvidence {
+                .map(|time| patchula_report::LookupEvidence {
                     catalog: None,
                     evaluated_at: time.into(),
                     disabled_updates: Vec::new(),
@@ -622,7 +622,7 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
     for (repo, files) in repositories {
         let mut package_files = Vec::new();
         for (path, dependencies) in files {
-            let dependencies = rustovate_report::normalize_dependencies(dependencies);
+            let dependencies = patchula_report::normalize_dependencies(dependencies);
             package_files.push(PackageFile { path, dependencies });
         }
         report.repositories.push(Repository {

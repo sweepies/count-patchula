@@ -186,7 +186,7 @@ impl Cache {
         let (jobs, mut receiver) = mpsc::channel::<Job>(128);
         let (ready, initialized) = oneshot::channel();
         std::thread::Builder::new()
-            .name("rustovate-cache".into())
+            .name("patchula-cache".into())
             .spawn(move || match Store::open(path, options) {
                 Ok(mut store) => {
                     let persistent = store.conn.path().is_some_and(|path| !path.is_empty());
@@ -223,7 +223,7 @@ impl Cache {
                 let (sender, mut receiver) = mpsc::channel::<Job>(32);
                 let (ready, initialized) = oneshot::channel();
                 std::thread::Builder::new()
-                    .name(format!("rustovate-cache-read-{index}"))
+                    .name(format!("patchula-cache-read-{index}"))
                     .spawn(move || {
                         let mut store = match Store::reader(&path) {
                             Ok(store) => store,

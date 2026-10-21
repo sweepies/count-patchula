@@ -1,6 +1,6 @@
 //! Resolve and validate all local overrides before starting batch reads.
 use crate::{Error, Result};
-use rustovate_config::Config;
+use patchula_config::Config;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
@@ -25,7 +25,7 @@ pub(crate) fn load(
             };
             match std::fs::metadata(&path) {
                 Ok(metadata) if metadata.is_file() => {
-                    let config = rustovate_config::load(&path)
+                    let config = patchula_config::load(&path)
                         .map_err(|error| diagnostic(format!("{error:#}")))?;
                     configs.insert(repo.clone(), config);
                     break;

@@ -1,6 +1,6 @@
 //! Pure resolution of published mise registry shorthands and backend identities.
 #![forbid(unsafe_code)]
-use rustovate_config::Source;
+use patchula_config::Source;
 use std::{collections::BTreeMap, sync::LazyLock};
 
 pub const REGISTRY_JSON: &str = include_str!("../registry.json");

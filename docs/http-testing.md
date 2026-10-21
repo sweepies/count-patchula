@@ -1,8 +1,8 @@
 # HTTP fixtures
 
-Production code accepts `rustovate_http::Transport`. It takes a reqwest Request
+Production code accepts `patchula_http::Transport`. It takes a reqwest Request
 constructed with `Request::new`, so building a request needs no Client. The
-separate `rustovate-testkit` crate belongs only in consuming crates'
+separate `patchula-testkit` crate belongs only in consuming crates'
 dev-dependencies. Replay has cassette data, match options and a consumption
 cursor only. It has no reqwest Client or fallback transport. Its unmatched
 request error names the redacted method/URL and the fields to check. A test
@@ -19,7 +19,7 @@ the list. Repeated identical requests consume successive recorded interactions.
 `Replay::assert_finished` detects unexpectedly unused interactions.
 
 Replay is the default. `from_env` only calls the provided network factory when
-`RUSTOVATE_RECORD=1`. Recording starts a fresh scenario and atomically persists
+`PATCHULA_RECORD=1`. Recording starts a fresh scenario and atomically persists
 after each exchange; failures may leave a partial recording, so review the diff
 and replay before committing. Ordinary tests and CI never opt into recording.
 
@@ -41,13 +41,13 @@ characters to retain ordinary version tags such as `v1.24.0`; the recording
 caller also adds its exact token as a literal. Regression tests cover both.
 GitHub documents the [stateless token format](https://github.blog/changelog/2026-04-24-notice-about-upcoming-new-format-for-github-app-installation-tokens/).
 Callers can add literal secret values or regex patterns through `Redactor`. The scanner
-also accepts comma-separated literal values in `RUSTOVATE_REDACT`. Redaction
+also accepts comma-separated literal values in `PATCHULA_REDACT`. Redaction
 does not change the in-memory response returned to a recording test. Scanning
 checks raw and parsed JSON (including escaped tokens), all nested fields, and
 URLs. Failures name the cassette path without printing matched values.
 `mise run ci` runs the scan as well as the test suite.
 
-Every real cassette must say it was recorded by rustovate from the endpoint
+Every real cassette must say it was recorded by patchula from the endpoint
 URLs. Simulated rate-limit and transport responses are explicitly labelled.
 Never import another bot's fixtures, including Renovate's.
 

@@ -61,7 +61,7 @@ impl pklr::EvalCapabilities for Files {
             .get(path.to_str().ok_or_else(denied)?)
             .cloned()
             .or_else(|| {
-                (!self.local && path.file_name().is_some_and(|name| name == "Rustovate.pkl"))
+                (!self.local && path.file_name().is_some_and(|name| name == "Patchula.pkl"))
                     .then(|| SCHEMA.into())
             })
             .ok_or_else(|| pklr::Error::ImportNotFound(path.display().to_string()))
@@ -69,7 +69,7 @@ impl pklr::EvalCapabilities for Files {
     fn path_exists(&mut self, path: &Path) -> pklr::Result<bool> {
         let path = normalize(path, self.local)?;
         Ok(self.files.contains_key(path.to_str().ok_or_else(denied)?)
-            || (!self.local && path.file_name().is_some_and(|name| name == "Rustovate.pkl")))
+            || (!self.local && path.file_name().is_some_and(|name| name == "Patchula.pkl")))
     }
     fn canonicalize(&mut self, path: &Path) -> pklr::Result<PathBuf> {
         normalize(path, self.local)
@@ -108,19 +108,19 @@ mod tests {
     #[test]
     fn isolated_modules_and_no_host_imports() {
         let files = BTreeMap::from([
-            ("/repo/Rustovate.pkl".into(), SCHEMA.into()),
+            ("/repo/Patchula.pkl".into(), SCHEMA.into()),
             (
-                "/repo/.github/rustovate.pkl".into(),
-                "amends \"../Rustovate.pkl\"\nmanagers = new Listing {\"npm\"}\n".into(),
+                "/repo/.github/patchula.pkl".into(),
+                "amends \"../Patchula.pkl\"\nmanagers = new Listing {\"npm\"}\n".into(),
             ),
         ]);
-        let config = load_files("/repo/.github/rustovate.pkl", files.clone()).unwrap();
+        let config = load_files("/repo/.github/patchula.pkl", files.clone()).unwrap();
         assert_eq!(config.managers, vec![Manager::Npm]);
         let mut files = files;
         files.insert(
-            "/repo/.github/rustovate.pkl".into(),
+            "/repo/.github/patchula.pkl".into(),
             "amends \"/etc/passwd\"".into(),
         );
-        assert!(load_files("/repo/.github/rustovate.pkl", files).is_err());
+        assert!(load_files("/repo/.github/patchula.pkl", files).is_err());
     }
 }

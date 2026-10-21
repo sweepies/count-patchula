@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 
+use patchula_http::{Exchange, Response, Transport};
+use patchula_testkit::{Options, Recorder, Redactor, Replay, check_directory};
 use reqwest::{Method, Request, header::HeaderValue};
-use rustovate_http::{Exchange, Response, Transport};
-use rustovate_testkit::{Options, Recorder, Redactor, Replay, check_directory};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -52,8 +52,8 @@ async fn replay_matches_body_headers_method_and_url_without_a_network_client() {
         replay.send(request()).await.is_err(),
         "interactions are consumed once"
     );
-    if std::env::var("RUSTOVATE_RECORD").as_deref() != Ok("1") {
-        let transport = rustovate_testkit::from_env(&path, Options::default(), || {
+    if std::env::var("PATCHULA_RECORD").as_deref() != Ok("1") {
+        let transport = patchula_testkit::from_env(&path, Options::default(), || {
             panic!("replay must never construct a network client")
         })
         .unwrap();

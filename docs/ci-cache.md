@@ -1,7 +1,7 @@
 # CI cache verification (SWE-81)
 
 Inspected run `38642667666`, attempts 1 and 2, with `mise exec -- gh run view
-38642667666 -R sweepies/rustovate --attempt 1 --log` (and attempt 2).
+38642667666 -R sweepies/count-patchula --attempt 1 --log` (and attempt 2).
 Attempt 1 saved target-cache ID `8963308758`; attempt 2 restored the exact
 342 MB archive and skipped re-saving it. Thus the original archive transport
 worked. mbx explicitly says its object counters exclude Cargo artifact reuse

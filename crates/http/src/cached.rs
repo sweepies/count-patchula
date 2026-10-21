@@ -1,10 +1,10 @@
 //! Conditional, unauthenticated registry GETs sharing the batch transport pool.
 use crate::{RequestTrace, Response, Transport};
+use patchula_cache::{Cache, HttpEntry, HttpKey};
 use reqwest::{
     Method, Request, StatusCode, Url,
     header::{self, HeaderValue},
 };
-use rustovate_cache::{Cache, HttpEntry, HttpKey};
 use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -78,7 +78,7 @@ pub enum Error {
     #[error(transparent)]
     Transport(#[from] crate::Error),
     #[error(transparent)]
-    Cache(#[from] rustovate_cache::Error),
+    Cache(#[from] patchula_cache::Error),
 }
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Stats {
@@ -360,9 +360,9 @@ impl Cached {
         let mut response = cached_response(entry)?;
         response
             .headers
-            .insert("x-rustovate-stale", HeaderValue::from_static("rate-limit"));
+            .insert("x-patchula-stale", HeaderValue::from_static("rate-limit"));
         response.headers.insert(
-            "x-rustovate-fetched-at",
+            "x-patchula-fetched-at",
             HeaderValue::from_str(&entry.fetched_at.to_string())
                 .map_err(|_| Error::Configuration)?,
         );
@@ -517,7 +517,7 @@ impl Cached {
         );
         request.headers_mut().insert(
             header::USER_AGENT,
-            HeaderValue::from_static(concat!("rustovate/", env!("CARGO_PKG_VERSION"))),
+            HeaderValue::from_static(concat!("patchula/", env!("CARGO_PKG_VERSION"))),
         );
         if let Some(entry) = &cached {
             self.0.cache_hits.fetch_add(1, Ordering::Relaxed);
@@ -649,8 +649,8 @@ impl Cached {
             break response;
         };
         // These are local provenance headers, never trusted from the network.
-        response.headers.remove("x-rustovate-stale");
-        response.headers.remove("x-rustovate-fetched-at");
+        response.headers.remove("x-patchula-stale");
+        response.headers.remove("x-patchula-fetched-at");
         if registry.is_some()
             && response.status == StatusCode::TOO_MANY_REQUESTS
             && let Some(response) = self

@@ -1,14 +1,14 @@
 //! A deterministic issue, discovered by ownership and marker rather than title.
 use crate::{Inventory, Plan, Recheck, plan::hash, update_key};
-use rustovate_cache::{Cache, ExtractionKey};
-use rustovate_config::Config;
-use rustovate_github::Client;
-use rustovate_report::{Dependency, Repository};
+use patchula_cache::{Cache, ExtractionKey};
+use patchula_config::Config;
+use patchula_github::Client;
+use patchula_report::{Dependency, Repository};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const MARKER: &str = "<!-- rustovate-dashboard:v1 -->";
+pub const MARKER: &str = "<!-- patchula-dashboard:v1 -->";
 const TITLE: &str = "Dependency Dashboard";
 const LIMIT: usize = 60_000;
 
@@ -43,14 +43,14 @@ pub fn dependency_key(file: &str, dep: &Dependency) -> String {
         .as_bytes(),
     )
 }
-pub fn extracted_key(dep: &rustovate_manager::Dependency) -> String {
+pub fn extracted_key(dep: &patchula_manager::Dependency) -> String {
     hash(
         serde_json::to_string(&(
             &dep.file,
-            rustovate_manager::word(&dep.manager),
+            patchula_manager::word(&dep.manager),
             &dep.name,
             &dep.package,
-            rustovate_manager::word(&dep.source),
+            patchula_manager::word(&dep.source),
             Some(&dep.current),
             &dep.digest,
         ))
@@ -106,7 +106,7 @@ fn checked_actions(body: &str) -> BTreeSet<Action> {
         if !checked && state != " " {
             continue;
         }
-        let Some((_, marker)) = rest.split_once("<!-- rustovate-action:") else {
+        let Some((_, marker)) = rest.split_once("<!-- patchula-action:") else {
             continue;
         };
         let Some(json) = marker.strip_suffix(" -->") else {
@@ -145,7 +145,7 @@ impl Controls {
             .iter()
             .any(|action| !previous.contains(action))
     }
-    pub fn apply(&mut self, plans: &mut [Plan], dependencies: &[rustovate_manager::Dependency]) {
+    pub fn apply(&mut self, plans: &mut [Plan], dependencies: &[patchula_manager::Dependency]) {
         for plan in plans {
             let key = update_key(plan);
             let permits: BTreeSet<_> = plan
@@ -157,7 +157,7 @@ impl Controls {
                         .filter(|d| {
                             d.file == c.file
                                 && d.package == c.package
-                                && rustovate_manager::word(&d.source) == c.source
+                                && patchula_manager::word(&d.source) == c.source
                         })
                         .filter_map(|d| {
                             c.version
@@ -178,7 +178,7 @@ impl Controls {
                     .filter(|d| {
                         d.file == c.file
                             && d.package == c.package
-                            && rustovate_manager::word(&d.source) == c.source
+                            && patchula_manager::word(&d.source) == c.source
                     })
                     .any(|d| {
                         c.version
@@ -198,7 +198,7 @@ impl Controls {
                 || self.branches.contains(&plan.action.branch))
                 && plan.action.reason.as_deref() == Some("outside the configured update windows")
             {
-                plan.action.status = rustovate_report::ActionStatus::Planned;
+                plan.action.status = patchula_report::ActionStatus::Planned;
                 plan.action.reason = None;
             }
             if self.recheck
@@ -246,7 +246,7 @@ impl Controls {
         Ok(result)
     }
 }
-const PERMIT_MARKER: &str = "<!-- rustovate-age-permits:v1 ";
+const PERMIT_MARKER: &str = "<!-- patchula-age-permits:v1 ";
 pub(crate) fn permit_marker(permits: &BTreeSet<String>) -> String {
     format!(
         "{PERMIT_MARKER}{} -->\n",
@@ -331,7 +331,7 @@ fn safe(text: &str) -> String {
 }
 fn checkbox(label: &str, action: Action) -> String {
     format!(
-        "- [ ] {label} <!-- rustovate-action:{} -->\n",
+        "- [ ] {label} <!-- patchula-action:{} -->\n",
         serde_json::to_string(&action).expect("action")
     )
 }
@@ -360,7 +360,7 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
                 format!(
                     "- #{number}: {} — {}\n",
                     safe(pr["title"].as_str().unwrap_or("Update dependencies")),
-                    safe(pr["rustovate_merge"].as_str().unwrap_or("merged"))
+                    safe(pr["patchula_merge"].as_str().unwrap_or("merged"))
                 ),
             ));
         }
@@ -385,7 +385,7 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
         }
     }
     for plan in plans {
-        if plan.action.status == rustovate_report::ActionStatus::Merged {
+        if plan.action.status == patchula_report::ActionStatus::Merged {
             continue;
         }
         let open = prs
@@ -407,7 +407,7 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
                         format!(
                             "- #{number}: {}{}\n",
                             safe(&plan.action.message),
-                            pr["rustovate_merge"]
+                            pr["patchula_merge"]
                                 .as_str()
                                 .map(|reason| format!(" — {}", safe(reason)))
                                 .unwrap_or_default()
@@ -531,7 +531,7 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
         Recheck::Now => "now",
         Recheck::NextRun => "on the next run",
     };
-    let mut text = format!("{MARKER}\n\nCreated by rustovate. Click to re-check {timing}.\n\n");
+    let mut text = format!("{MARKER}\n\nCreated by patchula. Click to re-check {timing}.\n\n");
     text.push_str(&checkbox(
         "Re-check this repository",
         Action::Recheck(hash(repo.repository.as_bytes())),

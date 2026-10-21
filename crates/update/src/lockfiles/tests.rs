@@ -1,5 +1,5 @@
 use super::*;
-use rustovate_http::{Exchange, Transport};
+use patchula_http::{Exchange, Transport};
 use std::{future::Future, pin::Pin, sync::Mutex};
 
 struct Fixture {
@@ -62,7 +62,7 @@ impl Executor for Fixture {
                         "authorization",
                         "github",
                         "gh_",
-                        "rustovate"
+                        "patchula"
                     ]
                     .iter()
                     .any(|part| key.contains(part)),
@@ -173,12 +173,12 @@ fn config() -> Config {
     config_with("")
 }
 fn config_with(lockfiles: &str) -> Config {
-    rustovate_config::load_files(
-        "/repo/rustovate.pkl",
+    patchula_config::load_files(
+        "/repo/patchula.pkl",
         BTreeMap::from([(
-            "/repo/rustovate.pkl".into(),
+            "/repo/patchula.pkl".into(),
             format!(
-                "amends \"Rustovate.pkl\"\nlockfiles {{ refresh = true; tidyGo = true; {lockfiles} }}\n"
+                "amends \"Patchula.pkl\"\nlockfiles {{ refresh = true; tidyGo = true; {lockfiles} }}\n"
             ),
         )]),
     )
@@ -206,7 +206,7 @@ fn repo() -> Repository {
         repository: "demo/app".into(),
         commit: Some("a".repeat(40)),
         default_branch: Some("main".into()),
-        status: rustovate_report::Status::Complete,
+        status: patchula_report::Status::Complete,
         reason: None,
         warnings: Vec::new(),
         package_files: Vec::new(),
@@ -273,10 +273,10 @@ async fn tool_failure_is_reported_without_api_writes_or_partial_scratch_files() 
             .to_string_lossy()
             .starts_with("run-"))
     );
-    let cache = rustovate_cache::Cache::open(":memory:", Default::default())
+    let cache = patchula_cache::Cache::open(":memory:", Default::default())
         .await
         .unwrap();
-    let client = rustovate_github::Client::with_transport(
+    let client = patchula_github::Client::with_transport(
         "offline",
         cache,
         Default::default(),
@@ -288,7 +288,7 @@ async fn tool_failure_is_reported_without_api_writes_or_partial_scratch_files() 
         std::slice::from_mut(&mut p),
         &snapshot,
         "main",
-        rustovate_config::Rebase::Behind,
+        patchula_config::Rebase::Behind,
         false,
     )
     .await;
@@ -848,7 +848,7 @@ async fn scheduled_refresh_uses_stable_name_windows_weekly_cadence_and_wait_hour
     let mut p = maintenance(&repo, &config, &snapshot, monday())
         .unwrap()
         .unwrap();
-    assert_eq!(p.action.branch, "rustovate/lock-file-maintenance");
+    assert_eq!(p.action.branch, "patchula/lock-file-maintenance");
     assert_eq!(p.action.status, ActionStatus::Planned);
     let outside = maintenance(
         &repo,
@@ -859,7 +859,7 @@ async fn scheduled_refresh_uses_stable_name_windows_weekly_cadence_and_wait_hour
     .unwrap()
     .unwrap();
     assert_eq!(outside.action.status, ActionStatus::Skipped);
-    let cache = rustovate_cache::Cache::open(":memory:", Default::default())
+    let cache = patchula_cache::Cache::open(":memory:", Default::default())
         .await
         .unwrap();
     p.lockfiles_ready = true;
@@ -1242,7 +1242,7 @@ async fn mise_lock_is_targeted_scrubbed_and_committed_with_each_supported_manife
                 .with_executor(executor.clone());
             let mut snapshot = snapshot(&files);
             let config = config();
-            let dep = rustovate_manager::Scanner::new(&config)
+            let dep = patchula_manager::Scanner::new(&config)
                 .unwrap()
                 .extract(&files)
                 .unwrap()
@@ -1299,7 +1299,7 @@ fn mise_lock_maintenance_respects_refresh_and_unlocked_manifests_need_no_job() {
     let files = BTreeMap::from([("mise.toml".into(), "[tools]\nnode='22.0.0'\n".into())]);
     let mut snapshot = snapshot(&files);
     let mut config = config();
-    let dep = rustovate_manager::Scanner::new(&config)
+    let dep = patchula_manager::Scanner::new(&config)
         .unwrap()
         .extract(&files)
         .unwrap()
@@ -1440,7 +1440,7 @@ fn lockfile_engine_pins_match_the_repository_mise_config() {
             );
         }
         let php = php::tools(
-            rustovate_config::PhpBuild::Static,
+            patchula_config::PhpBuild::Static,
             defaults["tools"]["php"].as_str().unwrap(),
             defaults["tools"]["composer"].as_str().unwrap(),
         );
@@ -1745,15 +1745,15 @@ fn chart_updates_with_a_committed_chart_lock_are_pending() {
     let mut config = config();
     config.managers = vec![Manager::Helm];
     let chart = "dependencies:\n  - name: redis\n    version: 1.0.0\n    repository: https://charts.example.test\n";
-    let deps = rustovate_manager::Scanner::new(&config)
+    let deps = patchula_manager::Scanner::new(&config)
         .unwrap()
-        .extract(&rustovate_manager::Files::from([(
+        .extract(&patchula_manager::Files::from([(
             "Chart.yaml".into(),
             chart.into(),
         )]))
         .unwrap()
         .dependencies;
-    let update = rustovate_report::Update {
+    let update = patchula_report::Update {
         new_value: Some("2.0.0".into()),
         new_version: Some("2.0.0".into()),
         new_digest: None,
@@ -1799,7 +1799,7 @@ impl Transport for Checksums {
                     format!("{}\n", "a".repeat(64)).into_bytes(),
                 )
             };
-            Ok(rustovate_http::Response {
+            Ok(patchula_http::Response {
                 status: reqwest::StatusCode::from_u16(status).unwrap(),
                 headers,
                 body,
@@ -1895,7 +1895,7 @@ async fn tool_store_prunes_unused_versions_and_prewarms_defaults() {
     ]);
     runner.record_use(&[("bun".into(), "1.3.0".into())]);
     // Age the node and uv records past the window.
-    let path = runner.tools().join("rustovate-usage.json");
+    let path = runner.tools().join("patchula-usage.json");
     let mut usage: BTreeMap<String, i64> =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     for spec in ["node@20.0.0", "uv@0.13.1"] {
@@ -2042,7 +2042,7 @@ async fn composer_locks_use_static_or_compiled_php() {
     for (setting, php) in [
         (
             "",
-            php::tools(rustovate_config::PhpBuild::Static, "8.5.8", "2.10.3")[0]
+            php::tools(patchula_config::PhpBuild::Static, "8.5.8", "2.10.3")[0]
                 .0
                 .clone(),
         ),
@@ -2072,7 +2072,7 @@ async fn composer_locks_use_static_or_compiled_php() {
         );
     }
     assert!(
-        php::tools(rustovate_config::PhpBuild::Static, "8.5.8", "2.10.3")[0]
+        php::tools(patchula_config::PhpBuild::Static, "8.5.8", "2.10.3")[0]
             .0
             .starts_with("http:php[url=https://dl.static-php.dev/")
     );

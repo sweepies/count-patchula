@@ -1,5 +1,5 @@
 use crate::{Error, Exclusion, Result, Warning};
-use rustovate_report::{Dependency, PackageFile, Report, Status, Update};
+use patchula_report::{Dependency, PackageFile, Report, Status, Update};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,8 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Classification {
-    RustovateMissing,
-    RustovateExtra,
+    PatchulaMissing,
+    PatchulaExtra,
     FieldMismatch,
     DeliberateDeparture,
 }
@@ -28,7 +28,7 @@ pub struct Difference {
     pub dependency: Option<String>,
     pub field: String,
     pub renovate: Value,
-    pub rustovate: Value,
+    pub patchula: Value,
     pub departure: Option<Departure>,
     /// Rate-limited lookup evidence is independent of the comparison class.
     pub rate_limited: bool,
@@ -111,7 +111,7 @@ impl Rules {
                     (&rule.predicate, rule.classification, rule.field.as_str()),
                     (
                         Predicate::StableNodeChannel,
-                        Classification::RustovateExtra,
+                        Classification::PatchulaExtra,
                         "updates"
                     ) | (
                         Predicate::StableNodeChannel,
@@ -123,7 +123,7 @@ impl Rules {
                         "current.version"
                     ) | (
                         Predicate::DeclaredGoFloor,
-                        Classification::RustovateExtra,
+                        Classification::PatchulaExtra,
                         "updates"
                     ) | (
                         Predicate::MiseBackendIdentity,
@@ -135,14 +135,14 @@ impl Rules {
                         "updates.newValue" | "updates.newVersion" | "updates.newDigest"
                     ) | (
                         Predicate::CargoCompatibleTarget,
-                        Classification::RustovateMissing | Classification::RustovateExtra,
+                        Classification::PatchulaMissing | Classification::PatchulaExtra,
                         "updates"
                     ) | (
                         Predicate::DisabledUpdate
                             | Predicate::RejectedRelease
                             | Predicate::ReleaseAgeMissing
                             | Predicate::NpmSatisfyingPin,
-                        Classification::RustovateMissing,
+                        Classification::PatchulaMissing,
                         "updates"
                     ) | (
                         Predicate::ObservedResolution,
@@ -150,7 +150,7 @@ impl Rules {
                         "current.version"
                     ) | (
                         Predicate::CargoManifestNoop,
-                        Classification::RustovateMissing,
+                        Classification::PatchulaMissing,
                         "updates"
                     ) | (
                         Predicate::DigestAdded,
@@ -162,7 +162,7 @@ impl Rules {
                         "updates.newDigest"
                     ) | (
                         Predicate::DigestPinOnly,
-                        Classification::RustovateExtra,
+                        Classification::PatchulaExtra,
                         "updates"
                     ) | (
                         Predicate::CargoPre1Breaking,
@@ -181,15 +181,15 @@ impl Rules {
                             | Predicate::IndirectGo
                             | Predicate::NpmRangePin
                             | Predicate::PatchAlternative,
-                        Classification::RustovateExtra,
+                        Classification::PatchulaExtra,
                         "updates"
                     ) | (
                         Predicate::ComposeTestFile,
-                        Classification::RustovateExtra,
+                        Classification::PatchulaExtra,
                         "dependency"
                     ) | (
                         Predicate::GoModulePath,
-                        Classification::RustovateMissing,
+                        Classification::PatchulaMissing,
                         "updates"
                     )
                 )
@@ -206,7 +206,7 @@ impl Rules {
         &self,
         difference: &mut Difference,
         dependency: Option<&Dependency>,
-        rustovate: &Dependency,
+        patchula: &Dependency,
     ) {
         for rule in &self.rules {
             if difference.classification != rule.classification
@@ -219,15 +219,15 @@ impl Rules {
                 continue;
             }
             let matches = match rule.predicate {
-                Predicate::StableNodeChannel => dependency.is_some_and(|dep| stable_node_channel(dep, rustovate, difference)),
-                Predicate::DeclaredGoFloor => dependency.is_some_and(|dep| declared_go_floor(dep, rustovate, difference)),
-                Predicate::MiseBackendIdentity => dependency.is_some_and(|dep| mise_backend_identity(dep, rustovate)),
-                Predicate::ActionAliasPrecision => dependency.is_some_and(|dep| action_alias_precision(dep, rustovate, difference)),
-                Predicate::CargoCompatibleTarget => dependency.is_some_and(|dep| cargo_compatible_target(dep, rustovate, difference)),
+                Predicate::StableNodeChannel => dependency.is_some_and(|dep| stable_node_channel(dep, patchula, difference)),
+                Predicate::DeclaredGoFloor => dependency.is_some_and(|dep| declared_go_floor(dep, patchula, difference)),
+                Predicate::MiseBackendIdentity => dependency.is_some_and(|dep| mise_backend_identity(dep, patchula)),
+                Predicate::ActionAliasPrecision => dependency.is_some_and(|dep| action_alias_precision(dep, patchula, difference)),
+                Predicate::CargoCompatibleTarget => dependency.is_some_and(|dep| cargo_compatible_target(dep, patchula, difference)),
                 Predicate::ReleaseAgeDigest => dependency.is_some_and(|dep| {
-                    dep.package == rustovate.package && dep.current.value == rustovate.current.value
-                        && dep.current.digest == rustovate.current.digest
-                        && rustovate.metadata.as_ref().is_some_and(|m| m.source == "github-tags")
+                    dep.package == patchula.package && dep.current.value == patchula.current.value
+                        && dep.current.digest == patchula.current.digest
+                        && patchula.metadata.as_ref().is_some_and(|m| m.source == "github-tags")
                         && difference.paired.as_ref().is_some_and(|(left, right)| {
                             left.update_type == right.update_type
                                 && matches!(right.update_type.as_str(), "major" | "minor" | "patch")
@@ -246,10 +246,10 @@ impl Rules {
                         })
                 }),
                 Predicate::NpmSatisfyingPin => dependency.is_some_and(|left| {
-                    !is_peer(rustovate)
+                    !is_peer(patchula)
                         &&
-                    left.package == rustovate.package && left.current.value == rustovate.current.value
-                        && rustovate.metadata.as_ref().is_some_and(|m| m.source == "npm")
+                    left.package == patchula.package && left.current.value == patchula.current.value
+                        && patchula.metadata.as_ref().is_some_and(|m| m.source == "npm")
                         && serde_json::from_value::<Update>(difference.renovate.clone()).is_ok_and(|u| {
                             matches!(u.update_type.as_str(), "minor" | "patch") && u.new_digest.is_none()
                                 && u.new_value == left.current.value
@@ -257,15 +257,15 @@ impl Rules {
                                     simple_range_version(range).is_some()
                                     && semver::VersionReq::parse(range).is_ok_and(|r|
                                         u.new_version.as_deref().and_then(parse_version).is_some_and(|v| r.matches(&v))))
-                                && rustovate.updates.iter().any(|actual| actual.update_type == "pin"
+                                && patchula.updates.iter().any(|actual| actual.update_type == "pin"
                                     && actual.new_version == u.new_version && actual.new_value == actual.new_version
                                     && actual.new_digest.is_none()
                                     && actual.policy.as_ref().is_some_and(|p| p.versions.as_deref() == Some("exact")))
                         })
                 }),
                 Predicate::DisabledUpdate | Predicate::RejectedRelease | Predicate::ReleaseAgeMissing => dependency.is_some_and(|left| {
-                    left.package == rustovate.package && left.current.value == rustovate.current.value
-                        && rustovate.metadata.as_ref().and_then(|m| m.lookup.as_ref()).is_some_and(|evidence| {
+                    left.package == patchula.package && left.current.value == patchula.current.value
+                        && patchula.metadata.as_ref().and_then(|m| m.lookup.as_ref()).is_some_and(|evidence| {
                             let evaluated = chrono::DateTime::parse_from_rfc3339(&evidence.evaluated_at).ok();
                             evaluated.is_some() && serde_json::from_value::<Update>(difference.renovate.clone()).is_ok_and(|u| {
                                 match rule.predicate {
@@ -274,11 +274,11 @@ impl Rules {
                                         u.new_digest.is_none() && matches!(u.update_type.as_str(), "major" | "minor" | "patch")
                                             && u.new_version.as_deref().is_some_and(|target| evidence.rejected.iter().any(|v|
                                                 v.version == target && matches!(v.reason.as_str(), "deprecated" | "yanked")))
-                                            && matches!(rustovate.metadata.as_ref().map(|m| m.source.as_str()), Some("npm" | "crates" | "pypi"))
+                                            && matches!(patchula.metadata.as_ref().map(|m| m.source.as_str()), Some("npm" | "crates" | "pypi"))
                                     },
                                     Predicate::ReleaseAgeMissing => {
                                         u.new_digest.is_none() && matches!(u.update_type.as_str(), "major" | "minor" | "patch")
-                                            && rustovate.metadata.as_ref().is_some_and(|m| m.held_back.iter().any(|held|
+                                            && patchula.metadata.as_ref().is_some_and(|m| m.held_back.iter().any(|held|
                                                 held.update_type == u.update_type && u.new_version.as_deref() == Some(&held.version)
                                                     && chrono::DateTime::parse_from_rfc3339(&held.published_at).ok()
                                                         .zip(chrono::DateTime::parse_from_rfc3339(&held.eligible_at).ok())
@@ -291,20 +291,20 @@ impl Rules {
                         })
                 }),
                 Predicate::ObservedResolution => dependency.is_some_and(|left| {
-                    left.package == rustovate.package && left.current.value == rustovate.current.value
-                        && left.current.digest == rustovate.current.digest
-                        && rustovate.metadata.as_ref().and_then(|m| m.resolution.as_ref()).is_some_and(|resolution| {
-                            rustovate.current.version.as_deref() == Some(&resolution.version)
+                    left.package == patchula.package && left.current.value == patchula.current.value
+                        && left.current.digest == patchula.current.digest
+                        && patchula.metadata.as_ref().and_then(|m| m.resolution.as_ref()).is_some_and(|resolution| {
+                            patchula.current.version.as_deref() == Some(&resolution.version)
                                 && left.current.version.as_deref().and_then(parse_version)
                                     .zip(parse_version(&resolution.version)).is_some_and(|(new, old)| new > old)
                                 && match resolution.kind.as_str() {
-                                    "lockfile" => rustovate.manager == "npm" && rustovate.metadata.as_ref().is_some_and(|m| m.source == "npm")
+                                    "lockfile" => patchula.manager == "npm" && patchula.metadata.as_ref().is_some_and(|m| m.source == "npm")
                                         && left.current.value.as_deref().is_some_and(|range| semver::VersionReq::parse(range).is_ok_and(|r|
                                             parse_version(&resolution.version).is_some_and(|v| r.matches(&v))
                                                 && left.current.version.as_deref().and_then(parse_version).is_some_and(|v| r.matches(&v)))),
-                                    "pinned-commit" => rustovate.manager == "github-actions"
-                                        && rustovate.metadata.as_ref().is_some_and(|m| m.source == "github-tags")
-                                        && rustovate.current.digest.as_ref().is_some_and(|sha| sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()))
+                                    "pinned-commit" => patchula.manager == "github-actions"
+                                        && patchula.metadata.as_ref().is_some_and(|m| m.source == "github-tags")
+                                        && patchula.current.digest.as_ref().is_some_and(|sha| sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()))
                                         && left.current.value.as_deref().is_some_and(|alias| {
                                             let alias = alias.trim_start_matches('v');
                                             !alias.is_empty() && alias.split('.').count() < 3 && alias.split('.').all(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
@@ -316,10 +316,10 @@ impl Rules {
                         })
                 }),
                 Predicate::CargoManifestNoop => dependency.is_some_and(|left| {
-                    left.manager == "cargo" && left.package == rustovate.package
-                        && left.current.value == rustovate.current.value
+                    left.manager == "cargo" && left.package == patchula.package
+                        && left.current.value == patchula.current.value
                         && left.metadata.as_ref().is_some_and(|m| m.source == "crate")
-                        && rustovate.metadata.as_ref().is_some_and(|m| m.source == "crates")
+                        && patchula.metadata.as_ref().is_some_and(|m| m.source == "crates")
                         && serde_json::from_value::<Update>(difference.renovate.clone()).is_ok_and(|u| {
                             matches!(u.update_type.as_str(), "major" | "minor" | "patch")
                                 && u.new_value == left.current.value && u.new_digest.is_none()
@@ -331,10 +331,10 @@ impl Rules {
                         })
                 }),
                 Predicate::GoModulePath => dependency.is_some_and(|left| {
-                    left.manager == "go" && left.package == rustovate.package
-                        && left.current.value == rustovate.current.value
+                    left.manager == "go" && left.package == patchula.package
+                        && left.current.value == patchula.current.value
                         && left.metadata.as_ref().is_some_and(|m| m.source == "go")
-                        && rustovate.metadata.as_ref().is_some_and(|m| m.source == "go")
+                        && patchula.metadata.as_ref().is_some_and(|m| m.source == "go")
                         && left.package.starts_with("github.com/")
                         && serde_json::from_value::<Update>(difference.renovate.clone()).is_ok_and(|u| {
                             u.update_type == "major" && u.new_value == u.new_version && u.new_digest.is_none()
@@ -345,7 +345,7 @@ impl Rules {
                         })
                 }),
                 Predicate::NpmExactRange => difference.paired.as_ref().is_some_and(|(left, right)| {
-                    if is_peer(rustovate) { return false; }
+                    if is_peer(patchula) { return false; }
                     let current = dependency.and_then(|d| d.current.value.as_deref())
                         .and_then(simple_range_version);
                     let target = right.new_version.as_deref().and_then(parse_version);
@@ -360,11 +360,11 @@ impl Rules {
                             && if right.update_type == "minor" { target.minor > old.minor } else { target.minor == old.minor })
                 }),
                 Predicate::NpmRangePin => dependency.is_some_and(|left| {
-                    !is_peer(rustovate) &&
-                    left.manager == "npm" && left.current.value == rustovate.current.value
+                    !is_peer(patchula) &&
+                    left.manager == "npm" && left.current.value == patchula.current.value
                         && left.updates.iter().all(|u| u.update_type != "pin")
-                        && rustovate.metadata.as_ref().is_some_and(|m| m.source == "npm")
-                        && serde_json::from_value::<Update>(difference.rustovate.clone()).is_ok_and(|u| {
+                        && patchula.metadata.as_ref().is_some_and(|m| m.source == "npm")
+                        && serde_json::from_value::<Update>(difference.patchula.clone()).is_ok_and(|u| {
                             u.update_type == "pin" && u.new_value == u.new_version && u.new_digest.is_none()
                                 && u.policy.as_ref().is_some_and(|p| p.versions.as_deref() == Some("exact"))
                                 && left.current.value.as_deref().is_some_and(|range| simple_range_version(range).is_some()
@@ -374,7 +374,7 @@ impl Rules {
                 }),
                 Predicate::PatchAlternative => dependency.is_some_and(|left| {
                     let current = left.current.version.as_deref().and_then(parse_version);
-                    serde_json::from_value::<Update>(difference.rustovate.clone()).is_ok_and(|u| {
+                    serde_json::from_value::<Update>(difference.patchula.clone()).is_ok_and(|u| {
                         u.update_type == "patch" && u.new_value != left.current.value
                             && u.policy.is_some()
                             && current.zip(u.new_version.as_deref().and_then(parse_version)).is_some_and(|(old,target)| {
@@ -382,13 +382,13 @@ impl Rules {
                                     && target.cmp_precedence(&old).is_gt()
                                     && left.updates.iter().any(|minor| {
                                         minor.update_type == "minor"
-                                            && (rustovate.updates.iter().any(|actual| actual.update_type == "minor"
+                                            && (patchula.updates.iter().any(|actual| actual.update_type == "minor"
                                                 && ((actual.new_version == minor.new_version
                                                     && actual.new_value == minor.new_value)
-                                                    || release_age_difference(minor, actual, rustovate))
+                                                    || release_age_difference(minor, actual, patchula))
                                                 && (actual.new_digest == minor.new_digest
                                                     || left.metadata.as_ref().is_some_and(|m| matches!(m.source.as_str(), "npm" | "helm"))))
-                                                || held_target(minor, rustovate))
+                                                || held_target(minor, patchula))
                                             && minor.new_version.as_deref().and_then(parse_version).is_some_and(|v|
                                                 v.major == target.major && v.minor > target.minor)
                                     })
@@ -396,15 +396,15 @@ impl Rules {
                     })
                 }),
                 Predicate::FloatingPin => dependency.is_some_and(|left| {
-                    left.package == rustovate.package
-                        && left.current.digest == rustovate.current.digest
+                    left.package == patchula.package
+                        && left.current.digest == patchula.current.digest
                         && left.current.value.as_deref() == Some("latest")
                         && left.updates.is_empty()
-                        && rustovate.current.value == left.current.value
-                        && (matches!(rustovate.manager.as_str(), "mise" | "npm")
-                            || (rustovate.manager == "github-actions" && rustovate.metadata.as_ref().is_some_and(|m|
+                        && patchula.current.value == left.current.value
+                        && (matches!(patchula.manager.as_str(), "mise" | "npm")
+                            || (patchula.manager == "github-actions" && patchula.metadata.as_ref().is_some_and(|m|
                                 matches!(m.source.as_str(), "github-releases" | "npm") && m.kinds.iter().any(|k| k == "tool"))))
-                        && serde_json::from_value::<Update>(difference.rustovate.clone()).is_ok_and(|u| {
+                        && serde_json::from_value::<Update>(difference.patchula.clone()).is_ok_and(|u| {
                             u.update_type == "pin" && u.new_digest.is_none()
                                 && u.policy.as_ref().is_some_and(|p| p.versions.as_deref() == Some("exact"))
                                 && u.new_version.as_deref().and_then(parse_version).is_some()
@@ -415,8 +415,8 @@ impl Rules {
                 Predicate::IndirectGo => dependency.is_some_and(|left| {
                     left.manager == "go" && left.updates.is_empty()
                         && left.metadata.as_ref().is_some_and(|m| m.source == "go" && m.kinds.iter().any(|k| k == "indirect"))
-                        && left.current.value == rustovate.current.value
-                        && serde_json::from_value::<Update>(difference.rustovate.clone()).is_ok_and(|u| {
+                        && left.current.value == patchula.current.value
+                        && serde_json::from_value::<Update>(difference.patchula.clone()).is_ok_and(|u| {
                             u.new_digest.is_none() && u.new_value == u.new_version
                                 && matches!(u.update_type.as_str(), "major" | "minor" | "patch")
                                 && left.current.value.as_deref().and_then(parse_version)
@@ -425,8 +425,8 @@ impl Rules {
                         })
                 }),
                 Predicate::ComposeTestFile => dependency.is_none()
-                    && rustovate.manager == "compose"
-                    && rustovate.metadata.as_ref().is_some_and(|m| m.source == "docker"
+                    && patchula.manager == "compose"
+                    && patchula.metadata.as_ref().is_some_and(|m| m.source == "docker"
                         && m.kinds.iter().any(|k| k == "container-image"))
                     && difference.package_file.as_deref().is_some_and(|path| {
                         path.starts_with("test/")
@@ -443,7 +443,7 @@ impl Rules {
                             .and_then(|e| chrono::DateTime::parse_from_rfc3339(&e.evaluated_at).ok())?;
                         Some(evaluated.signed_duration_since(published))
                     });
-                    let held_back = rustovate.metadata.as_ref().is_some_and(|metadata| metadata.held_back.iter().any(|held| {
+                    let held_back = patchula.metadata.as_ref().is_some_and(|metadata| metadata.held_back.iter().any(|held| {
                         let times = chrono::DateTime::parse_from_rfc3339(&held.published_at).ok()
                             .zip(chrono::DateTime::parse_from_rfc3339(&held.eligible_at).ok())
                             .zip(right.release_age.as_ref().and_then(|age| chrono::DateTime::parse_from_rfc3339(&age.evaluated_at).ok()));
@@ -468,7 +468,7 @@ impl Rules {
                         } else { true }
                 }),
                 Predicate::NpmExactMajor => difference.paired.as_ref().is_some_and(|(left, right)| {
-                    if is_peer(rustovate) { return false; }
+                    if is_peer(patchula) { return false; }
                     let current = dependency.and_then(|d| d.current.value.as_deref());
                     let target = right.new_version.as_deref().and_then(parse_version);
                     let range = left.new_value.as_deref();
@@ -476,7 +476,7 @@ impl Rules {
                     let lower = target_range.and_then(simple_range_version);
                     let baseline = current.and_then(simple_range_version);
                     left.update_type == "major" && right.update_type == "major"
-                        && (left.new_version == right.new_version || release_age_difference(left, right, rustovate))
+                        && (left.new_version == right.new_version || release_age_difference(left, right, patchula))
                         && right.new_value == right.new_version
                         && right.policy.as_ref().is_some_and(|p| p.versions.as_deref() == Some("exact"))
                         && baseline.zip(lower).zip(target).is_some_and(|((old,lower), target)| {
@@ -489,7 +489,7 @@ impl Rules {
                 Predicate::CargoPre1Breaking => {
                     difference.manager.as_deref() == Some("cargo")
                         && matches!(difference.renovate.as_str(), Some("minor" | "patch"))
-                        && difference.rustovate == "major"
+                        && difference.patchula == "major"
                         && dependency
                             .and_then(|d| d.current.version.as_deref())
                             .and_then(numeric_version)
@@ -509,12 +509,12 @@ impl Rules {
                 Predicate::DigestAdded => {
                     difference.renovate.is_null()
                         && difference
-                            .rustovate
+                            .patchula
                             .as_str()
                             .is_some_and(|digest| !digest.is_empty())
                 }
                 Predicate::DigestPinOnly => dependency.is_some_and(|dep| {
-                    serde_json::from_value::<Update>(difference.rustovate.clone()).is_ok_and(
+                    serde_json::from_value::<Update>(difference.patchula.clone()).is_ok_and(
                         |update| {
                             update.update_type == "pin"
                                 && dep.current.digest.is_none()
@@ -550,7 +550,7 @@ impl Rules {
 pub struct Triage {
     pub schema_version: u32,
     pub renovate: Report,
-    pub rustovate: Report,
+    pub patchula: Report,
     pub differences: Vec<Difference>,
     pub warnings: Vec<Warning>,
     pub exclusions: Vec<Exclusion>,
@@ -567,8 +567,8 @@ pub struct NoBaseline {
 
 fn label(class: Classification) -> &'static str {
     match class {
-        Classification::RustovateMissing => "rustovate-missing",
-        Classification::RustovateExtra => "rustovate-extra",
+        Classification::PatchulaMissing => "patchula-missing",
+        Classification::PatchulaExtra => "patchula-extra",
         Classification::FieldMismatch => "field-mismatch",
         Classification::DeliberateDeparture => "deliberate-departure",
     }
@@ -588,8 +588,8 @@ impl Triage {
     pub fn markdown(&self) -> String {
         let mut out = String::from("# Dependency comparison triage\n\n");
         for class in [
-            Classification::RustovateMissing,
-            Classification::RustovateExtra,
+            Classification::PatchulaMissing,
+            Classification::PatchulaExtra,
             Classification::FieldMismatch,
             Classification::DeliberateDeparture,
         ] {
@@ -622,7 +622,7 @@ impl Triage {
             out.push('\n');
         }
         if !self.exclusions.is_empty() {
-            out.push_str("Excluded Renovate output (outside rustovate's manager scope):\n\n");
+            out.push_str("Excluded Renovate output (outside patchula's manager scope):\n\n");
             for e in &self.exclusions {
                 out.push_str(&format!(
                     "- {} / {}: {} files, {} dependencies, {} updates ([departure {}]({})).\n",
@@ -654,7 +654,7 @@ impl Triage {
             out.push_str("No differences.\n");
             return out;
         }
-        out.push_str("| Classification | Repository / file / manager / dependency | Field | Renovate | rustovate | Departure |\n|---|---|---|---|---|---|\n");
+        out.push_str("| Classification | Repository / file / manager / dependency | Field | Renovate | patchula | Departure |\n|---|---|---|---|---|---|\n");
         for d in &self.differences {
             let location = [
                 &d.repository,
@@ -674,7 +674,7 @@ impl Triage {
                 cell(&location),
                 cell(&d.field),
                 cell(&d.renovate.to_string()),
-                cell(&d.rustovate.to_string()),
+                cell(&d.patchula.to_string()),
                 departure
             ));
         }
@@ -705,7 +705,7 @@ fn difference(
         dependency: location.dep.map(|d| d.name.clone()),
         field: field.into(),
         renovate: a,
-        rustovate: b,
+        patchula: b,
         departure: None,
         rate_limited: false,
         target_version: None,
@@ -876,7 +876,7 @@ fn updates(
             "updates",
             json!(u),
             Value::Null,
-            Classification::RustovateMissing,
+            Classification::PatchulaMissing,
         ));
     }
     for u in b {
@@ -885,7 +885,7 @@ fn updates(
             "updates",
             Value::Null,
             json!(u),
-            Classification::RustovateExtra,
+            Classification::PatchulaExtra,
         ));
     }
 }
@@ -904,7 +904,7 @@ fn missing_file(
         ..location.clone()
     };
     let values = |value| {
-        if class == Classification::RustovateMissing {
+        if class == Classification::PatchulaMissing {
             (value, Value::Null)
         } else {
             (Value::Null, value)
@@ -917,16 +917,16 @@ fn missing_file(
         };
         let (a, b) = values(json!(dep));
         out.push(difference(&location, "dependency", a, b, class));
-        if class == Classification::RustovateExtra {
+        if class == Classification::PatchulaExtra {
             rules.classify(out.last_mut().expect("just inserted"), None, dep);
         }
     }
 }
 
-pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<Triage> {
+pub fn compare(renovate: &Report, patchula: &Report, rules: &Rules) -> Result<Triage> {
     renovate.validate()?;
-    rustovate.validate()?;
-    for repo in &rustovate.repositories {
+    patchula.validate()?;
+    for repo in &patchula.repositories {
         if repo.status != Status::Complete {
             return Err(Error::Input(format!(
                 "{} is {:?}; only complete repositories can be compared",
@@ -940,15 +940,15 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
         }
     }
     let mut renovate = renovate.clone();
-    let mut rustovate = rustovate.clone();
+    let mut patchula = patchula.clone();
     let mut normalizations = BTreeMap::new();
-    let exclusions = crate::normalize::reports(&mut renovate, &mut rustovate, &mut normalizations);
+    let exclusions = crate::normalize::reports(&mut renovate, &mut patchula, &mut normalizations);
     let a: BTreeMap<_, _> = renovate
         .repositories
         .iter()
         .map(|r| (&r.repository, r))
         .collect();
-    let b: BTreeMap<_, _> = rustovate
+    let b: BTreeMap<_, _> = patchula
         .repositories
         .iter()
         .map(|r| (&r.repository, r))
@@ -974,9 +974,9 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
         }
         let (Some(left), Some(right)) = (a.get(repo), b.get(repo)) else {
             let class = if a.contains_key(repo) {
-                Classification::RustovateMissing
+                Classification::PatchulaMissing
             } else {
-                Classification::RustovateExtra
+                Classification::PatchulaExtra
             };
             let present = a
                 .get(repo)
@@ -1010,9 +1010,9 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
             };
             let (Some(left), Some(right)) = (a.get(path), b.get(path)) else {
                 let class = if a.contains_key(path) {
-                    Classification::RustovateMissing
+                    Classification::PatchulaMissing
                 } else {
-                    Classification::RustovateExtra
+                    Classification::PatchulaExtra
                 };
                 if a.get(path)
                     .or_else(|| b.get(path))
@@ -1055,9 +1055,9 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
                 };
                 let (Some(left), Some(right)) = (a.get(&key), b.get(&key)) else {
                     let class = if a.contains_key(&key) {
-                        Classification::RustovateMissing
+                        Classification::PatchulaMissing
                     } else {
-                        Classification::RustovateExtra
+                        Classification::PatchulaExtra
                     };
                     differences.push(difference(
                         &location,
@@ -1066,7 +1066,7 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
                         json!(b.get(&key)),
                         class,
                     ));
-                    if class == Classification::RustovateExtra {
+                    if class == Classification::PatchulaExtra {
                         rules.classify(differences.last_mut().expect("just inserted"), None, dep);
                     }
                     continue;
@@ -1126,7 +1126,7 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
         }
     }
     for d in &mut differences {
-        if let Some(repo) = rustovate
+        if let Some(repo) = patchula
             .repositories
             .iter()
             .find(|r| r.repository == d.repository)
@@ -1142,8 +1142,8 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
                 })
         {
             let digest_difference =
-                (d.field == "updates.newDigest" && d.rustovate.is_null() && !d.renovate.is_null())
-                    || (d.classification == Classification::RustovateMissing
+                (d.field == "updates.newDigest" && d.patchula.is_null() && !d.renovate.is_null())
+                    || (d.classification == Classification::PatchulaMissing
                         && d.field == "updates"
                         && serde_json::from_value::<Update>(d.renovate.clone()).is_ok_and(|u| {
                             matches!(u.update_type.as_str(), "digest" | "pin")
@@ -1183,7 +1183,7 @@ pub fn compare(renovate: &Report, rustovate: &Report, rules: &Rules) -> Result<T
     Ok(Triage {
         schema_version: 1,
         renovate,
-        rustovate,
+        patchula,
         differences,
         warnings: Vec::new(),
         exclusions,
@@ -1314,12 +1314,12 @@ fn stable_node_channel(left: &Dependency, right: &Dependency, difference: &Diffe
         return false;
     }
     let pair = difference.paired.clone().or_else(|| {
-        (difference.original_classification == Classification::RustovateExtra
+        (difference.original_classification == Classification::PatchulaExtra
             && left
                 .updates
                 .iter()
                 .all(|u| u.update_type != "major" && u.new_digest.is_none()))
-        .then(|| serde_json::from_value::<Update>(difference.rustovate.clone()).ok())
+        .then(|| serde_json::from_value::<Update>(difference.patchula.clone()).ok())
         .flatten()
         .map(|u| {
             let mut current = u.clone();
@@ -1398,7 +1398,7 @@ fn declared_go_floor(left: &Dependency, right: &Dependency, difference: &Differe
     if difference.field == "current.version" {
         return true;
     }
-    serde_json::from_value::<Update>(difference.rustovate.clone()).is_ok_and(|u| {
+    serde_json::from_value::<Update>(difference.patchula.clone()).is_ok_and(|u| {
         matches!(u.update_type.as_str(), "minor" | "patch")
             && u.new_value == u.new_version
             && u.new_digest.is_none()
@@ -1578,12 +1578,12 @@ fn cargo_compatible_target(left: &Dependency, right: &Dependency, difference: &D
                 })
     };
     match difference.original_classification {
-        Classification::RustovateMissing => {
+        Classification::PatchulaMissing => {
             serde_json::from_value::<Update>(difference.renovate.clone())
                 .is_ok_and(|a| right.updates.iter().any(|b| compatible(&a, b)))
         }
-        Classification::RustovateExtra => {
-            serde_json::from_value::<Update>(difference.rustovate.clone())
+        Classification::PatchulaExtra => {
+            serde_json::from_value::<Update>(difference.patchula.clone())
                 .is_ok_and(|b| left.updates.iter().any(|a| compatible(a, &b)))
         }
         _ => false,

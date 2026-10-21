@@ -2,7 +2,7 @@
 
 This workspace binary reads **only Renovate's output**, never its source, preset
 data or fixtures. Its fixtures are small JSON-lines examples written by hand;
-`demo/rustovate-sample` and `example/lookup` are fictional. The adapter was also
+`demo/patchula-sample` and `example/lookup` are fictional. The adapter was also
 verified against a caller-supplied private Renovate 44.155.6 lookup log; that log
 and its triage outputs stay outside this repository.
 
@@ -19,7 +19,7 @@ never as a CLI argument:
 
 ```sh
 # RENOVATE_TOKEN is already exported by the caller.
-mise run conformance:compare --report /path/to/rustovate-report.json \
+mise run conformance:compare --report /path/to/patchula-report.json \
   owner/repo-one owner/repo-two
 ```
 
@@ -30,7 +30,7 @@ warning under Bun. It sets `LOG_LEVEL=debug`, `LOG_FORMAT=json`,
 `RENOVATE_DRY_RUN=lookup`, GitHub platform, explicit targets, no autodiscovery and
 no onboarding. It supplies an empty operator config and temporary base/cache
 paths. This is a read-only dry run. Repository configs still influence Renovate's
-results; rustovate has its own policy. Temporary installations, clones, caches
+results; patchula has its own policy. Temporary installations, clones, caches
 and raw logs are removed on normal completion and error. Process termination
 (e.g. SIGKILL) can leave OS temporary directories to clean manually. No raw live
 log is persisted in the repository or echoed on failure.
@@ -54,10 +54,10 @@ The optional repo list selects an exact subset; a requested repository must exis
 on at least one side. A repository absent from Renovate output, or ending with
 `result: config-validation`, is recorded under `noBaseline` with a reason and
 does not produce false extra dependencies. A successful empty baseline remains
-comparable. Missing rustovate repositories/files emit one difference per contained
+comparable. Missing patchula repositories/files emit one difference per contained
 dependency, including dependencies without updates. Empty files/repositories still
-emit coverage differences. An empty rustovate report is valid and makes every
-included in-scope Renovate dependency `rustovate-missing`:
+emit coverage differences. An empty patchula report is valid and makes every
+included in-scope Renovate dependency `patchula-missing`:
 
 ```sh
 mise run conformance:compare --report /path/to/empty.json \
@@ -112,7 +112,7 @@ Optional `branches[].upgrades` or `branch.upgrades` summaries enrich only
 unambiguous extracted dependencies/proposals. Malformed or unmatched/ambiguous
 summaries warn and are ignored. A diagnostic `branches` object or a string branch
 name is not an upgrade summary. The adapter normalizes `gomod`,
-`pip_requirements`, `docker-compose`, `custom.regex` and `pinDigest` to rustovate's
+`pip_requirements`, `docker-compose`, `custom.regex` and `pinDigest` to patchula's
 independent vocabulary.
 
 Missing snapshots, invalid JSON-looking lines, absent required repository/manager
@@ -128,8 +128,8 @@ npm digest normalization and ignored empty-file-only coverage. Markdown includes
 these counts, warnings and exclusions too.
 The fixed `renovate-config-manager` scope rule excludes Renovate's own configuration
 manager (snapshots and upgrade summaries) under [departure 19](../docs/departures.md#departure-19);
-rustovate has no equivalent. Every other manager remains in comparison. Classification
-is `rustovate-missing`, `rustovate-extra`, `field-mismatch`, or
+patchula has no equivalent. Every other manager remains in comparison. Classification
+is `patchula-missing`, `patchula-extra`, `field-mismatch`, or
 `deliberate-departure`; mapped entries retain `originalClassification` and a
 rule/row/link. Equal updates match as sets; a unique identical target exposes
 type/group differences, and unique remaining proposals of the same type are
@@ -142,7 +142,7 @@ report-only. Input or execution failures exit nonzero.
 are mapped to [departure 7](../docs/departures.md#departure-7). An extra pin must
 keep the current value/version, add a digest to an unpinned dependency and have
 no group. Release-age differences map to [departure 23](../docs/departures.md#departure-23)
-only when timestamp evidence places a newer rustovate target at least 24 and less than 96
+only when timestamp evidence places a newer patchula target at least 24 and less than 96
 hours old (an empirical ceiling, not Renovate's exact rule) at Renovate's own package-snapshot log timestamp, under an explicit
 24-hour policy, with an older Renovate proposal in
 the same class. Exact npm major range edits map narrowly to
@@ -151,14 +151,14 @@ and an explicit exact policy. Other version and identity differences remain acti
 
 Departure 45 additionally covers newer full action targets on an identical
 proposed floating major/minor tag when the declared precision is preserved.
-The rustovate report must include independent `metadata.tagDigests` evidence
+The patchula report must include independent `metadata.tagDigests` evidence
 whose entry for that tag equals the proposed commit. Absent evidence or a
 different commit remains actionable; the proposal itself is not evidence.
 
 The reverse age difference is also departure 23 when Renovate's newer target
-matches any version in a rustovate `metadata.heldBack.versions` summary in the same
+matches any version in a patchula `metadata.heldBack.versions` summary in the same
 update class (legacy single-version entries remain accepted).
-The paired rustovate proposal must carry a 24-hour policy and an evaluation
+The paired patchula proposal must carry a 24-hour policy and an evaluation
 timestamp inside that held-back release's publication/eligibility interval,
 which must be exactly 24 hours. Future publication dates, expired eligibility,
 different versions/classes and missing evidence stay actionable. A `newValue`

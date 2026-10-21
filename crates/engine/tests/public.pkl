@@ -1,4 +1,4 @@
-amends "../../../Rustovate.pkl"
+amends "../../../Patchula.pkl"
 managers = new Listing { "npm"; "github-actions"; "mise"; "cargo" }
 // This legacy cassette verifies conditional source freshness, including wait=0.
 defaults { waitHours = 0 }

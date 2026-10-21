@@ -8,14 +8,14 @@ mod pagination;
 pub use credentials::{Credentials, Token};
 pub use governor::{PrimaryLimit, Stats};
 pub use pagination::GraphqlPage;
-pub use rustovate_http::{Network, Response, Transport};
+pub use patchula_http::{Network, Response, Transport};
 
 use governor::Governor;
+use patchula_cache::{Cache, HttpEntry, HttpKey};
 use reqwest::{
     Method, Request, StatusCode, Url,
     header::{self, HeaderValue},
 };
-use rustovate_cache::{Cache, HttpEntry, HttpKey};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
@@ -105,7 +105,7 @@ impl fmt::Debug for Client {
 
 impl fmt::Display for Client {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("rustovate GitHub client")
+        f.write_str("patchula GitHub client")
     }
 }
 
@@ -189,8 +189,8 @@ impl Client {
     }
 
     /// Public metadata reads share the transport pool but never GitHub auth.
-    pub fn public_http(&self) -> rustovate_http::Cached {
-        rustovate_http::Cached::new(
+    pub fn public_http(&self) -> patchula_http::Cached {
+        patchula_http::Cached::new(
             self.0.cache.clone(),
             self.0.transport.clone(),
             self.concurrency(),
@@ -235,7 +235,7 @@ impl Client {
         );
         headers.insert(
             header::USER_AGENT,
-            HeaderValue::from_static(concat!("rustovate/", env!("CARGO_PKG_VERSION"))),
+            HeaderValue::from_static(concat!("patchula/", env!("CARGO_PKG_VERSION"))),
         );
         request
     }
@@ -264,7 +264,7 @@ impl Client {
             );
         }
         headers.insert(
-            "x-rustovate-credential-scope".into(),
+            "x-patchula-credential-scope".into(),
             self.0.credential_scope.clone(),
         );
         HttpKey::new(request.method().as_str(), request.url().as_str(), headers)
@@ -297,7 +297,7 @@ impl Client {
             )
         };
         for attempt in 0..=self.0.options.max_retries {
-            let trace = rustovate_http::RequestTrace::new(request.method().as_str(), request.url());
+            let trace = patchula_http::RequestTrace::new(request.method().as_str(), request.url());
             trace.cache_policy(if cached { "always-revalidate" } else { "cold" }, None);
             let queued = std::time::Instant::now();
             let content_permit = if content {
@@ -325,7 +325,7 @@ impl Client {
                 .await;
             let response = match result {
                 Ok(response) => response,
-                Err(rustovate_http::Error::Fixture(message)) => {
+                Err(patchula_http::Error::Fixture(message)) => {
                     return Err(Error::Fixture(message));
                 }
                 Err(_) => return Err(Error::Transport),

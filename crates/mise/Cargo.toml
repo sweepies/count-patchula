@@ -1,5 +1,5 @@
 [package]
-name = "rustovate-mise"
+name = "patchula-mise"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,5 +10,5 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-rustovate-config = { path = "../config" }
+patchula-config = { path = "../config" }
 serde_json.workspace = true

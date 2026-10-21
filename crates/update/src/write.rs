@@ -1,8 +1,8 @@
 use crate::{Plan, Snapshot, blob_sha};
 use futures_util::{FutureExt, StreamExt, stream};
-use rustovate_config::Rebase;
-use rustovate_github::Client;
-use rustovate_report::ActionStatus;
+use patchula_config::Rebase;
+use patchula_github::Client;
+use patchula_report::ActionStatus;
 use serde_json::{Value, json};
 
 /// GitHub's Git Data GraphQL ref lease is atomic, including the base check.
@@ -14,7 +14,7 @@ pub const DEFAULT_BRANCH_MOVED: &str =
 pub const DEFAULT_BRANCH_CHANGED: &str = "default branch changed since extraction; rerun";
 
 /// An expected extraction race: no writes were attempted against the stale base.
-pub fn needs_requeue(action: &rustovate_report::BranchAction) -> bool {
+pub fn needs_requeue(action: &patchula_report::BranchAction) -> bool {
     action.status == ActionStatus::Skipped
         && matches!(
             action.reason.as_deref(),
@@ -308,7 +308,7 @@ async fn apply_inner(
             let value: Value = serde_json::from_slice(&response.body).map_err(|e| e.to_string())?;
             Some(field(&value["object"], "sha")?.to_owned())
         }
-        Err(rustovate_github::Error::Status(404)) => None,
+        Err(patchula_github::Error::Status(404)) => None,
         Err(e) => return Err(e.to_string()),
     };
     plan.action.previous_commit = old.clone();
@@ -328,7 +328,7 @@ async fn apply_inner(
         let existing_tip = fresh(client, &format!("repos/{repo}/git/commits/{old}")).await?;
         let Some(recorded) = existing_tip["message"]
             .as_str()
-            .and_then(|m| trailer(m, "Rustovate-Base: "))
+            .and_then(|m| trailer(m, "Patchula-Base: "))
         else {
             plan.action.status = ActionStatus::Protected;
             plan.action.reason = Some("unmarked branch history; left untouched".into());
@@ -360,8 +360,8 @@ async fn apply_inner(
                 c["author"]["login"] == actor
                     && (c["committer"]["login"] == actor || c["committer"]["login"] == "web-flow")
                     && c["commit"]["verification"]["verified"] == true
-                    && trailer(message, "Rustovate: ") == Some("v1")
-                    && trailer(message, "Rustovate-Branch: ").is_some()
+                    && trailer(message, "Patchula: ") == Some("v1")
+                    && trailer(message, "Patchula-Branch: ").is_some()
             });
         if !owned {
             plan.action.status = ActionStatus::Protected;
@@ -375,11 +375,11 @@ async fn apply_inner(
         let message = latest["commit"]["message"]
             .as_str()
             .ok_or("missing commit message")?;
-        let parent = trailer(message, "Rustovate-Base: ").ok_or("missing rustovate base marker")?;
+        let parent = trailer(message, "Patchula-Base: ").ok_or("missing patchula base marker")?;
         moved_base = parent != plan.action.base_commit;
         if !moved_base
             || rebase == Rebase::Conflicts
-                && trailer(message, "Rustovate-Plan: ") == Some(&plan.fingerprint)
+                && trailer(message, "Patchula-Plan: ") == Some(&plan.fingerprint)
         {
             let existing_tree = field(&existing_tip["tree"], "sha")?;
             let existing = fresh(
@@ -455,7 +455,7 @@ async fn apply_inner(
         ""
     };
     let message = format!(
-        "{}{}\n\nRustovate: v1\nRustovate-Branch: {}\nRustovate-Base: {}\nRustovate-Plan: {}",
+        "{}{}\n\nPatchula: v1\nPatchula-Branch: {}\nPatchula-Base: {}\nPatchula-Plan: {}",
         plan.action.message, pending, plan.identity, plan.action.base_commit, plan.fingerprint
     );
     // App bot signing requires GitHub-supplied authorship and signature.

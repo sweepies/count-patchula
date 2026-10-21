@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "provenance": "Simulated by rustovate for offline pagination/error tests; no external fixture source",
+  "provenance": "Simulated by patchula for offline pagination/error tests; no external fixture source",
   "interactions": [
     {
       "request": {
@@ -20,7 +20,7 @@
         "body": {
           "format": "json",
           "value": {
-            "query": "query($cursor: String) { repository(owner: \"rustovate\", name: \"simulated\") { releases(first: 2, after: $cursor) { nodes { name } pageInfo { hasNextPage endCursor } } } }",
+            "query": "query($cursor: String) { repository(owner: \"patchula\", name: \"simulated\") { releases(first: 2, after: $cursor) { nodes { name } pageInfo { hasNextPage endCursor } } } }",
             "variables": {
               "cursor": null
             }
@@ -70,7 +70,7 @@
         "body": {
           "format": "json",
           "value": {
-            "query": "query($cursor: String) { repository(owner: \"rustovate\", name: \"simulated\") { releases(first: 2, after: $cursor) { nodes { name } pageInfo { hasNextPage endCursor } } } }",
+            "query": "query($cursor: String) { repository(owner: \"patchula\", name: \"simulated\") { releases(first: 2, after: $cursor) { nodes { name } pageInfo { hasNextPage endCursor } } } }",
             "variables": {
               "cursor": "same"
             }

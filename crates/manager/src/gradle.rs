@@ -233,7 +233,7 @@ fn wrapper(path: &str, text: &str) -> Vec<Dependency> {
     let Some(version) = DISTRIBUTION.captures(text).and_then(|c| c.get(1)) else {
         return Vec::new();
     };
-    let (source, package, extract) = rustovate_mise::resolve("gradle").map_or_else(
+    let (source, package, extract) = patchula_mise::resolve("gradle").map_or_else(
         || (Source::Mise, "gradle".to_string(), None),
         |r| (r.source, r.package, r.extract),
     );

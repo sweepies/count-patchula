@@ -123,7 +123,7 @@ impl Runner {
                 vec![
                     "rev-parse".into(),
                     "--verify".into(),
-                    "refs/rustovate/base".into(),
+                    "refs/patchula/base".into(),
                 ],
             )
             .await;
@@ -140,7 +140,7 @@ impl Runner {
                     "--depth=1".into(),
                     "--no-tags".into(),
                     "origin".into(),
-                    format!("+{base}:refs/rustovate/base"),
+                    format!("+{base}:refs/patchula/base"),
                 ],
             )
             .await?;

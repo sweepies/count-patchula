@@ -108,15 +108,15 @@ with Git and the API extraction before edits are applied. Symlinks, special
 files, unexpected generated changes, oversized files and non-UTF-8 output fail
 the branch. The source tree is never pushed or committed with Git.
 
-Tools are installed into the runner's own tool store: `RUSTOVATE_TOOLS_DIR`,
+Tools are installed into the runner's own tool store: `PATCHULA_TOOLS_DIR`,
 or `<cache>.tools` beside the SQLite cache (for example
-`.rustovate-cache.tools`). It is separate from the operator's mise installs and
+`.patchula-cache.tools`). It is separate from the operator's mise installs and
 persists across runs, so mount it as a volume in containers. Every successful
 tool run records its `tool@version` with a timestamp in
-`rustovate-usage.json`. `rustovate tools install` prewarms every pinned default
+`patchula-usage.json`. `patchula tools install` prewarms every pinned default
 (Rust excepted, which runs through rustup), for example in an image build,
 since some downloads are slow (the static PHP host served about 44 KB/s when
-measured). `rustovate tools prune --days 30` uninstalls versions no run has used
+measured). `patchula tools prune --days 30` uninstalls versions no run has used
 for that long; pinned defaults are never pruned. In CI, mise-action caches the
 same task-scoped toolchains the real-tool tests install.
 
@@ -212,7 +212,7 @@ and is not a failure. Binary `bun.lockb` remains unsupported. The retained
 for that format; supported formats always require successful tooling.
 
 `lockfiles.refresh=true` maintains `<prs.branch>lock-file-maintenance` (default
-`rustovate/lock-file-maintenance`). It groups all enabled ecosystems, uses default
+`patchula/lock-file-maintenance`). It groups all enabled ecosystems, uses default
 labels/merge policy, and reports the configured lockfile group and changed
 files. Maintenance runs at most once per ISO week, respecting `waitHours` since
 the last successful completion. The default eligible window is Monday
@@ -238,20 +238,20 @@ provider registry; live registry/signature behavior remains a sandbox check.
 The supplied report pins Bun **1.1.30** in `mise.toml`, predating text `bun.lock`
 support. Repository pins are honored: generation reports an actionable branch
 error rather than silently choosing a newer tool. Recommended prerequisite:
-merge the existing `rustovate/oven-sh-bun-1.x` PR targeting Bun 1.4.3, then rerun.
+merge the existing `patchula/oven-sh-bun-1.x` PR targeting Bun 1.4.3, then rerun.
 This also satisfies the default-tool policy without adding an override.
 
 With compatible tools and unchanged catalogs/config, seven additional dependency
 branches and PRs are eligible:
 
 ```text
-rustovate/github-com-google-uuid-1.x
-rustovate/go-1.x
-rustovate/hono-4.x
-rustovate/typescript-5.x
-rustovate/typescript-7.x
-rustovate/zod-3.x
-rustovate/zod-4.x
+patchula/github-com-google-uuid-1.x
+patchula/go-1.x
+patchula/hono-4.x
+patchula/typescript-5.x
+patchula/typescript-7.x
+patchula/zod-3.x
+patchula/zod-4.x
 ```
 
 Prettier joins the existing pin branch, bringing it to six table rows; it does
@@ -274,11 +274,11 @@ environment variable (never written in commands or files):
 
 ```sh
 CARGO_NET_OFFLINE=true mise run ci
-CARGO_NET_OFFLINE=true mise exec -- cargo test --locked -p rustovate-update --test write verified_receipts -- --nocapture
-mise exec -- cargo build --release --locked -p rustovate-cli
-mise exec -- target/release/rustovate -vv run --dry-run --json --cache /root/rustovate-conf/sandbox.sqlite sweepies/rustovate-sandbox > /root/rustovate-conf/sandbox-wave3-dry.json 2> /root/rustovate-conf/sandbox-wave3-dry.trace
-mise exec -- target/release/rustovate -vv run --json --cache /root/rustovate-conf/sandbox.sqlite sweepies/rustovate-sandbox > /root/rustovate-conf/sandbox-wave3-run.json 2> /root/rustovate-conf/sandbox-wave3-run.trace
-mise exec -- target/release/rustovate -vv run --json --cache /root/rustovate-conf/sandbox.sqlite sweepies/rustovate-sandbox > /root/rustovate-conf/sandbox-wave3-repeat.json 2> /root/rustovate-conf/sandbox-wave3-repeat.trace
+CARGO_NET_OFFLINE=true mise exec -- cargo test --locked -p patchula-update --test write verified_receipts -- --nocapture
+mise exec -- cargo build --release --locked -p patchula-cli
+mise exec -- target/release/patchula -vv run --dry-run --json --cache /root/rustovate-conf/sandbox.sqlite sweepies/rustovate-sandbox > /root/rustovate-conf/sandbox-wave3-dry.json 2> /root/rustovate-conf/sandbox-wave3-dry.trace
+mise exec -- target/release/patchula -vv run --json --cache /root/rustovate-conf/sandbox.sqlite sweepies/rustovate-sandbox > /root/rustovate-conf/sandbox-wave3-run.json 2> /root/rustovate-conf/sandbox-wave3-run.trace
+mise exec -- target/release/patchula -vv run --json --cache /root/rustovate-conf/sandbox.sqlite sweepies/rustovate-sandbox > /root/rustovate-conf/sandbox-wave3-repeat.json 2> /root/rustovate-conf/sandbox-wave3-repeat.trace
 ```
 
 Compare repeat `write`/`total` timing and request traces. Expect one write-phase
@@ -300,17 +300,17 @@ separately designed opt-in, not inherited process secrets.
 zero failures and one intentionally ignored recording test. The fixture scan
 checked 22 cassettes; formatting, Clippy with `-D warnings`, tests and the workspace
 build passed. Full log: `/tmp/ci.log`; stage logs are kept under
-`$RUSTOVATE_CI_LOG_DIR` (default `/tmp/rustovate-ci.XXXXXX`). `mise run docs`
+`$PATCHULA_CI_LOG_DIR` (default `/tmp/patchula-ci.XXXXXX`). `mise run docs`
 regenerated the CLI reference. No live sandbox mutation or push was performed.
 
 CI tail:
 
 ```text
 [build] $ cargo build --workspace --locked
-   Compiling rustovate-update v0.1.0 (/root/rustovate/crates/update)
-   Compiling rustovate-conformance v0.1.0 (/root/rustovate/conformance)
-   Compiling rustovate-engine v0.1.0 (/root/rustovate/crates/engine)
-   Compiling rustovate-server v0.1.0 (/root/rustovate/crates/server)
-   Compiling rustovate-cli v0.1.0 (/root/rustovate/crates/cli)
+   Compiling patchula-update v0.1.0 (/root/rustovate/crates/update)
+   Compiling patchula-conformance v0.1.0 (/root/rustovate/conformance)
+   Compiling patchula-engine v0.1.0 (/root/rustovate/crates/engine)
+   Compiling patchula-server v0.1.0 (/root/rustovate/crates/server)
+   Compiling patchula-cli v0.1.0 (/root/rustovate/crates/cli)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.63s
 ```

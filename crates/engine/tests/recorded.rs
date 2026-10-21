@@ -1,16 +1,16 @@
 //! Multi-repository recording uses only public jdx repositories and registries.
-use rustovate_cache::Cache;
-use rustovate_engine::{Engine, Options};
-use rustovate_http::Network;
-use rustovate_report::{Report, Status};
-use rustovate_testkit::{Options as FixtureOptions, Redactor, Replay};
+use patchula_cache::Cache;
+use patchula_engine::{Engine, Options};
+use patchula_http::Network;
+use patchula_report::{Report, Status};
+use patchula_testkit::{Options as FixtureOptions, Redactor, Replay};
 use std::{path::Path, sync::Arc};
-fn config() -> rustovate_config::Config {
-    rustovate_config::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/public.pkl")).unwrap()
+fn config() -> patchula_config::Config {
+    patchula_config::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/public.pkl")).unwrap()
 }
 #[tokio::test]
 async fn public_multi_repo_report_cold_and_warm() {
-    let recording = std::env::var("RUSTOVATE_RECORD").as_deref() == Ok("1");
+    let recording = std::env::var("PATCHULA_RECORD").as_deref() == Ok("1");
     let token = if recording {
         std::env::var("GH_TOKEN")
             .or_else(|_| std::env::var("GITHUB_TOKEN"))
@@ -32,9 +32,9 @@ async fn public_multi_repo_report_cold_and_warm() {
         ))
     };
     let transport = if let Some(replay) = &replay {
-        replay.clone() as Arc<dyn rustovate_http::Transport>
+        replay.clone() as Arc<dyn patchula_http::Transport>
     } else {
-        rustovate_testkit::from_env(&path, fixture_options, || Ok(Arc::new(Network::new()?)))
+        patchula_testkit::from_env(&path, fixture_options, || Ok(Arc::new(Network::new()?)))
             .unwrap()
     };
     let dir = tempfile::tempdir().unwrap();
@@ -101,17 +101,17 @@ async fn public_multi_repo_report_cold_and_warm() {
     if let Some(replay) = replay {
         replay.assert_finished().unwrap();
     }
-    let cassette: rustovate_testkit::Cassette =
+    let cassette: patchula_testkit::Cassette =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     for repo in ["jdx/usage", "jdx/mr-boxington"] {
         let metadata = cassette
             .interactions
             .iter()
-            .find(|i| matches!(&i.request.body, rustovate_testkit::Body::Json(value)
-                if value["query"] == rustovate_engine::REPOSITORY_HEAD_QUERY
+            .find(|i| matches!(&i.request.body, patchula_testkit::Body::Json(value)
+                if value["query"] == patchula_engine::REPOSITORY_HEAD_QUERY
                     && format!("{}/{}", value["variables"]["owner"].as_str().unwrap(), value["variables"]["name"].as_str().unwrap()) == repo))
             .expect("public repo metadata");
-        let rustovate_testkit::Body::Json(value) = &metadata.response.body else {
+        let patchula_testkit::Body::Json(value) = &metadata.response.body else {
             panic!("JSON metadata")
         };
         assert_eq!(

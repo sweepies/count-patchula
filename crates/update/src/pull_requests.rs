@@ -1,16 +1,16 @@
 use crate::{Plan, plan::hash};
 use chrono::{DateTime, Duration, Utc};
-use rustovate_config::Config;
-use rustovate_github::Client;
-use rustovate_report::{ActionStatus, PullRequestAction};
+use patchula_config::Config;
+use patchula_github::Client;
+use patchula_report::{ActionStatus, PullRequestAction};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const BODY_LIMIT: usize = 32_000;
-const MARKER: &str = "<!-- rustovate:";
-const RECHECK: &str = "<!-- rustovate-recheck -->";
-const OBSOLETE: &str = "<!-- rustovate-closed:obsolete -->";
+const MARKER: &str = "<!-- patchula:";
+const RECHECK: &str = "<!-- patchula-recheck -->";
+const OBSOLETE: &str = "<!-- patchula-closed:obsolete -->";
 pub(crate) const CLOSED_BY_OWNER: &str =
     "closed-by-owner: this update was manually closed; waiting for a newer target";
 pub const ENABLE_AUTO_MERGE: &str = "mutation($input:EnablePullRequestAutoMergeInput!){enablePullRequestAutoMerge(input:$input){pullRequest{id}}}";
@@ -121,11 +121,11 @@ pub(crate) fn ticked_lines(text: &str) -> Vec<&str> {
     }
     out
 }
-/// The update key recorded by a rustovate PR's ownership marker.
+/// The update key recorded by a patchula PR's ownership marker.
 pub(crate) fn marker_update(text: &str) -> Option<String> {
     marker(text).map(|m| m.update)
 }
-/// Whether an edit ticked a rustovate control: re-check, add to batch or
+/// Whether an edit ticked a patchula control: re-check, add to batch or
 /// remove from batch.
 pub fn controls_edited(before: &str, after: &str) -> bool {
     let controls = |text| -> BTreeSet<String> {
@@ -191,10 +191,10 @@ pub struct Lifecycle {
     base: String,
     pub(crate) prs: Vec<Value>,
     pub actions: Vec<PullRequestAction>,
-    notes: BTreeMap<(String, String, String, String), rustovate_datasource::notes::Notes>,
+    notes: BTreeMap<(String, String, String, String), patchula_datasource::notes::Notes>,
     pub(crate) recheck: Recheck,
     merge_settings: Option<crate::automerge::Settings>,
-    maintenance_policy: rustovate_config::Policy,
+    maintenance_policy: patchula_config::Policy,
     maintenance_group: String,
     branch_permits: BTreeMap<String, BTreeSet<String>>,
     /// Update keys now carried by the batch PR; their PRs close as batched.
@@ -237,7 +237,7 @@ impl Lifecycle {
     /// decisions can suppress a newly closed PR or permit an over-budget create.
     pub async fn prepare(
         client: &Client,
-        repository: &rustovate_report::Repository,
+        repository: &patchula_report::Repository,
         plans: &mut [Plan],
         config: &Config,
         now: DateTime<Utc>,
@@ -256,7 +256,7 @@ impl Lifecycle {
     }
     pub async fn prepare_with_controls(
         client: &Client,
-        repository: &rustovate_report::Repository,
+        repository: &patchula_report::Repository,
         plans: &mut [Plan],
         config: &Config,
         now: DateTime<Utc>,
@@ -448,14 +448,14 @@ impl Lifecycle {
 
     pub async fn publish(&mut self, client: &Client, plans: &mut [Plan]) {
         let sources =
-            rustovate_datasource::Client::new(client.clone(), client.public_http(), client.cache())
+            patchula_datasource::Client::new(client.clone(), client.public_http(), client.cache())
                 .notes_batch();
         self.publish_with_sources(client, &sources, plans).await;
     }
     pub async fn publish_with_sources(
         &mut self,
         client: &Client,
-        sources: &rustovate_datasource::Client,
+        sources: &patchula_datasource::Client,
         plans: &mut [Plan],
     ) {
         let mut ranges = BTreeSet::new();
@@ -641,7 +641,7 @@ impl Lifecycle {
     async fn publish_one(
         &mut self,
         client: &Client,
-        sources: &rustovate_datasource::Client,
+        sources: &patchula_datasource::Client,
         plan: &Plan,
     ) -> Result<(), String> {
         if self
@@ -816,11 +816,11 @@ impl Lifecycle {
                 Value::Null
             };
         if merge && self.merge_settings.as_ref().is_some_and(|s| !s.native) {
-            pr["rustovate_merge"] = json!(
+            pr["patchula_merge"] = json!(
                 "auto-merge waiting for a later run with a verified receipt and passing checks"
             );
         } else if merge && !pr["auto_merge"].is_null() {
-            pr["rustovate_merge"] = json!("native auto-merge enabled");
+            pr["patchula_merge"] = json!("native auto-merge enabled");
         }
         self.actions.push(action(
             &self.repo,
@@ -914,7 +914,7 @@ impl Lifecycle {
             ))
             .expect("serializable body intent"),
         );
-        let content_marker = format!("<!-- rustovate-content:{content_hash} -->");
+        let content_marker = format!("<!-- patchula-content:{content_hash} -->");
         (text, content_marker)
     }
     fn reusable_body(&self, plan: &Plan, existing: Option<&Value>, content_marker: &str) -> bool {
@@ -928,7 +928,7 @@ impl Lifecycle {
     }
     async fn render(
         &mut self,
-        sources: &rustovate_datasource::Client,
+        sources: &patchula_datasource::Client,
         plan: &Plan,
         existing: Option<&Value>,
     ) -> String {
@@ -1009,7 +1009,7 @@ impl Lifecycle {
             Recheck::NextRun => "on the next run",
         };
         text.push_str(&format!(
-            "\n- [ ] Created by rustovate. Click to re-check {timing}. {RECHECK}\n"
+            "\n- [ ] Created by patchula. Click to re-check {timing}. {RECHECK}\n"
         ));
         text.push_str(&controls);
         text.push('\n');

@@ -14,10 +14,10 @@ use crate::{
     Blob, Plan, Snapshot, blob_sha,
     plan::{hash, unified},
 };
+use patchula_config::{Config, Manager, NpmEngine, Source};
+use patchula_manager::Dependency;
+use patchula_report::{ActionStatus, BranchAction, FileAction, Repository, Update};
 pub use process::{CommandSpec, Executor, SystemExecutor};
-use rustovate_config::{Config, Manager, NpmEngine, Source};
-use rustovate_manager::Dependency;
-use rustovate_report::{ActionStatus, BranchAction, FileAction, Repository, Update};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -122,7 +122,7 @@ pub(crate) fn job(
             }
             return Ok(None);
         }
-        Manager::Bundler if dep.kind == rustovate_config::DependencyKind::Toolchain => {
+        Manager::Bundler if dep.kind == patchula_config::DependencyKind::Toolchain => {
             return Ok(None);
         }
         Manager::Bundler => {
@@ -141,7 +141,7 @@ pub(crate) fn job(
         // with locks restores that directory's solution or project.
         Manager::Nuget => {
             let dir = directory(&dep.file);
-            let locked = dep.kind != rustovate_config::DependencyKind::Toolchain
+            let locked = dep.kind != patchula_config::DependencyKind::Toolchain
                 && !dep.file.ends_with("dotnet-tools.json")
                 && snapshot.paths.iter().any(|p| {
                     p.rsplit('/').next() == Some("packages.lock.json")
@@ -285,7 +285,7 @@ pub fn maintenance(
         .defaults
         .windows
         .iter()
-        .map(|w| rustovate_report::Window {
+        .map(|w| patchula_report::Window {
             cron: w.cron.clone(),
             zone: w.zone.clone(),
         })
@@ -335,15 +335,15 @@ pub fn maintenance(
     }))
 }
 
-fn refresh_key(repo: &str) -> rustovate_cache::ExtractionKey {
-    rustovate_cache::ExtractionKey {
+fn refresh_key(repo: &str) -> patchula_cache::ExtractionKey {
+    patchula_cache::ExtractionKey {
         repo: repo.into(),
         default_branch_commit: "maintenance".into(),
         config_hash: "maintenance-success-v1".into(),
     }
 }
 pub async fn defer_completed_refresh(
-    cache: &rustovate_cache::Cache,
+    cache: &patchula_cache::Cache,
     plan: &mut Plan,
     config: &Config,
     now: chrono::DateTime<chrono::Utc>,
@@ -369,9 +369,9 @@ pub async fn defer_completed_refresh(
     Ok(())
 }
 pub async fn record_refresh(
-    cache: &rustovate_cache::Cache,
+    cache: &patchula_cache::Cache,
     plans: &[Plan],
-    actions: &[rustovate_report::PullRequestAction],
+    actions: &[patchula_report::PullRequestAction],
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), String> {
     for plan in plans.iter().filter(|p| p.maintenance && p.lockfiles_ready) {
@@ -398,7 +398,7 @@ pub async fn record_refresh(
 }
 
 pub struct Runner {
-    credentials: Option<Arc<dyn rustovate_github::Credentials>>,
+    credentials: Option<Arc<dyn patchula_github::Credentials>>,
     cache: PathBuf,
     token: String,
     executor: Arc<dyn Executor>,
@@ -407,7 +407,7 @@ pub struct Runner {
     rustup: PathBuf,
     rustup_home: PathBuf,
     /// Fetches the Gradle wrapper checksum; injectable for offline tests.
-    http: Arc<dyn rustovate_http::Transport>,
+    http: Arc<dyn patchula_http::Transport>,
     /// Serialises tool usage records within this process.
     usage: Arc<std::sync::Mutex<()>>,
 }
@@ -449,7 +449,7 @@ impl Runner {
             usage: Default::default(),
         }
     }
-    pub fn with_http(mut self, http: Arc<dyn rustovate_http::Transport>) -> Self {
+    pub fn with_http(mut self, http: Arc<dyn patchula_http::Transport>) -> Self {
         self.http = http;
         self
     }
@@ -457,7 +457,7 @@ impl Runner {
         self.executor = executor;
         self
     }
-    pub fn with_credentials(mut self, credentials: Arc<dyn rustovate_github::Credentials>) -> Self {
+    pub fn with_credentials(mut self, credentials: Arc<dyn patchula_github::Credentials>) -> Self {
         self.credentials = Some(credentials);
         self
     }
@@ -832,7 +832,7 @@ fn validate_targets(
     if plan.changes.is_empty() {
         return Ok(());
     }
-    let extraction = rustovate_manager::Scanner::new(config)?.extract(files)?;
+    let extraction = patchula_manager::Scanner::new(config)?.extract(files)?;
     let paths: BTreeSet<String> = files.keys().cloned().collect();
     for change in &plan.changes {
         let leaf = change.file.rsplit('/').next().unwrap_or("");
@@ -879,7 +879,7 @@ fn validate_targets(
                     | Manager::Bundler
                     | Manager::Composer
             ) || (dep.source == Source::Terraform
-                && dep.kind == rustovate_config::DependencyKind::Provider))
+                && dep.kind == patchula_config::DependencyKind::Provider))
             && let Some(version) = &change.version
             && dep.resolved.as_deref() != Some(version)
         {
@@ -957,7 +957,7 @@ fn versions(
 /// `toolchain` directives. With GOTOOLCHAIN=local, an older Go refuses a
 /// module that requires a newer one, which an update itself may introduce.
 fn go_version(cwd: &Path, pinned: &str) -> Result<String, String> {
-    use rustovate_versioning::{Ecosystem as Scheme, Versioning};
+    use patchula_versioning::{Ecosystem as Scheme, Versioning};
     let text = std::fs::read_to_string(cwd.join("go.mod")).map_err(|e| e.to_string())?;
     let mut best = pinned.to_string();
     for line in text.lines() {
@@ -1101,15 +1101,15 @@ mod tests;
 /// The default checksum transport: a network client built on first use, so a
 /// runner that never touches a Gradle wrapper needs no network setup.
 struct NetworkTransport;
-impl rustovate_http::Transport for NetworkTransport {
-    fn send(&self, request: reqwest::Request) -> rustovate_http::Exchange<'_> {
+impl patchula_http::Transport for NetworkTransport {
+    fn send(&self, request: reqwest::Request) -> patchula_http::Exchange<'_> {
         Box::pin(async move {
-            static NETWORK: std::sync::OnceLock<Option<rustovate_http::Network>> =
+            static NETWORK: std::sync::OnceLock<Option<patchula_http::Network>> =
                 std::sync::OnceLock::new();
             let network = NETWORK
-                .get_or_init(|| rustovate_http::Network::new().ok())
+                .get_or_init(|| patchula_http::Network::new().ok())
                 .as_ref()
-                .ok_or(rustovate_http::Error::Configuration)?;
+                .ok_or(patchula_http::Error::Configuration)?;
             network.send(request).await
         })
     }

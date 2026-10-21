@@ -155,7 +155,7 @@ fn metadata(value: &Value) -> Option<Repository> {
     Some(source)
 }
 
-fn compact_npm(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheError> {
+fn compact_npm(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     // Deserialize selected fields only: full packuments can be tens of MB.
     #[derive(Deserialize)]
     struct Metadata {
@@ -163,20 +163,20 @@ fn compact_npm(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::Cac
         homepage: Option<String>,
     }
     let value: Metadata =
-        serde_json::from_slice(bytes).map_err(|_| rustovate_http::CacheError::Document)?;
+        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
     serde_json::to_vec(&metadata(
         &serde_json::json!({"repository":value.repository,"homepage":value.homepage}),
     ))
-    .map_err(|_| rustovate_http::CacheError::Document)
+    .map_err(|_| patchula_http::CacheError::Document)
 }
-fn compact_crate(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheError> {
+fn compact_crate(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     let value: Value =
-        serde_json::from_slice(bytes).map_err(|_| rustovate_http::CacheError::Document)?;
-    serde_json::to_vec(&metadata(&value["crate"])).map_err(|_| rustovate_http::CacheError::Document)
+        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
+    serde_json::to_vec(&metadata(&value["crate"])).map_err(|_| patchula_http::CacheError::Document)
 }
-fn compact_pypi(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheError> {
+fn compact_pypi(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     let value: Value =
-        serde_json::from_slice(bytes).map_err(|_| rustovate_http::CacheError::Document)?;
+        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
     let urls = value["info"]["project_urls"].as_object();
     let mut source = None;
     // Case insensitive; prefer a repository over documentation/changelog sites.
@@ -202,7 +202,7 @@ fn compact_pypi(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::Ca
             .as_str()
             .and_then(Repository::from_url)
     });
-    serde_json::to_vec(&source).map_err(|_| rustovate_http::CacheError::Document)
+    serde_json::to_vec(&source).map_err(|_| patchula_http::CacheError::Document)
 }
 
 pub(crate) fn mapped(group: &str, name: &str) -> Option<Repository> {
@@ -264,7 +264,7 @@ impl Client {
                 if let Some(source) = mapped("mise-core", package.trim_start_matches("core:")) {
                     return Ok(Some(source));
                 }
-                let Some(r) = rustovate_mise::resolve(package) else {
+                let Some(r) = patchula_mise::resolve(package) else {
                     return Ok(None);
                 };
                 if r.source == Source::Mise {

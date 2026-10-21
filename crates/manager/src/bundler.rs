@@ -5,7 +5,7 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 fn ruby(path: &str, text: &str, start: usize, version: &str, pointer: &str) -> Dependency {
-    let (source, package, extract) = rustovate_mise::resolve("ruby").map_or_else(
+    let (source, package, extract) = patchula_mise::resolve("ruby").map_or_else(
         || (Source::Mise, "ruby".to_string(), None),
         |r| (r.source, r.package, r.extract),
     );

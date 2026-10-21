@@ -39,8 +39,8 @@ fn coordinates(package: &str) -> Result<(String, String, String)> {
     Ok((repository, group.into(), artifact.into()))
 }
 
-fn versions(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheError> {
-    let text = std::str::from_utf8(bytes).map_err(|_| rustovate_http::CacheError::Document)?;
+fn versions(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+    let text = std::str::from_utf8(bytes).map_err(|_| patchula_http::CacheError::Document)?;
     let block = text
         .split_once("<versions>")
         .and_then(|(_, rest)| rest.split_once("</versions>"))
@@ -52,7 +52,7 @@ fn versions(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheE
         .map(|(v, _)| v.trim().to_string())
         .filter(|v| !v.is_empty() && !v.to_ascii_uppercase().ends_with("-SNAPSHOT"))
         .collect();
-    serde_json::to_vec(&versions).map_err(|_| rustovate_http::CacheError::Document)
+    serde_json::to_vec(&versions).map_err(|_| patchula_http::CacheError::Document)
 }
 
 impl Client {

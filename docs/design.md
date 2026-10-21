@@ -1,4 +1,4 @@
-# rustovate design
+# patchula design
 
 ## Goal
 
@@ -21,7 +21,7 @@ language change removes.
 
 Targets (to be confirmed by Phase 1 measurements):
 
-- Warm batch, nothing changed: under 5 s of rustovate time for 12 repos.
+- Warm batch, nothing changed: under 5 s of patchula time for 12 repos.
 - Warm batch with updates: 10–30 s, bounded by lockfile tools and GitHub writes.
 
 ## Principles
@@ -51,8 +51,8 @@ Targets (to be confirmed by Phase 1 measurements):
 
 ## Configuration
 
-Pkl only, evaluated in-process with `pklr`. rustovate publishes a typed
-`Rustovate.pkl` schema; a repository's config amends it, and an organisation
+Pkl only, evaluated in-process with `pklr`. patchula publishes a typed
+`Patchula.pkl` schema; a repository's config amends it, and an organisation
 can share a base config through Pkl imports. There is no `renovate.json`
 reader and no migration tool: repositories are migrated by hand or by agents.
 
@@ -75,7 +75,7 @@ crates/
   http/         reqwest transport boundary, shared network pool
   testkit/      dev-dependency only: redacted recording and offline cassette replay
   report/       versioned batch JSON caller contract, shared with conformance
-  cli/          `rustovate` binary, defined with usage
+  cli/          `patchula` binary, defined with usage
 conformance/    Renovate comparison harness (black box only)
 ```
 
@@ -104,17 +104,17 @@ tool installation, arbitrary post-upgrade commands, encrypted config.
 One engine library runs every batch. The CLI and the server are thin front
 ends over it, so a batch behaves the same however it was started.
 
-- **CLI** (`rustovate run`, `rustovate lookup`): one batch per invocation,
+- **CLI** (`patchula run`, `patchula lookup`): one batch per invocation,
   with a token supplied by the caller.
-- **Server** (`rustovate --server`): a long-running process that exposes an API
+- **Server** (`patchula --server`): a long-running process that exposes an API
   for GitHub webhooks (signatures verified before parsing) plus health and
   readiness endpoints, keeps one de-duplicated queue, runs sweeps on a cron
   schedule, and drains work in batches with caches kept warm.
 
-Checkboxes rustovate adds to issues and PRs say when a click takes effect:
+Checkboxes patchula adds to issues and PRs say when a click takes effect:
 "re-check now" in server mode, "re-check on the next run" in CLI mode. Operators
-can override this with `--recheck now|next-run` (or `RUSTOVATE_RECHECK`) for
-setups where an external webhook receiver starts CLI runs immediately. A hidden marker, not the text, identifies rustovate's checkboxes.
+can override this with `--recheck now|next-run` (or `PATCHULA_RECHECK`) for
+setups where an external webhook receiver starts CLI runs immediately. A hidden marker, not the text, identifies patchula's checkboxes.
 
 ### Server settings
 
@@ -128,7 +128,7 @@ Secrets (App private key, webhook secret) never appear in settings; they come
 from environment variables or files.
 
 Not planned for now (decision 2026-10-15): a web UI and settings managed by
-rustovate itself. The server exposes only the webhook API and health checks.
+patchula itself. The server exposes only the webhook API and health checks.
 
 ## Tooling
 
@@ -136,13 +136,13 @@ All tools come from mise. Builds go through mr-boxington (`mbx`) locally and in
 CI. The CLI is defined with usage, which also generates completions, Markdown
 docs and the man page. Performance is tracked with tak, report-only until tak
 stabilises. Tests never touch the network: they replay responses recorded by
-rustovate itself.
+patchula itself.
 
 ## Phases
 
 0. Foundations: workspace, CLI, Pkl config, GitHub client, cache,
    record/replay, comparison harness, benchmarks.
-1. Read-only: `rustovate lookup` produces a dry-run report for all 12
+1. Read-only: `patchula lookup` produces a dry-run report for all 12
    repositories, triaged against Renovate's dry-run output.
 2. Write side: branches, commits, PRs, dashboard, lockfile tools.
    Then server mode: webhook API, queue, file-based operator settings.

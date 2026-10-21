@@ -4,11 +4,11 @@
 mod redact;
 pub use redact::Redactor;
 
+use patchula_http::{Error, Exchange, Response, Transport};
 use reqwest::{
     Request, StatusCode,
     header::{HeaderMap, HeaderName, HeaderValue},
 };
-use rustovate_http::{Error, Exchange, Response, Transport};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -277,12 +277,12 @@ pub fn from_env(
     options: Options,
     network: impl FnOnce() -> Result<Arc<dyn Transport>, Error>,
 ) -> Result<Arc<dyn Transport>, Error> {
-    if std::env::var("RUSTOVATE_RECORD").as_deref() == Ok("1") {
+    if std::env::var("PATCHULA_RECORD").as_deref() == Ok("1") {
         Ok(Arc::new(Recorder::new(
             path,
             options,
             network()?,
-            "Recorded by rustovate from the request URLs; never imported from other bots".into(),
+            "Recorded by patchula from the request URLs; never imported from other bots".into(),
         )))
     } else {
         Ok(Arc::new(Replay::open(path, options)?))

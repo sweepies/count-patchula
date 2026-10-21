@@ -3,25 +3,25 @@
 //! which never suppresses the update. Unticking, removing or closing the batch
 //! returns its updates to individual PRs.
 use crate::{Change, Plan, Snapshot, pull_requests, update_key};
-use rustovate_config::Config;
-use rustovate_manager::Dependency;
-use rustovate_report::Repository;
+use patchula_config::Config;
+use patchula_manager::Dependency;
+use patchula_report::Repository;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
 /// Ticked on an update PR: move it into the batch.
-pub const ADD: &str = "<!-- rustovate-batch-add -->";
+pub const ADD: &str = "<!-- patchula-batch-add -->";
 /// The reviewed targets of an update PR, recorded when its body was rendered.
-pub(crate) const TARGETS: &str = "<!-- rustovate-targets:";
+pub(crate) const TARGETS: &str = "<!-- patchula-targets:";
 /// The batch PR's items.
-pub(crate) const ITEMS: &str = "<!-- rustovate-batch:";
+pub(crate) const ITEMS: &str = "<!-- patchula-batch:";
 /// Ticked on a batch item: return it to an individual PR.
-pub(crate) const REMOVE: &str = "<!-- rustovate-batch-remove:";
+pub(crate) const REMOVE: &str = "<!-- patchula-batch-remove:";
 /// The reason recorded on a plan whose update the batch carries.
 pub const BATCHED_REASON: &str = "batched: carried by the batch PR";
 /// A PR closed because its update moved into the batch.
-pub(crate) const BATCHED: &str = "<!-- rustovate-closed:batched -->";
+pub(crate) const BATCHED: &str = "<!-- patchula-closed:batched -->";
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -176,7 +176,7 @@ pub fn apply(
         .iter_mut()
         .filter(|p| origins.contains(&update_key(p)))
     {
-        p.action.status = rustovate_report::ActionStatus::Skipped;
+        p.action.status = patchula_report::ActionStatus::Skipped;
         p.action.reason = Some(BATCHED_REASON.into());
     }
     plan.batch = Some(items);
@@ -235,7 +235,7 @@ mod tests {
     }
     fn update_body(key: &str, targets: &[Change], ticked: bool) -> String {
         format!(
-            "{}\n- [{}] Add to the batch PR. {ADD}\n<!-- rustovate:{{\"version\":1,\"identity\":\"{}\",\"update\":\"{key}\"}} -->\n",
+            "{}\n- [{}] Add to the batch PR. {ADD}\n<!-- patchula:{{\"version\":1,\"identity\":\"{}\",\"update\":\"{key}\"}} -->\n",
             hidden_marker(TARGETS, &targets),
             if ticked { "x" } else { " " },
             "a".repeat(64)
@@ -248,53 +248,53 @@ mod tests {
         let mut prs = vec![
             pr(
                 1,
-                "rustovate/a-1.x",
+                "patchula/a-1.x",
                 update_body(&k1, &[change("a", "1.2.0")], true),
             ),
             pr(
                 2,
-                "rustovate/b-1.x",
+                "patchula/b-1.x",
                 update_body(&k2, &[change("b", "1.1.0")], false),
             ),
         ];
-        let items = items(&prs, "bot", "o/r", "rustovate/batch");
+        let items = items(&prs, "bot", "o/r", "patchula/batch");
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].number, Some(1));
         // The batch keeps the reviewed target; a ticked newer PR replaces it.
         let batch = format!(
-            "{}\n<!-- rustovate:{{\"version\":1,\"identity\":\"{}\",\"update\":\"{}\"}} -->",
+            "{}\n<!-- patchula:{{\"version\":1,\"identity\":\"{}\",\"update\":\"{}\"}} -->",
             render(&items),
             "b".repeat(64),
             "c".repeat(64)
         );
         prs = vec![
-            pr(9, "rustovate/batch", batch.clone()),
+            pr(9, "patchula/batch", batch.clone()),
             pr(
                 3,
-                "rustovate/a-1.x",
+                "patchula/a-1.x",
                 update_body(&k3, &[change("a", "1.3.0")], true),
             ),
         ];
-        let items = super::items(&prs, "bot", "o/r", "rustovate/batch");
+        let items = super::items(&prs, "bot", "o/r", "patchula/batch");
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].targets[0].value.as_deref(), Some("1.3.0"));
         // Ticking an item's removal box drops it.
         let removed = batch.replacen("- [ ]", "- [x]", 1);
         let items = super::items(
-            &[pr(9, "rustovate/batch", removed)],
+            &[pr(9, "patchula/batch", removed)],
             "bot",
             "o/r",
-            "rustovate/batch",
+            "patchula/batch",
         );
         assert!(items.is_empty());
     }
 
     #[test]
     fn markers_cannot_be_closed_early_or_forged_by_values() {
-        let marker = hidden_marker(TARGETS, &vec![change("evil--><!-- rustovate:x", "1.0.0")]);
+        let marker = hidden_marker(TARGETS, &vec![change("evil--><!-- patchula:x", "1.0.0")]);
         assert_eq!(marker.matches("-->").count(), 1);
         assert_eq!(marker.matches("<!--").count(), 1);
         let parsed: Vec<Change> = hidden(&marker, TARGETS).unwrap();
-        assert_eq!(parsed[0].package, "evil--><!-- rustovate:x");
+        assert_eq!(parsed[0].package, "evil--><!-- patchula:x");
     }
 }

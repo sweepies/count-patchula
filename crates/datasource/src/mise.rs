@@ -5,7 +5,7 @@ impl Client {
         match package {
             "node" | "core:node" => self.node().await,
             _ => {
-                let r = rustovate_mise::resolve(package).ok_or(Error::Invalid)?;
+                let r = patchula_mise::resolve(package).ok_or(Error::Invalid)?;
                 // Box the recursion: aliases resolve to actual release sources.
                 if r.source == Source::Mise && r.package == package {
                     return Err(Error::Invalid);

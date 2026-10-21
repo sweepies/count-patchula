@@ -33,7 +33,7 @@ Reports include the unchanged catalog `fetchedAt`, per-dependency `reused` state
 and current eligibility evaluation time. Offline clock-controlled tests verify
 known held-back releases become eligible without revalidation and checked
 controls bypass only the relevant cached views. Raw reports and traces are in
-`/tmp/rustovate-followup-bench/`, with summaries `item3-results.json` and
+`/tmp/patchula-followup-bench/`, with summaries `item3-results.json` and
 `item3-final-results.json`. The cold primary-host comparison follows below.
 
 ## Mise-versions catalogs (2026-10-15, departure 49)
@@ -62,7 +62,7 @@ count `api.github.com` trace completions, including extraction and digest reads.
 These are sequential single observations on changing, shared services, not
 controlled medians. The lower GitHub request count does not imply a guaranteed
 wall-time improvement during registry throttling. Raw reports, traces and
-summaries are under `/tmp/rustovate-followup-bench/`: `item2-results.json`,
+summaries are under `/tmp/patchula-followup-bench/`: `item2-results.json`,
 `item2-final-results.json` and `item2-steady-results.json`. The following
 release-age catalog reuse measurement builds on these baseline paths.
 
@@ -71,7 +71,7 @@ release-age catalog reuse measurement builds on these baseline paths.
 The supplied final twelve-repository batch at the Phase 1 implementation took
 **37.4 s cold / 4.1 s warm / 3.8 s warm2**, producing **343 proposals on every
 run**. The fresh Renovate dry run took **261 s** and started about four minutes
-before rustovate's cold run. These are caller-supplied single observations,
+before patchula's cold run. These are caller-supplied single observations,
 with builds outside the measured runs; they are not controlled medians.
 The observed cold/warm/warm2 speed ratios are approximately **7.0× / 63.7× /
 68.7×** relative to that Renovate run.
@@ -85,9 +85,9 @@ accounts for the two action fields; the four unocss fields remain because
 the log's actual evaluation timestamps are already beyond 72 hours. See
 [the timestamp evidence and report provenance](phase1-triage.md#final-live-check-2026-10-15).
 
-All twelve repositories ran through rustovate; eleven have a comparable
+All twelve repositories ran through patchula; eleven have a comparable
 Renovate baseline. remote-agent's `renovate.json` is invalid, so Renovate
-supplies no baseline for it. rustovate's own configuration for it validates.
+supplies no baseline for it. patchula's own configuration for it validates.
 Proposal-count stability and timings do not establish parity for that gap.
 
 [Tak](https://github.com/jdx/tak) is pinned to 0.0.15 in mise. Its README calls it
@@ -126,13 +126,13 @@ Ordinary measurement can be done on an uncommitted working tree.
 
 The default is ten timed runs and two warmups for each of fourteen benchmarks:
 
-- CLI startup: the release `rustovate --version` invocation.
-- Config evaluation: `rustovate config check` for each of the twelve examples,
+- CLI startup: the release `patchula --version` invocation.
+- Config evaluation: `patchula config check` for each of the twelve examples,
   including file reads, Pkl evaluation and validation. Each sample starts a fresh
   process; warmups only warm host/filesystem state.
 - GitHub/cache replay: 25 simulated 200/304 pairs through the real GitHub client
   and a shared SQLite cache, then 1,000 warm reads of a compressed 4 KiB entry.
-  The example uses rustovate's existing conditional cassette and the fail-closed
+  The example uses patchula's existing conditional cassette and the fail-closed
   Replay transport. It constructs no live HTTP transport and needs no token.
   Synthetic credential namespaces keep each pair's initial GET cold. Every
   response body, 304 count, and cassette consumption is checked. End-to-end
@@ -188,7 +188,7 @@ one batch, with an initially fresh SQLite cache:
 The fresh Renovate dry run of the same repositories took **296 s**, captured
 within about ten minutes. The observed ratios are about **8.8× cold** and
 **85–102× warm**; these are single-run comparisons, not medians or guarantees.
-Host/hardware were not supplied. rustovate's proposal count is identical across
+Host/hardware were not supplied. patchula's proposal count is identical across
 all three captures; cold/warm differences caused by the old local pull cooldown
 are absent in this batch. Both captures retain upstream lookup/coverage limits.
 
@@ -227,7 +227,7 @@ captures. The baseline lookup log predates evaluation by about one hour.
 Artifacts are `/root/rustovate-conf/r12-{cold,warm,warm2}.{json,err}` and
 `renovate12.jsonl`, outside the repository. Warm2 has 27 warnings, reviewed in
 [phase1-triage.md](phase1-triage.md). The 12 repositories are external test
-inputs; rustovate is developed independently of any runner in that set.
+inputs; patchula is developed independently of any runner in that set.
 
 The three extra proposals are two vaultwarden/server and one hashicorp/vault
 digest pins. Failed HEADs in cold/warm versus successful HEADs in warm2 account
@@ -362,8 +362,8 @@ while later release probes may be 200 solely because counters changed.
 
 ### Diagnostics and limitations
 
-`-vv` (including `-vvv`) or `RUSTOVATE_LOG=debug` enables one stderr line per HTTP
-attempt and fresh-cache read, plus start/end phase spans. `RUSTOVATE_LOG` accepts
+`-vv` (including `-vvv`) or `PATCHULA_LOG=debug` enables one stderr line per HTTP
+attempt and fresh-cache read, plus start/end phase spans. `PATCHULA_LOG` accepts
 `off`, `error`, `warn`, `info`, `debug` or `trace`. Logs contain method, host,
 sanitized path, status, cache outcome (`fresh-hit`, `304`, `200`, `miss`), decoded
 body bytes, governor queue/rate-wait ms, total ms, freshness/TTL, and the negotiated
@@ -392,7 +392,7 @@ the existing caller's token; all API operations are reads. No credential value
 is printed.
 
 ```sh
-mise exec -- cargo build --release --locked -p rustovate-cli
+mise exec -- cargo build --release --locked -p patchula-cli
 mise exec -- bash -c '
   set -eu
   export GH_TOKEN="$(gh auth token)"
@@ -400,7 +400,7 @@ mise exec -- bash -c '
   run_dir=$(mktemp -d benchmark-results/public-live.XXXXXX)
   for run in cold warm1 warm2; do
     /usr/bin/time -f "wall=%e" -o "$run_dir/$run.time" \
-      target/release/rustovate -vv lookup \
+      target/release/patchula -vv lookup \
       --config examples/benchmark-public.pkl --cache "$run_dir/cache.sqlite" \
       --concurrency 8 --json sweepies/remote-agent \
       >"$run_dir/$run.json" 2>"$run_dir/$run.log"
@@ -570,7 +570,7 @@ Baseline replay also held 1,254,330 bytes of uncompressed catalog extractions an
 10,826 duplicate release rows; both disappear with compact HTTP storage. Existing
 migrated databases reuse freed pages and may retain their old physical file size.
 
-`CARGO_NET_OFFLINE=true RUSTOVATE_RECORD=0 mise run ci` passed: 21-cassette secret
+`CARGO_NET_OFFLINE=true PATCHULA_RECORD=0 mise run ci` passed: 21-cassette secret
 scan, formatting, Clippy `-D warnings`, workspace tests and build. Added coverage
 checks parallel reader execution, schema upgrades/key versions, fresh reads after
 reopen, compact 304 validator updates, changed/deprecated/unpublished versions,
@@ -778,7 +778,7 @@ Private workload reports/caches/logs remain outside this repository at
 
 ### Validation and reproduction
 
-`CARGO_NET_OFFLINE=true RUSTOVATE_RECORD=0 mise run ci` passed on the final code:
+`CARGO_NET_OFFLINE=true PATCHULA_RECORD=0 mise run ci` passed on the final code:
 22-cassette secret scan, formatting, Clippy `-D warnings`, workspace tests and
 build. Meaningful new coverage includes independent host admission, freshness
 expiry/disable/no-cache behavior, compact OCI reopen, anonymous-token persistence,
@@ -792,11 +792,11 @@ no tests performed network requests. Log: `benchmark-results/batch-complete-ci.l
 Build first, then reproduce the final public policy with a new cache:
 
 ```sh
-mise exec -- cargo build --release --locked -p rustovate-cli
+mise exec -- cargo build --release --locked -p patchula-cli
 mise exec -- bash -c '
   set -eu
   export GH_TOKEN="$(gh auth token)"
-  unset RUSTOVATE_TOKEN GITHUB_TOKEN
+  unset PATCHULA_TOKEN GITHUB_TOKEN
   batch_root=benchmark-results/batch-live
   batch_repos=(
     sweepies/remote-agent sweepies/immich-go stefanprodan/podinfo
@@ -813,7 +813,7 @@ mise exec -- bash -c '
   batch_run=$(mktemp -d "$batch_root/reproduce.XXXXXX")
   for sample in cold warm1 warm2; do
     /usr/bin/time -f "%e" -o "$batch_run/$sample.time" \
-      target/release/rustovate lookup --config-dir "$batch_root/config" \
+      target/release/patchula lookup --config-dir "$batch_root/config" \
       --cache "$batch_run/cache.sqlite" --concurrency 8 -vv --json \
       "${batch_repos[@]}" > "$batch_run/$sample.json" 2> "$batch_run/$sample.log"
   done
@@ -830,8 +830,8 @@ All implementation and documentation commits remain local; nothing was pushed.
 
 ## Large public repositories on EC2 (2026-10-21)
 
-Rustovate `e89e99c` against Renovate 44.173.1 (the latest release that day) on
-six large public repositories. Both ran read-only lookups: `rustovate lookup`
+Patchula `e89e99c` against Renovate 44.173.1 (the latest release that day) on
+six large public repositories. Both ran read-only lookups: `patchula lookup`
 with the default policy, and Renovate with `dryRun=lookup` and each
 repository's own Renovate config. Each tool ran each repository alone, cold
 (empty cache and, for Renovate, no clone) and then warm (cache and clone
@@ -841,7 +841,7 @@ wall time, CPU time and cgroup memory peak, child processes included.
 Renovate ran under Node 24.21.0, already installed. GitHub access was a
 read-only installation token per run.
 
-| Repository | rustovate cold | rustovate warm | Renovate cold | Renovate warm |
+| Repository | patchula cold | patchula warm | Renovate cold | Renovate warm |
 |---|---|---|---|---|
 | mastodon/mastodon | 16.6 s, 383 MB | 2.0 s, 100 MB | 98.1 s, 1.8 GB | 96.4 s, 1.1 GB |
 | getsentry/sentry | 8.3 s, 186 MB | 3.6 s, 97 MB | 53.7 s, 1.8 GB | 44.9 s, 1.6 GB |
@@ -852,16 +852,16 @@ read-only installation token per run.
 | **Total wall time** | **150.5 s** | **14.8 s** | **920.6 s** | **274.3 s** |
 
 CPU time follows the same pattern. For grafana it was 92.4 s cold and 4.6 s
-warm for rustovate, against 538.9 s and 129.1 s for Renovate. Across all six
-repositories rustovate was 6.1× faster cold and 18.5× faster warm, and used a
+warm for patchula, against 538.9 s and 129.1 s for Renovate. Across all six
+repositories patchula was 6.1× faster cold and 18.5× faster warm, and used a
 fifth to a sixteenth of the memory. Renovate's cold time includes cloning (2 GB
-for grafana); rustovate reads trees and files through the API and never
+for grafana); patchula reads trees and files through the API and never
 clones. Its cold grafana run made 33,916 HTTP requests, mostly registry
 catalogs for 1,076 Go modules and 936 npm packages; the warm run made 317.
 
 Coverage, as unique dependency names (Renovate's unskipped dependencies):
 
-| Repository | rustovate | Renovate | Both | Renovate only | rustovate only |
+| Repository | patchula | Renovate | Both | Renovate only | patchula only |
 |---|---|---|---|---|---|
 | mastodon | 294 | 342 | 292 | 50 | 2 |
 | sentry | 439 | 438 | 433 | 5 | 6 |
@@ -871,7 +871,7 @@ Coverage, as unique dependency names (Renovate's unskipped dependencies):
 | kafka | 46 | 128 | 35 | 93 | 11 |
 
 Mastodon's gap is 47 Gemfile gems without a version requirement
-(`gem 'chewy'`). Every release satisfies them, so rustovate leaves them to
+(`gem 'chewy'`). Every release satisfies them, so patchula leaves them to
 lockfile maintenance, which is off by default. Kafka's gap is 70 versions in
 `gradle/dependencies.gradle`, a Groovy map that the gradle manager does not
 read, plus Gradle plugin and property declarations.

@@ -1,5 +1,5 @@
 [package]
-name = "rustovate-conformance"
+name = "patchula-conformance"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,7 +13,7 @@ workspace = true
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 semver = "1.0.28"
-rustovate-report = { path = "../crates/report" }
+patchula-report = { path = "../crates/report" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

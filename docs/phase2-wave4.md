@@ -1,7 +1,7 @@
 # Dependency dashboard (SWE-108)
 
 `prs.dashboard = true` maintains one open issue titled **Dependency Dashboard**
-initially. Discovery uses the exact `<!-- rustovate-dashboard:v1 -->` line and
+initially. Discovery uses the exact `<!-- patchula-dashboard:v1 -->` line and
 the authenticated bot actor, so owners may rename it. Ambiguous owned dashboards
 fail with a diagnostic rather than choosing one. Disabling the dashboard closes
 the marked issue; enabling it again creates a new open issue.
@@ -55,7 +55,7 @@ duplicate actions and fenced examples do not authorize work.
 
 Every acknowledged action is unticked or disappears when its pending row is
 resolved. CLI wording says “on the next run”; `--recheck now` or
-`RUSTOVATE_RECHECK=now` changes it to “now” without adding a webhook listener.
+`PATCHULA_RECHECK=now` changes it to “now” without adding a webhook listener.
 
 Accepted release-age targets are retained in the local cache for the same actor
 and declaration, and in a hidden marker on the resulting bot PR. The shared
@@ -70,7 +70,7 @@ should make no GitHub mutation. Rename the issue and rerun to verify discovery
 by marker. Tick each relevant row, save the issue/PR body and rerun the same
 command. Verify the requested action and the cleared checkbox. Use a young
 dated release, two competing updates with a PR limit of one, a closed schedule
-window, and a manually closed rustovate PR to exercise the policy holds. A
+window, and a manually closed patchula PR to exercise the policy holds. A
 failed/stale source lookup supplies its retry row. The offline suite covers
 these scenarios without requiring live upstream failures.
 

@@ -9,12 +9,12 @@ use miette::{Diagnostic, IntoDiagnostic, NamedSource, SourceSpan, WrapErr};
 use std::path::{Path, PathBuf};
 
 /// The schema is part of the executable, independent of the current directory.
-pub const SCHEMA: &str = include_str!("../../../Rustovate.pkl");
+pub const SCHEMA: &str = include_str!("../../../Patchula.pkl");
 
-/// Locate a repository config, preferring `.github/rustovate.pkl`.
+/// Locate a repository config, preferring `.github/patchula.pkl`.
 /// Absence is distinct from an unreadable path so callers can skip unconfigured repos.
 pub fn discover(repo: &Path) -> std::io::Result<Option<PathBuf>> {
-    for relative in [".github/rustovate.pkl", "rustovate.pkl"] {
+    for relative in [".github/patchula.pkl", "patchula.pkl"] {
         let path = repo.join(relative);
         match std::fs::metadata(&path) {
             Ok(metadata) if metadata.is_file() => return Ok(Some(path)),
@@ -40,7 +40,7 @@ pub fn load(path: &Path) -> miette::Result<Config> {
             .wrap_err_with(|| format!("cannot discover config in {}", path.display()))?
             .ok_or_else(|| {
                 miette::miette!(
-                    "no rustovate config in {}; checked .github/rustovate.pkl then rustovate.pkl",
+                    "no patchula config in {}; checked .github/patchula.pkl then patchula.pkl",
                     path.display()
                 )
             })?
@@ -50,7 +50,7 @@ pub fn load(path: &Path) -> miette::Result<Config> {
     let source = std::fs::read_to_string(&path)
         .into_diagnostic()
         .wrap_err_with(|| format!("cannot read config {}", path.display()))?;
-    let json = evaluate_local(&path, "Rustovate.pkl", SCHEMA)?;
+    let json = evaluate_local(&path, "Patchula.pkl", SCHEMA)?;
     decode(&path, &source, json)
 }
 
@@ -132,7 +132,7 @@ fn decode(path: &Path, source: &str, json: serde_json::Value) -> miette::Result<
 
 #[derive(Debug, thiserror::Error, Diagnostic)]
 #[error("invalid configuration {path}: {message}")]
-#[diagnostic(code(rustovate::config))]
+#[diagnostic(code(patchula::config))]
 struct ConfigProblem {
     path: String,
     message: String,

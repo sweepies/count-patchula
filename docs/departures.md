@@ -1,6 +1,6 @@
 # Deliberate departures from Renovate
 
-rustovate is not a Renovate clone. Each entry records a behaviour that differs
+patchula is not a Renovate clone. Each entry records a behaviour that differs
 on purpose, and why. The comparison harness links differences it finds to
 entries here; a difference with no entry is treated as a bug.
 
@@ -8,7 +8,7 @@ Review map (49 entries; IDs below remain stable):
 
 - **Policy:** 2–8, 10, 12, 14, 16–18, 20, 23, 25, 29–31, 33–35,
   37–38, 42–43, 45–46 cover explicit activation, reproducibility, update tracks,
-  release timing and editable declarations. rustovate is developed independently;
+  release timing and editable declarations. patchula is developed independently;
   the twelve public repositories are test inputs, not product requirements.
 - **Performance and strategy:** 21 and 36 describe conditional history probes,
   local freshness and quota fallbacks. They grant no comparison exemption.
@@ -35,7 +35,7 @@ These choices apply independently of the twelve comparison repositories.
 Stable comparison link: <a id="departure-7"></a>**Departure 7: default policy**
 (table row 7 below). IDs are retained when descriptions change.
 
-| # | Area | Renovate | rustovate | Why |
+| # | Area | Renovate | patchula | Why |
 |---|---|---|---|---|
 | 1 | Config | JSON/JSON5 with presets, migrations | Pkl only, typed schema, unknown fields are errors | Typed, composable config with real diagnostics |
 | 2 | Onboarding | Opens an onboarding PR in repos without config | Repos without config are skipped | Configs are added deliberately |
@@ -52,10 +52,10 @@ Stable comparison link: <a id="departure-7"></a>**Departure 7: default policy**
 | 13 | Shared configuration | Our configs use named presets and local> references | Ordinary local Pkl amends/import; vendor the bundled schema; no remote imports or external resource reads in Phase 0 | Deterministic validation with no network or environment dependency |
 | 14 | Release timing | Duration strings, schedules and timezone keys | Nonnegative waitHours plus explicit cron/timezone windows; empty windows means unrestricted | Typed units and validated timezones; no natural-language scheduling |
 | 15 | Repository scanning | Our configs use ecosystem names such as gomod, pip_requirements, custom.regex and managerFilePatterns | Closed manager identifiers (go, requirements, regex, compose); explicit per-manager file sets; no legacy aliases | Fail on typos and keep the independent vocabulary small |
-| 16 | Branches and commit messages | Existing configs choose Renovate names or semanticCommits switches | Default rustovate/ branch prefix and explicit chore(deps): commit prefix, both overridable | Independent identity and predictable messages |
+| 16 | Branches and commit messages | Existing configs choose Renovate names or semanticCommits switches | Default patchula/ branch prefix and explicit chore(deps): commit prefix, both overridable | Independent identity and predictable messages |
 | 17 | Maintenance and ancillary policy | Config migration, abandonment and post-update options | No migration or inferred abandonment policy; lockfile refresh and Go tidy are explicit fields | Pkl-only configuration and deliberate, reviewable maintenance |
 | 18 | Group identifiers | Separate groupName and groupSlug fields | One group string identifies the update group; branch slug derivation belongs to the updater | Avoid two configuration identities for the same grouping intent |
-| 19 | Configuration dependencies | The renovate-config manager treats Renovate configuration as package files | No equivalent manager: the comparison adapter excludes only renovate-config snapshots and summaries | rustovate uses Pkl and does not resolve Renovate configuration or presets |
+| 19 | Configuration dependencies | The renovate-config manager treats Renovate configuration as package files | No equivalent manager: the comparison adapter excludes only renovate-config snapshots and summaries | patchula uses Pkl and does not resolve Renovate configuration or presets |
 | 20 | Cargo compatibility | Numeric update levels may differ in black-box reports | A changed pre-1.0 Cargo compatibility boundary is major; exact Cargo uses = | Follow Cargo's documented compatibility rules |
 | 21 | Source refresh | Histories are exposed through registry/platform responses | Conditional head probes gate GraphQL; registry bodies use declared freshness | Avoid unnecessary histories and respect actual upstream HTTP capabilities |
 | 22 | Repeated dependencies | Manager snapshots can contain repeated dependency names | Optional occurrence IDs preserve different current values, merging identical rows | Retain all manifest occurrences without ambiguous report identities |
@@ -140,7 +140,7 @@ bug is fixed separately.
 
 For release upgrades retaining a declared major/minor ref's precision, both
 sides must propose the same floating tag and update class, with stable full
-versions on that line and rustovate's target newer. The proposed commit must
+versions on that line and patchula's target newer. The proposed commit must
 equal independent `metadata.tagDigests` evidence for the floating tag, emitted
 from the observed peeled tag catalog. This can explain both full-version and
 digest differences when Renovate pins an older release tag's commit. Missing
@@ -150,7 +150,7 @@ evidence, changed lines/precision and unrelated hashes remain actionable.
 The fresh output resolves keepass 0.15.0 versus 0.15.2, and toml_edit 0.25.16
 versus 0.25.17+spec-1.1.0. All exceed both release-age windows. Both sides propose
 the identical bare two-component Cargo interval, which contains both targets;
-rustovate selects the newest eligible release available from its sparse index.
+patchula selects the newest eligible release available from its sparse index.
 This is a resolved-target choice, not capture skew or a range-floor exemption.
 The narrow rule requires matching package/current declarations and digests,
 crate/crates sources, no stale evidence, a current pre-1.0 minor below both
@@ -161,7 +161,7 @@ separately audited. Changed ranges, different compatibility intervals, stale
 lookups and unrelated taxonomy remain actionable. Tests cover negative cases.
 
 <a id="departure-51"></a>**Departure 51: aube for npm and pnpm lockfiles.**
-rustovate regenerates `pnpm-lock.yaml`, `package-lock.json` and
+patchula regenerates `pnpm-lock.yaml`, `package-lock.json` and
 `npm-shrinkwrap.json` with aube instead of pnpm and npm, and regenerates
 `yarn.lock` with Yarn itself, Classic and Berry. aube reads and writes the
 committed format in place and is told the committed lockfile name, so it never
@@ -247,7 +247,7 @@ package/current declarations, expired holds and unexplained minor targets remain
 actionable.
 
 <a id="departure-32"></a>**Departure 32: unversioned inventory.**
-Only baseline rows missing from rustovate, in terraform/github-actions/flux/npm,
+Only baseline rows missing from patchula, in terraform/github-actions/flux/npm,
 with no proposals, no resolved version or digest, and either no current value,
 a local `file:`/`./`/`../` reference or a GitHub expression are excluded and audited.
 Concrete versions, opaque selectors such as `latest`, and all proposals remain
@@ -280,7 +280,7 @@ Actual API migration proposals remain visible for triage.
 <a id="departure-27"></a>**Departure 27: one YAML image owner.**
 The adapter excludes a duplicate `helm-values` Docker row only when the baseline also has
 the same package, current fields and proposals in `kubernetes` or `flux` in the
-same file, and rustovate reports that owner/package there. Different versions,
+same file, and patchula reports that owner/package there. Different versions,
 digests, proposals, files, missing owners and standalone values remain visible.
 The same rule recognizes a duplicate `kubernetes` image already owned by `flux`
 in a HelmRelease. All removed duplicate rows and proposals are counted in exclusions.
@@ -289,7 +289,7 @@ in a HelmRelease. All removed duplicate rows and proposals are counted in exclus
 Only proposed `newDigest` with datasource `helm` is ignored, with a normalization
 count. Current digests, OCI/Docker digests and all version targets remain compared.
 Helm registry URLs in observable output are joined to chart names to compare the
-same registry identity used by rustovate; a different registry stays actionable.
+same registry identity used by patchula; a different registry stays actionable.
 
 Comparison representation rules also canonicalize Bun's npm-sourced (or
 datasource-unspecified)
@@ -310,7 +310,7 @@ release publishedAt, otherwise the annotated tagger date; a lightweight tag
 without a release is undated and has no wait. Commit dates are never release
 age evidence. Tag-object/catalog caches are versioned to discard old commit
 dates; release dates revalidate even when the tag namespace is unchanged. The comparison rule requires an
-explicit 24-hour policy and timestamp evidence that rustovate's newer proposal is
+explicit 24-hour policy and timestamp evidence that patchula's newer proposal is
 at least 24 and less than 96 hours old, plus a strictly older Renovate target in
 the same update class. A newer baseline target instead requires an unexpired
 24-hour held-target record. Undated, older-than-window and unrelated target
@@ -345,7 +345,7 @@ targets and update types remain comparable. Triage counts normalized proposals.
 
 <a id="departure-25"></a>**Departure 25: exact npm major proposals.**
 The narrow rule requires a major upgrade from a numeric caret/tilde current
-range, a rustovate exact target with explicit policy, and a baseline caret/tilde
+range, a patchula exact target with explicit policy, and a baseline caret/tilde
 range on the target's major line that contains the selected target. Resolved
 targets must be identical, or independently explained by release-age evidence.
 Minor/patch range edits additionally qualify only for simple
@@ -412,6 +412,6 @@ See [wave 2](phase2-wave2.md) for ownership and migration behavior.
 Departure 47 also covers the independently specified [auto-merge fallback](auto-merge.md).
 The supplied black-box comparisons do not exercise Renovate merging PRs, so no
 observed merge-behavior difference or new conformance exemption is claimed.
-The explicit rustovate policy requires a prior successful head receipt, at least
+The explicit patchula policy requires a prior successful head receipt, at least
 one successful check/status, clean GitHub mergeability, and current age/window
 eligibility; a manual creation permit does not waive the merge gates.

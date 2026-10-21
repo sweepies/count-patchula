@@ -12,7 +12,7 @@
     {
       "id": "npm-satisfying-range-pin",
       "departure": 25,
-      "classification": "rustovate-missing",
+      "classification": "patchula-missing",
       "managers": ["npm"],
       "field": "updates",
       "predicate": "npm-satisfying-pin"
@@ -20,7 +20,7 @@
     {
       "id": "explicit-disabled-class",
       "departure": 37,
-      "classification": "rustovate-missing",
+      "classification": "patchula-missing",
       "managers": ["npm", "mise", "cargo", "go", "regex", "github-actions", "kubernetes", "flux", "terraform"],
       "field": "updates",
       "predicate": "disabled-update"
@@ -28,7 +28,7 @@
     {
       "id": "rejected-release",
       "departure": 38,
-      "classification": "rustovate-missing",
+      "classification": "patchula-missing",
       "managers": ["npm", "cargo", "requirements"],
       "field": "updates",
       "predicate": "rejected-release"
@@ -44,7 +44,7 @@
     {
       "id": "release-age-missing-target",
       "departure": 23,
-      "classification": "rustovate-missing",
+      "classification": "patchula-missing",
       "managers": ["npm", "mise", "cargo", "go", "regex", "github-actions", "flux", "terraform", "requirements"],
       "field": "updates",
       "predicate": "release-age-missing"
@@ -52,7 +52,7 @@
     {
       "id": "cargo-manifest-noop",
       "departure": 35,
-      "classification": "rustovate-missing",
+      "classification": "patchula-missing",
       "managers": ["cargo"],
       "field": "updates",
       "predicate": "cargo-manifest-noop"
@@ -60,7 +60,7 @@
     {
       "id": "go-major-module-path",
       "departure": 34,
-      "classification": "rustovate-missing",
+      "classification": "patchula-missing",
       "managers": ["go"],
       "field": "updates",
       "predicate": "go-module-path"
@@ -76,7 +76,7 @@
     {
       "id": "npm-exact-range-pin",
       "departure": 25,
-      "classification": "rustovate-extra",
+      "classification": "patchula-extra",
       "managers": ["npm"],
       "field": "updates",
       "predicate": "npm-range-pin"
@@ -84,7 +84,7 @@
     {
       "id": "separate-patch-track",
       "departure": 33,
-      "classification": "rustovate-extra",
+      "classification": "patchula-extra",
       "managers": ["npm", "mise", "regex", "cargo", "github-actions", "go", "kubernetes", "flux"],
       "field": "updates",
       "predicate": "patch-alternative"
@@ -92,7 +92,7 @@
     {
       "id": "exact-latest-pins",
       "departure": 29,
-      "classification": "rustovate-extra",
+      "classification": "patchula-extra",
       "managers": ["mise", "npm", "github-actions"],
       "field": "updates",
       "predicate": "floating-pin"
@@ -100,7 +100,7 @@
     {
       "id": "indirect-go-upgrades",
       "departure": 30,
-      "classification": "rustovate-extra",
+      "classification": "patchula-extra",
       "managers": ["go"],
       "field": "updates",
       "predicate": "indirect-go"
@@ -108,7 +108,7 @@
     {
       "id": "compose-test-fixtures",
       "departure": 31,
-      "classification": "rustovate-extra",
+      "classification": "patchula-extra",
       "managers": ["compose"],
       "field": "dependency",
       "predicate": "compose-test-file"
@@ -156,7 +156,7 @@
     {
       "id": "default-digest-only-pin",
       "departure": 7,
-      "classification": "rustovate-extra",
+      "classification": "patchula-extra",
       "managers": ["github-actions", "dockerfile", "compose"],
       "field": "updates",
       "predicate": "digest-pin-only"
@@ -164,7 +164,7 @@
     {
       "id": "stable-node-extra",
       "departure": 42,
-      "classification": "rustovate-extra",
+      "classification": "patchula-extra",
       "managers": ["mise"],
       "field": "updates",
       "predicate": "stable-node-channel"
@@ -196,7 +196,7 @@
     {
       "id": "declared-go-upgrades",
       "departure": 43,
-      "classification": "rustovate-extra",
+      "classification": "patchula-extra",
       "managers": ["go"],
       "field": "updates",
       "predicate": "declared-go-floor"
@@ -236,7 +236,7 @@
     {
       "id": "cargo-compatible-missing",
       "departure": 46,
-      "classification": "rustovate-missing",
+      "classification": "patchula-missing",
       "managers": ["cargo"],
       "field": "updates",
       "predicate": "cargo-compatible-target"
@@ -244,7 +244,7 @@
     {
       "id": "cargo-compatible-extra",
       "departure": 46,
-      "classification": "rustovate-extra",
+      "classification": "patchula-extra",
       "managers": ["cargo"],
       "field": "updates",
       "predicate": "cargo-compatible-target"

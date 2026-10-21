@@ -1,8 +1,8 @@
 // Keep this capture test in its own process: concurrent untraced unit tests
 // can first register the shared callsites with tracing's no-subscriber dispatch
 // while the scoped subscriber is being installed, caching Interest::never.
+use patchula_http::{RequestTrace, Response, Transport};
 use reqwest::{Request, Url};
-use rustovate_http::{RequestTrace, Response, Transport};
 use std::time::Duration;
 use std::{
     io::Write,
@@ -22,7 +22,7 @@ impl Write for Output {
 }
 struct SecretResponse;
 impl Transport for SecretResponse {
-    fn send(&self, request: Request) -> rustovate_http::Exchange<'_> {
+    fn send(&self, request: Request) -> patchula_http::Exchange<'_> {
         assert!(request.headers().contains_key("authorization"));
         Box::pin(async {
             Ok(Response {

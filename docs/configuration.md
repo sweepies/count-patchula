@@ -1,13 +1,13 @@
 # Configuration
 
-`rustovate config check <path>` evaluates Pkl and checks the resulting typed
+`patchula config check <path>` evaluates Pkl and checks the resulting typed
 model. A path can be a file or a repository directory. Discovery checks
-`.github/rustovate.pkl` first, then `rustovate.pkl`. The library returns `None`
+`.github/patchula.pkl` first, then `patchula.pkl`. The library returns `None`
 when neither exists so the future batch runner can skip that repository; an
 explicit CLI check reports missing configuration with exit code 2.
 
-Vendor the bundled schema with `rustovate config schema > Rustovate.pkl`, then
-write a repository config that `amends "Rustovate.pkl"` (adjust the relative
+Vendor the bundled schema with `patchula config schema > Patchula.pkl`, then
+write a repository config that `amends "Patchula.pkl"` (adjust the relative
 path if the config is in `.github`). The committed examples amend the schema
 at the repository root. `config schema` always prints Pkl, including with
 `--json`. `config check --json` returns a versioned validation envelope;
@@ -17,13 +17,13 @@ Organisation policy uses ordinary local Pkl composition:
 
 ```pkl
 // org.pkl
-amends "Rustovate.pkl"
+amends "Patchula.pkl"
 prs { concurrent = 8 }
 defaults { releaseNotes = false }
 ```
 
 ```pkl
-// rustovate.pkl
+// patchula.pkl
 amends "org.pkl"
 prs { dashboard = true }
 ```
@@ -39,7 +39,7 @@ Local modules can read other local modules; this is not a filesystem sandbox.
 
 ## Defaults and policy
 
-[The schema](../Rustovate.pkl) is the complete source of defaults. These are
+[The schema](../Patchula.pkl) is the complete source of defaults. These are
 independent choices, not an expansion of a Renovate preset:
 
 - Select all first-release managers. Each manager will select its own supported
@@ -48,7 +48,7 @@ independent choices, not an expansion of a Renovate preset:
 - Keep automerge off and dependencies separate. Attach `dependencies`, use
   `chore(deps):` as the commit prefix, and fetch release notes.
 - Allow unlimited open PRs and proposals per hour (`null`). Positive values
-  limit them; zero is invalid. Keep the dashboard off and use `rustovate/`
+  limit them; zero is invalid. Keep the dashboard off and use `patchula/`
   branch names, rebasing when conflicted.
 - Do not delay releases, restrict update windows, refresh lockfiles separately,
   process submodules, or ignore any dependencies/authors. Exclude generated
@@ -129,7 +129,7 @@ The twelve [examples](../examples) were written from the repositories' own
 configs fetched on 2026-10-14, plus `jdx/renovate-config/default.json` for fnox.
 fnox's source is `.github/renovate.json`; the other eleven are `renovate.json`
 at the repository root. Opaque preset names were not resolved or copied.
-Examples preserve explicit policies and use the documented rustovate defaults
+Examples preserve explicit policies and use the documented patchula defaults
 where a source only names a preset. Consequently they intentionally do not
 claim identical behavior for unexamined presets.
 
@@ -180,7 +180,7 @@ compiler or system libraries, but an exact `x.y.z` pin is required, since only
 published builds exist. `"compiled"` uses mise's `php` tool, which builds PHP
 from source on first use and needs a C toolchain and the PHP build
 dependencies; it accepts any version mise can resolve. Both land in the tool
-store, so either cost is paid once; `rustovate tools install` prewarms the
+store, so either cost is paid once; `patchula tools install` prewarms the
 static build.
 
 Yarn's version comes from the `packageManager` field of `package.json`

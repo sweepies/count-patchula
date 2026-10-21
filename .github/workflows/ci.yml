@@ -81,10 +81,10 @@ jobs:
           sudo apt-get install -y valgrind
       - name: Measure and record locally (no notes push)
         env:
-          GIT_AUTHOR_NAME: rustovate benchmarks
-          GIT_AUTHOR_EMAIL: noreply@rustovate.invalid
-          GIT_COMMITTER_NAME: rustovate benchmarks
-          GIT_COMMITTER_EMAIL: noreply@rustovate.invalid
+          GIT_AUTHOR_NAME: patchula benchmarks
+          GIT_AUTHOR_EMAIL: noreply@patchula.invalid
+          GIT_COMMITTER_NAME: patchula benchmarks
+          GIT_COMMITTER_EMAIL: noreply@patchula.invalid
         run: mise run benchmarks:record
       - name: Export portable measurement artifact
         run: mise run benchmarks:export

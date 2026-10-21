@@ -1,7 +1,7 @@
 //! Output-only adapter rules. Every discarded inventory row is audited; an
 //! unsupported or changed proposal must remain actionable.
 use crate::Exclusion;
-use rustovate_report::{Dependency, Report};
+use patchula_report::{Dependency, Report};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn source(dep: &Dependency) -> Option<&str> {
@@ -73,7 +73,7 @@ fn normalize(report: &mut Report, notes: &mut BTreeMap<String, usize>) {
                 }
             }
             file.dependencies =
-                rustovate_report::normalize_dependencies(std::mem::take(&mut file.dependencies));
+                patchula_report::normalize_dependencies(std::mem::take(&mut file.dependencies));
         }
     }
 }

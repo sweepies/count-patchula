@@ -1,4 +1,4 @@
-//! Command-line entry point for rustovate.
+//! Command-line entry point for patchula.
 #![forbid(unsafe_code)]
 
 mod cli;
@@ -15,7 +15,7 @@ struct Services {
     #[cfg(test)]
     token: Option<String>,
     #[cfg(test)]
-    transport: Option<std::sync::Arc<dyn rustovate_http::Transport>>,
+    transport: Option<std::sync::Arc<dyn patchula_http::Transport>>,
 }
 impl Services {
     fn token(&self) -> Result<String, std::env::VarError> {
@@ -23,18 +23,18 @@ impl Services {
         if let Some(token) = &self.token {
             return Ok(token.clone());
         }
-        std::env::var("RUSTOVATE_TOKEN")
+        std::env::var("PATCHULA_TOKEN")
             .or_else(|_| std::env::var("GITHUB_TOKEN"))
             .or_else(|_| std::env::var("GH_TOKEN"))
     }
     fn transport(
         &self,
-    ) -> Result<std::sync::Arc<dyn rustovate_http::Transport>, rustovate_http::Error> {
+    ) -> Result<std::sync::Arc<dyn patchula_http::Transport>, patchula_http::Error> {
         #[cfg(test)]
         if let Some(transport) = &self.transport {
             return Ok(transport.clone());
         }
-        Ok(std::sync::Arc::new(rustovate_http::Network::new()?))
+        Ok(std::sync::Arc::new(patchula_http::Network::new()?))
     }
 }
 
@@ -56,15 +56,13 @@ async fn run(app: &App, services: &Services) -> Result<u8, (u8, miette::Report)>
     })?;
     match command {
         Command::Config(config) => match &config.command {
-            ConfigCommand::ServerSchema => write!(
-                io::stdout().lock(),
-                "{}",
-                rustovate_server::settings::SCHEMA
-            )
-            .map(|_| 0)
-            .map_err(|e| (1, miette::miette!("{e}"))),
+            ConfigCommand::ServerSchema => {
+                write!(io::stdout().lock(), "{}", patchula_server::settings::SCHEMA)
+                    .map(|_| 0)
+                    .map_err(|e| (1, miette::miette!("{e}")))
+            }
             ConfigCommand::CheckServer(check) => {
-                rustovate_server::settings::Settings::load(&check.path).map_err(|e| (2, e))?;
+                patchula_server::settings::Settings::load(&check.path).map_err(|e| (2, e))?;
                 writeln!(
                     io::stdout().lock(),
                     "{}",
@@ -78,14 +76,14 @@ async fn run(app: &App, services: &Services) -> Result<u8, (u8, miette::Report)>
                 .map(|_| 0)
                 .map_err(|e| (1, miette::miette!("{e}")))
             }
-            ConfigCommand::Schema => write!(io::stdout().lock(), "{}", rustovate_config::SCHEMA)
+            ConfigCommand::Schema => write!(io::stdout().lock(), "{}", patchula_config::SCHEMA)
                 .map(|_| 0)
                 .map_err(|error| (1, miette::miette!("{error}"))),
             ConfigCommand::Check(check) => {
-                let config = rustovate_config::load(&check.path).map_err(|error| (2, error))?;
+                let config = patchula_config::load(&check.path).map_err(|error| (2, error))?;
                 if app.verbose > 0 && !app.json {
                     eprintln!(
-                        "rustovate: {} managers, {} rules, {} extractors",
+                        "patchula: {} managers, {} rules, {} extractors",
                         config.managers.len(),
                         config.rules.len(),
                         config.extractors.len()
@@ -120,7 +118,7 @@ async fn run(app: &App, services: &Services) -> Result<u8, (u8, miette::Report)>
                     .join(&store.cache)
             };
             let runner =
-                rustovate_update::lockfiles::Runner::new(path.with_extension("worktrees"), "");
+                patchula_update::lockfiles::Runner::new(path.with_extension("worktrees"), "");
             let (action, specs) = match days {
                 None => ("installed", runner.prewarm().await),
                 Some(days) => ("pruned", runner.prune(days).await),
@@ -150,7 +148,7 @@ async fn main() -> ExitCode {
     // Only our explicitly sanitized events reach stderr. Dependency HTTP debug
     // logs can contain headers even when the user requests maximum verbosity.
     use tracing_subscriber::{filter::Targets, prelude::*};
-    let level = std::env::var("RUSTOVATE_LOG")
+    let level = std::env::var("PATCHULA_LOG")
         .ok()
         .and_then(|value| value.parse::<tracing::level_filters::LevelFilter>().ok())
         .unwrap_or(if app.verbose >= 2 {
@@ -173,7 +171,7 @@ async fn main() -> ExitCode {
             .boxed()
     };
     let _ = tracing_subscriber::registry()
-        .with(layer.with_filter(Targets::new().with_target("rustovate", level)))
+        .with(layer.with_filter(Targets::new().with_target("patchula", level)))
         .try_init();
     let color = app.color == cli::Color::Always
         || (app.color == cli::Color::Auto && io::stderr().is_terminal());
@@ -194,7 +192,7 @@ async fn main() -> ExitCode {
                 } else {
                     format!("{error:#}")
                 };
-                tracing::error!(target: "rustovate_server", error = %diagnostic, exit_code = code, "server stopped");
+                tracing::error!(target: "patchula_server", error = %diagnostic, exit_code = code, "server stopped");
             } else if app.json {
                 println!(
                     "{}",
@@ -203,7 +201,7 @@ async fn main() -> ExitCode {
             } else {
                 eprintln!("{error:?}");
                 if app.verbose > 0 {
-                    eprintln!("rustovate: exiting with status {code}");
+                    eprintln!("patchula: exiting with status {code}");
                 }
             }
             ExitCode::from(code)
@@ -217,12 +215,12 @@ async fn batch(
     run: Option<&cli::Run>,
     services: &Services,
 ) -> Result<u8, (u8, miette::Report)> {
-    use rustovate_engine::{Engine, Options};
-    use rustovate_report::Status;
+    use patchula_engine::{Engine, Options};
+    use patchula_report::Status;
     if options.concurrency == 0 || options.concurrency > 100 {
         return Err((2, miette::miette!("concurrency must be 1..100")));
     }
-    let mut http_options = rustovate_http::Options {
+    let mut http_options = patchula_http::Options {
         registry_freshness_secs: options.registry_freshness_secs,
         go_freshness_secs: options.go_freshness_secs,
         ..Default::default()
@@ -246,39 +244,39 @@ async fn batch(
         )
     })?;
     let recheck = match app.recheck {
-        Some(cli::Recheck::Now) => rustovate_engine::Recheck::Now,
-        Some(cli::Recheck::NextRun) => rustovate_engine::Recheck::NextRun,
-        None if run.is_some() => match std::env::var("RUSTOVATE_RECHECK").as_deref() {
-            Ok("now") => rustovate_engine::Recheck::Now,
+        Some(cli::Recheck::Now) => patchula_engine::Recheck::Now,
+        Some(cli::Recheck::NextRun) => patchula_engine::Recheck::NextRun,
+        None if run.is_some() => match std::env::var("PATCHULA_RECHECK").as_deref() {
+            Ok("now") => patchula_engine::Recheck::Now,
             Ok("next-run") | Err(std::env::VarError::NotPresent) => {
-                rustovate_engine::Recheck::NextRun
+                patchula_engine::Recheck::NextRun
             }
             _ => {
                 return Err((
                     2,
-                    miette::miette!("RUSTOVATE_RECHECK must be now or next-run"),
+                    miette::miette!("PATCHULA_RECHECK must be now or next-run"),
                 ));
             }
         },
-        None => rustovate_engine::Recheck::NextRun,
+        None => patchula_engine::Recheck::NextRun,
     };
     let config = options
         .config
         .as_ref()
-        .map(|path| rustovate_config::load(path))
+        .map(|path| patchula_config::load(path))
         .transpose()
         .map_err(|e| (2, e))?;
     let token = services.token().map_err(|_| {
         (
             1,
-            miette::miette!("lookup/run requires RUSTOVATE_TOKEN, GITHUB_TOKEN or GH_TOKEN"),
+            miette::miette!("lookup/run requires PATCHULA_TOKEN, GITHUB_TOKEN or GH_TOKEN"),
         )
     })?;
     if let Some(parent) = options.cache.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)
             .map_err(|e| (1, miette::miette!("cannot create cache directory: {e}")))?;
     }
-    let cache = rustovate_cache::Cache::open(&options.cache, Default::default())
+    let cache = patchula_cache::Cache::open(&options.cache, Default::default())
         .await
         .map_err(|e| (1, miette::miette!("{e}")))?;
     let transport = services
@@ -289,8 +287,8 @@ async fn batch(
             .map_err(|e| (1, miette::miette!("{e}")))?
             .with_recheck(recheck);
     match (
-        std::env::var("RUSTOVATE_DOCKERHUB_USERNAME").ok(),
-        std::env::var("RUSTOVATE_DOCKERHUB_TOKEN").ok(),
+        std::env::var("PATCHULA_DOCKERHUB_USERNAME").ok(),
+        std::env::var("PATCHULA_DOCKERHUB_TOKEN").ok(),
     ) {
         (None, None) => {}
         (Some(username), Some(token)) if !username.is_empty() && !token.is_empty() => {
@@ -300,7 +298,7 @@ async fn batch(
             return Err((
                 2,
                 miette::miette!(
-                    "set both RUSTOVATE_DOCKERHUB_USERNAME and RUSTOVATE_DOCKERHUB_TOKEN to nonempty values"
+                    "set both PATCHULA_DOCKERHUB_USERNAME and PATCHULA_DOCKERHUB_TOKEN to nonempty values"
                 ),
             ));
         }
@@ -318,7 +316,7 @@ async fn batch(
         engine.lookup(options).await
     }
     .map_err(|e| {
-        let code = if matches!(e, rustovate_engine::Error::Configuration(_)) {
+        let code = if matches!(e, patchula_engine::Error::Configuration(_)) {
             2
         } else {
             1
@@ -403,7 +401,7 @@ async fn batch(
     }
     if let Some(stats) = &report.stats {
         eprintln!(
-            "rustovate: {} repos, {updates} proposals; {} requests, {} 304s, {} cache hits, {} extraction hits, {} unique lookups",
+            "patchula: {} repos, {updates} proposals; {} requests, {} 304s, {} cache hits, {} extraction hits, {} unique lookups",
             report.repositories.len(),
             stats.requests,
             stats.not_modified,
@@ -412,7 +410,7 @@ async fn batch(
             stats.lookups
         );
         eprintln!(
-            "rustovate timings: {}",
+            "patchula timings: {}",
             stats
                 .phase_micros
                 .iter()

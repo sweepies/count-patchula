@@ -2,10 +2,10 @@
 //! separately; this executable never constructs a live transport or reads a token.
 #![forbid(unsafe_code)]
 use futures_util::{StreamExt, stream};
-use rustovate_cache::Cache;
-use rustovate_config::Source;
-use rustovate_datasource::Client;
-use rustovate_http::{Cached, Exchange, Response, Transport};
+use patchula_cache::Cache;
+use patchula_config::Source;
+use patchula_datasource::Client;
+use patchula_http::{Cached, Exchange, Response, Transport};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let cache = Cache::open(&path, Default::default()).await?;
     let client = Client::new(
-        rustovate_github::Client::with_transport(
+        patchula_github::Client::with_transport(
             "offline",
             cache.clone(),
             Default::default(),
@@ -81,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|package| {
                 let client = &client;
                 async move {
-                    Ok::<_, rustovate_datasource::Error>((
+                    Ok::<_, patchula_datasource::Error>((
                         package,
                         serde_json::to_value(client.lookup(Source::Npm, package).await?)?,
                     ))

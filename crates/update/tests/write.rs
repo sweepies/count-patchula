@@ -1,13 +1,13 @@
 //! Stateful synthetic GitHub: no sockets, tokens or network client.
-use rustovate_cache::Cache;
-use rustovate_config::{Config, Manager, Rebase};
-use rustovate_github::Client;
-use rustovate_http::{Exchange, Response, Transport};
-use rustovate_manager::{Files, Scanner, word};
-use rustovate_report::{
+use patchula_cache::Cache;
+use patchula_config::{Config, Manager, Rebase};
+use patchula_github::Client;
+use patchula_http::{Exchange, Response, Transport};
+use patchula_manager::{Files, Scanner, word};
+use patchula_report::{
     ActionStatus, Current, Dependency as ReportDependency, PackageFile, Repository, Status, Update,
 };
-use rustovate_update::{Blob, Plan, Snapshot, apply, blob_sha, branch_name, plan};
+use patchula_update::{Blob, Plan, Snapshot, apply, blob_sha, branch_name, plan};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -79,7 +79,7 @@ impl Transport for Fake {
             .requests
             .push((request.method().to_string(), path.clone()));
         let reply = if path == "/graphql" {
-            if body["query"] == rustovate_update::INVENTORY_QUERY {
+            if body["query"] == patchula_update::INVENTORY_QUERY {
                 let nodes: Vec<_> = state.refs.iter().map(|(name, oid)| {
                     let name = name.strip_prefix("refs/heads/").unwrap();
                     let commit = &state.commits[oid];
@@ -90,7 +90,7 @@ impl Transport for Fake {
                         "labels":{"nodes":p["labels"],"pageInfo":{"hasNextPage":false}},"autoMergeRequest":p["auto_merge"]
                     })).collect();
                     json!({"name":name,"target":{"oid":oid,"tree":{"oid":commit["tree"]["sha"]},"message":commit["message"],
-                        "author":{"user":{"login":commit.get("actor").and_then(Value::as_str).unwrap_or("rustovate[bot]")}},
+                        "author":{"user":{"login":commit.get("actor").and_then(Value::as_str).unwrap_or("patchula[bot]")}},
                         "committer":{"user":{"login":"web-flow"}},"signature":{"isValid":!state.unsigned}},
                         "associatedPullRequests":{"nodes":prs,"pageInfo":{"hasNextPage":false}}})
                 }).collect();
@@ -103,7 +103,7 @@ impl Transport for Fake {
                 let nodes: Vec<_> = nodes.into_iter().skip(offset).take(size).collect();
                 response(
                     200,
-                    json!({"data":{"viewer":{"login":"rustovate[bot]"},"nodes":state.prs.values().filter(|p|body["variables"]["closed"].as_array().unwrap().contains(&p["node_id"])).map(|p|json!({
+                    json!({"data":{"viewer":{"login":"patchula[bot]"},"nodes":state.prs.values().filter(|p|body["variables"]["closed"].as_array().unwrap().contains(&p["node_id"])).map(|p|json!({
                         "id":p["node_id"],"state":if p["state"] == "open" {"OPEN"} else {"CLOSED"},"merged":!p["merged_at"].is_null(),
                         "body":p["body"],"author":graphql_author(p),"headRepository":{"nameWithOwner":p["head"]["repo"]["full_name"]},"baseRepository":{"nameWithOwner":p["base"]["repo"]["full_name"]}
                     })).collect::<Vec<_>>(),"repository":{
@@ -128,7 +128,7 @@ impl Transport for Fake {
                 };
                 response(200, json!({"data":{"repository":{"r0":value}}}))
             } else if body["query"] == "query{viewer{login}}" {
-                response(200, json!({"data":{"viewer":{"login":"rustovate[bot]"}}}))
+                response(200, json!({"data":{"viewer":{"login":"patchula[bot]"}}}))
             } else if body["query"]
                 .as_str()
                 .is_some_and(|q| q.contains("PullRequestAutoMerge"))
@@ -150,7 +150,7 @@ impl Transport for Fake {
                     json!({"data":if enabled { json!({"enablePullRequestAutoMerge":{"pullRequest":{"id":"pr-id"}}}) } else {json!({"disablePullRequestAutoMerge":{"pullRequest":{"id":"pr-id"}}})}}),
                 )
             } else {
-                assert_eq!(body["query"], rustovate_update::REF_UPDATE);
+                assert_eq!(body["query"], patchula_update::REF_UPDATE);
                 state.writes.push((path.clone(), body.clone()));
                 let input = &body["variables"]["input"];
                 assert_eq!(input["repositoryId"], "repo-id");
@@ -205,7 +205,7 @@ impl Transport for Fake {
                 let number = state.prs.len() as u64 + 1;
                 let sha =
                     state.refs[&format!("refs/heads/{}", body["head"].as_str().unwrap())].clone();
-                let pr = json!({"number":number,"node_id":format!("pr-{number}"),"html_url":format!("https://github.com/demo/app/pull/{number}"),"state":"open","title":body["title"],"body":body["body"],"head":{"ref":body["head"],"sha":sha,"repo":{"full_name":"demo/app"}},"base":{"ref":body["base"],"repo":{"full_name":"demo/app"}},"user":{"login":"rustovate[bot]"},"labels":[],"auto_merge":null,"merged_at":null,"created_at":chrono::Utc::now().to_rfc3339()});
+                let pr = json!({"number":number,"node_id":format!("pr-{number}"),"html_url":format!("https://github.com/demo/app/pull/{number}"),"state":"open","title":body["title"],"body":body["body"],"head":{"ref":body["head"],"sha":sha,"repo":{"full_name":"demo/app"}},"base":{"ref":body["base"],"repo":{"full_name":"demo/app"}},"user":{"login":"patchula[bot]"},"labels":[],"auto_merge":null,"merged_at":null,"created_at":chrono::Utc::now().to_rfc3339()});
                 let mut pr = pr;
                 pr["head"]["label"] = json!("demo:branch");
                 pr["head"]["repo"]["updated_at"] = json!("2026-10-15T00:00:00Z");
@@ -410,7 +410,7 @@ impl Transport for Fake {
             } else {
                 history.iter().map(|sha| {
                 let commit = &state.commits[*sha];
-                json!({"sha":sha,"author":{"login":commit.get("actor").and_then(Value::as_str).unwrap_or("rustovate[bot]")},"committer":{"login":commit.get("committer_login").and_then(Value::as_str).unwrap_or("web-flow")},"commit":commit})
+                json!({"sha":sha,"author":{"login":commit.get("actor").and_then(Value::as_str).unwrap_or("patchula[bot]")},"committer":{"login":commit.get("committer_login").and_then(Value::as_str).unwrap_or("web-flow")},"commit":commit})
             }).collect()
             };
             response(
@@ -434,14 +434,14 @@ fn setup(
 ) -> (
     Config,
     Repository,
-    Vec<rustovate_manager::Dependency>,
+    Vec<patchula_manager::Dependency>,
     Snapshot,
 ) {
-    let mut config = rustovate_config::load_files(
-        "/repo/rustovate.pkl",
+    let mut config = patchula_config::load_files(
+        "/repo/patchula.pkl",
         BTreeMap::from([(
-            "/repo/rustovate.pkl".into(),
-            "amends \"Rustovate.pkl\"".into(),
+            "/repo/patchula.pkl".into(),
+            "amends \"Patchula.pkl\"".into(),
         )]),
     )
     .unwrap();
@@ -619,7 +619,7 @@ async fn identical_forced_rechecks_never_create_git_objects_or_update_refs() {
         repeat.fingerprint = "changed-policy-fingerprint".into();
         server.0.lock().unwrap().writes.clear();
         if batch {
-            rustovate_update::apply_all(
+            patchula_update::apply_all(
                 &github,
                 std::slice::from_mut(&mut repeat),
                 &snapshot,
@@ -776,7 +776,7 @@ async fn behind_rebases_and_conflicts_keeps_an_identical_manifest_on_old_base() 
     }
 }
 #[tokio::test(start_paused = true)]
-async fn human_commit_is_protected_even_with_copied_rustovate_markers() {
+async fn human_commit_is_protected_even_with_copied_patchula_markers() {
     let (mut first, snapshot) = make_plan("22.0.0");
     let server = fake(&snapshot);
     let github = client(server.clone()).await;
@@ -943,7 +943,7 @@ async fn stale_blob_content_tree_moved_base_unsigned_and_lease_race_fail_closed(
             "case={case}: {:?}",
             plan.action
         );
-        assert_eq!(rustovate_update::needs_requeue(&plan.action), case == 2);
+        assert_eq!(patchula_update::needs_requeue(&plan.action), case == 2);
         assert!(
             !server
                 .0
@@ -968,9 +968,9 @@ async fn moved_default_base_skips_every_branch_in_a_shared_write_batch() {
         .refs
         .insert("refs/heads/main".into(), "new-base".into());
     let (mut second, _) = make_plan("22.0.0");
-    second.action.branch = "rustovate/second".into();
+    second.action.branch = "patchula/second".into();
     let mut plans = [plan, second];
-    rustovate_update::apply_all(
+    patchula_update::apply_all(
         &client(server.clone()).await,
         &mut plans,
         &snapshot,
@@ -982,7 +982,7 @@ async fn moved_default_base_skips_every_branch_in_a_shared_write_batch() {
     assert!(
         plans
             .iter()
-            .all(|plan| rustovate_update::needs_requeue(&plan.action))
+            .all(|plan| patchula_update::needs_requeue(&plan.action))
     );
     assert!(server.0.lock().unwrap().writes.is_empty());
 }
@@ -990,8 +990,8 @@ async fn moved_default_base_skips_every_branch_in_a_shared_write_batch() {
 #[test]
 fn names_are_readable_and_validate_git_refs() {
     assert_eq!(
-        branch_name("rustovate/", "scope-a-2.x", "one").unwrap(),
-        "rustovate/scope-a-2.x"
+        branch_name("patchula/", "scope-a-2.x", "one").unwrap(),
+        "patchula/scope-a-2.x"
     );
     assert!(branch_name("../bad/", "a", "one").is_err());
     assert!(branch_name("custom/deps/", "a", "one").unwrap() == "custom/deps/a");
@@ -1135,7 +1135,7 @@ fn pnpm_and_yarn_locks_are_supported_and_never_pending() {
             assert_eq!(p.lock_jobs.len(), 1, "{lock}");
             assert_eq!(
                 p.lock_jobs[0].ecosystem,
-                rustovate_update::lockfiles::Ecosystem::Node,
+                patchula_update::lockfiles::Ecosystem::Node,
                 "{lock}"
             );
         }
@@ -1167,9 +1167,9 @@ fn consolidates_minor_patch_digest_pins_and_keeps_only_latest_major() {
     assert_eq!(
         names,
         BTreeSet::from([
-            "rustovate/node-20.x",
-            "rustovate/node-24.x",
-            "rustovate/pin-dependencies"
+            "patchula/node-20.x",
+            "patchula/node-24.x",
+            "patchula/pin-dependencies"
         ])
     );
     let nonmajor = plans
@@ -1186,7 +1186,7 @@ async fn migration_deletes_owned_hash_branch_with_a_lease_and_preserves_human_wo
     let server = fake(&snapshot);
     let github = client(server.clone()).await;
     apply(&github, &mut p, &snapshot, "main", Rebase::Behind, false).await;
-    let old = "rustovate/node-major-0123456789abcdef";
+    let old = "patchula/node-major-0123456789abcdef";
     {
         let mut s = server.0.lock().unwrap();
         let sha = s
@@ -1195,17 +1195,17 @@ async fn migration_deletes_owned_hash_branch_with_a_lease_and_preserves_human_wo
             .unwrap();
         let commit = s.commits.get_mut(&sha).unwrap();
         commit["message"] = json!(commit["message"].as_str().unwrap().replace(
-            "Rustovate-Base: base",
-            "Rustovate-Base: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            "Patchula-Base: base",
+            "Patchula-Base: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         ));
         let mut human = commit.clone();
         human["actor"] = json!("human");
         s.commits.insert("human".into(), human);
         s.refs.insert(format!("refs/heads/{old}"), sha);
         s.refs
-            .insert("refs/heads/rustovate/human".into(), "human".into());
+            .insert("refs/heads/patchula/human".into(), "human".into());
     }
-    let actions = rustovate_update::cleanup(&github, "demo/app", "base", "main", &[p], false)
+    let actions = patchula_update::cleanup(&github, "demo/app", "base", "main", &[p], false)
         .await
         .unwrap();
     assert_eq!(actions.len(), 1);
@@ -1216,7 +1216,7 @@ async fn migration_deletes_owned_hash_branch_with_a_lease_and_preserves_human_wo
         s.refs[&format!("refs/heads/{old}")],
         "0000000000000000000000000000000000000000"
     );
-    assert!(s.refs.contains_key("refs/heads/rustovate/human"));
+    assert!(s.refs.contains_key("refs/heads/patchula/human"));
     assert_eq!(s.refs["refs/heads/main"], "base");
 }
 
@@ -1251,7 +1251,7 @@ fn container_occurrences_across_managers_share_target_and_slug_collisions_gain_m
     let names: BTreeSet<_> = plans.iter().map(|p| p.action.branch.as_str()).collect();
     assert_eq!(
         names,
-        BTreeSet::from(["rustovate/docker-node-22.x", "rustovate/mise-node-22.x"])
+        BTreeSet::from(["patchula/docker-node-22.x", "patchula/mise-node-22.x"])
     );
     // Same package/source/target in a second file shares the existing branch.
     let text = "node 20.0.0\n";
@@ -1297,12 +1297,12 @@ async fn shared_base_write_trace_and_request_budget() {
     let mut plans: Vec<_> = (0..12)
         .map(|n| {
             let (mut p, _) = make_plan("22.0.0");
-            p.action.branch = format!("rustovate/tool-{n}-22.x");
+            p.action.branch = format!("patchula/tool-{n}-22.x");
             p
         })
         .collect();
     let started = tokio::time::Instant::now();
-    rustovate_update::apply_all(&github, &mut plans, &snapshot, "main", Rebase::Behind, true).await;
+    patchula_update::apply_all(&github, &mut plans, &snapshot, "main", Rebase::Behind, true).await;
     assert_eq!(github.stats().await.requests, 0);
     eprintln!(
         "dry-run: {} requests, simulated elapsed {:?}",
@@ -1310,7 +1310,7 @@ async fn shared_base_write_trace_and_request_budget() {
         started.elapsed()
     );
     let started = tokio::time::Instant::now();
-    rustovate_update::apply_all(
+    patchula_update::apply_all(
         &github,
         &mut plans,
         &snapshot,
@@ -1367,13 +1367,13 @@ async fn forced_batch_recheck_has_no_mutations_and_one_shared_viewer_read() {
         (0..17)
             .map(|n| {
                 let (mut p, _) = make_plan("22.0.0");
-                p.action.branch = format!("rustovate/tool-{n}-22.x");
+                p.action.branch = format!("patchula/tool-{n}-22.x");
                 p.retry = true;
                 p
             })
             .collect::<Vec<_>>()
     };
-    rustovate_update::apply_all(
+    patchula_update::apply_all(
         &github,
         &mut plans(),
         &snapshot,
@@ -1389,7 +1389,7 @@ async fn forced_batch_recheck_has_no_mutations_and_one_shared_viewer_read() {
     }
     let mut repeat = plans();
     let started = tokio::time::Instant::now();
-    rustovate_update::apply_all(
+    patchula_update::apply_all(
         &github,
         &mut repeat,
         &snapshot,
@@ -1433,18 +1433,18 @@ async fn pr_cycle(
     config: &Config,
     plans: &mut [Plan],
     snapshot: &Snapshot,
-) -> Vec<rustovate_report::PullRequestAction> {
-    let mut state = rustovate_update::Lifecycle::prepare(
+) -> Vec<patchula_report::PullRequestAction> {
+    let mut state = patchula_update::Lifecycle::prepare(
         client,
         repo,
         plans,
         config,
         chrono::Utc::now(),
-        rustovate_update::Recheck::NextRun,
+        patchula_update::Recheck::NextRun,
     )
     .await
     .unwrap();
-    rustovate_update::apply_all(client, plans, snapshot, "main", Rebase::Behind, false).await;
+    patchula_update::apply_all(client, plans, snapshot, "main", Rebase::Behind, false).await;
     state.publish(client, plans).await;
     state.actions
 }
@@ -1487,8 +1487,8 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
         p.changes[0].labels = vec!["dependencies".into()];
         if case == "generated" {
             p.fingerprint = "d".repeat(64);
-            p.lock_jobs.push(rustovate_update::lockfiles::Job {
-                ecosystem: rustovate_update::lockfiles::Ecosystem::Cargo,
+            p.lock_jobs.push(patchula_update::lockfiles::Job {
+                ecosystem: patchula_update::lockfiles::Ecosystem::Cargo,
                 directory: String::new(),
                 package: None,
                 current: None,
@@ -1512,7 +1512,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
             next.changes = p.changes.clone();
             p = next;
         }
-        let mut lifecycle = rustovate_update::Lifecycle::prepare(
+        let mut lifecycle = patchula_update::Lifecycle::prepare(
             &github,
             &repo,
             std::slice::from_mut(&mut p),
@@ -1522,7 +1522,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
         )
         .await
         .unwrap();
-        rustovate_update::apply_all(
+        patchula_update::apply_all(
             &github,
             std::slice::from_mut(&mut p),
             &snapshot,
@@ -1534,7 +1534,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
         lifecycle
             .publish(&github, std::slice::from_mut(&mut p))
             .await;
-        rustovate_update::save_receipts(
+        patchula_update::save_receipts(
             &cache,
             &repo,
             &config,
@@ -1563,7 +1563,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
                 "actor" => s.prs.get_mut(&1).unwrap()["user"]["login"] = json!("other[bot]"),
                 "user-with-bot-name" => {
                     s.prs.get_mut(&1).unwrap()["graphql_author"] =
-                        json!({"__typename":"User","login":"rustovate"})
+                        json!({"__typename":"User","login":"patchula"})
                 }
                 "signature" => s.unsigned = true,
                 "body" => s.prs.get_mut(&1).unwrap()["body"] = json!("Human edited body"),
@@ -1587,7 +1587,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
                     }
                     s.commits.insert("obsolete".into(), commit);
                     s.refs
-                        .insert("refs/heads/rustovate/obsolete".into(), "obsolete".into());
+                        .insert("refs/heads/patchula/obsolete".into(), "obsolete".into());
                 }
                 _ => {}
             }
@@ -1595,7 +1595,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
             s.latency = std::time::Duration::from_millis(200);
         }
         let started = tokio::time::Instant::now();
-        let all = rustovate_update::restore_unchanged(
+        let all = patchula_update::restore_unchanged(
             &github,
             &cache,
             &repo,
@@ -1687,7 +1687,7 @@ async fn published_pr_heads_wait_for_our_old_head_but_reject_foreign_commits() {
             s.base = "base2".into();
             s.refs.insert("refs/heads/main".into(), "base2".into());
         }
-        let mut lifecycle = rustovate_update::Lifecycle::prepare(
+        let mut lifecycle = patchula_update::Lifecycle::prepare(
             &github,
             &repo,
             std::slice::from_mut(&mut next),
@@ -1703,7 +1703,7 @@ async fn published_pr_heads_wait_for_our_old_head_but_reject_foreign_commits() {
             s.pr_head_override = (case == "foreign").then(|| "human".into());
             s.close_on_read = case == "closed";
         }
-        rustovate_update::apply_all(
+        patchula_update::apply_all(
             &github,
             std::slice::from_mut(&mut next),
             &snapshot,
@@ -1796,7 +1796,7 @@ async fn receipts_save_verified_branches_despite_unrelated_pr_errors_and_skips()
     skipped.action.status = ActionStatus::Skipped;
     skipped.action.reason = Some("unrelated policy skip".into());
     let mut plans = vec![closed, live, failed, skipped];
-    let mut lifecycle = rustovate_update::Lifecycle::prepare(
+    let mut lifecycle = patchula_update::Lifecycle::prepare(
         &github,
         &repo,
         &mut plans,
@@ -1807,7 +1807,7 @@ async fn receipts_save_verified_branches_despite_unrelated_pr_errors_and_skips()
     .await
     .unwrap();
     assert_eq!(plans[0].action.status, ActionStatus::Skipped);
-    rustovate_update::apply_all(
+    patchula_update::apply_all(
         &github,
         &mut plans,
         &snapshot,
@@ -1818,7 +1818,7 @@ async fn receipts_save_verified_branches_despite_unrelated_pr_errors_and_skips()
     .await;
     lifecycle.publish(&github, &mut plans).await;
     assert_eq!(plans[1].action.verified, Some(true));
-    lifecycle.actions.push(rustovate_report::PullRequestAction {
+    lifecycle.actions.push(patchula_report::PullRequestAction {
         repository: repo.repository.clone(),
         branch: "unrelated".into(),
         number: None,
@@ -1827,11 +1827,11 @@ async fn receipts_save_verified_branches_despite_unrelated_pr_errors_and_skips()
         reason: Some("unrelated publication failure".into()),
     });
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-    rustovate_update::save_receipts(&cache, &repo, &config, &plans, &lifecycle)
+    patchula_update::save_receipts(&cache, &repo, &config, &plans, &lifecycle)
         .await
         .unwrap();
     let bytes = cache
-        .extraction_get(&rustovate_cache::ExtractionKey {
+        .extraction_get(&patchula_cache::ExtractionKey {
             repo: repo.repository.clone(),
             default_branch_commit: config.prs.branch.clone(),
             config_hash: "verified-write-receipts-v3".into(),
@@ -1878,7 +1878,7 @@ async fn closed_update_receipts_are_freshly_verified_and_invalidated() {
         .await;
         server.0.lock().unwrap().prs.get_mut(&1).unwrap()["state"] = json!("closed");
         let (mut next, _) = make_plan("22.0.0");
-        let lifecycle = rustovate_update::Lifecycle::prepare(
+        let lifecycle = patchula_update::Lifecycle::prepare(
             &github,
             &repo,
             std::slice::from_mut(&mut next),
@@ -1889,7 +1889,7 @@ async fn closed_update_receipts_are_freshly_verified_and_invalidated() {
         .await
         .unwrap();
         assert_eq!(next.action.status, ActionStatus::Skipped);
-        rustovate_update::save_receipts(&cache, &repo, &config, &[next], &lifecycle)
+        patchula_update::save_receipts(&cache, &repo, &config, &[next], &lifecycle)
             .await
             .unwrap();
         {
@@ -1907,7 +1907,7 @@ async fn closed_update_receipts_are_freshly_verified_and_invalidated() {
             s.requests.clear();
         }
         let (mut warm, _) = make_plan(if case == "target" { "22.1.0" } else { "22.0.0" });
-        let all = rustovate_update::restore_unchanged(
+        let all = patchula_update::restore_unchanged(
             &github,
             &cache,
             &repo,
@@ -1955,8 +1955,8 @@ async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
         assert!(body.contains("| Package | Change | Type | File |"));
         assert!(body.contains("mise.toml") && body.contains("22.0.0"));
         assert!(body.contains("Review our deployment first."));
-        assert!(body.contains("Created by rustovate. Click to re-check on the next run."));
-        assert!(body.contains("<!-- rustovate:") && body.contains("<!-- rustovate-recheck -->"));
+        assert!(body.contains("Created by patchula. Click to re-check on the next run."));
+        assert!(body.contains("<!-- patchula:") && body.contains("<!-- patchula-recheck -->"));
         assert_eq!(pr["labels"][0]["name"], "dependencies");
     }
     let count = server.0.lock().unwrap().writes.len();
@@ -1975,7 +1975,7 @@ async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
     {
         let mut s = server.0.lock().unwrap();
         let body = s.prs[&1]["body"].as_str().unwrap().replace(
-            "- [ ] Created by rustovate. Click to re-check on the next run.",
+            "- [ ] Created by patchula. Click to re-check on the next run.",
             "- [x] Any operator wording",
         );
         s.prs.get_mut(&1).unwrap()["body"] = json!(body);
@@ -2142,15 +2142,15 @@ async fn obsolete_pr_closes_then_branch_deletes_and_human_history_is_protected()
                 .get_mut(p.action.commit.as_ref().unwrap())
                 .unwrap();
             commit["message"] = json!(commit["message"].as_str().unwrap().replace(
-                "Rustovate-Base: base",
-                "Rustovate-Base: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                "Patchula-Base: base",
+                "Patchula-Base: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             ));
             if human {
                 commit["actor"] = json!("human");
             }
             s.close_on_read = case == "closed-by-owner";
         }
-        let state = rustovate_update::Lifecycle::prepare(
+        let state = patchula_update::Lifecycle::prepare(
             &github,
             &repo,
             &mut [],
@@ -2170,7 +2170,7 @@ async fn obsolete_pr_closes_then_branch_deletes_and_human_history_is_protected()
                 ActionStatus::Closed
             }
         );
-        let cleanup = rustovate_update::cleanup(&github, "demo/app", "base", "main", &[], false)
+        let cleanup = patchula_update::cleanup(&github, "demo/app", "base", "main", &[], false)
             .await
             .unwrap();
         assert_eq!(cleanup.len(), usize::from(!human));
@@ -2185,7 +2185,7 @@ async fn obsolete_pr_closes_then_branch_deletes_and_human_history_is_protected()
             let delete = s
                 .writes
                 .iter()
-                .rposition(|(_, b)| b["query"] == rustovate_update::REF_UPDATE)
+                .rposition(|(_, b)| b["query"] == patchula_update::REF_UPDATE)
                 .unwrap();
             assert!(close < delete);
         }
@@ -2199,7 +2199,7 @@ async fn generated_tables_policy_text_and_markers_do_not_gain_joiners() {
     p.changes[0].package = "@scope/package".into();
     p.changes[0].current = "20.0.0@sha256:abcdef".into();
     p.changes[0].digest = Some("sha256:fedcba".into());
-    p.changes[0].body_notes = vec!["Policy @owner name@version <!-- rustovate:fake -->".into()];
+    p.changes[0].body_notes = vec!["Policy @owner name@version <!-- patchula:fake -->".into()];
     let server = fake(&snapshot);
     let github = client(server.clone()).await;
     pr_cycle(
@@ -2213,10 +2213,10 @@ async fn generated_tables_policy_text_and_markers_do_not_gain_joiners() {
     let s = server.0.lock().unwrap();
     let body = s.prs[&1]["body"].as_str().unwrap();
     assert!(body.contains("| @scope/package | 20.0.0@sha256:abcdef → 22.0.0@sha256:fedcba |"));
-    assert!(body.contains("Policy @owner name@version &lt;!-- rustovate:fake --&gt;"));
+    assert!(body.contains("Policy @owner name@version &lt;!-- patchula:fake --&gt;"));
     assert!(!body.contains('\u{200d}'));
-    assert_eq!(body.matches("<!-- rustovate:").count(), 1);
-    assert_eq!(body.matches("<!-- rustovate-content:").count(), 1);
+    assert_eq!(body.matches("<!-- patchula:").count(), 1);
+    assert_eq!(body.matches("<!-- patchula-content:").count(), 1);
 }
 
 #[tokio::test(start_paused = true)]
@@ -2312,13 +2312,13 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
     let mut row = p.changes[0].clone();
     row.file = "other.yml".into();
     p.changes.push(row);
-    let mut lifecycle = rustovate_update::Lifecycle::prepare(
+    let mut lifecycle = patchula_update::Lifecycle::prepare(
         &github,
         &repo,
         std::slice::from_mut(&mut p),
         &config,
         chrono::Utc::now(),
-        rustovate_update::Recheck::Now,
+        patchula_update::Recheck::Now,
     )
     .await
     .unwrap();
@@ -2329,7 +2329,7 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
     {
         let s = server.0.lock().unwrap();
         let body = s.prs[&1]["body"].as_str().unwrap();
-        assert!(body.len() <= rustovate_update::BODY_LIMIT);
+        assert!(body.len() <= patchula_update::BODY_LIMIT);
         assert!(body.contains("Release details 🦀") && body.contains("Click to re-check now."));
         assert_eq!(s.release_queries.len(), 1);
     }
@@ -2381,7 +2381,7 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
     repeat.action.status = ActionStatus::Unchanged;
     repeat.changes.iter_mut().for_each(|c| {
         c.release_notes = false;
-        c.body_notes = vec!["huge 🦀 <!-- rustovate:fake -->".repeat(5000)];
+        c.body_notes = vec!["huge 🦀 <!-- patchula:fake -->".repeat(5000)];
     });
     let count = server.0.lock().unwrap().release_queries.len();
     lifecycle
@@ -2389,8 +2389,8 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
         .await;
     let s = server.0.lock().unwrap();
     let body = s.prs[&1]["body"].as_str().unwrap();
-    assert!(body.len() <= rustovate_update::BODY_LIMIT);
-    assert_eq!(body.matches("<!-- rustovate:").count(), 1);
+    assert!(body.len() <= patchula_update::BODY_LIMIT);
+    assert_eq!(body.matches("<!-- patchula:").count(), 1);
     assert_eq!(s.release_queries.len(), count);
 }
 
@@ -2482,7 +2482,7 @@ async fn lookup_warnings_defer_obsolete_pr_closure() {
     .await;
     repo.warnings
         .push("registry temporarily unavailable".into());
-    let state = rustovate_update::Lifecycle::prepare(
+    let state = patchula_update::Lifecycle::prepare(
         &github,
         &repo,
         &mut [],
@@ -2498,7 +2498,7 @@ async fn lookup_warnings_defer_obsolete_pr_closure() {
 
 #[test]
 fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
-    // Self-authored manifests and target facts from the owner's rustovate report;
+    // Self-authored manifests and target facts from the owner's patchula report;
     // no Renovate fixture, source or preset data is used.
     let (config, mut repo, _, _) = setup("22.0.0", false);
     let mut config = config;
@@ -2591,10 +2591,10 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
             .map(|(kind, target)| Update {
                 new_value: Some((*target).into()),
                 new_version: Some((*target).into()),
-                new_digest: if dep.source == rustovate_config::Source::Docker {
+                new_digest: if dep.source == patchula_config::Source::Docker {
                     Some(format!("sha256:{}", "b".repeat(64)))
                 } else if dep.manager == Manager::GithubActions
-                    && dep.source == rustovate_config::Source::GithubTags
+                    && dep.source == patchula_config::Source::GithubTags
                 {
                     Some("b".repeat(40))
                 } else {
@@ -2637,27 +2637,27 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
     assert_eq!(
         names,
         BTreeSet::from([
-            "rustovate/actions-checkout-4.x",
-            "rustovate/actions-checkout-7.x",
-            "rustovate/docker-node-20.x",
-            "rustovate/docker-node-26.x",
-            "rustovate/jdx-mise-action-5.x",
-            "rustovate/jqlang-jq-1.x",
-            "rustovate/mise-node-22.x",
-            "rustovate/mise-node-26.x",
-            "rustovate/nginx-1.x",
-            "rustovate/oven-sh-bun-1.x",
-            "rustovate/pin-dependencies",
-            "rustovate/postgres-16.x",
-            "rustovate/postgres-18.x",
-            "rustovate/redis-7.x",
-            "rustovate/redis-8.x",
-            "rustovate/ubuntu-26.x",
+            "patchula/actions-checkout-4.x",
+            "patchula/actions-checkout-7.x",
+            "patchula/docker-node-20.x",
+            "patchula/docker-node-26.x",
+            "patchula/jdx-mise-action-5.x",
+            "patchula/jqlang-jq-1.x",
+            "patchula/mise-node-22.x",
+            "patchula/mise-node-26.x",
+            "patchula/nginx-1.x",
+            "patchula/oven-sh-bun-1.x",
+            "patchula/pin-dependencies",
+            "patchula/postgres-16.x",
+            "patchula/postgres-18.x",
+            "patchula/redis-7.x",
+            "patchula/redis-8.x",
+            "patchula/ubuntu-26.x",
         ])
     );
     let pins = plans
         .iter()
-        .find(|p| p.action.branch == "rustovate/pin-dependencies")
+        .find(|p| p.action.branch == "patchula/pin-dependencies")
         .unwrap();
     assert_eq!(pins.changes.len(), 6);
     assert_eq!(pins.action.message, "chore(deps): pin dependencies");
@@ -2706,7 +2706,7 @@ async fn batch_ref_race_keeps_every_prepared_branch_unpublished() {
     let server = fake(&snapshot);
     server.0.lock().unwrap().race = true;
     let github = client(server.clone()).await;
-    rustovate_update::apply_all(
+    patchula_update::apply_all(
         &github,
         &mut plans,
         &snapshot,
@@ -2725,7 +2725,7 @@ async fn batch_ref_race_keeps_every_prepared_branch_unpublished() {
     let mutations: Vec<_> = state
         .writes
         .iter()
-        .filter(|(_, b)| b["query"] == rustovate_update::REF_UPDATE)
+        .filter(|(_, b)| b["query"] == patchula_update::REF_UPDATE)
         .collect();
     assert_eq!(mutations.len(), 1);
     assert_eq!(
@@ -2762,7 +2762,7 @@ async fn generated_lockfile_additions_and_deletions_share_the_manifest_commit() 
         ("Cargo.lock", String::new(), "version = 4\n"),
     ] {
         p.contents.insert(path.into(), content.into());
-        p.action.files.push(rustovate_report::FileAction {
+        p.action.files.push(patchula_report::FileAction {
             path: path.into(),
             blob_sha: sha,
             diff: String::new(),
@@ -2896,5 +2896,5 @@ async fn titles_name_versions_and_branches_skip_registry_urls() {
         plans[0].action.message,
         "chore(deps): update node to 22.0.0"
     );
-    assert_eq!(plans[0].action.branch, "rustovate/node-22.x");
+    assert_eq!(plans[0].action.branch, "patchula/node-22.x");
 }

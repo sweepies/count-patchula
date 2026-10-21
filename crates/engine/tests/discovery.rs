@@ -1,8 +1,8 @@
 //! Specification-written offline API responses for discovery, skips and errors.
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use rustovate_cache::Cache;
-use rustovate_engine::{Engine, Options};
-use rustovate_testkit::{Body, Cassette, Interaction, RecordedRequest, RecordedResponse, Replay};
+use patchula_cache::Cache;
+use patchula_engine::{Engine, Options};
+use patchula_testkit::{Body, Cassette, Interaction, RecordedRequest, RecordedResponse, Replay};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};
 fn get(
@@ -65,7 +65,7 @@ fn head(repo: &str, branch: Option<&str>) -> Interaction {
                 ("content-type".into(), vec!["application/json".into()]),
             ]),
             body: Body::Json(
-                json!({"query":rustovate_engine::REPOSITORY_HEAD_QUERY,"variables":{"owner":owner,"name":name}}),
+                json!({"query":patchula_engine::REPOSITORY_HEAD_QUERY,"variables":{"owner":owner,"name":name}}),
             ),
         },
         response: RecordedResponse {
@@ -94,7 +94,7 @@ async fn discovered_config_precedence_skips_errors_and_cached_extraction() {
     for repo in ["configured", "skipped"] {
         interactions.push(head(&format!("demo/{repo}"), Some("main")));
         let tree = if repo == "configured" {
-            json!([{"path":".github/rustovate.pkl","type":"blob","sha":"config"},{"path":"rustovate.pkl","type":"blob","sha":"bad-config"},{"path":"package.json","type":"blob","sha":"manifest"}])
+            json!([{"path":".github/patchula.pkl","type":"blob","sha":"config"},{"path":"patchula.pkl","type":"blob","sha":"bad-config"},{"path":"package.json","type":"blob","sha":"manifest"}])
         } else {
             json!([])
         };
@@ -111,7 +111,7 @@ async fn discovered_config_precedence_skips_errors_and_cached_extraction() {
     for (sha, text) in [
         (
             "config",
-            "amends \"../Rustovate.pkl\"\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n",
+            "amends \"../Patchula.pkl\"\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n",
         ),
         (
             "manifest",
@@ -171,7 +171,7 @@ async fn discovered_config_precedence_skips_errors_and_cached_extraction() {
         true,
     ));
     let cassette=Cassette{schema_version:1,provenance:"Simulated independently from GitHub repository/tree/blob API and npm metadata specifications".into(),interactions};
-    rustovate_testkit::save(&path, &cassette, &Default::default()).unwrap();
+    patchula_testkit::save(&path, &cassette, &Default::default()).unwrap();
     let replay = Arc::new(Replay::open(&path, Default::default()).unwrap());
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await
@@ -183,7 +183,7 @@ async fn discovered_config_precedence_skips_errors_and_cached_extraction() {
     let cold = engine.lookup_at(Options::default(), now).await.unwrap();
     let warm = engine.lookup_at(Options::default(), now).await.unwrap();
     assert_eq!(cold.repositories, warm.repositories);
-    use rustovate_report::Status;
+    use patchula_report::Status;
     assert_eq!(cold.repositories[0].status, Status::Complete);
     assert_eq!(cold.repositories[1].status, Status::Error);
     assert_eq!(cold.repositories[2].status, Status::Skipped);
@@ -223,7 +223,7 @@ async fn installation_tokens_use_installation_repository_listing() {
             ),
         ],
     };
-    rustovate_testkit::save(&path, &cassette, &Default::default()).unwrap();
+    patchula_testkit::save(&path, &cassette, &Default::default()).unwrap();
     let replay = Arc::new(Replay::open(&path, Default::default()).unwrap());
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await
@@ -285,7 +285,7 @@ async fn cold_snapshot_and_warm_branch_rename_reuse_identical_commit() {
             ),
         ],
     };
-    rustovate_testkit::save(&path, &cassette, &Default::default()).unwrap();
+    patchula_testkit::save(&path, &cassette, &Default::default()).unwrap();
     let replay = Arc::new(Replay::open(&path, Default::default()).unwrap());
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await
@@ -293,17 +293,14 @@ async fn cold_snapshot_and_warm_branch_rename_reuse_identical_commit() {
     let engine = Engine::with_transport("offline", cache, 4, replay.clone())
         .unwrap()
         .with_versions_host(false);
-    let config = rustovate_config::load_files(
+    let config = patchula_config::load_files(
         "/repo/config.pkl",
         BTreeMap::from([
             (
                 "/repo/config.pkl".into(),
-                "amends \"Rustovate.pkl\"\nmanagers = new Listing {}".into(),
+                "amends \"Patchula.pkl\"\nmanagers = new Listing {}".into(),
             ),
-            (
-                "/repo/Rustovate.pkl".into(),
-                rustovate_config::SCHEMA.into(),
-            ),
+            ("/repo/Patchula.pkl".into(), patchula_config::SCHEMA.into()),
         ]),
     )
     .unwrap();
@@ -316,7 +313,7 @@ async fn cold_snapshot_and_warm_branch_rename_reuse_identical_commit() {
     let warm = engine.lookup(options()).await.unwrap();
     assert_eq!(
         warm.repositories[0].status,
-        rustovate_report::Status::Complete
+        patchula_report::Status::Complete
     );
     assert_eq!(warm.repositories[0].default_branch.as_deref(), Some("next"));
     assert_eq!(warm.stats.unwrap().extraction_hits, 1);
@@ -325,7 +322,7 @@ async fn cold_snapshot_and_warm_branch_rename_reuse_identical_commit() {
 
 #[tokio::test]
 async fn warm_catalogs_wait_for_current_extraction_and_skip_removed_sources() {
-    use rustovate_http::{Exchange, Transport};
+    use patchula_http::{Exchange, Transport};
     use std::sync::atomic::{AtomicBool, Ordering};
     struct Gate {
         replay: Arc<Replay>,
@@ -385,7 +382,7 @@ async fn warm_catalogs_wait_for_current_extraction_and_skip_removed_sources() {
         None,
         false,
     ));
-    rustovate_testkit::save(
+    patchula_testkit::save(
         &path,
         &Cassette {
             schema_version: 1,
@@ -408,17 +405,14 @@ async fn warm_catalogs_wait_for_current_extraction_and_skip_removed_sources() {
     let engine = Engine::with_transport("offline", cache, 4, gate.clone())
         .unwrap()
         .with_versions_host(false);
-    let config = rustovate_config::load_files(
+    let config = patchula_config::load_files(
         "/repo/config.pkl",
         BTreeMap::from([
             (
                 "/repo/config.pkl".into(),
-                "amends \"Rustovate.pkl\"\nmanagers = new Listing { \"npm\" }".into(),
+                "amends \"Patchula.pkl\"\nmanagers = new Listing { \"npm\" }".into(),
             ),
-            (
-                "/repo/Rustovate.pkl".into(),
-                rustovate_config::SCHEMA.into(),
-            ),
+            ("/repo/Patchula.pkl".into(), patchula_config::SCHEMA.into()),
         ]),
     )
     .unwrap();
@@ -435,7 +429,7 @@ async fn warm_catalogs_wait_for_current_extraction_and_skip_removed_sources() {
         .unwrap();
     assert!(!gate.prefetched.load(Ordering::SeqCst));
     let repo = &warm.repositories[0];
-    assert_eq!(repo.status, rustovate_report::Status::Complete);
+    assert_eq!(repo.status, patchula_report::Status::Complete);
     assert_eq!(repo.commit.as_deref(), Some("head2"));
     assert_eq!(repo.package_files[0].dependencies.len(), 1);
     assert_eq!(repo.package_files[0].dependencies[0].name, "new-dep");
@@ -449,17 +443,17 @@ async fn warm_catalogs_wait_for_current_extraction_and_skip_removed_sources() {
 
 #[tokio::test]
 async fn config_dir_maps_overrides_and_falls_back_with_batch_dedup() {
-    use rustovate_report::Status;
+    use patchula_report::Status;
     let dir = tempfile::tempdir().unwrap();
     let configs = dir.path().join("configs");
     std::fs::create_dir_all(configs.join("b")).unwrap();
-    std::fs::write(configs.join("Rustovate.pkl"), rustovate_config::SCHEMA).unwrap();
-    let npm = "amends \"Rustovate.pkl\"\nmanagers = new Listing { \"npm\" }\n";
+    std::fs::write(configs.join("Patchula.pkl"), patchula_config::SCHEMA).unwrap();
+    let npm = "amends \"Patchula.pkl\"\nmanagers = new Listing { \"npm\" }\n";
     std::fs::write(configs.join("shared.pkl"), npm).unwrap();
     std::fs::write(configs.join("other.pkl"), npm).unwrap();
     std::fs::write(
         configs.join("b/shared.pkl"),
-        "amends \"../Rustovate.pkl\"\nmanagers = new Listing {}\n",
+        "amends \"../Patchula.pkl\"\nmanagers = new Listing {}\n",
     )
     .unwrap();
     // Unselected files must not be evaluated.
@@ -484,13 +478,13 @@ async fn config_dir_maps_overrides_and_falls_back_with_batch_dedup() {
         interactions.push(head(repo, Some("main")));
         let mut tree = vec![json!({"path":"package.json","type":"blob","sha":"manifest"})];
         if repo == "demo/github" {
-            tree.push(json!({"path":".github/rustovate.pkl","type":"blob","sha":"config"}));
-            tree.push(json!({"path":"rustovate.pkl","type":"blob","sha":"bad-config"}));
+            tree.push(json!({"path":".github/patchula.pkl","type":"blob","sha":"config"}));
+            tree.push(json!({"path":"patchula.pkl","type":"blob","sha":"bad-config"}));
         } else if repo == "demo/root" {
-            tree.push(json!({"path":"rustovate.pkl","type":"blob","sha":"config"}));
+            tree.push(json!({"path":"patchula.pkl","type":"blob","sha":"config"}));
         } else if repo != "demo/skipped" {
             // Local overrides must bypass this invalid in-repository config.
-            tree.push(json!({"path":"rustovate.pkl","type":"blob","sha":"bad-config"}));
+            tree.push(json!({"path":"patchula.pkl","type":"blob","sha":"bad-config"}));
         }
         interactions.push(get(
             &format!("repos/{repo}/git/trees/tree?recursive=1"),
@@ -502,7 +496,7 @@ async fn config_dir_maps_overrides_and_falls_back_with_batch_dedup() {
         ));
         if repo == "demo/github" || repo == "demo/root" {
             let source = if repo == "demo/github" {
-                npm.replace("\"Rustovate.pkl\"", "\"../Rustovate.pkl\"")
+                npm.replace("\"Patchula.pkl\"", "\"../Patchula.pkl\"")
             } else {
                 npm.into()
             };
@@ -531,7 +525,7 @@ async fn config_dir_maps_overrides_and_falls_back_with_batch_dedup() {
         true,
     ));
     let path = dir.path().join("overrides.json");
-    rustovate_testkit::save(
+    patchula_testkit::save(
         &path,
         &Cassette {
             schema_version: 1,

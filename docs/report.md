@@ -1,6 +1,6 @@
 # Batch report contract (version 2)
 
-`rustovate-report` is the shared caller interface for `lookup --json`
+`patchula-report` is the shared caller interface for `lookup --json`
 and `run --json` results, and for CLI/server callers of the engine. The
 existing config-check JSON is a different command result, not a batch report.
 
@@ -38,7 +38,7 @@ fields accept null or omission; producers should emit null consistently. Current
 value means manifest text, version means resolved/extracted version, and digest
 means the hash itself. Unknown versions stay null; consumers must not infer a
 version from a range. `package` is the registry identity (for aliases it can differ
-from `name`). Manager names use rustovate's configuration vocabulary. Update types
+from `name`). Manager names use patchula's configuration vocabulary. Update types
 are `major`, `minor`, `patch`, `digest`, `pin`; comparison output also preserves
 other upstream update types so unsupported maintenance is visible. `group` is
 the human group identity, not a tool-specific branch slug. Update lists are sets,
@@ -105,7 +105,7 @@ versions. The original extraction/proposal fields keep their meaning.
   "dryRun": true,
   "branches": [{
     "repository": "owner/repo",
-    "branch": "rustovate/example-major-0123456789abcdef",
+    "branch": "patchula/example-major-0123456789abcdef",
     "baseCommit": "default-branch-commit",
     "status": "planned",
     "reason": "would create branch",

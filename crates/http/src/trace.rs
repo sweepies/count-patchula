@@ -46,7 +46,7 @@ impl RequestTrace {
             .collect::<Vec<_>>()
             .join("/");
         Self {
-            span: tracing::debug_span!(target: "rustovate_http", "http", method, host = url.host_str().unwrap_or(""), path, protocol = tracing::field::Empty, freshness = tracing::field::Empty, ttl_seconds = tracing::field::Empty),
+            span: tracing::debug_span!(target: "patchula_http", "http", method, host = url.host_str().unwrap_or(""), path, protocol = tracing::field::Empty, freshness = tracing::field::Empty, ttl_seconds = tracing::field::Empty),
             started: Instant::now(),
         }
     }
@@ -99,7 +99,7 @@ pub struct PhaseTrace {
 }
 impl PhaseTrace {
     pub fn new(name: &'static str) -> Self {
-        tracing::debug!(target: "rustovate_http", phase = name, "phase.start");
+        tracing::debug!(target: "patchula_http", phase = name, "phase.start");
         Self {
             name,
             started: Instant::now(),
@@ -108,6 +108,6 @@ impl PhaseTrace {
 }
 impl Drop for PhaseTrace {
     fn drop(&mut self) {
-        tracing::debug!(target: "rustovate_http", phase = self.name, total_ms = self.started.elapsed().as_secs_f64() * 1000.0, "phase.end");
+        tracing::debug!(target: "patchula_http", phase = self.name, total_ms = self.started.elapsed().as_secs_f64() * 1000.0, "phase.end");
     }
 }

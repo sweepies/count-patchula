@@ -10,14 +10,14 @@ use axum::{
 };
 use chrono::Utc;
 use futures_util::future::BoxFuture;
-use rustovate_cache::{
+use patchula_cache::{
     Cache,
     queue::{Attribution, Work},
 };
-use rustovate_engine::Engine;
-use rustovate_github::{Client, app::App};
-use rustovate_http::Transport;
-use rustovate_report::{Report, Repository, SCHEMA_VERSION, Status};
+use patchula_engine::Engine;
+use patchula_github::{Client, app::App};
+use patchula_http::Transport;
+use patchula_report::{Report, Repository, SCHEMA_VERSION, Status};
 use std::{
     collections::BTreeMap,
     future::Future,
@@ -86,9 +86,8 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
         .recover_work()
         .await
         .map_err(|_| Error("cannot recover pending work"))?;
-    let transport: Arc<dyn Transport> = Arc::new(
-        rustovate_http::Network::new().map_err(|_| Error("cannot create HTTP transport"))?,
-    );
+    let transport: Arc<dyn Transport> =
+        Arc::new(patchula_http::Network::new().map_err(|_| Error("cannot create HTTP transport"))?);
     let app = App::new(options.app_id, &options.private_key, transport.clone())
         .map_err(|_| Error("invalid GitHub App credentials"))?;
     // The canonical slug is fetched, never guessed from repository names or senders.
@@ -110,7 +109,7 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
     let listener = TcpListener::bind(options.listen)
         .await
         .map_err(|_| Error("cannot bind server listener"))?;
-    tracing::info!(target: "rustovate_server", address = %listener.local_addr().map_err(|_| Error("cannot inspect listener"))?, "server listening");
+    tracing::info!(target: "patchula_server", address = %listener.local_addr().map_err(|_| Error("cannot inspect listener"))?, "server listening");
     let (stop, stopped) = watch::channel(false);
     let reload_settings = settings.clone();
     let settings_path = options.settings;
@@ -193,7 +192,7 @@ struct BatchOutcome {
 }
 impl BatchOutcome {
     fn report(report: &Report) -> Self {
-        use rustovate_report::ActionStatus;
+        use patchula_report::ActionStatus;
         let mut outcome = Self::default();
         for repo in &report.repositories {
             if repo.status == Status::Error {
@@ -202,7 +201,7 @@ impl BatchOutcome {
         }
         if let Some(actions) = &report.actions {
             for branch in &actions.branches {
-                outcome.requeue |= rustovate_update::needs_requeue(branch);
+                outcome.requeue |= patchula_update::needs_requeue(branch);
                 let kind = match branch.status {
                     ActionStatus::Error => "branch-error",
                     ActionStatus::Protected => "branch-protected",
@@ -305,7 +304,7 @@ impl Batch for Engines {
                     )
                     .await
                     .map_err(|_| Error("cannot persist discovered repositories"))?;
-                tracing::info!(target: "rustovate_server", installation = id,
+                tracing::info!(target: "patchula_server", installation = id,
                     "discovery completed; repository work queued for a separate batch");
             }
             let client = Client::with_credentials(
@@ -347,8 +346,8 @@ impl Batch for Engines {
                 )
                 .map_err(|_| Error("cannot create batch engine"))?;
                 match (
-                    std::env::var("RUSTOVATE_DOCKERHUB_USERNAME").ok(),
-                    std::env::var("RUSTOVATE_DOCKERHUB_TOKEN").ok(),
+                    std::env::var("PATCHULA_DOCKERHUB_USERNAME").ok(),
+                    std::env::var("PATCHULA_DOCKERHUB_TOKEN").ok(),
                 ) {
                     (None, None) => {}
                     (Some(user), Some(token)) if !user.is_empty() && !token.is_empty() => {
@@ -367,7 +366,7 @@ impl Batch for Engines {
                 .map_err(|_| Error("invalid batch options"))?;
             let result = engine
                 .run(
-                    rustovate_engine::Options {
+                    patchula_engine::Options {
                         repositories: repositories.clone(),
                         ..Default::default()
                     },
@@ -405,7 +404,7 @@ impl Batch for Engines {
     }
 }
 fn skip_report(reason: &str, discovery_only: bool) {
-    tracing::info!(target: "rustovate_server", reason, discovery_only, repository_runs = 0, "batch report skipped");
+    tracing::info!(target: "patchula_server", reason, discovery_only, repository_runs = 0, "batch report skipped");
 }
 async fn output_report(report: &Report, directory: Option<&std::path::Path>) -> Result<(), Error> {
     if let Some(directory) = directory {
@@ -432,7 +431,7 @@ async fn output_report(report: &Report, directory: Option<&std::path::Path>) -> 
             let path = directory.join(name);
             std::fs::rename(temporary, &path)
                 .map_err(|_| Error("cannot publish batch report"))?;
-            tracing::info!(target: "rustovate_server", path = %path.display(), repository_runs = report.repositories.len(), "batch report written");
+            tracing::info!(target: "patchula_server", path = %path.display(), repository_runs = report.repositories.len(), "batch report written");
             Ok::<(), Error>(())
         })
         .await
@@ -440,7 +439,7 @@ async fn output_report(report: &Report, directory: Option<&std::path::Path>) -> 
     } else {
         let json =
             serde_json::to_string(report).map_err(|_| Error("cannot encode batch report"))?;
-        tracing::info!(target: "rustovate_server", report = %json, "batch report");
+        tracing::info!(target: "patchula_server", report = %json, "batch report");
     }
     Ok(())
 }
@@ -469,7 +468,7 @@ async fn worker(
         for claim in &claims {
             attribution.merge(&claim.attribution);
         }
-        tracing::info!(target: "rustovate_server", installation = work[0].installation, entries = work.len(), reasons = ?attribution.reasons, delivery_ids = ?attribution.deliveries, "batch started");
+        tracing::info!(target: "patchula_server", installation = work[0].installation, entries = work.len(), reasons = ?attribution.reasons, delivery_ids = ?attribution.deliveries, "batch started");
         let result = runner.run(&work, &settings, &attribution).await;
         let (outcome, error) = match result {
             Ok(outcome) => (outcome, None),
@@ -482,15 +481,15 @@ async fn worker(
             ),
         };
         if outcome.failed() {
-            tracing::error!(target: "rustovate_server", error = error.as_ref().map(|e| e.0),
+            tracing::error!(target: "patchula_server", error = error.as_ref().map(|e| e.0),
                 error_kinds = ?outcome.error_kinds, error_count = outcome.error_kinds.values().sum::<usize>(),
                 "batch failed; work will be retried");
         }
         if outcome.requeue {
-            tracing::warn!(target: "rustovate_server", reason = "default branch moved; requeued",
+            tracing::warn!(target: "patchula_server", reason = "default branch moved; requeued",
                 installation = work[0].installation, "batch requeued");
         }
-        tracing::info!(target: "rustovate_server", installation = work[0].installation, entries = work.len(), success = !outcome.failed(), requeued = outcome.retry(), "batch finished");
+        tracing::info!(target: "patchula_server", installation = work[0].installation, entries = work.len(), success = !outcome.failed(), requeued = outcome.retry(), "batch finished");
         cache
             .finish_work(
                 claims,
@@ -543,7 +542,7 @@ async fn run_until(
     accepting.store(false, Ordering::Release);
     let _ = stop.send(true);
     let _ = http_stop.send(());
-    tracing::info!(target: "rustovate_server", "shutdown started; finishing current batch");
+    tracing::info!(target: "patchula_server", "shutdown started; finishing current batch");
     let drained = tokio::time::timeout(timeout, async {
         if !worker.is_finished() {
             let _ = (&mut worker).await;
@@ -557,7 +556,7 @@ async fn run_until(
     worker.abort();
     server.abort();
     if !drained {
-        tracing::warn!(target: "rustovate_server", "shutdown deadline reached; unfinished work remains queued");
+        tracing::warn!(target: "patchula_server", "shutdown deadline reached; unfinished work remains queued");
     }
     // Aborting is cancellation-safe: claimed rows are never removed on claim.
     // Wait for the worker to release engine/DB handles before resetting claims.
@@ -645,7 +644,7 @@ async fn maintenance(
             let success = result.is_ok();
             ready.store(success, Ordering::Release);
             if let Err(error) = result {
-                tracing::error!(target: "rustovate_server", %error, "readiness/sweep probe failed");
+                tracing::error!(target: "patchula_server", %error, "readiness/sweep probe failed");
             }
             probe_at = tokio::time::Instant::now() + Duration::from_secs(30);
             if sweep_due {
@@ -670,10 +669,10 @@ async fn check_candidate(client: &Client, work: &Work, bot: &str) -> Result<bool
             .await
         {
             Ok(pr) => pr,
-            Err(rustovate_github::Error::Status(404)) => continue,
+            Err(patchula_github::Error::Status(404)) => continue,
             Err(_) => return Err(Error("check-event PR ownership lookup failed")),
         };
-        if rustovate_update::pull_requests::owned_pr(&pr, bot, &work.repo) {
+        if patchula_update::pull_requests::owned_pr(&pr, bot, &work.repo) {
             return Ok(true);
         }
     }

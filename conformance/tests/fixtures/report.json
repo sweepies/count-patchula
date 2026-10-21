@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "repositories": [{
-    "repository": "demo/rustovate-sample",
+    "repository": "demo/patchula-sample",
     "status": "complete",
     "reason": null,
     "packageFiles": [

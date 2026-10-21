@@ -2,9 +2,9 @@
 //! listed; platform-specific builds of one version collapse into it.
 use super::*;
 
-fn versions(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheError> {
+fn versions(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     let values: Vec<serde_json::Value> =
-        serde_json::from_slice(bytes).map_err(|_| rustovate_http::CacheError::Document)?;
+        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
     let mut seen = BTreeMap::<String, Version>::new();
     for value in &values {
         let Some(number) = value["number"].as_str() else {
@@ -24,7 +24,7 @@ fn versions(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheE
         }
     }
     serde_json::to_vec(&seen.into_values().collect::<Vec<_>>())
-        .map_err(|_| rustovate_http::CacheError::Document)
+        .map_err(|_| patchula_http::CacheError::Document)
 }
 
 impl Client {

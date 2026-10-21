@@ -46,7 +46,7 @@ impl Network {
     pub fn new() -> Result<Self, Error> {
         use std::time::Duration;
         reqwest::Client::builder()
-            .user_agent(concat!("rustovate/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("patchula/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(10))
             .read_timeout(Duration::from_secs(30))
             .timeout(Duration::from_secs(60))

@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
 
-use rustovate_conformance::{
+use patchula_conformance::{
     Classification as Class, Rules, compare, parse_logs, parse_logs_with_diagnostics,
 };
-use rustovate_report::{Report, Status};
+use patchula_report::{Report, Status};
 use serde_json::json;
 use std::{path::Path, process::Command};
 
@@ -20,8 +20,8 @@ fn hand_written_output_classifies_all_four_cases_and_keeps_registry_identity() {
     let report = Report::from_json(REPORT).unwrap();
     let triage = compare(&renovate, &report, &rules()).unwrap();
     for (class, count) in [
-        (Class::RustovateMissing, 1),
-        (Class::RustovateExtra, 1),
+        (Class::PatchulaMissing, 1),
+        (Class::PatchulaExtra, 1),
         (Class::FieldMismatch, 2),
         (Class::DeliberateDeparture, 2),
     ] {
@@ -63,7 +63,7 @@ fn hand_written_output_classifies_all_four_cases_and_keeps_registry_identity() {
 fn equal_proposals_are_order_independent_and_never_paired_by_position() {
     let mut a = parse_logs(LOG).unwrap();
     let dep = &mut a.repositories[0].package_files[0].dependencies[0];
-    let mut u = rustovate_report::Update {
+    let mut u = patchula_report::Update {
         new_value: Some("5".into()),
         new_version: Some("5".into()),
         new_digest: None,
@@ -86,10 +86,7 @@ fn equal_proposals_are_order_independent_and_never_paired_by_position() {
         .retain(|u| u.new_value.as_deref() != Some("6"));
     let triage = compare(&a, &b, &rules()).unwrap();
     assert_eq!(triage.differences.len(), 1);
-    assert_eq!(
-        triage.differences[0].classification,
-        Class::RustovateMissing
-    );
+    assert_eq!(triage.differences[0].classification, Class::PatchulaMissing);
 }
 
 #[test]
@@ -97,7 +94,7 @@ fn departures_do_not_hide_version_changes_or_other_managers() {
     let a = parse_logs(LOG).unwrap();
     let mut b = a.clone();
     let dep = &mut b.repositories[0].package_files[0].dependencies[0];
-    dep.updates.push(rustovate_report::Update {
+    dep.updates.push(patchula_report::Update {
         new_value: None,
         new_version: Some("99".into()),
         new_digest: Some("digest".into()),
@@ -108,7 +105,7 @@ fn departures_do_not_hide_version_changes_or_other_managers() {
     });
     assert_eq!(
         compare(&a, &b, &rules()).unwrap().differences[0].classification,
-        Class::RustovateExtra
+        Class::PatchulaExtra
     );
     let mut value: serde_json::Value =
         serde_json::from_slice(include_bytes!("../departures.json")).unwrap();
@@ -188,7 +185,7 @@ fn npm_integrity_unknown_groups_and_empty_files_are_counted_without_hiding_real_
     );
 }
 
-fn policy() -> rustovate_report::UpdatePolicy {
+fn policy() -> patchula_report::UpdatePolicy {
     serde_json::from_value(json!({"versions":"exact","waitHours":24,"windows":[],"merge":false,"labels":[],"commitPrefix":"chore(deps):","releaseNotes":true,"bodyNotes":[]})).unwrap()
 }
 
@@ -235,7 +232,7 @@ fn release_age_departure_requires_newer_target_and_timestamp_evidence_inside_win
     update.new_value = Some("1.0.2".into());
     update.new_version = Some("1.0.2".into());
     update.policy = Some(policy());
-    update.release_age = Some(rustovate_report::ReleaseAge {
+    update.release_age = Some(patchula_report::ReleaseAge {
         published_at: "2026-10-14T00:00:00Z".into(),
         evaluated_at: "2026-10-15T12:00:00Z".into(),
     });
@@ -310,7 +307,7 @@ fn release_age_departure_requires_newer_target_and_timestamp_evidence_inside_win
             .metadata
             .as_mut()
             .unwrap()
-            .lookup = time.map(|time| rustovate_report::LookupEvidence {
+            .lookup = time.map(|time| patchula_report::LookupEvidence {
             catalog: None,
             evaluated_at: time.into(),
             disabled_updates: vec![],
@@ -336,7 +333,7 @@ fn release_age_departure_requires_newer_target_and_timestamp_evidence_inside_win
 }
 
 #[test]
-fn older_rustovate_target_requires_the_exact_held_back_release_and_24_hour_evidence() {
+fn older_patchula_target_requires_the_exact_held_back_release_and_24_hour_evidence() {
     let mut a = parse_logs(LOG).unwrap();
     let dep = &mut a.repositories[0].package_files[0].dependencies[0];
     dep.manager = "npm".into();
@@ -346,7 +343,7 @@ fn older_rustovate_target_requires_the_exact_held_back_release_and_24_hour_evide
     dep.updates[0].new_value = Some("1.0.1".into());
     dep.updates[0].new_version = Some("1.0.1".into());
     dep.updates[0].policy = Some(policy());
-    dep.updates[0].release_age = Some(rustovate_report::ReleaseAge {
+    dep.updates[0].release_age = Some(patchula_report::ReleaseAge {
         published_at: "2026-10-01T00:00:00Z".into(),
         evaluated_at: "2026-10-15T12:00:00Z".into(),
     });
@@ -387,7 +384,7 @@ fn older_rustovate_target_requires_the_exact_held_back_release_and_24_hour_evide
         let mut changed = serde_json::to_value(&b).unwrap();
         changed["repositories"][0]["packageFiles"][0]["dependencies"][0]["metadata"]["heldBack"]
             [0][field] = json!(value);
-        let changed: rustovate_report::Report = serde_json::from_value(changed).unwrap();
+        let changed: patchula_report::Report = serde_json::from_value(changed).unwrap();
         assert!(
             compare(&a, &changed, &rules())
                 .unwrap()
@@ -492,7 +489,7 @@ fn aliases_taxonomy_latest_snapshot_and_empty_repo_coverage_are_explicit() {
     );
     let empty = Report {
         actions: None,
-        schema_version: rustovate_report::SCHEMA_VERSION,
+        schema_version: patchula_report::SCHEMA_VERSION,
         repositories: vec![],
         stats: None,
     };
@@ -504,7 +501,7 @@ fn aliases_taxonomy_latest_snapshot_and_empty_repo_coverage_are_explicit() {
         2
     );
     let latest = parse_logs(&format!(
-        "{LOG}\n{{\"repository\":\"demo/rustovate-sample\",\"msg\":\"packageFiles with updates\",\"packageFiles\":{{}}}}"
+        "{LOG}\n{{\"repository\":\"demo/patchula-sample\",\"msg\":\"packageFiles with updates\",\"packageFiles\":{{}}}}"
     ));
     // A stale branch summary cannot enrich a newer extraction snapshot.
     assert!(latest.unwrap().repositories[0].package_files.is_empty());
@@ -522,7 +519,7 @@ fn cli_writes_both_outputs_offline_and_rejects_missing_requested_repository() {
         "--renovate-log",
         log_path.to_str().unwrap(),
     ];
-    let run = Command::new(env!("CARGO_BIN_EXE_rustovate-conformance"))
+    let run = Command::new(env!("CARGO_BIN_EXE_patchula-conformance"))
         .args(args)
         .arg("--output")
         .arg(dir.path())
@@ -538,7 +535,7 @@ fn cli_writes_both_outputs_offline_and_rejects_missing_requested_repository() {
         serde_json::from_slice(&std::fs::read(dir.path().join("triage.json")).unwrap()).unwrap();
     assert_eq!(output["schemaVersion"], 1);
     assert_eq!(output["differences"].as_array().unwrap().len(), 6);
-    let run = Command::new(env!("CARGO_BIN_EXE_rustovate-conformance"))
+    let run = Command::new(env!("CARGO_BIN_EXE_patchula-conformance"))
         .args(args)
         .arg("absent/repo")
         .arg("--output")
@@ -617,7 +614,7 @@ fn real_lookup_shape_retains_skipped_and_digest_only_deps_and_audits_exclusion()
     );
     let empty = Report {
         actions: None,
-        schema_version: rustovate_report::SCHEMA_VERSION,
+        schema_version: patchula_report::SCHEMA_VERSION,
         repositories: vec![],
         stats: None,
     };
@@ -627,7 +624,7 @@ fn real_lookup_shape_retains_skipped_and_digest_only_deps_and_audits_exclusion()
         triage
             .differences
             .iter()
-            .all(|d| d.classification == Class::RustovateMissing && d.field == "dependency")
+            .all(|d| d.classification == Class::PatchulaMissing && d.field == "dependency")
     );
     let reverse = compare(&empty, &parsed.report, &rules()).unwrap();
     assert!(reverse.differences.is_empty());
@@ -730,7 +727,7 @@ fn cli_accepts_one_sided_repo_coverage_and_writes_diagnostics() {
     let dir = tempfile::tempdir().unwrap();
     let report = dir.path().join("empty report.json");
     std::fs::write(&report, r#"{"schemaVersion":2,"repositories":[]}"#).unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_rustovate-conformance"))
+    let run = Command::new(env!("CARGO_BIN_EXE_patchula-conformance"))
         .arg("--report")
         .arg(report)
         .arg("--renovate-log")
@@ -824,7 +821,7 @@ fn cargo_pre1_departure_is_limited_to_identical_breaking_targets() {
     let dep = &mut a.repositories[0].package_files[0].dependencies[0];
     dep.manager = "cargo".into();
     dep.current.version = Some("0.2.3".into());
-    dep.updates = vec![rustovate_report::Update {
+    dep.updates = vec![patchula_report::Update {
         new_value: Some("0.3.0".into()),
         new_version: Some("0.3.0".into()),
         new_digest: None,

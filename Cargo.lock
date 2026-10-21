@@ -2194,7 +2194,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustovate-cache"
+name = "patchula-cache"
 version = "0.1.0"
 dependencies = [
  "rusqlite",
@@ -2209,20 +2209,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustovate-cli"
+name = "patchula-cli"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
  "miette",
  "reqwest",
- "rustovate-cache",
- "rustovate-config",
- "rustovate-engine",
- "rustovate-http",
- "rustovate-report",
- "rustovate-server",
- "rustovate-update",
+ "patchula-cache",
+ "patchula-config",
+ "patchula-engine",
+ "patchula-http",
+ "patchula-report",
+ "patchula-server",
+ "patchula-update",
  "serde_json",
  "sha2 0.11.1",
  "tempfile",
@@ -2233,7 +2233,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustovate-config"
+name = "patchula-config"
 version = "0.1.0"
 dependencies = [
  "chrono-tz",
@@ -2251,11 +2251,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustovate-conformance"
+name = "patchula-conformance"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "rustovate-report",
+ "patchula-report",
  "semver",
  "serde",
  "serde_json",
@@ -2265,7 +2265,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustovate-datasource"
+name = "patchula-datasource"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
@@ -2273,13 +2273,13 @@ dependencies = [
  "futures-util",
  "regex",
  "reqwest",
- "rustovate-cache",
- "rustovate-config",
- "rustovate-github",
- "rustovate-http",
- "rustovate-mise",
- "rustovate-testkit",
- "rustovate-versioning",
+ "patchula-cache",
+ "patchula-config",
+ "patchula-github",
+ "patchula-http",
+ "patchula-mise",
+ "patchula-testkit",
+ "patchula-versioning",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -2291,7 +2291,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustovate-engine"
+name = "patchula-engine"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
@@ -2299,17 +2299,17 @@ dependencies = [
  "futures-util",
  "regex",
  "reqwest",
- "rustovate-cache",
- "rustovate-config",
- "rustovate-datasource",
- "rustovate-github",
- "rustovate-http",
- "rustovate-lookup",
- "rustovate-manager",
- "rustovate-report",
- "rustovate-testkit",
- "rustovate-update",
- "rustovate-versioning",
+ "patchula-cache",
+ "patchula-config",
+ "patchula-datasource",
+ "patchula-github",
+ "patchula-http",
+ "patchula-lookup",
+ "patchula-manager",
+ "patchula-report",
+ "patchula-testkit",
+ "patchula-update",
+ "patchula-versioning",
  "serde",
  "serde_json",
  "sha2 0.11.1",
@@ -2319,7 +2319,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustovate-github"
+name = "patchula-github"
 version = "0.1.0"
 dependencies = [
  "chrono",
@@ -2327,9 +2327,9 @@ dependencies = [
  "jsonwebtoken",
  "reqwest",
  "rsa",
- "rustovate-cache",
- "rustovate-http",
- "rustovate-testkit",
+ "patchula-cache",
+ "patchula-http",
+ "patchula-testkit",
  "serde",
  "serde_json",
  "sha2 0.11.1",
@@ -2339,14 +2339,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustovate-http"
+name = "patchula-http"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "httpdate",
  "percent-encoding",
  "reqwest",
- "rustovate-cache",
+ "patchula-cache",
  "serde",
  "thiserror",
  "tokio",
@@ -2355,31 +2355,31 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustovate-lookup"
+name = "patchula-lookup"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "nodejs-semver",
  "regex",
- "rustovate-config",
- "rustovate-datasource",
- "rustovate-manager",
- "rustovate-report",
- "rustovate-versioning",
+ "patchula-config",
+ "patchula-datasource",
+ "patchula-manager",
+ "patchula-report",
+ "patchula-versioning",
  "semver",
  "serde_json",
 ]
 
 [[package]]
-name = "rustovate-manager"
+name = "patchula-manager"
 version = "0.1.0"
 dependencies = [
  "hcl-edit",
  "jsonc-parser",
  "regex",
- "rustovate-config",
- "rustovate-mise",
- "rustovate-versioning",
+ "patchula-config",
+ "patchula-mise",
+ "patchula-versioning",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -2388,15 +2388,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustovate-mise"
+name = "patchula-mise"
 version = "0.1.0"
 dependencies = [
- "rustovate-config",
+ "patchula-config",
  "serde_json",
 ]
 
 [[package]]
-name = "rustovate-report"
+name = "patchula-report"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -2405,7 +2405,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustovate-server"
+name = "patchula-server"
 version = "0.1.0"
 dependencies = [
  "axum",
@@ -2419,13 +2419,13 @@ dependencies = [
  "reqwest",
  "rsa",
  "rusqlite",
- "rustovate-cache",
- "rustovate-config",
- "rustovate-engine",
- "rustovate-github",
- "rustovate-http",
- "rustovate-report",
- "rustovate-update",
+ "patchula-cache",
+ "patchula-config",
+ "patchula-engine",
+ "patchula-github",
+ "patchula-http",
+ "patchula-report",
+ "patchula-update",
  "serde",
  "serde_json",
  "serde_path_to_error",
@@ -2439,13 +2439,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustovate-testkit"
+name = "patchula-testkit"
 version = "0.1.0"
 dependencies = [
  "percent-encoding",
  "regex",
  "reqwest",
- "rustovate-http",
+ "patchula-http",
  "serde",
  "serde_json",
  "tempfile",
@@ -2453,7 +2453,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustovate-update"
+name = "patchula-update"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
@@ -2463,15 +2463,15 @@ dependencies = [
  "futures-util",
  "reqwest",
  "rustix",
- "rustovate-cache",
- "rustovate-config",
- "rustovate-datasource",
- "rustovate-github",
- "rustovate-http",
- "rustovate-lookup",
- "rustovate-manager",
- "rustovate-report",
- "rustovate-versioning",
+ "patchula-cache",
+ "patchula-config",
+ "patchula-datasource",
+ "patchula-github",
+ "patchula-http",
+ "patchula-lookup",
+ "patchula-manager",
+ "patchula-report",
+ "patchula-versioning",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -2484,12 +2484,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustovate-versioning"
+name = "patchula-versioning"
 version = "0.1.0"
 dependencies = [
  "nodejs-semver",
  "pep440_rs",
- "rustovate-config",
+ "patchula-config",
  "semver",
  "thiserror",
 ]

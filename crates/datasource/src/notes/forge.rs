@@ -88,13 +88,13 @@ fn file_link(forge: &Forge, path: &str, anchor: &str) -> String {
 fn compact<T: Serialize>(
     bytes: &[u8],
     map: impl Fn(&Value) -> Option<T>,
-) -> std::result::Result<Vec<u8>, rustovate_http::CacheError> {
+) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     let values: Vec<Value> =
-        serde_json::from_slice(bytes).map_err(|_| rustovate_http::CacheError::Document)?;
+        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
     let items: Vec<T> = values.iter().filter_map(map).collect();
-    serde_json::to_vec(&items).map_err(|_| rustovate_http::CacheError::Document)
+    serde_json::to_vec(&items).map_err(|_| patchula_http::CacheError::Document)
 }
-fn gitlab_releases(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheError> {
+fn gitlab_releases(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     compact(bytes, |r| {
         Some(Release {
             tag: r["tag_name"].as_str()?.into(),
@@ -104,7 +104,7 @@ fn gitlab_releases(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http:
         })
     })
 }
-fn gitea_releases(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheError> {
+fn gitea_releases(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     compact(bytes, |r| {
         (r["draft"] != true).then_some(())?;
         Some(Release {
@@ -114,7 +114,7 @@ fn gitea_releases(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::
         })
     })
 }
-fn names(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheError> {
+fn names(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     compact(bytes, |t| {
         Some(Name {
             name: t["name"].as_str()?.into(),
@@ -122,7 +122,7 @@ fn names(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheErro
     })
 }
 /// Root files only: `blob` on GitLab, `file` on Gitea.
-fn files(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheError> {
+fn files(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     compact(bytes, |f| {
         matches!(f["type"].as_str(), Some("blob" | "file")).then_some(())?;
         Some(Name {
@@ -130,9 +130,9 @@ fn files(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheErro
         })
     })
 }
-fn sections(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheError> {
-    let text = std::str::from_utf8(bytes).map_err(|_| rustovate_http::CacheError::Document)?;
-    serde_json::to_vec(&parse_changelog(text)).map_err(|_| rustovate_http::CacheError::Document)
+fn sections(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+    let text = std::str::from_utf8(bytes).map_err(|_| patchula_http::CacheError::Document)?;
+    serde_json::to_vec(&parse_changelog(text)).map_err(|_| patchula_http::CacheError::Document)
 }
 
 impl Client {
@@ -141,7 +141,7 @@ impl Client {
         url: &str,
         accept: &str,
         format: &'static str,
-        derive: fn(&[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheError>,
+        derive: fn(&[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError>,
     ) -> Result<T> {
         let bytes = self
             .note_read(url, async {

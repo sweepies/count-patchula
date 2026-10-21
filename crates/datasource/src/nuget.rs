@@ -10,14 +10,14 @@ struct Entry {
     deprecated: bool,
 }
 
-fn listing(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheError> {
+fn listing(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     #[derive(Deserialize)]
     struct Index {
         versions: Vec<String>,
     }
     let index: Index =
-        serde_json::from_slice(bytes).map_err(|_| rustovate_http::CacheError::Document)?;
-    serde_json::to_vec(&index.versions).map_err(|_| rustovate_http::CacheError::Document)
+        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
+    serde_json::to_vec(&index.versions).map_err(|_| patchula_http::CacheError::Document)
 }
 fn entries(items: &serde_json::Value) -> Vec<Entry> {
     items
@@ -40,9 +40,9 @@ fn entries(items: &serde_json::Value) -> Vec<Entry> {
         .collect()
 }
 /// The registration index: the newest page's entries, inline or as a link.
-fn registration(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheError> {
+fn registration(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     let index: serde_json::Value =
-        serde_json::from_slice(bytes).map_err(|_| rustovate_http::CacheError::Document)?;
+        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
     let newest = index["items"].as_array().and_then(|pages| pages.last());
     let compact = match newest {
         Some(page) if page["items"].is_array() => {
@@ -51,13 +51,13 @@ fn registration(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::Ca
         Some(page) => serde_json::json!({"page": page["@id"]}),
         None => serde_json::json!({"entries": []}),
     };
-    serde_json::to_vec(&compact).map_err(|_| rustovate_http::CacheError::Document)
+    serde_json::to_vec(&compact).map_err(|_| patchula_http::CacheError::Document)
 }
-fn page(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheError> {
+fn page(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     let page: serde_json::Value =
-        serde_json::from_slice(bytes).map_err(|_| rustovate_http::CacheError::Document)?;
+        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
     serde_json::to_vec(&serde_json::json!({"entries": entries(&page["items"])}))
-        .map_err(|_| rustovate_http::CacheError::Document)
+        .map_err(|_| patchula_http::CacheError::Document)
 }
 
 impl Client {

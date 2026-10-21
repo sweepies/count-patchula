@@ -1,5 +1,5 @@
 [package]
-name = "rustovate-cache"
+name = "patchula-cache"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

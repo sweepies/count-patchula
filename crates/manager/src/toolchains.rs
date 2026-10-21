@@ -18,7 +18,7 @@ fn pin(
     start: usize,
     version: &str,
 ) -> Dependency {
-    let (source, package, extract) = rustovate_mise::resolve(tool).map_or_else(
+    let (source, package, extract) = patchula_mise::resolve(tool).map_or_else(
         || (Source::Mise, tool.to_string(), None),
         |r| (r.source, r.package, r.extract),
     );

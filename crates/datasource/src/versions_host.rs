@@ -19,11 +19,11 @@ struct Entry {
     #[serde(default)]
     prerelease: bool,
 }
-fn fallback(error: &rustovate_http::CacheError) -> bool {
+fn fallback(error: &patchula_http::CacheError) -> bool {
     matches!(
         error,
-        rustovate_http::CacheError::Status(429 | 500..=599)
-            | rustovate_http::CacheError::Transport(_)
+        patchula_http::CacheError::Status(429 | 500..=599)
+            | patchula_http::CacheError::Transport(_)
     )
 }
 impl Client {
@@ -39,7 +39,7 @@ impl Client {
     async fn mirror_list(&self, package: &str, kind: &str) -> Result<Option<Lists>> {
         if !self.use_versions_host
             || !self.github.versions_host_eligible()
-            || !rustovate_mise::listed_github_repository(package)
+            || !patchula_mise::listed_github_repository(package)
         {
             return Ok(None);
         }
@@ -137,7 +137,7 @@ impl Client {
             .as_ref()
             .map_err(String::as_str)
     }
-    /// Rustovate reports every update class and held-back version. A subset is
+    /// Patchula reports every update class and held-back version. A subset is
     /// not a complete catalog: use G4 only, otherwise read the full tool file.
     async fn tool_catalog(&self, tool: &str) -> Result<Option<Catalog>> {
         if let Ok(index) = self.versions_index().await {
@@ -221,7 +221,7 @@ impl Client {
     pub async fn mise_tool_catalog(&self, name: &str) -> Result<Catalog> {
         let mut from_host = false;
         let mut catalog = if self.use_versions_host
-            && let Some(tool) = rustovate_mise::versions_tool(name)
+            && let Some(tool) = patchula_mise::versions_tool(name)
         {
             match self.tool_catalog(&tool).await {
                 Ok(Some(catalog)) => {
@@ -243,7 +243,7 @@ impl Client {
         {
             catalog.dist_tags = node.dist_tags;
         }
-        if let Some(extract) = rustovate_mise::resolve(name).and_then(|r| r.extract)
+        if let Some(extract) = patchula_mise::resolve(name).and_then(|r| r.extract)
             && let Some(prefix) = extract
                 .strip_prefix('^')
                 .and_then(|v| v.strip_suffix("(?<version>.+)$"))

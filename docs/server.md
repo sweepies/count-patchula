@@ -1,25 +1,25 @@
 # API server (Phase 2b / SWE-90)
 
-`rustovate --server` runs the same write engine as `rustovate run`. There is no
+`patchula --server` runs the same write engine as `patchula run`. There is no
 web UI or settings API. The only routes are `POST /webhook`, `GET /healthz`, and
 `GET /readyz`. Bind defaults to `127.0.0.1:8080`; use an HTTPS reverse proxy for
-GitHub deliveries. rustovate is independent of renovate-runner.
+GitHub deliveries. patchula is independent of renovate-runner.
 
 ## Operator settings
 
-Create `/etc/rustovate/server.pkl` (the schema is bundled; no adjacent schema
-file is needed). The repository-root `RustovateServer.pkl` is the published
-operator schema; repository dependency policies still amend `Rustovate.pkl`.
+Create `/etc/patchula/server.pkl` (the schema is bundled; no adjacent schema
+file is needed). The repository-root `PatchulaServer.pkl` is the published
+operator schema; repository dependency policies still amend `Patchula.pkl`.
 `mise run server:schema` prints the bundled schema.
-`mise exec -- cargo run --locked -p rustovate-cli -- config check-server /etc/rustovate/server.pkl`
+`mise exec -- cargo run --locked -p patchula-cli -- config check-server /etc/patchula/server.pkl`
 validates operator settings offline, without credentials.
 
 ```pkl
-amends "RustovateServer.pkl"
+amends "PatchulaServer.pkl"
 
 allowedInstallations = new Listing { 123456 }
 allowedRepositories = new Listing { "sweepies/rustovate-sandbox" }
-reportDirectory = "/var/lib/rustovate/reports"
+reportDirectory = "/var/lib/patchula/reports"
 ```
 
 Empty allowlists permit all repositories/installations accessible to this App;
@@ -32,7 +32,7 @@ Additional settings and defaults:
 - `triggers { push = true; dashboard = true; pullRequestEdited = true;
   pullRequestClosed = true; installation = true; checks = true }` (put each
   property on its own line in Pkl).
-  `pullRequestEdited` reacts to any newly ticked rustovate control on an owned PR:
+  `pullRequestEdited` reacts to any newly ticked patchula control on an owned PR:
   re-check, add to batch or remove from batch ([batch PR](batch.md)).
 - `sweepCron = "0 0 * * * *"`, `sweepTimezone = "UTC"`: hourly, six cron fields
   including seconds (optional seventh year field). Named IANA timezones are
@@ -51,7 +51,7 @@ second). Relative and absolute local imports work; remote imports, environment r
 are disabled. Invalid edits keep the last good snapshot, emit a sanitized error,
 and make readiness fail until repaired. Edits apply between batches; an existing
 batch retains its snapshot. An invalid initial file prevents startup. Settings
-are operator-owned files; rustovate never rewrites them.
+are operator-owned files; patchula never rewrites them.
 `config check-server` and startup errors include the cause, file and available
 source span; string contents are masked in diagnostic excerpts. Reload errors
 direct operators to `config check-server` without logging source excerpts.
@@ -71,24 +71,24 @@ webhook URL can remain with another system. Keep branch protection and the exist
 Set environment variables (or the equivalent flags):
 
 ```sh
-export RUSTOVATE_APP_ID=12345
-export RUSTOVATE_APP_PRIVATE_KEY_FILE=/etc/rustovate/app.pem
-export RUSTOVATE_WEBHOOK_SECRET_FILE=/etc/rustovate/webhook-secret
-export RUSTOVATE_SERVER_SETTINGS=/etc/rustovate/server.pkl
-export RUSTOVATE_SERVER_CACHE=/var/lib/rustovate/cache.sqlite
+export PATCHULA_APP_ID=12345
+export PATCHULA_APP_PRIVATE_KEY_FILE=/etc/patchula/app.pem
+export PATCHULA_WEBHOOK_SECRET_FILE=/etc/patchula/webhook-secret
+export PATCHULA_SERVER_SETTINGS=/etc/patchula/server.pkl
+export PATCHULA_SERVER_CACHE=/var/lib/patchula/cache.sqlite
 mise run server
 ```
 
 `--settings`, `--server-cache`, `--listen`, `--app-id`, `--private-key-file`,
 `--webhook-secret-file`, and `--shutdown-timeout-secs` override their environment
-counterparts. `RUSTOVATE_LISTEN` defaults to `127.0.0.1:8080` and
-`RUSTOVATE_SHUTDOWN_TIMEOUT_SECS` defaults to 60 (1–3600).
-`--recheck now|next-run` overrides `RUSTOVATE_RECHECK`, which overrides Pkl.
-The default wording is “Created by rustovate. Click to re-check now.” CLI mode
+counterparts. `PATCHULA_LISTEN` defaults to `127.0.0.1:8080` and
+`PATCHULA_SHUTDOWN_TIMEOUT_SECS` defaults to 60 (1–3600).
+`--recheck now|next-run` overrides `PATCHULA_RECHECK`, which overrides Pkl.
+The default wording is “Created by patchula. Click to re-check now.” CLI mode
 continues to default to “on the next run”. Hidden markers identify checkboxes.
 
-Instead of files, `RUSTOVATE_APP_PRIVATE_KEY` may contain the PEM and
-`RUSTOVATE_WEBHOOK_SECRET` may contain the secret. Choose one source per secret;
+Instead of files, `PATCHULA_APP_PRIVATE_KEY` may contain the PEM and
+`PATCHULA_WEBHOOK_SECRET` may contain the secret. Choose one source per secret;
 supplying both a file and an environment value is an error. File contents are
 read at startup with trailing CR/LF removed. Rotate secrets by restarting the
 service. Secrets cannot be supplied in settings or command-line values. No key,
@@ -111,7 +111,7 @@ least every 30 seconds while GitHub is responding; every allowed installation
 must be mintable. With no allowed installations readiness stays 503. `/readyz`
 does no remote I/O and returns 503 while draining. The App identity is checked
 before opening the listener. Logs are JSON on stderr with sanitized fields;
-`RUSTOVATE_LOG=debug` adds the existing request/phase diagnostics.
+`PATCHULA_LOG=debug` adds the existing request/phase diagnostics.
 
 ## Delivery and queue behavior
 
@@ -205,7 +205,7 @@ separate cache from concurrently running CLI jobs.
 
 Use the App installed on `sweepies/rustovate-sandbox`, its installation ID, and
 the allowlists in the minimal example. The sandbox must have its own
-`.github/rustovate.pkl` (or `rustovate.pkl`) and the required lockfile tools
+`.github/patchula.pkl` (or `patchula.pkl`) and the required lockfile tools
 available through mise. No local repository policy override is needed. Run a CLI
 dry run with a caller-provided installation token first if reviewing proposed
 writes; server batches apply repository policy immediately, including merge
@@ -231,8 +231,8 @@ synthetic push using the actual installation ID:
 
 With the same secret file/env exported in the replay shell:
 
-Set **only one** of `RUSTOVATE_WEBHOOK_SECRET_FILE` and
-`RUSTOVATE_WEBHOOK_SECRET` for `mise run server:replay`. Unset the other variable;
+Set **only one** of `PATCHULA_WEBHOOK_SECRET_FILE` and
+`PATCHULA_WEBHOOK_SECRET` for `mise run server:replay`. Unset the other variable;
 the task refuses to run when both are set, even if they contain the same secret.
 
 ```sh
@@ -257,24 +257,24 @@ repositories are retried. Ordinary tests cover these cases without remote I/O.
 
 Install the built binary and pinned mise/tool environment for the service user;
 the lockfile runner still invokes mise. Put only non-secret environment selectors
-in `/etc/rustovate/environment` and use systemd credentials for secret files:
+in `/etc/patchula/environment` and use systemd credentials for secret files:
 
 ```ini
 [Unit]
-Description=rustovate GitHub webhook server
+Description=patchula GitHub webhook server
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=rustovate
-Group=rustovate
-StateDirectory=rustovate
-WorkingDirectory=/var/lib/rustovate
-EnvironmentFile=/etc/rustovate/environment
-LoadCredential=app.pem:/etc/rustovate/app.pem
-LoadCredential=webhook-secret:/etc/rustovate/webhook-secret
-ExecStart=/usr/local/bin/rustovate --server --settings /etc/rustovate/server.pkl --server-cache /var/lib/rustovate/cache.sqlite --private-key-file %d/app.pem --webhook-secret-file %d/webhook-secret --shutdown-timeout-secs 60
+User=patchula
+Group=patchula
+StateDirectory=patchula
+WorkingDirectory=/var/lib/patchula
+EnvironmentFile=/etc/patchula/environment
+LoadCredential=app.pem:/etc/patchula/app.pem
+LoadCredential=webhook-secret:/etc/patchula/webhook-secret
+ExecStart=/usr/local/bin/patchula --server --settings /etc/patchula/server.pkl --server-cache /var/lib/patchula/cache.sqlite --private-key-file %d/app.pem --webhook-secret-file %d/webhook-secret --shutdown-timeout-secs 60
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=75
@@ -286,7 +286,7 @@ NoNewPrivileges=true
 WantedBy=multi-user.target
 ```
 
-The environment file needs `RUSTOVATE_APP_ID`, a PATH including mise, and the
+The environment file needs `PATCHULA_APP_ID`, a PATH including mise, and the
 service user's mise/tool locations if nonstandard. Keep the systemd stop timeout
 longer than the server drain deadline. Route only the three API endpoints through
 the reverse proxy; use the same secret in the GitHub App webhook configuration.

@@ -3,7 +3,7 @@
 use std::process::{Command, Output};
 
 fn cli(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_rustovate"))
+    Command::new(env!("CARGO_BIN_EXE_patchula"))
         .args(args)
         .output()
         .unwrap()
@@ -20,13 +20,13 @@ fn help_version_and_bundled_schema() {
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        rustovate_config::SCHEMA
+        patchula_config::SCHEMA
     );
     let output = cli(&["config", "server-schema"]);
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        rustovate_server::settings::SCHEMA
+        patchula_server::settings::SCHEMA
     );
 }
 
@@ -34,7 +34,7 @@ fn help_version_and_bundled_schema() {
 fn operator_settings_are_checked_offline_and_secret_diagnostics_are_sanitized() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("server.pkl");
-    std::fs::write(&path, "amends \"RustovateServer.pkl\"\nconcurrency = 2\n").unwrap();
+    std::fs::write(&path, "amends \"PatchulaServer.pkl\"\nconcurrency = 2\n").unwrap();
     let output = cli(&["config", "check-server", path.to_str().unwrap(), "--json"]);
     assert!(output.status.success());
     assert_eq!(
@@ -43,7 +43,7 @@ fn operator_settings_are_checked_offline_and_secret_diagnostics_are_sanitized() 
     );
     std::fs::write(
         &path,
-        "amends \"RustovateServer.pkl\"\nprivateKey = \"do-not-echo-test-secret\"\n",
+        "amends \"PatchulaServer.pkl\"\nprivateKey = \"do-not-echo-test-secret\"\n",
     )
     .unwrap();
     let output = cli(&["config", "check-server", path.to_str().unwrap()]);
@@ -57,7 +57,7 @@ fn settings_diagnostics_reach_check_and_server_startup() {
     let settings = dir.path().join("server.pkl");
     std::fs::write(
         &settings,
-        "amends \"RustovateServer.pkl\"\nconcurrency = 0\n",
+        "amends \"PatchulaServer.pkl\"\nconcurrency = 0\n",
     )
     .unwrap();
     let checked = cli(&["config", "check-server", settings.to_str().unwrap()]);
@@ -65,21 +65,21 @@ fn settings_diagnostics_reach_check_and_server_startup() {
     let diagnostic = String::from_utf8(checked.stderr).unwrap();
     assert!(diagnostic.contains("server.pkl") && diagnostic.contains("concurrency"));
     assert!(diagnostic.contains('│'), "{diagnostic}");
-    let output = Command::new(env!("CARGO_BIN_EXE_rustovate"))
+    let output = Command::new(env!("CARGO_BIN_EXE_patchula"))
         .args(["--server", "--app-id", "1", "--settings"])
         .arg(&settings)
         .env(
-            "RUSTOVATE_APP_PRIVATE_KEY",
+            "PATCHULA_APP_PRIVATE_KEY",
             "test-private-key-must-not-appear",
         )
         .env(
-            "RUSTOVATE_WEBHOOK_SECRET",
+            "PATCHULA_WEBHOOK_SECRET",
             "test-webhook-secret-must-not-appear",
         )
-        .env_remove("RUSTOVATE_APP_PRIVATE_KEY_FILE")
-        .env_remove("RUSTOVATE_WEBHOOK_SECRET_FILE")
-        .env_remove("RUSTOVATE_RECHECK")
-        .env_remove("RUSTOVATE_LOG")
+        .env_remove("PATCHULA_APP_PRIVATE_KEY_FILE")
+        .env_remove("PATCHULA_WEBHOOK_SECRET_FILE")
+        .env_remove("PATCHULA_RECHECK")
+        .env_remove("PATCHULA_LOG")
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
@@ -95,8 +95,8 @@ fn settings_diagnostics_reach_check_and_server_startup() {
 fn server_startup_errors_are_json_and_never_echo_secret_values() {
     let dir = tempfile::tempdir().unwrap();
     let settings = dir.path().join("server.pkl");
-    std::fs::write(&settings, "amends \"RustovateServer.pkl\"\n").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_rustovate"))
+    std::fs::write(&settings, "amends \"PatchulaServer.pkl\"\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_patchula"))
         .args([
             "--server",
             "--app-id",
@@ -111,17 +111,17 @@ fn server_startup_errors_are_json_and_never_echo_secret_values() {
         .arg("--server-cache")
         .arg(dir.path().join("cache.sqlite"))
         .env(
-            "RUSTOVATE_APP_PRIVATE_KEY",
+            "PATCHULA_APP_PRIVATE_KEY",
             "test-private-key-must-not-appear",
         )
         .env(
-            "RUSTOVATE_WEBHOOK_SECRET",
+            "PATCHULA_WEBHOOK_SECRET",
             "test-webhook-secret-must-not-appear",
         )
-        .env_remove("RUSTOVATE_APP_PRIVATE_KEY_FILE")
-        .env_remove("RUSTOVATE_WEBHOOK_SECRET_FILE")
-        .env_remove("RUSTOVATE_RECHECK")
-        .env_remove("RUSTOVATE_LOG")
+        .env_remove("PATCHULA_APP_PRIVATE_KEY_FILE")
+        .env_remove("PATCHULA_WEBHOOK_SECRET_FILE")
+        .env_remove("PATCHULA_RECHECK")
+        .env_remove("PATCHULA_LOG")
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
@@ -140,9 +140,9 @@ fn run_requires_only_the_standard_token_and_accepts_write_options() {
         if dry_run {
             args.push("--dry-run");
         }
-        let output = Command::new(env!("CARGO_BIN_EXE_rustovate"))
+        let output = Command::new(env!("CARGO_BIN_EXE_patchula"))
             .args(args)
-            .env_remove("RUSTOVATE_TOKEN")
+            .env_remove("PATCHULA_TOKEN")
             .env_remove("GITHUB_TOKEN")
             .env_remove("GH_TOKEN")
             .output()
@@ -151,13 +151,13 @@ fn run_requires_only_the_standard_token_and_accepts_write_options() {
         assert_eq!(output.status.code(), Some(1));
         assert_eq!(json["exitCode"], 1);
         assert_eq!(json["schemaVersion"], 1);
-        assert!(json["error"].as_str().unwrap().contains("RUSTOVATE_TOKEN"));
+        assert!(json["error"].as_str().unwrap().contains("PATCHULA_TOKEN"));
     }
 }
 
 #[test]
 fn lookup_requires_token_without_network_and_validates_concurrency() {
-    let output = Command::new(env!("CARGO_BIN_EXE_rustovate"))
+    let output = Command::new(env!("CARGO_BIN_EXE_patchula"))
         .args([
             "lookup",
             "--config",
@@ -169,13 +169,13 @@ fn lookup_requires_token_without_network_and_validates_concurrency() {
             "sweepies/renovate-runner",
         ])
         .env_remove("GITHUB_TOKEN")
-        .env_remove("RUSTOVATE_TOKEN")
+        .env_remove("PATCHULA_TOKEN")
         .env_remove("GH_TOKEN")
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(value["error"].as_str().unwrap().contains("RUSTOVATE_TOKEN"));
+    assert!(value["error"].as_str().unwrap().contains("PATCHULA_TOKEN"));
     let output = cli(&["lookup", "--concurrency", "0", "--json", "owner/repo"]);
     assert_eq!(output.status.code(), Some(2));
 }
@@ -209,12 +209,12 @@ fn config_validation_and_json_results_use_documented_exit_codes() {
 
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(
-        directory.path().join("Rustovate.pkl"),
-        rustovate_config::SCHEMA,
+        directory.path().join("Patchula.pkl"),
+        patchula_config::SCHEMA,
     )
     .unwrap();
-    let invalid = directory.path().join("rustovate.pkl");
-    std::fs::write(&invalid, "amends \"Rustovate.pkl\"\nunknownPolicy = true\n").unwrap();
+    let invalid = directory.path().join("patchula.pkl");
+    std::fs::write(&invalid, "amends \"Patchula.pkl\"\nunknownPolicy = true\n").unwrap();
     let invalid = invalid.to_str().unwrap();
     let output = cli(&["config", "check", invalid, "--json"]);
     assert_eq!(output.status.code(), Some(2));
@@ -227,12 +227,12 @@ fn config_validation_and_json_results_use_documented_exit_codes() {
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("unknownPolicy") && stderr.contains("rustovate.pkl"));
+    assert!(stderr.contains("unknownPolicy") && stderr.contains("patchula.pkl"));
     assert!(!stderr.contains("\x1b["));
 
     let output = cli(&["config", "schema", "--json"]);
     assert!(output.status.success());
-    assert_eq!(output.stdout, rustovate_config::SCHEMA.as_bytes());
+    assert_eq!(output.stdout, patchula_config::SCHEMA.as_bytes());
 }
 
 #[test]
@@ -258,13 +258,13 @@ fn config_check_directory_uses_bundled_nested_defaults() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join(".github")).unwrap();
     std::fs::write(
-        dir.path().join(".github/rustovate.pkl"),
-        "amends \"../Rustovate.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\n",
+        dir.path().join(".github/patchula.pkl"),
+        "amends \"../Patchula.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\n",
     )
     .unwrap();
     for vendored in [false, true] {
         if vendored {
-            std::fs::write(dir.path().join("Rustovate.pkl"), rustovate_config::SCHEMA).unwrap();
+            std::fs::write(dir.path().join("Patchula.pkl"), patchula_config::SCHEMA).unwrap();
         }
         let output = cli(&["config", "check", dir.path().to_str().unwrap(), "--json"]);
         assert!(output.status.success(), "{output:?}");
@@ -276,11 +276,11 @@ fn config_check_directory_uses_bundled_nested_defaults() {
 #[test]
 fn lookup_config_dir_validates_all_matches_before_repository_reads() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("Rustovate.pkl"), rustovate_config::SCHEMA).unwrap();
-    std::fs::write(dir.path().join("first.pkl"), "amends \"Rustovate.pkl\"\n").unwrap();
+    std::fs::write(dir.path().join("Patchula.pkl"), patchula_config::SCHEMA).unwrap();
+    std::fs::write(dir.path().join("first.pkl"), "amends \"Patchula.pkl\"\n").unwrap();
     let bad = dir.path().join("second.pkl");
-    std::fs::write(&bad, "amends \"Rustovate.pkl\"\nunknownPolicy = true\n").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_rustovate"))
+    std::fs::write(&bad, "amends \"Patchula.pkl\"\nunknownPolicy = true\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_patchula"))
         .args([
             "lookup",
             "--config-dir",
@@ -291,7 +291,7 @@ fn lookup_config_dir_validates_all_matches_before_repository_reads() {
             "demo/first",
             "demo/second",
         ])
-        .env("RUSTOVATE_TOKEN", "offline")
+        .env("PATCHULA_TOKEN", "offline")
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2), "{output:?}");
@@ -308,13 +308,13 @@ fn lookup_config_dir_validates_all_matches_before_repository_reads() {
 #[test]
 fn recheck_flag_overrides_environment_and_invalid_environment_is_a_usage_error() {
     let command = || {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_rustovate"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_patchula"));
         command
             .args(["run", "--json", "--dry-run", "owner/repo"])
-            .env_remove("RUSTOVATE_TOKEN")
+            .env_remove("PATCHULA_TOKEN")
             .env_remove("GITHUB_TOKEN")
             .env_remove("GH_TOKEN")
-            .env("RUSTOVATE_RECHECK", "invalid");
+            .env("PATCHULA_RECHECK", "invalid");
         command
     };
     let output = command().output().unwrap();
@@ -322,7 +322,7 @@ fn recheck_flag_overrides_environment_and_invalid_environment_is_a_usage_error()
     assert!(
         String::from_utf8(output.stdout)
             .unwrap()
-            .contains("RUSTOVATE_RECHECK")
+            .contains("PATCHULA_RECHECK")
     );
     for mode in ["now", "next-run"] {
         let output = command().args(["--recheck", mode]).output().unwrap();
@@ -330,7 +330,7 @@ fn recheck_flag_overrides_environment_and_invalid_environment_is_a_usage_error()
         assert!(
             String::from_utf8(output.stdout)
                 .unwrap()
-                .contains("RUSTOVATE_TOKEN")
+                .contains("PATCHULA_TOKEN")
         );
     }
 }

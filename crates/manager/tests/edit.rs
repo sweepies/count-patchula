@@ -1,15 +1,15 @@
-use rustovate_config::{Config, Manager};
-use rustovate_manager::{Edit, Files, Scanner, apply, edits};
+use patchula_config::{Config, Manager};
+use patchula_manager::{Edit, Files, Scanner, apply, edits};
 
 fn config(manager: Manager) -> Config {
     static CONFIG: std::sync::OnceLock<Config> = std::sync::OnceLock::new();
     let mut config = CONFIG
         .get_or_init(|| {
-            rustovate_config::load_files(
-                "/repo/rustovate.pkl",
+            patchula_config::load_files(
+                "/repo/patchula.pkl",
                 std::collections::BTreeMap::from([(
-                    "/repo/rustovate.pkl".into(),
-                    "amends \"Rustovate.pkl\"".into(),
+                    "/repo/patchula.pkl".into(),
+                    "amends \"Patchula.pkl\"".into(),
                 )]),
             )
             .unwrap()

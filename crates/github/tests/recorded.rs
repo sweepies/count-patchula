@@ -1,15 +1,15 @@
-//! These scenarios are recorded by rustovate against public GitHub endpoints.
+//! These scenarios are recorded by patchula against public GitHub endpoints.
 //! They replay by default, including in CI. Recording requires an existing token.
 #![forbid(unsafe_code)]
 
-use rustovate_cache::{Cache, Options as CacheOptions};
-use rustovate_github::{Client, GraphqlPage, Network, Options};
-use rustovate_testkit::{Options as FixtureOptions, Redactor};
+use patchula_cache::{Cache, Options as CacheOptions};
+use patchula_github::{Client, GraphqlPage, Network, Options};
+use patchula_testkit::{Options as FixtureOptions, Redactor};
 use serde_json::{Value, json};
 use std::{path::Path, sync::Arc};
 
 async fn client(name: &str) -> (tempfile::TempDir, Client) {
-    let recording = std::env::var("RUSTOVATE_RECORD").as_deref() == Ok("1");
+    let recording = std::env::var("PATCHULA_RECORD").as_deref() == Ok("1");
     let token = if recording {
         std::env::var("GITHUB_TOKEN")
             .or_else(|_| std::env::var("GH_TOKEN"))
@@ -31,7 +31,7 @@ async fn client(name: &str) -> (tempfile::TempDir, Client) {
         ..FixtureOptions::default()
     };
     let transport =
-        rustovate_testkit::from_env(&path, options, || Ok(Arc::new(Network::new()?))).unwrap();
+        patchula_testkit::from_env(&path, options, || Ok(Arc::new(Network::new()?))).unwrap();
     (
         directory,
         Client::with_transport(&token, cache, Options::default(), transport).unwrap(),

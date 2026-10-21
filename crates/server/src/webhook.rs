@@ -9,7 +9,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use hmac::{Hmac, KeyInit, Mac};
-use rustovate_cache::{Cache, queue::Work};
+use patchula_cache::{Cache, queue::Work};
 use serde_json::{Value, json};
 use sha2::Sha256;
 use std::sync::{
@@ -75,7 +75,7 @@ pub(crate) async fn observe(request: Request, next: Next) -> Response {
                 _ => "http-rejection",
             })
         });
-    tracing::warn!(target: "rustovate_server", status = status.as_u16(), error_kind = failure.kind,
+    tracing::warn!(target: "patchula_server", status = status.as_u16(), error_kind = failure.kind,
         event = failure.event.as_deref(), delivery_id = failure.delivery.as_deref(),
         installation = failure.installation, repository = failure.repository.as_deref(),
         outcome = "rejected", "request rejected");
@@ -107,7 +107,7 @@ impl Webhook {
             resolver: None,
         }
     }
-    pub fn with_app(mut self, app: Arc<rustovate_github::app::App>) -> Self {
+    pub fn with_app(mut self, app: Arc<patchula_github::app::App>) -> Self {
         self.resolver = Some(Arc::new(crate::installations::Resolver::new(
             app,
             self.cache.clone(),
@@ -251,7 +251,7 @@ fn log_delivery(
     reason: &str,
     resolution: Option<&str>,
 ) {
-    tracing::info!(target: "rustovate_server", event, action = payload["action"].as_str().filter(|s| metadata_word(s)).unwrap_or(""), delivery_id = delivery, installation = payload["installation"]["id"].as_u64(), repository = payload["repository"]["full_name"].as_str().filter(|s| crate::settings::valid_repo(s)), outcome, reason, installation_resolution = resolution, "webhook received");
+    tracing::info!(target: "patchula_server", event, action = payload["action"].as_str().filter(|s| metadata_word(s)).unwrap_or(""), delivery_id = delivery, installation = payload["installation"]["id"].as_u64(), repository = payload["repository"]["full_name"].as_str().filter(|s| crate::settings::valid_repo(s)), outcome, reason, installation_resolution = resolution, "webhook received");
 }
 fn metadata_word(value: &str) -> bool {
     !value.is_empty()
@@ -383,7 +383,7 @@ pub fn classify(event: &str, payload: &Value, settings: &Settings, bot: &str) ->
     let before = payload["changes"]["body"]["from"].as_str();
     let issue = &payload["issue"];
     let pr = &payload["pull_request"];
-    let owned = rustovate_update::pull_requests::owned_pr(pr, bot, repo);
+    let owned = patchula_update::pull_requests::owned_pr(pr, bot, repo);
     let trigger = match event {
         "push" if settings.triggers.push => {
             let branch = payload["repository"]["default_branch"].as_str();
@@ -393,9 +393,9 @@ pub fn classify(event: &str, payload: &Value, settings: &Settings, bot: &str) ->
         "issues" if settings.triggers.dashboard && action == "edited" => {
             let after = issue["body"].as_str().unwrap_or("");
             issue["user"]["login"] == bot
-                && after.contains(rustovate_update::dashboard::MARKER)
+                && after.contains(patchula_update::dashboard::MARKER)
                 && before.is_some_and(|before| {
-                    rustovate_update::dashboard::Controls::checkbox_edited(before, after)
+                    patchula_update::dashboard::Controls::checkbox_edited(before, after)
                 })
         }
         "pull_request" if owned => {
@@ -403,7 +403,7 @@ pub fn classify(event: &str, payload: &Value, settings: &Settings, bot: &str) ->
                 || (settings.triggers.pull_request_edited
                     && action == "edited"
                     && before.is_some_and(|before| {
-                        rustovate_update::pull_requests::controls_edited(
+                        patchula_update::pull_requests::controls_edited(
                             before,
                             pr["body"].as_str().unwrap_or(""),
                         )

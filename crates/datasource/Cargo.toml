@@ -1,5 +1,5 @@
 [package]
-name = "rustovate-datasource"
+name = "patchula-datasource"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,14 +13,14 @@ workspace = true
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 serde_yaml_ng = "0.10.0"
-rustovate-mise = { path = "../mise" }
+patchula-mise = { path = "../mise" }
 regex = "1.13.1"
 reqwest.workspace = true
-rustovate-cache = { version = "0.1.0", path = "../cache" }
-rustovate-config = { version = "0.1.0", path = "../config" }
-rustovate-github = { version = "0.1.0", path = "../github" }
-rustovate-http = { version = "0.1.0", path = "../http" }
-rustovate-versioning = { version = "0.1.0", path = "../versioning" }
+patchula-cache = { version = "0.1.0", path = "../cache" }
+patchula-config = { version = "0.1.0", path = "../config" }
+patchula-github = { version = "0.1.0", path = "../github" }
+patchula-http = { version = "0.1.0", path = "../http" }
+patchula-versioning = { version = "0.1.0", path = "../versioning" }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.11.1"
@@ -30,5 +30,5 @@ futures-util = "0.3"
 toml_edit = "0.25.17"
 
 [dev-dependencies]
-rustovate-testkit = { path = "../testkit" }
+patchula-testkit = { path = "../testkit" }
 tempfile = "3.27.0"

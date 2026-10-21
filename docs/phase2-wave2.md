@@ -3,12 +3,12 @@
 ## Branch model
 
 Non-major proposals (minor, patch and refresh of an existing digest) use one
-`rustovate/<package-slug>-<current-major>.x` branch. The best compatible proposal
+`patchula/<package-slug>-<current-major>.x` branch. The best compatible proposal
 per occurrence wins, avoiding overlapping edits. Major proposals retain only the
 newest eligible major and use `<new-major>.x`. Zero majors retain `0.x`.
-Eligible initial version/digest pins share `rustovate/pin-dependencies`, including
+Eligible initial version/digest pins share `patchula/pin-dependencies`, including
 pins otherwise assigned to a configuration group. Groups use `<group-slug>` and
-`major-<group-slug>`. The configured `prs.branch` prefix replaces `rustovate/`.
+`major-<group-slug>`. The configured `prs.branch` prefix replaces `patchula/`.
 
 Lockfile-blocked pins retain separate skipped plans so they cannot block eligible
 pins in the shared branch.
@@ -71,7 +71,7 @@ avoid blind retries except for explicit rate-limit refusals. Migration adds
 one-time history inspection and ref deletion costs; PR creation adds its own
 paced mutations. Do not promise a shorter first migration run than wave 1.
 
-This session has no configured `RUSTOVATE_TOKEN`, `GITHUB_TOKEN` or `GH_TOKEN`.
+This session has no configured `PATCHULA_TOKEN`, `GITHUB_TOKEN` or `GH_TOKEN`.
 Fresh live `-vv` before/after traces and write timings require the caller's App
 installation token; no credential files were opened to recover one.
 
@@ -122,9 +122,9 @@ existing native auto-merge and cannot use the fallback.
 
 The checkbox says:
 
-> Created by rustovate CLI. Click to re-check on the next run.
+> Created by patchula CLI. Click to re-check on the next run.
 
-`--recheck now|next-run` takes precedence over `RUSTOVATE_RECHECK`; `next-run` is
+`--recheck now|next-run` takes precedence over `PATCHULA_RECHECK`; `next-run` is
 the default. Wording changes do not change checkbox identity: only its hidden
 marker identifies a checked request. The next eligible run forces regeneration
 and resets the checkbox after successful PR refresh. `now` changes wording for
@@ -145,22 +145,22 @@ next eligible run should create **16 branches and 16 PRs**, with `dependencies`
 labels, no auto-merge, no default-branch changes, and no lockfile-bearing writes:
 
 ```text
-rustovate/actions-checkout-4.x
-rustovate/actions-checkout-7.x
-rustovate/docker-node-20.x
-rustovate/docker-node-26.x
-rustovate/jdx-mise-action-5.x
-rustovate/jqlang-jq-1.x
-rustovate/mise-node-22.x
-rustovate/mise-node-26.x
-rustovate/nginx-1.x
-rustovate/oven-sh-bun-1.x
-rustovate/pin-dependencies
-rustovate/postgres-16.x
-rustovate/postgres-18.x
-rustovate/redis-7.x
-rustovate/redis-8.x
-rustovate/ubuntu-26.x
+patchula/actions-checkout-4.x
+patchula/actions-checkout-7.x
+patchula/docker-node-20.x
+patchula/docker-node-26.x
+patchula/jdx-mise-action-5.x
+patchula/jqlang-jq-1.x
+patchula/mise-node-22.x
+patchula/mise-node-26.x
+patchula/nginx-1.x
+patchula/oven-sh-bun-1.x
+patchula/pin-dependencies
+patchula/postgres-16.x
+patchula/postgres-18.x
+patchula/redis-7.x
+patchula/redis-8.x
+patchula/ubuntu-26.x
 ```
 
 The shared pin branch contains eligible action/image pins; prettier's blocked
@@ -177,16 +177,16 @@ No names or counts are hardcoded into cleanup.
 ## Commands
 
 From `/root/rustovate`, with the caller's App installation token exported as
-`RUSTOVATE_TOKEN` (never place it in a command, checked-in file or trace):
+`PATCHULA_TOKEN` (never place it in a command, checked-in file or trace):
 
 ```sh
 CARGO_NET_OFFLINE=true mise run ci
-CARGO_NET_OFFLINE=true mise exec -- cargo test -p rustovate-update --test write shared_base_write_trace_and_request_budget --locked -- --nocapture
-mise exec -- cargo build --release --locked -p rustovate-cli
-mise exec -- target/release/rustovate -vv run --dry-run --json --cache /root/rustovate-conf/sandbox.sqlite sweepies/rustovate-sandbox > /root/rustovate-conf/sandbox-wave2-dry.json 2> /root/rustovate-conf/sandbox-wave2-dry.trace
-mise exec -- target/release/rustovate -vv run --json --cache /root/rustovate-conf/sandbox.sqlite sweepies/rustovate-sandbox > /root/rustovate-conf/sandbox-wave2-run.json 2> /root/rustovate-conf/sandbox-wave2-run.trace
+CARGO_NET_OFFLINE=true mise exec -- cargo test -p patchula-update --test write shared_base_write_trace_and_request_budget --locked -- --nocapture
+mise exec -- cargo build --release --locked -p patchula-cli
+mise exec -- target/release/patchula -vv run --dry-run --json --cache /root/rustovate-conf/sandbox.sqlite sweepies/rustovate-sandbox > /root/rustovate-conf/sandbox-wave2-dry.json 2> /root/rustovate-conf/sandbox-wave2-dry.trace
+mise exec -- target/release/patchula -vv run --json --cache /root/rustovate-conf/sandbox.sqlite sweepies/rustovate-sandbox > /root/rustovate-conf/sandbox-wave2-run.json 2> /root/rustovate-conf/sandbox-wave2-run.trace
 # Repeat the real run to verify unchanged PRs/branches and warm note caching.
-mise exec -- target/release/rustovate -vv run --json --cache /root/rustovate-conf/sandbox.sqlite sweepies/rustovate-sandbox > /root/rustovate-conf/sandbox-wave2-repeat.json 2> /root/rustovate-conf/sandbox-wave2-repeat.trace
+mise exec -- target/release/patchula -vv run --json --cache /root/rustovate-conf/sandbox.sqlite sweepies/rustovate-sandbox > /root/rustovate-conf/sandbox-wave2-repeat.json 2> /root/rustovate-conf/sandbox-wave2-repeat.trace
 ```
 
 The App now needs Pull requests write and label-management permissions in addition
@@ -219,16 +219,16 @@ a changed track identity; copied markers never grant ownership to human commits.
 zero failures, one intentionally ignored recording-only test. The fixture stage
 checked 22 cassettes; rustfmt, Clippy with `-D warnings`, tests and workspace
 build passed. `mise run docs` regenerated the CLI reference and local generated
-artifacts. Full CI log: `/tmp/rustovate-wave2-ci-verified.log`; final stage logs:
-`/tmp/rustovate-ci.2GkmlT/`. Synthetic request trace:
-`/tmp/rustovate-wave2-final-trace.log`. No live sandbox write or push occurred.
+artifacts. Full CI log: `/tmp/patchula-wave2-ci-verified.log`; final stage logs:
+`/tmp/patchula-ci.2GkmlT/`. Synthetic request trace:
+`/tmp/patchula-wave2-final-trace.log`. No live sandbox write or push occurred.
 
 CI tail (build stage):
 
 ```text
 [build] $ cargo build --workspace --locked
-   Compiling rustovate-update v0.1.0 (/root/rustovate/crates/update)
-   Compiling rustovate-engine v0.1.0 (/root/rustovate/crates/engine)
-   Compiling rustovate-cli v0.1.0 (/root/rustovate/crates/cli)
+   Compiling patchula-update v0.1.0 (/root/rustovate/crates/update)
+   Compiling patchula-engine v0.1.0 (/root/rustovate/crates/engine)
+   Compiling patchula-cli v0.1.0 (/root/rustovate/crates/cli)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.89s
 ```

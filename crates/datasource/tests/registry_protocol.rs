@@ -1,8 +1,8 @@
 //! Independently simulated protocol edge cases, never live HTTP.
-use rustovate_cache::Cache;
-use rustovate_config::Source;
-use rustovate_datasource::Client;
-use rustovate_http::{Cached, Exchange, Response, Transport};
+use patchula_cache::Cache;
+use patchula_config::Source;
+use patchula_datasource::Client;
+use patchula_http::{Cached, Exchange, Response, Transport};
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
@@ -46,7 +46,7 @@ async fn client(transport: Arc<Steps>, dir: &std::path::Path) -> Client {
     let cache = Cache::open(dir.join("cache.sqlite"), Default::default())
         .await
         .unwrap();
-    let github = rustovate_github::Client::with_transport(
+    let github = patchula_github::Client::with_transport(
         "offline",
         cache.clone(),
         Default::default(),
@@ -58,7 +58,7 @@ async fn client(transport: Arc<Steps>, dir: &std::path::Path) -> Client {
         Cached::with_options(
             cache.clone(),
             transport,
-            rustovate_http::Options {
+            patchula_http::Options {
                 registry_retries: 0,
                 ..Default::default()
             },
@@ -188,7 +188,7 @@ async fn rate_limited_catalogs_and_digests_reuse_cache_without_refreshing_it() {
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await
         .unwrap();
-    let key = rustovate_cache::HttpKey::new(
+    let key = patchula_cache::HttpKey::new(
         "GET",
         tags,
         std::collections::BTreeMap::from([("accept".into(), "application/json".into())]),
@@ -419,7 +419,7 @@ async fn validator_free_tags_are_compact_and_survive_a_new_client() {
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await
         .unwrap();
-    let key = rustovate_cache::HttpKey::new(
+    let key = patchula_cache::HttpKey::new(
         "GET",
         url,
         std::collections::BTreeMap::from([("accept".into(), "application/json".into())]),
@@ -510,7 +510,7 @@ async fn auth_client(steps: Arc<AuthSteps>, dir: &std::path::Path) -> Client {
         .await
         .unwrap();
     Client::new(
-        rustovate_github::Client::with_transport(
+        patchula_github::Client::with_transport(
             "offline",
             cache.clone(),
             Default::default(),
@@ -671,7 +671,7 @@ async fn dockerhub_login_is_realm_scoped_and_authenticated_tokens_are_not_persis
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await
         .unwrap();
-    let key = rustovate_cache::HttpKey::new(
+    let key = patchula_cache::HttpKey::new(
         "GET",
         "https://registry-1.docker.io/v2/library/spec/",
         Default::default(),
@@ -845,7 +845,7 @@ async fn manifest_heads_have_separate_validators_and_fall_back_only_when_needed(
             .await
             .unwrap();
         let client = Client::new(
-            rustovate_github::Client::with_transport(
+            patchula_github::Client::with_transport(
                 "offline",
                 cache.clone(),
                 Default::default(),

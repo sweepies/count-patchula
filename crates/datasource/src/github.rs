@@ -1,7 +1,7 @@
 use super::*;
 use futures_util::{StreamExt, stream};
-use rustovate_cache::ExtractionKey;
-use rustovate_github::GraphqlPage;
+use patchula_cache::ExtractionKey;
+use patchula_github::GraphqlPage;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
@@ -472,14 +472,14 @@ fn peel(value: &Value) -> Option<&Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rustovate_testkit::{
+    use patchula_testkit::{
         Body, Cassette, Interaction, Options, RecordedRequest, RecordedResponse, Replay,
     };
     use std::{collections::BTreeMap, sync::Arc};
 
     #[tokio::test]
     async fn tag_age_uses_release_then_tagger_never_commit_and_refreshes_after_publication() {
-        use rustovate_http::{Exchange, Response, Transport};
+        use patchula_http::{Exchange, Response, Transport};
         use std::sync::atomic::{AtomicUsize, Ordering};
         struct Dates {
             phase: AtomicUsize,
@@ -551,7 +551,7 @@ mod tests {
             phase: AtomicUsize::new(0),
             hydrations: AtomicUsize::new(0),
         });
-        let github = rustovate_github::Client::with_transport(
+        let github = patchula_github::Client::with_transport(
             "offline",
             cache.clone(),
             Default::default(),
@@ -605,7 +605,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_matching_refs_falls_back_without_poisoning_warm_catalogs() {
-        use rustovate_http::{Exchange, Response, Transport};
+        use patchula_http::{Exchange, Response, Transport};
         struct Tags;
         impl Transport for Tags {
             fn send(&self, request: reqwest::Request) -> Exchange<'_> {
@@ -642,7 +642,7 @@ mod tests {
         }
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
         let transport = Arc::new(Tags);
-        let github = rustovate_github::Client::with_transport(
+        let github = patchula_github::Client::with_transport(
             "offline",
             cache.clone(),
             Default::default(),
@@ -670,7 +670,7 @@ mod tests {
 
     #[tokio::test]
     async fn tag_hydration_is_parallel_bounded_and_only_refetches_changed_targets() {
-        use rustovate_http::{Exchange, Response, Transport};
+        use patchula_http::{Exchange, Response, Transport};
         use std::sync::atomic::{AtomicUsize, Ordering};
         struct Tags {
             step: AtomicUsize,
@@ -735,10 +735,10 @@ mod tests {
             peak: AtomicUsize::new(0),
             queries: AtomicUsize::new(0),
         });
-        let github = rustovate_github::Client::with_transport(
+        let github = patchula_github::Client::with_transport(
             "offline",
             cache.clone(),
-            rustovate_github::Options {
+            patchula_github::Options {
                 concurrency: 2,
                 ..Default::default()
             },
@@ -888,12 +888,12 @@ mod tests {
                 warm_head("v4", Some("b"), "b", 304),
             ],
         };
-        rustovate_testkit::save(&path, &cassette, &Default::default()).unwrap();
+        patchula_testkit::save(&path, &cassette, &Default::default()).unwrap();
         let replay = Arc::new(Replay::open(&path, Options::default()).unwrap());
         let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
             .await
             .unwrap();
-        let github = rustovate_github::Client::with_transport(
+        let github = patchula_github::Client::with_transport(
             "offline",
             cache.clone(),
             Default::default(),

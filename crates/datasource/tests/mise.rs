@@ -1,15 +1,15 @@
 //! Independent, offline source payloads; no installed mise or network in tests.
-use rustovate_cache::Cache;
-use rustovate_config::Source;
-use rustovate_datasource::Client;
-use rustovate_http::Cached;
-use rustovate_testkit::{Body, Cassette, Interaction, RecordedRequest, RecordedResponse, Replay};
+use patchula_cache::Cache;
+use patchula_config::Source;
+use patchula_datasource::Client;
+use patchula_http::Cached;
+use patchula_testkit::{Body, Cassette, Interaction, RecordedRequest, RecordedResponse, Replay};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
 
 #[tokio::test]
 async fn setup_node_uses_node_lts_membership_without_replacing_github_release_dates() {
-    use rustovate_http::{Exchange, Response, Transport};
+    use patchula_http::{Exchange, Response, Transport};
     struct Node;
     impl Transport for Node {
         fn send(&self, request: reqwest::Request) -> Exchange<'_> {
@@ -41,7 +41,7 @@ async fn setup_node_uses_node_lts_membership_without_replacing_github_release_da
     }
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let transport = Arc::new(Node);
-    let github = rustovate_github::Client::with_transport(
+    let github = patchula_github::Client::with_transport(
         "offline",
         cache.clone(),
         Default::default(),
@@ -93,12 +93,12 @@ async fn core_node_and_pypi_use_real_metadata_shapes_and_fresh_bodies() {
         request: RecordedRequest { method: "GET".into(), url: url.into(), headers: BTreeMap::from([("accept".into(), vec!["application/json".into()])]), body: Body::Text(String::new()) },
         response: RecordedResponse { status: 200, headers: BTreeMap::from([("etag".into(), vec!["metadata".into()]), ("cache-control".into(), vec!["public,max-age=300".into()])]), body: Body::Json(value) },
     }).collect();
-    rustovate_testkit::save(&path, &Cassette { schema_version:1, provenance:"Independently simulated from Node distribution index and PyPI JSON API documentation".into(), interactions }, &Default::default()).unwrap();
+    patchula_testkit::save(&path, &Cassette { schema_version:1, provenance:"Independently simulated from Node distribution index and PyPI JSON API documentation".into(), interactions }, &Default::default()).unwrap();
     let replay = Arc::new(Replay::open(&path, Default::default()).unwrap());
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await
         .unwrap();
-    let github = rustovate_github::Client::with_transport(
+    let github = patchula_github::Client::with_transport(
         "offline",
         cache.clone(),
         Default::default(),
@@ -179,7 +179,7 @@ async fn no_cache_revalidates_fresh_validators_and_304_retains_body() {
             }
         })
         .collect();
-    rustovate_testkit::save(
+    patchula_testkit::save(
         &path,
         &Cassette {
             schema_version: 1,

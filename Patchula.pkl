@@ -1,6 +1,6 @@
-/// Rustovate's explicit defaults. Vendor with `rustovate config schema` and amend
+/// Patchula's explicit defaults. Vendor with `patchula config schema` and amend
 /// this module, or amend an organisation module that itself amends this one.
-module Rustovate
+module Patchula
 
 typealias Manager = "npm"|"bun"|"github-actions"|"mise"|"cargo"|"dockerfile"|"compose"|"go"|"terraform"|"kubernetes"|"kustomize"|"flux"|"helm-values"|"requirements"|"pyproject"|"pre-commit"|"helm"|"devcontainer"|"maven"|"gradle"|"nuget"|"bundler"|"composer"|"regex"
 typealias Source = "npm"|"github-releases"|"github-tags"|"github-runners"|"docker"|"crates"|"go"|"terraform"|"pypi"|"helm"|"oci"|"mise"|"forge-tags"|"maven"|"nuget"|"rubygems"|"packagist"
@@ -107,7 +107,7 @@ class PullRequests {
   concurrent: Int? = null
   perHour: Int? = null
   dashboard: Boolean = false
-  branch: String = "rustovate/"
+  branch: String = "patchula/"
   rebase: "conflicts"|"behind" = "conflicts"
   /// The batch PR collects updates whose "Add to batch" box was ticked. It
   /// only auto-merges when this is true, behind the usual check gates.

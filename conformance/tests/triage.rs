@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
-use rustovate_conformance::{Classification as Class, Rules, compare, parse_logs};
-use rustovate_report::Report;
+use patchula_conformance::{Classification as Class, Rules, compare, parse_logs};
+use patchula_report::Report;
 use serde_json::{Value, json};
 
 fn rules() -> Rules {
@@ -120,7 +120,7 @@ fn stable_node_departures_require_identity_major_order_and_stable_policy() {
     }
 }
 
-fn d_policy(report: &mut Report) -> &mut rustovate_report::UpdatePolicy {
+fn d_policy(report: &mut Report) -> &mut patchula_report::UpdatePolicy {
     report.repositories[0].package_files[0].dependencies[0].updates[0]
         .policy
         .as_mut()
@@ -197,7 +197,7 @@ fn mise_migrations_keep_distinct_identities_and_reject_other_sources_or_targets(
         assert_eq!(triage.differences[0].departure.as_ref().unwrap().row, 44);
         assert_ne!(
             triage.differences[0].renovate,
-            triage.differences[0].rustovate
+            triage.differences[0].patchula
         );
         actual.repositories[0].package_files[0].dependencies[0].updates =
             vec![update("2.0.0", "pin")];
@@ -322,7 +322,7 @@ fn retired_cargo_floor_exemption_stays_actionable_and_npm_pins_require_the_same_
     let d = &mut actual.repositories[0].package_files[0].dependencies[0];
     d.metadata.as_mut().unwrap().source = "crates".into();
     d.updates[0].new_value = Some("1.1".into());
-    let mut p: rustovate_report::UpdatePolicy = serde_json::from_value(policy()).unwrap();
+    let mut p: patchula_report::UpdatePolicy = serde_json::from_value(policy()).unwrap();
     p.versions = Some("preserve".into());
     d.updates[0].policy = Some(p);
     assert!(
@@ -361,7 +361,7 @@ fn retired_cargo_floor_exemption_stays_actionable_and_npm_pins_require_the_same_
             .unwrap()
             .differences
             .iter()
-            .any(|d| d.classification == Class::RustovateMissing)
+            .any(|d| d.classification == Class::PatchulaMissing)
     );
 }
 
@@ -375,7 +375,7 @@ fn action_age_digest_does_not_excuse_equal_version_hash_differences() {
     update.new_version = Some("v5.1.1".into());
     update.new_digest = Some("b".repeat(40));
     update.policy = Some(serde_json::from_value(policy()).unwrap());
-    update.release_age = Some(rustovate_report::ReleaseAge {
+    update.release_age = Some(patchula_report::ReleaseAge {
         published_at: "2026-10-13T00:00:00Z".into(),
         evaluated_at: "2026-10-15T00:00:00Z".into(),
     });
@@ -468,7 +468,7 @@ fn held_minor_patch_alternatives_require_target_and_clock_evidence() {
             .all(|d| d.departure.is_none())
     );
 }
-fn update(value: &str, kind: &str) -> rustovate_report::Update {
+fn update(value: &str, kind: &str) -> patchula_report::Update {
     serde_json::from_value(json!({"newValue":value,"newVersion":value,"newDigest":null,"updateType":kind,"group":null,"policy":policy()})).unwrap()
 }
 
@@ -523,7 +523,7 @@ fn digest_rate_limit_attribution_does_not_excuse_missing_major_policy() {
         triage
             .differences
             .iter()
-            .all(|d| d.classification == Class::RustovateMissing)
+            .all(|d| d.classification == Class::PatchulaMissing)
     );
     actual.repositories[0].warnings[0] = "image: registry HTTP 429".into();
     assert_eq!(
@@ -694,7 +694,7 @@ fn invalid_or_absent_baseline_is_coverage_and_empty_success_is_comparable() {
     assert_eq!(recovered.repositories.len(), 1);
     assert_eq!(
         recovered.repositories[0].status,
-        rustovate_report::Status::Complete
+        patchula_report::Status::Complete
     );
     let mut absent = actual.clone();
     absent.repositories.clear();
@@ -708,7 +708,7 @@ fn invalid_or_absent_baseline_is_coverage_and_empty_success_is_comparable() {
     let empty = snapshot(json!({}));
     let triage = compare(&empty, &actual, &rules()).unwrap();
     assert!(triage.no_baseline.is_empty());
-    assert_eq!(triage.differences[0].classification, Class::RustovateExtra);
+    assert_eq!(triage.differences[0].classification, Class::PatchulaExtra);
 }
 
 #[test]
@@ -863,7 +863,7 @@ fn latest_pin_departure_requires_exact_policy_and_literal_latest() {
         .versions = Some("preserve".into());
     assert_eq!(
         compare(&baseline, &actual, &rules()).unwrap().differences[0].classification,
-        Class::RustovateExtra
+        Class::PatchulaExtra
     );
     let mut numeric = baseline.clone();
     numeric.repositories[0].package_files[0].dependencies[0]
@@ -904,7 +904,7 @@ fn indirect_go_and_test_compose_departures_do_not_extend_to_direct_or_production
         .clear();
     assert_eq!(
         compare(&direct, &actual, &rules()).unwrap().differences[0].classification,
-        Class::RustovateExtra
+        Class::PatchulaExtra
     );
     let empty = snapshot(json!({}));
     let mut actual = snapshot(
@@ -926,7 +926,7 @@ fn indirect_go_and_test_compose_departures_do_not_extend_to_direct_or_production
     actual.repositories[0].package_files[0].path = "production/docker-compose.demo.yml".into();
     assert_eq!(
         compare(&empty, &actual, &rules()).unwrap().differences[0].classification,
-        Class::RustovateExtra
+        Class::PatchulaExtra
     );
 }
 
@@ -972,7 +972,7 @@ fn npm_exact_range_rules_require_the_same_satisfying_target_and_policy() {
     actual.repositories[0].package_files[0].dependencies[0].updates[0] = update("2.0.0", "pin");
     assert_eq!(
         compare(&baseline, &actual, &rules()).unwrap().differences[0].classification,
-        Class::RustovateExtra
+        Class::PatchulaExtra
     );
 }
 
@@ -996,7 +996,7 @@ fn patch_track_departure_requires_an_identical_minor_and_a_newer_manifest_edit()
     actual.repositories[0].package_files[0].dependencies[0].updates[1] = update("1.2.0", "patch");
     assert_eq!(
         compare(&baseline, &actual, &rules()).unwrap().differences[0].classification,
-        Class::RustovateExtra
+        Class::PatchulaExtra
     );
     actual.repositories[0].package_files[0].dependencies[0].updates =
         vec![update("1.2.1", "patch")];
@@ -1034,7 +1034,7 @@ fn go_major_path_rule_preserves_incompatible_releases_and_other_sources() {
             .unwrap()
             .differences[0]
             .classification,
-        Class::RustovateMissing
+        Class::PatchulaMissing
     );
     actual.repositories[0].package_files[0].dependencies[0]
         .metadata
@@ -1043,7 +1043,7 @@ fn go_major_path_rule_preserves_incompatible_releases_and_other_sources() {
         .source = "github-releases".into();
     assert_eq!(
         compare(&baseline, &actual, &rules()).unwrap().differences[0].classification,
-        Class::RustovateMissing
+        Class::PatchulaMissing
     );
 }
 
@@ -1058,7 +1058,7 @@ fn cli_handles_a_requested_repo_present_only_in_the_actual_report() {
         r#"{"repository":"example/other","msg":"packageFiles with updates","config":{}}"#,
     )
     .unwrap();
-    let run = std::process::Command::new(env!("CARGO_BIN_EXE_rustovate-conformance"))
+    let run = std::process::Command::new(env!("CARGO_BIN_EXE_patchula-conformance"))
         .arg("--report")
         .arg(report)
         .arg("--renovate-log")

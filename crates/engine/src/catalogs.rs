@@ -1,8 +1,8 @@
 //! Policy-bounded catalog views. Evaluation and mutable digests stay fresh.
 use super::*;
 use chrono::{DateTime, SecondsFormat, Utc};
-use rustovate_datasource::Catalog;
-use rustovate_report::CatalogEvidence;
+use patchula_datasource::Catalog;
+use patchula_report::CatalogEvidence;
 
 #[derive(Serialize, Deserialize)]
 struct Saved {
@@ -24,7 +24,7 @@ impl Engine {
             default_branch_commit: self.github.credential_scope().into(),
             config_hash: format!(
                 "age-catalog-v1:{}",
-                hash(rustovate_manager::MISE_REGISTRY.as_bytes())
+                hash(patchula_manager::MISE_REGISTRY.as_bytes())
             ),
         }
     }
@@ -166,7 +166,7 @@ impl Engine {
                         if let Some(keys) = entries.get(name) {
                             if keys.iter().any(|key| {
                                 !repo.dependencies.iter().any(|dep| {
-                                    rustovate_update::dashboard::extracted_key(dep) == *key
+                                    patchula_update::dashboard::extracted_key(dep) == *key
                                 })
                             }) {
                                 all = true;
@@ -181,7 +181,7 @@ impl Engine {
                 }
             }
             for dep in &repo.dependencies {
-                if all || dependencies.contains(&rustovate_update::dashboard::extracted_key(dep)) {
+                if all || dependencies.contains(&patchula_update::dashboard::extracted_key(dep)) {
                     forced.insert(self.catalog_key(dep, repo.config.as_ref()));
                 }
             }
@@ -199,7 +199,7 @@ impl Engine {
                 continue;
             }
             let mut controls = Controls::default();
-            if let Ok(plans) = rustovate_update::plan(
+            if let Ok(plans) = patchula_update::plan(
                 &repo.report,
                 config,
                 &repo.dependencies,
@@ -219,7 +219,7 @@ impl Engine {
                                         && dep.package == change.package
                                         && word(&dep.source) == change.source
                                 })
-                                .map(rustovate_update::dashboard::extracted_key)
+                                .map(patchula_update::dashboard::extracted_key)
                         })
                         .collect();
                     controls
@@ -227,7 +227,7 @@ impl Engine {
                         .insert(plan.action.branch.clone(), dependencies.clone());
                     controls
                         .targets
-                        .insert(rustovate_update::update_key(&plan), dependencies);
+                        .insert(patchula_update::update_key(&plan), dependencies);
                 }
             }
             for file in &repo.report.package_files {
@@ -238,10 +238,10 @@ impl Engine {
                         .into_iter()
                         .flat_map(|meta| &meta.held_back)
                     {
-                        let key = rustovate_update::dashboard::dependency_key(&file.path, dep);
+                        let key = patchula_update::dashboard::dependency_key(&file.path, dep);
                         for version in std::iter::once(&held.version).chain(&held.versions) {
                             controls.targets.insert(
-                                rustovate_update::dashboard::held_target(
+                                patchula_update::dashboard::held_target(
                                     &key,
                                     version,
                                     &held.update_type,

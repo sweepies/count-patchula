@@ -170,7 +170,7 @@ async fn webhook_logs_one_decision_per_delivery_without_sensitive_data() {
             assert_eq!(event["repository"], "owner/repo");
             assert_eq!(event["installation"], 1);
         }
-        value["sender"]["login"] = json!("rustovate[bot]");
+        value["sender"]["login"] = json!("patchula[bot]");
         router
             .clone()
             .oneshot(request(serde_json::to_vec(&value).unwrap(), "push", "own"))
@@ -249,7 +249,7 @@ struct InstallationLookup {
     status: std::sync::atomic::AtomicU16,
 }
 impl Transport for InstallationLookup {
-    fn send(&self, request: reqwest::Request) -> rustovate_http::Exchange<'_> {
+    fn send(&self, request: reqwest::Request) -> patchula_http::Exchange<'_> {
         self.requests.fetch_add(1, Ordering::SeqCst);
         assert_eq!(request.method(), reqwest::Method::GET);
         assert!(matches!(
@@ -273,7 +273,7 @@ impl Transport for InstallationLookup {
         );
         let status = reqwest::StatusCode::from_u16(self.status.load(Ordering::SeqCst)).unwrap();
         Box::pin(async move {
-            Ok(rustovate_http::Response {
+            Ok(patchula_http::Response {
                 status,
                 headers: Default::default(),
                 body: serde_json::to_vec(&json!({"id":1})).unwrap(),
@@ -543,7 +543,7 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
         recheck: None,
-        bot_login: "rustovate[bot]".into(),
+        bot_login: "patchula[bot]".into(),
     };
     let mut settings = settings();
     settings.report_directory = Some(directory.path().to_owned());
@@ -596,7 +596,7 @@ struct StartupTransport {
     lookups: std::sync::atomic::AtomicUsize,
 }
 impl Transport for StartupTransport {
-    fn send(&self, request: reqwest::Request) -> rustovate_http::Exchange<'_> {
+    fn send(&self, request: reqwest::Request) -> patchula_http::Exchange<'_> {
         Box::pin(async move {
             if request.url().path() == "/app/installations/1/access_tokens" {
                 self.mint_started.notify_one();
@@ -605,7 +605,7 @@ impl Transport for StartupTransport {
             if request.url().path() == "/repos/owner/repo/installation" {
                 self.lookups.fetch_add(1, Ordering::SeqCst);
                 self.lookup_started.notify_one();
-                return Ok(rustovate_http::Response {
+                return Ok(patchula_http::Response {
                     status: reqwest::StatusCode::OK,
                     headers: Default::default(),
                     body: serde_json::to_vec(&json!({"id":1})).unwrap(),
@@ -638,7 +638,7 @@ async fn concurrent_deliveries_during_startup_token_mint_and_database_contention
     let state = Webhook::new(
         cache.clone(),
         settings.clone(),
-        "rustovate[bot]".into(),
+        "patchula[bot]".into(),
         b"test-only-secret".to_vec(),
     )
     .with_app(app.clone());
@@ -648,7 +648,7 @@ async fn concurrent_deliveries_during_startup_token_mint_and_database_contention
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
         recheck: None,
-        bot_login: "rustovate[bot]".into(),
+        bot_login: "patchula[bot]".into(),
     });
     let (stop, stopped) = watch::channel(false);
     let worker = tokio::spawn(worker(cache.clone(), settings, runner, stopped));
@@ -724,7 +724,7 @@ async fn database_busy_has_a_stable_error_kind_and_does_not_consume_the_delivery
     let state = Webhook::new(
         cache.clone(),
         Reload::new(settings()),
-        "rustovate[bot]".into(),
+        "patchula[bot]".into(),
         b"test-only-secret".to_vec(),
     );
     let router = router(state, Arc::new(AtomicBool::new(true)));
@@ -767,7 +767,7 @@ async fn database_busy_has_a_stable_error_kind_and_does_not_consume_the_delivery
 }
 
 impl Transport for DiscoveryAndMissingRepository {
-    fn send(&self, request: reqwest::Request) -> rustovate_http::Exchange<'_> {
+    fn send(&self, request: reqwest::Request) -> patchula_http::Exchange<'_> {
         let (status, value) = match request.url().path() {
             "/app/installations/1/access_tokens" => (
                 reqwest::StatusCode::CREATED,
@@ -788,7 +788,7 @@ impl Transport for DiscoveryAndMissingRepository {
             path => panic!("unexpected offline request: {path}"),
         };
         Box::pin(async move {
-            Ok(rustovate_http::Response {
+            Ok(patchula_http::Response {
                 status,
                 headers: Default::default(),
                 body: serde_json::to_vec(&value).unwrap(),
@@ -800,14 +800,14 @@ impl Transport for DiscoveryAndMissingRepository {
 fn settings() -> Settings {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.pkl");
-    std::fs::write(&path, "amends \"RustovateServer.pkl\"\ncoalescingMs = 0\n").unwrap();
+    std::fs::write(&path, "amends \"PatchulaServer.pkl\"\ncoalescingMs = 0\n").unwrap();
     Settings::load(&path).unwrap()
 }
 async fn state() -> Webhook {
     Webhook::new(
         Cache::open(":memory:", Default::default()).await.unwrap(),
         Reload::new(settings()),
-        "rustovate[bot]".into(),
+        "patchula[bot]".into(),
         b"test-only-secret".to_vec(),
     )
 }
@@ -815,7 +815,7 @@ fn payload() -> Value {
     json!({"installation":{"id":1},"sender":{"login":"human"},"repository":{"id":100,"full_name":"owner/repo","default_branch":"main"},"ref":"refs/heads/main"})
 }
 fn pr() -> Value {
-    json!({"number":1,"body":format!("<!-- rustovate:{} -->\n- [x] any wording <!-- rustovate-recheck -->", json!({"version":1,"identity":"a".repeat(64),"update":"b".repeat(64)})),"user":{"login":"rustovate[bot]"},"head":{"ref":"custom-deps/pkg-2.x","repo":{"full_name":"owner/repo"}},"base":{"repo":{"full_name":"owner/repo"}}})
+    json!({"number":1,"body":format!("<!-- patchula:{} -->\n- [x] any wording <!-- patchula-recheck -->", json!({"version":1,"identity":"a".repeat(64),"update":"b".repeat(64)})),"user":{"login":"patchula[bot]"},"head":{"ref":"custom-deps/pkg-2.x","repo":{"full_name":"owner/repo"}},"base":{"repo":{"full_name":"owner/repo"}}})
 }
 fn signature(body: &[u8]) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(b"test-only-secret").unwrap();
@@ -892,7 +892,7 @@ async fn signature_precedes_json_parse_and_duplicate_delivery_never_enqueues_twi
         StatusCode::PAYLOAD_TOO_LARGE
     );
     let mut own = payload();
-    own["sender"]["login"] = json!("rustovate[bot]");
+    own["sender"]["login"] = json!("patchula[bot]");
     assert_eq!(
         router
             .oneshot(request(serde_json::to_vec(&own).unwrap(), "push", "own"))
@@ -911,10 +911,10 @@ fn every_trigger_and_switch_and_filters() {
     let mut dashboard = payload();
     dashboard["action"] = json!("edited");
     let checkbox = format!(
-        "- [x] Any text <!-- rustovate-action:{} -->",
+        "- [x] Any text <!-- patchula-action:{} -->",
         json!({"action":"recheck","target":"a".repeat(64)})
     );
-    dashboard["issue"] = json!({"user":{"login":"rustovate[bot]"},"body":format!("{}\n{checkbox}", rustovate_update::dashboard::MARKER)});
+    dashboard["issue"] = json!({"user":{"login":"patchula[bot]"},"body":format!("{}\n{checkbox}", patchula_update::dashboard::MARKER)});
     dashboard["changes"] =
         json!({"body":{"from":dashboard["issue"]["body"].as_str().unwrap().replace("[x]", "[ ]")}});
     events.push(("issues", dashboard, "dashboard"));
@@ -940,7 +940,7 @@ fn every_trigger_and_switch_and_filters() {
         events.push((event, checks, "checks"));
     }
     for (event, payload, switch) in events {
-        let work = crate::webhook::classify(event, &payload, &settings, "rustovate[bot]");
+        let work = crate::webhook::classify(event, &payload, &settings, "patchula[bot]");
         assert_eq!(
             work,
             vec![Work {
@@ -954,28 +954,28 @@ fn every_trigger_and_switch_and_filters() {
         value["triggers"][switch] = json!(false);
         let disabled: Settings = serde_json::from_value(value).unwrap();
         assert!(
-            crate::webhook::classify(event, &payload, &disabled, "rustovate[bot]").is_empty(),
+            crate::webhook::classify(event, &payload, &disabled, "patchula[bot]").is_empty(),
             "{event} disabled"
         );
         let mut filtered = settings.clone();
         filtered.allowed_installations = vec![2];
-        assert!(crate::webhook::classify(event, &payload, &filtered, "rustovate[bot]").is_empty());
+        assert!(crate::webhook::classify(event, &payload, &filtered, "patchula[bot]").is_empty());
         filtered.allowed_installations.clear();
         filtered.allowed_repositories = vec!["other/repo".into()];
-        assert!(crate::webhook::classify(event, &payload, &filtered, "rustovate[bot]").is_empty());
+        assert!(crate::webhook::classify(event, &payload, &filtered, "patchula[bot]").is_empty());
         let mut own = payload.clone();
-        own["sender"]["login"] = json!("rustovate[bot]");
-        assert!(crate::webhook::classify(event, &own, &settings, "rustovate[bot]").is_empty());
+        own["sender"]["login"] = json!("patchula[bot]");
+        assert!(crate::webhook::classify(event, &own, &settings, "patchula[bot]").is_empty());
     }
     let mut feature = payload();
     feature["ref"] = json!("refs/heads/feature");
-    assert!(crate::webhook::classify("push", &feature, &settings, "rustovate[bot]").is_empty());
+    assert!(crate::webhook::classify("push", &feature, &settings, "patchula[bot]").is_empty());
     let mut human_pr = payload();
     human_pr["action"] = json!("closed");
     human_pr["pull_request"] = pr();
     human_pr["pull_request"]["user"]["login"] = json!("human");
     assert!(
-        crate::webhook::classify("pull_request", &human_pr, &settings, "rustovate[bot]").is_empty()
+        crate::webhook::classify("pull_request", &human_pr, &settings, "patchula[bot]").is_empty()
     );
 }
 #[tokio::test]
@@ -1268,11 +1268,11 @@ async fn report_directory_preserves_versioned_contract() {
 
 struct PrDetails(Value);
 impl Transport for PrDetails {
-    fn send(&self, request: reqwest::Request) -> rustovate_http::Exchange<'_> {
+    fn send(&self, request: reqwest::Request) -> patchula_http::Exchange<'_> {
         assert_eq!(request.url().path(), "/repos/owner/repo/pulls/1");
         let body = serde_json::to_vec(&self.0).unwrap();
         Box::pin(async move {
-            Ok(rustovate_http::Response {
+            Ok(patchula_http::Response {
                 status: reqwest::StatusCode::OK,
                 headers: Default::default(),
                 body,
@@ -1307,7 +1307,7 @@ async fn check_events_verify_real_ownership_with_custom_branch_prefixes() {
             check_prs: Some(std::collections::BTreeSet::from([1])),
         };
         assert_eq!(
-            check_candidate(&client, &candidate, "rustovate[bot]")
+            check_candidate(&client, &candidate, "patchula[bot]")
                 .await
                 .unwrap(),
             expected

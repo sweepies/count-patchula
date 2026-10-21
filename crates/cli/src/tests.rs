@@ -1,12 +1,12 @@
 //! CLI dispatch and persistent cache regression for installation-token receipts.
 use super::{App, Services, run};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use rustovate_cache::Cache;
+use patchula_cache::Cache;
 use std::ffi::OsStr;
 
-use rustovate_http::{Exchange, Response, Transport};
+use patchula_http::{Exchange, Response, Transport};
 
-use rustovate_update::blob_sha;
+use patchula_update::blob_sha;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -32,7 +32,7 @@ impl Fake {
     fn new() -> Self {
         Self {
         files:BTreeMap::from([
-            (".github/rustovate.pkl".into(),"amends \"../Rustovate.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n".into()),
+            (".github/patchula.pkl".into(),"amends \"../Patchula.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n".into()),
             ("package.json".into(),"{\n  \"dependencies\": {\"fixture\": \"1.0.0\", \"owner-closed-a\": \"1.0.0\", \"owner-closed-b\": \"1.0.0\"}\n}\n".into()),
         ]),writes:Default::default(),prs:Default::default(),issues:Default::default(),requests:Default::default(),
     }
@@ -66,14 +66,14 @@ impl Transport for Fake {
             )
         } else if path == "/graphql" {
             assert!(request.headers()["authorization"].is_sensitive());
-            if body["query"] == rustovate_engine::REPOSITORY_HEAD_QUERY {
+            if body["query"] == patchula_engine::REPOSITORY_HEAD_QUERY {
                 (
                     200,
                     json!({"data":{"repository":{"defaultBranchRef":{"name":"main","target":{"oid":"base","tree":{"oid":"base-tree"}}}}}}),
                 )
             } else if body["query"] == "query{viewer{login}}" {
-                (200, json!({"data":{"viewer":{"login":"rustovate[bot]"}}}))
-            } else if body["query"] == rustovate_update::INVENTORY_QUERY {
+                (200, json!({"data":{"viewer":{"login":"patchula[bot]"}}}))
+            } else if body["query"] == patchula_update::INVENTORY_QUERY {
                 let prs = self.prs.lock().unwrap();
                 let nodes: Vec<_> = prs.iter().filter(|p|p["state"] == "open").map(|p|json!({
                     "name":p["head"]["ref"],"target":{"oid":p["head"]["sha"],"tree":{"oid":"updated-tree"},"signature":{"isValid":true}},
@@ -90,10 +90,10 @@ impl Transport for Fake {
                 })).collect();
                 (
                     200,
-                    json!({"data":{"viewer":{"login":"rustovate[bot]"},"nodes":closed,"repository":{"defaultBranchRef":{"name":"main","target":{"oid":"base"}},"refs":{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}},"issues":{"nodes":*self.issues.lock().unwrap(),"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+                    json!({"data":{"viewer":{"login":"patchula[bot]"},"nodes":closed,"repository":{"defaultBranchRef":{"name":"main","target":{"oid":"base"}},"refs":{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}},"issues":{"nodes":*self.issues.lock().unwrap(),"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
                 )
             } else {
-                assert_eq!(body["query"], rustovate_update::REF_UPDATE);
+                assert_eq!(body["query"], patchula_update::REF_UPDATE);
                 self.writes.lock().unwrap().push((path.into(), body));
                 (
                     200,
@@ -106,7 +106,7 @@ impl Transport for Fake {
                 .unwrap()
                 .push((path.into(), body.clone()));
             if path.ends_with("/pulls") {
-                let pr = json!({"number":10,"node_id":"pr-id","html_url":"https://github.com/demo/sandbox/pull/10","title":body["title"],"body":body["body"],"state":"open","user":{"login":"rustovate[bot]"},"head":{"ref":body["head"],"sha":"new-commit","repo":{"full_name":"demo/sandbox"}},"base":{"ref":"main","repo":{"full_name":"demo/sandbox"}},"labels":[{"name":"dependencies"}],"auto_merge":null,"created_at":chrono::Utc::now().to_rfc3339(),"merged_at":null});
+                let pr = json!({"number":10,"node_id":"pr-id","html_url":"https://github.com/demo/sandbox/pull/10","title":body["title"],"body":body["body"],"state":"open","user":{"login":"patchula[bot]"},"head":{"ref":body["head"],"sha":"new-commit","repo":{"full_name":"demo/sandbox"}},"base":{"ref":"main","repo":{"full_name":"demo/sandbox"}},"labels":[{"name":"dependencies"}],"auto_merge":null,"created_at":chrono::Utc::now().to_rfc3339(),"merged_at":null});
                 let mut pr = pr;
                 pr["head"]["label"] = json!("demo:branch");
                 pr["head"]["repo"]["updated_at"] = json!("2026-10-15T00:00:00Z");
@@ -114,7 +114,7 @@ impl Transport for Fake {
                 self.prs.lock().unwrap().push(pr.clone());
                 (201, pr)
             } else if path.ends_with("/issues") {
-                let issue = json!({"number":100,"id":"dashboard-id","title":body["title"],"body":body["body"],"state":"OPEN","author":{"__typename":"Bot","login":"rustovate"}});
+                let issue = json!({"number":100,"id":"dashboard-id","title":body["title"],"body":body["body"],"state":"OPEN","author":{"__typename":"Bot","login":"patchula"}});
                 self.issues.lock().unwrap().push(issue.clone());
                 (201, issue)
             } else if path.ends_with("/git/blobs") {
@@ -198,9 +198,9 @@ fn existing_pr(package: &str, number: u64, closed: bool) -> Value {
     json!({
         "number":number,"node_id":format!("closed-{number}"),
         "state":if closed {"closed"} else {"open"},"merged_at":null,
-        "body":format!("<!-- rustovate:{marker} -->"),
-        "title":"Existing PR", "user":{"login":"rustovate[bot]"},
-        "head":{"ref":format!("rustovate/{package}-2.x"),"sha":"old-commit","repo":{"full_name":"demo/sandbox"}},
+        "body":format!("<!-- patchula:{marker} -->"),
+        "title":"Existing PR", "user":{"login":"patchula[bot]"},
+        "head":{"ref":format!("patchula/{package}-2.x"),"sha":"old-commit","repo":{"full_name":"demo/sandbox"}},
         "base":{"ref":"main","repo":{"full_name":"demo/sandbox"}},
         "labels":[],"auto_merge":null
     })
@@ -227,7 +227,7 @@ async fn cli_run_reopens_disk_receipts_with_bot_authors_and_mixed_pr_inventory()
         tracing_subscriber::fmt::layer()
             .with_ansi(false)
             .with_writer(move || writer.clone())
-            .with_filter(Targets::new().with_target("rustovate", tracing::Level::DEBUG)),
+            .with_filter(Targets::new().with_target("patchula", tracing::Level::DEBUG)),
     );
     let _guard = tracing::subscriber::set_default(subscriber);
     let fake = Arc::new(Fake::new());
@@ -267,9 +267,9 @@ async fn cli_run_reopens_disk_receipts_with_bot_authors_and_mixed_pr_inventory()
         assert_eq!(run(&app, &services).await.unwrap(), 0);
         let cache = Cache::open(&cache_path, Default::default()).await.unwrap();
         let bytes = cache
-            .extraction_get(&rustovate_cache::ExtractionKey {
+            .extraction_get(&patchula_cache::ExtractionKey {
                 repo: "demo/sandbox".into(),
-                default_branch_commit: "rustovate/".into(),
+                default_branch_commit: "patchula/".into(),
                 config_hash: "verified-write-receipts-v3".into(),
             })
             .await
@@ -283,13 +283,13 @@ async fn cli_run_reopens_disk_receipts_with_bot_authors_and_mixed_pr_inventory()
             let requests = fake.requests.lock().unwrap();
             let inventory = requests
                 .iter()
-                .position(|(_, _, b)| b["query"] == rustovate_update::INVENTORY_QUERY)
+                .position(|(_, _, b)| b["query"] == patchula_update::INVENTORY_QUERY)
                 .unwrap();
             assert_eq!(requests.len(), 6, "{requests:?}");
             assert!(inventory > 0, "inventory follows repository discovery");
             assert!(
                 requests.iter().all(|(method, _, body)| method == "GET"
-                    || body["query"] == rustovate_update::INVENTORY_QUERY),
+                    || body["query"] == patchula_update::INVENTORY_QUERY),
                 "only the inventory query may use POST: {requests:?}"
             );
             assert!(fake.writes.lock().unwrap().is_empty());

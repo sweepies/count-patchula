@@ -1,9 +1,9 @@
 //! Compact catalogs retain conditional HTTP semantics across process handles.
+use patchula_cache::{Cache, HttpKey};
+use patchula_config::Source;
+use patchula_datasource::Client;
+use patchula_http::{Cached, Exchange, Response, Transport};
 use reqwest::{StatusCode, header::HeaderMap};
-use rustovate_cache::{Cache, HttpKey};
-use rustovate_config::Source;
-use rustovate_datasource::Client;
-use rustovate_http::{Cached, Exchange, Response, Transport};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -49,7 +49,7 @@ fn response(status: u16, etag: &str, control: &str, body: Value) -> Response {
 }
 fn client(cache: Cache, transport: Arc<Queue>) -> Client {
     Client::new(
-        rustovate_github::Client::with_transport(
+        patchula_github::Client::with_transport(
             "offline",
             cache.clone(),
             Default::default(),

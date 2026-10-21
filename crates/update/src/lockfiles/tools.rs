@@ -4,16 +4,16 @@
 //! run has needed recently, and `install` can prewarm the pinned defaults.
 use super::*;
 
-const USAGE: &str = "rustovate-usage.json";
+const USAGE: &str = "patchula-usage.json";
 /// mise itself, which is not in mise's registry under its own name.
 pub(super) const MISE: &str = "aqua:jdx/mise";
 /// Time allowed for installing tools. Some hosts are slow: static-php.dev
 /// served about 44 KB/s when measured.
 pub(super) const INSTALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1800);
 
-/// `RUSTOVATE_TOOLS_DIR`, or `<cache>.tools` beside the SQLite cache.
+/// `PATCHULA_TOOLS_DIR`, or `<cache>.tools` beside the SQLite cache.
 pub fn tools_dir(workspace: &Path) -> PathBuf {
-    std::env::var_os("RUSTOVATE_TOOLS_DIR")
+    std::env::var_os("PATCHULA_TOOLS_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace.with_extension("tools"))
 }
@@ -55,7 +55,7 @@ pub(super) fn defaults() -> Result<Vec<(String, String)>, String> {
         doc["tools"]["composer"].as_str(),
     ) {
         tools.extend(super::php::tools(
-            rustovate_config::PhpBuild::Static,
+            patchula_config::PhpBuild::Static,
             php,
             composer,
         ));

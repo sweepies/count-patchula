@@ -1,5 +1,5 @@
 [package]
-name = "rustovate-update"
+name = "patchula-update"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,14 +10,14 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-rustovate-datasource = { path = "../datasource" }
-rustovate-cache = { path = "../cache" }
-rustovate-config = { path = "../config" }
-rustovate-manager = { path = "../manager" }
-rustovate-github = { path = "../github" }
-rustovate-report = { path = "../report" }
-rustovate-versioning = { path = "../versioning" }
-rustovate-lookup = { path = "../lookup" }
+patchula-datasource = { path = "../datasource" }
+patchula-cache = { path = "../cache" }
+patchula-config = { path = "../config" }
+patchula-manager = { path = "../manager" }
+patchula-github = { path = "../github" }
+patchula-report = { path = "../report" }
+patchula-versioning = { path = "../versioning" }
+patchula-lookup = { path = "../lookup" }
 futures-util = "0.3"
 serde.workspace = true
 serde_json.workspace = true
@@ -34,8 +34,8 @@ serde_yaml_ng = "0.10.0"
 rustix = { version = "1", features = ["process"] }
 base64 = "0.22"
 tracing = "0.1"
-rustovate-http = { path = "../http" }
+patchula-http = { path = "../http" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
-rustovate-http = { path = "../http" }
+patchula-http = { path = "../http" }

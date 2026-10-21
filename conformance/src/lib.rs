@@ -1,4 +1,4 @@
-//! Compare only observable Renovate JSON log output with rustovate reports.
+//! Compare only observable Renovate JSON log output with patchula reports.
 #![forbid(unsafe_code)]
 
 mod diff;
@@ -19,7 +19,7 @@ pub enum Error {
     #[error("invalid JSON: {0}")]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
-    Report(#[from] rustovate_report::Error),
+    Report(#[from] patchula_report::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

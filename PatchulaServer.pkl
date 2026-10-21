@@ -1,5 +1,5 @@
 /// Operator-owned API server settings. Secrets are deliberately absent.
-module RustovateServer
+module PatchulaServer
 
 triggers: Triggers = new {}
 sweepCron: String? = "0 0 * * * *"

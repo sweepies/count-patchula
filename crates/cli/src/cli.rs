@@ -8,33 +8,33 @@ use usage_rs::{Args, Cli, Subcommands, ValueEnum};
 /// No interactive prompts are used. Future prompts require both stdin and stdout
 /// to be TTYs and use demand.
 #[derive(Cli)]
-#[usage(bin = "rustovate", version)]
+#[usage(bin = "patchula", version)]
 pub struct App {
     /// Run the API-only GitHub App webhook server (no subcommand).
     #[usage(long)]
     pub server: bool,
-    /// Operator Pkl settings file; also RUSTOVATE_SERVER_SETTINGS.
+    /// Operator Pkl settings file; also PATCHULA_SERVER_SETTINGS.
     #[usage(long)]
     pub settings: Option<PathBuf>,
-    /// Server bind address; also RUSTOVATE_LISTEN (default 127.0.0.1:8080).
+    /// Server bind address; also PATCHULA_LISTEN (default 127.0.0.1:8080).
     #[usage(long)]
     pub listen: Option<std::net::SocketAddr>,
-    /// Persistent server cache/queue; also RUSTOVATE_SERVER_CACHE.
+    /// Persistent server cache/queue; also PATCHULA_SERVER_CACHE.
     #[usage(long)]
     pub server_cache: Option<PathBuf>,
-    /// GitHub App ID; also RUSTOVATE_APP_ID.
+    /// GitHub App ID; also PATCHULA_APP_ID.
     #[usage(long)]
     pub app_id: Option<u64>,
-    /// PEM private key file; also RUSTOVATE_APP_PRIVATE_KEY_FILE.
+    /// PEM private key file; also PATCHULA_APP_PRIVATE_KEY_FILE.
     #[usage(long)]
     pub private_key_file: Option<PathBuf>,
-    /// Webhook secret file; also RUSTOVATE_WEBHOOK_SECRET_FILE.
+    /// Webhook secret file; also PATCHULA_WEBHOOK_SECRET_FILE.
     #[usage(long)]
     pub webhook_secret_file: Option<PathBuf>,
-    /// Graceful server drain deadline; also RUSTOVATE_SHUTDOWN_TIMEOUT_SECS (default 60).
+    /// Graceful server drain deadline; also PATCHULA_SHUTDOWN_TIMEOUT_SECS (default 60).
     #[usage(long)]
     pub shutdown_timeout_secs: Option<u64>,
-    /// Checkbox wording; also RUSTOVATE_RECHECK. Default: now in server, next-run in CLI.
+    /// Checkbox wording; also PATCHULA_RECHECK. Default: now in server, next-run in CLI.
     #[usage(long, value_enum, global)]
     pub recheck: Option<Recheck>,
     /// Increase diagnostic verbosity; repeat for more detail.
@@ -65,7 +65,7 @@ pub enum Command {
     Lookup(Lookup),
     /// Create or update dependency branches and pull requests with verified API commits.
     Run(Run),
-    /// Manage the lockfile runner's tool store (`RUSTOVATE_TOOLS_DIR`, or `<cache>.tools`).
+    /// Manage the lockfile runner's tool store (`PATCHULA_TOOLS_DIR`, or `<cache>.tools`).
     Tools(Tools),
 }
 
@@ -86,7 +86,7 @@ pub enum ToolsCommand {
 #[derive(Args)]
 pub struct ToolStore {
     /// Shared SQLite cache path; the tool store sits beside it.
-    #[usage(long, default = ".rustovate-cache.sqlite")]
+    #[usage(long, default = ".patchula-cache.sqlite")]
     pub cache: PathBuf,
 }
 
@@ -122,7 +122,7 @@ pub struct Lookup {
     /// Repositories as owner/repo; omit to discover all accessible repositories.
     pub repositories: Vec<String>,
     /// Shared SQLite cache path.
-    #[usage(long, default = ".rustovate-cache.sqlite")]
+    #[usage(long, default = ".patchula-cache.sqlite")]
     pub cache: PathBuf,
     /// Maximum concurrent repository scans (1–100); HTTP limits are per host.
     #[usage(long, default = "8")]
@@ -140,7 +140,7 @@ pub struct Lookup {
     #[usage(long, conflicts = "--config-dir")]
     pub config: Option<PathBuf>,
     /// Per-repository local overrides: `<dir>/<owner>/<name>.pkl` wins over `<dir>/<name>.pkl`.
-    /// Unmatched repositories discover `.github/rustovate.pkl` then `rustovate.pkl`; neither means skipped.
+    /// Unmatched repositories discover `.github/patchula.pkl` then `patchula.pkl`; neither means skipped.
     /// All matched files are validated before repository scans. Mutually exclusive with `--config`.
     #[usage(long, conflicts = "--config")]
     pub config_dir: Option<PathBuf>,
@@ -156,9 +156,9 @@ pub struct Config {
 pub enum ConfigCommand {
     /// Validate a Pkl config file or discover one in a repository directory.
     Check(Check),
-    /// Print the bundled Rustovate.pkl schema as Pkl source.
+    /// Print the bundled Patchula.pkl schema as Pkl source.
     Schema,
-    /// Print the bundled RustovateServer.pkl operator schema.
+    /// Print the bundled PatchulaServer.pkl operator schema.
     ServerSchema,
     /// Validate an operator Pkl server settings file without credentials or network.
     CheckServer(Check),

@@ -7,7 +7,7 @@ use notes::{ForgeKind, Repository};
 /// every tag of a long-lived project.
 const PAGES: u32 = 10;
 
-fn gitlab(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheError> {
+fn gitlab(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     tags(bytes, |t| {
         Some(Version {
             version: t["name"].as_str()?.into(),
@@ -19,7 +19,7 @@ fn gitlab(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheErr
         })
     })
 }
-fn gitea(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheError> {
+fn gitea(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     tags(bytes, |t| {
         Some(Version {
             version: t["name"].as_str()?.into(),
@@ -33,11 +33,11 @@ fn gitea(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheErro
 fn tags(
     bytes: &[u8],
     map: impl Fn(&serde_json::Value) -> Option<Version>,
-) -> std::result::Result<Vec<u8>, rustovate_http::CacheError> {
+) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     let values: Vec<serde_json::Value> =
-        serde_json::from_slice(bytes).map_err(|_| rustovate_http::CacheError::Document)?;
+        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
     let versions: Vec<_> = values.iter().filter_map(map).collect();
-    serde_json::to_vec(&versions).map_err(|_| rustovate_http::CacheError::Document)
+    serde_json::to_vec(&versions).map_err(|_| patchula_http::CacheError::Document)
 }
 
 impl Client {

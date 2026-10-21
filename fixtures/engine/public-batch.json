@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "provenance": "Recorded by rustovate from the request URLs; never imported from other bots; round 4 offline adaptation: tag hydration requests use tagger dates; previously unrecorded tagger dates remain unavailable. New tag release-history interactions are independently simulated empty catalogs, not live recordings. Release date precedence and late publication are tested with an independent synthetic transport.",
+  "provenance": "Recorded by patchula from the request URLs; never imported from other bots; round 4 offline adaptation: tag hydration requests use tagger dates; previously unrecorded tagger dates remain unavailable. New tag release-history interactions are independently simulated empty catalogs, not live recordings. Release date precedence and late publication are tested with an independent synthetic transport.",
   "interactions": [
     {
       "request": {

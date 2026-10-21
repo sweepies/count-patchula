@@ -1,5 +1,5 @@
-use rustovate_report::Repository;
-use rustovate_update::{
+use patchula_report::Repository;
+use patchula_update::{
     Inventory, Recheck,
     dashboard::{self, MARKER},
 };
@@ -103,14 +103,14 @@ fn dashboard_orders_pr_numbers_numerically_and_dependency_summaries_last() {
 #[test]
 fn issue_discovery_checks_marker_author_and_ambiguity_never_title() {
     let mut inventory = Inventory {
-        actor: "rustovate[bot]".into(),
+        actor: "patchula[bot]".into(),
         ..Default::default()
     };
     inventory.issues = vec![
         json!({"number":1,"title":"Dependency Dashboard","body":MARKER,"author":{"__typename":"User","login":"human"}}),
     ];
     assert!(dashboard::issue(&inventory).unwrap().is_none());
-    inventory.issues.push(json!({"number":2,"title":"Renamed by owner","body":MARKER,"author":{"__typename":"Bot","login":"rustovate"}}));
+    inventory.issues.push(json!({"number":2,"title":"Renamed by owner","body":MARKER,"author":{"__typename":"Bot","login":"patchula"}}));
     assert_eq!(dashboard::issue(&inventory).unwrap().unwrap()["number"], 2);
     inventory.issues.push(inventory.issues[1].clone());
     assert!(dashboard::issue(&inventory).is_err());
@@ -126,17 +126,17 @@ fn checkbox_parser_rejects_malformed_duplicate_fenced_foreign_and_wrong_reposito
         .unwrap()
         .replace("- [ ]", "- [x]");
     for (name, content, author, expected) in [
-        ("valid", format!("{MARKER}\n{line}"), "rustovate", true),
+        ("valid", format!("{MARKER}\n{line}"), "patchula", true),
         (
             "duplicate",
             format!("{MARKER}\n{line}\n{line}"),
-            "rustovate",
+            "patchula",
             false,
         ),
         (
             "fenced",
             format!("{MARKER}\n```md\n{line}\n```"),
-            "rustovate",
+            "patchula",
             false,
         ),
         ("foreign", format!("{MARKER}\n{line}"), "other", false),
@@ -146,20 +146,20 @@ fn checkbox_parser_rejects_malformed_duplicate_fenced_foreign_and_wrong_reposito
                 "{MARKER}\n{}",
                 line.replace("\"action\":\"recheck\"", "\"action\":\"unknown\"")
             ),
-            "rustovate",
+            "patchula",
             false,
         ),
         (
             "short-target",
             format!(
-                "{MARKER}\n- [x] Text <!-- rustovate-action:{{\"action\":\"recheck\",\"target\":\"abc\"}} -->"
+                "{MARKER}\n- [x] Text <!-- patchula-action:{{\"action\":\"recheck\",\"target\":\"abc\"}} -->"
             ),
-            "rustovate",
+            "patchula",
             false,
         ),
     ] {
         let inventory = Inventory {
-            actor: "rustovate[bot]".into(),
+            actor: "patchula[bot]".into(),
             issues: vec![json!({"body":content,"author":{"__typename":"Bot","login":author}})],
             ..Default::default()
         };
@@ -196,27 +196,27 @@ fn pr_checkbox_requires_bot_author_same_repository_and_a_valid_ownership_marker(
         "fenced",
     ] {
         let ownership = format!(
-            "<!-- rustovate:{{\"version\":1,\"identity\":\"{}\",\"update\":\"{}\"}} -->",
+            "<!-- patchula:{{\"version\":1,\"identity\":\"{}\",\"update\":\"{}\"}} -->",
             "a".repeat(64),
             "b".repeat(64)
         );
-        let checkbox = "- [X] Changed wording <!-- rustovate-recheck -->";
+        let checkbox = "- [X] Changed wording <!-- patchula-recheck -->";
         let body = match case {
             "bad-marker" => checkbox.into(),
             "duplicate" => format!("{checkbox}\n{checkbox}\n{ownership}"),
             "fenced" => format!("```md\n{checkbox}\n```\n{ownership}"),
             _ => format!("{checkbox}\n{ownership}"),
         };
-        let pr = json!({"body":body,"headRefName":"rustovate/fixture","author":{"__typename":"Bot","login":if case == "foreign" {"other"} else {"rustovate"}},
+        let pr = json!({"body":body,"headRefName":"patchula/fixture","author":{"__typename":"Bot","login":if case == "foreign" {"other"} else {"patchula"}},
             "headRepository":{"nameWithOwner":if case == "fork" {"other/app"} else {"demo/app"}},"baseRepository":{"nameWithOwner":"demo/app"},"labels":{"nodes":[],"pageInfo":{"hasNextPage":false}}});
         let inventory = Inventory {
-            actor: "rustovate[bot]".into(),
+            actor: "patchula[bot]".into(),
             refs: vec![json!({"associatedPullRequests":{"nodes":[pr]}})],
             ..Default::default()
         };
         let controls = dashboard::Controls::read(&inventory, "demo/app", true).unwrap();
         assert_eq!(
-            controls.branches.contains("rustovate/fixture"),
+            controls.branches.contains("patchula/fixture"),
             case == "valid",
             "{case}"
         );
@@ -224,11 +224,11 @@ fn pr_checkbox_requires_bot_author_same_repository_and_a_valid_ownership_marker(
 }
 
 struct InventoryPages(std::sync::Mutex<usize>);
-impl rustovate_http::Transport for InventoryPages {
-    fn send(&self, request: reqwest::Request) -> rustovate_http::Exchange<'_> {
+impl patchula_http::Transport for InventoryPages {
+    fn send(&self, request: reqwest::Request) -> patchula_http::Exchange<'_> {
         let input: serde_json::Value =
             serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
-        assert_eq!(input["query"], rustovate_update::INVENTORY_QUERY);
+        assert_eq!(input["query"], patchula_update::INVENTORY_QUERY);
         *self.0.lock().unwrap() += 1;
         let page = |cursor: &serde_json::Value, pages: usize, prefix: &str| {
             let offset = cursor
@@ -237,13 +237,13 @@ impl rustovate_http::Transport for InventoryPages {
                 .unwrap_or(0);
             json!({"nodes":[{"name":format!("{prefix}{offset}")}],"pageInfo":{"hasNextPage":offset + 1 < pages,"endCursor":(offset+1).to_string()}})
         };
-        let value = json!({"data":{"viewer":{"login":"rustovate[bot]"},"nodes":[],"repository":{
+        let value = json!({"data":{"viewer":{"login":"patchula[bot]"},"nodes":[],"repository":{
             "defaultBranchRef":{"name":"main","target":{"oid":"base"}},
             "refs":page(&input["variables"]["cursor"],2,"ref"),
             "issues":page(&input["variables"]["issueCursor"],3,"issue")
         }}});
         Box::pin(async move {
-            Ok(rustovate_http::Response {
+            Ok(patchula_http::Response {
                 status: reqwest::StatusCode::OK,
                 headers: Default::default(),
                 body: serde_json::to_vec(&value).unwrap(),
@@ -254,17 +254,17 @@ impl rustovate_http::Transport for InventoryPages {
 #[tokio::test]
 async fn shared_inventory_follows_each_connection_without_duplicating_finished_pages() {
     let fake = std::sync::Arc::new(InventoryPages(Default::default()));
-    let cache = rustovate_cache::Cache::open(":memory:", Default::default())
+    let cache = patchula_cache::Cache::open(":memory:", Default::default())
         .await
         .unwrap();
-    let github = rustovate_github::Client::with_transport(
+    let github = patchula_github::Client::with_transport(
         "offline",
         cache.clone(),
         Default::default(),
         fake.clone(),
     )
     .unwrap();
-    let config = rustovate_config::load(std::path::Path::new("../../Rustovate.pkl")).unwrap();
+    let config = patchula_config::load(std::path::Path::new("../../Patchula.pkl")).unwrap();
     let mut repo = repository();
     repo.commit = Some("base".into());
     repo.default_branch = Some("main".into());

@@ -2,7 +2,7 @@
 //! Composer from mise. Static PHP downloads a prebuilt static-php.dev binary;
 //! compiled PHP builds `php@<version>` from source on first use.
 use super::*;
-use rustovate_config::PhpBuild;
+use patchula_config::PhpBuild;
 
 /// The mise tool specs for PHP and Composer. Both use the http backend for
 /// the static build, so no compiler or system libraries are needed.

@@ -1,6 +1,6 @@
 use crate::*;
+use patchula_config::Extractor;
 use regex::{Captures, Regex};
-use rustovate_config::Extractor;
 fn template(text: &str, captures: &Captures<'_>) -> Result<String, String> {
     let mut out = String::new();
     let mut remaining = text;

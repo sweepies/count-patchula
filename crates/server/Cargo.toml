@@ -1,5 +1,5 @@
 [package]
-name = "rustovate-server"
+name = "patchula-server"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,13 +10,13 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-rustovate-cache = { path = "../cache" }
-rustovate-config = { path = "../config" }
-rustovate-engine = { path = "../engine" }
-rustovate-github = { path = "../github" }
-rustovate-http = { path = "../http" }
-rustovate-report = { path = "../report" }
-rustovate-update = { path = "../update" }
+patchula-cache = { path = "../cache" }
+patchula-config = { path = "../config" }
+patchula-engine = { path = "../engine" }
+patchula-github = { path = "../github" }
+patchula-http = { path = "../http" }
+patchula-report = { path = "../report" }
+patchula-update = { path = "../update" }
 tokio = { workspace = true, features = ["net", "signal"] }
 serde.workspace = true
 serde_json.workspace = true

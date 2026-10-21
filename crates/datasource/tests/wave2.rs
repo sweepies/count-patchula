@@ -1,21 +1,21 @@
 //! Public wave-2 endpoints recorded by this implementation; replay is offline.
-use rustovate_cache::Cache;
-use rustovate_config::Source;
-use rustovate_datasource::Client;
-use rustovate_http::{Cached, Network};
+use patchula_cache::Cache;
+use patchula_config::Source;
+use patchula_datasource::Client;
+use patchula_http::{Cached, Network};
 use std::{path::Path, sync::Arc};
 
 #[tokio::test]
 async fn public_wave2_catalogs_and_index_digest() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/datasource/wave2.json");
     let transport =
-        rustovate_testkit::from_env(&path, Default::default(), || Ok(Arc::new(Network::new()?)))
+        patchula_testkit::from_env(&path, Default::default(), || Ok(Arc::new(Network::new()?)))
             .unwrap();
     let dir = tempfile::tempdir().unwrap();
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await
         .unwrap();
-    let github = rustovate_github::Client::with_transport(
+    let github = patchula_github::Client::with_transport(
         "offline",
         cache.clone(),
         Default::default(),

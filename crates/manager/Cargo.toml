@@ -1,5 +1,5 @@
 [package]
-name = "rustovate-manager"
+name = "patchula-manager"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,13 +10,13 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-rustovate-versioning = { path = "../versioning" }
+patchula-versioning = { path = "../versioning" }
 hcl-edit = "0.9.7"
 yaml-rust2 = "0.11.0"
-rustovate-mise = { path = "../mise" }
+patchula-mise = { path = "../mise" }
 jsonc-parser = "0.34.0"
 regex = "1.13.1"
-rustovate-config = { version = "0.1.0", path = "../config" }
+patchula-config = { version = "0.1.0", path = "../config" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_yaml_ng = "0.10.0"

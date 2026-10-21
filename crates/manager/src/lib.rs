@@ -7,7 +7,7 @@ pub use actions::replacement as action_replacement;
 pub use actions::runner_replacement;
 pub use edit::{Edit, apply, edits};
 /// Included in persistent extraction fingerprints because backend mappings can change.
-pub const MISE_REGISTRY: &str = rustovate_mise::REGISTRY_JSON;
+pub const MISE_REGISTRY: &str = patchula_mise::REGISTRY_JSON;
 mod cargo;
 mod composer;
 mod custom;
@@ -29,7 +29,7 @@ mod toolchains;
 mod yaml;
 mod yaml_locations;
 
-use rustovate_config::{Config, DependencyKind, Manager, Patterns, Scheme, Source};
+use patchula_config::{Config, DependencyKind, Manager, Patterns, Scheme, Source};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 

@@ -4,7 +4,7 @@
 
 The supplied fresh release batch took **37.4 s cold / 4.1 s warm / 3.8 s
 warm2**, with **343 proposals on all three runs**. Renovate's dry run took
-**261 s**; its run started about four minutes before rustovate's cold run.
+**261 s**; its run started about four minutes before patchula's cold run.
 These are caller-supplied single observations. See [benchmarks](benchmarks.md#phase-1-final-live-check-2026-10-15).
 
 Input triage was **0 missing, 0 extra, 6 field-mismatch, 275 departures**.
@@ -13,7 +13,7 @@ Replay against `/root/rustovate-conf/renovate12.jsonl` now gives **0 missing,
 `/root/rustovate-conf/out12-closed/triage.{md,json}`. **0 actionable rows: Phase 1 exit is met for the eleven comparable repositories.**
 
 Departure 45 now covers a pinned action whose declared major/minor precision
-is retained in the proposed floating tag, while rustovate reports a newer
+is retained in the proposed floating tag, while patchula reports a newer
 stable release on that same line. It requires matching declarations and update
 classes, equal proposed aliases, ordered full versions, and independent
 `metadata.tagDigests` evidence that the proposed digest is the alias's peeled
@@ -29,9 +29,9 @@ response and peeled tag catalog; its extraction is saved as
 `/root/rustovate-conf/r12-floating-tag-evidence.json`. No live data was invented
 or substituted for the captured proposal set.
 
-Departure 23 measures the newer rustovate release's age at the timestamp
+Departure 23 measures the newer patchula release's age at the timestamp
 of Renovate's own `packageFiles with updates` log record, rather than at
-rustovate's `evaluatedAt`. Its upper bound is now **96 hours exclusive**, an
+patchula's `evaluatedAt`. Its upper bound is now **96 hours exclusive**, an
 empirical comparison ceiling; the explicit 24-hour policy, timestamp evidence,
 strictly older Renovate target and matching update class remain required.
 Missing/malformed timestamps and ages outside the window remain actionable.
@@ -52,7 +52,7 @@ Renovate's exact rule remains unknown from output alone, and its source was not
 read. The earlier 71.9-hour explanation was incorrect.
 
 Coverage remains **eleven comparable repositories and one gap**. remote-agent
-has no Renovate baseline because its `renovate.json` is invalid; rustovate's
+has no Renovate baseline because its `renovate.json` is invalid; patchula's
 own configuration for that repository validates. This gap is not parity.
 
 Validation: `mise run ci` passed (cassette secret scan, formatting,
@@ -72,7 +72,7 @@ Implementation: `9271512` (local; not pushed).
 The supplied release batch at `1826e32`, twelve repositories in one process,
 took **33.5 s cold / 2.9 s warm / 3.5 s warm2**, with **344 proposals on all
 three passes**. The fresh Renovate dry run took **296 s** and was captured within
-about ten minutes of rustovate. These are caller-supplied single observations,
+about ten minutes of patchula. These are caller-supplied single observations,
 not measurements of the round 4 implementation. Proposal determinism is confirmed
 for this capture. See [benchmarks](benchmarks.md#phase-1-exit-round-4-input-2026-10-15).
 
@@ -140,7 +140,7 @@ the workspace build. Log: `/root/rustovate-conf/r12-round4-ci.log`.
 
 **Phase 1 exit remains pending a live rerun**, rather than claiming that an
 unchanged report proves new behavior. This implementation process has none of
-`RUSTOVATE_TOKEN`, `GITHUB_TOKEN` or `GH_TOKEN` configured. Build the committed
+`PATCHULA_TOKEN`, `GITHUB_TOKEN` or `GH_TOKEN` configured. Build the committed
 release implementation, rerun all twelve repos cold/warm/warm2 with one fresh
 cache, then compare against the fresh baseline (refresh the baseline again if
 the captures are no longer contemporaneous). Confirm the eight fixed fields,
@@ -193,7 +193,7 @@ entries cover every row exactly once. “Retained” means no automated exemptio
 | 28–29, 31–32 | setup-go returned an empty matching-refs namespace. Fixed with a fully paginated tags-API fallback and peeled-object hydration; cold/warm regression added. Retained in this old report pending live verification. A genuinely empty catalog still warns. |
 | 30 | Explicit setup-bun latest pin, source npm/tool. Departure 29 now recognizes that tool source as well as GitHub releases. |
 | 33–34 | TypeScript peer widening versus explicit exact major/pin policy. Departure 25 accepts only the observed `current || target-range` shape and matching peer metadata. Exact peer pins are flagged as questionable; prefer a deliberate support-range policy for published libraries. |
-| 35–37 | Go language floor 1.26 versus baseline's resolved compiler 1.27.2; rustovate offers explicit floor edits to 1.26.9/1.27.2. Departure 43 documents the model; retained without a generic Go-version exemption. |
+| 35–37 | Go language floor 1.26 versus baseline's resolved compiler 1.27.2; patchula offers explicit floor edits to 1.26.9/1.27.2. Departure 43 documents the model; retained without a generic Go-version exemption. |
 | 38–42, 44–46 | Eight missing/absent Docker digests: Hermes, Python slim/alpine, Alpine and Stalwart. Every row has exact 429/rate-limit evidence. The host-wide zero-pull cooldown bug is fixed; retained pending successful live HEADs. No rate-limit exemption. |
 | 43, 47–48 | OpenClaw, Victoria Metrics and regex package patch alternatives. Departure 33 consistently ignores npm integrity/Helm archive hashes and requires a matching minor or independently evidenced age-held minor. No package-specific exception. |
 | 49–52 | Action digest pins: preserve v4/v2 ref precision (departure 45), but newVersion must be the full target version. Fixed the metadata bug, including resolving the new commit on an existing digest update. All four old-report fields remain visible for rerun. |
@@ -222,7 +222,7 @@ network outages can still change proposal availability and remain warnings.
 
 ### Time skew, separately
 
-The baseline was captured **04:44:02–04:51:55 UTC**; rustovate evaluated at
+The baseline was captured **04:44:02–04:51:55 UTC**; patchula evaluated at
 **05:51:26 UTC**. Five comparable occurrences crossed the 24-hour eligibility
 boundary between them: wrangler 4.151.0 in clips.sweepy.dev's mise.toml and
 package.json and maccrae-wiki's package.json (eligible 05:50:43 UTC), and uv
@@ -266,7 +266,7 @@ Implementation commit: `af88256`; CI log: `/root/rustovate-conf/r12-round3-ci.lo
 ## Historical round 2
 
 Round 2 replay of the supplied twelve-repository warm capture (2026-10-15):
-**22 rustovate-missing, 12 extra, 60 field-mismatch, 207 departures**. Eleven
+**22 patchula-missing, 12 extra, 60 field-mismatch, 207 departures**. Eleven
 repositories have a comparable baseline; remote-agent still lacks one because
 the baseline rejected its configuration. These counts describe the supplied
 capture with the updated adapter, not a new live engine run.
@@ -313,7 +313,7 @@ Residual causes and next checks are scoped as follows:
 - **npm (5 missing, 3 extra, 21 mismatches):** the cached public catalogs mark
   mux-node 15.5.0 and plyr 3.8.5 deprecated; convex-svelte and better-auth targets
   are held by age. An @types/node satisfying-range target is represented by
-  rustovate's exact pin rather than a patch, while its major target follows a
+  patchula's exact pin rather than a patch, while its major target follows a
   different Node channel. Thirteen current-version differences are lockfile
   versus satisfying-range resolution. Remaining value differences include
   peer unions, short caret ranges and differing major range floors. Extra

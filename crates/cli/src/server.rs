@@ -44,22 +44,22 @@ pub async fn run(app: &App) -> Result<u8> {
     let settings = app
         .settings
         .clone()
-        .or(env("RUSTOVATE_SERVER_SETTINGS")?.map(PathBuf::from))
-        .ok_or_else(|| invalid("--server requires --settings or RUSTOVATE_SERVER_SETTINGS"))?;
+        .or(env("PATCHULA_SERVER_SETTINGS")?.map(PathBuf::from))
+        .ok_or_else(|| invalid("--server requires --settings or PATCHULA_SERVER_SETTINGS"))?;
     let listen = app.listen.map(Ok).unwrap_or_else(|| {
-        env("RUSTOVATE_LISTEN")?
+        env("PATCHULA_LISTEN")?
             .unwrap_or_else(|| "127.0.0.1:8080".into())
             .parse()
             .map_err(|_| invalid("invalid server listen address"))
     })?;
     let app_id = app.app_id.map(Ok).unwrap_or_else(|| {
-        env("RUSTOVATE_APP_ID")?
-            .ok_or_else(|| invalid("server requires --app-id or RUSTOVATE_APP_ID"))?
+        env("PATCHULA_APP_ID")?
+            .ok_or_else(|| invalid("server requires --app-id or PATCHULA_APP_ID"))?
             .parse()
             .map_err(|_| invalid("invalid App ID"))
     })?;
     let timeout = app.shutdown_timeout_secs.map(Ok).unwrap_or_else(|| {
-        env("RUSTOVATE_SHUTDOWN_TIMEOUT_SECS")?
+        env("PATCHULA_SHUTDOWN_TIMEOUT_SECS")?
             .unwrap_or_else(|| "60".into())
             .parse::<u64>()
             .map_err(|_| invalid("invalid shutdown timeout"))
@@ -70,26 +70,26 @@ pub async fn run(app: &App) -> Result<u8> {
     let recheck = match app.recheck {
         Some(Recheck::Now) => Some("now".into()),
         Some(Recheck::NextRun) => Some("next-run".into()),
-        None => env("RUSTOVATE_RECHECK")?,
+        None => env("PATCHULA_RECHECK")?,
     };
-    rustovate_server::serve(rustovate_server::Options {
+    patchula_server::serve(patchula_server::Options {
         settings,
         cache: app
             .server_cache
             .clone()
-            .or(env("RUSTOVATE_SERVER_CACHE")?.map(PathBuf::from))
-            .unwrap_or_else(|| ".rustovate-server.sqlite".into()),
+            .or(env("PATCHULA_SERVER_CACHE")?.map(PathBuf::from))
+            .unwrap_or_else(|| ".patchula-server.sqlite".into()),
         listen,
         app_id,
         private_key: secret(
             app.private_key_file.as_ref(),
-            "RUSTOVATE_APP_PRIVATE_KEY_FILE",
-            "RUSTOVATE_APP_PRIVATE_KEY",
+            "PATCHULA_APP_PRIVATE_KEY_FILE",
+            "PATCHULA_APP_PRIVATE_KEY",
         )?,
         webhook_secret: secret(
             app.webhook_secret_file.as_ref(),
-            "RUSTOVATE_WEBHOOK_SECRET_FILE",
-            "RUSTOVATE_WEBHOOK_SECRET",
+            "PATCHULA_WEBHOOK_SECRET_FILE",
+            "PATCHULA_WEBHOOK_SECRET",
         )?,
         recheck,
         shutdown_timeout: Duration::from_secs(timeout),

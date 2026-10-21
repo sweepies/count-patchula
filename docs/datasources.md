@@ -62,7 +62,7 @@ Docker Hub's `ratelimit-remaining` / `ratelimit-limit` windows stop queued reads
 at zero remaining. Its pull-quota 429s do not trigger short retries. HEAD
 revalidation uses cached manifest validators and digests, avoiding a GET on 304.
 Tag-list validators cannot prove that a tag still points at the same digest.
-Optional `RUSTOVATE_DOCKERHUB_USERNAME` and `RUSTOVATE_DOCKERHUB_TOKEN` must be set
+Optional `PATCHULA_DOCKERHUB_USERNAME` and `PATCHULA_DOCKERHUB_TOKEN` must be set
 together. They are sent with Basic authentication only to Docker Hub's validated
 HTTPS token service, never to other registries or redirect targets. Authenticated
 bearers are memory-only; anonymous scoped tokens retain the existing expiry cache.
@@ -117,14 +117,14 @@ Additional specifications: [Node distribution index](https://nodejs.org/dist/ind
 
 `useVersionsHost` defaults to `true` in repository configuration. Public GitHub
 repos in the bundled mise registry use lowercase mise-versions `releases.json`
-and `tags.json`, with ETag validation. Since rustovate's GitHub client is always
+and `tags.json`, with ETag validation. Since patchula's GitHub client is always
 authenticated, repos outside that registry go directly to GitHub, including
 private upstreams. A mirror transport failure, 429 or 5xx can use the API;
 403, 404 and empty lists cannot. A truncated list reports an incomplete lookup
 instead of silently treating the prefix as full history or falling back.
 
 Mise tools use `data/index.v1.json` once per batch where G4 guarantees a complete
-list, otherwise `data/<tool>.toml`. Rustovate needs every update class and held-back
+list, otherwise `data/<tool>.toml`. Patchula needs every update class and held-back
 version, so the single-latest G1–G3 guarantees alone do not justify replacing a
 full catalog. Only tools whose declared first registry backend is supported use
 the tool feed. Dates come from its `created_at` (mise's collection provenance),

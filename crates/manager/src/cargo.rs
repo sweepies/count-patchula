@@ -1,5 +1,5 @@
 use crate::*;
-use rustovate_versioning::{Ecosystem, Versioning};
+use patchula_versioning::{Ecosystem, Versioning};
 use toml_edit::{Document, Item};
 
 pub(super) fn documents(files: &Files) -> Result<BTreeMap<&str, Document<&str>>, String> {

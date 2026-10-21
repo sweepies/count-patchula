@@ -1,5 +1,5 @@
 [package]
-name = "rustovate-github"
+name = "patchula-github"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,8 +10,8 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-rustovate-cache = { path = "../cache" }
-rustovate-http = { path = "../http" }
+patchula-cache = { path = "../cache" }
+patchula-http = { path = "../http" }
 reqwest.workspace = true
 tokio.workspace = true
 serde.workspace = true
@@ -24,6 +24,6 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [dev-dependencies]
 rsa = { version = "0.9", features = ["pem"] }
-rustovate-testkit = { path = "../testkit" }
+patchula-testkit = { path = "../testkit" }
 tempfile = "3"
 tokio = { workspace = true, features = ["test-util"] }

@@ -112,7 +112,7 @@ impl App {
         );
         request
             .headers_mut()
-            .insert(header::USER_AGENT, HeaderValue::from_static("rustovate"));
+            .insert(header::USER_AGENT, HeaderValue::from_static("patchula"));
         request.headers_mut().insert(
             "x-github-api-version",
             HeaderValue::from_static("2022-11-28"),
@@ -227,7 +227,7 @@ impl Credentials for Installation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rustovate_http::{Exchange, Response};
+    use patchula_http::{Exchange, Response};
     use std::sync::atomic::{AtomicUsize, Ordering};
     struct Offline(AtomicUsize, String);
     impl Transport for Offline {

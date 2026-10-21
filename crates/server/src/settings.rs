@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-pub const SCHEMA: &str = include_str!("../../../RustovateServer.pkl");
+pub const SCHEMA: &str = include_str!("../../../PatchulaServer.pkl");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -40,13 +40,13 @@ impl Settings {
         let source = std::fs::read_to_string(path)
             .into_diagnostic()
             .wrap_err_with(|| format!("cannot read server settings {}", path.display()))?;
-        let value = rustovate_config::evaluate_local(path, "RustovateServer.pkl", SCHEMA)?;
+        let value = patchula_config::evaluate_local(path, "PatchulaServer.pkl", SCHEMA)?;
         let settings: Self = serde_path_to_error::deserialize(value).map_err(|error| {
-            rustovate_config::problem(path, &source, &error.path().to_string(), &error.to_string())
+            patchula_config::problem(path, &source, &error.path().to_string(), &error.to_string())
         })?;
         settings.validate().map_err(|message| {
             let field = message.split_whitespace().next().unwrap_or("");
-            rustovate_config::problem(path, &source, field, message)
+            patchula_config::problem(path, &source, field, message)
         })?;
         Ok(settings)
     }
@@ -109,10 +109,10 @@ impl Settings {
                     .iter()
                     .any(|allowed| allowed.eq_ignore_ascii_case(repo)))
     }
-    pub fn recheck(&self, override_wording: Option<&str>) -> rustovate_engine::Recheck {
+    pub fn recheck(&self, override_wording: Option<&str>) -> patchula_engine::Recheck {
         match override_wording.or(self.recheck.as_deref()) {
-            Some("next-run") => rustovate_engine::Recheck::NextRun,
-            _ => rustovate_engine::Recheck::Now,
+            Some("next-run") => patchula_engine::Recheck::NextRun,
+            _ => patchula_engine::Recheck::Now,
         }
     }
 }
@@ -213,14 +213,14 @@ impl Reload {
         match result {
             Ok(settings) => {
                 if !state.valid || settings != state.settings {
-                    tracing::info!(target: "rustovate_server", "server settings loaded");
+                    tracing::info!(target: "patchula_server", "server settings loaded");
                 }
                 state.settings = settings;
                 state.valid = true;
             }
             Err(_) => {
                 if state.valid {
-                    tracing::error!(target: "rustovate_server", "server settings rejected; keeping last good settings; run config check-server for diagnostics");
+                    tracing::error!(target: "patchula_server", "server settings rejected; keeping last good settings; run config check-server for diagnostics");
                 }
                 state.valid = false;
             }
@@ -236,11 +236,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("server.pkl");
         let parent = dir.path().join("parent.pkl");
-        std::fs::write(&parent, "amends \"RustovateServer.pkl\"\nconcurrency = 3\n").unwrap();
+        std::fs::write(&parent, "amends \"PatchulaServer.pkl\"\nconcurrency = 3\n").unwrap();
         std::fs::write(&path, format!("amends \"{}\"\n", parent.display())).unwrap();
         assert_eq!(Settings::load(&path).unwrap().concurrency, 3);
         // An absolute schema path works both with a real file and bundled fallback.
-        let schema = dir.path().join("RustovateServer.pkl");
+        let schema = dir.path().join("PatchulaServer.pkl");
         for vendored in [false, true] {
             if vendored {
                 std::fs::write(&schema, SCHEMA).unwrap();
@@ -258,7 +258,7 @@ mod tests {
             "unknownSetting = true",
             "sweepCron = \"invalid\"",
         ] {
-            std::fs::write(&path, format!("amends \"RustovateServer.pkl\"\n{body}\n")).unwrap();
+            std::fs::write(&path, format!("amends \"PatchulaServer.pkl\"\n{body}\n")).unwrap();
             let diagnostic = format!("{:?}", Settings::load(&path).unwrap_err());
             assert!(diagnostic.contains("server.pkl"), "{diagnostic}");
             assert!(
@@ -272,11 +272,11 @@ mod tests {
     fn reload_keeps_last_good_settings_and_recovers() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("server.pkl");
-        let source = "amends \"RustovateServer.pkl\"\nconcurrency = 3\n";
+        let source = "amends \"PatchulaServer.pkl\"\nconcurrency = 3\n";
         std::fs::write(&path, source).unwrap();
         let settings = Settings::load(&path).unwrap();
         let reload = Reload::new(settings);
-        std::fs::write(&path, "amends \"RustovateServer.pkl\"\nconcurrency = 0\n").unwrap();
+        std::fs::write(&path, "amends \"PatchulaServer.pkl\"\nconcurrency = 0\n").unwrap();
         reload.refresh(&path);
         assert!(!reload.valid());
         assert_eq!(reload.current().concurrency, 3);
@@ -286,7 +286,7 @@ mod tests {
         assert_eq!(reload.current().concurrency, 5);
         std::fs::write(
             &path,
-            "amends \"RustovateServer.pkl\"\nwebhookSecret = \"forbidden\"\n",
+            "amends \"PatchulaServer.pkl\"\nwebhookSecret = \"forbidden\"\n",
         )
         .unwrap();
         assert!(Settings::load(&path).is_err());

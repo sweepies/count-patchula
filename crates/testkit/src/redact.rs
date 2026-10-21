@@ -1,7 +1,7 @@
 use crate::{Body, failure};
+use patchula_http::Error;
 use regex::Regex;
 use reqwest::Url;
-use rustovate_http::Error;
 use serde_json::Value;
 
 const MARKER: &str = "[REDACTED]";

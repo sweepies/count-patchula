@@ -1,5 +1,5 @@
 use super::*;
-use rustovate_http::CacheError;
+use patchula_http::CacheError;
 
 fn encode(catalog: &Catalog) -> std::result::Result<Vec<u8>, CacheError> {
     serde_json::to_vec(catalog).map_err(|_| CacheError::Document)

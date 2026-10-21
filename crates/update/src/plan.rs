@@ -1,6 +1,6 @@
-use rustovate_config::Config;
-use rustovate_manager::{Dependency, Edit, word};
-use rustovate_report::{ActionStatus, BranchAction, FileAction, Repository, Update};
+use patchula_config::Config;
+use patchula_manager::{Dependency, Edit, word};
+use patchula_report::{ActionStatus, BranchAction, FileAction, Repository, Update};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -99,7 +99,7 @@ pub fn plan(
     allow_pending: bool,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Vec<Plan>, String> {
-    let evaluator = rustovate_lookup::Evaluator::new(config)?;
+    let evaluator = patchula_lookup::Evaluator::new(config)?;
     let mut package_names = BTreeMap::<String, BTreeSet<(String, String)>>::new();
     for dep in dependencies {
         package_names
@@ -224,7 +224,7 @@ pub fn plan(
 fn build(
     repo: &Repository,
     config: &Config,
-    evaluator: &rustovate_lookup::Evaluator,
+    evaluator: &patchula_lookup::Evaluator,
     snapshot: &Snapshot,
     allow_pending: bool,
     now: chrono::DateTime<chrono::Utc>,
@@ -279,7 +279,7 @@ fn build(
             reason = Some(format!("unsupported manifest mode {}", blob.mode));
             continue;
         }
-        match rustovate_manager::edits(dep, &blob.content, value, update.new_digest.as_deref()) {
+        match patchula_manager::edits(dep, &blob.content, value, update.new_digest.as_deref()) {
             Ok(edits) => changes.entry(dep.file.clone()).or_default().extend(edits),
             Err(error) => reason = Some(format!("{}: {error}", dep.file)),
         }
@@ -300,7 +300,7 @@ fn build(
     let mut files = Vec::new();
     for (path, edits) in changes {
         let blob = &snapshot.files[&path];
-        match rustovate_manager::apply(&blob.content, edits) {
+        match patchula_manager::apply(&blob.content, edits) {
             Ok(content) if content != blob.content => {
                 files.push(FileAction {
                     path: path.clone(),
@@ -396,7 +396,7 @@ fn build(
 }
 
 pub(crate) fn in_window(
-    windows: &[rustovate_report::Window],
+    windows: &[patchula_report::Window],
     now: chrono::DateTime<chrono::Utc>,
 ) -> bool {
     use std::str::FromStr;
@@ -473,7 +473,7 @@ fn slug(value: &str) -> String {
 fn manager_slug(dep: &Dependency) -> String {
     if matches!(
         dep.source,
-        rustovate_config::Source::Docker | rustovate_config::Source::Oci
+        patchula_config::Source::Docker | patchula_config::Source::Oci
     ) {
         "docker".into()
     } else {
@@ -481,21 +481,21 @@ fn manager_slug(dep: &Dependency) -> String {
     }
 }
 fn proposal_order(dep: &Dependency, a: &Update, b: &Update) -> std::cmp::Ordering {
-    use rustovate_versioning::Versioning;
+    use patchula_versioning::Versioning;
     let value = |u: &Update| {
         u.new_version
             .clone()
             .or_else(|| u.new_value.clone())
             .unwrap_or_else(|| dep.current.clone())
     };
-    if let Ok(scheme) = rustovate_lookup::scheme(dep)
+    if let Ok(scheme) = patchula_lookup::scheme(dep)
         && let (Ok(a), Ok(b)) = (scheme.parse(&value(a)), scheme.parse(&value(b)))
     {
         return scheme.order(&a, &b);
     }
     value(a).cmp(&value(b))
 }
-fn line(dep: &Dependency, reported: &rustovate_report::Dependency, update: &Update) -> String {
+fn line(dep: &Dependency, reported: &patchula_report::Dependency, update: &Update) -> String {
     let value = if update.update_type == "major" {
         update
             .new_version
@@ -521,7 +521,7 @@ fn line(dep: &Dependency, reported: &rustovate_report::Dependency, update: &Upda
     // Keep container variants independent while sharing the numeric major line.
     let variant = if matches!(
         dep.source,
-        rustovate_config::Source::Docker | rustovate_config::Source::Oci
+        patchula_config::Source::Docker | patchula_config::Source::Oci
     ) {
         dep.current
             .split_once('-')
@@ -544,7 +544,7 @@ pub fn batch_plan(
     allow_pending: bool,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Option<Plan>, String> {
-    let evaluator = rustovate_lookup::Evaluator::new(config)?;
+    let evaluator = patchula_lookup::Evaluator::new(config)?;
     let mut pending = Vec::new();
     for target in targets {
         let candidates: Vec<_> = dependencies

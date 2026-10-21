@@ -1,9 +1,9 @@
-use rustovate_config::{DependencyKind, Manager, Scheme, Source};
-use rustovate_datasource::{Catalog, Version};
-use rustovate_lookup::Evaluator;
-use rustovate_manager::{Dependency, Location};
-fn config(name: &str) -> rustovate_config::Config {
-    rustovate_config::load(
+use patchula_config::{DependencyKind, Manager, Scheme, Source};
+use patchula_datasource::{Catalog, Version};
+use patchula_lookup::Evaluator;
+use patchula_manager::{Dependency, Location};
+fn config(name: &str) -> patchula_config::Config {
+    patchula_config::load(
         &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join(format!("../../examples/{name}.pkl")),
     )
@@ -141,7 +141,7 @@ fn satisfying_provider_constraints_and_cargo_floors_are_retained() {
 
 #[test]
 fn node_lts_is_explicit_uses_catalog_evidence_and_respects_ordered_rules() {
-    use rustovate_config::ReleaseChannel;
+    use patchula_config::ReleaseChannel;
     let mut cfg = config("benchmark-public");
     let mut dep = dependency("node");
     dep.manager = Manager::Mise;
@@ -270,9 +270,9 @@ fn action_digest_targets_resolve_the_new_commit_without_expanding_ref_precision(
 #[test]
 fn prefixed_mise_product_releases_pin_latest_without_sdk_tags() {
     let cfg = config("benchmark-public");
-    let dependencies = rustovate_manager::Scanner::new(&cfg)
+    let dependencies = patchula_manager::Scanner::new(&cfg)
         .unwrap()
-        .extract(&rustovate_manager::Files::from([(
+        .extract(&patchula_manager::Files::from([(
             "mise.toml".into(),
             "[tools]\njq = \"latest\"\nbitwarden-secrets-manager = \"latest\"\n".into(),
         )]))
@@ -445,7 +445,7 @@ fn rules_replace_lists_in_order_and_windows_are_reported() {
     rule.apply.group = Some("early".into());
     rule.apply.wait_hours = Some(12);
     rule.apply.permitted = Some("semver:<2.0.0".into());
-    rule.apply.windows = Some(vec![rustovate_config::Window {
+    rule.apply.windows = Some(vec![patchula_config::Window {
         cron: vec!["0 9 * * 1".into()],
         zone: "UTC".into(),
     }]);
@@ -509,12 +509,12 @@ fn floating_dist_tags_and_latest_tools_can_be_pinned() {
 #[test]
 fn extracted_reusable_workflow_matches_runner_digest_opt_out() {
     let config = config("renovate-runner");
-    let files = rustovate_manager::Files::from([(
+    let files = patchula_manager::Files::from([(
         ".github/workflows/test.yml".into(),
         "jobs:\n  build:\n    uses: sweepies/ops-workflows/.github/workflows/build.yml@main\n"
             .into(),
     )]);
-    let extracted = rustovate_manager::Scanner::new(&config)
+    let extracted = patchula_manager::Scanner::new(&config)
         .unwrap()
         .extract(&files)
         .unwrap();
@@ -738,9 +738,9 @@ fn floating_targets_fall_back_and_existing_lock_pins_survive_age_gate() {
 #[test]
 fn runner_latest_is_floating_and_versioned_images_never_get_digests() {
     let config = config("renovate-runner");
-    let deps = rustovate_manager::Scanner::new(&config)
+    let deps = patchula_manager::Scanner::new(&config)
         .unwrap()
-        .extract(&rustovate_manager::Files::from([(
+        .extract(&patchula_manager::Files::from([(
             ".github/workflows/ci.yml".into(),
             "jobs:\n  a:\n    runs-on: ubuntu-latest\n  b:\n    runs-on: ubuntu-22.04\n".into(),
         )]))
@@ -758,9 +758,9 @@ fn runner_latest_is_floating_and_versioned_images_never_get_digests() {
 #[test]
 fn mise_current_versions_follow_backend_tag_identity_without_proposal_filters() {
     let cfg = config("renovate-runner");
-    let deps = rustovate_manager::Scanner::new(&cfg)
+    let deps = patchula_manager::Scanner::new(&cfg)
         .unwrap()
-        .extract(&rustovate_manager::Files::from([(
+        .extract(&patchula_manager::Files::from([(
             "mise.toml".into(),
             "[tools]\nage = \"1.2.3\"\nfnox = \"2.3.4\"\nbun = \"3.4.5\"\n".into(),
         )]))
@@ -776,7 +776,7 @@ fn mise_current_versions_follow_backend_tag_identity_without_proposal_filters() 
         catalog.versions[0].published_at = Some("2099-01-01T00:00:00Z".into());
         catalog.versions[0].yanked = true;
         assert_eq!(
-            rustovate_lookup::resolved_tool_version(dep, &catalog).as_deref(),
+            patchula_lookup::resolved_tool_version(dep, &catalog).as_deref(),
             Some(expected)
         );
     }
@@ -799,7 +799,7 @@ fn floating_action_aliases_resolve_by_commit_and_keep_comment_precision() {
     versions.versions[4].digest = Some("d".repeat(40));
     versions.versions[5].digest = Some("d".repeat(40));
     assert_eq!(
-        rustovate_lookup::resolved_current_version(&dep, &versions).as_deref(),
+        patchula_lookup::resolved_current_version(&dep, &versions).as_deref(),
         Some("v2.4.2")
     );
     let proposals = eval.propose(&dep, &versions).unwrap();
@@ -812,7 +812,7 @@ fn floating_action_aliases_resolve_by_commit_and_keep_comment_precision() {
     assert_eq!(major.new_value.as_deref(), Some("v3"));
     assert_eq!(major.new_version.as_deref(), Some("v3.2.1"));
     dep.digest = Some("e".repeat(40));
-    assert!(rustovate_lookup::resolved_current_version(&dep, &versions).is_none());
+    assert!(patchula_lookup::resolved_current_version(&dep, &versions).is_none());
 }
 
 #[test]
@@ -879,7 +879,7 @@ fn numeric_mise_selectors_resolve_the_release_line_without_fake_zero_patches() {
     dep.resolved = Some("24".into());
     let versions = catalog(&["24.0.1", "24.6.2", "26.1.0"]);
     assert_eq!(
-        rustovate_lookup::resolved_current_version(&dep, &versions).as_deref(),
+        patchula_lookup::resolved_current_version(&dep, &versions).as_deref(),
         Some("24.6.2")
     );
     let p = Evaluator::new(&config("renovate-runner"))
@@ -893,11 +893,11 @@ fn numeric_mise_selectors_resolve_the_release_line_without_fake_zero_patches() {
 #[test]
 fn runtime_support_intervals_are_observed_without_spurious_exact_pins() {
     let cfg = config("renovate-runner");
-    let files = rustovate_manager::Files::from([(
+    let files = patchula_manager::Files::from([(
         "package.json".into(),
         r#"{"engines":{"node":">=22 <27"}}"#.into(),
     )]);
-    let deps = rustovate_manager::Scanner::new(&cfg)
+    let deps = patchula_manager::Scanner::new(&cfg)
         .unwrap()
         .extract(&files)
         .unwrap()
@@ -907,7 +907,7 @@ fn runtime_support_intervals_are_observed_without_spurious_exact_pins() {
     assert_eq!(dep.location.pointer, "/engines/node");
     let versions = catalog(&["22.1.0", "24.2.0", "26.3.0", "27.0.0"]);
     assert_eq!(
-        rustovate_lookup::resolved_current_version(dep, &versions).as_deref(),
+        patchula_lookup::resolved_current_version(dep, &versions).as_deref(),
         Some("26.3.0")
     );
     assert!(
@@ -942,7 +942,7 @@ fn pyproject_pins_move_poetry_ranges_keep_form_and_satisfied_ranges_wait() {
     // refreshes it.
     dep.current = ">=0.6".into();
     let mut preserve = cfg.clone();
-    preserve.defaults.versions = rustovate_config::VersionPolicy::Preserve;
+    preserve.defaults.versions = patchula_config::VersionPolicy::Preserve;
     let eval = Evaluator::new(&preserve).unwrap();
     let open = eval.propose(&dep, &releases).unwrap();
     assert!(

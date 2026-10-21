@@ -153,7 +153,7 @@ existing Markdown destinations, reference definitions and autolinks) use
 [Avoiding backlinks to linked references](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/autolinked-references-and-urls#avoiding-backlinks-to-linked-references):
 it prevents cross-reference backlinks, and also removes hover previews. This
 deliberate departure avoids upstream timeline noise from public update PRs.
-GitHub notes that this mechanism is unavailable for `ghe.com`; rustovate's
+GitHub notes that this mechanism is unavailable for `ghe.com`; patchula's
 rewrite is limited to `github.com` reference URLs. Source, compare, release and
 changelog links retain their original hosts, as do URLs shown inside code.
 
@@ -175,7 +175,7 @@ captures remain verbatim; offline tests explicitly project their fields into
 simulated GraphQL responses. These are not recorded GraphQL evidence. Independent
 fixtures assert alias batching, timestamp-only warm queries, changed/deleted
 release handling and cache reuse after reopening SQLite. Refresh through mise
-with `GH_TOKEN=$(gh auth token)` and `RUSTOVATE_RECORD=1`, then run
+with `GH_TOKEN=$(gh auth token)` and `PATCHULA_RECORD=1`, then run
 `mise run fixtures:check`; normal tests never construct a network client.
 
 Upstreams that publish their notes outside GitHub releases have explicit

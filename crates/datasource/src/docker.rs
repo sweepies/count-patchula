@@ -1,6 +1,6 @@
 use super::*;
+use patchula_cache::{HttpEntry, HttpKey};
 use reqwest::{Method, Url};
-use rustovate_cache::{HttpEntry, HttpKey};
 use std::{
     collections::HashSet,
     sync::Arc,
@@ -22,15 +22,15 @@ fn validate_digest(digest: &str) -> Result<()> {
         Err(Error::Invalid)
     }
 }
-fn compact_source_labels(bytes: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheError> {
+fn compact_source_labels(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     let value: Value =
-        serde_json::from_slice(bytes).map_err(|_| rustovate_http::CacheError::Document)?;
+        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
     let labels = &value["config"]["Labels"];
     serde_json::to_vec(&serde_json::json!({
         "org.opencontainers.image.source": labels["org.opencontainers.image.source"],
         "org.opencontainers.image.version": labels["org.opencontainers.image.version"]
     }))
-    .map_err(|_| rustovate_http::CacheError::Document)
+    .map_err(|_| patchula_http::CacheError::Document)
 }
 
 fn now() -> i64 {
@@ -47,14 +47,14 @@ fn token_key(host: &str, path: &str) -> Result<HttpKey> {
     )?
     .representation("anonymous-registry-pull-token-v1"))
 }
-fn compact_tags(body: &[u8]) -> std::result::Result<Vec<u8>, rustovate_http::CacheError> {
+fn compact_tags(body: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     #[derive(Deserialize, Serialize)]
     struct Page {
         tags: Option<Vec<String>>,
     }
     let page: Page =
-        serde_json::from_slice(body).map_err(|_| rustovate_http::CacheError::Document)?;
-    serde_json::to_vec(&page).map_err(|_| rustovate_http::CacheError::Document)
+        serde_json::from_slice(body).map_err(|_| patchula_http::CacheError::Document)?;
+    serde_json::to_vec(&page).map_err(|_| patchula_http::CacheError::Document)
 }
 
 pub(super) fn identity(package: &str) -> Result<(String, String)> {
@@ -100,7 +100,7 @@ impl Client {
         url: &str,
         accept: &str,
         method: Method,
-    ) -> Result<rustovate_http::Response> {
+    ) -> Result<patchula_http::Response> {
         let scope = format!("{host}/{path}");
         let authenticated = host == "registry-1.docker.io" && self.dockerhub_credentials.is_some();
         let token = self.tokens.lock().await.entry(scope).or_default().clone();
@@ -189,7 +189,7 @@ impl Client {
                     .token_get_with_credentials(realm.as_str(), credentials)
                     .await?;
                 if !auth.status.is_success() {
-                    return Err(rustovate_http::CacheError::Status(auth.status.as_u16()).into());
+                    return Err(patchula_http::CacheError::Status(auth.status.as_u16()).into());
                 }
                 let value: Value = serde_json::from_slice(&auth.body)?;
                 let bearer = value["token"]
@@ -264,7 +264,7 @@ impl Client {
             ));
         }
         if !response.status.is_success() {
-            return Err(rustovate_http::CacheError::Status(response.status.as_u16()).into());
+            return Err(patchula_http::CacheError::Status(response.status.as_u16()).into());
         }
         let reference = if let Some((_, tag)) = url.split_once("/manifests/") {
             format!("digest:{tag}")
@@ -273,10 +273,10 @@ impl Client {
         };
         let mut stale = self.stale_registry.lock().await;
         let entries = stale.entry(format!("{host}/{path}")).or_default();
-        if response.headers.contains_key("x-rustovate-stale") {
+        if response.headers.contains_key("x-patchula-stale") {
             if let Some(time) = response
                 .headers
-                .get("x-rustovate-fetched-at")
+                .get("x-patchula-fetched-at")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.parse().ok())
             {
@@ -294,7 +294,7 @@ impl Client {
         accept: &str,
         token: Option<&str>,
         method: Method,
-    ) -> Result<rustovate_http::Response> {
+    ) -> Result<patchula_http::Response> {
         if method == Method::HEAD {
             return Ok(self.http.registry_head(url, accept, token).await?);
         }
@@ -421,10 +421,10 @@ impl Client {
             let response = self
                 .registry(&host, &path, url.as_str(), "application/json", Method::GET)
                 .await?;
-            if response.headers.contains_key("x-rustovate-stale")
+            if response.headers.contains_key("x-patchula-stale")
                 && let Some(time) = response
                     .headers
-                    .get("x-rustovate-fetched-at")
+                    .get("x-patchula-fetched-at")
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse::<i64>().ok())
             {
@@ -504,7 +504,7 @@ impl Client {
             .await
         {
             Ok(response) if response.headers.contains_key("docker-content-digest") => response,
-            Ok(_) | Err(Error::Http(rustovate_http::CacheError::Status(405 | 501))) => {
+            Ok(_) | Err(Error::Http(patchula_http::CacheError::Status(405 | 501))) => {
                 self.registry(&host, &path, &url, MANIFEST, Method::GET)
                     .await?
             }

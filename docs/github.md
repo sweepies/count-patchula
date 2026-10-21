@@ -1,14 +1,14 @@
 # GitHub client
 
-Create one `rustovate_github::Client` per batch and clone it for repository
-tasks. `Client::new` builds one shared reqwest pool through rustovate-http;
+Create one `patchula_github::Client` per batch and clone it for repository
+tasks. `Client::new` builds one shared reqwest pool through patchula-http;
 `with_transport` accepts replay without constructing a network Client. The
 caller supplies an existing token (for example, read GITHUB_TOKEN in the batch
 runner); this crate does not mint tokens or inspect the environment.
 
 reqwest 0.13 uses HTTP/2 negotiation, rustls, gzip/brotli/zstd decompression,
 10-second connect, 30-second read, 60-second total request timeouts, and a
-90-second idle pool timeout. User-Agent is `rustovate/<workspace version>`.
+90-second idle pool timeout. User-Agent is `patchula/<workspace version>`.
 The transport disables automatic protocol retries so the governor owns request
 accounting. It disables automatic redirects; REST GET follows up to ten
 same-origin redirects through the governor. Cross-origin URLs and embedded URL
@@ -22,7 +22,7 @@ Debug and errors omit tokens and bodies. Network failures discard reqwest's
 URL-bearing error details. Replay errors retain the testkit's sanitized
 method/URL diagnostic. Optional request diagnostics use an explicit allowlist of
 fields; headers, bodies and query strings never reach the logger. The CLI enables
-them with `-vv` or `RUSTOVATE_LOG=debug`, filtering out dependency HTTP logs even
+them with `-vv` or `PATCHULA_LOG=debug`, filtering out dependency HTTP logs even
 at trace level. Tests verify
 credential/body confidentiality, including rejected requests and 403 responses.
 
@@ -79,7 +79,7 @@ another; they return the stopping page too, so a cache merge can consume its
 new prefix and ignore its known suffix. Repeated/missing cursors fail instead
 of looping. The default safety budget is 1,000 pages.
 
-`fixtures/github/public-{releases,tags,graphql}.json` were recorded by rustovate
+`fixtures/github/public-{releases,tags,graphql}.json` were recorded by patchula
 from public GitHub endpoints using an existing caller token. Releases includes
 a real 200/304 exchange. Tags and GraphQL stop on the first nonempty page;
 simulated two-page cassettes prove that pagination stops at known history even

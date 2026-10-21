@@ -1,6 +1,6 @@
 # SQLite cache
 
-`rustovate-cache` uses rusqlite 0.40 with bundled SQLite. rusqlite is a mature,
+`patchula-cache` uses rusqlite 0.40 with bundled SQLite. rusqlite is a mature,
 actively maintained synchronous wrapper with transactions and explicit error
 codes; bundling avoids system SQLite version/feature drift. Zstd level 3 stores
 HTTP bodies with a small CPU cost and reuses the HTTP stack's compression

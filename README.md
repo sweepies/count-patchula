@@ -1,8 +1,8 @@
-# rustovate
+# patchula
 
 A fast dependency update bot for GitHub, written in Rust.
 
-rustovate keeps the dependencies of a set of repositories up to date: it finds
+patchula keeps the dependencies of a set of repositories up to date: it finds
 dependencies in each repository, looks up newer versions, and opens pull
 requests. It is built to run a whole batch of repositories in one short-lived
 process, so it is designed around shared caching and concurrency rather than
@@ -26,15 +26,15 @@ labels and mise registry backends are supported by read-only lookup.
 - API server and sandbox replay: [docs/server.md](docs/server.md)
 - Deliberate departures from Renovate: [docs/departures.md](docs/departures.md)
 - Batching reviewed updates into one PR: [docs/batch.md](docs/batch.md)
-- Progress: the `rustovate` project in Linear (sweepies team)
+- Progress: the `patchula` project in Linear (sweepies team)
 
 ## Package managers and speed
 
 Lockfile updates run the ecosystem's own tool, so a repository's package
-manager choice sets a floor on how fast rustovate can update it. Manifest edits
+manager choice sets a floor on how fast patchula can update it. Manifest edits
 and API commits take milliseconds; the lockfile tool usually takes seconds.
 
-rustovate is opinionated here. `pnpm-lock.yaml`, `package-lock.json` and
+patchula is opinionated here. `pnpm-lock.yaml`, `package-lock.json` and
 `npm-shrinkwrap.json` are regenerated with [aube](https://aube.sh) by default
 rather than pnpm or npm ([SWE-149](https://linear.app/sweepies/issue/SWE-149)).
 aube reads and writes both formats in place and never introduces its own
@@ -60,10 +60,10 @@ entry order still differs from Bun's.
 
 ## Clean-room rule
 
-rustovate is an independent implementation under the MIT licence. Renovate
+patchula is an independent implementation under the MIT licence. Renovate
 (AGPL-3.0) may be run as a black box to compare results, but its source code,
 preset data and test fixtures must never be read, copied or adapted into this
-repository. Fixtures are recorded from real registries by rustovate itself.
+repository. Fixtures are recorded from real registries by patchula itself.
 
 ## Development
 
@@ -83,7 +83,7 @@ mise installs them when those tasks run.
 - `mise run fixtures:record` opts into real GitHub recording with an existing
   GITHUB_TOKEN or GH_TOKEN; ordinary tests replay offline. See [HTTP tests](docs/http-testing.md).
 - `mise run docs` exports the usage derive definition to KDL and generates
-  `docs/cli.md`, `generated/rustovate.1` and bash/zsh/fish completions.
+  `docs/cli.md`, `generated/patchula.1` and bash/zsh/fish completions.
 
 The Rust mise option `mr_boxington = true` wraps Cargo with mbx. Use mise tasks
 or `mise exec -- cargo …` so builds share that cache. GitHub CI restores the
@@ -107,7 +107,7 @@ workload. CI publishes results as artifacts without benchmark gates.
 
 ## Configuration commands
 
-`mise exec -- cargo run -p rustovate-cli -- config check examples/renovate-runner.pkl`
+`mise exec -- cargo run -p patchula-cli -- config check examples/renovate-runner.pkl`
 validates a config. `config schema` prints the bundled typed Pkl schema.
 See [configuration](docs/configuration.md), [CLI reference](docs/cli.md), and
 [repository examples](examples). Use an App installation token for verified
@@ -119,16 +119,16 @@ mise run run owner/repo
 ```
 
 ```sh
-# Export RUSTOVATE_TOKEN, GITHUB_TOKEN or GH_TOKEN first.
-mise exec -- cargo run --locked -p rustovate-cli -- lookup \
-  --config examples/renovate-runner.pkl --cache /tmp/rustovate.sqlite \
-  --concurrency 8 --json owner/repo > /tmp/rustovate-report.json
+# Export PATCHULA_TOKEN, GITHUB_TOKEN or GH_TOKEN first.
+mise exec -- cargo run --locked -p patchula-cli -- lookup \
+  --config examples/renovate-runner.pkl --cache /tmp/patchula.sqlite \
+  --concurrency 8 --json owner/repo > /tmp/patchula-report.json
 ```
 
 Omit repository arguments to discover accessible repositories. With no local
-override, `.github/rustovate.pkl` takes precedence over `rustovate.pkl`; repositories
+override, `.github/patchula.pkl` takes precedence over `patchula.pkl`; repositories
 with neither are skipped. Unavailable upstream identities produce report warnings.
-`-vv` or `RUSTOVATE_LOG=debug` enables sanitized per-request and phase diagnostics
+`-vv` or `PATCHULA_LOG=debug` enables sanitized per-request and phase diagnostics
 on stderr. See [live benchmarks](docs/benchmarks.md#live-network-investigation-2026-10-15)
 for fields, measured limits and cold/warm reproduction commands.
 See [extraction](docs/managers.md), [sources](docs/datasources.md),

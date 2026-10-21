@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "provenance": "Simulated by rustovate for offline pagination/error tests; no external fixture source",
+  "provenance": "Simulated by patchula for offline pagination/error tests; no external fixture source",
   "interactions": [
     {
       "request": {

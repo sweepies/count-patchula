@@ -1,4 +1,4 @@
-amends "../Rustovate.pkl"
+amends "../Patchula.pkl"
 
 prs { branch = "renovate/" }
 extractors = new Listing {

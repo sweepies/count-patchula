@@ -1,9 +1,9 @@
 //! Offline, fixed-workload GitHub/cache benchmark. No live transport is created.
 #![forbid(unsafe_code)]
 
-use rustovate_cache::{Cache, HttpEntry, HttpKey, Options as CacheOptions};
-use rustovate_github::{Client, Options};
-use rustovate_testkit::{Options as FixtureOptions, Replay};
+use patchula_cache::{Cache, HttpEntry, HttpKey, Options as CacheOptions};
+use patchula_github::{Client, Options};
+use patchula_testkit::{Options as FixtureOptions, Replay};
 use std::{collections::BTreeMap, hint::black_box, path::Path, sync::Arc};
 
 #[tokio::main(flavor = "current_thread")]

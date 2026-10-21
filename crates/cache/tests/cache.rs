@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use rustovate_cache::{Cache, ExtractionKey, HttpEntry, HttpKey, Options, Release};
+use patchula_cache::{Cache, ExtractionKey, HttpEntry, HttpKey, Options, Release};
 use std::collections::BTreeMap;
 
 fn key(name: &str) -> HttpKey {
@@ -340,7 +340,7 @@ async fn future_schema_is_preserved_instead_of_being_treated_as_corruption() {
     }
     assert!(matches!(
         Cache::open(&path, Options::default()).await,
-        Err(rustovate_cache::Error::FutureSchema(99))
+        Err(patchula_cache::Error::FutureSchema(99))
     ));
     let conn = rusqlite::Connection::open(path).unwrap();
     assert_eq!(

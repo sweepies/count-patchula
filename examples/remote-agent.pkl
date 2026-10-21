@@ -1,4 +1,4 @@
-amends "../Rustovate.pkl"
+amends "../Patchula.pkl"
 
 managers = new Listing { "npm"; "regex" }
 prs { dashboard = true }

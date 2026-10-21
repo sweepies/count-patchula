@@ -122,7 +122,7 @@ pub struct PackageFile {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Dependency {
-    /// Canonical rustovate manager identifier; unknown upstream names stay literal.
+    /// Canonical patchula manager identifier; unknown upstream names stay literal.
     pub manager: String,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -523,7 +523,7 @@ mod tests {
             "schemaVersion": 2,
             "repositories": [{"repository":"demo/app","status":"complete","reason":null,"packageFiles":[]}],
             "actions": {"schemaVersion":1,"dryRun":true,"branches":[{
-                "repository":"demo/app","branch":"rustovate/example","baseCommit":"base",
+                "repository":"demo/app","branch":"patchula/example","baseCommit":"base",
                 "status":"planned","reason":null,"message":"update example","previousCommit":null,
                 "commit":null,"verified":null,"lockfilePending":false,"files":[]
             }]}

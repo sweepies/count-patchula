@@ -1,11 +1,11 @@
 //! Public source evidence. Normal execution is strictly offline replay.
 #![forbid(unsafe_code)]
 mod support;
-use rustovate_cache::Cache;
-use rustovate_config::Source;
-use rustovate_datasource::Client;
-use rustovate_http::{Cached, Exchange, Network, Response, Transport};
-use rustovate_testkit::{Options, Redactor};
+use patchula_cache::Cache;
+use patchula_config::Source;
+use patchula_datasource::Client;
+use patchula_http::{Cached, Exchange, Network, Response, Transport};
+use patchula_testkit::{Options, Redactor};
 use std::{path::Path, sync::Arc};
 
 /// Existing captures remain verbatim REST evidence. During offline replay,
@@ -43,7 +43,7 @@ fn release_replay(inner: Arc<dyn Transport>, path: &Path, recording: bool) -> Ar
     if recording {
         return inner;
     }
-    let cassette: rustovate_testkit::Cassette =
+    let cassette: patchula_testkit::Cassette =
         serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     if cassette
         .interactions
@@ -57,7 +57,7 @@ fn release_replay(inner: Arc<dyn Transport>, path: &Path, recording: bool) -> Ar
     for entry in cassette.interactions {
         if entry.request.url.contains("/releases/tags/")
             && entry.response.status == 200
-            && let rustovate_testkit::Body::Json(body) = entry.response.body
+            && let patchula_testkit::Body::Json(body) = entry.response.body
         {
             releases.entry(entry.request.url).or_insert(body);
         }
@@ -67,7 +67,7 @@ fn release_replay(inner: Arc<dyn Transport>, path: &Path, recording: bool) -> Ar
 
 #[tokio::test]
 async fn public_note_sources_and_release_range() {
-    let recording = std::env::var("RUSTOVATE_RECORD").as_deref() == Ok("1");
+    let recording = std::env::var("PATCHULA_RECORD").as_deref() == Ok("1");
     let token = if recording {
         std::env::var("GH_TOKEN").expect("recording requires GH_TOKEN")
     } else {
@@ -75,7 +75,7 @@ async fn public_note_sources_and_release_range() {
     };
     let path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/datasource/public-notes.json");
-    let transport = rustovate_testkit::from_env(
+    let transport = patchula_testkit::from_env(
         &path,
         Options {
             redactor: Redactor::default().with_literals([token.clone()]),
@@ -89,7 +89,7 @@ async fn public_note_sources_and_release_range() {
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await
         .unwrap();
-    let github = rustovate_github::Client::with_transport(
+    let github = patchula_github::Client::with_transport(
         &token,
         cache.clone(),
         Default::default(),
@@ -158,7 +158,7 @@ async fn public_note_sources_and_release_range() {
 
 #[tokio::test]
 async fn public_sandbox_note_ranges() {
-    let recording = std::env::var("RUSTOVATE_RECORD").as_deref() == Ok("1");
+    let recording = std::env::var("PATCHULA_RECORD").as_deref() == Ok("1");
     let token = if recording {
         std::env::var("GH_TOKEN").expect("recording requires GH_TOKEN")
     } else {
@@ -221,7 +221,7 @@ async fn public_sandbox_note_ranges() {
         ),
     ] {
         let path = root.join(format!("notes-{fixture}.json"));
-        let transport = rustovate_testkit::from_env(
+        let transport = patchula_testkit::from_env(
             &path,
             Options {
                 redactor: Redactor::default().with_literals([token.clone()]),
@@ -235,7 +235,7 @@ async fn public_sandbox_note_ranges() {
         let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
             .await
             .unwrap();
-        let github = rustovate_github::Client::with_transport(
+        let github = patchula_github::Client::with_transport(
             &token,
             cache.clone(),
             Default::default(),
@@ -269,7 +269,7 @@ async fn public_sandbox_note_ranges() {
                 http.stats().requests
             );
             if recording {
-                std::fs::write(format!("/tmp/rustovate-notes-{fixture}-{target}.txt"), text)
+                std::fs::write(format!("/tmp/patchula-notes-{fixture}-{target}.txt"), text)
                     .unwrap();
             }
         }

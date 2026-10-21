@@ -2,17 +2,17 @@
 #![forbid(unsafe_code)]
 mod catalogs;
 mod overrides;
-pub use rustovate_update::Recheck;
+pub use patchula_update::Recheck;
 
 use futures_util::{StreamExt, stream};
-use rustovate_cache::{Cache, ExtractionKey};
-use rustovate_config::{Config, Manager, Source};
-use rustovate_datasource::Client as Sources;
-use rustovate_github::{Client as Github, Options as GithubOptions};
-use rustovate_http::{Cached, PhaseTrace, Transport};
-use rustovate_lookup::{Evaluation, Evaluator};
-use rustovate_manager::{Dependency, Extraction, Files, Scanner, word};
-use rustovate_report::{
+use patchula_cache::{Cache, ExtractionKey};
+use patchula_config::{Config, Manager, Source};
+use patchula_datasource::Client as Sources;
+use patchula_github::{Client as Github, Options as GithubOptions};
+use patchula_http::{Cached, PhaseTrace, Transport};
+use patchula_lookup::{Evaluation, Evaluator};
+use patchula_manager::{Dependency, Extraction, Files, Scanner, word};
+use patchula_report::{
     Current, Dependency as ReportDependency, PackageFile, Report, Repository, SCHEMA_VERSION,
     Status,
 };
@@ -35,13 +35,13 @@ pub enum Error {
     #[error("{0}")]
     Configuration(String),
     #[error(transparent)]
-    Github(#[from] rustovate_github::Error),
+    Github(#[from] patchula_github::Error),
     #[error(transparent)]
-    Cache(#[from] rustovate_cache::Error),
+    Cache(#[from] patchula_cache::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
-    Report(#[from] rustovate_report::Error),
+    Report(#[from] patchula_report::Error),
 }
 pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Default)]
@@ -51,7 +51,7 @@ pub struct Options {
     pub config_dir: Option<std::path::PathBuf>,
 }
 pub struct Engine {
-    lockfiles: Option<rustovate_update::lockfiles::Runner>,
+    lockfiles: Option<patchula_update::lockfiles::Runner>,
     github: Github,
     http: Cached,
     sources: Sources,
@@ -65,14 +65,14 @@ struct Work {
     report: Repository,
     config: Option<Config>,
     dependencies: Vec<Dependency>,
-    snapshot: rustovate_update::Snapshot,
-    inventory: Option<rustovate_update::Inventory>,
-    controls: rustovate_update::dashboard::Controls,
+    snapshot: patchula_update::Snapshot,
+    inventory: Option<patchula_update::Inventory>,
+    controls: patchula_update::dashboard::Controls,
 }
 #[derive(Serialize, Deserialize)]
 struct CachedExtraction {
     extraction: Extraction,
-    snapshot: rustovate_update::Snapshot,
+    snapshot: patchula_update::Snapshot,
 }
 #[derive(Clone, Deserialize)]
 struct Entry {
@@ -88,7 +88,7 @@ fn file_mode() -> String {
 }
 
 type LookupKey = (String, String);
-type Catalogs = BTreeMap<LookupKey, std::result::Result<rustovate_datasource::Catalog, String>>;
+type Catalogs = BTreeMap<LookupKey, std::result::Result<patchula_datasource::Catalog, String>>;
 pub const REPOSITORY_HEAD_QUERY: &str = "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){isPrivate defaultBranchRef{name target{... on Commit{oid tree{oid}}}}}}";
 #[derive(Default, Serialize, Deserialize)]
 struct LookupHint {
@@ -99,7 +99,7 @@ struct LookupHint {
 impl Engine {
     /// Long-lived installation engine using the same batch path as caller-token runs.
     pub fn with_credentials(
-        credentials: Arc<dyn rustovate_github::Credentials>,
+        credentials: Arc<dyn patchula_github::Credentials>,
         cache: Cache,
         concurrency: usize,
         transport: Arc<dyn Transport>,
@@ -118,7 +118,7 @@ impl Engine {
         )?;
         engine.sources = Sources::new(engine.github.clone(), engine.http.clone(), cache.clone());
         engine.lockfiles = cache.workspace_dir().map(|path| {
-            rustovate_update::lockfiles::Runner::new(path.into(), "").with_credentials(credentials)
+            patchula_update::lockfiles::Runner::new(path.into(), "").with_credentials(credentials)
         });
         Ok(engine)
     }
@@ -152,7 +152,7 @@ impl Engine {
         cache: Cache,
         concurrency: usize,
         transport: Arc<dyn Transport>,
-        http_options: rustovate_http::Options,
+        http_options: patchula_http::Options,
     ) -> Result<Self> {
         if concurrency == 0 || concurrency > 100 {
             return Err(Error::Invalid("concurrency must be 1..100".into()));
@@ -171,7 +171,7 @@ impl Engine {
         let sources = Sources::new(github.clone(), http.clone(), cache.clone());
         let lockfiles = cache
             .workspace_dir()
-            .map(|path| rustovate_update::lockfiles::Runner::new(path.into(), token));
+            .map(|path| patchula_update::lockfiles::Runner::new(path.into(), token));
         Ok(Self {
             lockfiles,
             github,
@@ -184,7 +184,7 @@ impl Engine {
             versions_host_override: None,
         })
     }
-    pub fn with_lockfile_runner(mut self, runner: rustovate_update::lockfiles::Runner) -> Self {
+    pub fn with_lockfile_runner(mut self, runner: patchula_update::lockfiles::Runner) -> Self {
         self.lockfiles = Some(runner);
         self
     }
@@ -206,7 +206,7 @@ impl Engine {
     async fn lookup_key(
         sources: &Sources,
         key: &LookupKey,
-    ) -> std::result::Result<rustovate_datasource::Catalog, String> {
+    ) -> std::result::Result<patchula_datasource::Catalog, String> {
         let (enabled, source) = key.0.split_once(':').ok_or("invalid catalog key")?;
         let sources = sources.clone().with_versions_host(enabled == "true");
         if source == "mise-tool" {
@@ -270,7 +270,7 @@ impl Engine {
                 continue;
             }
             let inventory = work.inventory;
-            let plans = rustovate_update::plan(
+            let plans = patchula_update::plan(
                 repo,
                 &config,
                 &work.dependencies,
@@ -287,10 +287,10 @@ impl Engine {
                 }
             };
             if let Some(mut maintenance) =
-                rustovate_update::lockfiles::maintenance(repo, &config, &work.snapshot, now)
+                patchula_update::lockfiles::maintenance(repo, &config, &work.snapshot, now)
                     .map_err(Error::Invalid)?
             {
-                rustovate_update::lockfiles::defer_completed_refresh(
+                patchula_update::lockfiles::defer_completed_refresh(
                     &self.cache,
                     &mut maintenance,
                     &config,
@@ -303,7 +303,7 @@ impl Engine {
             if !dry_run {
                 work.controls.apply(&mut plans, &work.dependencies);
                 let open = inventory.as_ref().expect("write inventory");
-                match rustovate_update::batch::apply(
+                match patchula_update::batch::apply(
                     &mut plans,
                     repo,
                     &config,
@@ -321,7 +321,7 @@ impl Engine {
                         continue;
                     }
                 }
-                let restored = rustovate_update::restore_inventory(
+                let restored = patchula_update::restore_inventory(
                     &self.cache,
                     repo,
                     &config,
@@ -333,7 +333,7 @@ impl Engine {
                 match restored {
                     Ok(true) => {
                         let inventory = inventory.as_ref().expect("write inventory");
-                        let merge_actions = rustovate_update::automerge::reconcile(
+                        let merge_actions = patchula_update::automerge::reconcile(
                             &self.github,
                             &self.cache,
                             repo,
@@ -346,24 +346,24 @@ impl Engine {
                         if merge_actions.iter().any(|a| {
                             matches!(
                                 a.status,
-                                rustovate_report::ActionStatus::Error
-                                    | rustovate_report::ActionStatus::Protected
+                                patchula_report::ActionStatus::Error
+                                    | patchula_report::ActionStatus::Protected
                             )
                         }) {
                             repo.status = Status::Error;
                             repo.reason =
                                 Some("auto-merge failed or was protected; inspect actions".into());
                         }
-                        if let Err(error) = rustovate_update::dashboard::reconcile(
+                        if let Err(error) = patchula_update::dashboard::reconcile(
                             &self.github,
                             &self.cache,
                             repo,
                             &config,
                             inventory,
-                            rustovate_update::dashboard::render(
+                            patchula_update::dashboard::render(
                                 repo,
                                 &plans,
-                                &rustovate_update::automerge::dashboard_prs(
+                                &patchula_update::automerge::dashboard_prs(
                                     inventory,
                                     &repo.repository,
                                     &plans,
@@ -384,12 +384,12 @@ impl Engine {
                                 })
                                 .filter_map(|p| {
                                     p.cached_pr.as_ref().map(|pr| {
-                                        rustovate_report::PullRequestAction {
+                                        patchula_report::PullRequestAction {
                                             repository: repo.repository.clone(),
                                             branch: p.action.branch.clone(),
                                             number: pr["number"].as_u64(),
                                             url: pr["html_url"].as_str().map(str::to_owned),
-                                            status: rustovate_report::ActionStatus::Unchanged,
+                                            status: patchula_report::ActionStatus::Unchanged,
                                             reason: None,
                                         }
                                     })
@@ -411,13 +411,13 @@ impl Engine {
                 pull_requests.extend(
                     plans
                         .iter()
-                        .filter(|p| p.action.status == rustovate_report::ActionStatus::Planned)
-                        .map(|p| rustovate_report::PullRequestAction {
+                        .filter(|p| p.action.status == patchula_report::ActionStatus::Planned)
+                        .map(|p| patchula_report::PullRequestAction {
                             repository: repo.repository.clone(),
                             branch: p.action.branch.clone(),
                             number: None,
                             url: None,
-                            status: rustovate_report::ActionStatus::Planned,
+                            status: patchula_report::ActionStatus::Planned,
                             reason: Some(
                                 "create or reconcile after authoritative live inventory".into(),
                             ),
@@ -425,7 +425,7 @@ impl Engine {
                 );
                 None
             } else {
-                match rustovate_update::Lifecycle::prepare_with_controls(
+                match patchula_update::Lifecycle::prepare_with_controls(
                     &self.github,
                     repo,
                     &mut plans,
@@ -457,10 +457,10 @@ impl Engine {
                 for plan in &mut plans {
                     if let Some(runner) = &self.lockfiles {
                         runner.prepare(plan, &mut work.snapshot, &config).await;
-                    } else if plan.action.status == rustovate_report::ActionStatus::Planned
+                    } else if plan.action.status == patchula_report::ActionStatus::Planned
                         && !plan.lockfiles_ready
                     {
-                        plan.action.status = rustovate_report::ActionStatus::Error;
+                        plan.action.status = patchula_report::ActionStatus::Error;
                         plan.action.reason = Some(
                             "lockfile generation requires a disk cache or an injected runner"
                                 .into(),
@@ -469,7 +469,7 @@ impl Engine {
                 }
             }
             let cleanup = if repo.warnings.is_empty() {
-                rustovate_update::cleanup(
+                patchula_update::cleanup(
                     &self.github,
                     &repo.repository,
                     repo.commit.as_deref().expect("extracted commit"),
@@ -489,7 +489,7 @@ impl Engine {
                     continue;
                 }
             }
-            rustovate_update::apply_all(
+            patchula_update::apply_all(
                 &self.github,
                 &mut plans,
                 &work.snapshot,
@@ -502,7 +502,7 @@ impl Engine {
                 state
                     .publish_with_sources(&self.github, &note_sources, &mut plans)
                     .await;
-                let merge_actions = rustovate_update::automerge::reconcile(
+                let merge_actions = patchula_update::automerge::reconcile(
                     &self.github,
                     &self.cache,
                     repo,
@@ -520,16 +520,16 @@ impl Engine {
                     repo.warnings
                         .push(format!("PR checkbox acknowledgement: {error}"));
                 }
-                if let Err(error) = rustovate_update::dashboard::reconcile(
+                if let Err(error) = patchula_update::dashboard::reconcile(
                     &self.github,
                     &self.cache,
                     repo,
                     &config,
                     inventory.as_ref().expect("write inventory"),
-                    rustovate_update::dashboard::render(
+                    patchula_update::dashboard::render(
                         repo,
                         &plans,
-                        &rustovate_update::automerge::dashboard_history(
+                        &patchula_update::automerge::dashboard_history(
                             inventory.as_ref().expect("write inventory"),
                             state.dashboard_prs(),
                             &plans,
@@ -542,7 +542,7 @@ impl Engine {
                     repo.status = Status::Error;
                     repo.reason = Some(format!("dependency dashboard: {error}"));
                 }
-                if let Err(error) = rustovate_update::lockfiles::record_refresh(
+                if let Err(error) = patchula_update::lockfiles::record_refresh(
                     &self.cache,
                     &plans,
                     &state.actions,
@@ -553,15 +553,15 @@ impl Engine {
                     repo.warnings.push(format!("maintenance cache: {error}"));
                 }
                 if let Err(error) =
-                    rustovate_update::save_receipts(&self.cache, repo, &config, &plans, state).await
+                    patchula_update::save_receipts(&self.cache, repo, &config, &plans, state).await
                 {
                     repo.warnings.push(format!("write receipt cache: {error}"));
                 }
                 if state.actions.iter().any(|a| {
                     matches!(
                         a.status,
-                        rustovate_report::ActionStatus::Error
-                            | rustovate_report::ActionStatus::Protected
+                        patchula_report::ActionStatus::Error
+                            | patchula_report::ActionStatus::Protected
                     )
                 }) {
                     repo.status = Status::Error;
@@ -572,8 +572,7 @@ impl Engine {
             for plan in &plans {
                 if matches!(
                     plan.action.status,
-                    rustovate_report::ActionStatus::Error
-                        | rustovate_report::ActionStatus::Protected
+                    patchula_report::ActionStatus::Error | patchula_report::ActionStatus::Protected
                 ) {
                     repo.status = Status::Error;
                     repo.reason.get_or_insert_with(|| {
@@ -585,7 +584,7 @@ impl Engine {
             branches.extend(plans.into_iter().map(|p| p.action));
         }
         branches.sort_by(|a, b| (&a.repository, &a.branch).cmp(&(&b.repository, &b.branch)));
-        report.actions = Some(rustovate_report::Actions {
+        report.actions = Some(patchula_report::Actions {
             schema_version: 1,
             dry_run,
             branches,
@@ -644,8 +643,8 @@ impl Engine {
                 &overrides,
                 self.versions_host_override
             ))?),
-            hash(rustovate_config::SCHEMA.as_bytes()),
-            hash(rustovate_manager::MISE_REGISTRY.as_bytes()),
+            hash(patchula_config::SCHEMA.as_bytes()),
+            hash(patchula_manager::MISE_REGISTRY.as_bytes()),
             self.github.credential_scope()
         );
         let mut hint = LookupHint::default();
@@ -685,7 +684,7 @@ impl Engine {
                         && work.report.status == Status::Complete
                         && let Some(config) = &work.config
                     {
-                        match rustovate_update::Inventory::read(
+                        match patchula_update::Inventory::read(
                             &self.github,
                             &self.cache,
                             &work.report,
@@ -694,14 +693,14 @@ impl Engine {
                         .await
                         {
                             Ok(inventory) => {
-                                match rustovate_update::dashboard::Controls::read(
+                                match patchula_update::dashboard::Controls::read(
                                     &inventory,
                                     &repo,
                                     config.prs.dashboard,
                                 ) {
                                     Ok(mut controls) => {
                                         controls.age_permits.extend(
-                                            rustovate_update::dashboard::load_permits(
+                                            patchula_update::dashboard::load_permits(
                                                 &self.cache,
                                                 &repo,
                                                 &inventory.actor,
@@ -859,7 +858,7 @@ impl Engine {
                     match catalogs.get(&self.catalog_key(dep, repo.config.as_ref())) {
                         Some(Ok(catalog)) => match eval.evaluate_at(dep, catalog, now) {
                             Ok(p) => {
-                                let dep_key = rustovate_update::dashboard::extracted_key(dep);
+                                let dep_key = patchula_update::dashboard::extracted_key(dep);
                                 let overrides: BTreeSet<_> = p
                                     .held_back
                                     .iter()
@@ -870,9 +869,8 @@ impl Engine {
                                             .map(|v| (v.clone(), h.update_type.clone()))
                                     })
                                     .filter(|(v, k)| {
-                                        let target = rustovate_update::dashboard::held_target(
-                                            &dep_key, v, k,
-                                        );
+                                        let target =
+                                            patchula_update::dashboard::held_target(&dep_key, v, k);
                                         repo.controls.create.contains(&target)
                                             || repo.controls.age_permits.contains(&target)
                                     })
@@ -886,7 +884,7 @@ impl Engine {
                                         Ok(p) => {
                                             for (v, k) in overrides {
                                                 repo.controls.age_permits.insert(
-                                                    rustovate_update::dashboard::held_target(
+                                                    patchula_update::dashboard::held_target(
                                                         &dep_key, &v, &k,
                                                     ),
                                                 );
@@ -950,7 +948,7 @@ impl Engine {
         let proposal_cpu_time = micros(started);
         for repo in &work {
             if let Some(inventory) = &repo.inventory {
-                rustovate_update::dashboard::save_permits(
+                patchula_update::dashboard::save_permits(
                     &self.cache,
                     &repo.report.repository,
                     &inventory.actor,
@@ -1142,7 +1140,7 @@ impl Engine {
                     ));
                 }
                 let resolved =
-                    catalog.and_then(|c| rustovate_lookup::resolved_current_version(dep, c));
+                    catalog.and_then(|c| patchula_lookup::resolved_current_version(dep, c));
                 let resolution = resolved.as_ref().or(dep.resolved.as_ref()).map(|version| {
                     let kind = if dep.manager == Manager::GithubActions
                         && dep.source == Source::GithubTags
@@ -1155,24 +1153,24 @@ impl Engine {
                     } else if matches!(dep.manager, Manager::Npm | Manager::Cargo)
                         && !matches!(
                             dep.kind,
-                            rustovate_config::DependencyKind::Toolchain
-                                | rustovate_config::DependencyKind::Tool
+                            patchula_config::DependencyKind::Toolchain
+                                | patchula_config::DependencyKind::Tool
                         )
                         && dep.resolved.is_some()
                     {
                         "lockfile"
                     } else if resolved.is_some()
-                        && matches!(dep.kind, rustovate_config::DependencyKind::Tool)
+                        && matches!(dep.kind, patchula_config::DependencyKind::Tool)
                     {
                         "release-line"
                     } else if resolved.is_some()
-                        && dep.kind == rustovate_config::DependencyKind::Toolchain
+                        && dep.kind == patchula_config::DependencyKind::Toolchain
                     {
                         "supported-range"
                     } else {
                         "declared"
                     };
-                    rustovate_report::Resolution {
+                    patchula_report::Resolution {
                         kind: kind.into(),
                         version: version.clone(),
                     }
@@ -1191,16 +1189,14 @@ impl Engine {
                         version: catalogs
                             .get(&self.catalog_key(dep, repo.config.as_ref()))
                             .and_then(|c| c.as_ref().ok())
-                            .and_then(|c| rustovate_lookup::resolved_current_version(dep, c))
+                            .and_then(|c| patchula_lookup::resolved_current_version(dep, c))
                             .or_else(|| dep.resolved.clone())
                             .or_else(|| {
-                                rustovate_lookup::scheme(dep)
+                                patchula_lookup::scheme(dep)
                                     .ok()
-                                    .filter(|_| {
-                                        dep.kind != rustovate_config::DependencyKind::Runner
-                                    })
+                                    .filter(|_| dep.kind != patchula_config::DependencyKind::Runner)
                                     .and_then(|s| {
-                                        rustovate_versioning::Versioning::parse(&s, &dep.current)
+                                        patchula_versioning::Versioning::parse(&s, &dep.current)
                                             .ok()
                                     })
                                     .map(|v| v.0.to_string())
@@ -1208,7 +1204,7 @@ impl Engine {
                         digest: dep.digest.clone(),
                     },
                     updates: proposals,
-                    metadata: Some(rustovate_report::DependencyMetadata {
+                    metadata: Some(patchula_report::DependencyMetadata {
                         tag_digests: if dep.manager == Manager::GithubActions
                             && dep.source == Source::GithubTags
                         {
@@ -1227,7 +1223,7 @@ impl Engine {
                         },
                         source: word(&dep.source),
                         kinds: vec![word(&dep.kind)],
-                        locations: vec![rustovate_report::Location {
+                        locations: vec![patchula_report::Location {
                             start: dep.location.start,
                             end: dep.location.end,
                             line: dep.location.line,
@@ -1252,7 +1248,7 @@ impl Engine {
                 .into_iter()
                 .map(|(path, dependencies)| PackageFile {
                     path,
-                    dependencies: rustovate_report::normalize_dependencies(dependencies),
+                    dependencies: patchula_report::normalize_dependencies(dependencies),
                 })
                 .collect();
             repo.report.warnings.sort();
@@ -1266,7 +1262,7 @@ impl Engine {
             schema_version: SCHEMA_VERSION,
             repositories: work.iter().map(|w| w.report.clone()).collect(),
             actions: None,
-            stats: Some(rustovate_report::Stats {
+            stats: Some(patchula_report::Stats {
                 requests: after_g.requests + after_h.requests
                     - before_g.requests
                     - before_h.requests,
@@ -1376,7 +1372,7 @@ impl Engine {
                         .ok_or_else(|| Error::Invalid("invalid repository listing".into()))
                 })
                 .collect(),
-            Err(rustovate_github::Error::Status(401 | 403)) => {
+            Err(patchula_github::Error::Status(401 | 403)) => {
                 let mut repos = Vec::new();
                 for page in 1..=1000 {
                     let value = self
@@ -1530,13 +1526,13 @@ impl Engine {
             let key = ExtractionKey {
                 repo: format!("config:{repo}"),
                 default_branch_commit: commit.clone(),
-                config_hash: hash(rustovate_config::SCHEMA.as_bytes()),
+                config_hash: hash(patchula_config::SCHEMA.as_bytes()),
             };
             if let Some(bytes) = self.cache.extraction_get(&key).await? {
                 serde_json::from_slice(&bytes)?
             } else {
                 let entries = self.tree(repo, tree_sha).await?;
-                let path = [".github/rustovate.pkl", "rustovate.pkl"]
+                let path = [".github/patchula.pkl", "patchula.pkl"]
                     .into_iter()
                     .find(|p| {
                         entries
@@ -1557,7 +1553,7 @@ impl Engine {
         };
         let Some(config) = config else {
             report.status = Status::Skipped;
-            report.reason = Some("no .github/rustovate.pkl or rustovate.pkl".into());
+            report.reason = Some("no .github/patchula.pkl or patchula.pkl".into());
             return Ok(Work {
                 report,
                 config: None,
@@ -1573,7 +1569,7 @@ impl Engine {
             config_hash: format!(
                 "extract-v7:{}:{}",
                 hash(&serde_json::to_vec(&config)?),
-                hash(rustovate_manager::MISE_REGISTRY.as_bytes())
+                hash(patchula_manager::MISE_REGISTRY.as_bytes())
             ),
         };
         let cached: CachedExtraction = if let Some(bytes) = self.cache.extraction_get(&key).await? {
@@ -1595,12 +1591,12 @@ impl Engine {
                 .into_iter()
                 .filter(|entry| entry.kind == "blob" && scanner.needs(&entry.path))
                 .collect();
-            let blobs: BTreeMap<String, rustovate_update::Blob> = stream::iter(selected)
+            let blobs: BTreeMap<String, patchula_update::Blob> = stream::iter(selected)
                 .map(|entry| async move {
                     let content = self.file(repo, &entry.sha).await?;
                     Ok((
                         entry.path,
-                        rustovate_update::Blob {
+                        patchula_update::Blob {
                             sha: entry.sha,
                             mode: entry.mode,
                             content,
@@ -1622,7 +1618,7 @@ impl Engine {
                 .map_err(Error::Invalid)?;
             let cached = CachedExtraction {
                 extraction,
-                snapshot: rustovate_update::Snapshot {
+                snapshot: patchula_update::Snapshot {
                     paths,
                     files: blobs,
                 },
@@ -1658,8 +1654,8 @@ impl Engine {
             let text =
                 if let Some(entry) = entries.iter().find(|e| e.path == path && e.kind == "blob") {
                     self.file(repo, &entry.sha).await?
-                } else if path.rsplit('/').next() == Some("Rustovate.pkl") {
-                    rustovate_config::SCHEMA.into()
+                } else if path.rsplit('/').next() == Some("Patchula.pkl") {
+                    patchula_config::SCHEMA.into()
                 } else {
                     return Err(Error::Invalid(format!(
                         "missing local config module {path}"
@@ -1695,7 +1691,7 @@ impl Engine {
         }
         let path = format!("/repo/{path}");
         tokio::task::spawn_blocking(move || {
-            rustovate_config::load_files(&path, files).map_err(|e| e.to_string())
+            patchula_config::load_files(&path, files).map_err(|e| e.to_string())
         })
         .await
         .map_err(|e| Error::Invalid(e.to_string()))?

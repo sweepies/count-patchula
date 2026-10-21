@@ -1,8 +1,8 @@
 //! Independent contract fixtures; no network client is constructed.
-use rustovate_cache::Cache;
-use rustovate_config::Source;
-use rustovate_datasource::Client;
-use rustovate_http::{Cached, Exchange, Response, Transport};
+use patchula_cache::Cache;
+use patchula_config::Source;
+use patchula_datasource::Client;
+use patchula_http::{Cached, Exchange, Response, Transport};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 
@@ -27,7 +27,7 @@ impl Transport for Host {
             let github = request.url().host_str() == Some("api.github.com");
             assert_eq!(request.headers().contains_key("authorization"), github);
             if !github && self.lost {
-                return Err(rustovate_http::Error::Fixture("lost connection".into()));
+                return Err(patchula_http::Error::Fixture("lost connection".into()));
             }
             let body = if github {
                 assert_eq!(path, "/graphql");
@@ -73,7 +73,7 @@ impl Transport for Host {
     }
 }
 async fn client(host: Arc<Host>, cache: Cache) -> Client {
-    let github = rustovate_github::Client::with_transport(
+    let github = patchula_github::Client::with_transport(
         "offline",
         cache.clone(),
         Default::default(),
@@ -279,7 +279,7 @@ async fn cached_catalogs_do_not_freeze_mutable_lightweight_or_annotated_tag_targ
     }
     let cache = memory().await;
     let moving = Arc::new(Moving(AtomicUsize::new(0)));
-    let github = rustovate_github::Client::with_transport(
+    let github = patchula_github::Client::with_transport(
         "offline",
         cache.clone(),
         Default::default(),

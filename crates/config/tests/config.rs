@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use rustovate_config::{DependencyKind, Manager, SCHEMA, Update, VersionPolicy, discover, load};
+use patchula_config::{DependencyKind, Manager, SCHEMA, Update, VersionPolicy, discover, load};
 use std::path::Path;
 
 fn workspace() -> &'static Path {
@@ -17,9 +17,9 @@ fn versions_host_is_enabled_by_default_and_can_be_disabled() {
 
 fn fixture(body: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let directory = tempfile::tempdir().unwrap();
-    std::fs::write(directory.path().join("Rustovate.pkl"), SCHEMA).unwrap();
-    let path = directory.path().join("rustovate.pkl");
-    std::fs::write(&path, format!("amends \"Rustovate.pkl\"\n{body}\n")).unwrap();
+    std::fs::write(directory.path().join("Patchula.pkl"), SCHEMA).unwrap();
+    let path = directory.path().join("patchula.pkl");
+    std::fs::write(&path, format!("amends \"Patchula.pkl\"\n{body}\n")).unwrap();
     (directory, path)
 }
 
@@ -39,7 +39,7 @@ fn every_repository_example_validates() {
 
 #[test]
 fn the_npm_lockfile_engine_is_aube_by_default_and_can_stay_native() {
-    use rustovate_config::NpmEngine;
+    use patchula_config::NpmEngine;
     let (_directory, path) = fixture("");
     assert_eq!(load(&path).unwrap().lockfiles.npm_engine, NpmEngine::Aube);
     let (_directory, path) = fixture("lockfiles { npmEngine = \"npm\" }");
@@ -58,7 +58,7 @@ fn defaults_are_explicit_safe_and_unlimited() {
     assert_eq!(config.defaults.versions, VersionPolicy::Exact);
     assert_eq!(
         config.defaults.channel,
-        rustovate_config::ReleaseChannel::Stable
+        patchula_config::ReleaseChannel::Stable
     );
     assert_eq!(config.defaults.wait_hours, 24);
     assert_eq!(config.prs.concurrent, None);
@@ -72,22 +72,22 @@ fn nested_amendments_keep_class_defaults_with_bundled_or_vendored_schema() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join(".github")).unwrap();
     let source =
-        "amends \"../Rustovate.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\n";
-    std::fs::write(dir.path().join(".github/rustovate.pkl"), source).unwrap();
+        "amends \"../Patchula.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\n";
+    std::fs::write(dir.path().join(".github/patchula.pkl"), source).unwrap();
     let mut previous = None;
     for vendored in [false, true] {
-        let mut files = BTreeMap::from([("/repo/.github/rustovate.pkl".into(), source.into())]);
+        let mut files = BTreeMap::from([("/repo/.github/patchula.pkl".into(), source.into())]);
         if vendored {
-            std::fs::write(dir.path().join("Rustovate.pkl"), SCHEMA).unwrap();
-            files.insert("/repo/Rustovate.pkl".into(), SCHEMA.into());
+            std::fs::write(dir.path().join("Patchula.pkl"), SCHEMA).unwrap();
+            files.insert("/repo/Patchula.pkl".into(), SCHEMA.into());
         }
         let local = load(dir.path()).unwrap();
-        let api = rustovate_config::load_files("/repo/.github/rustovate.pkl", files).unwrap();
+        let api = patchula_config::load_files("/repo/.github/patchula.pkl", files).unwrap();
         assert_eq!(
             serde_json::to_value(&local).unwrap(),
             serde_json::to_value(api).unwrap()
         );
-        assert_eq!(local.prs.branch, "rustovate/");
+        assert_eq!(local.prs.branch, "patchula/");
         assert!(local.defaults.active);
         assert!(local.prs.dashboard);
         assert_eq!(local.defaults.wait_hours, 0);
@@ -103,8 +103,8 @@ fn nested_amendments_keep_class_defaults_with_bundled_or_vendored_schema() {
 fn vendored_schema_overrides_the_bundle() {
     let (dir, path) = fixture("prs { dashboard = true }");
     std::fs::write(
-        dir.path().join("Rustovate.pkl"),
-        SCHEMA.replace("rustovate/", "custom/"),
+        dir.path().join("Patchula.pkl"),
+        SCHEMA.replace("patchula/", "custom/"),
     )
     .unwrap();
     assert_eq!(load(&path).unwrap().prs.branch, "custom/");
@@ -117,7 +117,7 @@ fn node_lts_channel_is_typed_and_rule_selectable() {
     );
     assert_eq!(
         load(&path).unwrap().rules[0].apply.channel,
-        Some(rustovate_config::ReleaseChannel::Lts)
+        Some(patchula_config::ReleaseChannel::Lts)
     );
     let (_dir, path) = fixture("defaults { channel = \"guess\" }");
     assert!(load(&path).is_err());
@@ -259,7 +259,7 @@ fn invalid_values_have_actionable_diagnostics() {
             message.contains(expected),
             "expected {expected:?} in {message}"
         );
-        assert!(message.contains("rustovate.pkl"), "{message}");
+        assert!(message.contains("patchula.pkl"), "{message}");
     }
 }
 
@@ -267,7 +267,7 @@ fn invalid_values_have_actionable_diagnostics() {
 fn syntax_errors_include_file_and_location() {
     let (_directory, path) = fixture("defaults { versions = ");
     let error = format!("{:?}", load(&path).unwrap_err());
-    assert!(error.contains("rustovate.pkl"), "{error}");
+    assert!(error.contains("patchula.pkl"), "{error}");
     assert!(error.contains('│') || error.contains("line"), "{error}");
 }
 
@@ -276,7 +276,7 @@ fn local_organisation_amends_and_imports_work() {
     let (directory, path) = fixture("");
     std::fs::write(
         directory.path().join("org.pkl"),
-        "amends \"Rustovate.pkl\"\nprs { concurrent = 8 }\ndefaults { releaseNotes = false }\n",
+        "amends \"Patchula.pkl\"\nprs { concurrent = 8 }\ndefaults { releaseNotes = false }\n",
     )
     .unwrap();
     std::fs::write(
@@ -296,10 +296,10 @@ fn discovery_prefers_github_and_reports_absence() {
     let (directory, root) = fixture("");
     assert_eq!(discover(directory.path()).unwrap(), Some(root.clone()));
     std::fs::create_dir(directory.path().join(".github")).unwrap();
-    let github = directory.path().join(".github/rustovate.pkl");
+    let github = directory.path().join(".github/patchula.pkl");
     std::fs::write(
         &github,
-        "amends \"../Rustovate.pkl\"\nprs { concurrent = 3 }\n",
+        "amends \"../Patchula.pkl\"\nprs { concurrent = 3 }\n",
     )
     .unwrap();
     assert_eq!(discover(directory.path()).unwrap(), Some(github));
@@ -310,7 +310,7 @@ fn discovery_prefers_github_and_reports_absence() {
         load(empty.path())
             .unwrap_err()
             .to_string()
-            .contains("no rustovate config")
+            .contains("no patchula config")
     );
 }
 
@@ -318,7 +318,7 @@ fn discovery_prefers_github_and_reports_absence() {
 fn remote_imports_and_environment_reads_are_rejected_without_network() {
     for body in [
         "amends \"https://invalid.example/config.pkl\"",
-        "amends \"Rustovate.pkl\"\ndefaults { commitPrefix = read(\"env:PATH\") }",
+        "amends \"Patchula.pkl\"\ndefaults { commitPrefix = read(\"env:PATH\") }",
     ] {
         let (directory, path) = fixture("");
         std::fs::write(&path, body).unwrap();

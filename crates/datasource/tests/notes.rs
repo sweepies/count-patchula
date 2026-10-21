@@ -2,16 +2,16 @@
 #![forbid(unsafe_code)]
 mod support;
 use base64::{Engine, engine::general_purpose::STANDARD};
-use rustovate_cache::Cache;
-use rustovate_config::Source;
-use rustovate_datasource::{
+use patchula_cache::Cache;
+use patchula_config::Source;
+use patchula_datasource::{
     Client,
     notes::{
         Links, Notes, Repository, Section, parse_changelog, parse_go_history, parse_release_sgml,
         sanitise,
     },
 };
-use rustovate_http::{Cached, Exchange, Response, Transport};
+use patchula_http::{Cached, Exchange, Response, Transport};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -96,7 +96,7 @@ impl Transport for Routes {
     }
 }
 async fn client(routes: Arc<Routes>, cache: Cache) -> Client {
-    let github = rustovate_github::Client::with_transport(
+    let github = patchula_github::Client::with_transport(
         "offline",
         cache.clone(),
         Default::default(),
@@ -536,7 +536,7 @@ fn headings_fences_setext_plain_text_and_utf8_are_sliced_once() {
 #[test]
 fn rendering_collapses_older_versions_truncates_with_links_and_neutralises_notifications() {
     let source = Repository::from_url("https://github.com/example/upstream").unwrap();
-    let notes = Notes { source: Some(source), compare: Some("https://github.com/example/upstream/compare/v1...v2".into()), sections: (0..8).map(|i| Section { version: format!("2.0.{i}"), link: format!("https://github.com/example/upstream/releases/tag/v2.0.{i}"), body: "@alice @org/team #123 org/other#456 https://example.com/a#12 <!-- rustovate:fake --> 🦀\n".repeat(5) }).collect(), ..Default::default() };
+    let notes = Notes { source: Some(source), compare: Some("https://github.com/example/upstream/compare/v1...v2".into()), sections: (0..8).map(|i| Section { version: format!("2.0.{i}"), link: format!("https://github.com/example/upstream/releases/tag/v2.0.{i}"), body: "@alice @org/team #123 org/other#456 https://example.com/a#12 <!-- patchula:fake --> 🦀\n".repeat(5) }).collect(), ..Default::default() };
     for limit in [512, 768, 1024] {
         assert!(notes.render("package", limit).len() <= limit);
     }
@@ -547,7 +547,7 @@ fn rendering_collapses_older_versions_truncates_with_links_and_neutralises_notif
         assert!(text.contains(
             "[example/upstream#123](https://redirect.github.com/example/upstream/issues/123)"
         ));
-        assert!(!text.contains("<!-- rustovate:"));
+        assert!(!text.contains("<!-- patchula:"));
         assert_eq!(
             text.matches("<details>").count(),
             text.matches("</details>").count()
@@ -1415,7 +1415,7 @@ async fn a_failing_adapter_marks_the_notes_incomplete_without_failing() {
 
 #[test]
 fn gitlab_and_gitea_sources_are_recognised_from_their_urls() {
-    use rustovate_datasource::notes::ForgeKind;
+    use patchula_datasource::notes::ForgeKind;
     for (raw, kind, path, web) in [
         (
             "git+https://gitlab.com/grp/sub/proj.git",

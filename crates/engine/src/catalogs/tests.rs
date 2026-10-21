@@ -1,5 +1,5 @@
 use super::*;
-use rustovate_http::{Exchange, Response};
+use patchula_http::{Exchange, Response};
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 
@@ -16,7 +16,7 @@ impl Transport for Registry {
             assert!(!request.headers().contains_key("authorization"));
             self.requests.fetch_add(1, Ordering::SeqCst);
             if self.failed.load(Ordering::SeqCst) {
-                return Err(rustovate_http::Error::Fixture(
+                return Err(patchula_http::Error::Fixture(
                     "offline connection failure".into(),
                 ));
             }
@@ -146,11 +146,11 @@ async fn zero_wait_and_forced_reads_keep_freshness_and_credentials_do_not_share_
 }
 
 fn config() -> Config {
-    rustovate_config::load_files(
-        "/repo/rustovate.pkl",
+    patchula_config::load_files(
+        "/repo/patchula.pkl",
         BTreeMap::from([(
-            "/repo/rustovate.pkl".into(),
-            "amends \"Rustovate.pkl\"\n".into(),
+            "/repo/patchula.pkl".into(),
+            "amends \"Patchula.pkl\"\n".into(),
         )]),
     )
     .unwrap()
@@ -213,10 +213,10 @@ async fn checkbox_controls_refresh_only_the_selected_dependency_and_failures_do_
     let engine = engine(cache, registry.clone(), "offline");
     let config = config();
     let dependencies = dependencies(&config);
-    let first = rustovate_update::dashboard::extracted_key(&dependencies[0]);
+    let first = patchula_update::dashboard::extracted_key(&dependencies[0]);
     let mapping = Controls {
         branches: BTreeMap::from([(
-            "rustovate/fixture-2.x".into(),
+            "patchula/fixture-2.x".into(),
             BTreeSet::from([first.clone()]),
         )]),
         targets: BTreeMap::from([("target".into(), BTreeSet::from([first.clone()]))]),
@@ -238,13 +238,13 @@ async fn checkbox_controls_refresh_only_the_selected_dependency_and_failures_do_
         "repository",
         "unknown",
     ] {
-        let mut controls = rustovate_update::dashboard::Controls::default();
+        let mut controls = patchula_update::dashboard::Controls::default();
         match mode {
             "retry" => {
                 controls.retry.insert(first.clone());
             }
             "pr" | "changed-pr" => {
-                controls.branches.insert("rustovate/fixture-2.x".into());
+                controls.branches.insert("patchula/fixture-2.x".into());
             }
             "dashboard" => {
                 controls.create.insert("target".into());
@@ -291,7 +291,7 @@ async fn checkbox_controls_refresh_only_the_selected_dependency_and_failures_do_
 
 #[test]
 fn effective_rules_include_zero_age_exceptions() {
-    let config = rustovate_config::load_files("/repo/rustovate.pkl",BTreeMap::from([("/repo/rustovate.pkl".into(),"amends \"Rustovate.pkl\"\ndefaults { waitHours = 72 }\nrules = new Listing { new Rule { select { packages = new Listing { \"fixture\" }; updates = new Listing { \"minor\" } }; apply { waitHours = 0 } } }\n".into())])).unwrap();
+    let config = patchula_config::load_files("/repo/patchula.pkl",BTreeMap::from([("/repo/patchula.pkl".into(),"amends \"Patchula.pkl\"\ndefaults { waitHours = 72 }\nrules = new Listing { new Rule { select { packages = new Listing { \"fixture\" }; updates = new Listing { \"minor\" } }; apply { waitHours = 0 } } }\n".into())])).unwrap();
     let eval = Evaluator::new(&config).unwrap();
     for dep in dependencies(&config) {
         assert_eq!(

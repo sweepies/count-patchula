@@ -1,7 +1,7 @@
 //! Ecosystem version semantics. npm ranges are deliberately not Cargo requirements.
 #![forbid(unsafe_code)]
 
-use rustovate_config::{Update, VersionPolicy};
+use patchula_config::{Update, VersionPolicy};
 use semver::{Version, VersionReq};
 use std::cmp::Ordering;
 mod composer;

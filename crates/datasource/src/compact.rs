@@ -1,8 +1,8 @@
 //! Typed deserialization skips unused registry fields without building a JSON
 //! tree for README, dependencies, attestations or artifact metadata.
 use super::{Catalog, Version, sort};
-use rustovate_http::CacheError;
-use rustovate_versioning::Ecosystem;
+use patchula_http::CacheError;
+use patchula_versioning::Ecosystem;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 

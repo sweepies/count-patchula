@@ -1,10 +1,10 @@
 //! Native auto-merge, or conservative later-run merging backed by write receipts.
 use crate::{Inventory, Plan, plan::in_window, pull_requests::owned_pr};
 use chrono::{DateTime, Duration, Utc};
-use rustovate_cache::{Cache, ExtractionKey};
-use rustovate_config::Config;
-use rustovate_github::{Client, GraphqlPage};
-use rustovate_report::{ActionStatus, PullRequestAction, Repository};
+use patchula_cache::{Cache, ExtractionKey};
+use patchula_config::Config;
+use patchula_github::{Client, GraphqlPage};
+use patchula_report::{ActionStatus, PullRequestAction, Repository};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -139,7 +139,7 @@ fn policy_allows(repo: &Repository, plan: &Plan, config: &Config, now: DateTime<
             .defaults
             .windows
             .iter()
-            .map(|w| rustovate_report::Window {
+            .map(|w| patchula_report::Window {
                 cron: w.cron.clone(),
                 zone: w.zone.clone(),
             })
@@ -188,7 +188,7 @@ async fn green(client: &Client, repo: &str, head: &str) -> Result<bool, String> 
             json!({"owner":owner,"name":name,"oid":head}),
             |data| {
                 if data["repository"]["object"]["oid"] != head {
-                    return Err(rustovate_github::Error::Json);
+                    return Err(patchula_github::Error::Json);
                 }
                 if data["repository"]["object"]["statusCheckRollup"].is_null() {
                     return Ok(GraphqlPage {
@@ -304,7 +304,7 @@ async fn one(
             "auto-merge refused by GitHub; retry on a later run".into(),
         ));
     }
-    let mut reason = format!("merged by rustovate ({method}); all current-head checks passed");
+    let mut reason = format!("merged by patchula ({method}); all current-head checks passed");
     if !settings.delete_branch {
         let cleanup = async {
             if settings.repository_id.is_empty() {
@@ -328,7 +328,7 @@ async fn one(
         }
     }
     pr["state"] = json!("closed");
-    pr["merged_at"] = json!("merged by rustovate");
+    pr["merged_at"] = json!("merged by patchula");
     Ok((ActionStatus::Merged, reason))
 }
 
@@ -362,7 +362,7 @@ pub async fn reconcile(
                 .await
                 .unwrap_or_else(|e| (ActionStatus::Error, format!("auto-merge: {e}")))
         };
-        pr["rustovate_merge"] = json!(reason);
+        pr["patchula_merge"] = json!(reason);
         if status == ActionStatus::Merged {
             plan.action.status = ActionStatus::Merged;
         }
@@ -403,7 +403,7 @@ pub fn dashboard_prs(inventory: &Inventory, repo: &str, plans: &[Plan]) -> Vec<V
 }
 pub fn dashboard_history(inventory: &Inventory, mut prs: Vec<Value>, plans: &[Plan]) -> Vec<Value> {
     // Untracked historical/native merges are not presented as fallback outcomes.
-    prs.retain(|p| p["merged_at"].is_null() || !p["rustovate_merge"].is_null());
+    prs.retain(|p| p["merged_at"].is_null() || !p["patchula_merge"].is_null());
     for pr in &inventory.merged_prs {
         if !prs.iter().any(|p| p["number"] == pr["number"]) {
             prs.push(pr.clone());

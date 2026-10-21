@@ -1,6 +1,6 @@
 # Batch engine (SWE-95 / SWE-106)
 
-`rustovate-engine::Engine` accepts a token, shared SQLite cache, concurrency cap
+`patchula-engine::Engine` accepts a token, shared SQLite cache, concurrency cap
 and transport. The CLI constructs one network pool; tests inject cassette replay.
 Its lookup method accepts repositories or discovers all accessible repositories,
 using user/repos or the installation repository endpoint for App tokens.
@@ -9,11 +9,11 @@ Repositories run concurrently behind one GitHub governor. The default branch
 name, commit and tree identity come from one GraphQL snapshot on a cold scan.
 Only selected manager files and required local config modules are fetched as blobs. Truncated trees
 and invalid selected files produce per-repo errors. Config precedence is
-.github/rustovate.pkl then rustovate.pkl; absence is skipped. Local --config
+.github/patchula.pkl then patchula.pkl; absence is skipped. Local --config
 applies to every selected repository and is evaluated before network access.
 
 Repository configs evaluate with an isolated supplied-file capability. Local
-amends/import dependencies are fetched, with the bundled Rustovate.pkl available
+amends/import dependencies are fetched, with the bundled Patchula.pkl available
 when not vendored. Remote and escaping imports/resources are rejected. Literal
 imports are supported; dynamic import targets require future discovery support.
 `config check` and local overrides use the same supplied-module evaluator and
@@ -88,8 +88,8 @@ directly comparable. Total time remains comparable. Reproduce with:
 mise run benchmarks:lookup-release
 # With an existing GitHub token, run twice against the same private cache:
 mise run lookup:release --config examples/renovate-runner.pkl \
-  --cache /tmp/rustovate-runner.sqlite --concurrency 8 --json \
-  sweepies/renovate-runner > /tmp/rustovate-runner-report.json
+  --cache /tmp/patchula-runner.sqlite --concurrency 8 --json \
+  sweepies/renovate-runner > /tmp/patchula-runner-report.json
 ```
 
 The `3029efd` follow-up had no GitHub recording credential and refreshed only
@@ -124,7 +124,7 @@ return `verification.verified = true` before a ref is published. See GitHub's
 The supplied wave-2 sandbox results confirmed verified App commits.
 
 Existing branches require authenticated-actor authorship, matching bot/GitHub
-committer, verified commits, and rustovate's version/full-identity trailers on
+committer, verified commits, and patchula's version/full-identity trailers on
 every exclusive commit. Incomplete histories and human commits are protected.
 Changes replace the branch commit in place; unchanged contents produce no writes.
 `rebase = "behind"` recreates on a moved base. `"conflicts"` keeps an identical
