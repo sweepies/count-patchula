@@ -168,3 +168,20 @@ runs `bundle lock --update <gems>` (all gems for maintenance) with Ruby from
 `GEM_HOME`/`BUNDLE_USER_HOME`, and `BUNDLE_APP_CONFIG` pointed away from any
 repository `.bundle/config`. A Gemfile is Ruby: evaluating it runs repository
 code inside that scrubbed environment, as Bundler always does.
+
+`composer` reads `require` and `require-dev` in `composer.json`, resolving
+packages from `composer.lock` (`packages` and `packages-dev`). Platform
+requirements (`php`, `ext-*`, `lib-*`, `composer-plugin-api`,
+`composer-runtime-api`), `dev-` branches and `*` are skipped. Constraints use
+the `composer` scheme: up to four release numbers with `alpha` < `beta` < `RC`
+< stable < `patch`, and `^`, `~` (`~1.2` allows `<2.0`, `~1.2.3` allows `<1.3`),
+comparisons, `1.2.*`, hyphen ranges, `,`/space and `||`, rewritten with their
+operator and precision (`^6.4` becomes `^7.1`). The lockfile runner runs
+`composer update <packages> --with-all-dependencies --minimal-changes`
+(everything for maintenance) with `--no-install --no-scripts --no-plugins`, so
+no repository code runs and nothing is downloaded beyond metadata. The PHP
+version still constrains resolution; extension and library requirements are
+ignored because they describe the deployment, not the runner. PHP comes from
+the repository's `mise.toml` pin or the pinned 8.5.8, Composer from its pin or
+2.10.3, with a scratch `COMPOSER_HOME`. `lockfiles.php` selects the PHP build;
+see [configuration](configuration.md).

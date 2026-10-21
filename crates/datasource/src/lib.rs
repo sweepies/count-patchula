@@ -8,6 +8,7 @@ mod maven;
 mod mise;
 pub mod notes;
 mod nuget;
+mod packagist;
 mod registries;
 mod rubygems;
 use rustovate_cache::{Cache, Release};
@@ -147,6 +148,7 @@ impl Client {
             Source::Maven => self.maven(package).await,
             Source::Nuget => self.nuget(package).await,
             Source::Rubygems => self.rubygems(package).await,
+            Source::Packagist => self.packagist(package).await,
         }
     }
     async fn npm(&self, package: &str) -> Result<Catalog> {

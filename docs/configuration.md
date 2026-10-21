@@ -158,6 +158,8 @@ with Bun. The lockfile and the manifest enter the same verified Git commit.
 lockfiles {
   /// "aube" (the default) or native "npm", for npm lockfiles only.
   npmEngine = "aube"
+  /// "static" (the default) or "compiled" PHP for composer.lock.
+  php = "static"
 }
 ```
 
@@ -171,6 +173,15 @@ format v1 locks, which aube cannot read, and trees whose manifests declare
 `file:` or `link:` dependencies, whose entries aube drops so `npm ci` rejects
 the lock ([aube#1796](https://github.com/aubepkg/aube/issues/1796)). See
 [departures](departures.md).
+
+`php` selects how the runner gets PHP for `composer update`. `"static"`
+downloads a prebuilt static-php.dev CLI through mise's http backend: no
+compiler or system libraries, but an exact `x.y.z` pin is required, since only
+published builds exist. `"compiled"` uses mise's `php` tool, which builds PHP
+from source on first use and needs a C toolchain and the PHP build
+dependencies; it accepts any version mise can resolve. Both land in the tool
+store, so either cost is paid once; `rustovate tools install` prewarms the
+static build.
 
 Yarn's version comes from the `packageManager` field of `package.json`
 (`yarn@x.y.z`), then a `yarn` pin in the repository's `mise.toml`, then the

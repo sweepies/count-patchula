@@ -3,6 +3,7 @@ mod checkout;
 mod dotnet;
 mod mise;
 mod node;
+mod php;
 mod process;
 mod python;
 mod ruby;
@@ -35,6 +36,7 @@ pub enum Ecosystem {
     GradleWrapper,
     Dotnet,
     Ruby,
+    Php,
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Job {
@@ -129,6 +131,12 @@ pub(crate) fn job(
             };
             (Ecosystem::Ruby, root)
         }
+        Manager::Composer => {
+            let Some(root) = nearest(&dep.file, &snapshot.paths, &["composer.lock"]) else {
+                return Ok(None);
+            };
+            (Ecosystem::Php, root)
+        }
         // NuGet locks sit beside each project; a manifest under a directory
         // with locks restores that directory's solution or project.
         Manager::Nuget => {
@@ -200,10 +208,10 @@ pub(crate) fn job(
     };
     let targeted = matches!(
         ecosystem,
-        Ecosystem::Cargo | Ecosystem::Go | Ecosystem::Python | Ecosystem::Ruby
+        Ecosystem::Cargo | Ecosystem::Go | Ecosystem::Python | Ecosystem::Ruby | Ecosystem::Php
     ) && matches!(
         dep.source,
-        Source::Crates | Source::Go | Source::Pypi | Source::Rubygems
+        Source::Crates | Source::Go | Source::Pypi | Source::Rubygems | Source::Packagist
     );
     Ok(Some(Job {
         ecosystem,
@@ -254,6 +262,7 @@ pub fn maintenance(
             }
             "packages.lock.json" if config.managers.contains(&Manager::Nuget) => Ecosystem::Dotnet,
             "Gemfile.lock" if config.managers.contains(&Manager::Bundler) => Ecosystem::Ruby,
+            "composer.lock" if config.managers.contains(&Manager::Composer) => Ecosystem::Php,
             "mise.lock" if config.managers.contains(&Manager::Mise) => Ecosystem::Mise,
             "go.mod" if config.managers.contains(&Manager::Go) => Ecosystem::Go,
             ".terraform.lock.hcl" if config.managers.contains(&Manager::Terraform) => {
@@ -503,6 +512,21 @@ impl Runner {
             match ecosystem {
                 Ecosystem::Ruby => {
                     self.bundle_lock(
+                        node::NodeContext {
+                            driver: &driver,
+                            root: &root,
+                            baseline: &baseline,
+                            directory: &directory,
+                            config,
+                            versions: &versions,
+                            maintenance: plan.maintenance,
+                        },
+                        &jobs,
+                    )
+                    .await?;
+                }
+                Ecosystem::Php => {
+                    self.composer_lock(
                         node::NodeContext {
                             driver: &driver,
                             root: &root,
@@ -809,7 +833,12 @@ fn validate_targets(
         let leaf = change.file.rsplit('/').next().unwrap_or("");
         if !matches!(
             leaf,
-            "package.json" | "Cargo.toml" | "go.mod" | "pyproject.toml" | "Gemfile"
+            "package.json"
+                | "Cargo.toml"
+                | "go.mod"
+                | "pyproject.toml"
+                | "Gemfile"
+                | "composer.json"
         ) && !change.file.ends_with(".tf")
         {
             continue;
@@ -843,6 +872,7 @@ fn validate_targets(
                     | Manager::Cargo
                     | Manager::Pyproject
                     | Manager::Bundler
+                    | Manager::Composer
             ) || (dep.source == Source::Terraform
                 && dep.kind == rustovate_config::DependencyKind::Provider))
             && let Some(version) = &change.version
@@ -876,6 +906,8 @@ fn versions(
         "poetry",
         "dotnet",
         "ruby",
+        "php",
+        "composer",
     ] {
         versions.insert(
             tool.into(),
@@ -973,6 +1005,8 @@ fn writable(path: &str) -> bool {
             | "global.json"
             | "uv.lock"
             | "poetry.lock"
+            | "composer.json"
+            | "composer.lock"
     ) || path.ends_with(".tf")
 }
 fn materialized(path: &str) -> bool {

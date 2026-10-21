@@ -7,14 +7,15 @@ macro_rules! words {
         pub enum $name { $(#[serde(rename = $word)] $variant),+ }
     };
 }
-words!(Manager { Npm => "npm", Bun => "bun", GithubActions => "github-actions", Mise => "mise", Cargo => "cargo", Dockerfile => "dockerfile", Compose => "compose", Go => "go", Terraform => "terraform", Kubernetes => "kubernetes", Kustomize => "kustomize", Flux => "flux", HelmValues => "helm-values", Requirements => "requirements", Pyproject => "pyproject", PreCommit => "pre-commit", Helm => "helm", Devcontainer => "devcontainer", Maven => "maven", Gradle => "gradle", Nuget => "nuget", Bundler => "bundler", Regex => "regex" });
-words!(Source { Npm => "npm", GithubReleases => "github-releases", GithubTags => "github-tags", GithubRunners => "github-runners", Docker => "docker", Crates => "crates", Go => "go", Terraform => "terraform", Pypi => "pypi", Helm => "helm", Oci => "oci", Mise => "mise", ForgeTags => "forge-tags", Maven => "maven", Nuget => "nuget", Rubygems => "rubygems" });
+words!(Manager { Npm => "npm", Bun => "bun", GithubActions => "github-actions", Mise => "mise", Cargo => "cargo", Dockerfile => "dockerfile", Compose => "compose", Go => "go", Terraform => "terraform", Kubernetes => "kubernetes", Kustomize => "kustomize", Flux => "flux", HelmValues => "helm-values", Requirements => "requirements", Pyproject => "pyproject", PreCommit => "pre-commit", Helm => "helm", Devcontainer => "devcontainer", Maven => "maven", Gradle => "gradle", Nuget => "nuget", Bundler => "bundler", Composer => "composer", Regex => "regex" });
+words!(Source { Npm => "npm", GithubReleases => "github-releases", GithubTags => "github-tags", GithubRunners => "github-runners", Docker => "docker", Crates => "crates", Go => "go", Terraform => "terraform", Pypi => "pypi", Helm => "helm", Oci => "oci", Mise => "mise", ForgeTags => "forge-tags", Maven => "maven", Nuget => "nuget", Rubygems => "rubygems", Packagist => "packagist" });
 words!(Update { Major => "major", Minor => "minor", Patch => "patch", Digest => "digest", Pin => "pin" });
 words!(VersionPolicy { Exact => "exact", Preserve => "preserve", Widen => "widen" });
 words!(ReleaseChannel { Stable => "stable", Lts => "lts" });
-words!(Scheme { Semver => "semver", Docker => "docker", Pep440 => "pep440", Poetry => "poetry", Maven => "maven", Nuget => "nuget", Rubygems => "rubygems", Go => "go", Hashicorp => "hashicorp", Loose => "loose" });
+words!(Scheme { Semver => "semver", Docker => "docker", Pep440 => "pep440", Poetry => "poetry", Maven => "maven", Nuget => "nuget", Rubygems => "rubygems", Composer => "composer", Go => "go", Hashicorp => "hashicorp", Loose => "loose" });
 words!(Rebase { Conflicts => "conflicts", Behind => "behind" });
 words!(NpmEngine { Aube => "aube", Npm => "npm" });
+words!(PhpBuild { Static => "static", Compiled => "compiled" });
 words!(DependencyKind { Production => "production", Development => "development", Peer => "peer", Optional => "optional", Build => "build", Action => "action", ReusableWorkflow => "reusable-workflow", Runner => "runner", ContainerImage => "container-image", Tool => "tool", GoDirective => "go-directive", Toolchain => "toolchain", Provider => "provider", Module => "module", Chart => "chart" });
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -138,4 +139,5 @@ pub struct Lockfiles {
     pub group: String,
     pub tidy_go: bool,
     pub npm_engine: NpmEngine,
+    pub php: PhpBuild,
 }

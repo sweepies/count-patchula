@@ -2,12 +2,12 @@
 /// this module, or amend an organisation module that itself amends this one.
 module Rustovate
 
-typealias Manager = "npm"|"bun"|"github-actions"|"mise"|"cargo"|"dockerfile"|"compose"|"go"|"terraform"|"kubernetes"|"kustomize"|"flux"|"helm-values"|"requirements"|"pyproject"|"pre-commit"|"helm"|"devcontainer"|"maven"|"gradle"|"nuget"|"bundler"|"regex"
-typealias Source = "npm"|"github-releases"|"github-tags"|"github-runners"|"docker"|"crates"|"go"|"terraform"|"pypi"|"helm"|"oci"|"mise"|"forge-tags"|"maven"|"nuget"|"rubygems"
+typealias Manager = "npm"|"bun"|"github-actions"|"mise"|"cargo"|"dockerfile"|"compose"|"go"|"terraform"|"kubernetes"|"kustomize"|"flux"|"helm-values"|"requirements"|"pyproject"|"pre-commit"|"helm"|"devcontainer"|"maven"|"gradle"|"nuget"|"bundler"|"composer"|"regex"
+typealias Source = "npm"|"github-releases"|"github-tags"|"github-runners"|"docker"|"crates"|"go"|"terraform"|"pypi"|"helm"|"oci"|"mise"|"forge-tags"|"maven"|"nuget"|"rubygems"|"packagist"
 typealias Update = "major"|"minor"|"patch"|"digest"|"pin"
 typealias VersionPolicy = "exact"|"preserve"|"widen"
 typealias ReleaseChannel = "stable"|"lts"
-typealias Scheme = "semver"|"docker"|"pep440"|"poetry"|"maven"|"nuget"|"rubygems"|"go"|"hashicorp"|"loose"
+typealias Scheme = "semver"|"docker"|"pep440"|"poetry"|"maven"|"nuget"|"rubygems"|"composer"|"go"|"hashicorp"|"loose"
 /// Dependency roles emitted by first-release managers. npm/bun use the first
 /// four roles; Cargo also uses build. Ordinary Go/Python/regex packages use
 /// production. Actions distinguish steps from reusable workflows; containers,
@@ -122,13 +122,16 @@ class Lockfiles {
   /// Engine that regenerates npm lockfiles: aube by default, or native npm.
   /// pnpm and Yarn lockfiles always use aube and Yarn respectively.
   npmEngine: "aube"|"npm" = "aube"
+  /// PHP for composer.lock: a prebuilt static binary, or PHP compiled from
+  /// source by mise, which needs a C toolchain and development libraries.
+  php: "static"|"compiled" = "static"
 }
 
 /// All first-release managers are selected unless a repository replaces this list.
 managers: Listing<Manager> = new {
   "npm"; "bun"; "github-actions"; "mise"; "cargo"; "dockerfile"; "compose"
   "go"; "terraform"; "kubernetes"; "kustomize"; "flux"; "helm-values"
-  "requirements"; "pyproject"; "pre-commit"; "helm"; "devcontainer"; "maven"; "gradle"; "nuget"; "bundler"; "regex"
+  "requirements"; "pyproject"; "pre-commit"; "helm"; "devcontainer"; "maven"; "gradle"; "nuget"; "bundler"; "composer"; "regex"
 }
 defaults: Policy = new {}
 rules: Listing<Rule> = new {}

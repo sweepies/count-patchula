@@ -1430,6 +1430,18 @@ fn lockfile_engine_pins_match_the_repository_mise_config() {
                 "{task} {tool}"
             );
         }
+        let php = php::tools(
+            rustovate_config::PhpBuild::Static,
+            defaults["tools"]["php"].as_str().unwrap(),
+            defaults["tools"]["composer"].as_str().unwrap(),
+        );
+        for (tool, version) in php {
+            assert_eq!(
+                tools[&tool].as_str(),
+                Some(version.as_str()),
+                "{task} {tool}"
+            );
+        }
     }
 }
 
@@ -1976,5 +1988,127 @@ async fn real_bundler_relocks_offline() {
             .iter()
             .any(|(specs, args)| specs.iter().any(|s| s == "ruby@3.4.11")
                 && starts(args, &["bundle", "lock", "--update"]))
+    );
+}
+
+/// composer.lock runs Composer under static PHP by default, or mise's
+/// compiled PHP when configured, ignoring extension requirements only.
+#[tokio::test]
+async fn composer_locks_use_static_or_compiled_php() {
+    let files = BTreeMap::from([
+        (
+            "composer.json".to_string(),
+            "{\"require\": {}}\n".to_string(),
+        ),
+        (
+            "composer.lock".to_string(),
+            "{\"packages\": []}\n".to_string(),
+        ),
+    ]);
+    for (setting, php) in [
+        (
+            "",
+            php::tools(rustovate_config::PhpBuild::Static, "8.5.8", "2.10.3")[0]
+                .0
+                .clone(),
+        ),
+        ("php = \"compiled\"", "php".to_string()),
+    ] {
+        let executor = fixture(files.clone(), false, false);
+        let temp = tempfile::tempdir().unwrap();
+        let runner =
+            Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
+        let mut snapshot = snapshot(&files);
+        let config = config_with(setting);
+        let mut p = maintenance(&repo(), &config, &snapshot, monday())
+            .unwrap()
+            .unwrap();
+        runner.prepare(&mut p, &mut snapshot, &config).await;
+        let calls = executor.calls.lock().unwrap();
+        assert!(
+            recorded(&calls)
+                .iter()
+                .any(|(specs, args)| specs.contains(&format!("{php}@8.5.8"))
+                    && starts(args, &["composer", "update", "--no-install"])
+                    && contains(
+                        args,
+                        &["--ignore-platform-req=ext-*", "--ignore-platform-req=lib-*"]
+                    )),
+            "{setting}: {calls:?}"
+        );
+    }
+    assert!(
+        php::tools(rustovate_config::PhpBuild::Static, "8.5.8", "2.10.3")[0]
+            .0
+            .starts_with("http:php[url=https://dl.static-php.dev/")
+    );
+}
+
+/// Static PHP downloads exact releases, so a partial repository pin fails
+/// clearly instead of resolving against another PHP.
+#[tokio::test]
+async fn static_php_requires_an_exact_version() {
+    let files = BTreeMap::from([
+        (
+            "composer.json".to_string(),
+            "{\"require\": {}}\n".to_string(),
+        ),
+        (
+            "composer.lock".to_string(),
+            "{\"packages\": []}\n".to_string(),
+        ),
+        (
+            "mise.toml".to_string(),
+            "[tools]\nphp = \"8.4\"\n".to_string(),
+        ),
+    ]);
+    let executor = fixture(files.clone(), false, false);
+    let temp = tempfile::tempdir().unwrap();
+    let runner =
+        Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snapshot, monday())
+        .unwrap()
+        .unwrap();
+    runner.prepare(&mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+    assert!(
+        p.action
+            .reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("exact version"),
+        "{:?}",
+        p.action
+    );
+}
+
+/// Real Composer relocks offline under the static PHP from the tool store.
+#[tokio::test]
+async fn real_composer_relocks_offline() {
+    let manifest = "{\n    \"name\": \"demo/app\",\n    \"repositories\": [{\"packagist.org\": false}],\n    \"require\": {}\n}\n";
+    let files = BTreeMap::from([
+        ("composer.json".to_string(), manifest.to_string()),
+        (
+            "composer.lock".to_string(),
+            "{\"packages\": [], \"packages-dev\": []}\n".to_string(),
+        ),
+    ]);
+    let executor = fixture(files.clone(), false, true);
+    let temp = tempfile::tempdir().unwrap();
+    let runner =
+        Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snapshot, monday())
+        .unwrap()
+        .unwrap();
+    runner.prepare(&mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert!(
+        p.contents["composer.lock"].contains("content-hash"),
+        "{}",
+        p.contents["composer.lock"]
     );
 }

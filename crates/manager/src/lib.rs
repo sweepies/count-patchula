@@ -9,6 +9,7 @@ pub use edit::{Edit, apply, edits};
 /// Included in persistent extraction fingerprints because backend mappings can change.
 pub const MISE_REGISTRY: &str = rustovate_mise::REGISTRY_JSON;
 mod cargo;
+mod composer;
 mod custom;
 mod devcontainer;
 mod go;
@@ -97,6 +98,7 @@ pub fn supported(manager: Manager) -> bool {
         | Manager::Gradle
         | Manager::Nuget
         | Manager::Bundler
+        | Manager::Composer
         | Manager::Regex => true,
     }
 }
@@ -193,6 +195,7 @@ impl Scanner {
             Manager::Gradle => gradle::selected(path),
             Manager::Nuget => nuget::selected(path),
             Manager::Bundler => matches!(leaf, "Gemfile" | "Gemfile.lock" | ".ruby-version"),
+            Manager::Composer => matches!(leaf, "composer.json" | "composer.lock"),
             Manager::Devcontainer => {
                 matches!(leaf, "devcontainer.json" | ".devcontainer.json")
             }
@@ -284,6 +287,8 @@ impl Scanner {
                 Ok(toolchains::terraform(path, text))
             } else if self.selected(Manager::Terraform, path) {
                 terraform::extract(path, text, &terraform)
+            } else if self.selected(Manager::Composer, path) {
+                composer::extract(path, text, files)
             } else if self.selected(Manager::Bundler, path) {
                 bundler::extract(path, text, files)
             } else if self.selected(Manager::Nuget, path) {

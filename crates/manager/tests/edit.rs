@@ -335,3 +335,11 @@ fn bundler_requirements_keep_their_quotes() {
             .replace("6.4.2", "~> 8.0.0")
     );
 }
+#[test]
+fn composer_constraints_are_replaced_in_place() {
+    let manifest = "{\n    \"require\": {\n        \"laravel/framework\": \"^11.9\"\n    }\n}\n";
+    assert_eq!(
+        replace(Manager::Composer, "composer.json", manifest, "^12.0", None),
+        manifest.replace("^11.9", "^12.0")
+    );
+}

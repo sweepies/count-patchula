@@ -33,7 +33,7 @@ pub(super) fn defaults() -> Result<Vec<(String, String)>, String> {
     let mut tools = Vec::new();
     if let Some(table) = doc.get("tools").and_then(toml_edit::Item::as_table_like) {
         for (tool, version) in table.iter() {
-            if tool != "rust"
+            if !matches!(tool, "rust" | "php" | "composer")
                 && let Some(version) = version.as_str()
             {
                 tools.push((tool.to_string(), version.to_string()));
@@ -42,6 +42,17 @@ pub(super) fn defaults() -> Result<Vec<(String, String)>, String> {
     }
     if let Some(berry) = doc["yarn"]["berry"].as_str() {
         tools.push(("yarn".into(), berry.into()));
+    }
+    // The static build is the default; compiled PHP is built on first use.
+    if let (Some(php), Some(composer)) = (
+        doc["tools"]["php"].as_str(),
+        doc["tools"]["composer"].as_str(),
+    ) {
+        tools.extend(super::php::tools(
+            rustovate_config::PhpBuild::Static,
+            php,
+            composer,
+        ));
     }
     Ok(tools)
 }

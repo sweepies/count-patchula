@@ -4,6 +4,7 @@
 use rustovate_config::{Update, VersionPolicy};
 use semver::{Version, VersionReq};
 use std::cmp::Ordering;
+mod composer;
 mod extended;
 mod maven;
 mod nuget;
@@ -26,6 +27,8 @@ pub enum Ecosystem {
     Nuget,
     /// RubyGems versions and `~>` requirements.
     Rubygems,
+    /// Composer versions and constraints.
+    Composer,
     Hashicorp,
 }
 
@@ -64,6 +67,9 @@ impl Versioning for Ecosystem {
         }
         if *self == Self::Rubygems {
             return rubygems::parse(value);
+        }
+        if *self == Self::Composer {
+            return composer::parse(value);
         }
         if matches!(
             self,
@@ -121,6 +127,11 @@ impl Versioning for Ecosystem {
         {
             return rubygems::order(a, b);
         }
+        if *self == Self::Composer
+            && let (Some(a), Some(b)) = (&left.2, &right.2)
+        {
+            return composer::order(a, b);
+        }
         if let (Some(a), Some(b)) = (&left.1, &right.1) {
             return a.cmp(b);
         }
@@ -142,6 +153,7 @@ impl Versioning for Ecosystem {
             Self::Maven => maven::matches(range, version),
             Self::Nuget => nuget::matches(range, version),
             Self::Rubygems => rubygems::matches(range, version),
+            Self::Composer => composer::matches(range, version),
             Self::Docker | Self::Pep440 | Self::Poetry | Self::Hashicorp => {
                 extended::matches(*self, range, version)
             }
@@ -172,6 +184,9 @@ impl Versioning for Ecosystem {
     fn new_range(&self, current: &str, target: &str, policy: VersionPolicy) -> Result<String> {
         if *self == Self::Rubygems {
             return rubygems::new_range(current, target, policy);
+        }
+        if *self == Self::Composer {
+            return composer::new_range(current, target, policy);
         }
         if matches!(self, Self::Maven | Self::Nuget) {
             // A bare Maven or NuGet version is an exact (soft) requirement. Ranges keep

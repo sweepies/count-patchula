@@ -12,6 +12,8 @@ uv = "0.13.1"
 poetry = "2.5.1"
 dotnet = "9.0.319"
 ruby = "3.4.11"
+php = "8.5.8"
+composer = "2.10.3"
 
 [yarn]
 berry = "4.18.1"

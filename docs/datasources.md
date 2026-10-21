@@ -173,3 +173,10 @@ not read: their releases are outside any release-age wait.
 versions with `created_at`; yanked versions are absent, and platform builds of
 one version collapse into it with the `ruby` platform's date. mise tools tagged
 with underscores (Ruby's `v3_4_11`) normalise to dotted versions.
+
+# Packagist (SWE-153)
+
+`packagist` packages are `vendor/name`. `repo.packagist.org/p2/<vendor>/<name>.json`
+lists tagged releases with their `time`; development branches live in a
+separate `~dev` document that is not read. Names are lowercased for the URL.
+Versions keep their tag spelling (`v12.22.1`), matching `composer.lock`.

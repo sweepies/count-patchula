@@ -646,3 +646,67 @@ end
         );
     }
 }
+#[test]
+fn composer_requirements_and_lock_resolutions() {
+    let mut config = config();
+    config.managers = vec![Manager::Composer];
+    let scanner = Scanner::new(&config).unwrap();
+    let manifest = r#"{
+    "require": {
+        "php": "^8.2",
+        "ext-json": "*",
+        "composer-runtime-api": "^2.2",
+        "laravel/framework": "^11.9",
+        "Guzzlehttp/Guzzle": "~7.8.1",
+        "acme/branch": "dev-main",
+        "acme/any": "*"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "11.2.5"
+    }
+}
+"#;
+    let lock = r#"{"packages": [{"name": "laravel/framework", "version": "v11.14.0"}, {"name": "guzzlehttp/guzzle", "version": "7.8.1"}], "packages-dev": [{"name": "phpunit/phpunit", "version": "11.2.5"}]}"#;
+    let files = Files::from([
+        ("composer.json".into(), manifest.into()),
+        ("composer.lock".into(), lock.into()),
+    ]);
+    let deps = scanner.extract(&files).unwrap().dependencies;
+    let got: Vec<_> = deps
+        .iter()
+        .map(|d| {
+            (
+                d.package.as_str(),
+                d.current.as_str(),
+                d.resolved.as_deref(),
+                d.kind,
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (
+                "laravel/framework",
+                "^11.9",
+                Some("v11.14.0"),
+                DependencyKind::Production
+            ),
+            (
+                "guzzlehttp/guzzle",
+                "~7.8.1",
+                Some("7.8.1"),
+                DependencyKind::Production
+            ),
+            (
+                "phpunit/phpunit",
+                "11.2.5",
+                Some("11.2.5"),
+                DependencyKind::Development
+            ),
+        ]
+    );
+    for dep in &deps {
+        assert_eq!(&manifest[dep.location.start..dep.location.end], dep.current);
+    }
+}
