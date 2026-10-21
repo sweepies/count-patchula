@@ -1,22 +1,62 @@
 name: CI
 
-# Docs-only changes are built by docs.yml instead.
 on:
   push:
     branches: [main]
-    paths-ignore: &ignore
-      - "docs/**"
-      - "README.md"
-      - ".github/workflows/docs.yml"
   pull_request:
-    paths-ignore: *ignore
 
 permissions:
   contents: read
 
+# A newer push to a pull request supersedes its older runs. Runs on main finish,
+# since they publish the build cache.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  ci:
+  # The workflow always runs, so "CI result" can be a required check. Changes
+  # that only touch the docs site (built by docs.yml) skip the Rust jobs.
+  changes:
+    name: Changed paths
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename')
+          elif [ "$BEFORE" = 0000000000000000000000000000000000000000 ]; then
+            files=unknown
+          else
+            # The compare API lists at most 300 files; assume more means Rust.
+            files=$(gh api "repos/$REPO/compare/$BEFORE...$AFTER" --jq 'if (.files | length) >= 300 then "unknown" else .files[].filename end')
+          fi
+          if printf '%s\n' "$files" | grep -Eqv '^(docs/|README\.md$|\.github/workflows/docs\.yml$)'; then
+            rust=true
+          else
+            rust=false
+          fi
+          echo "rust=$rust" >> "$GITHUB_OUTPUT"
+          echo "Rust jobs: $rust" >> "$GITHUB_STEP_SUMMARY"
+
+  ci:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -58,6 +98,8 @@ jobs:
 
   corpus:
     name: Corpus lookup
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -117,6 +159,8 @@ jobs:
 
   benchmarks:
     name: Benchmarks (report only)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 20
@@ -161,9 +205,11 @@ jobs:
         if: always()
         run: |
           if [ -f benchmark-results/summary.txt ]; then
-            printf '<pre>\n' >> "$GITHUB_STEP_SUMMARY"
-            mise exec -- cat benchmark-results/summary.txt >> "$GITHUB_STEP_SUMMARY"
-            printf '</pre>\n' >> "$GITHUB_STEP_SUMMARY"
+            {
+              printf '<pre>\n'
+              mise exec -- cat benchmark-results/summary.txt
+              printf '</pre>\n'
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Publish report-only results
         if: always()
@@ -173,3 +219,20 @@ jobs:
           path: benchmark-results/
           if-no-files-found: warn
           retention-days: 14
+
+  # The one check to require. Skipped Rust jobs count as passing; failed or
+  # cancelled ones, or a failed path check, do not. Benchmarks never gate.
+  result:
+    name: CI result
+    needs: [changes, ci, corpus]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "A required job did not pass: $RESULTS"
+          exit 1
+      - run: echo "Required jobs passed or were skipped."
