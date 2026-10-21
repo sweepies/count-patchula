@@ -91,10 +91,14 @@ Install [mise](https://mise.jdx.dev), then `mise trust` and `mise install`.
 ```sh
 mise run build      # build the workspace
 mise run test       # offline tests
-mise run lint       # rustfmt and Clippy, warnings denied
+mise run lint       # rustfmt, Clippy (warnings denied) and jactionlint
 mise run ci         # fixtures check, lint, test and build
 mise run docs:dev   # the documentation site
 ```
+
+The check to require on `main` is **CI result**. It always reports, and
+passes when the Rust jobs pass or were skipped because a change only touched
+the docs site.
 
 The site is deployed to Cloudflare Workers by Workers Builds, Cloudflare's
 GitHub integration. It installs mise and runs `mise run docs:deploy` on `main`
