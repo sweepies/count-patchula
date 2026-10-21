@@ -11,12 +11,10 @@
   </p>
 </div>
 
-The Count reads your repositories' manifests through the GitHub API, looks up
-newer versions, and opens one pull request per update, with a regenerated
-lockfile, release notes and a commit signed by GitHub. One process handles the
-whole batch: repositories run concurrently, every package is looked up once
-however many repositories use it, and a repository that has not changed costs
-one GraphQL query on the write side.
+The Count reads your repositories' manifests, looks up newer versions, and
+opens one pull request per update, with release notes. One process handles the
+whole batch: repositories run concurrently, and every package is looked up once
+however many repositories use it.
 
 ## Get started
 
@@ -78,11 +76,15 @@ the method and every run.
 
 ## Coming from Renovate
 
-The Count is not a Renovate clone, and he only works on GitHub. The
-[compatibility matrix](docs/renovate/compatibility.md)
+The [compatibility matrix](docs/renovate/compatibility.md)
 lists every manager, datasource and feature, and [migrating a
 config](docs/renovate/migrating.md) maps
 `renovate.json` options onto Pkl.
+
+Count Patchula is an independent implementation under the MIT licence. Renovate
+(AGPL-3.0) may be run as a black box to compare results, but its source code,
+preset data and test fixtures are never read, copied or adapted into this
+repository.
 
 ## Development
 
@@ -96,26 +98,23 @@ mise run ci         # fixtures check, lint, test and build
 mise run docs:dev   # the documentation site
 ```
 
-The check to require on `main` is **CI result**. It always reports, and
-passes when the Rust jobs pass or were skipped because a change only touched
-the docs site.
-
-The site is deployed to Cloudflare Workers by Workers Builds, Cloudflare's
-GitHub integration. It installs mise and runs `mise run docs:deploy` on `main`
-and `mise run docs:upload` on other branches, so each pull request that touches
-`docs/` or `mise.toml` gets a preview.
-
 Builds go through [mr boxington](https://mr-boxington.jdx.dev) for a shared
 Cargo cache. Tests never touch the network: they replay HTTP fixtures the Count
 recorded himself. Tools only the tests need, like the lockfile engines, are
 task-scoped, so a plain `mise install` does not fetch them.
 
-## Clean-room rule
+## Thanks
 
-Count Patchula is an independent implementation under the MIT licence. Renovate
-(AGPL-3.0) may be run as a black box to compare results, but its source code,
-preset data and test fixtures are never read, copied or adapted into this
-repository.
+Count Patchula would not exist without [@jdx](https://github.com/jdx). His
+work inspired it, and it is built on his tools at every step:
+[mise](https://mise.jdx.dev) installs every toolchain and lockfile engine,
+[aube](https://aube.sh) writes the npm and pnpm locks,
+[mr boxington](https://mr-boxington.jdx.dev) caches the builds,
+[usage](https://usage.jdx.dev) generates the CLI reference and completions,
+[tak](https://github.com/jdx/tak) runs the benchmarks,
+[fnox](https://fnox.jdx.dev) keeps the release secrets,
+[communique](https://communique.jdx.dev) writes the release notes, and
+[packslip](https://packslip.dev) signs the releases. Thank you, Jeff.
 
 ## License
 

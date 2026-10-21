@@ -38,16 +38,8 @@ holds:
   `clean`. Conflicts, required reviews, a behind base or an unknown state wait.
 - The head has at least one check run or commit status, every check run is
   completed with success, neutral or skipped, and every status is a success.
-  Pending, failed, cancelled, missing or unreadable results block the merge.
 
-Ownership and mergeability are read again after the checks. The merge call sends
-the receipt's head SHA, and GitHub still enforces branch protection and rulesets.
-There is no admin bypass and no direct push to the default branch. After a merge
-the head branch is deleted, unless GitHub already did it, with a lease so a moved
-branch is left alone.
-
-The App needs read access to checks and commit statuses for this. The Count
-never changes a repository's auto-merge setting or its branch protection.
+The App needs read access to checks and commit statuses for this.
 
 The dashboard shows open PRs that are waiting on checks or policy, and the last
 twenty fallback merges.
