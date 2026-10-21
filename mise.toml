@@ -198,14 +198,6 @@ dir = "docs"
 tools = { node = "24.21.0", aube = "2.8.1" }
 run = "aube exec wrangler deploy"
 
-[tasks."docs:preview"]
-description = "Upload the built site as a Cloudflare preview version under an alias, without deploying it"
-depends = ["docs:build"]
-dir = "docs"
-tools = { node = "24.21.0", aube = "2.8.1" }
-usage = 'arg "<alias>" help="Preview alias, such as pr-42 (lowercase letters, digits and dashes)"'
-run = 'aube exec wrangler versions upload --preview-alias "${usage_alias?}" --message "Preview ${usage_alias?}"'
-
 [tasks."corpus:snapshot"]
 description = "Regenerate tests/corpus-extraction.tsv after an intended extraction change"
 env = { PATCHULA_UPDATE_SNAPSHOT = "1" }
