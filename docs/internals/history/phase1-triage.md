@@ -40,9 +40,8 @@ Regression coverage includes the observed 72-hour-17-minute holdback and the
 
 The last four fields were unocss and @unocss/reset, 66.10.5 versus 66.11.0.
 The original capture was already beyond 72 hours (publication
-2026-10-12T06:41:36.594Z; clips snapshot 2026-10-15T06:43:43.844Z).
-The clips-only Renovate rerun at **2026-10-15T06:59**, captured in
-`renovate-clips.jsonl`, still held 66.11.0 at **72 hours
+2026-10-12T06:41:36.594Z; snapshot 2026-10-15T06:43:43.844Z).
+A single-repository Renovate rerun at **2026-10-15T06:59** still held 66.11.0 at **72 hours
 17 minutes** and proposed 66.10.5 for both packages. 66.11.0 was
 `dist-tags.latest` and was not deprecated. Earlier runs held effect 4.0.4 at
 about 49 hours and renovate 44.155.8 at about 33 hours, but proposed effect
@@ -224,7 +223,7 @@ network outages can still change proposal availability and remain warnings.
 
 The baseline was captured **04:44:02–04:51:55 UTC**; patchula evaluated at
 **05:51:26 UTC**. Five comparable occurrences crossed the 24-hour eligibility
-boundary between them: wrangler 4.151.0 in clips.sweepy.dev's mise.toml and
+boundary between them: wrangler 4.151.0 in one repository's mise.toml and
 package.json and maccrae-wiki's package.json (eligible 05:50:43 UTC), and uv
 0.13.1 in devops-minter's .mise.toml and maccrae-infra's mise.toml (eligible
 05:15:30 UTC). They are already departure-23 rows, not members of the 57.

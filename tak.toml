@@ -10,8 +10,8 @@ cmd = ["./target/release/patchula", "--version"]
 [bench.config-cafeteria-order-tracker]
 cmd = ["./target/release/patchula", "config", "check", "examples/cafeteria-order-tracker.pkl"]
 
-[bench.config-clips-sweepy-dev]
-cmd = ["./target/release/patchula", "config", "check", "examples/clips.sweepy.dev.pkl"]
+[bench.config-defaults]
+cmd = ["./target/release/patchula", "config", "check", "examples/defaults.pkl"]
 
 [bench.config-devops-minter]
 cmd = ["./target/release/patchula", "config", "check", "examples/devops-minter.pkl"]

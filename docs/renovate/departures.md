@@ -313,38 +313,24 @@ with identical update targets. It never excludes version or range differences.
 - **Count Patchula:** Follow mise's default minimum_release_age of 24 hours for dated releases; choose the newest eligible release and report held-back versions
 - **Why:** A short explicit default with release-date evidence; undated releases have no delay
 
-The default follows [mise's minimum_release_age](https://mise.jdx.dev/configuration/settings.html#minimum_release_age):
-24 hours when a release timestamp is available. GitHub tags use the matching
-release publishedAt, otherwise the annotated tagger date; a lightweight tag
-without a release is undated and has no wait. Commit dates are never release
-age evidence. Tag-object/catalog caches are versioned to discard old commit
-dates; release dates revalidate even when the tag namespace is unchanged. The comparison rule requires an
-explicit 24-hour policy and timestamp evidence that patchula's newer proposal is
-at least 24 and less than 96 hours old, plus a strictly older Renovate target in
-the same update class. A newer baseline target instead requires an unexpired
-24-hour held-target record. Undated, older-than-window and unrelated target
-differences remain actionable. This is a narrow explanation of
-an empirical comparison window, not a claim about Renovate's exact rule or
-all its defaults. Black-box runs held effect 4.0.4 at about 49 hours and
-renovate 44.155.8 at about 33 hours, but proposed effect 4.0.3 at about 84 hours.
-A clips.sweepy.dev-only rerun at 2026-10-15T06:59 still proposed unocss and
-@unocss/reset 66.10.5 instead of 66.11.0, published 2026-10-12T06:41:36Z
-(72 hours 17 minutes old). The latter was dist-tags.latest and not deprecated.
-Thus the observed holdback window lies between 72 hours 17 minutes and about
-84 hours; 96 hours is a conservative empirical upper bound for comparison.
-Renovate's exact rule is unknown from output alone; its source was not read.
-New reports additionally allow a missing exact target to be classified when
-`metadata.lookup.evaluatedAt` falls inside that target's recorded 24-hour
-held-back window. Only matching package/current identities, digest-free version
-upgrades and the exact summary version/class qualify. Missing evaluation evidence,
-elapsed windows and fallback extras remain actionable.
+Dated releases wait 24 hours, the same default as mise's
+[`minimum_release_age`](https://mise.jdx.dev/configuration/settings.html#minimum_release_age).
+A release is dated by its registry publish time. A GitHub tag is dated by its
+release's publish time, or else by an annotated tag's date. A lightweight tag
+without a release is undated and has no wait. Commit dates never count.
 
-For action tag upgrades only, the same 24–96-hour newer-target explanation can
-also classify the paired digest difference: identical package/current identity,
-same numeric alias and upgrade class, both 40-digit commit hashes, explicit
-24-hour policy and distinct ordered full target versions are required. A changed
-hash for the same target version remains actionable. This is a policy-window
-departure, not evidence that the baseline's one-hour capture skew caused it.
+In the comparison runs Renovate held new releases for longer, somewhere between
+about 72 and 84 hours, judging from its output alone. A difference is
+explained by this departure when:
+
+- the Count's target is newer than Renovate's, in the same update class, and
+  between 24 and 96 hours old; or
+- the Count is still holding the exact target Renovate proposed, inside its
+  24-hour window at the time of the lookup.
+
+For GitHub Actions the matching digest change is explained on the same terms.
+Anything else stays a real difference: undated releases, targets older than
+the window, or a changed digest for the same version.
 
 ### npm range edits {#npm-range-edits}
 

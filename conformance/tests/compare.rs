@@ -263,7 +263,7 @@ fn release_age_departure_requires_newer_target_and_timestamp_evidence_inside_win
                 .all(|d| d.classification == Class::FieldMismatch)
         );
     }
-    // Observed clips-only rerun: unocss 66.11.0 was still held at 72 h 17 min.
+    // Observed single-repository rerun: unocss 66.11.0 was still held at 72 h 17 min.
     let mut observed = b.clone();
     observed.repositories[0].package_files[0].dependencies[0].updates[0]
         .release_age
