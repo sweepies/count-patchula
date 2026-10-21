@@ -234,21 +234,24 @@ impl Scanner {
             Manager::Flux,
             Manager::HelmValues,
         ];
-        let documents: BTreeMap<_, _> = files
+        // A file that does not parse (a template such as ERB-rendered YAML)
+        // is skipped with a warning. Warnings suppress branch cleanup, so the
+        // skipped file's open updates are never closed as obsolete.
+        let mut documents = BTreeMap::new();
+        let mut locations = BTreeMap::new();
+        for (path, text) in files
             .iter()
             .filter(|(path, _)| yaml_managers.iter().any(|m| self.selected(*m, path)))
-            .map(|(p, t)| Ok((p.as_str(), yaml::docs(t).map_err(|e| format!("{p}: {e}"))?)))
-            .collect::<Result<_, String>>()?;
+        {
+            match yaml::docs(text).and_then(|d| Ok((d, yaml_locations::parse(text)?))) {
+                Ok((docs, spans)) => {
+                    documents.insert(path.as_str(), docs);
+                    locations.insert(path.as_str(), spans);
+                }
+                Err(e) => result.warnings.push(format!("{path}: skipped: {e}")),
+            }
+        }
         let repos = yaml::repositories(&documents);
-        let locations: BTreeMap<_, _> = documents
-            .keys()
-            .map(|path| {
-                Ok((
-                    *path,
-                    yaml_locations::parse(&files[*path]).map_err(|e| format!("{path}: {e}"))?,
-                ))
-            })
-            .collect::<Result<_, String>>()?;
         // package.json shared by npm/bun is scanned once, preferring bun only
         // when npm is disabled. Lockfiles provide resolution, never transitive deps.
         let node = if self.config.managers.contains(&Manager::Npm) {
@@ -310,9 +313,10 @@ impl Scanner {
             } else {
                 Ok(Vec::new())
             };
-            result
-                .dependencies
-                .extend(extraction.map_err(|e| format!("{path}: {e}"))?);
+            match extraction {
+                Ok(dependencies) => result.dependencies.extend(dependencies),
+                Err(e) => result.warnings.push(format!("{path}: skipped: {e}")),
+            }
             for manager in [
                 Manager::Compose,
                 Manager::Kubernetes,
@@ -320,18 +324,14 @@ impl Scanner {
                 Manager::Flux,
                 Manager::HelmValues,
             ] {
-                if self.selected(manager, path) {
-                    result.dependencies.extend(
-                        yaml::extract(
-                            manager,
-                            path,
-                            text,
-                            &documents[path.as_str()],
-                            &locations[path.as_str()],
-                            &repos,
-                        )
-                        .map_err(|e| format!("{path}: {e}"))?,
-                    );
+                if self.selected(manager, path)
+                    && let (Some(docs), Some(spans)) =
+                        (documents.get(path.as_str()), locations.get(path.as_str()))
+                {
+                    match yaml::extract(manager, path, text, docs, spans, &repos) {
+                        Ok(dependencies) => result.dependencies.extend(dependencies),
+                        Err(e) => result.warnings.push(format!("{path}: skipped: {e}")),
+                    }
                 }
             }
             if self.selected(Manager::Regex, path) {

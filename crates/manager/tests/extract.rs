@@ -178,12 +178,43 @@ fn npm_is_strict_json_and_bun_lock_is_jsonc() {
         "{\"dependencies\":{\"a\":\"1.0.0\",}}",
         "{\"dependencies\":{\"a\":\"1.0.0\" \"b\":\"2.0.0\"}}",
     ] {
-        assert!(
-            scanner
-                .extract(&Files::from([("package.json".into(), text.into())]))
-                .is_err()
-        );
+        let extraction = scanner
+            .extract(&Files::from([("package.json".into(), text.into())]))
+            .unwrap();
+        assert!(extraction.dependencies.is_empty());
+        assert!(extraction.warnings[0].starts_with("package.json: skipped:"));
     }
+}
+/// A file that does not parse, such as an ERB-templated YAML config, is
+/// skipped with a warning while the rest of the repository is extracted.
+#[test]
+fn unparseable_files_are_skipped_with_a_warning() {
+    let defaults = rustovate_config::load_files(
+        "/repo/rustovate.pkl",
+        std::collections::BTreeMap::from([(
+            "/repo/rustovate.pkl".into(),
+            "amends \"Rustovate.pkl\"".into(),
+        )]),
+    )
+    .unwrap();
+    let scanner = Scanner::new(&defaults).unwrap();
+    let files = Files::from([
+        (
+            "config/email.yml".into(),
+            "production:\n  smtp:\n    tls: <%= ENV.fetch('SMTP_TLS', false) == 'true' ? true : nil %>\n".into(),
+        ),
+        ("compose.yml".into(), "services:\n  db:\n    image: postgres:16.4\n".into()),
+    ]);
+    let extraction = scanner.extract(&files).unwrap();
+    assert_eq!(
+        extraction.dependencies.len(),
+        1,
+        "{:?}",
+        extraction.dependencies
+    );
+    assert_eq!(extraction.dependencies[0].file, "compose.yml");
+    assert_eq!(extraction.warnings.len(), 1, "{:?}", extraction.warnings);
+    assert!(extraction.warnings[0].starts_with("config/email.yml: skipped:"));
 }
 #[test]
 fn catalogs_and_node_version_files_are_npm_dependencies() {
