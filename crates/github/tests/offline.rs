@@ -202,7 +202,10 @@ impl Transport for Concurrent {
     fn send(&self, request: reqwest::Request) -> Exchange<'_> {
         Box::pin(async move {
             assert!(request.headers()["authorization"].is_sensitive());
-            assert_eq!(request.headers()["user-agent"], "patchula/0.1.0");
+            assert_eq!(
+                request.headers()["user-agent"],
+                concat!("patchula/", env!("CARGO_PKG_VERSION"))
+            );
             let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
             self.maximum.fetch_max(active, Ordering::SeqCst);
             tokio::time::sleep(Duration::from_millis(10)).await;
