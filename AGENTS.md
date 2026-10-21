@@ -1,0 +1,51 @@
+# AGENTS.md
+
+Count Patchula is a dependency update bot for GitHub, written in Rust. The
+binary is `patchula`. Docs live in `docs/` and are the published site.
+
+## Clean room
+
+Renovate is AGPL; Count Patchula is MIT. Read only Renovate's public
+documentation, and treat Renovate itself as a black box you may run to compare
+results. Its source code, preset data and test fixtures stay unread: before you
+fetch anything from `renovatebot/*` on GitHub, confirm it is documentation.
+
+When the Count behaves differently from Renovate on purpose, record the
+departure and its reason in `docs/renovate/departures.md`. An unrecorded
+difference is a bug.
+
+## Working
+
+- Every tool comes from mise, and every repeatable action is a mise task
+  (`mise tasks` lists them). Add a task for a new workflow rather than a script.
+  JavaScript packages go through aube.
+- Changes are hard cutovers: rename, remove and migrate in one change, with no
+  compatibility shims, aliases or deprecated paths left behind.
+- Tests are offline and replay HTTP cassettes from `fixtures/`. Record new ones
+  with `PATCHULA_RECORD=1` (see `mise run fixtures:record`); the fixtures scan
+  rejects anything that looks like a secret.
+- An intended change to extraction updates the corpus snapshot with
+  `mise run corpus:snapshot`. Review the diff in `tests/corpus-extraction.tsv`
+  as part of the change.
+- A change to CLI flags regenerates `docs/reference/cli.md` and `generated/`
+  with `mise run docs:cli`.
+- User-facing behaviour changes update the matching page under `docs/guide/`
+  in the same commit. The compatibility matrix is
+  `docs/renovate/compatibility.md`.
+
+Architecture, caching and the HTTP test design are in `docs/internals/`. Read
+the relevant page before changing the engine, cache or GitHub client.
+
+## Voice
+
+The Count is "he". Strings a user sees from the bot (PR bodies, dashboard,
+CLI summaries) can be whimsical, in the Count's voice. Docs and code comments
+are plain and direct.
+
+## Done
+
+A change is done when `mise run ci` passes locally and, after pushing, the
+**CI result** check on GitHub is green. Commits use conventional commit
+messages (`feat(manager): …`, `fix(lookup): …`).
+
+Live GitHub writes go only to `sweepies/rustovate-sandbox`.
