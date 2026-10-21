@@ -1,6 +1,7 @@
 //! Pure extraction and surgical manifest edits: no tools, network or filesystem access.
 #![forbid(unsafe_code)]
 mod actions;
+mod bundler;
 mod edit;
 pub use actions::replacement as action_replacement;
 pub use actions::runner_replacement;
@@ -95,6 +96,7 @@ pub fn supported(manager: Manager) -> bool {
         | Manager::Maven
         | Manager::Gradle
         | Manager::Nuget
+        | Manager::Bundler
         | Manager::Regex => true,
     }
 }
@@ -190,6 +192,7 @@ impl Scanner {
             Manager::Maven => leaf == "pom.xml",
             Manager::Gradle => gradle::selected(path),
             Manager::Nuget => nuget::selected(path),
+            Manager::Bundler => matches!(leaf, "Gemfile" | "Gemfile.lock" | ".ruby-version"),
             Manager::Devcontainer => {
                 matches!(leaf, "devcontainer.json" | ".devcontainer.json")
             }
@@ -281,6 +284,8 @@ impl Scanner {
                 Ok(toolchains::terraform(path, text))
             } else if self.selected(Manager::Terraform, path) {
                 terraform::extract(path, text, &terraform)
+            } else if self.selected(Manager::Bundler, path) {
+                bundler::extract(path, text, files)
             } else if self.selected(Manager::Nuget, path) {
                 nuget::extract(path, text)
             } else if self.selected(Manager::Gradle, path) {

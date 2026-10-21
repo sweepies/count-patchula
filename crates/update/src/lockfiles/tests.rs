@@ -1423,7 +1423,7 @@ fn lockfile_engine_pins_match_the_repository_mise_config() {
             defaults["yarn"]["berry"].as_str(),
             "{task}"
         );
-        for tool in ["python", "uv", "poetry", "dotnet"] {
+        for tool in ["python", "uv", "poetry", "dotnet", "ruby"] {
             assert_eq!(
                 tools[tool].as_str(),
                 defaults["tools"][tool].as_str(),
@@ -1940,5 +1940,41 @@ async fn real_dotnet_restore_regenerates_packages_lock_json() {
         !p.contents.keys().any(|k| k.contains("/obj/")),
         "{:?}",
         p.contents.keys()
+    );
+}
+
+/// Real Bundler relocks offline against the runner's mise Ruby, ignoring a
+/// repository .bundle/config.
+#[tokio::test]
+async fn real_bundler_relocks_offline() {
+    let files = BTreeMap::from([
+        ("Gemfile".to_string(), "source \"https://rubygems.org\"\n".to_string()),
+        ("Gemfile.lock".to_string(), "GEM\n  remote: https://rubygems.org/\n  specs:\n\nPLATFORMS\n  ruby\n\nDEPENDENCIES\n\nBUNDLED WITH\n   2.6.9\n".to_string()),
+        (".ruby-version".to_string(), "3.4.11\n".to_string()),
+    ]);
+    let executor = fixture(files.clone(), false, true);
+    let temp = tempfile::tempdir().unwrap();
+    let runner =
+        Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snapshot, monday())
+        .unwrap()
+        .unwrap();
+    runner.prepare(&mut p, &mut snapshot, &config).await;
+    assert!(
+        matches!(
+            p.action.status,
+            ActionStatus::Planned | ActionStatus::Skipped
+        ),
+        "{:?}",
+        p.action
+    );
+    let calls = executor.calls.lock().unwrap();
+    assert!(
+        recorded(&calls)
+            .iter()
+            .any(|(specs, args)| specs.iter().any(|s| s == "ruby@3.4.11")
+                && starts(args, &["bundle", "lock", "--update"]))
     );
 }

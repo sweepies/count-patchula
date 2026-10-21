@@ -2,12 +2,12 @@
 /// this module, or amend an organisation module that itself amends this one.
 module Rustovate
 
-typealias Manager = "npm"|"bun"|"github-actions"|"mise"|"cargo"|"dockerfile"|"compose"|"go"|"terraform"|"kubernetes"|"kustomize"|"flux"|"helm-values"|"requirements"|"pyproject"|"pre-commit"|"helm"|"devcontainer"|"maven"|"gradle"|"nuget"|"regex"
-typealias Source = "npm"|"github-releases"|"github-tags"|"github-runners"|"docker"|"crates"|"go"|"terraform"|"pypi"|"helm"|"oci"|"mise"|"forge-tags"|"maven"|"nuget"
+typealias Manager = "npm"|"bun"|"github-actions"|"mise"|"cargo"|"dockerfile"|"compose"|"go"|"terraform"|"kubernetes"|"kustomize"|"flux"|"helm-values"|"requirements"|"pyproject"|"pre-commit"|"helm"|"devcontainer"|"maven"|"gradle"|"nuget"|"bundler"|"regex"
+typealias Source = "npm"|"github-releases"|"github-tags"|"github-runners"|"docker"|"crates"|"go"|"terraform"|"pypi"|"helm"|"oci"|"mise"|"forge-tags"|"maven"|"nuget"|"rubygems"
 typealias Update = "major"|"minor"|"patch"|"digest"|"pin"
 typealias VersionPolicy = "exact"|"preserve"|"widen"
 typealias ReleaseChannel = "stable"|"lts"
-typealias Scheme = "semver"|"docker"|"pep440"|"poetry"|"maven"|"nuget"|"go"|"hashicorp"|"loose"
+typealias Scheme = "semver"|"docker"|"pep440"|"poetry"|"maven"|"nuget"|"rubygems"|"go"|"hashicorp"|"loose"
 /// Dependency roles emitted by first-release managers. npm/bun use the first
 /// four roles; Cargo also uses build. Ordinary Go/Python/regex packages use
 /// production. Actions distinguish steps from reusable workflows; containers,
@@ -128,7 +128,7 @@ class Lockfiles {
 managers: Listing<Manager> = new {
   "npm"; "bun"; "github-actions"; "mise"; "cargo"; "dockerfile"; "compose"
   "go"; "terraform"; "kubernetes"; "kustomize"; "flux"; "helm-values"
-  "requirements"; "pyproject"; "pre-commit"; "helm"; "devcontainer"; "maven"; "gradle"; "nuget"; "regex"
+  "requirements"; "pyproject"; "pre-commit"; "helm"; "devcontainer"; "maven"; "gradle"; "nuget"; "bundler"; "regex"
 }
 defaults: Policy = new {}
 rules: Listing<Rule> = new {}

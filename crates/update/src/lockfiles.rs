@@ -5,6 +5,7 @@ mod mise;
 mod node;
 mod process;
 mod python;
+mod ruby;
 mod tools;
 pub use tools::tools_dir;
 mod wrapper;
@@ -33,6 +34,7 @@ pub enum Ecosystem {
     Python,
     GradleWrapper,
     Dotnet,
+    Ruby,
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Job {
@@ -118,6 +120,15 @@ pub(crate) fn job(
             }
             return Ok(None);
         }
+        Manager::Bundler if dep.kind == rustovate_config::DependencyKind::Toolchain => {
+            return Ok(None);
+        }
+        Manager::Bundler => {
+            let Some(root) = nearest(&dep.file, &snapshot.paths, &["Gemfile.lock"]) else {
+                return Ok(None);
+            };
+            (Ecosystem::Ruby, root)
+        }
         // NuGet locks sit beside each project; a manifest under a directory
         // with locks restores that directory's solution or project.
         Manager::Nuget => {
@@ -189,8 +200,11 @@ pub(crate) fn job(
     };
     let targeted = matches!(
         ecosystem,
-        Ecosystem::Cargo | Ecosystem::Go | Ecosystem::Python
-    ) && matches!(dep.source, Source::Crates | Source::Go | Source::Pypi);
+        Ecosystem::Cargo | Ecosystem::Go | Ecosystem::Python | Ecosystem::Ruby
+    ) && matches!(
+        dep.source,
+        Source::Crates | Source::Go | Source::Pypi | Source::Rubygems
+    );
     Ok(Some(Job {
         ecosystem,
         directory: root.into(),
@@ -239,6 +253,7 @@ pub fn maintenance(
                 Ecosystem::Python
             }
             "packages.lock.json" if config.managers.contains(&Manager::Nuget) => Ecosystem::Dotnet,
+            "Gemfile.lock" if config.managers.contains(&Manager::Bundler) => Ecosystem::Ruby,
             "mise.lock" if config.managers.contains(&Manager::Mise) => Ecosystem::Mise,
             "go.mod" if config.managers.contains(&Manager::Go) => Ecosystem::Go,
             ".terraform.lock.hcl" if config.managers.contains(&Manager::Terraform) => {
@@ -486,6 +501,21 @@ impl Runner {
                 .collect();
             let cwd = root.join(&directory);
             match ecosystem {
+                Ecosystem::Ruby => {
+                    self.bundle_lock(
+                        node::NodeContext {
+                            driver: &driver,
+                            root: &root,
+                            baseline: &baseline,
+                            directory: &directory,
+                            config,
+                            versions: &versions,
+                            maintenance: plan.maintenance,
+                        },
+                        &jobs,
+                    )
+                    .await?;
+                }
                 Ecosystem::Dotnet => {
                     let edited = plan
                         .contents
@@ -779,7 +809,7 @@ fn validate_targets(
         let leaf = change.file.rsplit('/').next().unwrap_or("");
         if !matches!(
             leaf,
-            "package.json" | "Cargo.toml" | "go.mod" | "pyproject.toml"
+            "package.json" | "Cargo.toml" | "go.mod" | "pyproject.toml" | "Gemfile"
         ) && !change.file.ends_with(".tf")
         {
             continue;
@@ -808,7 +838,11 @@ fn validate_targets(
         if !unread
             && (matches!(
                 dep.manager,
-                Manager::Npm | Manager::Bun | Manager::Cargo | Manager::Pyproject
+                Manager::Npm
+                    | Manager::Bun
+                    | Manager::Cargo
+                    | Manager::Pyproject
+                    | Manager::Bundler
             ) || (dep.source == Source::Terraform
                 && dep.kind == rustovate_config::DependencyKind::Provider))
             && let Some(version) = &change.version
@@ -841,6 +875,7 @@ fn versions(
         "uv",
         "poetry",
         "dotnet",
+        "ruby",
     ] {
         versions.insert(
             tool.into(),
@@ -930,6 +965,8 @@ fn writable(path: &str) -> bool {
             | "pyproject.toml"
             | "gradle-wrapper.properties"
             | "packages.lock.json"
+            | "Gemfile"
+            | "Gemfile.lock"
             | "Directory.Packages.props"
             | "Directory.Build.props"
             | "dotnet-tools.json"
@@ -955,7 +992,7 @@ fn materialized(path: &str) -> bool {
         )
         || path.ends_with(".go")
         || path.ends_with(".rs")
-        || [".csproj", ".fsproj", ".vbproj", ".sln", ".slnx"]
+        || [".csproj", ".fsproj", ".vbproj", ".sln", ".slnx", ".gemspec"]
             .iter()
             .any(|e| path.ends_with(e))
         || matches!(

@@ -455,6 +455,7 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
                             | "maven"
                             | "gradle"
                             | "nuget"
+                            | "bundler"
                             | "compose"
                             | "regex"
                             | "dockerfile"

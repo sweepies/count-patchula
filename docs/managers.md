@@ -154,3 +154,17 @@ lockfile runner runs `dotnet restore --force-evaluate` on that directory's singl
 solution (else project) with the `global.json` SDK or the pinned default
 (9.0.319), an isolated `NUGET_PACKAGES` and telemetry off, removes the `obj/`
 intermediates restore writes, and fails the branch if no lock changed.
+
+`bundler` reads `gem "name", "requirement"` lines and the `ruby` directive in a
+`Gemfile`, resolving gems from `Gemfile.lock` specs (platform suffixes
+ignored), plus `.ruby-version` (`ruby-` prefix accepted). Gems with `git:`,
+`path:` or `github:` sources, gems with two requirement strings and commented
+lines are skipped. Requirements use the `rubygems` scheme: Gem version order
+(letters make a prerelease, `1.0.0.rc1 < 1.0.0`, four-part versions such as
+`8.1.3.1`) and `=`, `!=`, `<`, `<=`, `>`, `>=`, `~>` requirements, rewritten with
+their operator and precision (`~> 7.1` becomes `~> 8.0`). The lockfile runner
+runs `bundle lock --update <gems>` (all gems for maintenance) with Ruby from
+`.ruby-version`, the Gemfile's `ruby` directive or the pinned 3.4.11, a scratch
+`GEM_HOME`/`BUNDLE_USER_HOME`, and `BUNDLE_APP_CONFIG` pointed away from any
+repository `.bundle/config`. A Gemfile is Ruby: evaluating it runs repository
+code inside that scrubbed environment, as Bundler always does.

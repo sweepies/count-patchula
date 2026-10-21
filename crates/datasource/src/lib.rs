@@ -9,6 +9,7 @@ mod mise;
 pub mod notes;
 mod nuget;
 mod registries;
+mod rubygems;
 use rustovate_cache::{Cache, Release};
 use rustovate_config::Source;
 use rustovate_http::Cached;
@@ -145,6 +146,7 @@ impl Client {
             Source::ForgeTags => self.forge_tags(package).await,
             Source::Maven => self.maven(package).await,
             Source::Nuget => self.nuget(package).await,
+            Source::Rubygems => self.rubygems(package).await,
         }
     }
     async fn npm(&self, package: &str) -> Result<Catalog> {

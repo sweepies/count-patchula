@@ -179,6 +179,11 @@ fn quote(dep: &Dependency, raw: &str, target: &str) -> Result<String, String> {
         if parsed.as_str() != Some(target) && !parsed.is_number() {
             return serde_json::to_string(target).map_err(|e| e.to_string());
         }
+    } else if dep.manager == Manager::Bundler {
+        // Gem requirements sit inside a Ruby string and may contain spaces.
+        if target.contains(['"', '\'', '\\']) {
+            return Err("unsafe replacement inside a Ruby string".into());
+        }
     } else if target.chars().any(char::is_whitespace) && dep.manager != Manager::Regex {
         return Err("unsafe unquoted replacement".into());
     }

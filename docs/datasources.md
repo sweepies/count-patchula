@@ -166,3 +166,10 @@ older releases are outside any release-age wait.
 (`registration5-gz-semver2`, inline or linked) dates them, marks unlisted
 releases (published 1900) as yanked and records deprecations. Older pages are
 not read: their releases are outside any release-age wait.
+
+# RubyGems (SWE-153)
+
+`rubygems` packages are gem names. `api/v1/versions/<gem>.json` lists published
+versions with `created_at`; yanked versions are absent, and platform builds of
+one version collapse into it with the `ruby` platform's date. mise tools tagged
+with underscores (Ruby's `v3_4_11`) normalise to dotted versions.

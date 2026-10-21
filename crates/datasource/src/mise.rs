@@ -21,7 +21,17 @@ impl Client {
                         else {
                             return false;
                         };
-                        v.version = value;
+                        // Ruby tags its 3.x releases v3_4_11 and its 4.x
+                        // releases v4.0.7; underscores separate release numbers.
+                        v.version = if value.contains('_')
+                            && value
+                                .split('_')
+                                .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+                        {
+                            value.replace('_', ".")
+                        } else {
+                            value
+                        };
                         true
                     });
                 }

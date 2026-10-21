@@ -325,3 +325,13 @@ fn nuget_attribute_child_and_json_edits() {
         tools.replace("9.0.0", "9.0.1")
     );
 }
+#[test]
+fn bundler_requirements_keep_their_quotes() {
+    let gemfile = "gem \"rails\", \"~> 7.1.0\"\ngem 'puma', '6.4.2'\n";
+    assert_eq!(
+        replace(Manager::Bundler, "Gemfile", gemfile, "~> 8.0.0", None),
+        gemfile
+            .replace("~> 7.1.0", "~> 8.0.0")
+            .replace("6.4.2", "~> 8.0.0")
+    );
+}

@@ -592,3 +592,57 @@ fn nuget_projects_central_versions_tools_and_sdk() {
         );
     }
 }
+#[test]
+fn bundler_gems_lock_resolutions_and_ruby_pins() {
+    let mut config = config();
+    config.managers = vec![Manager::Bundler];
+    let scanner = Scanner::new(&config).unwrap();
+    let gemfile = r#"source "https://rubygems.org"
+ruby "3.3.4"
+gem "rails", "~> 7.1.0"
+gem 'puma', '>= 6.0'
+gem "pg", ">= 1.1", "< 2.0"
+gem "mine", git: "https://example.test/mine.git"
+gem "local", "1.0", path: "../local"
+# gem "commented", "1.0"
+group :test do
+  gem "rspec-rails", "6.1.3"
+end
+"#;
+    let lock = "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (7.1.3.4)\n      actionpack (= 7.1.3.4)\n    puma (6.4.2)\n    nokogiri (1.16.6-x86_64-linux)\n\nPLATFORMS\n  ruby\n";
+    let files = Files::from([
+        ("Gemfile".into(), gemfile.into()),
+        ("Gemfile.lock".into(), lock.into()),
+        ("api/.ruby-version".into(), "ruby-3.3.4\n".into()),
+    ]);
+    let deps = scanner.extract(&files).unwrap().dependencies;
+    let got: Vec<_> = deps
+        .iter()
+        .map(|d| {
+            (
+                d.file.as_str(),
+                d.name.as_str(),
+                d.current.as_str(),
+                d.resolved.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("Gemfile", "rails", "~> 7.1.0", Some("7.1.3.4")),
+            ("Gemfile", "puma", ">= 6.0", Some("6.4.2")),
+            ("Gemfile", "rspec-rails", "6.1.3", None),
+            ("Gemfile", "ruby", "3.3.4", Some("3.3.4")),
+            ("api/.ruby-version", "ruby", "3.3.4", Some("3.3.4")),
+        ]
+    );
+    for dep in &deps {
+        assert_eq!(
+            &files[&dep.file][dep.location.start..dep.location.end],
+            dep.current,
+            "{}",
+            dep.name
+        );
+    }
+}

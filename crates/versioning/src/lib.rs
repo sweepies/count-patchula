@@ -7,6 +7,7 @@ use std::cmp::Ordering;
 mod extended;
 mod maven;
 mod nuget;
+mod rubygems;
 pub use maven::variant as maven_variant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,6 +24,8 @@ pub enum Ecosystem {
     Maven,
     /// NuGet's SemVer 2 with an optional fourth release number.
     Nuget,
+    /// RubyGems versions and `~>` requirements.
+    Rubygems,
     Hashicorp,
 }
 
@@ -58,6 +61,9 @@ impl Versioning for Ecosystem {
         }
         if *self == Self::Nuget {
             return nuget::parse(value);
+        }
+        if *self == Self::Rubygems {
+            return rubygems::parse(value);
         }
         if matches!(
             self,
@@ -110,6 +116,11 @@ impl Versioning for Ecosystem {
         {
             return nuget::order(a, b);
         }
+        if *self == Self::Rubygems
+            && let (Some(a), Some(b)) = (&left.2, &right.2)
+        {
+            return rubygems::order(a, b);
+        }
         if let (Some(a), Some(b)) = (&left.1, &right.1) {
             return a.cmp(b);
         }
@@ -130,6 +141,7 @@ impl Versioning for Ecosystem {
                 .map_err(|_| Error::Invalid(range.into())),
             Self::Maven => maven::matches(range, version),
             Self::Nuget => nuget::matches(range, version),
+            Self::Rubygems => rubygems::matches(range, version),
             Self::Docker | Self::Pep440 | Self::Poetry | Self::Hashicorp => {
                 extended::matches(*self, range, version)
             }
@@ -158,6 +170,9 @@ impl Versioning for Ecosystem {
         }
     }
     fn new_range(&self, current: &str, target: &str, policy: VersionPolicy) -> Result<String> {
+        if *self == Self::Rubygems {
+            return rubygems::new_range(current, target, policy);
+        }
         if matches!(self, Self::Maven | Self::Nuget) {
             // A bare Maven or NuGet version is an exact (soft) requirement. Ranges keep
             // themselves when satisfied and are never rewritten.
