@@ -22,7 +22,7 @@ export default defineConfig({
     ["meta", { property: "og:image", content: `${site}/og.png` }],
     ["meta", { property: "og:image:width", content: "1200" }],
     ["meta", { property: "og:image:height", content: "630" }],
-    ["meta", { property: "og:image:alt", content: "Count Patchula, a bat holding a wrench" }],
+    ["meta", { property: "og:image:alt", content: "Count Patchula, a bat holding a wrench: vants to update your deps." }],
     ["meta", { name: "twitter:card", content: "summary_large_image" }],
     ["meta", { name: "twitter:image", content: `${site}/og.png` }],
   ],
