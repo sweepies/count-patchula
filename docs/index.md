@@ -5,8 +5,8 @@ titleTemplate: Dependency updates for GitHub
 
 hero:
   name: Count Patchula
-  text: He vants to update your deps.
-  tagline: He never sleeps. Neither do your CVEs. A dependency update bot for GitHub that handles a whole batch of repositories in one fast, cached run.
+  text: Vants to update your deps.
+  tagline: He never sleeps. Neither do your CVEs. A modern dependency updater with strong defaults.
   image:
     src: /logo.png
     alt: Count Patchula, a bat holding a wrench
@@ -38,14 +38,14 @@ features:
     details: Tick a box on any update PR and the Count moves it into one batch PR with the version you reviewed, then closes the original. Untick to send it back.
     link: /guide/batch
     linkText: Batching
-  - title: Measured, not promised
-    details: Against Renovate 44.173.1 on six large public repositories, the Count was 6.1 times faster cold and 18.5 times faster warm, using a fraction of the memory.
+  - title: Built in Rust
+    details: One native binary. Against Renovate 44.173.1 on six large public repositories, the Count was 6.1 times faster cold and 18.5 times faster warm, using a fraction of the memory.
     link: /benchmarks
     linkText: Benchmarks
-  - title: Clean-room and MIT
-    details: An independent implementation. Renovate has only ever been run as a black box for comparison; its source, presets and fixtures were never read.
-    link: /renovate/departures
-    linkText: Deliberate departures
+  - title: The server is MIT too
+    details: The GitHub App server, with webhooks, scheduled sweeps and warm caches, ships in the same MIT-licensed binary as the CLI. No paid edition, no feature gates, no licence key.
+    link: /guide/server
+    linkText: Server mode
 ---
 
 ## What it does

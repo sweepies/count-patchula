@@ -135,6 +135,7 @@ export default defineConfig({
               { text: "Phase 2, wave 1", link: "/internals/history/phase2-wave1" },
               { text: "Phase 2, wave 2", link: "/internals/history/phase2-wave2" },
               { text: "Phase 2, wave 3", link: "/internals/history/phase2-wave3" },
+              { text: "Benchmark history", link: "/internals/history/benchmarks" },
             ],
           },
         ],

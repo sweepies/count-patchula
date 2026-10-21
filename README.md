@@ -2,7 +2,7 @@
   <img src="docs/public/logo.png" width="180" alt="Count Patchula, a bat holding a wrench">
   <h1>Count Patchula</h1>
   <p><strong>Count Patchula vants to update your deps. He never sleeps. Neither do your CVEs.</strong></p>
-  <p>A dependency update bot for GitHub that does a whole batch of repositories in one fast, cached run.</p>
+  <p>A modern dependency updater with strong defaults.</p>
   <p>
     <a href="docs/getting-started.md">Get started</a> ·
     <a href="docs/">Documentation</a> ·
@@ -91,13 +91,19 @@ Install [mise](https://mise.jdx.dev), then `mise trust` and `mise install`.
 ```sh
 mise run build      # build the workspace
 mise run test       # offline tests
-mise run lint       # rustfmt and Clippy, warnings denied
+mise run lint       # rustfmt, Clippy (warnings denied) and jactionlint
 mise run ci         # fixtures check, lint, test and build
 mise run docs:dev   # the documentation site
 ```
 
-The site is deployed to Cloudflare Workers by Cloudflare's GitHub integration,
-from `docs/wrangler.jsonc`, with a preview for each pull request.
+The check to require on `main` is **CI result**. It always reports, and
+passes when the Rust jobs pass or were skipped because a change only touched
+the docs site.
+
+The site is deployed to Cloudflare Workers by Workers Builds, Cloudflare's
+GitHub integration. It installs mise and runs `mise run docs:deploy` on `main`
+and `mise run docs:upload` on other branches, so each pull request that touches
+`docs/` or `mise.toml` gets a preview.
 
 Builds go through [mr boxington](https://mr-boxington.jdx.dev) for a shared
 Cargo cache. Tests never touch the network: they replay HTTP fixtures the Count
