@@ -287,3 +287,22 @@ fn toolchain_chart_and_devcontainer_edits_stay_in_place() {
         devcontainer.replace("node:1", "node:2")
     );
 }
+#[test]
+fn maven_and_gradle_edits_replace_only_the_version() {
+    let pom = "<project><properties><v>1.0</v></properties><dependencies><dependency><groupId>g</groupId><artifactId>a</artifactId><version>${v}</version></dependency></dependencies></project>";
+    assert_eq!(
+        replace(Manager::Maven, "pom.xml", pom, "2.0", None),
+        pom.replace("<v>1.0</v>", "<v>2.0</v>")
+    );
+    let catalog = "[libraries]\nokhttp = \"com.squareup.okhttp3:okhttp:4.12.0\"\n";
+    assert_eq!(
+        replace(
+            Manager::Gradle,
+            "gradle/libs.versions.toml",
+            catalog,
+            "5.0.0",
+            None
+        ),
+        catalog.replace("4.12.0", "5.0.0")
+    );
+}

@@ -11,8 +11,10 @@ mod cargo;
 mod custom;
 mod devcontainer;
 mod go;
+mod gradle;
 mod helm;
 mod images;
+mod maven;
 mod mise;
 mod npm;
 mod precommit;
@@ -89,6 +91,8 @@ pub fn supported(manager: Manager) -> bool {
         | Manager::PreCommit
         | Manager::Helm
         | Manager::Devcontainer
+        | Manager::Maven
+        | Manager::Gradle
         | Manager::Regex => true,
     }
 }
@@ -181,6 +185,8 @@ impl Scanner {
                     && (leaf.ends_with(".yaml") || leaf.ends_with(".yml"))
             }
             Manager::Helm => leaf == "Chart.yaml",
+            Manager::Maven => leaf == "pom.xml",
+            Manager::Gradle => gradle::selected(path),
             Manager::Devcontainer => {
                 matches!(leaf, "devcontainer.json" | ".devcontainer.json")
             }
@@ -272,6 +278,10 @@ impl Scanner {
                 Ok(toolchains::terraform(path, text))
             } else if self.selected(Manager::Terraform, path) {
                 terraform::extract(path, text, &terraform)
+            } else if self.selected(Manager::Gradle, path) {
+                gradle::extract(path, text)
+            } else if self.selected(Manager::Maven, path) {
+                maven::extract(path, text)
             } else if self.selected(Manager::Devcontainer, path) {
                 devcontainer::extract(path, text)
             } else if self.selected(Manager::Helm, path) {

@@ -452,6 +452,8 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
                             | "pre-commit"
                             | "helm"
                             | "devcontainer"
+                            | "maven"
+                            | "gradle"
                             | "compose"
                             | "regex"
                             | "dockerfile"

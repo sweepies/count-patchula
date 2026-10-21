@@ -111,3 +111,29 @@ archives into the tree and is not run yet.
 `image` is a container image, digest-pinned like any other; OCI `features` keep
 their version in the feature key (`ghcr.io/devcontainers/features/node:1`), are
 edited there and are never digest-pinned. Templated images are skipped.
+
+`maven` reads `pom.xml` with a small span-preserving XML scanner (comments,
+CDATA and processing instructions are skipped): `parent`, `dependencies`,
+`dependencyManagement`, build `plugins`/`pluginManagement` and `extensions`.
+Plugins without a `groupId` use `org.apache.maven.plugins`. A `${property}`
+version is edited at its `<properties>` definition; only the first artifact
+using a property is emitted, so artifacts sharing it never get conflicting
+edits. Profiles and versions inherited from a parent or BOM are not updated.
+
+`gradle` reads version catalogs (`gradle/*.versions.toml`: `[libraries]` and
+`[plugins]`, inline `group:artifact:version` strings, module tables and
+`version.ref`, edited once in `[versions]` for its first user), literal
+`"group:artifact:version"` coordinates and `id("…") version "…"` plugins in
+`build.gradle(.kts)`/`settings.gradle(.kts)`, and the wrapper's
+`distributionUrl`. Interpolated, dynamic (`1.+`) and rich versions are skipped.
+Plugins resolve through the Gradle Plugin Portal's marker artifacts. When the
+wrapper records `distributionSha256Sum`, the lockfile runner replaces it with
+the checksum Gradle publishes beside the new distribution, fetched only from
+`services.gradle.org`/`downloads.gradle.org`. A committed `gradle.lockfile`
+holds updates as lockfile-pending.
+
+Maven versions use Maven's version order (`maven` scheme): case-insensitive
+tokens and qualifiers `alpha < beta < milestone < rc < snapshot < release <
+sp`. Bare versions are exact requirements and `[a,b)` ranges are kept while
+satisfied. A version's release variant (Guava's `-jre`/`-android`, Hibernate's
+`.Final`) is kept, so `33.4.8-android` never becomes `33.7.2-jre`.

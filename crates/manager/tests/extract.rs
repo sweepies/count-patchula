@@ -417,3 +417,128 @@ fn toolchain_files_charts_and_devcontainers() {
         );
     }
 }
+#[test]
+fn maven_poms_and_gradle_catalogs_scripts_and_wrappers() {
+    let mut config = config();
+    config.managers = vec![Manager::Maven, Manager::Gradle];
+    let scanner = Scanner::new(&config).unwrap();
+    let pom = r#"<?xml version="1.0"?>
+<project>
+  <parent><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-parent</artifactId><version>3.3.0</version></parent>
+  <properties>
+    <jackson.version>2.17.0</jackson.version>
+  </properties>
+  <!-- <dependency><groupId>x</groupId><artifactId>y</artifactId><version>9</version></dependency> -->
+  <dependencies>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>${jackson.version}</version>
+      <exclusions><exclusion><groupId>a</groupId><artifactId>b</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-core</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
+    <dependency><groupId>com.google.guava</groupId><artifactId>guava</artifactId><version> 33.4.8-jre </version></dependency>
+    <dependency><groupId>org.slf4j</groupId><artifactId>slf4j-api</artifactId></dependency>
+  </dependencies>
+  <build><plugins><plugin><artifactId>maven-compiler-plugin</artifactId><version>3.13.0</version></plugin></plugins></build>
+</project>
+"#;
+    let catalog = r#"[versions]
+kotlin = "2.0.0"
+agp = "8.5.0"
+[libraries]
+core = { module = "androidx.core:core-ktx", version = "1.13.1" }
+okhttp = "com.squareup.okhttp3:okhttp:4.12.0"
+stdlib = { group = "org.jetbrains.kotlin", name = "kotlin-stdlib", version.ref = "kotlin" }
+reflect = { module = "org.jetbrains.kotlin:kotlin-reflect", version.ref = "kotlin" }
+dynamic = "com.example:dyn:1.+"
+[plugins]
+android = { id = "com.android.application", version.ref = "agp" }
+"#;
+    let script = "plugins {\n    id(\"org.jetbrains.kotlin.jvm\") version \"2.0.0\"\n}\ndependencies {\n    implementation(\"io.ktor:ktor-client-core:2.3.12\")\n    implementation(\"x:y:$v\")\n}\n";
+    let files = Files::from([
+        ("pom.xml".into(), pom.into()),
+        ("gradle/libs.versions.toml".into(), catalog.into()),
+        ("app/build.gradle.kts".into(), script.into()),
+        (
+            "gradle/wrapper/gradle-wrapper.properties".into(),
+            "distributionUrl=https\\://services.gradle.org/distributions/gradle-8.10-bin.zip\n"
+                .into(),
+        ),
+    ]);
+    let deps = scanner.extract(&files).unwrap().dependencies;
+    let got: Vec<_> = deps
+        .iter()
+        .map(|d| (d.file.as_str(), d.package.as_str(), d.current.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("app/build.gradle.kts", "io.ktor:ktor-client-core", "2.3.12"),
+            (
+                "app/build.gradle.kts",
+                "https://plugins.gradle.org/m2|org.jetbrains.kotlin.jvm:org.jetbrains.kotlin.jvm.gradle.plugin",
+                "2.0.0"
+            ),
+            (
+                "gradle/libs.versions.toml",
+                "androidx.core:core-ktx",
+                "1.13.1"
+            ),
+            (
+                "gradle/libs.versions.toml",
+                "com.squareup.okhttp3:okhttp",
+                "4.12.0"
+            ),
+            (
+                "gradle/libs.versions.toml",
+                "org.jetbrains.kotlin:kotlin-stdlib",
+                "2.0.0"
+            ),
+            (
+                "gradle/libs.versions.toml",
+                "https://plugins.gradle.org/m2|com.android.application:com.android.application.gradle.plugin",
+                "8.5.0"
+            ),
+            (
+                "gradle/wrapper/gradle-wrapper.properties",
+                "gradle/gradle-distributions",
+                "8.10"
+            ),
+            (
+                "pom.xml",
+                "org.springframework.boot:spring-boot-starter-parent",
+                "3.3.0"
+            ),
+            (
+                "pom.xml",
+                "com.fasterxml.jackson.core:jackson-databind",
+                "2.17.0"
+            ),
+            ("pom.xml", "com.google.guava:guava", "33.4.8-jre"),
+            (
+                "pom.xml",
+                "org.apache.maven.plugins:maven-compiler-plugin",
+                "3.13.0"
+            ),
+        ]
+    );
+    for dep in &deps {
+        assert_eq!(
+            &files[&dep.file][dep.location.start..dep.location.end],
+            dep.current,
+            "{}",
+            dep.name
+        );
+    }
+    // A pinned checksum is refreshed by the lockfile runner, not skipped.
+    let pinned = Files::from([(
+        "gradle/wrapper/gradle-wrapper.properties".into(),
+        "distributionSha256Sum=abc\ndistributionUrl=https\\://services.gradle.org/distributions/gradle-8.10-bin.zip\n".into(),
+    )]);
+    assert_eq!(scanner.extract(&pinned).unwrap().dependencies.len(), 1);
+}

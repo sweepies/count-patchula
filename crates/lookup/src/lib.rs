@@ -594,6 +594,15 @@ impl Evaluator {
                 // zero-filled baseline when no full tag matches the pinned SHA.
                 continue;
             }
+            if scheme == Ecosystem::Maven
+                && rustovate_versioning::maven_variant(&normalized)
+                    != rustovate_versioning::maven_variant(
+                        baseline.2.as_deref().unwrap_or(&dep.current),
+                    )
+            {
+                // Keep the published variant: 33.x-android never becomes 33.x-jre.
+                continue;
+            }
             if scheme == Ecosystem::Docker {
                 // A floating 3.22 tag tracks the 3.22 line, not 3.22.0.
                 // Mixing precisions also turns date tags into bogus majors.
@@ -1065,6 +1074,7 @@ pub fn scheme(dep: &Dependency) -> Result<Ecosystem> {
         Scheme::Docker => Ok(Ecosystem::Docker),
         Scheme::Pep440 => Ok(Ecosystem::Pep440),
         Scheme::Poetry => Ok(Ecosystem::Poetry),
+        Scheme::Maven => Ok(Ecosystem::Maven),
         Scheme::Hashicorp => Ok(Ecosystem::Hashicorp),
     }
 }

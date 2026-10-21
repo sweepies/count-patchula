@@ -4,6 +4,7 @@ mod mise;
 mod node;
 mod process;
 mod python;
+mod wrapper;
 use crate::{
     Blob, Plan, Snapshot, blob_sha,
     plan::{hash, unified},
@@ -27,6 +28,7 @@ pub enum Ecosystem {
     Terraform,
     Mise,
     Python,
+    GradleWrapper,
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Job {
@@ -109,6 +111,27 @@ pub(crate) fn job(
             );
             if snapshot.paths.contains(&lock) {
                 return Err("unsupported lockfile format: Chart.lock".into());
+            }
+            return Ok(None);
+        }
+        // Gradle dependency locking writes per-configuration lockfiles that
+        // need the build itself to regenerate; hold such updates.
+        Manager::Gradle
+            if dep
+                .file
+                .ends_with("gradle/wrapper/gradle-wrapper.properties") =>
+        {
+            return Ok(Some(Job {
+                ecosystem: Ecosystem::GradleWrapper,
+                directory: directory(&dep.file).into(),
+                package: None,
+                current: None,
+                target: None,
+            }));
+        }
+        Manager::Gradle => {
+            if nearest(&dep.file, &snapshot.paths, &["gradle.lockfile"]).is_some() {
+                return Err("unsupported lockfile format: gradle.lockfile".into());
             }
             return Ok(None);
         }
@@ -333,6 +356,8 @@ pub struct Runner {
     mise: PathBuf,
     rustup: PathBuf,
     rustup_home: PathBuf,
+    /// Fetches the Gradle wrapper checksum; injectable for offline tests.
+    http: Arc<dyn rustovate_http::Transport>,
 }
 impl Runner {
     pub fn new(cache: PathBuf, token: &str) -> Self {
@@ -370,7 +395,12 @@ impl Runner {
             mise,
             rustup,
             rustup_home,
+            http: Arc::new(NetworkTransport),
         }
+    }
+    pub fn with_http(mut self, http: Arc<dyn rustovate_http::Transport>) -> Self {
+        self.http = http;
+        self
     }
     pub fn with_executor(mut self, executor: Arc<dyn Executor>) -> Self {
         self.executor = executor;
@@ -429,6 +459,9 @@ impl Runner {
                 .collect();
             let cwd = root.join(&directory);
             match ecosystem {
+                Ecosystem::GradleWrapper => {
+                    self.gradle_wrapper(&root, &directory).await?;
+                }
                 Ecosystem::Python => {
                     self.python_locks(
                         node::NodeContext {
@@ -852,6 +885,7 @@ fn writable(path: &str) -> bool {
             | ".terraform.lock.hcl"
             | "mise.lock"
             | "pyproject.toml"
+            | "gradle-wrapper.properties"
             | "uv.lock"
             | "poetry.lock"
     ) || path.ends_with(".tf")
@@ -932,3 +966,20 @@ fn collect(root: &Path) -> Result<BTreeMap<String, String>, String> {
 
 #[cfg(test)]
 mod tests;
+
+/// The default checksum transport: a network client built on first use, so a
+/// runner that never touches a Gradle wrapper needs no network setup.
+struct NetworkTransport;
+impl rustovate_http::Transport for NetworkTransport {
+    fn send(&self, request: reqwest::Request) -> rustovate_http::Exchange<'_> {
+        Box::pin(async move {
+            static NETWORK: std::sync::OnceLock<Option<rustovate_http::Network>> =
+                std::sync::OnceLock::new();
+            let network = NETWORK
+                .get_or_init(|| rustovate_http::Network::new().ok())
+                .as_ref()
+                .ok_or(rustovate_http::Error::Configuration)?;
+            network.send(request).await
+        })
+    }
+}

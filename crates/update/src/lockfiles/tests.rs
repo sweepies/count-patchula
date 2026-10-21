@@ -1744,3 +1744,94 @@ fn chart_updates_with_a_committed_chart_lock_are_pending() {
             .contains("Chart.lock")
     );
 }
+
+struct Checksums {
+    requests: Mutex<Vec<String>>,
+}
+impl Transport for Checksums {
+    fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+        Box::pin(async move {
+            let url = request.url().to_string();
+            self.requests.lock().unwrap().push(url.clone());
+            let (status, headers, body) = if url.starts_with("https://services.gradle.org/") {
+                let mut headers = reqwest::header::HeaderMap::new();
+                headers.insert(
+                    "location",
+                    url.replace("services.gradle.org", "downloads.gradle.org")
+                        .parse()
+                        .unwrap(),
+                );
+                (301, headers, Vec::new())
+            } else {
+                (
+                    200,
+                    Default::default(),
+                    format!("{}\n", "a".repeat(64)).into_bytes(),
+                )
+            };
+            Ok(rustovate_http::Response {
+                status: reqwest::StatusCode::from_u16(status).unwrap(),
+                headers,
+                body,
+            })
+        })
+    }
+}
+
+/// The wrapper checksum follows the edited distribution, from Gradle's own
+/// hosts only; a wrapper without a checksum needs no request.
+#[tokio::test]
+async fn gradle_wrapper_checksums_follow_the_distribution() {
+    let old = "distributionBase=GRADLE_USER_HOME\r\ndistributionSha256Sum=0000\r\ndistributionUrl=https\\://services.gradle.org/distributions/gradle-8.10-bin.zip\r\n";
+    let new = old.replace("gradle-8.10-bin", "gradle-9.0-bin");
+    let transport = Arc::new(Checksums {
+        requests: Mutex::new(Vec::new()),
+    });
+    let temp = tempfile::tempdir().unwrap();
+    let runner =
+        Runner::new(temp.path().into(), "offline-installation").with_http(transport.clone());
+    let root = temp.path().join("tree");
+    write(&root, "gradle/wrapper/gradle-wrapper.properties", &new).unwrap();
+    runner
+        .gradle_wrapper(&root, "gradle/wrapper")
+        .await
+        .unwrap();
+    let written =
+        std::fs::read_to_string(root.join("gradle/wrapper/gradle-wrapper.properties")).unwrap();
+    assert_eq!(
+        written,
+        new.replace("=0000", &format!("={}", "a".repeat(64)))
+    );
+    assert_eq!(
+        *transport.requests.lock().unwrap(),
+        [
+            "https://services.gradle.org/distributions/gradle-9.0-bin.zip.sha256",
+            "https://downloads.gradle.org/distributions/gradle-9.0-bin.zip.sha256",
+        ]
+    );
+    write(
+        &root,
+        "gradle/wrapper/gradle-wrapper.properties",
+        &new.replace("services.gradle.org", "mirror.example.test"),
+    )
+    .unwrap();
+    assert!(
+        runner
+            .gradle_wrapper(&root, "gradle/wrapper")
+            .await
+            .unwrap_err()
+            .contains("refusing")
+    );
+    transport.requests.lock().unwrap().clear();
+    write(
+        &root,
+        "gradle/wrapper/gradle-wrapper.properties",
+        "distributionUrl=https\\://services.gradle.org/distributions/gradle-9.0-bin.zip\n",
+    )
+    .unwrap();
+    runner
+        .gradle_wrapper(&root, "gradle/wrapper")
+        .await
+        .unwrap();
+    assert!(transport.requests.lock().unwrap().is_empty());
+}

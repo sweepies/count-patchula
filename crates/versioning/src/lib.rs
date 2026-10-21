@@ -5,6 +5,8 @@ use rustovate_config::{Update, VersionPolicy};
 use semver::{Version, VersionReq};
 use std::cmp::Ordering;
 mod extended;
+mod maven;
+pub use maven::variant as maven_variant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ecosystem {
@@ -16,6 +18,8 @@ pub enum Ecosystem {
     Pep440,
     /// Poetry constraints: PEP 440 versions with `^`/`~` ranges and `||`.
     Poetry,
+    /// Maven's version order; bare versions are exact requirements.
+    Maven,
     Hashicorp,
 }
 
@@ -46,6 +50,9 @@ pub trait Versioning: Send + Sync {
 
 impl Versioning for Ecosystem {
     fn parse(&self, value: &str) -> Result<Parsed> {
+        if *self == Self::Maven {
+            return maven::parse(value);
+        }
         if matches!(
             self,
             Self::Docker | Self::Pep440 | Self::Poetry | Self::Hashicorp
@@ -87,6 +94,11 @@ impl Versioning for Ecosystem {
             .map_err(|_| Error::Invalid(value.into()))
     }
     fn order(&self, left: &Parsed, right: &Parsed) -> Ordering {
+        if *self == Self::Maven
+            && let (Some(a), Some(b)) = (&left.2, &right.2)
+        {
+            return maven::order(a, b);
+        }
         if let (Some(a), Some(b)) = (&left.1, &right.1) {
             return a.cmp(b);
         }
@@ -105,6 +117,7 @@ impl Versioning for Ecosystem {
             Self::Cargo => VersionReq::parse(range)
                 .map(|req| req.matches(&version.0))
                 .map_err(|_| Error::Invalid(range.into())),
+            Self::Maven => maven::matches(range, version),
             Self::Docker | Self::Pep440 | Self::Poetry | Self::Hashicorp => {
                 extended::matches(*self, range, version)
             }
@@ -133,6 +146,19 @@ impl Versioning for Ecosystem {
         }
     }
     fn new_range(&self, current: &str, target: &str, policy: VersionPolicy) -> Result<String> {
+        if *self == Self::Maven {
+            // A bare Maven version is an exact (soft) requirement. Ranges keep
+            // themselves when satisfied and are never rewritten.
+            let parsed = self.parse(target)?;
+            if !current.trim_start().starts_with(['[', '(']) || policy == VersionPolicy::Exact {
+                return Ok(target.into());
+            }
+            return if self.matches(current, &parsed)? {
+                Ok(current.into())
+            } else {
+                Err(Error::Compound(current.into()))
+            };
+        }
         if matches!(
             self,
             Self::Docker | Self::Pep440 | Self::Poetry | Self::Hashicorp

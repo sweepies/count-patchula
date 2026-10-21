@@ -962,3 +962,31 @@ fn pyproject_pins_move_poetry_ranges_keep_form_and_satisfied_ranges_wait() {
         .collect();
     assert_eq!(values, ["^0.7.1"]);
 }
+#[test]
+fn maven_variants_are_kept_and_ordered_by_maven_rules() {
+    let mut cfg = config("renovate-runner");
+    cfg.defaults.wait_hours = 0;
+    let eval = Evaluator::new(&cfg).unwrap();
+    let mut dep = dependency("com.google.guava:guava");
+    dep.manager = Manager::Maven;
+    dep.kind = DependencyKind::Production;
+    dep.source = Source::Maven;
+    dep.scheme = Scheme::Maven;
+    dep.current = "33.4.8-android".into();
+    dep.resolved = Some(dep.current.clone());
+    let releases = catalog(&[
+        "33.4.8-android",
+        "33.4.8-jre",
+        "33.7.2-android",
+        "33.7.2-jre",
+        "34.0.0-jre",
+        "33.8.0-rc1-android",
+    ]);
+    let values: Vec<_> = eval
+        .propose(&dep, &releases)
+        .unwrap()
+        .into_iter()
+        .filter_map(|p| p.new_value)
+        .collect();
+    assert_eq!(values, ["33.7.2-android"]);
+}

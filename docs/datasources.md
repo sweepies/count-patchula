@@ -147,3 +147,14 @@ short page or ten pages. Each tag's commit SHA is its digest. GitLab's annotated
 tag `created_at` is the publication date; lightweight and Gitea tags are
 undated, so they have no release-age wait, as for GitHub tags without a release.
 Regex extractors can use `forge-tags` directly.
+
+# Maven repositories (SWE-152)
+
+`maven` packages are `group:artifact`, optionally `repository-url|group:artifact`.
+`androidx.*`, `com.android.*` and `com.google.android.*` default to Google's
+Maven repository, everything else to Maven Central; Gradle plugins use
+`https://plugins.gradle.org/m2|<id>:<id>.gradle.plugin`. Versions come from
+`maven-metadata.xml` (conditional, ETag), excluding `-SNAPSHOT`. Maven Central's
+search API lags releases by months, so publication dates are each POM's
+`Last-Modified` header (cached HEAD), read for the ten newest versions only:
+older releases are outside any release-age wait.
