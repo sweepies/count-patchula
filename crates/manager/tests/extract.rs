@@ -741,3 +741,144 @@ fn composer_requirements_and_lock_resolutions() {
         assert_eq!(&manifest[dep.location.start..dep.location.end], dep.current);
     }
 }
+/// Versions held in variables are found through their references and edited
+/// at their single definition: ext blocks, def/val locals, extra properties,
+/// map literals, indexed maps and gradle.properties.
+#[test]
+fn gradle_variables_resolve_to_their_definitions() {
+    let mut config = config();
+    config.managers = vec![Manager::Gradle];
+    let scanner = Scanner::new(&config).unwrap();
+    let root = r#"plugins {
+  id 'org.owasp.dependencycheck' version '12.2.2'
+  id "io.swagger.core.v3.swagger-gradle-plugin" version "${swaggerVersion}"
+}
+version = '4.5.0-SNAPSHOT'
+ext {
+    junitVersion = "4.13.2"
+    guavaVersion = '33.7.2-jre'
+}
+def okioVersion = "3.9.0"
+ext.set('slf4jVersion', '2.0.13')
+// implementation "com.example:commented:$junitVersion"
+/* implementation "com.example:block:1.0.0" */
+dependencies {
+    implementation "junit:junit:$junitVersion"
+    implementation "com.google.guava:guava:${guavaVersion}"
+    implementation "com.squareup.okio:okio:$okioVersion"
+    implementation group: 'org.slf4j', name: 'slf4j-api', version: slf4jVersion
+    implementation group: 'org.slf4j', name: 'slf4j-simple', version: '2.0.12'
+    implementation "org.apache.kafka:kafka-clients:$version"
+    implementation "io.swagger.core.v3:swagger-jaxrs2-jakarta:$swaggerVersion"
+    implementation "com.example:twice:$twiceVersion"
+    testImplementation "org.apache.kafka:kafka-streams:$versions.kafka_28"
+    testImplementation "org.apache.kafka:kafka-streams:$versions.kafka_30"
+    implementation "2020-07-01T12:34:56Z"
+}
+"#;
+    let versions = r#"ext {
+  versions = [:]
+  libs = [:]
+}
+versions += [
+  jackson: "2.15.0",
+  checkstyle: project.hasProperty('checkstyleVersion') ? checkstyleVersion : "12.3.1",
+  "jetty": '12.0.10',
+  kafka_28: "2.8.2",
+  kafka_30: "3.0.2",
+]
+versions["scala"] = "2.13.18"
+libs += [
+  jacksonDatabind: "com.fasterxml.jackson.core:jackson-databind:$versions.jackson",
+  jacksonCore: "com.fasterxml.jackson.core:jackson-core:$versions.jackson",
+  jetty: "org.eclipse.jetty:jetty-server:${versions.jetty}",
+  scala: "org.scala-lang:scala-library:$versions.scala",
+]
+"#;
+    let kotlin = r#"val ktorVersion = "2.3.12"
+val twiceVersion = "1.0.0"
+extra["coroutines"] = "1.8.1"
+dependencies {
+    implementation("io.ktor:ktor-client-core:$ktorVersion")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:${coroutines}")
+    implementation("com.example:dotted:$ktorVersion.extra")
+}
+"#;
+    let files = Files::from([
+        ("build.gradle".into(), root.into()),
+        ("gradle/dependencies.gradle".into(), versions.into()),
+        ("app/build.gradle.kts".into(), kotlin.into()),
+        (
+            "app/src/test/resources/fixture.gradle".into(),
+            "dependencies { implementation 'com.example:fixture:1.0.0' }\n".into(),
+        ),
+        (
+            "buildSrc/src/main/groovy/conventions.gradle".into(),
+            "dependencies { implementation 'com.example:convention:2.0.0' }\n".into(),
+        ),
+        (
+            "gradle.properties".into(),
+            "org.gradle.jvmargs=-Xmx4g\nswaggerVersion=2.2.55\ntwiceVersion=1.0.0\n".into(),
+        ),
+    ]);
+    let deps = scanner.extract(&files).unwrap().dependencies;
+    let mut got: Vec<_> = deps
+        .iter()
+        .map(|d| (d.file.as_str(), d.name.as_str(), d.current.as_str()))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        [
+            ("app/build.gradle.kts", "io.ktor:ktor-client-core", "2.3.12"),
+            (
+                "app/build.gradle.kts",
+                "org.jetbrains.kotlinx:kotlinx-coroutines-core",
+                "1.8.1"
+            ),
+            ("build.gradle", "com.google.guava:guava", "33.7.2-jre"),
+            ("build.gradle", "com.squareup.okio:okio", "3.9.0"),
+            ("build.gradle", "junit:junit", "4.13.2"),
+            (
+                "build.gradle",
+                "org.owasp.dependencycheck:org.owasp.dependencycheck.gradle.plugin",
+                "12.2.2"
+            ),
+            ("build.gradle", "org.slf4j:slf4j-api", "2.0.13"),
+            ("build.gradle", "org.slf4j:slf4j-simple", "2.0.12"),
+            (
+                "buildSrc/src/main/groovy/conventions.gradle",
+                "com.example:convention",
+                "2.0.0"
+            ),
+            (
+                "gradle.properties",
+                "io.swagger.core.v3.swagger-gradle-plugin:io.swagger.core.v3.swagger-gradle-plugin.gradle.plugin",
+                "2.2.55"
+            ),
+            (
+                "gradle/dependencies.gradle",
+                "com.fasterxml.jackson.core:jackson-databind",
+                "2.15.0"
+            ),
+            (
+                "gradle/dependencies.gradle",
+                "org.eclipse.jetty:jetty-server",
+                "12.0.10"
+            ),
+            (
+                "gradle/dependencies.gradle",
+                "org.scala-lang:scala-library",
+                "2.13.18"
+            ),
+        ]
+    );
+    for dep in &deps {
+        assert_eq!(
+            &files[&dep.file][dep.location.start..dep.location.end],
+            dep.current,
+            "{}",
+            dep.name
+        );
+    }
+}

@@ -14,6 +14,7 @@ mod custom;
 mod devcontainer;
 mod go;
 mod gradle;
+mod gradle_vars;
 mod helm;
 mod images;
 mod maven;
@@ -339,6 +340,13 @@ impl Scanner {
                     .dependencies
                     .extend(custom::extract(path, text, &self.config.extractors)?);
             }
+        }
+        if self.config.managers.contains(&Manager::Gradle) {
+            result
+                .dependencies
+                .extend(gradle_vars::extract(files, |path| {
+                    self.selected(Manager::Gradle, path)
+                }));
         }
         Ok(result)
     }

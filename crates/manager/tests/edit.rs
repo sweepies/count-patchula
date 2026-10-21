@@ -343,3 +343,27 @@ fn composer_constraints_are_replaced_in_place() {
         manifest.replace("^11.9", "^12.0")
     );
 }
+#[test]
+fn gradle_variable_versions_are_edited_at_their_definition() {
+    let files = Files::from([
+        (
+            "build.gradle".into(),
+            "dependencies {\n    implementation \"io.swagger.core.v3:swagger-core:$swaggerVersion\"\n    implementation \"com.fasterxml.jackson.core:jackson-databind:$versions.jackson\"\n}\n".into(),
+        ),
+        ("gradle.properties".into(), "swaggerVersion=2.2.55\n".into()),
+        ("gradle/dependencies.gradle".into(), "versions += [\n  jackson: \"2.15.0\",\n]\n".into()),
+    ]);
+    let deps = Scanner::new(&config(Manager::Gradle))
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies;
+    assert_eq!(deps.len(), 2);
+    for (dep, value) in deps.iter().zip(["2.21.0", "2.2.60"]) {
+        let text = &files[&dep.file];
+        let changed = apply(text, edits(dep, text, value, None).unwrap()).unwrap();
+        assert_eq!(changed, text.replace(&dep.current, value), "{}", dep.file);
+        assert!(edits(dep, text, "1.0\"; evil", None).is_err());
+        assert!(edits(dep, text, "${x}", None).is_err());
+    }
+}

@@ -179,6 +179,15 @@ fn quote(dep: &Dependency, raw: &str, target: &str) -> Result<String, String> {
         if parsed.as_str() != Some(target) && !parsed.is_number() {
             return serde_json::to_string(target).map_err(|e| e.to_string());
         }
+    } else if dep.manager == Manager::Gradle {
+        // Gradle versions sit inside script strings and properties, where
+        // quotes, `$` and backslashes would change their meaning.
+        if !target
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-+".contains(&b))
+        {
+            return Err("unsafe replacement inside a Gradle string".into());
+        }
     } else if dep.manager == Manager::Bundler {
         // Gem requirements sit inside a Ruby string and may contain spaces.
         if target.contains(['"', '\'', '\\']) {

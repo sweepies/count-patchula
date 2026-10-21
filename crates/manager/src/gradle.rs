@@ -1,5 +1,6 @@
 //! Gradle: version catalogs (`libs.versions.toml`), literal coordinates and
-//! plugin versions in `build.gradle(.kts)`, and the wrapper distribution.
+//! plugin versions in Gradle scripts, and the wrapper distribution. Versions
+//! held in variables are resolved by `gradle_vars`.
 use crate::*;
 use regex::Regex;
 use std::{collections::BTreeSet, sync::LazyLock};
@@ -7,10 +8,10 @@ use toml_edit::{Document, Item, Value};
 
 const PORTAL: &str = "https://plugins.gradle.org/m2";
 
-fn plugin(id: &str) -> String {
+pub(super) fn plugin(id: &str) -> String {
     format!("{PORTAL}|{id}:{id}.gradle.plugin")
 }
-fn maven(
+pub(super) fn maven(
     path: &str,
     text: &str,
     package: String,
@@ -38,7 +39,7 @@ fn maven(
     }
 }
 /// Gradle dynamic and rich versions are not pins.
-fn literal(version: &str) -> bool {
+pub(super) fn literal(version: &str) -> bool {
     !version.is_empty()
         && version.starts_with(|c: char| c.is_ascii_digit())
         && !version.contains(['+', '$', ' ', '[', '(', ','])
@@ -156,6 +157,8 @@ fn catalog(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
 }
 
 fn script(path: &str, text: &str) -> Vec<Dependency> {
+    // Commented-out declarations are not dependencies.
+    let text = &crate::gradle_vars::mask(text);
     static COORDINATE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r#"["']([A-Za-z0-9_.-]+):([A-Za-z0-9_.-]+):([0-9][A-Za-z0-9_.+-]*)["']"#)
             .expect("coordinate pattern")
@@ -164,10 +167,31 @@ fn script(path: &str, text: &str) -> Vec<Dependency> {
         Regex::new(r#"\bid\s*\(?\s*["']([A-Za-z0-9_.-]+)["']\s*\)?\s*version\s*\(?\s*["']([0-9][A-Za-z0-9_.+-]*)["']"#)
             .expect("plugin pattern")
     });
+    static NOTATION: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"\bgroup\s*[:=]\s*["']([A-Za-z0-9_.-]+)["']\s*,\s*name\s*[:=]\s*["']([A-Za-z0-9_.-]+)["']\s*,\s*version\s*[:=]\s*["']([0-9][A-Za-z0-9_.+-]*)["']"#)
+            .expect("notation pattern")
+    });
     let mut out = Vec::new();
-    for c in COORDINATE.captures_iter(text) {
+    for c in NOTATION.captures_iter(text) {
         let version = c.get(3).unwrap();
         if literal(version.as_str()) {
+            let package = format!("{}:{}", &c[1], &c[2]);
+            out.push(maven(
+                path,
+                text,
+                package.clone(),
+                DependencyKind::Production,
+                version.start(),
+                version.as_str(),
+                format!("/{package}"),
+            ));
+        }
+    }
+    for c in COORDINATE.captures_iter(text) {
+        let version = c.get(3).unwrap();
+        // A group and artifact name something; "2020-07-01T12:34:56Z" does not.
+        let named = |s: &str| s.bytes().any(|b| b.is_ascii_alphabetic());
+        if literal(version.as_str()) && named(&c[1]) && named(&c[2]) {
             let package = format!("{}:{}", &c[1], &c[2]);
             out.push(maven(
                 path,
@@ -236,11 +260,20 @@ fn wrapper(path: &str, text: &str) -> Vec<Dependency> {
 
 pub(super) fn selected(path: &str) -> bool {
     let leaf = path.rsplit('/').next().unwrap_or(path);
+    // Under a source tree only main sources are build logic (such as
+    // buildSrc/src/main/kotlin/*.gradle.kts); test resources and docs hold
+    // fixtures that pin old versions on purpose.
+    if let Some(index) = path
+        .find("src/")
+        .filter(|i| *i == 0 || path.as_bytes()[i - 1] == b'/')
+        && !path[index..].starts_with("src/main/")
+    {
+        return false;
+    }
     leaf.ends_with(".versions.toml") && path.contains("gradle/")
-        || matches!(
-            leaf,
-            "build.gradle" | "build.gradle.kts" | "settings.gradle" | "settings.gradle.kts"
-        )
+        || leaf.ends_with(".gradle")
+        || leaf.ends_with(".gradle.kts")
+        || leaf == "gradle.properties"
         || path.ends_with("gradle/wrapper/gradle-wrapper.properties")
 }
 
@@ -249,6 +282,9 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
         catalog(path, text)
     } else if path.ends_with("gradle-wrapper.properties") {
         Ok(wrapper(path, text))
+    } else if path.ends_with("gradle.properties") {
+        // Properties are only versions through a reference; see gradle_vars.
+        Ok(Vec::new())
     } else {
         Ok(script(path, text))
     }

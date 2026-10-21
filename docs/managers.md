@@ -122,10 +122,27 @@ edits. Profiles and versions inherited from a parent or BOM are not updated.
 
 `gradle` reads version catalogs (`gradle/*.versions.toml`: `[libraries]` and
 `[plugins]`, inline `group:artifact:version` strings, module tables and
-`version.ref`, edited once in `[versions]` for its first user), literal
-`"group:artifact:version"` coordinates and `id("…") version "…"` plugins in
-`build.gradle(.kts)`/`settings.gradle(.kts)`, and the wrapper's
-`distributionUrl`. Interpolated, dynamic (`1.+`) and rich versions are skipped.
+`version.ref`, edited once in `[versions]` for its first user), and Gradle
+scripts (`*.gradle`, `*.gradle.kts`): literal `"group:artifact:version"`
+coordinates, `group: …, name: …, version: …` notation and `id "…" version "…"`
+plugins, with comments ignored. Under a `src/` directory only `src/main/` is
+read (precompiled script plugins); test resources and docs hold fixtures. It
+also reads the wrapper's `distributionUrl`. Dynamic (`1.+`) and rich versions
+are skipped.
+
+Versions held in variables are resolved and edited at their definition, once,
+for their first user. Definitions are `ext { name = "1.0" }`, `ext.name`,
+`def`/`val` locals, `extra["name"]`/`ext.set("name", …)`, entries of map
+literals (`versions += [jackson: "2.15.0"]` names `versions.jackson`), indexed
+maps (`versions["x"] = "1.0"`) and `gradle.properties`. References are
+`"g:a:$name"`, `"g:a:${versions.jackson}"`, notation `version: name` and plugin
+`version "${name}"`. Kotlin's `"$a.b"` appends `.b` and is not a reference.
+Gradle scoping is approximated by one namespace per repository, so a name
+defined more than once is skipped, as are computed values (ternaries,
+`if`/`else`), the project's own `version`/`group` and Gradle settings
+(`org.gradle.*`). A package referenced through several variables keeps
+deliberate parallel versions, such as Kafka's compatibility-test pins, and is
+skipped.
 Plugins resolve through the Gradle Plugin Portal's marker artifacts. When the
 wrapper records `distributionSha256Sum`, the lockfile runner replaces it with
 the checksum Gradle publishes beside the new distribution, fetched only from
