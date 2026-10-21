@@ -88,3 +88,11 @@ Independent specifications: [Cargo](https://doc.rust-lang.org/cargo/reference/sp
 [Dockerfile](https://docs.docker.com/reference/dockerfile/),
 [Go modules](https://go.dev/ref/mod#go-mod-file),
 [Flux](https://fluxcd.io/flux/components/source/helmrepositories/).
+
+`pre-commit` reads `.pre-commit-config.yaml` (or `.yml`) and updates each hook
+repository's `rev`, keeping its YAML quoting. GitHub repositories use
+`github-tags`; GitLab and Gitea/Forgejo repositories (gitlab.com, codeberg.org,
+gitea.com and hosts labelled `gitlab`, `gitea` or `forgejo`) use `forge-tags`
+with the identity `host/path`. `local` and `meta` hooks, other hosts and
+40-character commit pins are skipped; commit pins with a frozen tag comment are
+not yet supported.

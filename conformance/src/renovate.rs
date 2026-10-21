@@ -448,6 +448,7 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
                             | "go"
                             | "requirements"
                             | "pyproject"
+                            | "pre-commit"
                             | "compose"
                             | "regex"
                             | "dockerfile"

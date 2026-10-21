@@ -233,3 +233,18 @@ fn pyproject_edits_specifiers_inside_strings_and_poetry_scalars() {
         "3.13.1\n"
     );
 }
+#[test]
+fn pre_commit_revs_keep_their_quoting() {
+    let old = "repos:\n  - repo: https://github.com/a/b\n    rev: v1.0.0 # pinned\n  - repo: https://gitlab.com/c/d\n    rev: \"1.0.0\"\n";
+    assert_eq!(
+        replace(
+            Manager::PreCommit,
+            ".pre-commit-config.yaml",
+            old,
+            "v2.0.0",
+            None
+        ),
+        old.replace("v1.0.0", "v2.0.0")
+            .replace("\"1.0.0\"", "\"v2.0.0\"")
+    );
+}

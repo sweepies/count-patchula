@@ -13,6 +13,7 @@ mod go;
 mod images;
 mod mise;
 mod npm;
+mod precommit;
 mod pyproject;
 mod requirements;
 mod terraform;
@@ -82,6 +83,7 @@ pub fn supported(manager: Manager) -> bool {
         | Manager::HelmValues
         | Manager::Requirements
         | Manager::Pyproject
+        | Manager::PreCommit
         | Manager::Regex => true,
     }
 }
@@ -167,6 +169,9 @@ impl Scanner {
                     || leaf.ends_with("values.yml"))
                     && (leaf.ends_with(".yaml") || leaf.ends_with(".yml"))
             }
+            Manager::PreCommit => {
+                matches!(leaf, ".pre-commit-config.yaml" | ".pre-commit-config.yml")
+            }
             Manager::Pyproject => matches!(
                 leaf,
                 "pyproject.toml" | "uv.lock" | "poetry.lock" | ".python-version"
@@ -244,6 +249,8 @@ impl Scanner {
                 go::extract(path, text)
             } else if self.selected(Manager::Terraform, path) {
                 terraform::extract(path, text, &terraform)
+            } else if self.selected(Manager::PreCommit, path) {
+                precommit::extract(path, text)
             } else if self.selected(Manager::Pyproject, path) {
                 pyproject::extract(path, text, files)
             } else if self.selected(Manager::Requirements, path) {

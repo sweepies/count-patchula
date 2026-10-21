@@ -311,3 +311,44 @@ coverage = "7.6.0"
     let groups = deps.iter().find(|d| d.name == "ruff").unwrap();
     assert_eq!(groups.kind, DependencyKind::Development);
 }
+#[test]
+fn pre_commit_revs_use_github_or_forge_tags() {
+    let mut config = config();
+    config.managers = vec![Manager::PreCommit];
+    let scanner = Scanner::new(&config).unwrap();
+    assert!(scanner.needs(".pre-commit-config.yaml"));
+    let text = r#"repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks: [{id: trailing-whitespace}]
+  - repo: https://gitlab.com/grp/sub/hooks.git
+    rev: "1.2.0"
+  - repo: https://codeberg.org/owner/hooks
+    rev: v0.3
+  - repo: https://github.com/frozen/hooks
+    rev: 0123456789abcdef0123456789abcdef01234567
+  - repo: https://git.example.com/a/b
+    rev: v1.0.0
+  - repo: local
+    hooks: [{id: mine}]
+"#;
+    let files = Files::from([(".pre-commit-config.yaml".into(), text.into())]);
+    let deps = scanner.extract(&files).unwrap().dependencies;
+    let got: Vec<_> = deps
+        .iter()
+        .map(|d| (d.source, d.package.as_str(), d.current.as_str()))
+        .collect();
+    use rustovate_config::Source;
+    assert_eq!(
+        got,
+        [
+            (Source::GithubTags, "pre-commit/pre-commit-hooks", "v5.0.0"),
+            (Source::ForgeTags, "gitlab.com/grp/sub/hooks", "1.2.0"),
+            (Source::ForgeTags, "codeberg.org/owner/hooks", "v0.3"),
+        ]
+    );
+    for dep in &deps {
+        let slice = &text[dep.location.start..dep.location.end];
+        assert_eq!(slice.trim_matches('"'), dep.current);
+    }
+}

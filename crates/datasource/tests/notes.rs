@@ -1561,3 +1561,51 @@ async fn gitea_without_release_text_falls_back_to_its_root_changelog() {
         "{text}"
     );
 }
+
+#[tokio::test]
+async fn forge_tags_page_newest_first_until_a_short_page() {
+    let full: Vec<_> = (0..100)
+        .map(|n| json!({"name":format!("v1.{}.0", 200 - n),"created_at":"2026-01-01T00:00:00.000Z","commit":{"id":format!("{n:040}")}}))
+        .collect();
+    let routes = routes(&[
+        (
+            "https://gitlab.com/api/v4/projects/grp%2Fhooks/repository/tags?per_page=100&page=1",
+            json!(full),
+        ),
+        (
+            "https://gitlab.com/api/v4/projects/grp%2Fhooks/repository/tags?per_page=100&page=2",
+            json!([{"name":"v1.0.0","created_at":null,"commit":{"id":"f".repeat(40)}}]),
+        ),
+        (
+            "https://codeberg.org/api/v1/repos/owner/hooks/tags?limit=50&page=1",
+            json!([{"name":"v0.3","commit":{"sha":"e".repeat(40)}},{"name":"v0.2","commit":{"sha":"d".repeat(40)}}]),
+        ),
+    ]);
+    let client = client(routes, memory().await).await;
+    let gitlab = client
+        .lookup(Source::ForgeTags, "gitlab.com/grp/hooks")
+        .await
+        .unwrap();
+    assert_eq!(gitlab.versions.len(), 101);
+    assert_eq!(gitlab.versions[0].version, "v1.200.0");
+    assert_eq!(
+        gitlab.versions[0].published_at.as_deref(),
+        Some("2026-01-01T00:00:00.000Z")
+    );
+    assert_eq!(gitlab.versions[100].published_at, None);
+    let gitea = client
+        .lookup(Source::ForgeTags, "codeberg.org/owner/hooks")
+        .await
+        .unwrap();
+    assert_eq!(gitea.versions[0].version, "v0.3");
+    assert_eq!(
+        gitea.versions[0].digest.as_deref(),
+        Some("e".repeat(40).as_str())
+    );
+    assert!(
+        client
+            .lookup(Source::ForgeTags, "git.example.com/a/b")
+            .await
+            .is_err()
+    );
+}

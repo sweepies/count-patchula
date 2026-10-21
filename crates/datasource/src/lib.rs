@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 mod compact;
 mod docker;
+mod forge;
 mod github;
 mod mise;
 pub mod notes;
@@ -139,6 +140,7 @@ impl Client {
             }
             Source::Terraform => self.terraform(package).await,
             Source::Helm => self.helm(package).await,
+            Source::ForgeTags => self.forge_tags(package).await,
         }
     }
     async fn npm(&self, package: &str) -> Result<Catalog> {

@@ -137,3 +137,13 @@ Set `useVersionsHost = false` to use the previous upstream catalog paths.
 Legacy public cassettes explicitly exercise that mode; independent offline
 contract fixtures cover conditional mirror reads, batch index reuse, full-list
 fallback, private routing, errors and date provenance.
+
+# Forge tags (SWE-151)
+
+`forge-tags` packages are `host/path` on GitLab or Gitea/Forgejo, recognised by
+the same host rules as release notes. Tags are read newest first through the
+public API, without credentials, 100 per page on GitLab and 50 on Gitea, until a
+short page or ten pages. Each tag's commit SHA is its digest. GitLab's annotated
+tag `created_at` is the publication date; lightweight and Gitea tags are
+undated, so they have no release-age wait, as for GitHub tags without a release.
+Regex extractors can use `forge-tags` directly.

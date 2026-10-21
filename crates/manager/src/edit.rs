@@ -109,6 +109,7 @@ fn yaml(dep: &Dependency) -> bool {
             | Manager::Kustomize
             | Manager::Flux
             | Manager::HelmValues
+            | Manager::PreCommit
     ) || (matches!(dep.manager, Manager::Npm | Manager::Bun)
         && (dep.file.ends_with(".yaml") || dep.file.ends_with(".yml")))
 }
