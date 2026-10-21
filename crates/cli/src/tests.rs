@@ -305,3 +305,37 @@ async fn cli_run_reopens_disk_receipts_with_bot_authors_and_mixed_pr_inventory()
     assert!(!logs.contains("offline-installation"));
     assert!(!logs.contains("unrelated private PR text"));
 }
+
+#[test]
+fn github_remotes_name_their_repository() {
+    use super::github_repository;
+    for url in [
+        "https://github.com/sweepies/count-patchula",
+        "https://github.com/sweepies/count-patchula.git",
+        "https://github.com/sweepies/count-patchula/",
+        "https://x-access-token:secret@github.com/sweepies/count-patchula.git",
+        "http://GitHub.com/sweepies/count-patchula",
+        "git@github.com:sweepies/count-patchula.git",
+        "github.com:sweepies/count-patchula",
+        "ssh://git@github.com/sweepies/count-patchula.git",
+        "ssh://git@ssh.github.com:443/sweepies/count-patchula.git",
+        "git://github.com/sweepies/count-patchula",
+    ] {
+        assert_eq!(
+            github_repository(url).as_deref(),
+            Some("sweepies/count-patchula"),
+            "{url}"
+        );
+    }
+    for url in [
+        "https://gitlab.com/sweepies/count-patchula.git",
+        "git@example.com:sweepies/count-patchula.git",
+        "https://github.com/sweepies",
+        "https://github.com/sweepies/count-patchula/tree/main",
+        "file:///srv/git/count-patchula.git",
+        "/srv/git/count-patchula.git",
+        "",
+    ] {
+        assert_eq!(github_repository(url), None, "{url}");
+    }
+}

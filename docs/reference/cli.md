@@ -93,9 +93,10 @@ Validate an operator Pkl server settings file without credentials or network.
 Extract dependencies and report available updates without writing repositories.
 
 ### Arguments
-- **`[REPOSITORIES]…`** — Repositories as owner/repo; omit to discover all accessible repositories.
+- **`[REPOSITORIES]…`** — Repositories as owner/repo; omit to use the current directory's GitHub remote.
 
 ### Flags
+- **`--all-repos`** — Process every repository the token can reach instead of naming them.
 - **`--cache <CACHE>`** — Shared SQLite cache path.
 
   **Default:** `.patchula-cache.sqlite`
@@ -121,9 +122,10 @@ Extract dependencies and report available updates without writing repositories.
 Create or update dependency branches and pull requests with verified API commits.
 
 ### Arguments
-- **`[REPOSITORIES]…`** — Repositories as owner/repo; omit to discover all accessible repositories.
+- **`[REPOSITORIES]…`** — Repositories as owner/repo; omit to use the current directory's GitHub remote.
 
 ### Flags
+- **`--all-repos`** — Process every repository the token can reach instead of naming them.
 - **`--cache <CACHE>`** — Shared SQLite cache path.
 
   **Default:** `.patchula-cache.sqlite`
@@ -187,9 +189,10 @@ Uninstall tool versions no run has used recently; pinned defaults stay.
 Browse dependencies and updates in the terminal; with `--local`, apply selected updates.
 
 ### Arguments
-- **`[REPOSITORIES]…`** — Repositories as owner/repo; omit to discover all accessible repositories.
+- **`[REPOSITORIES]…`** — Repositories as owner/repo; omit to use the current directory's GitHub remote.
 
 ### Flags
+- **`--all-repos`** — Process every repository the token can reach instead of naming them.
 - **`--cache <CACHE>`** — Shared SQLite cache path.
 
   **Default:** `.patchula-cache.sqlite`

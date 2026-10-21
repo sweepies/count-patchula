@@ -77,7 +77,9 @@ which mise installs on first use into a tool store kept beside the cache. Run
 the same command again and the Count notices nothing changed: an unchanged
 repository costs one GraphQL query on the write side.
 
-Omit the repository argument to process every repository the token can reach.
+Without a repository argument the Count works on the current directory's
+checkout, through its `origin` remote (or its only remote) on github.com. Pass
+`--all-repos` to process every repository the token can reach.
 
 ## Where to go next
 

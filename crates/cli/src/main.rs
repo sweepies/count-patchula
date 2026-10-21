@@ -357,6 +357,107 @@ async fn batch(
     Ok(if errors == 0 { 0 } else { 1 })
 }
 
+/// The repositories a batch covers: the ones named, every one the token can
+/// reach with `--all-repos` (an empty list, which the engine discovers), or the
+/// GitHub repository the current directory's Git remote points at.
+fn repositories(options: &cli::Lookup) -> Result<Vec<String>, miette::Report> {
+    if options.all_repos {
+        if !options.repositories.is_empty() {
+            return Err(miette::miette!(
+                "--all-repos cannot be combined with named repositories"
+            ));
+        }
+        return Ok(Vec::new());
+    }
+    if !options.repositories.is_empty() || options.local.is_some() {
+        return Ok(options.repositories.clone());
+    }
+    current_repository().map(|repository| vec![repository])
+}
+
+/// The `owner/name` of the current checkout's GitHub remote: `origin`, or the
+/// only remote when there is no `origin`.
+fn current_repository() -> Result<String, miette::Report> {
+    let help = "name a repository as owner/repo, or pass --all-repos for every repository the token can reach";
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    };
+    let Some(remotes) = git(&["remote"]) else {
+        return Err(miette::miette!(
+            help = help,
+            "no repository named, and the current directory is not a Git checkout"
+        ));
+    };
+    let remotes: Vec<&str> = remotes.lines().collect();
+    let remote = match remotes.as_slice() {
+        _ if remotes.contains(&"origin") => "origin",
+        [only] => only,
+        [] => {
+            return Err(miette::miette!(
+                help = help,
+                "no repository named, and this checkout has no Git remote"
+            ));
+        }
+        _ => {
+            return Err(miette::miette!(
+                help = help,
+                "no repository named, and this checkout has several remotes but no origin"
+            ));
+        }
+    };
+    git(&["remote", "get-url", remote])
+        .as_deref()
+        .and_then(github_repository)
+        .ok_or_else(|| {
+            miette::miette!(
+                help = help,
+                "no repository named, and the {remote} remote is not a github.com repository"
+            )
+        })
+}
+
+/// `owner/name` from a github.com remote URL in HTTPS, SSH, Git or scp-like form.
+fn github_repository(url: &str) -> Option<String> {
+    let host_of = |authority: &str| {
+        let host = authority
+            .rsplit_once('@')
+            .map_or(authority, |(_, host)| host);
+        host.split_once(':')
+            .map_or(host, |(host, _)| host)
+            .to_ascii_lowercase()
+    };
+    let (host, path) = match url.split_once("://") {
+        Some((scheme, rest)) => {
+            if !matches!(
+                scheme,
+                "https" | "http" | "ssh" | "git" | "git+ssh" | "ssh+git"
+            ) {
+                return None;
+            }
+            let (authority, path) = rest.split_once('/')?;
+            (host_of(authority), path)
+        }
+        None => {
+            let (authority, path) = url.split_once(':')?;
+            (host_of(authority), path)
+        }
+    };
+    if host != "github.com" && host != "ssh.github.com" {
+        return None;
+    }
+    let path = path.trim_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let (owner, name) = path.split_once('/')?;
+    (!owner.is_empty() && !name.is_empty() && !name.contains('/'))
+        .then(|| format!("{owner}/{name}"))
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -371,6 +472,7 @@ async fn report(
     if options.concurrency == 0 || options.concurrency > 100 {
         return Err((2, miette::miette!("concurrency must be 1..100")));
     }
+    let repositories = repositories(options).map_err(|e| (2, e))?;
     let mut http_options = patchula_http::Options {
         registry_freshness_secs: options.registry_freshness_secs,
         go_freshness_secs: options.go_freshness_secs,
@@ -455,7 +557,7 @@ async fn report(
         }
     }
     let options = Options {
-        repositories: options.repositories.clone(),
+        repositories,
         config,
         config_dir: options.config_dir.clone(),
         local: options.local.clone(),

@@ -130,8 +130,11 @@ pub enum Recheck {
 
 #[derive(Args)]
 pub struct Lookup {
-    /// Repositories as owner/repo; omit to discover all accessible repositories.
+    /// Repositories as owner/repo; omit to use the current directory's GitHub remote.
     pub repositories: Vec<String>,
+    /// Process every repository the token can reach instead of naming them.
+    #[usage(long, conflicts = "--local")]
+    pub all_repos: bool,
     /// Shared SQLite cache path.
     #[usage(long, default = ".patchula-cache.sqlite")]
     pub cache: PathBuf,

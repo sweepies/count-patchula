@@ -334,3 +334,68 @@ fn recheck_flag_overrides_environment_and_invalid_environment_is_a_usage_error()
         );
     }
 }
+
+#[test]
+fn repositories_default_to_the_current_github_remote() {
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    };
+    let lookup = |dir: &std::path::Path, args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_patchula"))
+            .arg("lookup")
+            .args(args)
+            .arg("--json")
+            .current_dir(dir)
+            .env_remove("GITHUB_TOKEN")
+            .env_remove("PATCHULA_TOKEN")
+            .env_remove("GH_TOKEN")
+            .env("GIT_CEILING_DIRECTORIES", dir.parent().unwrap())
+            .output()
+            .unwrap()
+    };
+    let error = |output: &std::process::Output| {
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        json["error"].as_str().unwrap().to_owned()
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let output = lookup(dir.path(), &[]);
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(error(&output).contains("not a Git checkout"));
+
+    git(dir.path(), &["init", "--quiet"]);
+    let output = lookup(dir.path(), &[]);
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(error(&output).contains("no Git remote"));
+
+    git(
+        dir.path(),
+        &["remote", "add", "origin", "https://gitlab.com/demo/app.git"],
+    );
+    let output = lookup(dir.path(), &[]);
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(error(&output).contains("origin remote is not a github.com repository"));
+
+    // A GitHub remote resolves, so the run gets as far as needing a token.
+    git(
+        dir.path(),
+        &["remote", "set-url", "origin", "git@github.com:demo/app.git"],
+    );
+    let output = lookup(dir.path(), &[]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(error(&output).contains("PATCHULA_TOKEN"));
+
+    let output = lookup(dir.path(), &["--all-repos", "demo/app"]);
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(error(&output).contains("--all-repos cannot be combined"));
+
+    let elsewhere = tempfile::tempdir().unwrap();
+    let output = lookup(elsewhere.path(), &["--all-repos"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(error(&output).contains("PATCHULA_TOKEN"));
+}
