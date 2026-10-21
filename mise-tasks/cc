@@ -5,6 +5,8 @@ args=()
 for arg in "$@"; do
   case "$arg" in
     --target=*-unknown-linux-*) arg="${arg/-unknown-linux-/-linux-}" ;;
+    # rustc asks for this erratum workaround on aarch64; Zig's lld has no such flag.
+    -Wl,--fix-cortex-a53-843419) continue ;;
   esac
   args+=("$arg")
 done

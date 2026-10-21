@@ -1,7 +1,24 @@
 # Installation
 
-The Count is one binary, `patchula`. There are no prebuilt releases yet, so
-build him with Cargo.
+The Count is one binary, `patchula`. Releases have static builds for Linux
+(x86_64 and arm64) and macOS (Apple silicon and Intel).
+
+## With mise
+
+```sh
+mise use -g packslip:github.com/sweepies/count-patchula
+```
+
+Each release carries a [packslip](https://packslip.dev) manifest signed by the
+release workflow, so mise checks every download against it. Pin a version with
+`packslip:github.com/sweepies/count-patchula@0.1.0`.
+
+## From a release
+
+Download the archive for your platform from the [releases
+page](https://github.com/sweepies/count-patchula/releases). It holds
+`bin/patchula`, the man page under `share/man`, and bash, zsh and fish
+completions under `share/`.
 
 ## With Cargo
 
