@@ -401,8 +401,14 @@ async fn batch(
     }
     if let Some(stats) = &report.stats {
         eprintln!(
-            "patchula: {} repos, {updates} proposals; {} requests, {} 304s, {} cache hits, {} extraction hits, {} unique lookups",
+            "patchula: the Count visited {} repositor{} and found {updates} update{}; {} requests, {} 304s, {} cache hits, {} extraction hits, {} unique lookups",
             report.repositories.len(),
+            if report.repositories.len() == 1 {
+                "y"
+            } else {
+                "ies"
+            },
+            if updates == 1 { "" } else { "s" },
             stats.requests,
             stats.not_modified,
             stats.cache_hits,

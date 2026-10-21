@@ -1,16 +1,16 @@
 <!-- patchula-dashboard:v1 -->
 
-Created by patchula. Click to re-check on the next run.
+The Count keeps watch over this repository's dependencies. Tick a box and he will see to it on the next run.
 
-- [ ] Re-check this repository <!-- patchula-action:{"action":"recheck","target":"REPOSITORY"} -->
+- [ ] Ask the Count to re-check this repository <!-- patchula-action:{"action":"recheck","target":"REPOSITORY"} -->
 
 ## Pending updates
 
-- [ ] Create this held-back/limited update now: fixture → 2.0.0 (npm, package.json; eligible at 2026-10-16T00:00:00Z) <!-- patchula-action:{"action":"create","target":"HELD_UPDATE"} -->
+- [ ] Create it now anyway: fixture → 2.0.0 (npm, package.json; eligible at 2026-10-16T00:00:00Z) <!-- patchula-action:{"action":"create","target":"HELD_UPDATE"} -->
 
 ## Lookup warnings and errors
 
-- [ ] Retry failed lookup: fixture (npm, package.json) <!-- patchula-action:{"action":"retry","target":"DEPENDENCY"} -->
+- [ ] Try that lookup again: fixture (npm, package.json) <!-- patchula-action:{"action":"retry","target":"DEPENDENCY"} -->
   - Stale/rate-limited catalog (cached at Unix 123)
   - fixture: cached after rate limiting
 

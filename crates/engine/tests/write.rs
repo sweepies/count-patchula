@@ -813,7 +813,8 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
             .to_owned();
         if merges {
             assert!(
-                dashboard.contains("## Merged PRs") && dashboard.contains("merged by patchula"),
+                dashboard.contains("## Merged by the Count")
+                    && dashboard.contains("merged by patchula"),
                 "{case}: {dashboard}"
             );
             let bytes = cache
@@ -851,7 +852,7 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
                 Default::default(),
             );
             assert!(
-                next_dashboard.contains("## Merged PRs")
+                next_dashboard.contains("## Merged by the Count")
                     && next_dashboard.contains("merged by patchula"),
                 "merged outcomes must survive the next inventory: {next_dashboard}"
             );
@@ -1073,7 +1074,7 @@ async fn age_cached_catalogs_refresh_for_checked_pr_and_repository_controls_only
             pr["body"]
                 .as_str()
                 .unwrap()
-                .replace("- [ ] Created", "- [x] Created")
+                .replace("- [ ] Tick this", "- [x] Tick this")
         );
     }
     *fake.catalog.lock().unwrap() = json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}},"time":{"1.0.0":"2020-01-01T00:00:00Z","2.0.0":"2022-01-01T00:00:00Z"}});
@@ -1367,7 +1368,7 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
                     prs[0]["body"]
                         .as_str()
                         .unwrap()
-                        .replace("- [ ] Created", "- [x] Created")
+                        .replace("- [ ] Tick this", "- [x] Tick this")
                 );
             } else if origin == "retry" {
                 // An unknown/stale target is consumed without invalidating any write receipt.
@@ -1505,7 +1506,7 @@ async fn repository_and_pr_recheck_clicks_force_branch_work_and_clear_the_checkb
                 prs[0]["body"]
                     .as_str()
                     .unwrap()
-                    .replace("- [ ] Created", "- [x] Created")
+                    .replace("- [ ] Tick this", "- [x] Tick this")
             );
         }
         fake.writes.lock().unwrap().clear();
@@ -1715,7 +1716,7 @@ async fn batching_moves_updates_into_one_pr_and_never_suppresses_them() {
         .as_str()
         .unwrap()
         .to_owned();
-    assert!(dashboard.contains("Batched updates"), "{dashboard}");
+    assert!(dashboard.contains("Batched by the Count"), "{dashboard}");
 
     // A steady run keeps the batch and does not reopen the update.
     checkbox_run(&engine, &config, now).await;

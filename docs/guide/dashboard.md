@@ -5,7 +5,7 @@ prs { dashboard = true }
 ```
 
 With the dashboard on, the Count keeps one issue per repository, titled
-Dependency Dashboard to begin with. Rename it if you like: he finds it by a
+"Count Patchula's dependency dashboard" to begin with. Rename it if you like: he finds it by a
 hidden marker and by who wrote it, not by title. Turning the dashboard off
 closes the issue; turning it on again opens a new one.
 
@@ -13,10 +13,11 @@ closes the issue; turning it on again opens a new one.
 
 In order:
 
-1. open update PRs, grouped by update type;
+1. open update PRs, grouped by update type, then the ones he merged;
 2. pending updates, each with the reason it is held (release age with the time
    it becomes eligible, PR limits, schedule windows);
-3. updates you closed, with the target that was suppressed;
+3. updates you closed ("Updates you closed"), with the target that was
+   suppressed, and updates "Batched by the Count";
 4. lookup warnings and sources served from stale cache;
 5. every detected dependency, collapsed by manager and file.
 

@@ -45,7 +45,7 @@ update.
 
 The batch's items live in its body as a hidden marker, so any runner sees the
 same batch without local state. The PRs it carries are listed under "Batched
-updates" on the [dashboard](/guide/dashboard), and their branches stay until the
+by the Count" on the [dashboard](/guide/dashboard), and their branches stay until the
 batch merges. A group whose targets would need more than 12,000 bytes of marker
 cannot be batched. The `batch` branch name is reserved, so a group named
 `batch` is a configuration error.

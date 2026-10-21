@@ -1553,7 +1553,8 @@ impl Engine {
         };
         let Some(config) = config else {
             report.status = Status::Skipped;
-            report.reason = Some("no .github/patchula.pkl or patchula.pkl".into());
+            report.reason =
+                Some("the Count was not invited: no .github/patchula.pkl or patchula.pkl".into());
             return Ok(Work {
                 report,
                 config: None,

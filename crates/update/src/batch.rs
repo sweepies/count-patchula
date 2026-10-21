@@ -187,7 +187,7 @@ pub fn apply(
 /// The batch section of the batch PR body, with a removal box per item.
 pub(crate) fn render(items: &[Item]) -> String {
     let mut text = String::from(
-        "\nBatched updates. Tick an item to move it back to its own pull request; closing this pull request returns every item.\n\n",
+        "\nBatched by the Count. Tick an item to send it back to its own pull request; closing this pull request sends every item back.\n\n",
     );
     for item in items {
         let title = item.title.replace(['\n', '\r', '<', '>', '`'], " ");
@@ -235,7 +235,7 @@ mod tests {
     }
     fn update_body(key: &str, targets: &[Change], ticked: bool) -> String {
         format!(
-            "{}\n- [{}] Add to the batch PR. {ADD}\n<!-- patchula:{{\"version\":1,\"identity\":\"{}\",\"update\":\"{key}\"}} -->\n",
+            "{}\n- [{}] Add to the Count's batch PR. This one closes and the update moves there. {ADD}\n<!-- patchula:{{\"version\":1,\"identity\":\"{}\",\"update\":\"{key}\"}} -->\n",
             hidden_marker(TARGETS, &targets),
             if ticked { "x" } else { " " },
             "a".repeat(64)

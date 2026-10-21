@@ -618,7 +618,7 @@ pub fn batch_plan(
         change.merge = config.prs.batch_merge;
     }
     plan.action.message = format!(
-        "{} batch {} dependency update{}",
+        "{} the Count's batch of {} update{}",
         config.defaults.commit_prefix,
         plan.changes.len(),
         if plan.changes.len() == 1 { "" } else { "s" }

@@ -1955,7 +1955,7 @@ async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
         assert!(body.contains("| Package | Change | Type | File |"));
         assert!(body.contains("mise.toml") && body.contains("22.0.0"));
         assert!(body.contains("Review our deployment first."));
-        assert!(body.contains("Created by patchula. Click to re-check on the next run."));
+        assert!(body.contains("Tick this and the Count will look at it again on the next run."));
         assert!(body.contains("<!-- patchula:") && body.contains("<!-- patchula-recheck -->"));
         assert_eq!(pr["labels"][0]["name"], "dependencies");
     }
@@ -1975,7 +1975,7 @@ async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
     {
         let mut s = server.0.lock().unwrap();
         let body = s.prs[&1]["body"].as_str().unwrap().replace(
-            "- [ ] Created by patchula. Click to re-check on the next run.",
+            "- [ ] Tick this and the Count will look at it again on the next run.",
             "- [x] Any operator wording",
         );
         s.prs.get_mut(&1).unwrap()["body"] = json!(body);
@@ -2250,7 +2250,7 @@ async fn rechecks_refresh_notes_but_only_patch_changed_body_hashes() {
                 }
                 let mut body = s.prs[&1]["body"].as_str().unwrap().replace("\r\n", "\n");
                 if origin == "pr" {
-                    body = body.replace("- [ ] Created", "- [x] Created");
+                    body = body.replace("- [ ] Tick this", "- [x] Tick this");
                 }
                 s.prs.get_mut(&1).unwrap()["body"] = json!(body.replace('\n', "\r\n"));
                 s.requests.clear();
@@ -2330,7 +2330,7 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
         let s = server.0.lock().unwrap();
         let body = s.prs[&1]["body"].as_str().unwrap();
         assert!(body.len() <= patchula_update::BODY_LIMIT);
-        assert!(body.contains("Release details 🦀") && body.contains("Click to re-check now."));
+        assert!(body.contains("Release details 🦀") && body.contains("will look at it again now."));
         assert_eq!(s.release_queries.len(), 1);
     }
     let (mut repeat, _) = make_plan("22.0.0");

@@ -2,7 +2,7 @@
 # `patchula`
 - **Version:** 0.1.0
 
-A fast dependency update bot for GitHub.
+Count Patchula vants to update your deps. A fast dependency update bot for GitHub.
 
 Exit codes: 0 = success; 1 = runtime error; 2 = usage or configuration error.
 

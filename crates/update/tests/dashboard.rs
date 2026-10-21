@@ -107,7 +107,7 @@ fn issue_discovery_checks_marker_author_and_ambiguity_never_title() {
         ..Default::default()
     };
     inventory.issues = vec![
-        json!({"number":1,"title":"Dependency Dashboard","body":MARKER,"author":{"__typename":"User","login":"human"}}),
+        json!({"number":1,"title":"Count Patchula's dependency dashboard","body":MARKER,"author":{"__typename":"User","login":"human"}}),
     ];
     assert!(dashboard::issue(&inventory).unwrap().is_none());
     inventory.issues.push(json!({"number":2,"title":"Renamed by owner","body":MARKER,"author":{"__typename":"Bot","login":"patchula"}}));

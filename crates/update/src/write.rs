@@ -450,7 +450,7 @@ async fn apply_inner(
     let tree = field(&tree, "sha")?;
     plan.tree = Some(tree.into());
     let pending = if plan.action.lockfile_pending {
-        "\n\nLockfile pending: manifest-only test branch; regenerate before merging (SWE-109)."
+        "\n\nLockfile pending: manifest-only test branch; regenerate before merging."
     } else {
         ""
     };

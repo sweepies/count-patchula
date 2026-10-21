@@ -592,7 +592,7 @@ impl Lifecycle {
             client
                 .post(
                     &format!("repos/{}/issues/{target}/comments", self.repo),
-                    json!({"body":format!("Moved to the batch PR #{number}. Tick its box there to bring this update back.")}),
+                    json!({"body":format!("Batched by the Count into #{number}. Tick this update's box there to bring it back.")}),
                 )
                 .await
                 .map_err(|e| e.to_string())?;
@@ -877,9 +877,7 @@ impl Lifecycle {
             text.push_str(&row);
         }
         if plan.action.lockfile_pending {
-            text.push_str(
-                "\nLockfile pending: regenerate and validate before merging (SWE-109).\n",
-            );
+            text.push_str("\nLockfile pending: regenerate and validate it before merging.\n");
         }
         if let Some(items) = &plan.batch {
             text.push_str(&crate::batch::render(items));
@@ -944,7 +942,7 @@ impl Lifecycle {
         let targets = crate::batch::hidden_marker(crate::batch::TARGETS, &plan.changes);
         let controls = if plan.batch.is_none() && !plan.maintenance && targets.len() <= 12_000 {
             format!(
-                "- [ ] Add to the batch PR; this one closes. {}\n{targets}\n",
+                "- [ ] Add to the Count's batch PR. This one closes and the update moves there. {}\n{targets}\n",
                 crate::batch::ADD,
             )
         } else {
@@ -954,7 +952,7 @@ impl Lifecycle {
         let mut releases = BTreeSet::new();
         for change in &plan.changes {
             if releases.len() >= 8 || text.len() + reserve > BODY_LIMIT - 2500 {
-                text.push_str("\nAdditional release notes truncated to fit this PR. Consult the source repositories for the remaining updates.\n");
+                text.push_str("\nThe Count ran out of room for more release notes. The source repositories have the rest.\n");
                 break;
             }
             if change.kind == "pin" || !change.release_notes {
@@ -1009,7 +1007,7 @@ impl Lifecycle {
             Recheck::NextRun => "on the next run",
         };
         text.push_str(&format!(
-            "\n- [ ] Created by patchula. Click to re-check {timing}. {RECHECK}\n"
+            "\n- [ ] Tick this and the Count will look at it again {timing}. {RECHECK}\n"
         ));
         text.push_str(&controls);
         text.push('\n');

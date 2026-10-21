@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const MARKER: &str = "<!-- patchula-dashboard:v1 -->";
-const TITLE: &str = "Dependency Dashboard";
+const TITLE: &str = "Count Patchula's dependency dashboard";
 const LIMIT: usize = 60_000;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -355,14 +355,17 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
     let mut sections = BTreeMap::<String, BTreeSet<(Option<u64>, String)>>::new();
     for pr in prs.iter().filter(|p| !p["merged_at"].is_null()) {
         if let Some(number) = pr["number"].as_u64() {
-            sections.entry("Merged PRs".into()).or_default().insert((
-                Some(number),
-                format!(
-                    "- #{number}: {} — {}\n",
-                    safe(pr["title"].as_str().unwrap_or("Update dependencies")),
-                    safe(pr["patchula_merge"].as_str().unwrap_or("merged"))
-                ),
-            ));
+            sections
+                .entry("Merged by the Count".into())
+                .or_default()
+                .insert((
+                    Some(number),
+                    format!(
+                        "- #{number}: {} — {}\n",
+                        safe(pr["title"].as_str().unwrap_or("Update dependencies")),
+                        safe(pr["patchula_merge"].as_str().unwrap_or("merged"))
+                    ),
+                ));
         }
     }
     for pr in prs.iter().filter(|p| {
@@ -373,7 +376,7 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
     }) {
         if let Some(number) = pr["number"].as_u64() {
             sections
-                .entry("Open PRs — other".into())
+                .entry("Open PRs: other".into())
                 .or_default()
                 .insert((
                     Some(number),
@@ -400,7 +403,7 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
             };
             if let Some(number) = pr["number"].as_u64() {
                 sections
-                    .entry(format!("Open PRs — {kind}"))
+                    .entry(format!("Open PRs: {kind}"))
                     .or_default()
                     .insert((
                         Some(number),
@@ -417,18 +420,18 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
         } else if plan.action.reason.as_deref() == Some(crate::batch::BATCHED_REASON) {
             // The batch PR is listed with the open PRs; these are its items.
             sections
-                .entry("Batched updates".into())
+                .entry("Batched by the Count".into())
                 .or_default()
                 .insert((None, format!("- {}\n", safe(&plan.action.message))));
         } else if plan.action.reason.as_deref() == Some(crate::pull_requests::CLOSED_BY_OWNER) {
             sections
-                .entry("Owner-closed updates".into())
+                .entry("Updates you closed".into())
                 .or_default()
                 .insert((
                     None,
                     checkbox(
                         &format!(
-                            "Recreate this owner-closed update: {}",
+                            "Bring back this update you closed: {}",
                             safe(&plan.action.message)
                         ),
                         Action::Recreate(update_key(plan)),
@@ -440,7 +443,7 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
             {
                 checkbox(
                     &format!(
-                        "Create this held-back/limited update now: {} ({})",
+                        "Create it now anyway: {} ({})",
                         safe(&plan.action.message),
                         safe(reason)
                     ),
@@ -465,9 +468,33 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
                     .map(|catalog| format!("; catalog fetched at {}", safe(&catalog.fetched_at)))
                     .unwrap_or_default();
                 for held in &metadata.held_back {
-                    sections.entry("Pending updates".into()).or_default().insert((None, checkbox(
-                        &format!("Create this held-back/limited update now: {} → {} ({}, {}; eligible at {}{})", safe(&dep.name), safe(&held.version), safe(&metadata.source), safe(&file.path), safe(held.target_eligible_at.as_deref().unwrap_or(&held.eligible_at)), catalog_age),
-                        Action::Create(held_key(&file.path, dep, &held.version, &held.update_type)))));
+                    sections
+                        .entry("Pending updates".into())
+                        .or_default()
+                        .insert((
+                            None,
+                            checkbox(
+                                &format!(
+                                    "Create it now anyway: {} → {} ({}, {}; eligible at {}{})",
+                                    safe(&dep.name),
+                                    safe(&held.version),
+                                    safe(&metadata.source),
+                                    safe(&file.path),
+                                    safe(
+                                        held.target_eligible_at
+                                            .as_deref()
+                                            .unwrap_or(&held.eligible_at)
+                                    ),
+                                    catalog_age
+                                ),
+                                Action::Create(held_key(
+                                    &file.path,
+                                    dep,
+                                    &held.version,
+                                    &held.update_type,
+                                )),
+                            ),
+                        ));
                 }
                 let warnings: Vec<_> = repo
                     .warnings
@@ -481,7 +508,7 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
                 if !metadata.stale.is_empty() || !warnings.is_empty() {
                     let mut row = checkbox(
                         &format!(
-                            "Retry failed lookup: {} ({}, {})",
+                            "Try that lookup again: {} ({}, {})",
                             safe(&dep.name),
                             safe(&metadata.source),
                             safe(&file.path)
@@ -531,20 +558,22 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
         Recheck::Now => "now",
         Recheck::NextRun => "on the next run",
     };
-    let mut text = format!("{MARKER}\n\nCreated by patchula. Click to re-check {timing}.\n\n");
+    let mut text = format!(
+        "{MARKER}\n\nThe Count keeps watch over this repository's dependencies. Tick a box and he will see to it {timing}.\n\n"
+    );
     text.push_str(&checkbox(
-        "Re-check this repository",
+        "Ask the Count to re-check this repository",
         Action::Recheck(hash(repo.repository.as_bytes())),
     ));
     let mut sections: Vec<_> = sections.into_iter().collect();
     sections.sort_by_key(|(section, _)| {
-        let rank = if section.starts_with("Open PRs — ") {
+        let rank = if section.starts_with("Open PRs: ") {
             0
         } else {
             match section.as_str() {
-                "Merged PRs" => 1,
+                "Merged by the Count" => 1,
                 "Pending updates" => 2,
-                "Owner-closed updates" => 3,
+                "Updates you closed" => 3,
                 "Lookup warnings and errors" => 4,
                 "Report warnings" => 5,
                 _ => 6,
