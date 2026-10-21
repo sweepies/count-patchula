@@ -17,6 +17,6 @@ rules = new Listing {
   new Rule {
     note = "Nightlies get individual PRs for manual review; never batch."
     select { dependencies = new Listing { "pingdotgg/t3code" } }
-    apply { group = ""; merge = false; permitted = #"regex:-nightly\."#; labels = new Listing { "dependencies"; "liv:no-batch" } }
+    apply { group = ""; merge = false; permitted = #"regex:-nightly\."#; labels = new Listing { "dependencies"; "no-batch" } }
   }
 }

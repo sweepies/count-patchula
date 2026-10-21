@@ -56,8 +56,8 @@ the [GitHub App server](/guide/server).
 ## 4. Look before you leap
 
 ```sh
-patchula lookup --json sweepies/my-app > report.json
-patchula run --dry-run sweepies/my-app
+patchula lookup --json acme/my-app > report.json
+patchula run --dry-run acme/my-app
 ```
 
 `lookup` prints a summary and writes the [JSON report](/reference/report): every
@@ -68,7 +68,7 @@ without touching GitHub.
 ## 5. Run it
 
 ```sh
-patchula run sweepies/my-app
+patchula run acme/my-app
 ```
 
 The first run opens one PR per update and, with `dashboard = true`, a

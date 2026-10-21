@@ -35,8 +35,8 @@ prs { dashboard = true }
 Then, with a GitHub App installation token in `PATCHULA_TOKEN`:
 
 ```sh
-patchula run --dry-run sweepies/my-app   # look first
-patchula run sweepies/my-app             # then let him bite
+patchula run --dry-run acme/my-app   # look first
+patchula run acme/my-app             # then let him bite
 ```
 
 Lockfile tools come from [mise](https://mise.jdx.dev), so it needs to be on the

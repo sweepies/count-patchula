@@ -56,8 +56,8 @@ pull request per update, each with a regenerated lockfile, release notes and a
 verified commit signed by GitHub.
 
 ```sh
-patchula run --dry-run sweepies/my-app   # look first
-patchula run sweepies/my-app             # then let him bite
+patchula run --dry-run acme/my-app   # look first
+patchula run acme/my-app             # then let him bite
 ```
 
 ```pkl

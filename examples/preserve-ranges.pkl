@@ -1,0 +1,4 @@
+amends "PatchulaConfig.pkl"
+
+// A published crate: preserve dependency ranges for its users.
+defaults { versions = "preserve" }

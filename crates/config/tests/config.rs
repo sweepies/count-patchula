@@ -30,7 +30,7 @@ fn every_repository_example_validates() {
         .filter(|path| path.extension().is_some_and(|extension| extension == "pkl"))
         .collect();
     examples.sort();
-    assert_eq!(examples.len(), 15);
+    assert_eq!(examples.len(), 14);
     for example in examples {
         load(&example).unwrap_or_else(|error| panic!("{}: {error:?}", example.display()));
     }
@@ -154,7 +154,7 @@ fn dependency_kinds_are_closed_and_typed() {
 
 #[test]
 fn migration_preserves_critical_intent() {
-    let config = load(&workspace().join("examples/renovate-runner.pkl")).unwrap();
+    let config = load(&workspace().join("examples/renovate-migration.pkl")).unwrap();
     assert_eq!(
         config.managers,
         [
@@ -170,7 +170,7 @@ fn migration_preserves_critical_intent() {
     );
     assert_eq!(
         config.rules[1].select.dependencies,
-        ["sweepies/ops-workflows"]
+        ["acme/shared-workflows"]
     );
     assert_eq!(config.rules[1].apply.digest, Some(false));
     assert_eq!(
@@ -178,11 +178,11 @@ fn migration_preserves_critical_intent() {
         [DependencyKind::ReusableWorkflow]
     );
     assert_eq!(config.extractors.len(), 2);
-    let config = load(&workspace().join("examples/maccrae-infra.pkl")).unwrap();
+    let config = load(&workspace().join("examples/kubernetes-infra.pkl")).unwrap();
     assert_eq!(config.rules[3].select.updates, [Update::Major]);
     assert_eq!(config.rules[3].apply.active, Some(false));
     assert_eq!(config.files.len(), 3);
-    let config = load(&workspace().join("examples/fnox.pkl")).unwrap();
+    let config = load(&workspace().join("examples/preserve-ranges.pkl")).unwrap();
     assert_eq!(config.defaults.versions, VersionPolicy::Preserve);
     let (_directory, path) = fixture("");
     let mut defaults = serde_json::to_value(load(&path).unwrap()).unwrap();

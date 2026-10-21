@@ -87,16 +87,15 @@ directly comparable. Total time remains comparable. Reproduce with:
 ```sh
 mise run benchmarks:lookup-release
 # With an existing GitHub token, run twice against the same private cache:
-mise run lookup:release --config examples/renovate-runner.pkl \
+mise run lookup:release --config examples/renovate-migration.pkl \
   --cache /tmp/patchula-runner.sqlite --concurrency 8 --json \
-  sweepies/renovate-runner > /tmp/patchula-runner-report.json
+  owner/repo > /tmp/patchula-runner-report.json
 ```
 
 The `3029efd` follow-up had no GitHub recording credential and refreshed only
 public npm metadata. The subsequent live investigation refreshed both public
 source and engine cassettes for GraphQL head batches and matching-ref hydration.
-All ordinary tests remain offline. Current live results and reproduction commands
-are in [benchmarks](/internals/history/benchmarks#live-network-investigation-2026-10-15).
+All ordinary tests remain offline.
 Registry max-age is honored rather than replaced with an arbitrary local TTL.
 
 ## Branch write path
@@ -145,11 +144,11 @@ persistent partial clone.
 Tool success and target validation precede API commits; failures are reported per
 branch without publishing manifest-only work. Binary Bun locks
 retain the explicit `--allow-lockfile-pending` testing escape hatch. Scheduled
-lock maintenance is opt-in. See [wave-3 behavior and prerequisites](/internals/history/phase2-wave3).
+lock maintenance is opt-in. See [lockfiles](/guide/lockfiles).
 
 Warm runs validate cached successful writes against a fresh GraphQL head/PR
 inventory. Exact commit, update and PR matches bypass history/tree/PR reads and
 tool execution. Changed inputs fall back to the full safety checks; tool-generated
 branches also regenerate on base changes in conflicts mode. PR lifecycle,
 closed-target suppression, labels and native auto-merge are documented in
-[wave 2](/internals/history/phase2-wave2). Dashboard writes remain unimplemented.
+[branches and PRs](/guide/pull-requests) and [auto-merge](/guide/auto-merge).

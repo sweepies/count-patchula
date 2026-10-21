@@ -65,11 +65,11 @@ fn every_example_has_implemented_dispatch_for_the_twelve_repo_matrix() {
         }
         let name = path.file_stem().unwrap().to_str().unwrap();
         let expected: &[Manager] = match name {
-            "benchmark-batch-public" | "sandbox-automerge" => &[Manager::GithubActions],
-            "fnox" => &[Manager::Cargo, Manager::Compose],
-            "immich-go" => &[Manager::Go],
-            "cafeteria-order-tracker" => &[Manager::Terraform],
-            "maccrae-infra" => &[
+            "benchmark-batch-public" | "automerge" => &[Manager::GithubActions],
+            "preserve-ranges" => &[Manager::Cargo, Manager::Compose],
+            "go-module" => &[Manager::Go],
+            "terraform-ignore" => &[Manager::Terraform],
+            "kubernetes-infra" => &[
                 Manager::Kubernetes,
                 Manager::Kustomize,
                 Manager::Flux,
@@ -89,5 +89,5 @@ fn every_example_has_implemented_dispatch_for_the_twelve_repo_matrix() {
         }
         count += 1;
     }
-    assert_eq!(count, 15);
+    assert_eq!(count, 14);
 }

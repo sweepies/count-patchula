@@ -33,7 +33,7 @@ They are separate from repository configs, which amend `PatchulaConfig.pkl`.
 amends "PatchulaServer.pkl"
 
 allowedInstallations { 123456 }
-allowedRepositories { "sweepies/my-app" }
+allowedRepositories { "acme/my-app" }
 sweepCron = "0 0 * * * *"   // hourly; six fields, seconds first
 reportDirectory = "/var/lib/patchula/reports"
 ```

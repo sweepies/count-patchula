@@ -6,7 +6,7 @@ and the run's stats. Point it at a directory with `--local` and you can pick
 updates and have the Count write them into your files.
 
 ```sh
-patchula tui sweepies/my-app            # browse a GitHub repository
+patchula tui acme/my-app            # browse a GitHub repository
 patchula tui --local .                  # browse, and apply, the current directory
 patchula tui --once --local . | less    # a plain-text snapshot instead
 ```

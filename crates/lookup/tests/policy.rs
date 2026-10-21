@@ -94,7 +94,7 @@ fn peer_support_ranges_widen_without_pins_while_installed_dependencies_remain_ex
 
 #[test]
 fn satisfying_provider_constraints_and_cargo_floors_are_retained() {
-    let cfg = config("fnox");
+    let cfg = config("preserve-ranges");
     let eval = Evaluator::new(&cfg).unwrap();
     let mut dep = dependency("azure_core");
     dep.manager = Manager::Cargo;
@@ -294,7 +294,7 @@ fn prefixed_mise_product_releases_pin_latest_without_sdk_tags() {
 
 #[test]
 fn docker_policy_keeps_variants_and_python_epochs_use_pep440_order() {
-    let mut cfg = config("renovate-runner");
+    let mut cfg = config("renovate-migration");
     cfg.defaults.wait_hours = 0;
     let eval = Evaluator::new(&cfg).unwrap();
     let mut dep = dependency("image");
@@ -338,7 +338,7 @@ fn docker_policy_keeps_variants_and_python_epochs_use_pep440_order() {
 }
 #[test]
 fn grouping_ops_workflow_opt_out_and_opaque_refs() {
-    let eval = Evaluator::new(&config("renovate-runner")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
     for name in [
         "alchemy",
         "@alchemy.run/core",
@@ -355,7 +355,7 @@ fn grouping_ops_workflow_opt_out_and_opaque_refs() {
                 .all(|p| p.group.as_deref() == Some("alchemy, effect and sveltekit"))
         );
     }
-    let mut dep = dependency("sweepies/ops-workflows");
+    let mut dep = dependency("acme/shared-workflows");
     dep.manager = Manager::GithubActions;
     dep.kind = DependencyKind::ReusableWorkflow;
     dep.source = Source::GithubTags;
@@ -377,11 +377,11 @@ fn grouping_ops_workflow_opt_out_and_opaque_refs() {
 fn exact_preserve_nightly_and_deprecated_yanked_filters() {
     let mut dep = dependency("serde");
     dep.current = "^1.0.0".into();
-    let eval = Evaluator::new(&config("fnox")).unwrap();
+    let eval = Evaluator::new(&config("preserve-ranges")).unwrap();
     let p = eval.propose(&dep, &catalog(&["1.2.0", "2.0.0"])).unwrap();
     assert!(p.iter().any(|p| p.new_value.as_deref() == Some("^1.0.0")));
     assert!(p.iter().any(|p| p.new_value.as_deref() == Some("^2.0.0")));
-    let eval = Evaluator::new(&config("renovate-runner")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
     let p = eval.propose(&dep, &catalog(&["1.0.0"])).unwrap();
     assert_eq!(p[0].update_type, "pin");
     assert_eq!(p[0].new_value.as_deref(), Some("1.0.0"));
@@ -393,7 +393,7 @@ fn exact_preserve_nightly_and_deprecated_yanked_filters() {
             .unwrap()
             .is_empty()
     );
-    let eval = Evaluator::new(&config("remote-agent")).unwrap();
+    let eval = Evaluator::new(&config("nightly-pins")).unwrap();
     dep.name = "pingdotgg/t3code".into();
     dep.package = dep.name.clone();
     dep.manager = Manager::Regex;
@@ -415,7 +415,7 @@ fn exact_preserve_nightly_and_deprecated_yanked_filters() {
 
 #[test]
 fn lookup_evidence_records_rejected_versions_and_per_class_policy() {
-    let eval = Evaluator::new(&config("maccrae-infra")).unwrap();
+    let eval = Evaluator::new(&config("kubernetes-infra")).unwrap();
     let mut dep = dependency("plain");
     let mut versions = catalog(&["0.9.0", "1.1.0", "1.2.0", "1.3.0"]);
     versions.versions[0].deprecated = true;
@@ -439,7 +439,7 @@ fn lookup_evidence_records_rejected_versions_and_per_class_policy() {
 }
 #[test]
 fn rules_replace_lists_in_order_and_windows_are_reported() {
-    let mut config = config("renovate-runner");
+    let mut config = config("renovate-migration");
     let mut rule = config.rules[0].clone();
     rule.select=serde_json::from_value(serde_json::json!({"packages":["plain"],"dependencies":[],"managers":[],"files":[],"updates":["minor"],"sources":[],"kinds":[],"current":null})).unwrap();
     rule.apply.group = Some("early".into());
@@ -475,7 +475,7 @@ fn rules_replace_lists_in_order_and_windows_are_reported() {
 
 #[test]
 fn negated_ignore_exceptions_match_manifest_or_registry_alias() {
-    let mut config = config("renovate-runner");
+    let mut config = config("renovate-migration");
     config.ignore = vec!["!alias".into()];
     let eval = Evaluator::new(&config).unwrap();
     let mut dep = dependency("alias");
@@ -486,7 +486,7 @@ fn negated_ignore_exceptions_match_manifest_or_registry_alias() {
 
 #[test]
 fn floating_dist_tags_and_latest_tools_can_be_pinned() {
-    let eval = Evaluator::new(&config("renovate-runner")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
     let mut dep = dependency("plain");
     dep.current = "latest".into();
     dep.resolved = None;
@@ -508,10 +508,10 @@ fn floating_dist_tags_and_latest_tools_can_be_pinned() {
 
 #[test]
 fn extracted_reusable_workflow_matches_runner_digest_opt_out() {
-    let config = config("renovate-runner");
+    let config = config("renovate-migration");
     let files = patchula_manager::Files::from([(
         ".github/workflows/test.yml".into(),
-        "jobs:\n  build:\n    uses: sweepies/ops-workflows/.github/workflows/build.yml@main\n"
+        "jobs:\n  build:\n    uses: acme/shared-workflows/.github/workflows/build.yml@main\n"
             .into(),
     )]);
     let extracted = patchula_manager::Scanner::new(&config)
@@ -519,7 +519,7 @@ fn extracted_reusable_workflow_matches_runner_digest_opt_out() {
         .extract(&files)
         .unwrap();
     let dep = &extracted.dependencies[0];
-    assert_eq!(dep.name, "sweepies/ops-workflows");
+    assert_eq!(dep.name, "acme/shared-workflows");
     let eval = Evaluator::new(&config).unwrap();
     assert!(!eval.needs_lookup(dep));
     assert!(eval.propose(dep, &catalog(&["v1.0.0"])).unwrap().is_empty());
@@ -533,7 +533,7 @@ fn instant(value: &str) -> chrono::DateTime<chrono::Utc> {
 }
 #[test]
 fn held_back_versions_share_the_normalized_proposal_identity() {
-    let cfg = config("renovate-runner");
+    let cfg = config("renovate-migration");
     let eval = Evaluator::new(&cfg).unwrap();
     let mut dep = dependency("plain");
     dep.extract = Some(r"^release-(?<version>.*)$".into());
@@ -549,7 +549,7 @@ fn held_back_versions_share_the_normalized_proposal_identity() {
 
 #[test]
 fn held_back_summarizes_newest_but_keeps_earliest_eligibility() {
-    let eval = Evaluator::new(&config("renovate-runner")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
     let mut versions = catalog(&["1.0.2", "1.0.4", "1.0.3"]);
     for (v, date) in versions.versions.iter_mut().zip([
         "2026-10-14T13:00:00Z",
@@ -580,7 +580,7 @@ fn held_back_summarizes_newest_but_keeps_earliest_eligibility() {
 
 #[test]
 fn manual_age_override_selects_only_its_version_and_class_and_preserves_disabled_policy() {
-    let mut cfg = config("renovate-runner");
+    let mut cfg = config("renovate-migration");
     let dep = dependency("plain");
     let mut versions = catalog(&["1.0.2", "1.0.3", "2.0.0"]);
     for version in &mut versions.versions {
@@ -618,7 +618,7 @@ fn manual_age_override_selects_only_its_version_and_class_and_preserves_disabled
 }
 #[test]
 fn release_age_falls_back_and_reports_eligibility_without_hiding_current() {
-    let config = config("renovate-runner");
+    let config = config("renovate-migration");
     let eval = Evaluator::new(&config).unwrap();
     let now = instant("2026-10-15T12:00:00Z");
     let mut versions = catalog(&["1.0.0", "1.0.1", "1.0.2", "2.0.0", "3.0.0"]);
@@ -676,7 +676,7 @@ fn release_age_falls_back_and_reports_eligibility_without_hiding_current() {
 
 #[test]
 fn missing_dates_all_held_and_rule_overrides_are_explicit() {
-    let mut cfg = config("renovate-runner");
+    let mut cfg = config("renovate-migration");
     let now = instant("2026-10-15T12:00:00Z");
     let mut versions = catalog(&["1.0.1", "1.0.2"]);
     for version in &mut versions.versions {
@@ -716,7 +716,7 @@ fn missing_dates_all_held_and_rule_overrides_are_explicit() {
 
 #[test]
 fn floating_targets_fall_back_and_existing_lock_pins_survive_age_gate() {
-    let eval = Evaluator::new(&config("renovate-runner")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
     let now = instant("2026-10-15T12:00:00Z");
     let mut dep = dependency("plain");
     dep.current = "latest".into();
@@ -737,7 +737,7 @@ fn floating_targets_fall_back_and_existing_lock_pins_survive_age_gate() {
 
 #[test]
 fn runner_latest_is_floating_and_versioned_images_never_get_digests() {
-    let config = config("renovate-runner");
+    let config = config("renovate-migration");
     let deps = patchula_manager::Scanner::new(&config)
         .unwrap()
         .extract(&patchula_manager::Files::from([(
@@ -757,7 +757,7 @@ fn runner_latest_is_floating_and_versioned_images_never_get_digests() {
 
 #[test]
 fn mise_current_versions_follow_backend_tag_identity_without_proposal_filters() {
-    let cfg = config("renovate-runner");
+    let cfg = config("renovate-migration");
     let deps = patchula_manager::Scanner::new(&cfg)
         .unwrap()
         .extract(&patchula_manager::Files::from([(
@@ -784,7 +784,7 @@ fn mise_current_versions_follow_backend_tag_identity_without_proposal_filters() 
 
 #[test]
 fn floating_action_aliases_resolve_by_commit_and_keep_comment_precision() {
-    let eval = Evaluator::new(&config("renovate-runner")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
     let mut dep = dependency("example/action");
     dep.manager = Manager::GithubActions;
     dep.source = Source::GithubTags;
@@ -817,7 +817,7 @@ fn floating_action_aliases_resolve_by_commit_and_keep_comment_precision() {
 
 #[test]
 fn docker_alias_precision_prevents_patch_and_date_tag_proposals() {
-    let eval = Evaluator::new(&config("renovate-runner")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
     let mut dep = dependency("image");
     dep.manager = Manager::Kubernetes;
     dep.kind = DependencyKind::ContainerImage;
@@ -835,7 +835,7 @@ fn docker_alias_precision_prevents_patch_and_date_tag_proposals() {
 
 #[test]
 fn cargo_noop_ranges_are_not_updates_and_both_breaking_tracks_survive() {
-    let eval = Evaluator::new(&config("fnox")).unwrap();
+    let eval = Evaluator::new(&config("preserve-ranges")).unwrap();
     let mut dep = dependency("example");
     dep.manager = Manager::Cargo;
     dep.source = Source::Crates;
@@ -852,7 +852,7 @@ fn cargo_noop_ranges_are_not_updates_and_both_breaking_tracks_survive() {
 
 #[test]
 fn satisfying_npm_range_upgrade_is_one_pin_even_with_an_older_lock() {
-    let eval = Evaluator::new(&config("renovate-runner")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
     let mut dep = dependency("plain");
     dep.current = "^1.0.0".into();
     dep.resolved = Some("1.0.0".into());
@@ -882,7 +882,7 @@ fn numeric_mise_selectors_resolve_the_release_line_without_fake_zero_patches() {
         patchula_lookup::resolved_current_version(&dep, &versions).as_deref(),
         Some("24.6.2")
     );
-    let p = Evaluator::new(&config("renovate-runner"))
+    let p = Evaluator::new(&config("renovate-migration"))
         .unwrap()
         .propose(&dep, &versions)
         .unwrap();
@@ -892,7 +892,7 @@ fn numeric_mise_selectors_resolve_the_release_line_without_fake_zero_patches() {
 
 #[test]
 fn runtime_support_intervals_are_observed_without_spurious_exact_pins() {
-    let cfg = config("renovate-runner");
+    let cfg = config("renovate-migration");
     let files = patchula_manager::Files::from([(
         "package.json".into(),
         r#"{"engines":{"node":">=22 <27"}}"#.into(),
@@ -920,7 +920,7 @@ fn runtime_support_intervals_are_observed_without_spurious_exact_pins() {
 }
 #[test]
 fn pyproject_pins_move_poetry_ranges_keep_form_and_satisfied_ranges_wait() {
-    let mut cfg = config("renovate-runner");
+    let mut cfg = config("renovate-migration");
     cfg.defaults.wait_hours = 0;
     let eval = Evaluator::new(&cfg).unwrap();
     let mut dep = dependency("ruff");
@@ -964,7 +964,7 @@ fn pyproject_pins_move_poetry_ranges_keep_form_and_satisfied_ranges_wait() {
 }
 #[test]
 fn maven_variants_are_kept_and_ordered_by_maven_rules() {
-    let mut cfg = config("renovate-runner");
+    let mut cfg = config("renovate-migration");
     cfg.defaults.wait_hours = 0;
     let eval = Evaluator::new(&cfg).unwrap();
     let mut dep = dependency("com.google.guava:guava");
@@ -994,7 +994,7 @@ fn maven_variants_are_kept_and_ordered_by_maven_rules() {
 /// the range's lowest version instead of failing.
 #[test]
 fn unlocked_composer_and_gem_ranges_classify_from_their_floor() {
-    let mut cfg = config("renovate-runner");
+    let mut cfg = config("renovate-migration");
     cfg.defaults.wait_hours = 0;
     let eval = Evaluator::new(&cfg).unwrap();
     let mut dep = dependency("symfony/console");

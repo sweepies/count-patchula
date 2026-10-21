@@ -227,13 +227,13 @@ mod tests {
         let words = [
             "lookup",
             "--config",
-            "examples/renovate-runner.pkl",
+            "examples/renovate-migration.pkl",
             "--cache",
             "tmp/cache.sqlite",
             "--concurrency",
             "4",
             "--json",
-            "sweepies/renovate-runner",
+            "acme/runner",
         ]
         .map(std::ffi::OsStr::new);
         let app = App::parse_from(&words).unwrap();
@@ -241,7 +241,7 @@ mod tests {
         let Some(Command::Lookup(options)) = app.command else {
             panic!("lookup")
         };
-        assert_eq!(options.repositories, vec!["sweepies/renovate-runner"]);
+        assert_eq!(options.repositories, vec!["acme/runner"]);
         assert_eq!(options.concurrency, 4);
         let app = App::parse_from(&[std::ffi::OsStr::new("lookup")]).unwrap();
         let Some(Command::Lookup(options)) = app.command else {

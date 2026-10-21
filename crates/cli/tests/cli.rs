@@ -163,10 +163,10 @@ fn lookup_requires_token_without_network_and_validates_concurrency() {
             "--config",
             concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../examples/renovate-runner.pkl"
+                "/../../examples/renovate-migration.pkl"
             ),
             "--json",
-            "sweepies/renovate-runner",
+            "acme/runner",
         ])
         .env_remove("GITHUB_TOKEN")
         .env_remove("PATCHULA_TOKEN")
@@ -198,7 +198,7 @@ fn invalid_arguments_exit_two() {
 fn config_validation_and_json_results_use_documented_exit_codes() {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../examples/renovate-runner.pkl"
+        "/../../examples/renovate-migration.pkl"
     );
     let output = cli(&["config", "check", path, "--json"]);
     assert!(output.status.success(), "{output:?}");

@@ -2,7 +2,7 @@ amends "PatchulaConfig.pkl"
 
 prs { dashboard = true }
 defaults { bodyNotes = new Listing { "{releaseNotes}" } }
-ignore = new Listing { "sweepies/devops-minter" }
+ignore = new Listing { "acme/token-minter" }
 files = new Listing {
   new FileSet { manager = "kubernetes"; paths = new Listing { #"regex:\.yaml$"# } }
   new FileSet {
@@ -47,7 +47,7 @@ rules = new Listing {
   }
   new Rule {
     note = "Flux image automation owns these :latest images."
-    select { packages = new Listing { "ghcr.io/sweepies/maccrae-account-manager"; "ghcr.io/sweepies/stalwart-provisioner" } }
+    select { packages = new Listing { "ghcr.io/acme/account-manager"; "ghcr.io/acme/mail-provisioner" } }
     apply { active = false }
   }
 }

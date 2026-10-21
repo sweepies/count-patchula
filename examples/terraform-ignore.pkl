@@ -6,3 +6,4 @@ rules = new Listing {
     apply { active = false }
   }
 }
+ignore = new Listing { "acme/token-minter" }

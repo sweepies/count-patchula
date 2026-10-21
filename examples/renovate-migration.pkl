@@ -17,7 +17,7 @@ rules = new Listing {
     note = "OpenBao authorizes refs/heads/main; a workflow SHA changes job_workflow_ref."
     select {
       managers = new Listing { "github-actions" }
-      dependencies = new Listing { "sweepies/ops-workflows" }
+      dependencies = new Listing { "acme/shared-workflows" }
       kinds = new Listing { "reusable-workflow" }
     }
     apply { digest = false }

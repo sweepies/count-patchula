@@ -232,8 +232,8 @@ async fn cli_run_reopens_disk_receipts_with_bot_authors_and_mixed_pr_inventory()
     let _guard = tracing::subscriber::set_default(subscriber);
     let fake = Arc::new(Fake::new());
     let mut foreign = existing_pr("foreign", 3, false);
-    foreign["head"]["ref"] = json!("liv/safe-deps");
-    foreign["user"]["login"] = json!("liv");
+    foreign["head"]["ref"] = json!("someone/feature");
+    foreign["user"]["login"] = json!("someone");
     foreign["body"] = json!("unrelated private PR text");
     *fake.prs.lock().unwrap() = vec![
         existing_pr("owner-closed-a", 1, true),

@@ -1,4 +1,0 @@
-amends "PatchulaConfig.pkl"
-
-// fnox is a published crate: preserve dependency ranges for its users.
-defaults { versions = "preserve" }

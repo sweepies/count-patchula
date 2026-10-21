@@ -12,8 +12,6 @@ needed to use him.
 - [HTTP fixtures](/internals/http-testing): how tests record and replay
   registries offline.
 - [CI cache](/internals/ci-cache): the mbx build cache in GitHub Actions.
-- [Development log](/internals/history/): the record of each phase as it was
-  built.
 
 The source lives at
 [sweepies/count-patchula](https://github.com/sweepies/count-patchula). The

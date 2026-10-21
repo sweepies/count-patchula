@@ -1583,7 +1583,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
                 "obsolete" | "foreign-obsolete" => {
                     let mut commit = s.commits[p.action.commit.as_ref().unwrap()].clone();
                     if case == "foreign-obsolete" {
-                        commit["actor"] = json!("liv-app[bot]");
+                        commit["actor"] = json!("other-app[bot]");
                     }
                     s.commits.insert("obsolete".into(), commit);
                     s.refs
@@ -1898,7 +1898,7 @@ async fn closed_update_receipts_are_freshly_verified_and_invalidated() {
                 "reopened" => s.prs.get_mut(&1).unwrap()["state"] = json!("open"),
                 "merged" => s.prs.get_mut(&1).unwrap()["merged_at"] = json!("2026-10-15T00:00:00Z"),
                 "body" => s.prs.get_mut(&1).unwrap()["body"] = json!("changed"),
-                "actor" => s.prs.get_mut(&1).unwrap()["user"]["login"] = json!("liv-app[bot]"),
+                "actor" => s.prs.get_mut(&1).unwrap()["user"]["login"] = json!("other-app[bot]"),
                 "deleted" => {
                     s.prs.remove(&1);
                 }

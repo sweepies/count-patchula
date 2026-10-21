@@ -3,7 +3,7 @@ use patchula_manager::{Files, Scanner};
 fn config() -> patchula_config::Config {
     patchula_config::load(std::path::Path::new(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../examples/renovate-runner.pkl"
+        "/../../examples/renovate-migration.pkl"
     )))
     .unwrap()
 }

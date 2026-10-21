@@ -2,16 +2,16 @@
 
 ## Goal
 
-Replace the Renovate CLI in `sweepies/renovate-runner` with a tool that updates
-the dependencies of about a dozen repositories in seconds, not minutes.
+Replace a scheduled Renovate CLI runner with a tool that updates the
+dependencies of about a dozen repositories in seconds, not minutes.
 
 Measured baseline (Renovate 44.155.6, warm caches, one EC2 c7i.large):
 
 | | Time |
 |---|---|
 | Batch of 12 repos, before our release-notes patch | 6.7 min |
-| fnox alone, after the patch | 44 s |
-| renovate-runner alone, after the patch | 13 s |
+| Largest repository alone, after the patch | 44 s |
+| Smallest repository alone, after the patch | 13 s |
 
 Where Renovate's time went: one repository at a time, per-repository caches,
 full release and tag histories fetched through paginated APIs, every changelog
@@ -46,7 +46,7 @@ Targets (to be confirmed by Phase 1 measurements):
 6. **Fail loudly.** Unknown config fields, unknown managers and unsupported
    files are errors with precise diagnostics, never silently ignored.
 7. **Structured output.** A stable, versioned JSON report is the interface to
-   callers such as renovate-runner. Logs are for humans and never parsed.
+   callers such as a scheduled runner. Logs are for humans and never parsed.
 8. **Clean-room and MIT.** See the README.
 
 ## Configuration
@@ -146,4 +146,4 @@ patchula itself.
    repositories, triaged against Renovate's dry-run output.
 2. Write side: branches, commits, PRs, dashboard, lockfile tools.
    Then server mode: webhook API, queue, file-based operator settings.
-3. Shadow mode next to Renovate in renovate-runner, then cutover.
+3. Shadow mode next to Renovate on the existing runner, then cutover.

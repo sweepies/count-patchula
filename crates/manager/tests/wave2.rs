@@ -3,7 +3,7 @@ use patchula_manager::{Files, Scanner};
 fn extract(files: &Files) -> Vec<patchula_manager::Dependency> {
     let config = patchula_config::load(std::path::Path::new(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../examples/maccrae-infra.pkl"
+        "/../../examples/kubernetes-infra.pkl"
     )))
     .unwrap();
     let result = Scanner::new(&config).unwrap().extract(files).unwrap();

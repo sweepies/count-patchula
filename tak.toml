@@ -7,41 +7,38 @@ warmup = 2
 [bench.startup]
 cmd = ["./target/release/patchula", "--version"]
 
-[bench.config-cafeteria-order-tracker]
-cmd = ["./target/release/patchula", "config", "check", "examples/cafeteria-order-tracker.pkl"]
+[bench.config-terraform-ignore]
+cmd = ["./target/release/patchula", "config", "check", "examples/terraform-ignore.pkl"]
 
 [bench.config-defaults]
 cmd = ["./target/release/patchula", "config", "check", "examples/defaults.pkl"]
 
-[bench.config-devops-minter]
-cmd = ["./target/release/patchula", "config", "check", "examples/devops-minter.pkl"]
+[bench.config-preserve-ranges]
+cmd = ["./target/release/patchula", "config", "check", "examples/preserve-ranges.pkl"]
 
-[bench.config-fnox]
-cmd = ["./target/release/patchula", "config", "check", "examples/fnox.pkl"]
+[bench.config-custom-extractor]
+cmd = ["./target/release/patchula", "config", "check", "examples/custom-extractor.pkl"]
 
-[bench.config-immich-forge-cli]
-cmd = ["./target/release/patchula", "config", "check", "examples/immich-forge-cli.pkl"]
+[bench.config-go-module]
+cmd = ["./target/release/patchula", "config", "check", "examples/go-module.pkl"]
 
-[bench.config-immich-go]
-cmd = ["./target/release/patchula", "config", "check", "examples/immich-go.pkl"]
+[bench.config-kubernetes-infra]
+cmd = ["./target/release/patchula", "config", "check", "examples/kubernetes-infra.pkl"]
 
-[bench.config-maccrae-infra]
-cmd = ["./target/release/patchula", "config", "check", "examples/maccrae-infra.pkl"]
+[bench.config-disabled-dependency]
+cmd = ["./target/release/patchula", "config", "check", "examples/disabled-dependency.pkl"]
 
-[bench.config-maccrae-wiki]
-cmd = ["./target/release/patchula", "config", "check", "examples/maccrae-wiki.pkl"]
+[bench.config-nightly-pins]
+cmd = ["./target/release/patchula", "config", "check", "examples/nightly-pins.pkl"]
 
-[bench.config-remote-agent]
-cmd = ["./target/release/patchula", "config", "check", "examples/remote-agent.pkl"]
+[bench.config-npm-only]
+cmd = ["./target/release/patchula", "config", "check", "examples/npm-only.pkl"]
 
-[bench.config-renovate-ce]
-cmd = ["./target/release/patchula", "config", "check", "examples/renovate-ce.pkl"]
+[bench.config-renovate-migration]
+cmd = ["./target/release/patchula", "config", "check", "examples/renovate-migration.pkl"]
 
-[bench.config-renovate-runner]
-cmd = ["./target/release/patchula", "config", "check", "examples/renovate-runner.pkl"]
-
-[bench.config-sweepy-dev]
-cmd = ["./target/release/patchula", "config", "check", "examples/sweepy.dev.pkl"]
+[bench.config-manual-merges]
+cmd = ["./target/release/patchula", "config", "check", "examples/manual-merges.pkl"]
 
 [bench.github-cache-replay]
 cmd = ["./target/release/examples/replay_bench"]
