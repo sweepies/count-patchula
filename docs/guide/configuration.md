@@ -185,12 +185,15 @@ Limits are positive integers or `null`. Zero is rejected, because zero meaning
 
 ## Choosing files and managers
 
-`managers` replaces the list of active managers. `files` replaces one
-manager's file selection. `exclude` replaces the excluded paths. `ignore`
-lists dependency names to leave alone, with the same pattern syntax.
+`managers` lists the active managers and `exclude` the excluded paths. Both
+start out full, so assign a `new Listing` to replace them: amending with
+`managers { ... }` adds to the defaults instead. `files` replaces one manager's
+file selection. `ignore` lists dependency names to leave alone, with the same
+pattern syntax.
 
 ```pkl
-managers { "npm"; "github-actions"; "mise" }
+managers = new Listing { "npm"; "github-actions"; "mise" }
+exclude = new Listing { "**/node_modules/**"; "fixtures/**" }
 files {
   new FileSet {
     manager = "dockerfile"

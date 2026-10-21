@@ -1,9 +1,10 @@
 # GitHub Actions
 
 The repository is also a GitHub Action. It installs the Count with mise,
-keeps his cache between runs, and runs `patchula run`. Each repository he
-updates still needs a `.github/patchula.pkl` to invite him; see [getting
-started](/getting-started).
+keeps his cache between runs, and runs `patchula run`. A repository is updated
+when it invites him with a `.github/patchula.pkl` (see [getting
+started](/getting-started)), or when an organization runner supplies its config
+with `--config-dir`.
 
 Both setups use a GitHub App installation token. Pull requests opened with a
 workflow's own `GITHUB_TOKEN` do not trigger other workflows, so your checks

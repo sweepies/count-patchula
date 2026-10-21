@@ -24,7 +24,7 @@ inputs:
     description: Count Patchula version to run. Empty means the version of this action, or the latest release when the action is not used at a release tag.
     default: ""
   args:
-    description: Extra arguments for `patchula run`, such as `--config-dir policy`.
+    description: Extra arguments for `patchula run`, such as `--config-dir policy`, separated by spaces or newlines.
     default: ""
 
 runs:
@@ -78,8 +78,8 @@ runs:
         else
           args+=("$GITHUB_REPOSITORY")
         fi
-        if [ -n "$INPUT_ARGS" ]; then
-          read -r -a extra <<< "$INPUT_ARGS"
+        if [ -n "${INPUT_ARGS//[[:space:]]/}" ]; then
+          read -r -d '' -a extra <<< "$INPUT_ARGS" || true
           args+=("${extra[@]}")
         fi
         mkdir -p "$CACHE_DIR"
