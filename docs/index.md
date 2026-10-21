@@ -5,7 +5,7 @@ titleTemplate: Dependency updates for GitHub
 
 hero:
   name: Count Patchula
-  text: Vants to update your deps.
+  text: vants to update your deps.
   tagline: He never sleeps. Neither do your CVEs. A modern dependency updater with strong defaults.
   image:
     src: /logo.png

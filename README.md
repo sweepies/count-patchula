@@ -81,11 +81,6 @@ lists every manager, datasource and feature, and [migrating a
 config](docs/renovate/migrating.md) maps
 `renovate.json` options onto Pkl.
 
-Count Patchula is an independent implementation under the MIT licence. Renovate
-(AGPL-3.0) may be run as a black box to compare results, but its source code,
-preset data and test fixtures are never read, copied or adapted into this
-repository.
-
 ## Development
 
 Install [mise](https://mise.jdx.dev), then `mise trust` and `mise install`.
@@ -102,6 +97,11 @@ Builds go through [mr boxington](https://mr-boxington.jdx.dev) for a shared
 Cargo cache. Tests never touch the network: they replay HTTP fixtures the Count
 recorded himself. Tools only the tests need, like the lockfile engines, are
 task-scoped, so a plain `mise install` does not fetch them.
+
+Count Patchula is an independent implementation under the MIT licence. Renovate
+(AGPL-3.0) may be run as a black box to compare results, but its source code,
+preset data and test fixtures are never read, copied or adapted into this
+repository.
 
 ## Thanks
 
