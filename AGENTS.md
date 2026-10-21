@@ -47,5 +47,3 @@ are plain and direct.
 A change is done when `mise run ci` passes locally and, after pushing, the
 **CI result** check on GitHub is green. Commits use conventional commit
 messages (`feat(manager): …`, `fix(lookup): …`).
-
-Live GitHub writes go only to `sweepies/rustovate-sandbox`.

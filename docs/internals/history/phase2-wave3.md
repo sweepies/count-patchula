@@ -271,16 +271,16 @@ needs an eligible provider plan or enabled maintenance.
 
 ## Commands
 
-From `/root/rustovate`, with an installation token supplied through the existing
+From the repository root, with an installation token supplied through the existing
 environment variable (never written in commands or files):
 
 ```sh
 CARGO_NET_OFFLINE=true mise run ci
 CARGO_NET_OFFLINE=true mise exec -- cargo test --locked -p patchula-update --test write verified_receipts -- --nocapture
 mise exec -- cargo build --release --locked -p patchula-cli
-mise exec -- target/release/patchula -vv run --dry-run --json --cache /root/rustovate-conf/sandbox.sqlite sweepies/rustovate-sandbox > /root/rustovate-conf/sandbox-wave3-dry.json 2> /root/rustovate-conf/sandbox-wave3-dry.trace
-mise exec -- target/release/patchula -vv run --json --cache /root/rustovate-conf/sandbox.sqlite sweepies/rustovate-sandbox > /root/rustovate-conf/sandbox-wave3-run.json 2> /root/rustovate-conf/sandbox-wave3-run.trace
-mise exec -- target/release/patchula -vv run --json --cache /root/rustovate-conf/sandbox.sqlite sweepies/rustovate-sandbox > /root/rustovate-conf/sandbox-wave3-repeat.json 2> /root/rustovate-conf/sandbox-wave3-repeat.trace
+mise exec -- target/release/patchula -vv run --dry-run --json --cache sandbox.sqlite OWNER/SANDBOX > sandbox-wave3-dry.json 2> sandbox-wave3-dry.trace
+mise exec -- target/release/patchula -vv run --json --cache sandbox.sqlite OWNER/SANDBOX > sandbox-wave3-run.json 2> sandbox-wave3-run.trace
+mise exec -- target/release/patchula -vv run --json --cache sandbox.sqlite OWNER/SANDBOX > sandbox-wave3-repeat.json 2> sandbox-wave3-repeat.trace
 ```
 
 Compare repeat `write`/`total` timing and request traces. Expect one write-phase
@@ -309,10 +309,10 @@ CI tail:
 
 ```text
 [build] $ cargo build --workspace --locked
-   Compiling patchula-update v0.1.0 (/root/rustovate/crates/update)
-   Compiling patchula-conformance v0.1.0 (/root/rustovate/conformance)
-   Compiling patchula-engine v0.1.0 (/root/rustovate/crates/engine)
-   Compiling patchula-server v0.1.0 (/root/rustovate/crates/server)
-   Compiling patchula-cli v0.1.0 (/root/rustovate/crates/cli)
+   Compiling patchula-update v0.1.0 (crates/update)
+   Compiling patchula-conformance v0.1.0 (conformance)
+   Compiling patchula-engine v0.1.0 (crates/engine)
+   Compiling patchula-server v0.1.0 (crates/server)
+   Compiling patchula-cli v0.1.0 (crates/cli)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.63s
 ```

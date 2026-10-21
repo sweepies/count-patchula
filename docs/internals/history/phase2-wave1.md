@@ -29,7 +29,7 @@ log rather than inferred from an aggregate count.
 Local checks/overrides and API-supplied modules now use the same evaluator and
 bundled-schema fallback. Regression tests compare nested `prs` and `defaults`
 amendments with and without vendoring, plus vendored-schema precedence and CLI
-directory discovery. `config check /root/rustovate-sandbox` passes without a
+directory discovery. `config check` on a local checkout of the sandbox passes without a
 local `Patchula.pkl`. No files in the sandbox were changed.
 
 ## SWE-106: branches only
@@ -53,14 +53,14 @@ No private responses or credentials were recorded.
 
 ## Live sandbox verification
 
-From `/root/rustovate`, with an installation token already exported as
+From the repository root, with an installation token already exported as
 `PATCHULA_TOKEN` (no other credentials/config flags are needed):
 
 ```sh
-mise run run --dry-run sweepies/rustovate-sandbox
-mise run run sweepies/rustovate-sandbox
+mise run run --dry-run OWNER/SANDBOX
+mise run run OWNER/SANDBOX
 # A second real run should report unchanged eligible branches:
-mise run run --json sweepies/rustovate-sandbox > /tmp/patchula-sandbox-applied.json
+mise run run --json OWNER/SANDBOX > /tmp/patchula-sandbox-applied.json
 ```
 
 For JSON review before publishing, add `--json` to the first command and redirect
@@ -82,8 +82,8 @@ reasons because this sandbox has `bun.lock`, `Cargo.lock` and `go.sum`. To test
 those manifest-only branches deliberately, use the same flag for both steps:
 
 ```sh
-mise run run --dry-run --allow-lockfile-pending sweepies/rustovate-sandbox
-mise run run --allow-lockfile-pending sweepies/rustovate-sandbox
+mise run run --dry-run --allow-lockfile-pending OWNER/SANDBOX
+mise run run --allow-lockfile-pending OWNER/SANDBOX
 ```
 
 Those branches retain `lockfilePending: true` and a commit warning. Keep this

@@ -79,10 +79,10 @@ with builds outside the measured runs; they are not controlled medians.
 The observed cold/warm/warm2 speed ratios are approximately **7.0× / 63.7× /
 68.7×** relative to that Renovate run.
 
-Cold report: `/root/rustovate-conf/r12-cold.json`; fresh baseline:
-`/root/rustovate-conf/renovate12.jsonl`. Input triage was **0 missing, 0 extra,
+Cold report: `r12-cold.json`; fresh baseline:
+`renovate12.jsonl`. Input triage was **0 missing, 0 extra,
 6 field-mismatch, 275 departures**. Final strict replay at
-`/root/rustovate-conf/out12-closed/triage.{md,json}` is **0 missing, 0 extra,
+`out12-closed/triage.{md,json}` is **0 missing, 0 extra,
 4 field-mismatch, 277 departures**. Independent cached floating-tag evidence
 accounts for the two action fields; the four unocss fields remain because
 the log's actual evaluation timestamps are already beyond 72 hours. See
@@ -195,12 +195,12 @@ Host/hardware were not supplied. patchula's proposal count is identical across
 all three captures; cold/warm differences caused by the old local pull cooldown
 are absent in this batch. Both captures retain upstream lookup/coverage limits.
 
-Inputs are `/root/rustovate-conf/r12-{cold,warm,warm2}.json` with their `.err`
-traces and the **fresh** `/root/rustovate-conf/renovate12.jsonl`; the earlier
+Inputs are `r12-{cold,warm,warm2}.json` with their `.err`
+traces and the **fresh** `renovate12.jsonl`; the earlier
 baseline is now `renovate12-old.jsonl`. Fresh triage started at **2 missing,
 6 extra, 13 field-mismatch, 264 departures**. The final round 4 offline replay
 of the unchanged cold report is **0 missing, 1 extra, 7 field-mismatch,
-277 departures**, under `/root/rustovate-conf/out12-r4-final/`. Its eight
+277 departures**, under `out12-r4-final/`. Its eight
 remaining rows map to fixed tag-date, peer, Cargo-floor and provider behaviors
 that require new live output; they are not accepted departures. Eleven repos
 have a comparison baseline; remote-agent is a configuration-validation coverage
@@ -227,7 +227,7 @@ comparison repositories in one batch with an initially fresh SQLite cache:
 
 Each is one sample, not a median; host/hardware were not supplied for these
 captures. The baseline lookup log predates evaluation by about one hour.
-Artifacts are `/root/rustovate-conf/r12-{cold,warm,warm2}.{json,err}` and
+Artifacts are `r12-{cold,warm,warm2}.{json,err}` and
 `renovate12.jsonl`, outside the repository. Warm2 has 27 warnings, reviewed in
 [phase1-triage.md](/internals/history/phase1-triage). The 12 repositories are external test
 inputs; patchula is developed independently of any runner in that set.
@@ -777,7 +777,7 @@ credential support, Docker Hub dated-tag API or GitHub Packages fallback was
 implemented. The new public benchmark proves the catalog/host changes on twelve
 repositories, not an identical replacement for the supplied private workload.
 Private workload reports/caches/logs remain outside this repository at
-`/root/rustovate-conf/performance-{after,final}/`; no private fixtures were added.
+`performance-{after,final}/`; no private fixtures were added.
 
 ### Validation and reproduction
 

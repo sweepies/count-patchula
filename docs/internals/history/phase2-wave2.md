@@ -176,17 +176,17 @@ No names or counts are hardcoded into cleanup.
 
 ## Commands
 
-From `/root/rustovate`, with the caller's App installation token exported as
+From the repository root, with the caller's App installation token exported as
 `PATCHULA_TOKEN` (never place it in a command, checked-in file or trace):
 
 ```sh
 CARGO_NET_OFFLINE=true mise run ci
 CARGO_NET_OFFLINE=true mise exec -- cargo test -p patchula-update --test write shared_base_write_trace_and_request_budget --locked -- --nocapture
 mise exec -- cargo build --release --locked -p patchula-cli
-mise exec -- target/release/patchula -vv run --dry-run --json --cache /root/rustovate-conf/sandbox.sqlite sweepies/rustovate-sandbox > /root/rustovate-conf/sandbox-wave2-dry.json 2> /root/rustovate-conf/sandbox-wave2-dry.trace
-mise exec -- target/release/patchula -vv run --json --cache /root/rustovate-conf/sandbox.sqlite sweepies/rustovate-sandbox > /root/rustovate-conf/sandbox-wave2-run.json 2> /root/rustovate-conf/sandbox-wave2-run.trace
+mise exec -- target/release/patchula -vv run --dry-run --json --cache sandbox.sqlite OWNER/SANDBOX > sandbox-wave2-dry.json 2> sandbox-wave2-dry.trace
+mise exec -- target/release/patchula -vv run --json --cache sandbox.sqlite OWNER/SANDBOX > sandbox-wave2-run.json 2> sandbox-wave2-run.trace
 # Repeat the real run to verify unchanged PRs/branches and warm note caching.
-mise exec -- target/release/patchula -vv run --json --cache /root/rustovate-conf/sandbox.sqlite sweepies/rustovate-sandbox > /root/rustovate-conf/sandbox-wave2-repeat.json 2> /root/rustovate-conf/sandbox-wave2-repeat.trace
+mise exec -- target/release/patchula -vv run --json --cache sandbox.sqlite OWNER/SANDBOX > sandbox-wave2-repeat.json 2> sandbox-wave2-repeat.trace
 ```
 
 The App now needs Pull requests write and label-management permissions in addition
@@ -227,8 +227,8 @@ CI tail (build stage):
 
 ```text
 [build] $ cargo build --workspace --locked
-   Compiling patchula-update v0.1.0 (/root/rustovate/crates/update)
-   Compiling patchula-engine v0.1.0 (/root/rustovate/crates/engine)
-   Compiling patchula-cli v0.1.0 (/root/rustovate/crates/cli)
+   Compiling patchula-update v0.1.0 (crates/update)
+   Compiling patchula-engine v0.1.0 (crates/engine)
+   Compiling patchula-cli v0.1.0 (crates/cli)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.89s
 ```

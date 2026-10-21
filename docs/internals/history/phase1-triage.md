@@ -8,9 +8,9 @@ warm2**, with **343 proposals on all three runs**. Renovate's dry run took
 These are caller-supplied single observations. See [benchmarks](/internals/history/benchmarks#phase-1-final-live-check-2026-10-15).
 
 Input triage was **0 missing, 0 extra, 6 field-mismatch, 275 departures**.
-Replay against `/root/rustovate-conf/renovate12.jsonl` now gives **0 missing,
+Replay against `renovate12.jsonl` now gives **0 missing,
 0 extra, 0 field-mismatch, 281 departures**, at
-`/root/rustovate-conf/out12-closed/triage.{md,json}`. **0 actionable rows: Phase 1 exit is met for the eleven comparable repositories.**
+`out12-closed/triage.{md,json}`. **0 actionable rows: Phase 1 exit is met for the eleven comparable repositories.**
 
 Departure 45 now covers a pinned action whose declared major/minor precision
 is retained in the proposed floating tag, while patchula reports a newer
@@ -22,11 +22,11 @@ qualify: v7 and v7.1.0 resolve to `77ba2a2a…`, whereas v7.0.0 resolves to
 `5142e029…`. Future engine reports emit this evidence from their tag catalogs.
 
 The original cold capture lacked that additional metadata. Its original bytes
-are preserved at `/root/rustovate-conf/r12-cold.original.json`; only the observed
+are preserved at `r12-cold.original.json`; only the observed
 v7 tag evidence was added to `r12-cold.json`, with every original proposal and
 timing retained. Evidence comes from the captured `r12.sqlite` matching-refs
 response and peeled tag catalog; its extraction is saved as
-`/root/rustovate-conf/r12-floating-tag-evidence.json`. No live data was invented
+`r12-floating-tag-evidence.json`. No live data was invented
 or substituted for the captured proposal set.
 
 Departure 23 measures the newer patchula release's age at the timestamp
@@ -42,7 +42,7 @@ The last four fields were unocss and @unocss/reset, 66.10.5 versus 66.11.0.
 The original capture was already beyond 72 hours (publication
 2026-10-12T06:41:36.594Z; clips snapshot 2026-10-15T06:43:43.844Z).
 The clips-only Renovate rerun at **2026-10-15T06:59**, captured in
-`/root/rustovate-conf/renovate-clips.jsonl`, still held 66.11.0 at **72 hours
+`renovate-clips.jsonl`, still held 66.11.0 at **72 hours
 17 minutes** and proposed 66.10.5 for both packages. 66.11.0 was
 `dist-tags.latest` and was not deprecated. Earlier runs held effect 4.0.4 at
 about 49 hours and renovate 44.155.8 at about 33 hours, but proposed effect
@@ -62,8 +62,8 @@ concurrent untraced HTTP tests could register shared callsites with the
 no-subscriber dispatch while the scoped capture subscriber was installed,
 caching disabled interest. Isolation removes that registration race while
 retaining all credential-redaction assertions. Logs:
-`/root/rustovate-conf/last-phase1-ci.log` and
-`/root/rustovate-conf/last-phase1-conformance.log`. No push was performed.
+`last-phase1-ci.log` and
+`last-phase1-conformance.log`. No push was performed.
 
 ## Round 4: fresh baseline, owner decisions and unchanged-report replay
 
@@ -78,8 +78,8 @@ for this capture. See [benchmarks](/internals/history/benchmarks#phase-1-exit-ro
 
 Fresh input triage: **2 missing, 6 extra, 13 field-mismatch, 264 departures**.
 Final replay of the unchanged cold report against the **fresh**
-`/root/rustovate-conf/renovate12.jsonl`: **0 missing, 1 extra, 7 field-mismatch,
-277 departures**, at `/root/rustovate-conf/out12-r4-final/triage.{md,json}`.
+`renovate12.jsonl`: **0 missing, 1 extra, 7 field-mismatch,
+277 departures**, at `out12-r4-final/triage.{md,json}`.
 Every original actionable row is accounted for below: 19 have narrow deliberate
 departure rules, and two expose the corrected GitHub date bug. Removing the
 obsolete Cargo/provider/peer exemptions exposes six additional old-report rows.
@@ -136,7 +136,7 @@ transport responses. Ordinary tests do not use the network.
 
 Validation passed with `CARGO_NET_OFFLINE=true mise run ci`: 22 cassettes scanned,
 formatting, workspace/all-target Clippy with `-D warnings`, workspace tests and
-the workspace build. Log: `/root/rustovate-conf/r12-round4-ci.log`.
+the workspace build. Log: `r12-round4-ci.log`.
 
 **Phase 1 exit remains pending a live rerun**, rather than claiming that an
 unchanged report proves new behavior. This implementation process has none of
@@ -168,7 +168,7 @@ original 57 actionable rows, 22 now have narrow evidence-backed classifications;
 35 remain visible. All eight missing/absent registry digest rows now carry
 rate-limit annotations (previously only four did). Eleven repositories have a
 baseline; remote-agent remains a coverage gap, not parity. Private reports stay
-under `/root/rustovate-conf/out12-r3-final/`; none are committed. Replaying old
+under `out12-r3-final/`; none are committed. Replaying old
 output cannot demonstrate the extraction/lookup fixes below. Phase 1 exit still
 requires the caller's new live run and a fresh baseline.
 
@@ -261,7 +261,7 @@ offline tests and workspace build). No upstream implementation/presets/fixtures,
 npm command, standalone script or repository-specific product rule was added.
 All commits remain local. The next live report must confirm the HEAD, setup-go,
 tag-prefix and action metadata fixes before Phase 1 exit is declared.
-Implementation commit: `af88256`; CI log: `/root/rustovate-conf/r12-round3-ci.log`.
+Implementation commit: `af88256`; CI log: `r12-round3-ci.log`.
 
 ## Historical round 2
 
