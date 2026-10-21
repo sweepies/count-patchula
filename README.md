@@ -24,10 +24,10 @@ mise use -g packslip:github.com/sweepies/count-patchula
 
 Other ways to install him are on the [installation page](https://count-patchula.sweepy.dev/installation).
 
-Invite the Count into a repository with `.github/patchula.pkl`:
+Invite the Count into a repository with `patchula.pkl`:
 
 ```pkl
-amends "../Patchula.pkl"
+amends "patchula-schema.pkl"
 
 prs { dashboard = true }
 ```

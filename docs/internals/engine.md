@@ -8,16 +8,16 @@ using user/repos or the installation repository endpoint for App tokens.
 Repositories run concurrently behind one GitHub governor. The default branch
 name, commit and tree identity come from one GraphQL snapshot on a cold scan.
 Only selected manager files and required local config modules are fetched as blobs. Truncated trees
-and invalid selected files produce per-repo errors. Config precedence is
-.github/patchula.pkl then patchula.pkl; absence is skipped. Local --config
+and invalid selected files produce per-repo errors. The config is
+patchula.pkl at the root; absence is skipped. Local --config
 applies to every selected repository and is evaluated before network access.
 
 Repository configs evaluate with an isolated supplied-file capability. Local
-amends/import dependencies are fetched, with the bundled Patchula.pkl available
-when not vendored. Remote and escaping imports/resources are rejected. Literal
-imports are supported; dynamic import targets require future discovery support.
-`config check` and local overrides use the same supplied-module evaluator and
-bundled-schema fallback. Vendored schemas take precedence, and nested object
+amends/import dependencies are fetched, with the bundled patchula-schema.pkl
+available when not vendored. Remote and escaping imports/resources are
+rejected. Literal imports are supported;
+dynamic import targets require future discovery support. `config check` and
+local overrides use the same supplied-module evaluator, and nested object
 amendments retain class defaults in either path (SWE-105).
 An unchanged commit/config fingerprint reuses extraction without tree/blob calls.
 The extraction fingerprint includes the mise registry snapshot; its namespace

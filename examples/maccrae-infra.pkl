@@ -1,4 +1,4 @@
-amends "../Patchula.pkl"
+amends "patchula-schema.pkl"
 
 prs { dashboard = true }
 defaults { bodyNotes = new Listing { "{releaseNotes}" } }

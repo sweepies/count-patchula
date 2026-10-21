@@ -17,9 +17,8 @@ fn versions_host_is_enabled_by_default_and_can_be_disabled() {
 
 fn fixture(body: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let directory = tempfile::tempdir().unwrap();
-    std::fs::write(directory.path().join("Patchula.pkl"), SCHEMA).unwrap();
     let path = directory.path().join("patchula.pkl");
-    std::fs::write(&path, format!("amends \"Patchula.pkl\"\n{body}\n")).unwrap();
+    std::fs::write(&path, format!("amends \"patchula-schema.pkl\"\n{body}\n")).unwrap();
     (directory, path)
 }
 
@@ -67,43 +66,30 @@ fn defaults_are_explicit_safe_and_unlimited() {
 }
 
 #[test]
-fn nested_amendments_keep_class_defaults_with_bundled_or_vendored_schema() {
+fn nested_amendments_keep_class_defaults_locally_and_through_the_api() {
     use std::collections::BTreeMap;
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir(dir.path().join(".github")).unwrap();
     let source =
-        "amends \"../Patchula.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\n";
-    std::fs::write(dir.path().join(".github/patchula.pkl"), source).unwrap();
-    let mut previous = None;
-    for vendored in [false, true] {
-        let mut files = BTreeMap::from([("/repo/.github/patchula.pkl".into(), source.into())]);
-        if vendored {
-            std::fs::write(dir.path().join("Patchula.pkl"), SCHEMA).unwrap();
-            files.insert("/repo/Patchula.pkl".into(), SCHEMA.into());
-        }
-        let local = load(dir.path()).unwrap();
-        let api = patchula_config::load_files("/repo/.github/patchula.pkl", files).unwrap();
-        assert_eq!(
-            serde_json::to_value(&local).unwrap(),
-            serde_json::to_value(api).unwrap()
-        );
-        assert_eq!(local.prs.branch, "patchula/");
-        assert!(local.defaults.active);
-        assert!(local.prs.dashboard);
-        assert_eq!(local.defaults.wait_hours, 0);
-        let value = serde_json::to_value(local).unwrap();
-        if let Some(previous) = &previous {
-            assert_eq!(&value, previous);
-        }
-        previous = Some(value);
-    }
+        "amends \"patchula-schema.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\n";
+    std::fs::write(dir.path().join("patchula.pkl"), source).unwrap();
+    let files = BTreeMap::from([("/repo/patchula.pkl".into(), source.into())]);
+    let local = load(dir.path()).unwrap();
+    let api = patchula_config::load_files("/repo/patchula.pkl", files).unwrap();
+    assert_eq!(
+        serde_json::to_value(&local).unwrap(),
+        serde_json::to_value(api).unwrap()
+    );
+    assert_eq!(local.prs.branch, "patchula/");
+    assert!(local.defaults.active);
+    assert!(local.prs.dashboard);
+    assert_eq!(local.defaults.wait_hours, 0);
 }
 
 #[test]
-fn vendored_schema_overrides_the_bundle() {
+fn a_vendored_schema_overrides_the_built_in_one() {
     let (dir, path) = fixture("prs { dashboard = true }");
     std::fs::write(
-        dir.path().join("Patchula.pkl"),
+        dir.path().join("patchula-schema.pkl"),
         SCHEMA.replace("patchula/", "custom/"),
     )
     .unwrap();
@@ -276,7 +262,7 @@ fn local_organisation_amends_and_imports_work() {
     let (directory, path) = fixture("");
     std::fs::write(
         directory.path().join("org.pkl"),
-        "amends \"Patchula.pkl\"\nprs { concurrent = 8 }\ndefaults { releaseNotes = false }\n",
+        "amends \"patchula-schema.pkl\"\nprs { concurrent = 8 }\ndefaults { releaseNotes = false }\n",
     )
     .unwrap();
     std::fs::write(
@@ -292,25 +278,24 @@ fn local_organisation_amends_and_imports_work() {
 }
 
 #[test]
-fn discovery_prefers_github_and_reports_absence() {
+fn discovery_reads_only_the_root_and_reports_absence() {
     let (directory, root) = fixture("");
-    assert_eq!(discover(directory.path()).unwrap(), Some(root.clone()));
-    std::fs::create_dir(directory.path().join(".github")).unwrap();
-    let github = directory.path().join(".github/patchula.pkl");
+    assert_eq!(discover(directory.path()).unwrap(), Some(root));
+    let github_only = tempfile::tempdir().unwrap();
+    std::fs::create_dir(github_only.path().join(".github")).unwrap();
     std::fs::write(
-        &github,
-        "amends \"../Patchula.pkl\"\nprs { concurrent = 3 }\n",
+        github_only.path().join(".github/patchula.pkl"),
+        "amends \"patchula-schema.pkl\"\nprs { concurrent = 3 }\n",
     )
     .unwrap();
-    assert_eq!(discover(directory.path()).unwrap(), Some(github));
-    assert_eq!(load(directory.path()).unwrap().prs.concurrent, Some(3));
+    assert_eq!(discover(github_only.path()).unwrap(), None);
     let empty = tempfile::tempdir().unwrap();
     assert_eq!(discover(empty.path()).unwrap(), None);
     assert!(
         load(empty.path())
             .unwrap_err()
             .to_string()
-            .contains("no patchula config")
+            .contains("no patchula.pkl")
     );
 }
 
@@ -318,7 +303,7 @@ fn discovery_prefers_github_and_reports_absence() {
 fn remote_imports_and_environment_reads_are_rejected_without_network() {
     for body in [
         "amends \"https://invalid.example/config.pkl\"",
-        "amends \"Patchula.pkl\"\ndefaults { commitPrefix = read(\"env:PATH\") }",
+        "amends \"patchula-schema.pkl\"\ndefaults { commitPrefix = read(\"env:PATH\") }",
     ] {
         let (directory, path) = fixture("");
         std::fs::write(&path, body).unwrap();

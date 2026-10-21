@@ -178,7 +178,7 @@ fn config_with(lockfiles: &str) -> Config {
         BTreeMap::from([(
             "/repo/patchula.pkl".into(),
             format!(
-                "amends \"Patchula.pkl\"\nlockfiles {{ refresh = true; tidyGo = true; {lockfiles} }}\n"
+                "amends \"patchula-schema.pkl\"\nlockfiles {{ refresh = true; tidyGo = true; {lockfiles} }}\n"
             ),
         )]),
     )

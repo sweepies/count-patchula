@@ -264,7 +264,7 @@ async fn shared_inventory_follows_each_connection_without_duplicating_finished_p
         fake.clone(),
     )
     .unwrap();
-    let config = patchula_config::load(std::path::Path::new("../../Patchula.pkl")).unwrap();
+    let config = patchula_config::load(std::path::Path::new("../../patchula-schema.pkl")).unwrap();
     let mut repo = repository();
     repo.commit = Some("base".into());
     repo.default_branch = Some("main".into());

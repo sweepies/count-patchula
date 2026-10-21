@@ -9,9 +9,9 @@ He does the same job differently. One process takes the whole batch.
 
 ## A run, start to finish
 
-1. Repositories come from the command line, or from everything
-   the token can reach. Each one needs `.github/patchula.pkl` or
-   `patchula.pkl`; the rest are skipped.
+1. Repositories come from the command line, the current checkout, or
+   with `--all-repos` everything the token can reach. Each one needs a
+   `patchula.pkl` at its root; the rest are skipped.
 2. Files are read through the GitHub API at the default branch's
    commit. No clone. If neither the commit nor the resolved config changed
    since the last run, the previous extraction is reused.

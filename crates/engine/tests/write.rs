@@ -97,7 +97,7 @@ impl Fake {
     fn new(lock: bool) -> Self {
         Self {
         files:BTreeMap::from([
-            (".github/patchula.pkl".into(),"amends \"../Patchula.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n".into()),
+            ("patchula.pkl".into(),"amends \"patchula-schema.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n".into()),
             ("package.json".into(),"{\n  \"dependencies\": {\"fixture\": \"1.0.0\"}\n}\n".into()),
         ]),lock,lock_name:"bun.lockb",writes:Default::default(),prs:Default::default(),issues:Default::default(),requests:Default::default(),latency:Default::default(),close_on_read:Default::default(),catalog:Mutex::new(json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}}})),fail_lookup:Default::default(),
         merge_settings: Mutex::new(json!({"id":"repo-id","autoMergeAllowed":false,"squashMergeAllowed":true,"mergeCommitAllowed":true,"rebaseMergeAllowed":true,"deleteBranchOnMerge":false})),
@@ -556,13 +556,15 @@ async fn dashboard_renames_are_preserved_and_disabling_closes_only_the_owned_iss
         fake.writes.lock().unwrap().is_empty(),
         "unchanged content hash must converge after one patch"
     );
-    let mut config = patchula_config::load(std::path::Path::new("../../Patchula.pkl")).unwrap();
+    let mut config =
+        patchula_config::load(std::path::Path::new("../../patchula-schema.pkl")).unwrap();
     config.prs.dashboard = false;
     config.defaults.wait_hours = 0;
     run(Some(config)).await.unwrap();
     assert_eq!(fake.issues.lock().unwrap()[0]["state"], "CLOSED");
     fake.writes.lock().unwrap().clear();
-    let mut config = patchula_config::load(std::path::Path::new("../../Patchula.pkl")).unwrap();
+    let mut config =
+        patchula_config::load(std::path::Path::new("../../patchula-schema.pkl")).unwrap();
     config.prs.dashboard = false;
     config.defaults.wait_hours = 0;
     run(Some(config)).await.unwrap();
@@ -1015,7 +1017,8 @@ async fn manual_create_age_and_schedule_permits_do_not_authorize_fallback_mergin
 }
 
 fn checkbox_config() -> patchula_config::Config {
-    let mut config = patchula_config::load(std::path::Path::new("../../Patchula.pkl")).unwrap();
+    let mut config =
+        patchula_config::load(std::path::Path::new("../../patchula-schema.pkl")).unwrap();
     config.prs.dashboard = true;
     config.defaults.wait_hours = 0;
     config

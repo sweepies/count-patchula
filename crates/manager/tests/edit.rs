@@ -9,7 +9,7 @@ fn config(manager: Manager) -> Config {
                 "/repo/patchula.pkl",
                 std::collections::BTreeMap::from([(
                     "/repo/patchula.pkl".into(),
-                    "amends \"Patchula.pkl\"".into(),
+                    "amends \"patchula-schema.pkl\"".into(),
                 )]),
             )
             .unwrap()

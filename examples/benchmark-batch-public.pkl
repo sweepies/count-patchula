@@ -1,4 +1,4 @@
-amends "../Patchula.pkl"
+amends "patchula-schema.pkl"
 
 // Bounded, reproducible public batch: real image declarations and six common
 // Go modules from root manifests. Full catalogs are still enumerated.

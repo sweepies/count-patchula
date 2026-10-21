@@ -61,8 +61,8 @@ patchula run sweepies/my-app             # then let him bite
 ```
 
 ```pkl
-// .github/patchula.pkl
-amends "../Patchula.pkl"
+// patchula.pkl
+amends "patchula-schema.pkl"
 
 prs { dashboard = true }
 rules {

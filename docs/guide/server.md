@@ -26,7 +26,7 @@ App's own webhook URL, using the same secret.
 ## Settings
 
 Operator settings are a Pkl file that amends the bundled `PatchulaServer.pkl`.
-They are separate from repository configs, which still amend `Patchula.pkl`.
+They are separate from repository configs, which amend `patchula-schema.pkl`.
 
 ```pkl
 // /etc/patchula/server.pkl

@@ -32,7 +32,7 @@ impl Fake {
     fn new() -> Self {
         Self {
         files:BTreeMap::from([
-            (".github/patchula.pkl".into(),"amends \"../Patchula.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n".into()),
+            ("patchula.pkl".into(),"amends \"patchula-schema.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n".into()),
             ("package.json".into(),"{\n  \"dependencies\": {\"fixture\": \"1.0.0\", \"owner-closed-a\": \"1.0.0\", \"owner-closed-b\": \"1.0.0\"}\n}\n".into()),
         ]),writes:Default::default(),prs:Default::default(),issues:Default::default(),requests:Default::default(),
     }

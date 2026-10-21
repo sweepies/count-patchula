@@ -1542,20 +1542,17 @@ impl Engine {
                     .map_err(Error::Invalid)?,
                     None => {
                         return Ok(Work {
-                        report: repository(
-                            repo,
-                            Status::Skipped,
-                            Some(
-                                "the Count was not invited: no .github/patchula.pkl or patchula.pkl"
-                                    .into(),
+                            report: repository(
+                                repo,
+                                Status::Skipped,
+                                Some("the Count was not invited: no patchula.pkl".into()),
                             ),
-                        ),
-                        config: None,
-                        dependencies: Vec::new(),
-                        snapshot: Default::default(),
-                        inventory: None,
-                        controls: Default::default(),
-                    });
+                            config: None,
+                            dependencies: Vec::new(),
+                            snapshot: Default::default(),
+                            inventory: None,
+                            controls: Default::default(),
+                        });
                     }
                 }
             }
@@ -1659,19 +1656,18 @@ impl Engine {
             let key = ExtractionKey {
                 repo: format!("config:{repo}"),
                 default_branch_commit: commit.clone(),
-                config_hash: hash(patchula_config::SCHEMA.as_bytes()),
+                // v2: only patchula.pkl at the root is discovered.
+                config_hash: format!("v2:{}", hash(patchula_config::SCHEMA.as_bytes())),
             };
             if let Some(bytes) = self.cache.extraction_get(&key).await? {
                 serde_json::from_slice(&bytes)?
             } else {
                 let entries = self.tree(repo, tree_sha).await?;
-                let path = [".github/patchula.pkl", "patchula.pkl"]
-                    .into_iter()
-                    .find(|p| {
-                        entries
-                            .iter()
-                            .any(|entry| entry.path == *p && entry.kind == "blob")
-                    });
+                let path = Some(patchula_config::CONFIG_PATH).filter(|p| {
+                    entries
+                        .iter()
+                        .any(|entry| entry.path == *p && entry.kind == "blob")
+                });
                 let config = if let Some(path) = path {
                     Some(self.config(repo, path, &entries).await?)
                 } else {
@@ -1686,8 +1682,7 @@ impl Engine {
         };
         let Some(config) = config else {
             report.status = Status::Skipped;
-            report.reason =
-                Some("the Count was not invited: no .github/patchula.pkl or patchula.pkl".into());
+            report.reason = Some("the Count was not invited: no patchula.pkl".into());
             return Ok(Work {
                 report,
                 config: None,
@@ -1788,7 +1783,7 @@ impl Engine {
             let text =
                 if let Some(entry) = entries.iter().find(|e| e.path == path && e.kind == "blob") {
                     self.file(repo, &entry.sha).await?
-                } else if path.rsplit('/').next() == Some("Patchula.pkl") {
+                } else if path.rsplit('/').next() == Some(patchula_config::SCHEMA_NAME) {
                     patchula_config::SCHEMA.into()
                 } else {
                     return Err(Error::Invalid(format!(

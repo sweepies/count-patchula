@@ -150,7 +150,7 @@ fn config() -> Config {
         "/repo/patchula.pkl",
         BTreeMap::from([(
             "/repo/patchula.pkl".into(),
-            "amends \"Patchula.pkl\"\n".into(),
+            "amends \"patchula-schema.pkl\"\n".into(),
         )]),
     )
     .unwrap()
@@ -291,7 +291,7 @@ async fn checkbox_controls_refresh_only_the_selected_dependency_and_failures_do_
 
 #[test]
 fn effective_rules_include_zero_age_exceptions() {
-    let config = patchula_config::load_files("/repo/patchula.pkl",BTreeMap::from([("/repo/patchula.pkl".into(),"amends \"Patchula.pkl\"\ndefaults { waitHours = 72 }\nrules = new Listing { new Rule { select { packages = new Listing { \"fixture\" }; updates = new Listing { \"minor\" } }; apply { waitHours = 0 } } }\n".into())])).unwrap();
+    let config = patchula_config::load_files("/repo/patchula.pkl",BTreeMap::from([("/repo/patchula.pkl".into(),"amends \"patchula-schema.pkl\"\ndefaults { waitHours = 72 }\nrules = new Listing { new Rule { select { packages = new Listing { \"fixture\" }; updates = new Listing { \"minor\" } }; apply { waitHours = 0 } } }\n".into())])).unwrap();
     let eval = Evaluator::new(&config).unwrap();
     for dep in dependencies(&config) {
         assert_eq!(

@@ -16,12 +16,12 @@ building from a checkout and for what the runner needs at run time.
 
 ## 2. Add a config to the repository
 
-The Count only visits repositories that invite him. Commit a
-`.github/patchula.pkl` (or `patchula.pkl` at the root):
+The Count only visits repositories that invite him. Commit a `patchula.pkl`
+at the repository root:
 
 ```pkl
-// .github/patchula.pkl
-amends "../Patchula.pkl"
+// patchula.pkl
+amends "patchula-schema.pkl"
 
 prs { dashboard = true }
 ```
@@ -30,12 +30,12 @@ That is a complete config. Everything else comes from the schema's defaults:
 every supported manager, exact version pins, digest pins for actions and
 images, a 24-hour release-age wait, one PR per update and no auto-merge.
 
-`Patchula.pkl` does not need to exist in the repository. When the Count reads a
-repository's config he supplies the schema himself. Vendor it if you want to
-check the config locally or get completion in an editor:
+`patchula-schema.pkl` does not need to exist in the repository. When the Count
+reads a config he supplies the schema himself. Vendor it if you want completion
+in an editor, and check the config locally:
 
 ```sh
-patchula config schema > Patchula.pkl
+patchula config schema > patchula-schema.pkl
 patchula config check .
 ```
 

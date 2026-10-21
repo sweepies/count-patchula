@@ -193,7 +193,7 @@ fn unparseable_files_are_skipped_with_a_warning() {
         "/repo/patchula.pkl",
         std::collections::BTreeMap::from([(
             "/repo/patchula.pkl".into(),
-            "amends \"Patchula.pkl\"".into(),
+            "amends \"patchula-schema.pkl\"".into(),
         )]),
     )
     .unwrap();

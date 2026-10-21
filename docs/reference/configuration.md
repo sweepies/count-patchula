@@ -1,7 +1,7 @@
-# Patchula.pkl
+# Configuration schema
 
-This is the complete repository schema, bundled with every build. Print it with
-`patchula config schema`. The [configuration guide](/guide/configuration)
+This is the complete repository schema, `patchula-schema.pkl`, bundled with every
+build. Print it with `patchula config schema`. The [configuration guide](/guide/configuration)
 explains how the pieces fit together.
 
 ## Top-level fields
@@ -69,4 +69,4 @@ leaves out the two digest switches. `null` leaves the earlier value alone.
 
 ## The schema
 
-<<< @/../Patchula.pkl{pkl}
+<<< @/../patchula-schema.pkl{pkl}

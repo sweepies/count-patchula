@@ -151,7 +151,7 @@ pub struct Lookup {
     #[usage(long, conflicts = "--config-dir")]
     pub config: Option<PathBuf>,
     /// Per-repository local overrides: `<dir>/<owner>/<name>.pkl` wins over `<dir>/<name>.pkl`.
-    /// Unmatched repositories discover `.github/patchula.pkl` then `patchula.pkl`; neither means skipped.
+    /// Unmatched repositories use their own `patchula.pkl`, and are skipped without one.
     /// All matched files are validated before repository scans. Mutually exclusive with `--config`.
     #[usage(long, conflicts = "--config")]
     pub config_dir: Option<PathBuf>,
@@ -171,7 +171,7 @@ pub struct Config {
 pub enum ConfigCommand {
     /// Validate a Pkl config file or discover one in a repository directory.
     Check(Check),
-    /// Print the bundled Patchula.pkl schema as Pkl source.
+    /// Print the bundled patchula-schema.pkl schema as Pkl source.
     Schema,
     /// Print the bundled PatchulaServer.pkl operator schema.
     ServerSchema,
