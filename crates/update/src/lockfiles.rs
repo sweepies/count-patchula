@@ -410,6 +410,8 @@ pub struct Runner {
     http: Arc<dyn patchula_http::Transport>,
     /// Serialises tool usage records within this process.
     usage: Arc<std::sync::Mutex<()>>,
+    /// The user's mise data directory, whose installs seed the tool store.
+    seed: Option<PathBuf>,
 }
 impl Runner {
     pub fn new(cache: PathBuf, token: &str) -> Self {
@@ -447,7 +449,15 @@ impl Runner {
             rustup_home,
             http: Arc::new(NetworkTransport),
             usage: Default::default(),
+            seed: None,
         }
+    }
+    /// Borrow tool versions from this mise data directory, usually the user's
+    /// own, instead of downloading them. Local runs only: the server keeps a
+    /// store of its own.
+    pub fn with_seed(mut self, mise_data: PathBuf) -> Self {
+        self.seed = Some(mise_data);
+        self
     }
     pub fn with_http(mut self, http: Arc<dyn patchula_http::Transport>) -> Self {
         self.http = http;
@@ -757,6 +767,7 @@ impl Runner {
         // A first use installs the tool inside this call, from scratch.
         if !self.installed(&call.tools) {
             self.clear_unproven(&call.tools).await;
+            self.seed(&call.tools);
             spec.timeout = tools::INSTALL_TIMEOUT;
         }
         if let Some(cwd) = &call.cwd {

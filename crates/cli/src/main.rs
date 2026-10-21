@@ -9,6 +9,17 @@ use cli::{App, Command, ConfigCommand, ToolsCommand};
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 
+/// Environment variables the CLI reads. Their meanings are in
+/// docs/reference/environment.md.
+const TOKEN_VARS: [&str; 3] = ["PATCHULA_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"];
+const LOG_VAR: &str = "PATCHULA_LOG";
+const RECHECK_VAR: &str = "PATCHULA_RECHECK";
+const DOCKERHUB_USERNAME_VAR: &str = "PATCHULA_DOCKERHUB_USERNAME";
+const DOCKERHUB_TOKEN_VAR: &str = "PATCHULA_DOCKERHUB_TOKEN";
+const MISE_DATA_VAR: &str = "MISE_DATA_DIR";
+const XDG_DATA_VAR: &str = "XDG_DATA_HOME";
+const HOME_VAR: &str = "HOME";
+
 // Only the token and transport are replaced in offline CLI tests. Dispatch,
 // configuration, disk-cache opening and engine construction stay on this path.
 #[derive(Default)]
@@ -24,9 +35,9 @@ impl Services {
         if let Some(token) = &self.token {
             return Ok(token.clone());
         }
-        std::env::var("PATCHULA_TOKEN")
-            .or_else(|_| std::env::var("GITHUB_TOKEN"))
-            .or_else(|_| std::env::var("GH_TOKEN"))
+        std::env::var(TOKEN_VARS[0])
+            .or_else(|_| std::env::var(TOKEN_VARS[1]))
+            .or_else(|_| std::env::var(TOKEN_VARS[2]))
     }
     fn transport(
         &self,
@@ -56,119 +67,55 @@ async fn run(app: &App, services: &Services) -> Result<u8, (u8, miette::Report)>
         )
     })?;
     match command {
-        Command::Config(config) => match &config.command {
-            ConfigCommand::ServerSchema => {
-                write!(io::stdout().lock(), "{}", patchula_server::settings::SCHEMA)
-                    .map(|_| 0)
-                    .map_err(|e| (1, miette::miette!("{e}")))
-            }
-            ConfigCommand::CheckServer(check) => {
-                patchula_server::settings::Settings::load(&check.path).map_err(|e| (2, e))?;
-                writeln!(
-                    io::stdout().lock(),
-                    "{}",
-                    if app.json {
-                        serde_json::json!({"schemaVersion":1,"valid":true,"path":check.path})
-                            .to_string()
-                    } else {
-                        format!("Valid server settings: {}", check.path.display())
-                    }
-                )
-                .map(|_| 0)
-                .map_err(|e| (1, miette::miette!("{e}")))
-            }
-            ConfigCommand::Schema => write!(io::stdout().lock(), "{}", patchula_config::SCHEMA)
-                .map(|_| 0)
-                .map_err(|error| (1, miette::miette!("{error}"))),
-            ConfigCommand::Check(check) => {
-                let config = patchula_config::load(&check.path).map_err(|error| (2, error))?;
-                if app.verbose > 0 && !app.json {
-                    eprintln!(
-                        "patchula: {} managers, {} rules, {} extractors",
-                        config.managers.len(),
-                        config.rules.len(),
-                        config.extractors.len()
-                    );
-                }
-                let result = if app.json {
-                    serde_json::json!({"schemaVersion": 1, "valid": true, "path": check.path})
-                        .to_string()
-                } else {
-                    format!("Valid configuration: {}", check.path.display())
-                };
-                writeln!(io::stdout().lock(), "{result}")
-                    .map(|_| 0)
-                    .map_err(|error| (1, miette::miette!("{error}")))
-            }
-        },
+        Command::Config(config) => config_command(app, config),
         Command::Lookup(options) => batch(app, options, None, services).await,
         Command::Run(options) => batch(app, &options.lookup, Some(options), services).await,
-        Command::Tui(tui) => {
-            if !tui.once && !(io::stdin().is_terminal() && io::stdout().is_terminal()) {
-                return Err((
-                    2,
-                    miette::miette!(
-                        "patchula tui needs a terminal; use --once for a plain snapshot"
-                    ),
-                ));
-            }
-            let report = report(app, &tui.lookup, None, services).await?;
-            let local = match &tui.lookup.local {
-                Some(dir) => {
-                    let config = tui
-                        .lookup
-                        .config
-                        .as_ref()
-                        .map(|path| patchula_config::load(path))
-                        .transpose()
-                        .map_err(|e| (2, e))?;
-                    Some(tui::local(dir, config).map_err(|e| (2, miette::miette!("{e}")))?)
-                }
-                None => None,
-            };
-            let model = tui::Model::new(&report, local);
-            if tui.once {
-                write!(io::stdout().lock(), "{}", tui::snapshot(&model))
-                    .map(|_| 0)
-                    .map_err(|e| (1, miette::miette!("{e}")))
-            } else {
-                tui::interact(model)
-                    .map(|_| 0)
-                    .map_err(|e| (1, miette::miette!("terminal error: {e}")))
-            }
+        Command::Tui(tui) => tui_command(app, tui, services).await,
+        Command::Tools(tools) => tools_command(app, tools).await,
+    }
+}
+
+/// `patchula config ...`: print or validate configuration and server settings.
+fn config_command(app: &App, config: &cli::Config) -> Result<u8, (u8, miette::Report)> {
+    match &config.command {
+        ConfigCommand::ServerSchema => {
+            write!(io::stdout().lock(), "{}", patchula_server::settings::SCHEMA)
+                .map(|_| 0)
+                .map_err(|e| (1, miette::miette!("{e}")))
         }
-        Command::Tools(tools) => {
-            let (store, days) = match &tools.command {
-                ToolsCommand::Install(store) => (store, None),
-                ToolsCommand::Prune(prune) => (&prune.store, Some(prune.days)),
-            };
-            if days.is_some_and(|d| d < 1) {
-                return Err((2, miette::miette!("--days must be at least 1")));
+        ConfigCommand::CheckServer(check) => {
+            patchula_server::settings::Settings::load(&check.path).map_err(|e| (2, e))?;
+            writeln!(
+                io::stdout().lock(),
+                "{}",
+                if app.json {
+                    serde_json::json!({"schemaVersion":1,"valid":true,"path":check.path})
+                        .to_string()
+                } else {
+                    format!("Valid server settings: {}", check.path.display())
+                }
+            )
+            .map(|_| 0)
+            .map_err(|e| (1, miette::miette!("{e}")))
+        }
+        ConfigCommand::Schema => write!(io::stdout().lock(), "{}", patchula_config::SCHEMA)
+            .map(|_| 0)
+            .map_err(|error| (1, miette::miette!("{error}"))),
+        ConfigCommand::Check(check) => {
+            let config = patchula_config::load(&check.path).map_err(|error| (2, error))?;
+            if app.verbose > 0 && !app.json {
+                eprintln!(
+                    "patchula: {} managers, {} rules, {} extractors",
+                    config.managers.len(),
+                    config.rules.len(),
+                    config.extractors.len()
+                );
             }
-            let path = if store.cache.is_absolute() {
-                store.cache.clone()
-            } else {
-                std::env::current_dir()
-                    .unwrap_or_default()
-                    .join(&store.cache)
-            };
-            let runner =
-                patchula_update::lockfiles::Runner::new(path.with_extension("worktrees"), "");
-            let (action, specs) = match days {
-                None => ("installed", runner.prewarm().await),
-                Some(days) => ("pruned", runner.prune(days).await),
-            };
-            let specs = specs.map_err(|e| (1, miette::miette!("{e}")))?;
             let result = if app.json {
-                serde_json::json!({"schemaVersion":1,"store":runner.tools(),action:specs})
+                serde_json::json!({"schemaVersion": 1, "valid": true, "path": check.path})
                     .to_string()
             } else {
-                format!(
-                    "{} {} tool versions in {}",
-                    action,
-                    specs.len(),
-                    runner.tools().display()
-                )
+                format!("Valid configuration: {}", check.path.display())
             };
             writeln!(io::stdout().lock(), "{result}")
                 .map(|_| 0)
@@ -177,13 +124,91 @@ async fn run(app: &App, services: &Services) -> Result<u8, (u8, miette::Report)>
     }
 }
 
+/// `patchula tui`: browse a lookup, and with `--local`, apply chosen updates.
+async fn tui_command(
+    app: &App,
+    tui: &cli::Tui,
+    services: &Services,
+) -> Result<u8, (u8, miette::Report)> {
+    if !tui.once && !(io::stdin().is_terminal() && io::stdout().is_terminal()) {
+        return Err((
+            2,
+            miette::miette!("patchula tui needs a terminal; use --once for a plain snapshot"),
+        ));
+    }
+    let report = report(app, &tui.lookup, None, services).await?;
+    let local = match &tui.lookup.local {
+        Some(dir) => {
+            let config = tui
+                .lookup
+                .config
+                .as_ref()
+                .map(|path| patchula_config::load(path))
+                .transpose()
+                .map_err(|e| (2, e))?;
+            Some(tui::local(dir, config).map_err(|e| (2, miette::miette!("{e}")))?)
+        }
+        None => None,
+    };
+    let model = tui::Model::new(&report, local);
+    if tui.once {
+        write!(io::stdout().lock(), "{}", tui::snapshot(&model))
+            .map(|_| 0)
+            .map_err(|e| (1, miette::miette!("{e}")))
+    } else {
+        tui::interact(model)
+            .map(|_| 0)
+            .map_err(|e| (1, miette::miette!("terminal error: {e}")))
+    }
+}
+
+/// `patchula tools install|prune`: manage the lockfile tool store.
+async fn tools_command(app: &App, tools: &cli::Tools) -> Result<u8, (u8, miette::Report)> {
+    let (store, days) = match &tools.command {
+        ToolsCommand::Install(store) => (store, None),
+        ToolsCommand::Prune(prune) => (&prune.store, Some(prune.days)),
+    };
+    if days.is_some_and(|d| d < 1) {
+        return Err((2, miette::miette!("--days must be at least 1")));
+    }
+    let path = if store.cache.is_absolute() {
+        store.cache.clone()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_default()
+            .join(&store.cache)
+    };
+    let mut runner = patchula_update::lockfiles::Runner::new(path.with_extension("worktrees"), "");
+    if let Some(mise_data) = user_mise_data() {
+        runner = runner.with_seed(mise_data);
+    }
+    let (action, specs) = match days {
+        None => ("installed", runner.prewarm().await),
+        Some(days) => ("pruned", runner.prune(days).await),
+    };
+    let specs = specs.map_err(|e| (1, miette::miette!("{e}")))?;
+    let result = if app.json {
+        serde_json::json!({"schemaVersion":1,"store":runner.tools(),action:specs}).to_string()
+    } else {
+        format!(
+            "{} {} tool versions in {}",
+            action,
+            specs.len(),
+            runner.tools().display()
+        )
+    };
+    writeln!(io::stdout().lock(), "{result}")
+        .map(|_| 0)
+        .map_err(|error| (1, miette::miette!("{error}")))
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let app = App::parse();
     // Only our explicitly sanitized events reach stderr. Dependency HTTP debug
     // logs can contain headers even when the user requests maximum verbosity.
     use tracing_subscriber::{filter::Targets, prelude::*};
-    let level = std::env::var("PATCHULA_LOG")
+    let level = std::env::var(LOG_VAR)
         .ok()
         .and_then(|value| value.parse::<tracing::level_filters::LevelFilter>().ok())
         .unwrap_or(if app.verbose >= 2 {
@@ -357,6 +382,87 @@ async fn batch(
     Ok(if errors == 0 { 0 } else { 1 })
 }
 
+/// HTTP settings from the lookup flags.
+fn http_options(options: &cli::Lookup) -> Result<patchula_http::Options, (u8, miette::Report)> {
+    let mut http_options = patchula_http::Options {
+        registry_freshness_secs: options.registry_freshness_secs,
+        go_freshness_secs: options.go_freshness_secs,
+        ..Default::default()
+    };
+    for setting in &options.host_concurrency {
+        let (host, limit) = setting
+            .split_once('=')
+            .and_then(|(host, limit)| limit.parse::<usize>().ok().map(|limit| (host, limit)))
+            .ok_or_else(|| {
+                (
+                    2,
+                    miette::miette!("host-concurrency must be HOST=LIMIT (1..100)"),
+                )
+            })?;
+        http_options.host_concurrency.insert(host.to_owned(), limit);
+    }
+    http_options.validate().map_err(|_| {
+        (
+            2,
+            miette::miette!("host-concurrency requires a lowercase hostname and limit 1..100"),
+        )
+    })?;
+    Ok(http_options)
+}
+
+/// The checkbox wording: `--recheck`, then `PATCHULA_RECHECK` for runs.
+fn recheck(app: &App, run: bool) -> Result<patchula_engine::Recheck, (u8, miette::Report)> {
+    Ok(match app.recheck {
+        Some(cli::Recheck::Now) => patchula_engine::Recheck::Now,
+        Some(cli::Recheck::NextRun) => patchula_engine::Recheck::NextRun,
+        None if run => match std::env::var(RECHECK_VAR).as_deref() {
+            Ok("now") => patchula_engine::Recheck::Now,
+            Ok("next-run") | Err(std::env::VarError::NotPresent) => {
+                patchula_engine::Recheck::NextRun
+            }
+            _ => {
+                return Err((
+                    2,
+                    miette::miette!("PATCHULA_RECHECK must be now or next-run"),
+                ));
+            }
+        },
+        None => patchula_engine::Recheck::NextRun,
+    })
+}
+
+/// Docker Hub credentials, when both variables are set.
+fn dockerhub_credentials() -> Result<Option<(String, String)>, (u8, miette::Report)> {
+    match (
+        std::env::var(DOCKERHUB_USERNAME_VAR).ok(),
+        std::env::var(DOCKERHUB_TOKEN_VAR).ok(),
+    ) {
+        (None, None) => Ok(None),
+        (Some(username), Some(token)) if !username.is_empty() && !token.is_empty() => {
+            Ok(Some((username, token)))
+        }
+        _ => Err((
+            2,
+            miette::miette!(
+                "set both PATCHULA_DOCKERHUB_USERNAME and PATCHULA_DOCKERHUB_TOKEN to nonempty values"
+            ),
+        )),
+    }
+}
+
+/// The invoking user's mise data directory, when it has installs. Local runs
+/// borrow matching tool versions from it instead of downloading them.
+fn user_mise_data() -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+    std::env::var_os(MISE_DATA_VAR)
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os(XDG_DATA_VAR).map(|dir| PathBuf::from(dir).join("mise")))
+        .or_else(|| {
+            std::env::var_os(HOME_VAR).map(|home| PathBuf::from(home).join(".local/share/mise"))
+        })
+        .filter(|dir| dir.join("installs").is_dir())
+}
+
 /// The repositories a batch covers: the ones named, every one the token can
 /// reach with `--all-repos` (an empty list, which the engine discovers), or the
 /// GitHub repository the current directory's Git remote points at.
@@ -473,46 +579,8 @@ async fn report(
         return Err((2, miette::miette!("concurrency must be 1..100")));
     }
     let repositories = repositories(options).map_err(|e| (2, e))?;
-    let mut http_options = patchula_http::Options {
-        registry_freshness_secs: options.registry_freshness_secs,
-        go_freshness_secs: options.go_freshness_secs,
-        ..Default::default()
-    };
-    for setting in &options.host_concurrency {
-        let (host, limit) = setting
-            .split_once('=')
-            .and_then(|(host, limit)| limit.parse::<usize>().ok().map(|limit| (host, limit)))
-            .ok_or_else(|| {
-                (
-                    2,
-                    miette::miette!("host-concurrency must be HOST=LIMIT (1..100)"),
-                )
-            })?;
-        http_options.host_concurrency.insert(host.to_owned(), limit);
-    }
-    http_options.validate().map_err(|_| {
-        (
-            2,
-            miette::miette!("host-concurrency requires a lowercase hostname and limit 1..100"),
-        )
-    })?;
-    let recheck = match app.recheck {
-        Some(cli::Recheck::Now) => patchula_engine::Recheck::Now,
-        Some(cli::Recheck::NextRun) => patchula_engine::Recheck::NextRun,
-        None if run.is_some() => match std::env::var("PATCHULA_RECHECK").as_deref() {
-            Ok("now") => patchula_engine::Recheck::Now,
-            Ok("next-run") | Err(std::env::VarError::NotPresent) => {
-                patchula_engine::Recheck::NextRun
-            }
-            _ => {
-                return Err((
-                    2,
-                    miette::miette!("PATCHULA_RECHECK must be now or next-run"),
-                ));
-            }
-        },
-        None => patchula_engine::Recheck::NextRun,
-    };
+    let http_options = http_options(options)?;
+    let recheck = recheck(app, run.is_some())?;
     let config = options
         .config
         .as_ref()
@@ -539,22 +607,11 @@ async fn report(
         Engine::with_http_options(&token, cache, options.concurrency, transport, http_options)
             .map_err(|e| (1, miette::miette!("{e}")))?
             .with_recheck(recheck);
-    match (
-        std::env::var("PATCHULA_DOCKERHUB_USERNAME").ok(),
-        std::env::var("PATCHULA_DOCKERHUB_TOKEN").ok(),
-    ) {
-        (None, None) => {}
-        (Some(username), Some(token)) if !username.is_empty() && !token.is_empty() => {
-            engine = engine.with_dockerhub_credentials(username, token);
-        }
-        _ => {
-            return Err((
-                2,
-                miette::miette!(
-                    "set both PATCHULA_DOCKERHUB_USERNAME and PATCHULA_DOCKERHUB_TOKEN to nonempty values"
-                ),
-            ));
-        }
+    if let Some(mise_data) = user_mise_data() {
+        engine = engine.with_tool_seed(mise_data);
+    }
+    if let Some((username, token)) = dockerhub_credentials()? {
+        engine = engine.with_dockerhub_credentials(username, token);
     }
     let options = Options {
         repositories,
