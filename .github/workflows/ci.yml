@@ -18,7 +18,7 @@ concurrency:
 # instead, so untrusted code never reaches the Namespace machines.
 jobs:
   # The workflow always runs, so "CI result" can be a required check. Changes
-  # that only touch the docs site (built by docs.yml) skip the Rust jobs.
+  # that only touch the docs site (which Cloudflare builds) skip the Rust jobs.
   changes:
     name: Changed paths
     runs-on: ubuntu-latest
@@ -46,7 +46,7 @@ jobs:
             # The compare API lists at most 300 files; assume more means Rust.
             files=$(gh api "repos/$REPO/compare/$BEFORE...$AFTER" --jq 'if (.files | length) >= 300 then "unknown" else .files[].filename end')
           fi
-          if printf '%s\n' "$files" | grep -Eqv '^(docs/|README\.md$|\.github/workflows/docs\.yml$)'; then
+          if printf '%s\n' "$files" | grep -Eqv '^(docs/|README\.md$)'; then
             rust=true
           else
             rust=false
