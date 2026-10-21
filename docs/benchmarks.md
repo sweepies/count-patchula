@@ -52,6 +52,12 @@ lockfile maintenance, which is off by default. Kafka's gap is 70 versions in
 `gradle/dependencies.gradle`, a Groovy map that the gradle manager does not
 read, plus Gradle plugin and property declarations.
 
+These runs predate a later fix to Go lookups. A cold lookup used to fetch
+the proxy's `.info` for every version a module had ever published, and now
+dates only the 20 newest. On the corpus in `tests/corpus` that cut the cold
+lookup from 18,298 requests to 6,743, so grafana's cold number above, with its
+1,076 Go modules, is pessimistic.
+
 The first pass also found two extraction bugs, fixed before the numbers above
 were taken. One file that did not parse failed the whole repository
 (mastodon's ERB-templated `config/email.yml`, grafana's malformed compose
