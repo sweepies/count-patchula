@@ -9,7 +9,9 @@ pub use edit::{Edit, apply, edits};
 pub const MISE_REGISTRY: &str = rustovate_mise::REGISTRY_JSON;
 mod cargo;
 mod custom;
+mod devcontainer;
 mod go;
+mod helm;
 mod images;
 mod mise;
 mod npm;
@@ -17,6 +19,7 @@ mod precommit;
 mod pyproject;
 mod requirements;
 mod terraform;
+mod toolchains;
 mod yaml;
 mod yaml_locations;
 
@@ -84,6 +87,8 @@ pub fn supported(manager: Manager) -> bool {
         | Manager::Requirements
         | Manager::Pyproject
         | Manager::PreCommit
+        | Manager::Helm
+        | Manager::Devcontainer
         | Manager::Regex => true,
     }
 }
@@ -143,7 +148,10 @@ impl Scanner {
                 .extractors
                 .iter()
                 .any(|e| Patterns::compile(&e.paths).is_ok_and(|p| p.matches(path))),
-            Manager::Cargo => matches!(leaf, "Cargo.toml" | "Cargo.lock"),
+            Manager::Cargo => matches!(
+                leaf,
+                "Cargo.toml" | "Cargo.lock" | "rust-toolchain" | "rust-toolchain.toml"
+            ),
             Manager::Dockerfile => {
                 leaf == "Dockerfile"
                     || leaf.starts_with("Dockerfile.")
@@ -155,7 +163,10 @@ impl Scanner {
                     && (leaf.ends_with(".yml") || leaf.ends_with(".yaml"))
             }
             Manager::Go => leaf == "go.mod",
-            Manager::Terraform => leaf.ends_with(".tf") || leaf == ".terraform.lock.hcl",
+            Manager::Terraform => {
+                leaf.ends_with(".tf")
+                    || matches!(leaf, ".terraform.lock.hcl" | ".terraform-version")
+            }
             Manager::Kubernetes | Manager::Flux => {
                 leaf.ends_with(".yaml") || leaf.ends_with(".yml")
             }
@@ -168,6 +179,10 @@ impl Scanner {
                     || leaf.ends_with("values.yaml")
                     || leaf.ends_with("values.yml"))
                     && (leaf.ends_with(".yaml") || leaf.ends_with(".yml"))
+            }
+            Manager::Helm => leaf == "Chart.yaml",
+            Manager::Devcontainer => {
+                matches!(leaf, "devcontainer.json" | ".devcontainer.json")
             }
             Manager::PreCommit => {
                 matches!(leaf, ".pre-commit-config.yaml" | ".pre-commit-config.yml")
@@ -241,14 +256,26 @@ impl Scanner {
                 actions::extract(path, text)
             } else if self.selected(Manager::Mise, path) {
                 mise::extract(path, text)
+            } else if self.selected(Manager::Cargo, path)
+                && (path.ends_with("rust-toolchain") || path.ends_with("rust-toolchain.toml"))
+            {
+                toolchains::rust(path, text)
             } else if self.selected(Manager::Cargo, path) {
                 cargo::extract(path, text, &cargo)
             } else if self.selected(Manager::Dockerfile, path) {
                 images::dockerfile(path, text)
             } else if self.selected(Manager::Go, path) {
                 go::extract(path, text)
+            } else if self.selected(Manager::Terraform, path)
+                && path.ends_with(".terraform-version")
+            {
+                Ok(toolchains::terraform(path, text))
             } else if self.selected(Manager::Terraform, path) {
                 terraform::extract(path, text, &terraform)
+            } else if self.selected(Manager::Devcontainer, path) {
+                devcontainer::extract(path, text)
+            } else if self.selected(Manager::Helm, path) {
+                helm::extract(path, text)
             } else if self.selected(Manager::PreCommit, path) {
                 precommit::extract(path, text)
             } else if self.selected(Manager::Pyproject, path) {

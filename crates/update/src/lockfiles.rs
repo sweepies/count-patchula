@@ -100,6 +100,27 @@ pub(crate) fn job(
             }
             (Ecosystem::Node, root)
         }
+        // `helm dependency update` downloads chart archives into the tree;
+        // a committed Chart.lock is not regenerated yet.
+        Manager::Helm => {
+            let lock = format!(
+                "{}Chart.lock",
+                dep.file.strip_suffix("Chart.yaml").unwrap_or("")
+            );
+            if snapshot.paths.contains(&lock) {
+                return Err("unsupported lockfile format: Chart.lock".into());
+            }
+            return Ok(None);
+        }
+        // Toolchain files pin a tool, which no lockfile records.
+        Manager::Cargo | Manager::Terraform
+            if matches!(
+                dep.file.rsplit('/').next(),
+                Some("rust-toolchain" | "rust-toolchain.toml" | ".terraform-version")
+            ) =>
+        {
+            return Ok(None);
+        }
         Manager::Cargo => (
             Ecosystem::Cargo,
             nearest(&dep.file, &snapshot.paths, &["Cargo.lock"]).unwrap_or(directory(&dep.file)),

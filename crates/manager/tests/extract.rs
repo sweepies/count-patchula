@@ -352,3 +352,68 @@ fn pre_commit_revs_use_github_or_forge_tags() {
         assert_eq!(slice.trim_matches('"'), dep.current);
     }
 }
+#[test]
+fn toolchain_files_charts_and_devcontainers() {
+    let mut config = config();
+    config.managers = vec![
+        Manager::Cargo,
+        Manager::Terraform,
+        Manager::Helm,
+        Manager::Devcontainer,
+    ];
+    let scanner = Scanner::new(&config).unwrap();
+    let files = Files::from([
+        ("rust-toolchain.toml".into(), "[toolchain]\nchannel = \"1.82.0\"\ncomponents = [\"clippy\"]\n".into()),
+        ("tools/rust-toolchain".into(), "nightly-2026-01-01\n".into()),
+        (".terraform-version".into(), "v1.14.7\n".into()),
+        ("infra/.terraform-version".into(), "latest\n".into()),
+        (
+            "chart/Chart.yaml".into(),
+            "apiVersion: v2\nname: app\ndependencies:\n  - name: redis\n    version: \"^20.0.0\"\n    repository: https://charts.bitnami.com/bitnami\n  - name: pg\n    version: 1.2.3\n    repository: oci://registry-1.docker.io/bitnamicharts/\n  - name: local\n    version: 0.1.0\n    repository: file://../local\n".into(),
+        ),
+        (
+            ".devcontainer/devcontainer.json".into(),
+            "{\n  // comment\n  \"image\": \"mcr.microsoft.com/devcontainers/base:1.2-bookworm\",\n  \"features\": {\n    \"ghcr.io/devcontainers/features/node:1\": {\"version\": \"22\"},\n    \"./local-feature\": {},\n  },\n}\n".into(),
+        ),
+    ]);
+    let deps = scanner.extract(&files).unwrap().dependencies;
+    let got: Vec<_> = deps
+        .iter()
+        .map(|d| (d.file.as_str(), d.package.as_str(), d.current.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (
+                ".devcontainer/devcontainer.json",
+                "mcr.microsoft.com/devcontainers/base",
+                "1.2-bookworm"
+            ),
+            (
+                ".devcontainer/devcontainer.json",
+                "ghcr.io/devcontainers/features/node",
+                "1"
+            ),
+            (".terraform-version", "hashicorp/terraform", "1.14.7"),
+            (
+                "chart/Chart.yaml",
+                "https://charts.bitnami.com/bitnami|redis",
+                "^20.0.0"
+            ),
+            (
+                "chart/Chart.yaml",
+                "registry-1.docker.io/bitnamicharts/pg",
+                "1.2.3"
+            ),
+            ("rust-toolchain.toml", "rust-lang/rust", "1.82.0"),
+        ]
+    );
+    for dep in &deps {
+        let slice = &files[&dep.file][dep.location.start..dep.location.end];
+        assert!(
+            slice.trim_matches('"') == dep.current || slice.ends_with(&format!(":{}", dep.current)),
+            "{} {slice:?}",
+            dep.name
+        );
+    }
+}

@@ -248,3 +248,42 @@ fn pre_commit_revs_keep_their_quoting() {
             .replace("\"1.0.0\"", "\"v2.0.0\"")
     );
 }
+#[test]
+fn toolchain_chart_and_devcontainer_edits_stay_in_place() {
+    assert_eq!(
+        replace(
+            Manager::Cargo,
+            "rust-toolchain.toml",
+            "[toolchain]\nchannel = \"1.82.0\"\n",
+            "1.99.0",
+            None
+        ),
+        "[toolchain]\nchannel = \"1.99.0\"\n"
+    );
+    assert_eq!(
+        replace(
+            Manager::Terraform,
+            ".terraform-version",
+            "v1.14.7\n",
+            "1.15.0",
+            None
+        ),
+        "v1.15.0\n"
+    );
+    let chart = "dependencies:\n  - name: redis\n    version: \"^20.0.0\"\n    repository: https://charts.example.test\n";
+    assert_eq!(
+        replace(Manager::Helm, "Chart.yaml", chart, "^21.0.0", None),
+        chart.replace("^20.0.0", "^21.0.0")
+    );
+    let devcontainer = "{\"features\": {\"ghcr.io/devcontainers/features/node:1\": {}}}";
+    assert_eq!(
+        replace(
+            Manager::Devcontainer,
+            ".devcontainer.json",
+            devcontainer,
+            "2",
+            None
+        ),
+        devcontainer.replace("node:1", "node:2")
+    );
+}

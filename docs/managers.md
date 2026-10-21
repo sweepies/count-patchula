@@ -96,3 +96,18 @@ gitea.com and hosts labelled `gitlab`, `gitea` or `forgejo`) use `forge-tags`
 with the identity `host/path`. `local` and `meta` hooks, other hosts and
 40-character commit pins are skipped; commit pins with a frozen tag comment are
 not yet supported.
+
+`rust-toolchain` and `rust-toolchain.toml` (Cargo manager) and
+`.terraform-version` (Terraform manager) pin their tool with a numeric version,
+like mise's `rust` and `terraform`; channels such as `stable`, `nightly-…` or
+`latest` are skipped, and these files have no lockfile job.
+
+`helm` reads `Chart.yaml` dependencies from HTTPS and `oci://` repositories
+(`file://` charts and repository aliases are local). A committed `Chart.lock`
+holds the update as lockfile-pending: `helm dependency update` downloads chart
+archives into the tree and is not run yet.
+
+`devcontainer` reads `devcontainer.json` and `.devcontainer.json` (JSONC). The
+`image` is a container image, digest-pinned like any other; OCI `features` keep
+their version in the feature key (`ghcr.io/devcontainers/features/node:1`), are
+edited there and are never digest-pinned. Templated images are skipped.

@@ -319,7 +319,7 @@ fn build(
         );
     }
     if pending && !allow_pending {
-        reason = Some("lockfile pending: unsupported binary bun lockfile; --allow-lockfile-pending permits manifest-only testing".into());
+        reason = Some("lockfile pending: unsupported lockfile (binary bun.lockb or Chart.lock); --allow-lockfile-pending permits manifest-only testing".into());
     }
     let fingerprint = hash(
         serde_json::to_string(&(&contents, &message, pending, &lock_jobs))

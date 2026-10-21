@@ -2,7 +2,7 @@
 /// this module, or amend an organisation module that itself amends this one.
 module Rustovate
 
-typealias Manager = "npm"|"bun"|"github-actions"|"mise"|"cargo"|"dockerfile"|"compose"|"go"|"terraform"|"kubernetes"|"kustomize"|"flux"|"helm-values"|"requirements"|"pyproject"|"pre-commit"|"regex"
+typealias Manager = "npm"|"bun"|"github-actions"|"mise"|"cargo"|"dockerfile"|"compose"|"go"|"terraform"|"kubernetes"|"kustomize"|"flux"|"helm-values"|"requirements"|"pyproject"|"pre-commit"|"helm"|"devcontainer"|"regex"
 typealias Source = "npm"|"github-releases"|"github-tags"|"github-runners"|"docker"|"crates"|"go"|"terraform"|"pypi"|"helm"|"oci"|"mise"|"forge-tags"
 typealias Update = "major"|"minor"|"patch"|"digest"|"pin"
 typealias VersionPolicy = "exact"|"preserve"|"widen"
@@ -128,7 +128,7 @@ class Lockfiles {
 managers: Listing<Manager> = new {
   "npm"; "bun"; "github-actions"; "mise"; "cargo"; "dockerfile"; "compose"
   "go"; "terraform"; "kubernetes"; "kustomize"; "flux"; "helm-values"
-  "requirements"; "pyproject"; "pre-commit"; "regex"
+  "requirements"; "pyproject"; "pre-commit"; "helm"; "devcontainer"; "regex"
 }
 defaults: Policy = new {}
 rules: Listing<Rule> = new {}

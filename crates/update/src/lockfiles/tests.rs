@@ -1708,3 +1708,39 @@ fn go_runs_at_the_version_the_edited_module_requires() {
         );
     }
 }
+
+/// A chart update beside a committed Chart.lock is held, not published stale.
+#[test]
+fn chart_updates_with_a_committed_chart_lock_are_pending() {
+    let mut config = config();
+    config.managers = vec![Manager::Helm];
+    let chart = "dependencies:\n  - name: redis\n    version: 1.0.0\n    repository: https://charts.example.test\n";
+    let deps = rustovate_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&rustovate_manager::Files::from([(
+            "Chart.yaml".into(),
+            chart.into(),
+        )]))
+        .unwrap()
+        .dependencies;
+    let update = rustovate_report::Update {
+        new_value: Some("2.0.0".into()),
+        new_version: Some("2.0.0".into()),
+        new_digest: None,
+        update_type: "major".into(),
+        group: None,
+        policy: None,
+        release_age: None,
+    };
+    let unlocked = snapshot(&BTreeMap::from([("Chart.yaml".into(), chart.into())]));
+    assert!(matches!(job(&deps[0], &update, &unlocked), Ok(None)));
+    let locked = snapshot(&BTreeMap::from([
+        ("Chart.yaml".into(), chart.into()),
+        ("Chart.lock".into(), "dependencies: []\n".into()),
+    ]));
+    assert!(
+        job(&deps[0], &update, &locked)
+            .unwrap_err()
+            .contains("Chart.lock")
+    );
+}

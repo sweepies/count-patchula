@@ -110,11 +110,15 @@ fn yaml(dep: &Dependency) -> bool {
             | Manager::Flux
             | Manager::HelmValues
             | Manager::PreCommit
+            | Manager::Helm
     ) || (matches!(dep.manager, Manager::Npm | Manager::Bun)
         && (dep.file.ends_with(".yaml") || dep.file.ends_with(".yml")))
 }
 fn toml(dep: &Dependency) -> bool {
-    (matches!(dep.manager, Manager::Cargo | Manager::Mise) && !dep.file.ends_with(".tool-versions"))
+    (matches!(dep.manager, Manager::Cargo | Manager::Mise)
+        && !dep.file.ends_with(".tool-versions")
+        // Toolchain pins are located inside their string, not as a TOML value.
+        && dep.kind != DependencyKind::Toolchain)
         // Poetry constraints are whole TOML strings; PEP 508 specifiers are
         // spans inside one and are replaced as raw text.
         || (dep.manager == Manager::Pyproject && dep.location.pointer.starts_with("/tool/poetry/"))

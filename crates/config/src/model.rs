@@ -7,7 +7,7 @@ macro_rules! words {
         pub enum $name { $(#[serde(rename = $word)] $variant),+ }
     };
 }
-words!(Manager { Npm => "npm", Bun => "bun", GithubActions => "github-actions", Mise => "mise", Cargo => "cargo", Dockerfile => "dockerfile", Compose => "compose", Go => "go", Terraform => "terraform", Kubernetes => "kubernetes", Kustomize => "kustomize", Flux => "flux", HelmValues => "helm-values", Requirements => "requirements", Pyproject => "pyproject", PreCommit => "pre-commit", Regex => "regex" });
+words!(Manager { Npm => "npm", Bun => "bun", GithubActions => "github-actions", Mise => "mise", Cargo => "cargo", Dockerfile => "dockerfile", Compose => "compose", Go => "go", Terraform => "terraform", Kubernetes => "kubernetes", Kustomize => "kustomize", Flux => "flux", HelmValues => "helm-values", Requirements => "requirements", Pyproject => "pyproject", PreCommit => "pre-commit", Helm => "helm", Devcontainer => "devcontainer", Regex => "regex" });
 words!(Source { Npm => "npm", GithubReleases => "github-releases", GithubTags => "github-tags", GithubRunners => "github-runners", Docker => "docker", Crates => "crates", Go => "go", Terraform => "terraform", Pypi => "pypi", Helm => "helm", Oci => "oci", Mise => "mise", ForgeTags => "forge-tags" });
 words!(Update { Major => "major", Minor => "minor", Patch => "patch", Digest => "digest", Pin => "pin" });
 words!(VersionPolicy { Exact => "exact", Preserve => "preserve", Widen => "widen" });
