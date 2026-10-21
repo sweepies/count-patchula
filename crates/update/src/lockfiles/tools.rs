@@ -138,9 +138,10 @@ impl Runner {
                 .and_then(|()| link_tree(&from, &to.join(version)))
                 .and_then(|()| {
                     let backend = installs.join(".mise.backend.toml");
-                    match backend.is_file() && !to.join(".mise.backend.toml").exists() {
-                        true => std::fs::copy(backend, to.join(".mise.backend.toml")).map(drop),
-                        false => Ok(()),
+                    if backend.is_file() && !to.join(".mise.backend.toml").exists() {
+                        std::fs::copy(backend, to.join(".mise.backend.toml")).map(drop)
+                    } else {
+                        Ok(())
                     }
                 });
             match linked {
