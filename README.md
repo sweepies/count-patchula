@@ -4,10 +4,10 @@
   <p><strong>Count Patchula vants to update your deps. He never sleeps. Neither do your CVEs.</strong></p>
   <p>A modern dependency updater with strong defaults.</p>
   <p>
-    <a href="docs/getting-started.md">Get started</a> ·
+    <a href="https://count-patchula.sweepy.dev/getting-started">Get started</a> ·
     <a href="https://count-patchula.sweepy.dev">Documentation</a> ·
-    <a href="docs/renovate/compatibility.md">Coming from Renovate</a> ·
-    <a href="docs/benchmarks.md">Benchmarks</a>
+    <a href="https://count-patchula.sweepy.dev/renovate/compatibility">Coming from Renovate</a> ·
+    <a href="https://count-patchula.sweepy.dev/benchmarks">Benchmarks</a>
   </p>
 </div>
 
@@ -22,7 +22,7 @@ however many repositories use it.
 mise use -g packslip:github.com/sweepies/count-patchula
 ```
 
-Other ways to install him are on the [installation page](docs/installation.md).
+Other ways to install him are on the [installation page](https://count-patchula.sweepy.dev/installation).
 
 Invite the Count into a repository with `.github/patchula.pkl`:
 
@@ -40,8 +40,8 @@ patchula run sweepies/my-app             # then let him bite
 ```
 
 Lockfile tools come from [mise](https://mise.jdx.dev), so it needs to be on the
-`PATH`. See [getting started](docs/getting-started.md), or run him on a schedule
-with the [GitHub Action](docs/guide/github-actions.md).
+`PATH`. See [getting started](https://count-patchula.sweepy.dev/getting-started), or run him on a schedule
+with the [GitHub Action](https://count-patchula.sweepy.dev/guide/github-actions).
 
 ## What you get
 
@@ -74,14 +74,14 @@ grafana, monica, jellyfin, kafka), each tool alone on the same c7i.xlarge:
 | All six, warm | **14.8 s** | 274.3 s | 18.5× faster |
 | Peak memory, grafana cold | **494 MB** | 3.6 GB | 7.3× less |
 
-The [benchmarks page](docs/benchmarks.md) has
+The [benchmarks page](https://count-patchula.sweepy.dev/benchmarks) has
 the method and every run.
 
 ## Coming from Renovate
 
-The [compatibility matrix](docs/renovate/compatibility.md)
+The [compatibility matrix](https://count-patchula.sweepy.dev/renovate/compatibility)
 lists every manager, datasource and feature, and [migrating a
-config](docs/renovate/migrating.md) maps
+config](https://count-patchula.sweepy.dev/renovate/migrating) maps
 `renovate.json` options onto Pkl.
 
 ## Development
