@@ -137,3 +137,20 @@ tokens and qualifiers `alpha < beta < milestone < rc < snapshot < release <
 sp`. Bare versions are exact requirements and `[a,b)` ranges are kept while
 satisfied. A version's release variant (Guava's `-jre`/`-android`, Hibernate's
 `.Final`) is kept, so `33.4.8-android` never becomes `33.7.2-jre`.
+
+`nuget` reads `PackageReference`, `PackageVersion` and `GlobalPackageReference`
+items (a `Version`/`VersionOverride` attribute or a `<Version>` child) in
+`*.csproj`, `*.fsproj`, `*.vbproj`, `Directory.Packages.props` and
+`Directory.Build.props`, local tools in `.config/dotnet-tools.json`, and the SDK
+in `global.json`. Commented items, `$(Property)` versions and floating `*`
+versions are skipped. NuGet versions use the `nuget` scheme: SemVer 2 with an
+optional fourth number and case-insensitive labels, bare versions exact and
+interval ranges (`[2.9.0,3.0)`) kept while satisfied. The SDK resolves from
+published `dotnet/sdk` GitHub releases, accepting only feature-band versions,
+because tags can precede a release.
+
+When `packages.lock.json` files exist under an edited file's directory, the
+lockfile runner runs `dotnet restore --force-evaluate` on that directory's single
+solution (else project) with the `global.json` SDK or the pinned default
+(9.0.319), an isolated `NUGET_PACKAGES` and telemetry off, removes the `obj/`
+intermediates restore writes, and fails the branch if no lock changed.

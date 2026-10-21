@@ -1423,7 +1423,7 @@ fn lockfile_engine_pins_match_the_repository_mise_config() {
             defaults["yarn"]["berry"].as_str(),
             "{task}"
         );
-        for tool in ["python", "uv", "poetry"] {
+        for tool in ["python", "uv", "poetry", "dotnet"] {
             assert_eq!(
                 tools[tool].as_str(),
                 defaults["tools"][tool].as_str(),
@@ -1899,4 +1899,46 @@ async fn tool_store_prunes_unused_versions_and_prewarms_defaults() {
             && installed.contains(&"yarn@4.18.1".to_string())
     );
     assert!(!installed.iter().any(|s| s.starts_with("rust@")));
+}
+
+/// Real dotnet restores a project's packages.lock.json offline and leaves no
+/// obj/ intermediates behind.
+#[tokio::test]
+async fn real_dotnet_restore_regenerates_packages_lock_json() {
+    let project = "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <TargetFramework>net9.0</TargetFramework>\n    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>\n  </PropertyGroup>\n</Project>\n";
+    let files = BTreeMap::from([
+        ("app/App.csproj".to_string(), project.to_string()),
+        (
+            "app/packages.lock.json".to_string(),
+            "{\"version\": 1, \"dependencies\": {\"net8.0\": {}}}\n".to_string(),
+        ),
+    ]);
+    let executor = fixture(files.clone(), false, true);
+    let temp = tempfile::tempdir().unwrap();
+    let runner =
+        Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snapshot, monday())
+        .unwrap()
+        .unwrap();
+    p.lock_jobs = vec![Job {
+        ecosystem: Ecosystem::Dotnet,
+        directory: "app".into(),
+        package: None,
+        current: None,
+        target: None,
+    }];
+    runner.prepare(&mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert!(
+        p.contents["app/packages.lock.json"].contains("net9.0"),
+        "{}",
+        p.contents["app/packages.lock.json"]
+    );
+    assert!(
+        !p.contents.keys().any(|k| k.contains("/obj/")),
+        "{:?}",
+        p.contents.keys()
+    );
 }

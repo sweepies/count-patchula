@@ -17,6 +17,7 @@ mod images;
 mod maven;
 mod mise;
 mod npm;
+mod nuget;
 mod precommit;
 mod pyproject;
 mod requirements;
@@ -93,6 +94,7 @@ pub fn supported(manager: Manager) -> bool {
         | Manager::Devcontainer
         | Manager::Maven
         | Manager::Gradle
+        | Manager::Nuget
         | Manager::Regex => true,
     }
 }
@@ -187,6 +189,7 @@ impl Scanner {
             Manager::Helm => leaf == "Chart.yaml",
             Manager::Maven => leaf == "pom.xml",
             Manager::Gradle => gradle::selected(path),
+            Manager::Nuget => nuget::selected(path),
             Manager::Devcontainer => {
                 matches!(leaf, "devcontainer.json" | ".devcontainer.json")
             }
@@ -278,6 +281,8 @@ impl Scanner {
                 Ok(toolchains::terraform(path, text))
             } else if self.selected(Manager::Terraform, path) {
                 terraform::extract(path, text, &terraform)
+            } else if self.selected(Manager::Nuget, path) {
+                nuget::extract(path, text)
             } else if self.selected(Manager::Gradle, path) {
                 gradle::extract(path, text)
             } else if self.selected(Manager::Maven, path) {

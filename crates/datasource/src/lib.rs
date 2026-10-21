@@ -7,6 +7,7 @@ mod github;
 mod maven;
 mod mise;
 pub mod notes;
+mod nuget;
 mod registries;
 use rustovate_cache::{Cache, Release};
 use rustovate_config::Source;
@@ -143,6 +144,7 @@ impl Client {
             Source::Helm => self.helm(package).await,
             Source::ForgeTags => self.forge_tags(package).await,
             Source::Maven => self.maven(package).await,
+            Source::Nuget => self.nuget(package).await,
         }
     }
     async fn npm(&self, package: &str) -> Result<Catalog> {

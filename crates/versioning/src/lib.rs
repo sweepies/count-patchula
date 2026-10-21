@@ -6,6 +6,7 @@ use semver::{Version, VersionReq};
 use std::cmp::Ordering;
 mod extended;
 mod maven;
+mod nuget;
 pub use maven::variant as maven_variant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,6 +21,8 @@ pub enum Ecosystem {
     Poetry,
     /// Maven's version order; bare versions are exact requirements.
     Maven,
+    /// NuGet's SemVer 2 with an optional fourth release number.
+    Nuget,
     Hashicorp,
 }
 
@@ -52,6 +55,9 @@ impl Versioning for Ecosystem {
     fn parse(&self, value: &str) -> Result<Parsed> {
         if *self == Self::Maven {
             return maven::parse(value);
+        }
+        if *self == Self::Nuget {
+            return nuget::parse(value);
         }
         if matches!(
             self,
@@ -99,6 +105,11 @@ impl Versioning for Ecosystem {
         {
             return maven::order(a, b);
         }
+        if *self == Self::Nuget
+            && let (Some(a), Some(b)) = (&left.2, &right.2)
+        {
+            return nuget::order(a, b);
+        }
         if let (Some(a), Some(b)) = (&left.1, &right.1) {
             return a.cmp(b);
         }
@@ -118,6 +129,7 @@ impl Versioning for Ecosystem {
                 .map(|req| req.matches(&version.0))
                 .map_err(|_| Error::Invalid(range.into())),
             Self::Maven => maven::matches(range, version),
+            Self::Nuget => nuget::matches(range, version),
             Self::Docker | Self::Pep440 | Self::Poetry | Self::Hashicorp => {
                 extended::matches(*self, range, version)
             }
@@ -146,8 +158,8 @@ impl Versioning for Ecosystem {
         }
     }
     fn new_range(&self, current: &str, target: &str, policy: VersionPolicy) -> Result<String> {
-        if *self == Self::Maven {
-            // A bare Maven version is an exact (soft) requirement. Ranges keep
+        if matches!(self, Self::Maven | Self::Nuget) {
+            // A bare Maven or NuGet version is an exact (soft) requirement. Ranges keep
             // themselves when satisfied and are never rewritten.
             let parsed = self.parse(target)?;
             if !current.trim_start().starts_with(['[', '(']) || policy == VersionPolicy::Exact {

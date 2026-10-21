@@ -1,5 +1,6 @@
 //! Real ecosystem tools run before any Git Data mutation, in disposable trees.
 mod checkout;
+mod dotnet;
 mod mise;
 mod node;
 mod process;
@@ -31,6 +32,7 @@ pub enum Ecosystem {
     Mise,
     Python,
     GradleWrapper,
+    Dotnet,
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Job {
@@ -116,8 +118,27 @@ pub(crate) fn job(
             }
             return Ok(None);
         }
-        // Gradle dependency locking writes per-configuration lockfiles that
-        // need the build itself to regenerate; hold such updates.
+        // NuGet locks sit beside each project; a manifest under a directory
+        // with locks restores that directory's solution or project.
+        Manager::Nuget => {
+            let dir = directory(&dep.file);
+            let locked = dep.kind != rustovate_config::DependencyKind::Toolchain
+                && !dep.file.ends_with("dotnet-tools.json")
+                && snapshot.paths.iter().any(|p| {
+                    p.rsplit('/').next() == Some("packages.lock.json")
+                        && (dir.is_empty() || under(p, dir))
+                });
+            if !locked {
+                return Ok(None);
+            }
+            return Ok(Some(Job {
+                ecosystem: Ecosystem::Dotnet,
+                directory: dir.into(),
+                package: None,
+                current: None,
+                target: None,
+            }));
+        }
         Manager::Gradle
             if dep
                 .file
@@ -131,6 +152,8 @@ pub(crate) fn job(
                 target: None,
             }));
         }
+        // Gradle dependency locking writes per-configuration lockfiles that
+        // need the build itself to regenerate; hold such updates.
         Manager::Gradle => {
             if nearest(&dep.file, &snapshot.paths, &["gradle.lockfile"]).is_some() {
                 return Err("unsupported lockfile format: gradle.lockfile".into());
@@ -215,6 +238,7 @@ pub fn maintenance(
             "uv.lock" | "poetry.lock" if config.managers.contains(&Manager::Pyproject) => {
                 Ecosystem::Python
             }
+            "packages.lock.json" if config.managers.contains(&Manager::Nuget) => Ecosystem::Dotnet,
             "mise.lock" if config.managers.contains(&Manager::Mise) => Ecosystem::Mise,
             "go.mod" if config.managers.contains(&Manager::Go) => Ecosystem::Go,
             ".terraform.lock.hcl" if config.managers.contains(&Manager::Terraform) => {
@@ -462,6 +486,20 @@ impl Runner {
                 .collect();
             let cwd = root.join(&directory);
             match ecosystem {
+                Ecosystem::Dotnet => {
+                    let edited = plan
+                        .contents
+                        .keys()
+                        .any(|p| directory.is_empty() || p.starts_with(&format!("{directory}/")));
+                    self.dotnet_restore(
+                        &driver,
+                        &root,
+                        &directory,
+                        &versions,
+                        edited && !plan.maintenance,
+                    )
+                    .await?;
+                }
                 Ecosystem::GradleWrapper => {
                     self.gradle_wrapper(&root, &directory).await?;
                 }
@@ -802,6 +840,7 @@ fn versions(
         "python",
         "uv",
         "poetry",
+        "dotnet",
     ] {
         versions.insert(
             tool.into(),
@@ -890,6 +929,11 @@ fn writable(path: &str) -> bool {
             | "mise.lock"
             | "pyproject.toml"
             | "gradle-wrapper.properties"
+            | "packages.lock.json"
+            | "Directory.Packages.props"
+            | "Directory.Build.props"
+            | "dotnet-tools.json"
+            | "global.json"
             | "uv.lock"
             | "poetry.lock"
     ) || path.ends_with(".tf")
@@ -911,6 +955,13 @@ fn materialized(path: &str) -> bool {
         )
         || path.ends_with(".go")
         || path.ends_with(".rs")
+        || [".csproj", ".fsproj", ".vbproj", ".sln", ".slnx"]
+            .iter()
+            .any(|e| path.ends_with(e))
+        || matches!(
+            path.rsplit('/').next(),
+            Some("Directory.Build.targets" | "nuget.config" | "NuGet.Config")
+        )
 }
 fn safe_path(path: &str) -> bool {
     !path.is_empty()

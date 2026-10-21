@@ -248,6 +248,15 @@ pub(super) fn matches(range: &str, version: &Parsed) -> Result<bool> {
     if !range.starts_with(['[', '(']) {
         return Ok(order(range, current).is_eq());
     }
+    intervals(range, current, order)
+}
+
+/// Interval sets such as `[1.0,2.0)` or `(,1.0],[1.2,)`, shared with NuGet.
+pub(super) fn intervals(
+    range: &str,
+    current: &str,
+    order: fn(&str, &str) -> Ordering,
+) -> Result<bool> {
     let mut rest = range;
     while !rest.is_empty() {
         let close = rest

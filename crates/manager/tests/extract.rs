@@ -542,3 +542,53 @@ android = { id = "com.android.application", version.ref = "agp" }
     )]);
     assert_eq!(scanner.extract(&pinned).unwrap().dependencies.len(), 1);
 }
+#[test]
+fn nuget_projects_central_versions_tools_and_sdk() {
+    let mut config = config();
+    config.managers = vec![Manager::Nuget];
+    let scanner = Scanner::new(&config).unwrap();
+    let project = r#"<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="Serilog">
+      <Version>4.0.0</Version>
+    </PackageReference>
+    <PackageReference Include="FromProperty" Version="$(Shared)" />
+    <PackageReference Include="Floating" Version="1.*" />
+    <!-- <PackageReference Include="Commented" Version="1.0.0" /> -->
+  </ItemGroup>
+</Project>
+"#;
+    let files = Files::from([
+        ("src/App/App.csproj".into(), project.into()),
+        (
+            "Directory.Packages.props".into(),
+            "<Project><ItemGroup><PackageVersion Include=\"xunit\" Version=\"[2.9.0,3.0)\" /></ItemGroup></Project>".into(),
+        ),
+        (".config/dotnet-tools.json".into(), "{\"version\":1,\"tools\":{\"dotnet-ef\":{\"version\":\"9.0.0\",\"commands\":[\"dotnet-ef\"]}}}".into()),
+        ("global.json".into(), "{\n  \"sdk\": { \"version\": \"9.0.100\", \"rollForward\": \"latestFeature\" }\n}\n".into()),
+    ]);
+    let deps = scanner.extract(&files).unwrap().dependencies;
+    let got: Vec<_> = deps
+        .iter()
+        .map(|d| (d.file.as_str(), d.name.as_str(), d.current.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (".config/dotnet-tools.json", "dotnet-ef", "9.0.0"),
+            ("Directory.Packages.props", "xunit", "[2.9.0,3.0)"),
+            ("global.json", "dotnet-sdk", "9.0.100"),
+            ("src/App/App.csproj", "Newtonsoft.Json", "13.0.3"),
+            ("src/App/App.csproj", "Serilog", "4.0.0"),
+        ]
+    );
+    for dep in &deps {
+        assert_eq!(
+            &files[&dep.file][dep.location.start..dep.location.end],
+            dep.current,
+            "{}",
+            dep.name
+        );
+    }
+}

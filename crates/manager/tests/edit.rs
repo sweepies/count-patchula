@@ -306,3 +306,22 @@ fn maven_and_gradle_edits_replace_only_the_version() {
         catalog.replace("4.12.0", "5.0.0")
     );
 }
+#[test]
+fn nuget_attribute_child_and_json_edits() {
+    let project = "<PackageReference Include=\"A\" Version=\"1.0.0\" /><PackageReference Include=\"B\"><Version>2.0.0</Version></PackageReference>";
+    assert_eq!(
+        replace(Manager::Nuget, "App.csproj", project, "3.0.0", None),
+        project.replace("1.0.0", "3.0.0").replace("2.0.0", "3.0.0")
+    );
+    let tools = "{\"tools\":{\"dotnet-ef\":{\"version\":\"9.0.0\"}}}";
+    assert_eq!(
+        replace(
+            Manager::Nuget,
+            ".config/dotnet-tools.json",
+            tools,
+            "9.0.1",
+            None
+        ),
+        tools.replace("9.0.0", "9.0.1")
+    );
+}

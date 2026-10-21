@@ -1075,6 +1075,7 @@ pub fn scheme(dep: &Dependency) -> Result<Ecosystem> {
         Scheme::Pep440 => Ok(Ecosystem::Pep440),
         Scheme::Poetry => Ok(Ecosystem::Poetry),
         Scheme::Maven => Ok(Ecosystem::Maven),
+        Scheme::Nuget => Ok(Ecosystem::Nuget),
         Scheme::Hashicorp => Ok(Ecosystem::Hashicorp),
     }
 }

@@ -158,3 +158,11 @@ Maven repository, everything else to Maven Central; Gradle plugins use
 search API lags releases by months, so publication dates are each POM's
 `Last-Modified` header (cached HEAD), read for the ten newest versions only:
 older releases are outside any release-age wait.
+
+# NuGet (SWE-153)
+
+`nuget` packages are nuget.org IDs. Versions come from the flat container
+(`v3-flatcontainer/<id>/index.json`); the newest registration page
+(`registration5-gz-semver2`, inline or linked) dates them, marks unlisted
+releases (published 1900) as yanked and records deprecations. Older pages are
+not read: their releases are outside any release-age wait.
