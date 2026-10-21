@@ -51,8 +51,10 @@ so a minimal image without system development packages can build it.
 
 Lockfiles are regenerated with the real tools (aube, Yarn, Bun, Cargo, Go,
 Terraform, uv, Poetry, dotnet, Bundler, Composer), so `mise` must be on the
-`PATH`. mise installs each tool on first use into the Count's own tool store,
-never your personal mise installs. The store is `PATCHULA_TOOLS_DIR`, or
+`PATH`. Each tool goes into the Count's own tool store, never your personal
+mise installs: on a local run he borrows a version you already have by
+hard-linking it in, and otherwise mise installs it on first use (see [the tool
+store](/guide/lockfiles#the-tool-store)). The store is `PATCHULA_TOOLS_DIR`, or
 `<cache>.tools` beside the SQLite cache. Put it on a persistent volume.
 
 `git` is needed for the partial clones a lockfile tool works in.

@@ -72,18 +72,36 @@ pub(super) fn defaults() -> Result<Vec<(String, String)>, String> {
 
 /// Recreate `from` at `to` with hard links, keeping symlinks as symlinks. The
 /// copy shares the user's files but is the Count's own directory: removing it
-/// never touches the original.
+/// never touches the original. Symlinks must resolve inside `root`, the version
+/// directory being copied: relative ones are kept, absolute ones (mise's own
+/// `.mise-bins`) are pointed at the same file under `published`, where the copy
+/// will live. Any other link refuses the copy.
 #[cfg(unix)]
-fn link_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+fn link_tree(root: &Path, published: &Path, from: &Path, to: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(to)?;
     for entry in std::fs::read_dir(from)? {
         let entry = entry?;
         let (source, target) = (entry.path(), to.join(entry.file_name()));
         let kind = entry.file_type()?;
         if kind.is_symlink() {
-            std::os::unix::fs::symlink(std::fs::read_link(&source)?, &target)?;
+            let link = std::fs::read_link(&source)?;
+            let resolved = from.join(&link).canonicalize().ok();
+            let inside = resolved
+                .as_deref()
+                .and_then(|path| path.strip_prefix(root).ok());
+            let link = match inside {
+                Some(_) if link.is_relative() => link,
+                Some(rest) => published.join(rest),
+                None => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Unsupported,
+                        format!("{} links outside the install", source.display()),
+                    ));
+                }
+            };
+            std::os::unix::fs::symlink(link, &target)?;
         } else if kind.is_dir() {
-            link_tree(&source, &target)?;
+            link_tree(root, published, &source, &target)?;
         } else {
             std::fs::hard_link(&source, &target)?;
         }
@@ -134,8 +152,13 @@ impl Runner {
             }
             seeded.insert(spec.clone());
             changed = true;
+            // Build the copy where only this process writes, then publish it in
+            // one rename. Another run seeding the same version either finishes
+            // first, and this rename fails, or finds a complete install.
+            let staging = to.join(format!(".patchula-seed-{}-{version}", std::process::id()));
             let linked = std::fs::create_dir_all(&to)
-                .and_then(|()| link_tree(&from, &to.join(version)))
+                .and_then(|()| link_tree(&from, &to.join(version), &from, &staging))
+                .and_then(|()| std::fs::rename(&staging, to.join(version)))
                 .and_then(|()| {
                     let backend = installs.join(".mise.backend.toml");
                     if backend.is_file() && !to.join(".mise.backend.toml").exists() {
@@ -147,7 +170,7 @@ impl Runner {
             match linked {
                 Ok(()) => tracing::info!(tool = %spec, "seeded from the user's mise install"),
                 Err(error) => {
-                    let _ = std::fs::remove_dir_all(to.join(version));
+                    let _ = std::fs::remove_dir_all(&staging);
                     tracing::debug!(tool = %spec, %error, "not seeded; mise will install it");
                 }
             }

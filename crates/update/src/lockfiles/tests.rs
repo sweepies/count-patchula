@@ -1924,18 +1924,41 @@ fn tool_store_seeds_relocatable_tools_from_the_users_mise_once() {
         std::os::unix::fs::symlink(tool, dir.join(format!("{tool}-alias"))).unwrap();
     }
     std::fs::write(user.join("installs/node/.mise.backend.toml"), "backend").unwrap();
+    // mise's own bin links are absolute, into the version directory.
+    let mise_bins = user.join("installs/node/24.21.0/.mise-bins");
+    std::fs::create_dir_all(&mise_bins).unwrap();
+    std::os::unix::fs::symlink(
+        user.join("installs/node/24.21.0/bin/node")
+            .canonicalize()
+            .unwrap(),
+        mise_bins.join("node"),
+    )
+    .unwrap();
     // uv's version points into a root shared with other versions.
     let shared = user.join("uv-root/bin");
     std::fs::create_dir_all(&shared).unwrap();
     std::fs::write(shared.join("uv"), "binary").unwrap();
     std::fs::create_dir_all(user.join("installs/uv")).unwrap();
     std::os::unix::fs::symlink(user.join("uv-root"), user.join("installs/uv/0.13.1")).unwrap();
+    // bun's binary links outside its version directory, so it cannot move.
+    let bun = user.join("installs/bun/1.4.3/bin");
+    std::fs::create_dir_all(&bun).unwrap();
+    std::fs::create_dir_all(user.join("installs/bun/shared")).unwrap();
+    std::fs::write(user.join("installs/bun/shared/bun"), "binary").unwrap();
+    std::os::unix::fs::symlink("../../shared/bun", bun.join("bun")).unwrap();
+    // Another run already published go; this run leaves it as it was.
+    let racing = temp.path().join("cache.tools/installs/go/1.27.2");
+    std::fs::create_dir_all(user.join("installs/go/1.27.2/bin")).unwrap();
+    std::fs::write(user.join("installs/go/1.27.2/bin/go"), "binary").unwrap();
+    std::fs::create_dir_all(&racing).unwrap();
+    std::fs::write(racing.join("other-run"), "complete").unwrap();
     let runner = Runner::new(temp.path().join("cache.worktrees"), "x").with_seed(user.clone());
     let tools = [
         ("node".to_string(), "24.21.0".to_string()),
         ("python".to_string(), "3.14.8".to_string()),
         ("go".to_string(), "1.27.2".to_string()),
         ("uv".to_string(), "0.13.1".to_string()),
+        ("bun".to_string(), "1.4.3".to_string()),
     ];
     runner.seed(&tools);
     let store = runner.tools().join("installs");
@@ -1952,8 +1975,28 @@ fn tool_store_seeds_relocatable_tools_from_the_users_mise_once() {
         std::path::Path::new("node")
     );
     assert!(store.join("node/.mise.backend.toml").is_file());
+    assert_eq!(
+        std::fs::read_link(store.join("node/24.21.0/.mise-bins/node")).unwrap(),
+        store.join("node/24.21.0/bin/node"),
+        "absolute links point into the copy, not the user's install"
+    );
     assert!(!store.join("python").exists(), "python is not relocatable");
-    assert!(!store.join("go").exists(), "the user has no go install");
+    assert!(
+        store.join("go/1.27.2/other-run").is_file() && !store.join("go/1.27.2/bin").exists(),
+        "another run's install is left as it was"
+    );
+    assert!(
+        !store.join("bun/1.4.3").exists(),
+        "a link out of the version is not copied"
+    );
+    assert!(
+        std::fs::read_dir(store.join("go")).unwrap().all(|e| !e
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".patchula-seed")),
+        "staging copies are cleaned up"
+    );
     assert!(!store.join("uv").exists(), "a shared root is not copied");
     // Removing the seeded copy, as clearing an unproven install does, leaves
     // the user's install alone and is not undone by seeding again.

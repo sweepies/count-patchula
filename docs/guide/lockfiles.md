@@ -112,7 +112,9 @@ between runs, so keep it on a volume. Each successful tool run records its
   Terraform. That takes no time and no extra disk, and the store's links are
   its own, so pruning never touches your installs. Python, Ruby, PHP and .NET
   are always installed fresh, because their installs depend on where they
-  live. Each version is borrowed once; if it fails, mise installs it normally.
+  live, and so is any install with a symlink leading outside its own
+  directory. Each version is borrowed once; if it fails, mise installs it
+  normally.
   Your mise directory is `MISE_DATA_DIR`, or `~/.local/share/mise`, and it has
   to be on the same filesystem as the store. The server never borrows.
 
