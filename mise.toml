@@ -198,6 +198,13 @@ dir = "docs"
 tools = { node = "24.21.0", aube = "2.8.1" }
 run = "aube exec wrangler deploy"
 
+[tasks."docs:upload"]
+description = "Upload the built site as a Cloudflare preview version, without deploying it; Workers Builds runs this for pull request branches"
+depends = ["docs:build"]
+dir = "docs"
+tools = { node = "24.21.0", aube = "2.8.1" }
+run = "aube exec wrangler versions upload"
+
 [tasks."corpus:snapshot"]
 description = "Regenerate tests/corpus-extraction.tsv after an intended extraction change"
 env = { PATCHULA_UPDATE_SNAPSHOT = "1" }

@@ -96,8 +96,10 @@ mise run ci         # fixtures check, lint, test and build
 mise run docs:dev   # the documentation site
 ```
 
-The site is deployed to Cloudflare Workers by Cloudflare's GitHub integration,
-from `docs/wrangler.jsonc`, with a preview for each pull request.
+The site is deployed to Cloudflare Workers by Workers Builds, Cloudflare's
+GitHub integration. It installs mise and runs `mise run docs:deploy` on `main`
+and `mise run docs:upload` on other branches, so each pull request that touches
+`docs/` or `mise.toml` gets a preview.
 
 Builds go through [mr boxington](https://mr-boxington.jdx.dev) for a shared
 Cargo cache. Tests never touch the network: they replay HTTP fixtures the Count
