@@ -94,7 +94,7 @@ async fn discovered_config_precedence_skips_errors_and_cached_extraction() {
     for repo in ["configured", "skipped"] {
         interactions.push(head(&format!("demo/{repo}"), Some("main")));
         let tree = if repo == "configured" {
-            json!([{"path":".github/patchula.pkl","type":"blob","sha":"config"},{"path":"patchula.pkl","type":"blob","sha":"bad-config"},{"path":"package.json","type":"blob","sha":"manifest"}])
+            json!([{"path":".github/patchula.pkl","type":"blob","sha":"bad-config"},{"path":"patchula.pkl","type":"blob","sha":"config"},{"path":"package.json","type":"blob","sha":"manifest"}])
         } else {
             json!([])
         };
@@ -111,7 +111,7 @@ async fn discovered_config_precedence_skips_errors_and_cached_extraction() {
     for (sha, text) in [
         (
             "config",
-            "amends \"../Patchula.pkl\"\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n",
+            "amends \"PatchulaConfig.pkl\"\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n",
         ),
         (
             "manifest",
@@ -295,13 +295,10 @@ async fn cold_snapshot_and_warm_branch_rename_reuse_identical_commit() {
         .with_versions_host(false);
     let config = patchula_config::load_files(
         "/repo/config.pkl",
-        BTreeMap::from([
-            (
-                "/repo/config.pkl".into(),
-                "amends \"Patchula.pkl\"\nmanagers = new Listing {}".into(),
-            ),
-            ("/repo/Patchula.pkl".into(), patchula_config::SCHEMA.into()),
-        ]),
+        BTreeMap::from([(
+            "/repo/config.pkl".into(),
+            "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing {}".into(),
+        )]),
     )
     .unwrap();
     let options = || Options {
@@ -407,13 +404,10 @@ async fn warm_catalogs_wait_for_current_extraction_and_skip_removed_sources() {
         .with_versions_host(false);
     let config = patchula_config::load_files(
         "/repo/config.pkl",
-        BTreeMap::from([
-            (
-                "/repo/config.pkl".into(),
-                "amends \"Patchula.pkl\"\nmanagers = new Listing { \"npm\" }".into(),
-            ),
-            ("/repo/Patchula.pkl".into(), patchula_config::SCHEMA.into()),
-        ]),
+        BTreeMap::from([(
+            "/repo/config.pkl".into(),
+            "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"npm\" }".into(),
+        )]),
     )
     .unwrap();
     let options = || Options {
@@ -447,13 +441,12 @@ async fn config_dir_maps_overrides_and_falls_back_with_batch_dedup() {
     let dir = tempfile::tempdir().unwrap();
     let configs = dir.path().join("configs");
     std::fs::create_dir_all(configs.join("b")).unwrap();
-    std::fs::write(configs.join("Patchula.pkl"), patchula_config::SCHEMA).unwrap();
-    let npm = "amends \"Patchula.pkl\"\nmanagers = new Listing { \"npm\" }\n";
+    let npm = "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"npm\" }\n";
     std::fs::write(configs.join("shared.pkl"), npm).unwrap();
     std::fs::write(configs.join("other.pkl"), npm).unwrap();
     std::fs::write(
         configs.join("b/shared.pkl"),
-        "amends \"../Patchula.pkl\"\nmanagers = new Listing {}\n",
+        "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing {}\n",
     )
     .unwrap();
     // Unselected files must not be evaluated.
@@ -478,8 +471,8 @@ async fn config_dir_maps_overrides_and_falls_back_with_batch_dedup() {
         interactions.push(head(repo, Some("main")));
         let mut tree = vec![json!({"path":"package.json","type":"blob","sha":"manifest"})];
         if repo == "demo/github" {
+            // Only patchula.pkl at the root invites the Count.
             tree.push(json!({"path":".github/patchula.pkl","type":"blob","sha":"config"}));
-            tree.push(json!({"path":"patchula.pkl","type":"blob","sha":"bad-config"}));
         } else if repo == "demo/root" {
             tree.push(json!({"path":"patchula.pkl","type":"blob","sha":"config"}));
         } else if repo != "demo/skipped" {
@@ -494,22 +487,17 @@ async fn config_dir_maps_overrides_and_falls_back_with_batch_dedup() {
             None,
             false,
         ));
-        if repo == "demo/github" || repo == "demo/root" {
-            let source = if repo == "demo/github" {
-                npm.replace("\"Patchula.pkl\"", "\"../Patchula.pkl\"")
-            } else {
-                npm.into()
-            };
+        if repo == "demo/root" {
             interactions.push(get(
                 &format!("repos/{repo}/git/blobs/config"),
-                json!({"encoding":"base64","content":STANDARD.encode(source)}),
+                json!({"encoding":"base64","content":STANDARD.encode(npm)}),
                 200,
                 None,
                 None,
                 false,
             ));
         }
-        if repo != "demo/skipped" && repo != "b/shared" {
+        if !["demo/skipped", "demo/github", "b/shared"].contains(&repo) {
             interactions.push(get(
                 &format!("repos/{repo}/git/blobs/manifest"),
                 json!({"encoding":"base64","content":STANDARD.encode(r#"{"dependencies":{"fixture-spec":"1.0.0"}}"#)}), 200, None, None, false,
@@ -551,8 +539,8 @@ async fn config_dir_maps_overrides_and_falls_back_with_batch_dedup() {
         .await
         .unwrap();
     for repo in &report.repositories {
-        if repo.repository == "demo/skipped" {
-            assert_eq!(repo.status, Status::Skipped);
+        if ["demo/skipped", "demo/github"].contains(&repo.repository.as_str()) {
+            assert_eq!(repo.status, Status::Skipped, "{repo:?}");
         } else {
             assert_eq!(repo.status, Status::Complete, "{repo:?}");
             assert_eq!(

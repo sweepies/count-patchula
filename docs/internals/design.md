@@ -52,7 +52,7 @@ Targets (to be confirmed by Phase 1 measurements):
 ## Configuration
 
 Pkl only, evaluated in-process with `pklr`. patchula publishes a typed
-`Patchula.pkl` schema; a repository's config amends it, and an organisation
+`PatchulaConfig.pkl` schema; a repository's config amends it, and an organisation
 can share a base config through Pkl imports. There is no `renovate.json`
 reader and no migration tool: repositories are migrated by hand or by agents.
 

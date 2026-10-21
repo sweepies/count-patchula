@@ -1,20 +1,19 @@
 # Configuration
 
 The Count reads [Pkl](https://pkl-lang.org), evaluated in process. A repository's
-config amends the published `Patchula.pkl` schema, and every field it leaves
+config amends the `PatchulaConfig.pkl` schema, and every field it leaves
 alone keeps the schema's default. There is no JSON reader, no preset system and
 no migration tool. If you are coming from Renovate, see [migrating a
 config](/renovate/migrating).
 
 ## Where the config lives
 
-The Count looks for `.github/patchula.pkl` first, then `patchula.pkl` at the
-repository root. A repository with neither is skipped, so nothing happens to a
-repository that did not ask.
+The Count reads `patchula.pkl` at the repository root. A repository without
+one is skipped, so nothing happens to a repository that did not ask.
 
 ```pkl
-// .github/patchula.pkl
-amends "../Patchula.pkl"
+// patchula.pkl
+amends "PatchulaConfig.pkl"
 
 prs {
   dashboard = true
@@ -25,12 +24,13 @@ defaults {
 }
 ```
 
-The schema does not have to be committed. When the Count evaluates a
-repository's config he provides `Patchula.pkl` himself. Vendor it to check a
-config locally or to get completion in an editor:
+The schema does not have to be committed. When the Count evaluates a config he
+supplies `PatchulaConfig.pkl` himself. Vendor it for completion in an editor;
+a vendored copy is the one that gets evaluated, so keep it current with the
+Count you run:
 
 ```sh
-patchula config schema > Patchula.pkl
+patchula config schema > PatchulaConfig.pkl
 patchula config check .            # a file or a repository directory
 patchula config check --json .     # a versioned validation envelope
 ```
@@ -44,7 +44,7 @@ and repositories amend that module.
 
 ```pkl
 // org.pkl
-amends "Patchula.pkl"
+amends "PatchulaConfig.pkl"
 
 prs { concurrent = 8 }
 defaults { releaseNotes = false }

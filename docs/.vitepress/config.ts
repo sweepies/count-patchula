@@ -67,7 +67,7 @@ export default defineConfig({
         activeMatch: "^/reference/",
         items: [
           { text: "CLI commands", link: "/reference/cli" },
-          { text: "Patchula.pkl", link: "/reference/configuration" },
+          { text: "Configuration schema", link: "/reference/configuration" },
           { text: "Server settings", link: "/reference/server-settings" },
           { text: "Environment variables", link: "/reference/environment" },
           { text: "JSON report", link: "/reference/report" },
@@ -128,7 +128,7 @@ export default defineConfig({
         text: "Reference",
         items: [
           { text: "CLI commands", link: "/reference/cli" },
-          { text: "Patchula.pkl", link: "/reference/configuration" },
+          { text: "Configuration schema", link: "/reference/configuration" },
           { text: "Server settings", link: "/reference/server-settings" },
           { text: "Environment variables", link: "/reference/environment" },
           { text: "JSON report", link: "/reference/report" },

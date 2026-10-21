@@ -14,8 +14,8 @@ images, semantic commit prefixes and one PR per update. Turn the dashboard on
 and you are close.
 
 ```pkl
-// .github/patchula.pkl
-amends "../Patchula.pkl"
+// patchula.pkl
+amends "PatchulaConfig.pkl"
 
 prs { dashboard = true }
 ```
@@ -91,7 +91,7 @@ use `null`.
 becomes
 
 ```pkl
-amends "../Patchula.pkl"
+amends "PatchulaConfig.pkl"
 
 defaults {
   windows {
@@ -116,7 +116,6 @@ rules {
 Then check it:
 
 ```sh
-patchula config schema > Patchula.pkl
 patchula config check .
 patchula run --dry-run owner/repo
 ```

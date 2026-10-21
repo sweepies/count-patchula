@@ -1,4 +1,4 @@
-amends "../Patchula.pkl"
+amends "PatchulaConfig.pkl"
 
 // Public live workload: package.json, workflows, mise.toml, and a version
 // declared outside the tools table. No repository code is executed.

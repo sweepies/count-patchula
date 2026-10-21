@@ -1,4 +1,4 @@
-amends "../Patchula.pkl"
+amends "PatchulaConfig.pkl"
 
 managers = new Listing { "npm"; "github-actions"; "mise"; "regex" }
 // Dated proposals inherit the schema's 24-hour minimum release age.

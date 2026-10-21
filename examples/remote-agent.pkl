@@ -1,4 +1,4 @@
-amends "../Patchula.pkl"
+amends "PatchulaConfig.pkl"
 
 managers = new Listing { "npm"; "regex" }
 prs { dashboard = true }

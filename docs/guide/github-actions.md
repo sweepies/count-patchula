@@ -2,7 +2,7 @@
 
 The repository is also a GitHub Action. It installs the Count with mise,
 keeps his cache between runs, and runs `patchula run`. A repository is updated
-when it invites him with a `.github/patchula.pkl` (see [getting
+when it invites him with a `patchula.pkl` (see [getting
 started](/getting-started)), or when an organization runner supplies its config
 with `--config-dir`.
 
@@ -94,18 +94,18 @@ jobs:
 ```
 
 `--config-dir` is optional. Without it, each repository is configured by its
-own `.github/patchula.pkl`, and repositories without one are skipped. With it,
+own `patchula.pkl`, and repositories without one are skipped. With it,
 a file in the directory takes the place of that repository's config, so the
 runner can opt repositories in without committing to them:
 
 ```pkl
 // my-org/patchula-runner/policy/my-app.pkl
-amends "Patchula.pkl"
+amends "PatchulaConfig.pkl"
 
 prs { dashboard = true }
 ```
 
-The schema is built in, so the directory needs no copy of `Patchula.pkl`. See
+Policy files amend `PatchulaConfig.pkl` like any config, and the Count supplies it. See
 [sharing policy](/guide/configuration#sharing-policy-across-repositories) to
 build these files on one organization module.
 

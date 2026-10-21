@@ -1,4 +1,4 @@
-amends "../Patchula.pkl"
+amends "PatchulaConfig.pkl"
 
 rules = new Listing {
   new Rule {

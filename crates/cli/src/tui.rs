@@ -1048,7 +1048,11 @@ mod tests {
         let manifest =
             "{\n  \"dependencies\": {\n    \"zod\": \"3.22.0\",\n    \"hono\": \"4.6.0\"\n  }\n}\n";
         std::fs::write(dir.path().join("package.json"), manifest).unwrap();
-        std::fs::write(dir.path().join("patchula.pkl"), "amends \"Patchula.pkl\"\n").unwrap();
+        std::fs::write(
+            dir.path().join("patchula.pkl"),
+            "amends \"PatchulaConfig.pkl\"\n",
+        )
+        .unwrap();
         let config = patchula_config::load(dir.path()).unwrap();
         let mut report = report(&[
             ("zod", "3.22.0", "4.1.0", "major"),

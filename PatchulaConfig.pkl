@@ -1,6 +1,7 @@
-/// Patchula's explicit defaults. Vendor with `patchula config schema` and amend
-/// this module, or amend an organisation module that itself amends this one.
-module Patchula
+/// Count Patchula's configuration schema, with its explicit defaults. Vendor it
+/// with `patchula config schema > PatchulaConfig.pkl` and amend this module, or
+/// amend an organisation module that itself amends this one.
+module PatchulaConfig
 
 typealias Manager = "npm"|"bun"|"github-actions"|"mise"|"cargo"|"dockerfile"|"compose"|"go"|"terraform"|"kubernetes"|"kustomize"|"flux"|"helm-values"|"requirements"|"pyproject"|"pre-commit"|"helm"|"devcontainer"|"maven"|"gradle"|"nuget"|"bundler"|"composer"|"regex"
 typealias Source = "npm"|"github-releases"|"github-tags"|"github-runners"|"docker"|"crates"|"go"|"terraform"|"pypi"|"helm"|"oci"|"mise"|"forge-tags"|"maven"|"nuget"|"rubygems"|"packagist"

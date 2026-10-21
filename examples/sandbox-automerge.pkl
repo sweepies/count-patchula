@@ -1,4 +1,4 @@
-amends "../Patchula.pkl"
+amends "PatchulaConfig.pkl"
 
 prs { dashboard = true }
 defaults { waitHours = 0 }

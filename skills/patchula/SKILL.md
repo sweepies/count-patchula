@@ -1,6 +1,6 @@
 ---
 name: patchula
-description: Configure and run Count Patchula, the dependency update bot for GitHub. Use when working with the patchula CLI, a .github/patchula.pkl or patchula.pkl config, or patchula's JSON reports and pull requests.
+description: Configure and run Count Patchula, the dependency update bot for GitHub. Use when working with the patchula CLI, a patchula.pkl config, or patchula's JSON reports and pull requests.
 ---
 
 # Count Patchula
@@ -11,12 +11,12 @@ opens one pull request per update with the lockfile regenerated. The CLI is
 
 ## Configure a repository
 
-A repository opts in with `.github/patchula.pkl` (or `patchula.pkl` at the
-root). Without one, the Count skips it. Configs are
+A repository opts in with a `patchula.pkl` at its root. Without one, the
+Count skips it. Configs are
 [Pkl](https://pkl-lang.org) amending the published schema:
 
 ```pkl
-amends "../Patchula.pkl"
+amends "PatchulaConfig.pkl"
 
 prs { dashboard = true }
 rules {
@@ -31,9 +31,12 @@ Validate every change before committing it. `config check` exits 2 on an
 invalid config and names the file and line:
 
 ```sh
-patchula config schema > Patchula.pkl   # vendor the schema for local checks
 patchula config check .
 ```
+
+The Count supplies `PatchulaConfig.pkl` when the repository has no copy.
+`patchula config schema > PatchulaConfig.pkl` vendors it for editor
+completion; a vendored copy is the one evaluated.
 
 Unknown fields are errors, so read the schema rather than guessing a field:
 https://count-patchula.sweepy.dev/reference/configuration. Rules, selectors

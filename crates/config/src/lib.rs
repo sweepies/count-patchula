@@ -9,26 +9,28 @@ use miette::{Diagnostic, IntoDiagnostic, NamedSource, SourceSpan, WrapErr};
 use std::path::{Path, PathBuf};
 
 /// The schema is part of the executable, independent of the current directory.
-pub const SCHEMA: &str = include_str!("../../../Patchula.pkl");
+pub const SCHEMA: &str = include_str!("../../../PatchulaConfig.pkl");
 
-/// Locate a repository config, preferring `.github/patchula.pkl`.
+/// The schema module's file name. A config amends it; the Count supplies it
+/// when the repository has no copy of its own.
+pub const SCHEMA_NAME: &str = "PatchulaConfig.pkl";
+
+/// A repository's config file, relative to its root.
+pub const CONFIG_PATH: &str = "patchula.pkl";
+
+/// Locate a repository's `patchula.pkl`.
 /// Absence is distinct from an unreadable path so callers can skip unconfigured repos.
 pub fn discover(repo: &Path) -> std::io::Result<Option<PathBuf>> {
-    for relative in [".github/patchula.pkl", "patchula.pkl"] {
-        let path = repo.join(relative);
-        match std::fs::metadata(&path) {
-            Ok(metadata) if metadata.is_file() => return Ok(Some(path)),
-            Ok(_) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("{} is not a config file", path.display()),
-                ));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
+    let path = repo.join(CONFIG_PATH);
+    match std::fs::metadata(&path) {
+        Ok(metadata) if metadata.is_file() => Ok(Some(path)),
+        Ok(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{} is not a config file", path.display()),
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
     }
-    Ok(None)
 }
 
 /// Evaluate a file or discover a config under a repository directory.
@@ -38,19 +40,14 @@ pub fn load(path: &Path) -> miette::Result<Config> {
         discover(path)
             .into_diagnostic()
             .wrap_err_with(|| format!("cannot discover config in {}", path.display()))?
-            .ok_or_else(|| {
-                miette::miette!(
-                    "no patchula config in {}; checked .github/patchula.pkl then patchula.pkl",
-                    path.display()
-                )
-            })?
+            .ok_or_else(|| miette::miette!("no patchula.pkl in {}", path.display()))?
     } else {
         path.to_owned()
     };
     let source = std::fs::read_to_string(&path)
         .into_diagnostic()
         .wrap_err_with(|| format!("cannot read config {}", path.display()))?;
-    let json = evaluate_local(&path, "Patchula.pkl", SCHEMA)?;
+    let json = evaluate_local(&path, SCHEMA_NAME, SCHEMA)?;
     decode(&path, &source, json)
 }
 
