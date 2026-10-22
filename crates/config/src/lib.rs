@@ -54,7 +54,8 @@ fn weekday_names(field: &str) -> String {
                     _ => return field.to_owned(),
                 },
                 None => match range.parse::<usize>() {
-                    Ok(day) if day <= 7 => (day, if step > 1 { 6 } else { day }),
+                    // A stepped day runs every `step` days through Sunday, 7.
+                    Ok(day) if day <= 7 => (day, if step > 1 { 7 } else { day }),
                     _ => return field.to_owned(),
                 },
             },
