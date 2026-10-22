@@ -34,6 +34,10 @@ use tokio::{
     sync::{Mutex, watch},
 };
 
+/// Docker Hub credentials for authenticated pulls, as in the CLI.
+const DOCKERHUB_USERNAME_VAR: &str = "PATCHULA_DOCKERHUB_USERNAME";
+const DOCKERHUB_TOKEN_VAR: &str = "PATCHULA_DOCKERHUB_TOKEN";
+
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct Error(&'static str);
@@ -415,8 +419,8 @@ impl Engines {
             )
             .map_err(|_| Error("cannot create batch engine"))?;
             match (
-                std::env::var("PATCHULA_DOCKERHUB_USERNAME").ok(),
-                std::env::var("PATCHULA_DOCKERHUB_TOKEN").ok(),
+                std::env::var(DOCKERHUB_USERNAME_VAR).ok(),
+                std::env::var(DOCKERHUB_TOKEN_VAR).ok(),
             ) {
                 (None, None) => {}
                 (Some(user), Some(token)) if !user.is_empty() && !token.is_empty() => {
@@ -594,6 +598,7 @@ async fn run_until(
         stopped,
     ));
     let accepting = webhook.accepting.clone();
+    let api = webhook.api.clone();
     let (http_stop, http_stopped) = tokio::sync::oneshot::channel();
     let mut server = tokio::spawn(async move {
         axum::serve(listener, router(webhook, ready))
@@ -618,6 +623,10 @@ async fn run_until(
         }
         if !server.is_finished() {
             let _ = (&mut server).await;
+        }
+        // Remote runs write branches too; let them finish like a batch.
+        if let Some(api) = &api {
+            api.drain().await;
         }
     })
     .await

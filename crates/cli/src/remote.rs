@@ -62,7 +62,7 @@ pub async fn report(
     repositories: Vec<String>,
     mode: Mode,
 ) -> Result<patchula_report::Report> {
-    let transport = services.transport().map_err(fail)?;
+    let transport = services.remote_transport().map_err(fail)?;
     let body = json!({"mode": mode, "repositories": repositories});
     let mut token = token(services, &*transport, server).await?;
     let mut response = send(
@@ -136,19 +136,14 @@ fn rejected(server: &str, status: u16, value: &Value) -> (u8, miette::Report) {
 
 /// `patchula auth login`: sign in now, replacing any stored token.
 pub async fn sign_in(services: &Services, server: &str) -> Result<String> {
-    let transport = services.transport().map_err(fail)?;
+    let transport = services.remote_transport().map_err(fail)?;
     login(services, &*transport, server).await
 }
 
 /// `patchula auth logout`: forget the server's token. GitHub keeps the App
 /// authorization; revoke it under Settings → Applications.
 pub fn forget(services: &Services, server: &str) -> Result<bool> {
-    let mut logins = load(services)?;
-    let removed = logins.remove(server).is_some();
-    if removed {
-        save(services, &logins)?;
-    }
-    Ok(removed)
+    update(services, |logins| logins.remove(server).is_some())
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -183,13 +178,34 @@ fn load(services: &Services) -> Result<BTreeMap<String, Login>> {
         Err(error) => Err(fail(format!("cannot read {}: {error}", path.display()))),
     }
 }
-fn save(services: &Services, logins: &BTreeMap<String, Login>) -> Result<()> {
-    use std::io::Write;
+/// Changes the store under a lock, so two CLIs signing in at once keep both
+/// tokens. `change` says whether it changed anything.
+fn update(
+    services: &Services,
+    change: impl FnOnce(&mut BTreeMap<String, Login>) -> bool,
+) -> Result<bool> {
     let path = path(services)?;
     let dir = path.parent().expect("store path has a parent");
     std::fs::create_dir_all(dir)
         .map_err(|e| fail(format!("cannot create {}: {e}", dir.display())))?;
-    let temporary = path.with_extension("json.tmp");
+    let lock = std::fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path.with_extension("json.lock"))
+        .and_then(|file| file.lock().map(|()| file))
+        .map_err(|e| fail(format!("cannot lock {}: {e}", path.display())))?;
+    let mut logins = load(services)?;
+    let changed = change(&mut logins);
+    if changed {
+        save(&path, &logins)?;
+    }
+    drop(lock);
+    Ok(changed)
+}
+fn save(path: &std::path::Path, logins: &BTreeMap<String, Login>) -> Result<()> {
+    use std::io::Write;
+    let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
     let mut options = std::fs::File::options();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -198,7 +214,7 @@ fn save(services: &Services, logins: &BTreeMap<String, Login>) -> Result<()> {
         let mut file = options.open(&temporary)?;
         file.write_all(&serde_json::to_vec_pretty(logins)?)?;
         file.sync_all()?;
-        std::fs::rename(&temporary, &path)
+        std::fs::rename(&temporary, path)
     };
     write().map_err(|e| fail(format!("cannot write {}: {e}", path.display())))
 }
@@ -245,9 +261,11 @@ fn granted(value: &Value, now: i64) -> Option<Login> {
     })
 }
 fn store(services: &Services, server: &str, login: Login) -> Result<()> {
-    let mut logins = load(services)?;
-    logins.insert(server.to_owned(), login);
-    save(services, &logins)
+    update(services, |logins| {
+        logins.insert(server.to_owned(), login);
+        true
+    })
+    .map(|_| ())
 }
 
 async fn client_id(transport: &dyn Transport, server: &str) -> Result<String> {

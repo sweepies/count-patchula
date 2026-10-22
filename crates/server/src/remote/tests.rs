@@ -19,9 +19,21 @@ impl Transport for GitHub {
             .unwrap_or_default();
         let (status, body) = match path.as_str() {
             "/user" => match auth.as_str() {
-                "Bearer ghu_writer" => (200, json!({"login": "writer"})),
+                "Bearer ghu_writer" | "Bearer ghp_personal" => (200, json!({"login": "writer"})),
                 "Bearer ghu_reader" => (200, json!({"login": "reader"})),
+                "Bearer ghu_elsewhere" => (200, json!({"login": "writer"})),
                 _ => (401, json!({})),
+            },
+            // Only this App's user tokens can list its installations.
+            "/user/installations" => match auth.as_str() {
+                "Bearer ghu_writer" | "Bearer ghu_reader" => (
+                    200,
+                    json!({"total_count": 2, "installations": [{"id": 1}, {"id": 2}]}),
+                ),
+                "Bearer ghu_elsewhere" => {
+                    (200, json!({"total_count": 1, "installations": [{"id": 2}]}))
+                }
+                _ => (403, json!({})),
             },
             "/repos/acme/app/installation" | "/repos/acme/web/installation" => {
                 (200, json!({"id": 1}))
@@ -43,7 +55,7 @@ impl Transport for GitHub {
         Box::pin(async move {
             Ok(patchula_http::Response {
                 status: reqwest::StatusCode::from_u16(status).unwrap(),
-                headers: Default::default(),
+                headers: reqwest::header::HeaderMap::new(),
                 body: serde_json::to_vec(&body).unwrap(),
             })
         })
@@ -118,7 +130,9 @@ async fn api(runner: Arc<Recorder>, client_id: Option<&str>, settings: &str) -> 
         app: app(),
         client_id: client_id.map(str::to_owned),
         transport: Arc::new(GitHub),
-        cache: Cache::open(":memory:", Default::default()).await.unwrap(),
+        cache: Cache::open(":memory:", patchula_cache::Options::default())
+            .await
+            .unwrap(),
         settings: Reload::new(Settings::load(&path).unwrap()),
         accepting: Arc::new(AtomicBool::new(true)),
         runner,
@@ -149,13 +163,13 @@ fn poll(token: &str, id: &str) -> Request<Body> {
 
 #[tokio::test]
 async fn auth_publishes_the_client_id_only_when_known() {
-    let router = api(Arc::default(), Some("Iv23client"), "").await;
+    let router = api(Arc::new(Recorder::default()), Some("Iv23client"), "").await;
     let request = || Request::get("/api/v1/auth").body(Body::empty()).unwrap();
     assert_eq!(
         call(&router, request()).await,
         (StatusCode::OK, json!({"clientId": "Iv23client"}))
     );
-    let router = api(Arc::default(), None, "").await;
+    let router = api(Arc::new(Recorder::default()), None, "").await;
     let (status, body) = call(&router, request()).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["errorKind"], "no-client-id");
@@ -212,6 +226,20 @@ async fn rejections_name_the_reason() {
     let run = |repos: Value| json!({"mode": "run", "repositories": repos});
     for (token, body, status, kind) in [
         ("ghu_nobody", run(json!(["acme/app"])), 401, "unauthorized"),
+        // A personal token for a writer is not this App's sign-in.
+        (
+            "ghp_personal",
+            run(json!(["acme/app"])),
+            401,
+            "unauthorized",
+        ),
+        // This App's token, but it does not reach installation 1.
+        (
+            "ghu_elsewhere",
+            run(json!(["acme/app"])),
+            403,
+            "not-installed",
+        ),
         ("ghu_reader", run(json!(["acme/app"])), 403, "forbidden"),
         (
             "ghu_writer",
@@ -255,7 +283,7 @@ async fn one_run_at_a_time_per_user() {
     let gate = Arc::new(tokio::sync::Notify::new());
     let runner = Arc::new(Recorder {
         gate: Some(gate.clone()),
-        ..Default::default()
+        ..Recorder::default()
     });
     let router = api(runner.clone(), Some("client"), "").await;
     let body = json!({"mode": "lookup", "repositories": ["acme/app"]});
@@ -274,4 +302,49 @@ async fn one_run_at_a_time_per_user() {
     }
     let (status, _) = call(&router, start("ghu_writer", body)).await;
     assert_eq!(status, StatusCode::ACCEPTED);
+}
+
+#[tokio::test]
+async fn drain_waits_for_runs_in_progress() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let runner = Arc::new(Recorder {
+        gate: Some(gate.clone()),
+        ..Recorder::default()
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("server.pkl");
+    std::fs::write(&path, "amends \"PatchulaServer.pkl\"\n").unwrap();
+    let api = Api::new(Parts {
+        app: app(),
+        client_id: Some("client".into()),
+        transport: Arc::new(GitHub),
+        cache: Cache::open(":memory:", patchula_cache::Options::default())
+            .await
+            .unwrap(),
+        settings: Reload::new(Settings::load(&path).unwrap()),
+        accepting: Arc::new(AtomicBool::new(true)),
+        runner: runner.clone(),
+    });
+    let router = routes(api.clone());
+    let body = json!({"mode": "run", "repositories": ["acme/app"]});
+    assert_eq!(
+        call(&router, start("ghu_writer", body)).await.0,
+        StatusCode::ACCEPTED
+    );
+    while runner.calls.lock().unwrap().is_empty() {
+        tokio::task::yield_now().await;
+    }
+    let drained = tokio::spawn({
+        let api = api.clone();
+        async move { api.drain().await }
+    });
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        !drained.is_finished(),
+        "drain returned while a run was going"
+    );
+    gate.notify_one();
+    drained.await.unwrap();
 }

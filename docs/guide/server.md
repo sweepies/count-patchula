@@ -131,14 +131,16 @@ patchula run --dry-run --server https://patchula.acme.dev acme/my-app
 
 The run uses the server's App credentials, warm caches and lockfile tools, so
 the machine needs no GitHub token and no mise. Set `PATCHULA_SERVER` to make
-it the default.
+it the default. The URL must use HTTPS, except for a server on
+`localhost` or a loopback address.
 
 On first use the CLI asks you to sign in: it prints a code to enter at
 `github.com/login/device`, and you authorise the server's App. The token is
 stored in `~/.config/patchula/servers.json` (or under `XDG_CONFIG_HOME`) and
 refreshed as it expires, so this happens once. `patchula auth login` and
 `patchula auth logout` sign in and out explicitly; to revoke the App's access,
-use GitHub's Settings → Applications.
+use GitHub's Settings → Applications. Only a token from this sign-in works:
+the server refuses personal access tokens and other Apps' tokens.
 
 Each repository in the request must:
 
@@ -149,9 +151,10 @@ Each repository in the request must:
 
 A server runs one request per user at a time, and a real run shares the queue's
 engine, so it never races a webhook batch. The repository's own `patchula.pkl`
-applies; `--config`, `--config-dir`, `--local`, `--all-repos` and
-`--allow-lockfile-pending` only work locally, and the cache and HTTP flags are
-ignored.
+applies; `--config`, `--config-dir`, `--local`, `--all-repos`,
+`--allow-lockfile-pending` and `--recheck` only work locally, and the cache and
+HTTP flags are ignored. A run in progress when the server shuts down finishes
+before it exits, within the shutdown deadline.
 
 ## Replaying a webhook locally
 

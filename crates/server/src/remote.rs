@@ -65,9 +65,18 @@ struct Inner {
     settings: Reload,
     accepting: Arc<AtomicBool>,
     runner: Arc<dyn Runner>,
-    users: Mutex<BTreeMap<[u8; 32], (String, i64)>>,
+    users: Mutex<BTreeMap<[u8; 32], (User, i64)>>,
     jobs: Mutex<BTreeMap<String, Job>>,
+    tasks: Mutex<tokio::task::JoinSet<()>>,
     next: AtomicU64,
+}
+/// Who a token belongs to, and the installations of this App it reaches.
+/// Only a user token this App issued can list them, so a personal token or
+/// another App's token never passes.
+#[derive(Clone)]
+struct User {
+    login: String,
+    installations: Vec<u64>,
 }
 struct Job {
     login: String,
@@ -101,8 +110,15 @@ impl Api {
             runner: parts.runner,
             users: Mutex::new(BTreeMap::new()),
             jobs: Mutex::new(BTreeMap::new()),
+            tasks: Mutex::new(tokio::task::JoinSet::new()),
             next: AtomicU64::new(1),
         }))
+    }
+    /// Waits for every remote run in progress. Shutdown calls this once no
+    /// new runs are accepted.
+    pub(crate) async fn drain(&self) {
+        let mut tasks = std::mem::take(&mut *self.0.tasks.lock().await);
+        while tasks.join_next().await.is_some() {}
     }
 }
 
@@ -124,6 +140,20 @@ impl IntoResponse for Reject {
 }
 fn reject(status: StatusCode, kind: &'static str, message: impl Into<String>) -> Reject {
     Reject(status, kind, message.into())
+}
+fn unauthorized() -> Reject {
+    reject(
+        StatusCode::UNAUTHORIZED,
+        "unauthorized",
+        "sign in with this server's GitHub App: patchula auth login --server <url>",
+    )
+}
+fn github_unavailable() -> Reject {
+    reject(
+        StatusCode::BAD_GATEWAY,
+        "github-unavailable",
+        "GitHub did not answer as expected",
+    )
 }
 
 async fn auth(State(api): State<Api>) -> Result<Json<serde_json::Value>, Reject> {
@@ -149,7 +179,8 @@ async fn start(
     headers: HeaderMap,
     body: Result<Json<Start>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Response, Reject> {
-    let login = api.user(&headers).await?;
+    let user = api.user(&headers).await?;
+    let login = user.login.clone();
     let Json(start) = body.map_err(|_| {
         reject(
             StatusCode::BAD_REQUEST,
@@ -187,6 +218,13 @@ async fn start(
     }
     let settings = api.0.settings.current();
     let installation = api.installation(&repositories, &settings).await?;
+    if !user.installations.contains(&installation) {
+        return Err(reject(
+            StatusCode::FORBIDDEN,
+            "not-installed",
+            "your sign-in does not reach this App's installation for these repositories",
+        ));
+    }
     api.authorize(installation, &repositories, &login).await?;
     let id = {
         let now = chrono::Utc::now().timestamp();
@@ -224,7 +262,9 @@ async fn start(
         repositories = repositories.len(), "remote run started");
     let job = api.clone();
     let job_id = id.clone();
-    tokio::spawn(async move {
+    let mut tasks = api.0.tasks.lock().await;
+    while tasks.try_join_next().is_some() {}
+    tasks.spawn(async move {
         let result = job
             .0
             .runner
@@ -241,6 +281,7 @@ async fn start(
         }
         tracing::info!(target: "patchula_server", installation, user = %login, success, "remote run finished");
     });
+    drop(tasks);
     Ok((StatusCode::ACCEPTED, Json(json!({"id": id}))).into_response())
 }
 
@@ -249,7 +290,7 @@ async fn status(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, Reject> {
-    let login = api.user(&headers).await?;
+    let login = api.user(&headers).await?.login;
     let jobs = api.0.jobs.lock().await;
     let job = jobs
         .get(&id)
@@ -269,15 +310,9 @@ async fn status(
 }
 
 impl Api {
-    /// The GitHub login behind the request's user access token.
-    async fn user(&self, headers: &HeaderMap) -> Result<String, Reject> {
-        let unauthorized = || {
-            reject(
-                StatusCode::UNAUTHORIZED,
-                "unauthorized",
-                "send a GitHub user access token for this server's App",
-            )
-        };
+    /// The user behind the request's token, which must be a user access
+    /// token from this App's device flow.
+    async fn user(&self, headers: &HeaderMap) -> Result<User, Reject> {
         let token = headers
             .get(header::AUTHORIZATION)
             .and_then(|value| value.to_str().ok())
@@ -289,15 +324,52 @@ impl Api {
         {
             let mut users = self.0.users.lock().await;
             users.retain(|_, (_, expires)| *expires > now);
-            if let Some((login, _)) = users.get(&key) {
-                return Ok(login.clone());
+            if let Some((user, _)) = users.get(&key) {
+                return Ok(user.clone());
             }
         }
+        let login = self
+            .github(token, "user")
+            .await?
+            .get("login")
+            .and_then(|login| login.as_str())
+            .filter(|login| !login.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(github_unavailable)?;
+        let mut installations = Vec::new();
+        for page in 1..=10 {
+            let value = self
+                .github(
+                    token,
+                    &format!("user/installations?per_page=100&page={page}"),
+                )
+                .await?;
+            let entries = value["installations"]
+                .as_array()
+                .ok_or_else(github_unavailable)?;
+            installations.extend(entries.iter().filter_map(|entry| entry["id"].as_u64()));
+            if entries.len() < 100 {
+                break;
+            }
+        }
+        let user = User {
+            login,
+            installations,
+        };
+        let mut users = self.0.users.lock().await;
+        if users.len() < 10_000 {
+            users.insert(key, (user.clone(), now + USER_TTL_SECONDS));
+        }
+        Ok(user)
+    }
+
+    /// GETs `path` from the GitHub API with the user's token.
+    async fn github(&self, token: &str, path: &str) -> Result<serde_json::Value, Reject> {
         let mut request = reqwest::Request::new(
             reqwest::Method::GET,
-            "https://api.github.com/user"
+            format!("https://api.github.com/{path}")
                 .parse()
-                .expect("static GitHub URL"),
+                .map_err(|_| github_unavailable())?,
         );
         let mut auth = header::HeaderValue::from_str(&format!("Bearer {token}"))
             .map_err(|_| unauthorized())?;
@@ -312,33 +384,20 @@ impl Api {
             "x-github-api-version",
             header::HeaderValue::from_static("2022-11-28"),
         );
-        let response = self.0.transport.send(request).await.map_err(|_| {
-            reject(
-                StatusCode::BAD_GATEWAY,
-                "github-unavailable",
-                "GitHub did not answer",
-            )
-        })?;
-        if response.status == StatusCode::UNAUTHORIZED {
-            return Err(unauthorized());
+        let response = self
+            .0
+            .transport
+            .send(request)
+            .await
+            .map_err(|_| github_unavailable())?;
+        match response.status {
+            status if status.is_success() => {
+                serde_json::from_slice(&response.body).map_err(|_| github_unavailable())
+            }
+            // GitHub answers 403 to a token that is not one of this App's user tokens.
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(unauthorized()),
+            _ => Err(github_unavailable()),
         }
-        let login = (response.status.is_success())
-            .then(|| serde_json::from_slice::<serde_json::Value>(&response.body).ok())
-            .flatten()
-            .and_then(|user| user["login"].as_str().map(str::to_owned))
-            .filter(|login| !login.is_empty())
-            .ok_or_else(|| {
-                reject(
-                    StatusCode::BAD_GATEWAY,
-                    "github-unavailable",
-                    "GitHub did not return the user",
-                )
-            })?;
-        let mut users = self.0.users.lock().await;
-        if users.len() < 10_000 {
-            users.insert(key, (login.clone(), now + USER_TTL_SECONDS));
-        }
-        Ok(login)
     }
 
     /// The one installation every repository belongs to, if the settings allow them.
@@ -398,7 +457,7 @@ impl Api {
         let client = Client::with_credentials(
             self.0.app.installation(installation),
             self.0.cache.clone(),
-            Default::default(),
+            patchula_github::Options::default(),
             self.0.transport.clone(),
         )
         .map_err(|_| {

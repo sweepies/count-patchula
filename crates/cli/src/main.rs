@@ -51,6 +51,18 @@ impl Services {
         }
         Ok(std::sync::Arc::new(patchula_http::Network::new()?))
     }
+    /// For `--server`, which may be a `patchula serve` on loopback without TLS.
+    fn remote_transport(
+        &self,
+    ) -> Result<std::sync::Arc<dyn patchula_http::Transport>, patchula_http::Error> {
+        #[cfg(test)]
+        if let Some(transport) = &self.transport {
+            return Ok(transport.clone());
+        }
+        Ok(std::sync::Arc::new(
+            patchula_http::Network::with_loopback_http()?,
+        ))
+    }
 }
 
 async fn run(app: &App, services: &Services) -> Result<u8, (u8, miette::Report)> {
@@ -420,6 +432,7 @@ async fn batch(
 /// A lookup or run on a server. Only the repositories and the mode travel;
 /// the server applies each repository's own `patchula.pkl`.
 async fn remote_report(
+    app: &App,
     options: &cli::Lookup,
     run: Option<&cli::Run>,
     services: &Services,
@@ -434,6 +447,8 @@ async fn remote_report(
             run.is_some_and(|r| r.allow_lockfile_pending),
             "--allow-lockfile-pending",
         ),
+        // The server's operator setting decides the checkbox wording.
+        (app.recheck.is_some(), "--recheck"),
     ];
     if let Some((_, flag)) = local_only.iter().find(|(set, _)| *set) {
         return Err((
@@ -650,7 +665,7 @@ async fn report(
         return Err((2, miette::miette!("concurrency must be 1..100")));
     }
     if let Some(server) = remote::server(options.server.as_deref())? {
-        return remote_report(options, run, services, &server).await;
+        return remote_report(app, options, run, services, &server).await;
     }
     let repositories = repositories(options).map_err(|e| (2, e))?;
     let http_options = http_options(options)?;

@@ -106,7 +106,7 @@ impl Transport for Fake {
         Box::pin(async move {
             Ok(Response {
                 status: reqwest::StatusCode::from_u16(status).unwrap(),
-                headers: Default::default(),
+                headers: reqwest::header::HeaderMap::new(),
                 body: serde_json::to_vec(&value).unwrap(),
             })
         })
@@ -117,7 +117,7 @@ fn services(fake: Arc<Fake>, dir: &std::path::Path) -> Services {
     Services {
         transport: Some(fake),
         config_dir: Some(dir.to_owned()),
-        ..Default::default()
+        ..Services::default()
     }
 }
 fn stored(dir: &std::path::Path) -> Value {
@@ -169,7 +169,7 @@ async fn first_run_signs_in_with_the_device_flow_and_stores_the_token() {
     let dir = tempfile::tempdir().unwrap();
     let fake = Arc::new(Fake {
         pending: Mutex::new(1),
-        ..Default::default()
+        ..Fake::default()
     });
     let services = services(fake.clone(), dir.path());
     let app = app(&["run", "--dry-run", "--server", SERVER, "acme/app", "--json"]);
@@ -236,7 +236,7 @@ async fn a_revoked_token_signs_in_again_once() {
     seed(dir.path(), json!({"accessToken": "ghu_revoked"}));
     let fake = Arc::new(Fake {
         revoked: vec!["ghu_revoked"],
-        ..Default::default()
+        ..Fake::default()
     });
     let services = services(fake.clone(), dir.path());
     assert_eq!(
@@ -267,6 +267,7 @@ async fn local_only_flags_are_refused_with_a_server() {
             "--allow-lockfile-pending",
             "acme/app",
         ],
+        &["run", "--server", SERVER, "--recheck", "now", "acme/app"],
     ] {
         let Err((code, error)) = run(&app(args), &services).await else {
             panic!("{args:?}")
