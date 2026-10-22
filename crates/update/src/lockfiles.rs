@@ -234,9 +234,10 @@ pub fn maintenance(
     repository: &Repository,
     config: &Config,
     snapshot: &Snapshot,
+    since: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Option<Plan>, String> {
-    use chrono::{Datelike, Timelike};
+    use chrono::Datelike;
     if !config.lockfiles.refresh {
         return Ok(None);
     }
@@ -281,7 +282,7 @@ pub fn maintenance(
     if jobs.is_empty() {
         return Ok(None);
     }
-    let windows: Vec<_> = config
+    let mut windows: Vec<_> = config
         .defaults
         .windows
         .iter()
@@ -290,11 +291,14 @@ pub fn maintenance(
             zone: w.zone.clone(),
         })
         .collect();
-    let due = if windows.is_empty() {
-        now.weekday() == chrono::Weekday::Mon && now.hour() < 4
-    } else {
-        crate::plan::in_window(&windows, now)
-    };
+    if windows.is_empty() {
+        // Monday 00:00 to 04:00 UTC, unless the repository sets windows.
+        windows.push(patchula_report::Window {
+            cron: vec!["* 0-3 * * 1".into()],
+            zone: "UTC".into(),
+        });
+    }
+    let due = crate::plan::in_window(&windows, since, now);
     let period = format!("{}-{:02}", now.iso_week().year(), now.iso_week().week());
     let fingerprint = hash(
         serde_json::to_string(&(period, &jobs, &config.lockfiles))

@@ -133,6 +133,7 @@ pub fn apply(
     prs: &[Value],
     actor: &str,
     allow_pending: bool,
+    since: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<BTreeSet<String>, String> {
     let name = branch_name(config)?;
@@ -145,6 +146,7 @@ pub fn apply(
         snapshot,
         &targets,
         allow_pending,
+        since,
         now,
     )?
     else {

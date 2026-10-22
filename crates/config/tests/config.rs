@@ -336,3 +336,35 @@ extractors = new Listing {
     let config = load(&path).unwrap();
     assert_eq!(config.extractors[0].scheme, "{scheme}");
 }
+
+#[test]
+fn cron_weekdays_use_standard_numbering() {
+    use chrono::Datelike;
+    // 2026-10-17 is a Saturday. Days are numbered Monday 1 to Sunday 7.
+    let start = chrono::DateTime::parse_from_rfc3339("2026-10-17T00:00:00Z")
+        .unwrap()
+        .to_utc();
+    let days = |expr: &str, seconds: bool| -> Vec<u32> {
+        patchula_config::schedule(expr, seconds)
+            .unwrap()
+            .after(&start)
+            .take(7)
+            .map(|t| t.weekday().number_from_monday())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    };
+    assert_eq!(days("0 12 * * 1", false), [1]);
+    assert_eq!(days("0 12 * * 0", false), [7]);
+    assert_eq!(days("0 12 * * 7", false), [7]);
+    assert_eq!(days("0 12 * * 1-5", false), [1, 2, 3, 4, 5]);
+    assert_eq!(days("0 12 * * 5-7", false), [5, 6, 7]);
+    assert_eq!(days("0 12 * * MON,WED", false), [1, 3]);
+    assert_eq!(days("0 0 12 * * 1", true), [1]);
+    // Steps apply across the whole range, and 7 alone is Sunday.
+    assert_eq!(days("0 12 * * 5-7/2", false), [5, 7]);
+    assert_eq!(days("0 12 * * 7-7", false), [7]);
+    assert_eq!(days("0 12 * * */2", false), [2, 4, 6, 7]);
+    assert_eq!(days("0 12 * * 1/2", false), [1, 3, 5, 7]);
+    assert_eq!(days("0 12 * * 7/2", false), [7]);
+}

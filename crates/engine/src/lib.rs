@@ -283,12 +283,14 @@ impl Engine {
                 continue;
             }
             let inventory = work.inventory;
+            let since = self.last_run(&repo.repository).await;
             let plans = patchula_update::plan(
                 repo,
                 &config,
                 &work.dependencies,
                 &work.snapshot,
                 allow_lockfile_pending,
+                since,
                 now,
             );
             let mut plans = match plans {
@@ -300,7 +302,7 @@ impl Engine {
                 }
             };
             if let Some(mut maintenance) =
-                patchula_update::lockfiles::maintenance(repo, &config, &work.snapshot, now)
+                patchula_update::lockfiles::maintenance(repo, &config, &work.snapshot, since, now)
                     .map_err(Error::Invalid)?
             {
                 patchula_update::lockfiles::defer_completed_refresh(
@@ -325,6 +327,7 @@ impl Engine {
                     &open.pull_requests(&repo.repository),
                     &open.actor,
                     allow_lockfile_pending,
+                    since,
                     now,
                 ) {
                     Ok(batched) => work.controls.batched = batched,
@@ -596,6 +599,19 @@ impl Engine {
             }
             branches.extend(plans.into_iter().map(|p| p.action));
         }
+        // Every repository that finished cleanly, including ones settled from
+        // their write receipts, has taken this run's schedule turn.
+        if !dry_run {
+            for repo in report
+                .repositories
+                .iter_mut()
+                .filter(|repo| repo.status == Status::Complete)
+            {
+                if let Err(error) = self.record_run(&repo.repository, now).await {
+                    repo.warnings.push(format!("last run cache: {error}"));
+                }
+            }
+        }
         branches.sort_by(|a, b| (&a.repository, &a.branch).cmp(&(&b.repository, &b.branch)));
         report.actions = Some(patchula_report::Actions {
             schema_version: 1,
@@ -614,6 +630,24 @@ impl Engine {
         }
         report.validate()?;
         Ok(report)
+    }
+    /// When this repository last completed a real run. Schedule windows are
+    /// due when one of their times falls between that run and this one.
+    pub(crate) async fn last_run(&self, repo: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+        let bytes = self
+            .cache
+            .extraction_get(&last_run_key(repo))
+            .await
+            .ok()??;
+        let seconds: i64 = serde_json::from_slice(&bytes).ok()?;
+        chrono::DateTime::from_timestamp(seconds, 0)
+    }
+    async fn record_run(&self, repo: &str, now: chrono::DateTime<chrono::Utc>) -> Result<()> {
+        let bytes = serde_json::to_vec(&now.timestamp())?;
+        self.cache
+            .extraction_put(&last_run_key(repo), &bytes)
+            .await?;
+        Ok(())
     }
     async fn lookup_work_at(
         &self,
@@ -1830,6 +1864,13 @@ impl Engine {
         .await
         .map_err(|e| Error::Invalid(e.to_string()))?
         .map_err(Error::Invalid)
+    }
+}
+fn last_run_key(repo: &str) -> ExtractionKey {
+    ExtractionKey {
+        repo: format!("last-run:{repo}"),
+        default_branch_commit: String::default(),
+        config_hash: "last-run-v1".into(),
     }
 }
 fn hash(bytes: &[u8]) -> String {

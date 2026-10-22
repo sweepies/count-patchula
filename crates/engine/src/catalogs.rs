@@ -199,12 +199,14 @@ impl Engine {
                 continue;
             }
             let mut controls = Controls::default();
+            let since = self.last_run(&repo.report.repository).await;
             if let Ok(plans) = patchula_update::plan(
                 &repo.report,
                 config,
                 &repo.dependencies,
                 &repo.snapshot,
                 false,
+                since,
                 now,
             ) {
                 for plan in plans {

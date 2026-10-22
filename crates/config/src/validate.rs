@@ -1,6 +1,5 @@
 use crate::*;
 use regex::Regex;
-use std::str::FromStr;
 
 pub(crate) struct Issue {
     pub field: String,
@@ -84,8 +83,7 @@ fn windows(field: &str, values: &[Window]) -> Result {
             if cron.split_whitespace().count() != 5 {
                 return fail(&field, "expected a five-field cron expression");
             }
-            // cron's parser includes seconds; our public syntax fixes them to zero.
-            cron::Schedule::from_str(&format!("0 {cron}")).map_err(|error| Issue {
+            crate::schedule(cron, false).map_err(|error| Issue {
                 field: field.clone(),
                 message: format!("{field}: invalid cron expression: {error}"),
             })?;

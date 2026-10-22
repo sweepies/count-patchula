@@ -1,5 +1,5 @@
 //! Native auto-merge, or conservative later-run merging backed by write receipts.
-use crate::{Inventory, Plan, plan::in_window, pull_requests::owned_pr};
+use crate::{Inventory, Plan, pull_requests::owned_pr};
 use chrono::{DateTime, Duration, Utc};
 use patchula_cache::{Cache, ExtractionKey};
 use patchula_config::Config;
@@ -130,21 +130,14 @@ pub(crate) fn requested(plan: &Plan, config: &Config) -> bool {
             !plan.changes.is_empty() && plan.changes.iter().all(|c| c.merge)
         }
 }
-fn policy_allows(repo: &Repository, plan: &Plan, config: &Config, now: DateTime<Utc>) -> bool {
+fn policy_allows(repo: &Repository, plan: &Plan, now: DateTime<Utc>) -> bool {
     if !repo.warnings.is_empty() {
         return false;
     }
+    // Windows decide when updates are proposed, not when they merge: a PR whose
+    // checks pass after its window still merges.
     if plan.maintenance {
-        let windows = config
-            .defaults
-            .windows
-            .iter()
-            .map(|w| patchula_report::Window {
-                cron: w.cron.clone(),
-                zone: w.zone.clone(),
-            })
-            .collect::<Vec<_>>();
-        return in_window(&windows, now);
+        return true;
     }
     plan.changes.iter().all(|c| {
         let mut updates = repo
@@ -167,7 +160,6 @@ fn policy_allows(repo: &Repository, plan: &Plan, config: &Config, now: DateTime<
             && updates.all(|u| {
                 u.policy.as_ref().is_some_and(|p| {
                     p.merge
-                        && in_window(&p.windows, now)
                         && u.release_age.as_ref().is_none_or(|age| {
                             DateTime::parse_from_rfc3339(&age.published_at).is_ok_and(|published| {
                                 published
@@ -353,7 +345,7 @@ pub async fn reconcile(
         };
         // Check policy independently of manual create/schedule/age permits.
         let proof = pr.clone();
-        let allowed = policy_allows(repo, plan, config, now);
+        let allowed = policy_allows(repo, plan, now);
         let pr = plan.cached_pr.as_mut().expect("restored receipt");
         let (status, reason) = if !allowed {
             (ActionStatus::Skipped, "auto-merge waiting: release age, schedule or lookup evidence does not permit merging".into())

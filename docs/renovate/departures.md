@@ -50,7 +50,7 @@ difference is written down here with a reason.
 ### Release age and windows {#release-timing}
 
 - **Renovate:** Duration strings, schedules and timezone keys
-- **Count Patchula:** Nonnegative waitHours plus explicit cron/timezone windows; empty windows means unrestricted
+- **Count Patchula:** Nonnegative waitHours plus explicit cron/timezone windows, each time a window names being due on the first run after it; empty windows means unrestricted
 - **Why:** Typed units and validated timezones; no natural-language scheduling
 
 ### Manager names {#manager-names}
@@ -596,8 +596,9 @@ This departure also covers the independently specified [auto-merge fallback](/gu
 The supplied black-box comparisons do not exercise Renovate merging PRs, so no
 observed merge-behavior difference or new conformance exemption is claimed.
 The explicit patchula policy requires a prior successful head receipt, at least
-one successful check/status, clean GitHub mergeability, and current age/window
-eligibility; a manual creation permit does not waive the merge gates.
+one successful check/status, clean GitHub mergeability, and current release-age
+eligibility; a manual creation permit does not waive the merge gates. Schedule
+windows only decide when updates are proposed.
 
 ### Release notes {#release-notes}
 

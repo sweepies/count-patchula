@@ -15,6 +15,62 @@ pub const SCHEMA: &str = include_str!("../../../PatchulaConfig.pkl");
 /// when the repository has no copy of its own.
 pub const SCHEMA_NAME: &str = "PatchulaConfig.pkl";
 
+/// Parse a cron expression whose day-of-week field uses standard numbering, where
+/// 0 and 7 are Sunday and 1 is Monday. The underlying parser counts from 1 for
+/// Sunday, so numbers there are rewritten as day names first. `seconds` says the
+/// expression starts with a seconds field, as the server's sweep schedule does;
+/// schedule windows have five fields and run at second zero.
+pub fn schedule(expr: &str, seconds: bool) -> Result<cron::Schedule, cron::error::Error> {
+    use std::str::FromStr;
+    let mut fields: Vec<String> = expr.split_whitespace().map(str::to_owned).collect();
+    if !seconds {
+        fields.insert(0, "0".into());
+    }
+    if let Some(weekdays) = fields.get_mut(5) {
+        *weekdays = weekday_names(weekdays);
+    }
+    cron::Schedule::from_str(&fields.join(" "))
+}
+
+/// A day-of-week field in standard numbering as the parser's day names. A field
+/// that already uses names, or that cannot be read as numbers, is left alone
+/// for the parser to accept or reject.
+fn weekday_names(field: &str) -> String {
+    const NAMES: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+    let mut days = std::collections::BTreeSet::new();
+    for part in field.split(',') {
+        let (range, step) = match part.split_once('/') {
+            Some((range, step)) => match step.parse::<usize>() {
+                Ok(step) if step > 0 => (range, step),
+                _ => return field.to_owned(),
+            },
+            None => (part, 1),
+        };
+        let (from, to) = match range {
+            "*" => (0, 6),
+            _ => match range.split_once('-') {
+                Some((from, to)) => match (from.parse::<usize>(), to.parse::<usize>()) {
+                    (Ok(from), Ok(to)) if from <= to && to <= 7 => (from, to),
+                    _ => return field.to_owned(),
+                },
+                None => match range.parse::<usize>() {
+                    // A stepped day runs every `step` days through Sunday, 7.
+                    Ok(day) if day <= 7 => (day, if step > 1 { 7 } else { day }),
+                    _ => return field.to_owned(),
+                },
+            },
+        };
+        days.extend((from..=to).step_by(step).map(|day| day % 7));
+    }
+    if days.len() == 7 {
+        return "*".into();
+    }
+    days.into_iter()
+        .map(|day| NAMES[day])
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// A repository's config file, relative to its root.
 pub const CONFIG_PATH: &str = "patchula.pkl";
 

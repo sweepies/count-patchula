@@ -252,7 +252,7 @@ async fn tool_failure_is_reported_without_api_writes_or_partial_scratch_files() 
         Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
     runner.prepare(&mut p, &mut snapshot, &config).await;
@@ -310,7 +310,7 @@ async fn all_tools_are_targeted_scrubbed_and_versions_are_read_without_loading_r
         Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
     p.maintenance = false;
@@ -404,7 +404,7 @@ async fn node_lockfiles_use_aube_yarn_and_bun_by_lockfile_format() {
         Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
     p.maintenance = false;
@@ -460,7 +460,7 @@ async fn the_npm_engine_setting_restores_native_npm_for_npm_locks() {
         Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config_with("npmEngine = \"npm\"");
-    let mut p = maintenance(&repo(), &config, &snapshot, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
     p.maintenance = false;
@@ -583,7 +583,7 @@ async fn an_unchanged_lockfile_after_a_manifest_edit_fails_the_branch() {
         Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
     p.maintenance = false;
@@ -624,7 +624,7 @@ async fn a_manifest_edit_outside_the_dependencies_leaves_the_lock_alone() {
         Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
     p.maintenance = false;
@@ -650,7 +650,7 @@ async fn aube_lock_yaml_creation_fails_the_branch() {
         Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
     p.maintenance = false;
@@ -683,7 +683,7 @@ async fn maintenance_refreshes_node_lockfiles_within_the_manifest_ranges() {
         Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config_with("npmEngine = \"npm\"");
-    let mut p = maintenance(&repo(), &config, &snapshot, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
     assert!(p.maintenance);
@@ -754,7 +754,7 @@ async fn real_tools_produce_deterministic_lockfiles_from_local_offline_fixtures(
             let runner=Runner::new(temp.path().into(),"offline-installation").with_executor(executor);
             let mut snapshot=snapshot(&files);
             let config=config();
-            let mut p=maintenance(&repo(),&config,&snapshot,monday()).unwrap().unwrap();
+            let mut p=maintenance(&repo(),&config,&snapshot,None,monday()).unwrap().unwrap();
             assert!(p.lock_jobs.iter().all(|j|j.ecosystem==ecosystem));
             runner.prepare(&mut p,&mut snapshot,&config).await;
             assert!(matches!(p.action.status,ActionStatus::Planned|ActionStatus::Skipped),"{ecosystem:?}: {:?}",p.action);
@@ -811,7 +811,7 @@ async fn real_aube_rewrites_pnpm_and_npm_locks_in_place() {
             Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
-        let mut p = maintenance(&repo(), &config, &snapshot, monday())
+        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
             .unwrap()
             .unwrap();
         p.maintenance = false;
@@ -846,7 +846,7 @@ async fn scheduled_refresh_uses_stable_name_windows_weekly_cadence_and_wait_hour
     let snapshot = snapshot(&files);
     let mut config = config();
     let repo = repo();
-    let mut p = maintenance(&repo, &config, &snapshot, monday())
+    let mut p = maintenance(&repo, &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
     assert_eq!(p.action.branch, "patchula/lock-file-maintenance");
@@ -855,6 +855,7 @@ async fn scheduled_refresh_uses_stable_name_windows_weekly_cadence_and_wait_hour
         &repo,
         &config,
         &snapshot,
+        None,
         monday() + chrono::Duration::days(1),
     )
     .unwrap()
@@ -870,7 +871,7 @@ async fn scheduled_refresh_uses_stable_name_windows_weekly_cadence_and_wait_hour
     for days in [0, 7] {
         config.lockfiles.wait_hours = 200;
         let now = monday() + chrono::Duration::days(days);
-        let mut p = maintenance(&repo, &config, &snapshot, now)
+        let mut p = maintenance(&repo, &config, &snapshot, None, now)
             .unwrap()
             .unwrap();
         defer_completed_refresh(&cache, &mut p, &config, now)
@@ -883,6 +884,7 @@ async fn scheduled_refresh_uses_stable_name_windows_weekly_cadence_and_wait_hour
         &repo,
         &config,
         &snapshot,
+        None,
         monday() + chrono::Duration::days(7),
     )
     .unwrap()
@@ -1009,7 +1011,7 @@ async fn real_git_cache_is_reused_and_fetches_new_bases_incrementally_offline() 
         let files = BTreeMap::from([("Cargo.lock".into(), "version = 4\n".into())]);
         let mut snapshot = snapshot(&files);
         let config = config();
-        let mut p = maintenance(&repo, &config, &snapshot, monday())
+        let mut p = maintenance(&repo, &config, &snapshot, None, monday())
             .unwrap()
             .unwrap();
         runner.prepare(&mut p, &mut snapshot, &config).await;
@@ -1081,7 +1083,7 @@ async fn real_cargo_and_go_targeted_updates_retain_the_selected_manifest_and_loc
             Runner::new(temp.path().into(), "offline-installation").with_executor(executor);
         let mut snapshot = snapshot(&files);
         let config = config();
-        let mut p = maintenance(&repo(), &config, &snapshot, monday())
+        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
             .unwrap()
             .unwrap();
         p.maintenance = false;
@@ -1131,7 +1133,7 @@ fn provider_lock_drift_is_rejected_before_publication() {
     ]);
     let config = config();
     let snapshot = snapshot(&files);
-    let mut p = maintenance(&repo(), &config, &snapshot, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
     p.changes.push(crate::Change {
@@ -1258,7 +1260,7 @@ async fn mise_lock_is_targeted_scrubbed_and_committed_with_each_supported_manife
             };
             let job = job(&dep, &update, &snapshot).unwrap().unwrap();
             assert_eq!(job.ecosystem, Ecosystem::Mise);
-            let mut p = maintenance(&repo(), &config, &snapshot, monday())
+            let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
                 .unwrap()
                 .unwrap();
             p.maintenance = false;
@@ -1313,7 +1315,7 @@ fn mise_lock_maintenance_respects_refresh_and_unlocked_manifests_need_no_job() {
     snapshot.paths.insert("mise.lock".into());
     config.lockfiles.refresh = false;
     assert!(
-        maintenance(&repo(), &config, &snapshot, monday())
+        maintenance(&repo(), &config, &snapshot, None, monday())
             .unwrap()
             .is_none()
     );
@@ -1322,7 +1324,7 @@ fn mise_lock_maintenance_respects_refresh_and_unlocked_manifests_need_no_job() {
         "ordinary updates must still refresh a committed lock"
     );
     config.lockfiles.refresh = true;
-    let plan = maintenance(&repo(), &config, &snapshot, monday())
+    let plan = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
     assert_eq!(plan.lock_jobs.len(), 1);
@@ -1353,7 +1355,7 @@ fn npm_change(value: &str) -> crate::plan::Change {
 fn readable_locks_must_resolve_the_requested_version() {
     let config = config();
     let seed = BTreeMap::from([("package-lock.json".to_string(), "{}\n".to_string())]);
-    let mut p = maintenance(&repo(), &config, &snapshot(&seed), monday())
+    let mut p = maintenance(&repo(), &config, &snapshot(&seed), None, monday())
         .unwrap()
         .unwrap();
     p.changes = vec![npm_change("2.0.0")];
@@ -1479,7 +1481,7 @@ async fn an_unchanged_lockfile_after_a_catalog_edit_fails_the_branch() {
         Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
     p.maintenance = false;
@@ -1520,7 +1522,7 @@ async fn real_yarn_berry_uses_a_sanitised_yarnrc_and_restores_it() {
         Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
     p.maintenance = false;
@@ -1576,7 +1578,7 @@ async fn python_locks_use_uv_and_poetry_with_the_project_interpreter() {
             Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
-        let mut p = maintenance(&repo(), &config, &snapshot, monday())
+        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
             .unwrap()
             .unwrap();
         p.maintenance = false;
@@ -1625,7 +1627,7 @@ async fn an_unchanged_python_lock_after_a_targeted_upgrade_fails() {
         Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
     p.maintenance = false;
@@ -1680,7 +1682,7 @@ async fn real_uv_and_poetry_regenerate_python_locks() {
             Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
-        let mut p = maintenance(&repo(), &config, &snapshot, monday())
+        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
             .unwrap()
             .unwrap();
         runner.prepare(&mut p, &mut snapshot, &config).await;
@@ -2048,7 +2050,7 @@ async fn real_dotnet_restore_regenerates_packages_lock_json() {
         Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
     p.lock_jobs = vec![Job {
@@ -2087,7 +2089,7 @@ async fn real_bundler_relocks_offline() {
         Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
     runner.prepare(&mut p, &mut snapshot, &config).await;
@@ -2137,7 +2139,7 @@ async fn composer_locks_use_static_or_compiled_php() {
             Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config_with(setting);
-        let mut p = maintenance(&repo(), &config, &snapshot, monday())
+        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
             .unwrap()
             .unwrap();
         runner.prepare(&mut p, &mut snapshot, &config).await;
@@ -2185,7 +2187,7 @@ async fn static_php_requires_an_exact_version() {
         Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
     runner.prepare(&mut p, &mut snapshot, &config).await;
@@ -2218,7 +2220,7 @@ async fn real_composer_relocks_offline() {
         Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
     runner.prepare(&mut p, &mut snapshot, &config).await;
