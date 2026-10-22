@@ -199,8 +199,13 @@ pub struct Lifecycle {
     branch_permits: BTreeMap<String, BTreeSet<String>>,
     /// Update keys now carried by the batch PR; their PRs close as batched.
     batched: BTreeSet<String>,
+    /// The server URL to advertise to the CLI, if any.
+    server: Option<String>,
 }
 impl Lifecycle {
+    pub fn set_advertised_server(&mut self, url: Option<String>) {
+        self.server = url;
+    }
     pub fn set_merge_settings(&mut self, settings: crate::automerge::Settings) {
         self.merge_settings = Some(settings);
     }
@@ -299,6 +304,7 @@ impl Lifecycle {
             maintenance_group: config.lockfiles.group.clone(),
             branch_permits: controls.branch_permits.clone(),
             batched: controls.batched.clone(),
+            server: None,
         };
         let desired: BTreeSet<_> = plans.iter().map(|p| p.action.branch.as_str()).collect();
         for pr in &mut state.prs {
@@ -909,6 +915,7 @@ impl Lifecycle {
                 ranges,
                 self.recheck,
                 self.branch_permits.get(&plan.action.branch),
+                &self.server,
             ))
             .expect("serializable body intent"),
         );
@@ -999,6 +1006,10 @@ impl Lifecycle {
             );
             text.push('\n');
             text.push_str(&marker);
+        }
+        if let Some(url) = &self.server {
+            text.push('\n');
+            text.push_str(&crate::advertise::marker(url));
         }
         text.push('\n');
         text.push_str(&content_marker);

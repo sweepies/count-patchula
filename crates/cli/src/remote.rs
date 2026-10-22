@@ -1,11 +1,13 @@
 //! `--server`: hand a lookup or run to a Count Patchula server. The user signs
 //! in once with the server's GitHub App through GitHub's device flow; the
 //! resulting user access token is stored per server and refreshed as it
-//! expires.
+//! expires. A checkout's repository can also find its server, hidden by the
+//! Count in the PRs and dashboard he writes; the user chooses once per
+//! repository whether to run there.
 use crate::Services;
 use patchula_http::Transport;
 use reqwest::{Method, Url, header};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
@@ -14,6 +16,8 @@ const CONFIG_VAR: &str = "XDG_CONFIG_HOME";
 const DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 const ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
+const LOGINS: &str = "servers.json";
+const CHOICES: &str = "repositories.json";
 
 type Result<T> = std::result::Result<T, (u8, miette::Report)>;
 fn fail(message: impl std::fmt::Display) -> (u8, miette::Report) {
@@ -75,7 +79,7 @@ pub async fn report(
     .await?;
     if response.0 == 401 {
         // GitHub revoked the stored token; sign in again once.
-        forget(services, server)?;
+        forget_login(services, server)?;
         token = login(services, &*transport, server).await?;
         response = send(
             &*transport,
@@ -140,10 +144,98 @@ pub async fn sign_in(services: &Services, server: &str) -> Result<String> {
     login(services, &*transport, server).await
 }
 
-/// `patchula auth logout`: forget the server's token. GitHub keeps the App
-/// authorization; revoke it under Settings → Applications.
+/// `patchula auth logout`: forget the server's token, and which checkouts
+/// chose it, so they ask again. GitHub keeps the App authorization; revoke it
+/// under Settings → Applications.
 pub fn forget(services: &Services, server: &str) -> Result<bool> {
-    update(services, |logins| logins.remove(server).is_some())
+    let chosen = update(
+        services,
+        CHOICES,
+        |choices: &mut BTreeMap<String, Choice>| {
+            let before = choices.len();
+            choices.retain(|_, choice| choice.server.as_deref() != Some(server));
+            choices.len() != before
+        },
+    )?;
+    Ok(forget_login(services, server)? || chosen)
+}
+fn forget_login(services: &Services, server: &str) -> Result<bool> {
+    update(services, LOGINS, |logins: &mut BTreeMap<String, Login>| {
+        logins.remove(server).is_some()
+    })
+}
+
+/// Where a repository runs, as the user chose: a server, or this machine.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Choice {
+    server: Option<String>,
+}
+
+/// The server for the current checkout's `repository`: the one the user chose
+/// before, or one the Count advertises, if the user wants it. None runs here.
+pub async fn choose(services: &Services, repository: &str) -> Result<Option<String>> {
+    if let Some(choice) = load::<Choice>(services, CHOICES)?.remove(repository) {
+        if let Some(server) = &choice.server {
+            eprintln!(
+                "patchula: running {repository} on {server}, as you chose; --no-server runs it here"
+            );
+        }
+        return Ok(choice.server);
+    }
+    if !services.interactive() {
+        return Ok(None);
+    }
+    let Some(server) = discover(services, repository).await else {
+        return Ok(None);
+    };
+    let remote = services
+        .ask(&format!(
+            "patchula: the Count runs {repository} on {server}. Run there instead of on this machine? [Y/n] "
+        ))
+        .map_err(|e| fail(format!("cannot read the answer: {e}")))?;
+    let chosen = remote.then_some(server);
+    update(
+        services,
+        CHOICES,
+        |choices: &mut BTreeMap<String, Choice>| {
+            choices.insert(
+                repository.to_owned(),
+                Choice {
+                    server: chosen.clone(),
+                },
+            );
+            true
+        },
+    )?;
+    eprintln!(
+        "patchula: remembered for {repository}. --server or --no-server overrides it once; patchula auth logout --server {} asks again",
+        chosen.as_deref().unwrap_or("<url>")
+    );
+    Ok(chosen)
+}
+
+/// The server URL in the newest open bot-written issue or PR that has one.
+/// Only an installed App can write as a bot, so no passer-by can plant one.
+async fn discover(services: &Services, repository: &str) -> Option<String> {
+    let transport = services.transport().ok()?;
+    let url = format!(
+        "https://api.github.com/repos/{repository}/issues?state=open&sort=updated&direction=desc&per_page=100"
+    );
+    // Public repositories answer without a token.
+    let token = services.token().ok();
+    let (status, value) = send(&*transport, Method::GET, &url, token.as_deref(), None)
+        .await
+        .ok()?;
+    if status != 200 {
+        return None;
+    }
+    value.as_array()?.iter().find_map(|item| {
+        let url = patchula_update::advertise::find(item["body"].as_str()?)?;
+        (item["user"]["type"] == "Bot" && url.starts_with("https://"))
+            .then(|| server(Some(url)).ok().flatten())
+            .flatten()
+    })
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -155,10 +247,10 @@ struct Login {
     refresh_expires_at: Option<i64>,
 }
 
-fn path(services: &Services) -> Result<PathBuf> {
+fn path(services: &Services, name: &str) -> Result<PathBuf> {
     #[cfg(test)]
     if let Some(dir) = &services.config_dir {
-        return Ok(dir.join("servers.json"));
+        return Ok(dir.join(name));
     }
     let _ = services;
     std::env::var_os(CONFIG_VAR)
@@ -166,25 +258,30 @@ fn path(services: &Services) -> Result<PathBuf> {
         .or_else(|| {
             std::env::var_os(crate::HOME_VAR).map(|home| PathBuf::from(home).join(".config"))
         })
-        .map(|dir| dir.join("patchula/servers.json"))
+        .map(|dir| dir.join("patchula").join(name))
         .ok_or_else(|| fail("cannot find a config directory; set XDG_CONFIG_HOME or HOME"))
 }
-fn load(services: &Services) -> Result<BTreeMap<String, Login>> {
-    let path = path(services)?;
+fn load<T: DeserializeOwned>(services: &Services, name: &str) -> Result<BTreeMap<String, T>> {
+    let path = path(services, name)?;
     match std::fs::read(&path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map_err(|_| fail(format!("{} is not a valid login store", path.display()))),
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| {
+            fail(format!(
+                "{} is not valid; delete it to start over",
+                path.display()
+            ))
+        }),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
         Err(error) => Err(fail(format!("cannot read {}: {error}", path.display()))),
     }
 }
-/// Changes the store under a lock, so two CLIs signing in at once keep both
+/// Changes a store under a lock, so two CLIs signing in at once keep both
 /// tokens. `change` says whether it changed anything.
-fn update(
+fn update<T: DeserializeOwned + Serialize>(
     services: &Services,
-    change: impl FnOnce(&mut BTreeMap<String, Login>) -> bool,
+    name: &str,
+    change: impl FnOnce(&mut BTreeMap<String, T>) -> bool,
 ) -> Result<bool> {
-    let path = path(services)?;
+    let path = path(services, name)?;
     let dir = path.parent().expect("store path has a parent");
     std::fs::create_dir_all(dir)
         .map_err(|e| fail(format!("cannot create {}: {e}", dir.display())))?;
@@ -196,14 +293,14 @@ fn update(
         .open(path.with_extension("json.lock"))
         .and_then(|file| file.lock().map(|()| file))
         .map_err(|e| fail(format!("cannot lock {}: {e}", path.display())))?;
-    let mut logins = load(services)?;
-    let changed = change(&mut logins);
+    let mut entries = load(services, name)?;
+    let changed = change(&mut entries);
     if changed {
-        save(&path, &logins)?;
+        save(&path, &entries)?;
     }
     Ok(changed)
 }
-fn save(path: &std::path::Path, logins: &BTreeMap<String, Login>) -> Result<()> {
+fn save<T: Serialize>(path: &std::path::Path, entries: &BTreeMap<String, T>) -> Result<()> {
     use std::io::Write;
     let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
     let mut options = std::fs::File::options();
@@ -212,7 +309,7 @@ fn save(path: &std::path::Path, logins: &BTreeMap<String, Login>) -> Result<()> 
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
     let write = || -> std::io::Result<()> {
         let mut file = options.open(&temporary)?;
-        file.write_all(&serde_json::to_vec_pretty(logins)?)?;
+        file.write_all(&serde_json::to_vec_pretty(entries)?)?;
         file.sync_all()?;
         std::fs::rename(&temporary, path)
     };
@@ -222,7 +319,7 @@ fn save(path: &std::path::Path, logins: &BTreeMap<String, Login>) -> Result<()> 
 /// A usable token for the server: the stored one, a refreshed one, or a new sign-in.
 async fn token(services: &Services, transport: &dyn Transport, server: &str) -> Result<String> {
     let now = chrono::Utc::now().timestamp();
-    let Some(stored) = load(services)?.remove(server) else {
+    let Some(stored) = load::<Login>(services, LOGINS)?.remove(server) else {
         return login(services, transport, server).await;
     };
     if stored.expires_at.is_none_or(|at| at > now + 60) {
@@ -261,7 +358,7 @@ fn granted(value: &Value, now: i64) -> Option<Login> {
     })
 }
 fn store(services: &Services, server: &str, login: Login) -> Result<()> {
-    update(services, |logins| {
+    update(services, LOGINS, |logins: &mut BTreeMap<String, Login>| {
         logins.insert(server.to_owned(), login);
         true
     })

@@ -162,6 +162,25 @@ applies; `--config`, `--config-dir`, `--local`, `--all-repos`,
 HTTP flags are ignored. A run in progress when the server shuts down finishes
 before it exits, within the shutdown deadline.
 
+### Found from a checkout
+
+The server hides its URL in an HTML comment in each PR and dashboard it writes.
+`patchula lookup` or `patchula run` in a checkout, with no repository named and
+no `--server`, looks for that comment in the repository's open issues and PRs.
+Only ones written by a bot count, since only an installed App can write as one.
+If it finds a server, it asks whether to run there, and remembers your answer
+for that repository in `~/.config/patchula/repositories.json`.
+
+The answer holds until you sign out of that server with `patchula auth logout`.
+`--server` or `--no-server` overrides it for one command. Nothing is looked up
+without a terminal, and local-only flags such as `--local` always run locally.
+
+The advertised URL is `publicUrl`, or the App's webhook URL with `/webhook`
+removed. A webhook relay such as smee.io gives no server URL, so set
+`publicUrl` there. Set `advertise = false` to keep the URL out of what the
+Count writes. Turning it on or off edits the open PRs once. A server whose
+App has no client ID advertises nothing, because the CLI could not sign in.
+
 ## Replaying a webhook locally
 
 ```sh

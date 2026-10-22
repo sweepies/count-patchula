@@ -149,6 +149,17 @@ impl App {
             .map(str::to_owned)
             .ok_or(Error::Json)
     }
+    /// The webhook URL in the App's settings, where GitHub delivers events.
+    pub async fn webhook_url(&self) -> Result<String> {
+        let value = self
+            .request(Method::GET, "app/hook/config", Utc::now().timestamp())
+            .await?;
+        value["url"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .ok_or(Error::Json)
+    }
     pub async fn installations(&self) -> Result<Vec<u64>> {
         let mut ids = Vec::new();
         for page in 1..=1000 {

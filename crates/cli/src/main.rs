@@ -31,6 +31,9 @@ struct Services {
     transport: Option<std::sync::Arc<dyn patchula_http::Transport>>,
     #[cfg(test)]
     config_dir: Option<std::path::PathBuf>,
+    /// Answers the server prompt; tests are interactive only when it is set.
+    #[cfg(test)]
+    answer: Option<bool>,
 }
 impl Services {
     fn token(&self) -> Result<String, std::env::VarError> {
@@ -50,6 +53,32 @@ impl Services {
             return Ok(transport.clone());
         }
         Ok(std::sync::Arc::new(patchula_http::Network::new()?))
+    }
+    /// Whether a person is at the terminal to answer a question.
+    fn interactive(&self) -> bool {
+        #[cfg(test)]
+        {
+            self.answer.is_some()
+        }
+        #[cfg(not(test))]
+        {
+            io::stdin().is_terminal() && io::stderr().is_terminal()
+        }
+    }
+    /// A yes/no question on stderr; anything but "n" or "no" is yes.
+    fn ask(&self, question: &str) -> io::Result<bool> {
+        eprint!("{question}");
+        #[cfg(test)]
+        if let Some(answer) = self.answer {
+            eprintln!();
+            return Ok(answer);
+        }
+        let mut line = String::new();
+        io::stdin().read_line(&mut line)?;
+        Ok(!matches!(
+            line.trim().to_ascii_lowercase().as_str(),
+            "n" | "no"
+        ))
     }
     /// For `--server`, which may be a `patchula serve` on loopback without TLS.
     fn remote_transport(
@@ -653,6 +682,36 @@ fn github_repository(url: &str) -> Option<String> {
 #[cfg(test)]
 mod tests;
 
+/// The server to run on: `--server` or `PATCHULA_SERVER`, else, for a
+/// checkout's own repository with no local-only flags, the one its user chose.
+async fn server(
+    app: &App,
+    options: &cli::Lookup,
+    run: Option<&cli::Run>,
+    services: &Services,
+) -> Result<Option<String>, (u8, miette::Report)> {
+    if options.no_server {
+        return Ok(None);
+    }
+    if let Some(server) = remote::server(options.server.as_deref())? {
+        return Ok(Some(server));
+    }
+    let local_only = options.local.is_some()
+        || options.config.is_some()
+        || options.config_dir.is_some()
+        || options.all_repos
+        || run.is_some_and(|r| r.allow_lockfile_pending)
+        || app.recheck.is_some();
+    if local_only || !options.repositories.is_empty() {
+        return Ok(None);
+    }
+    match current_repository() {
+        Ok(repository) => remote::choose(services, &repository).await,
+        // The local run reports the same problem.
+        Err(_) => Ok(None),
+    }
+}
+
 /// Build the engine from lookup flags and run one lookup or run batch.
 async fn report(
     app: &App,
@@ -664,7 +723,7 @@ async fn report(
     if options.concurrency == 0 || options.concurrency > 100 {
         return Err((2, miette::miette!("concurrency must be 1..100")));
     }
-    if let Some(server) = remote::server(options.server.as_deref())? {
+    if let Some(server) = server(app, options, run, services).await? {
         return remote_report(app, options, run, services, &server).await;
     }
     let repositories = repositories(options).map_err(|e| (2, e))?;

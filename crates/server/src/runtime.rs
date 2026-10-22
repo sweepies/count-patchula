@@ -104,6 +104,22 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
     if client_id.is_none() {
         tracing::warn!(target: "patchula_server", "cannot read the App's client ID; --server runs are unavailable");
     }
+    // Advertising a server the CLI cannot sign in to would only send users to an error.
+    let derived_url = match &client_id {
+        Some(_) => app
+            .webhook_url()
+            .await
+            .ok()
+            .and_then(|url| crate::settings::from_webhook(&url)),
+        None => None,
+    };
+    let current = settings.current();
+    if client_id.is_some()
+        && current.advertise
+        && current.advertised(derived_url.as_deref()).is_none()
+    {
+        tracing::warn!(target: "patchula_server", "the App's webhook URL does not end in /webhook; set publicUrl to advertise this server");
+    }
     let runner = Arc::new(Engines {
         app: app.clone(),
         transport: transport.clone(),
@@ -111,6 +127,8 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
         engines: Mutex::new(BTreeMap::new()),
         recheck: options.recheck,
         bot_login: bot.clone(),
+        derived_url,
+        signs_in: client_id.is_some(),
     });
     let webhook = Webhook::new(cache.clone(), settings.clone(), bot, options.webhook_secret)
         .with_app(app.clone());
@@ -268,6 +286,10 @@ struct Engines {
     engines: Mutex<BTreeMap<u64, Engine>>,
     recheck: Option<String>,
     bot_login: String,
+    /// The server URL from the App's webhook URL, for `advertise`.
+    derived_url: Option<String>,
+    /// Whether the CLI can sign in here; nothing is advertised otherwise.
+    signs_in: bool,
 }
 impl Batch for Engines {
     fn run<'a>(
@@ -437,6 +459,11 @@ impl Engines {
                 settings.recheck(self.recheck.as_deref()),
             )
             .map_err(|_| Error("invalid batch options"))?;
+        engine.set_advertised_server(
+            settings
+                .advertised(self.derived_url.as_deref())
+                .filter(|_| self.signs_in),
+        );
         Ok(engine)
     }
 }

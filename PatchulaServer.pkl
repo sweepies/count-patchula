@@ -14,6 +14,12 @@ reportDirectory: String? = null
 /// Empty lists allow all installations/repositories the App can access.
 allowedInstallations: Listing<Int> = new {}
 allowedRepositories: Listing<String> = new {}
+/// Hide this server's URL in the PRs and dashboard the Count writes, so
+/// `patchula` in a checkout can offer to run there.
+advertise: Boolean = true
+/// The https URL to advertise. null uses the App's webhook URL without its
+/// /webhook path.
+publicUrl: String? = null
 
 class Triggers {
   push: Boolean = true

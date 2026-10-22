@@ -4,6 +4,7 @@ use patchula_http::{Exchange, Response};
 use std::sync::{Arc, Mutex};
 
 const SERVER: &str = "https://patchula.acme.dev";
+const ISSUES: &str = "https://api.github.com/repos/acme/app/issues?state=open&sort=updated&direction=desc&per_page=100";
 
 /// The server and GitHub's login endpoints. `revoked` tokens get a 401 from the server.
 #[derive(Default)]
@@ -37,6 +38,17 @@ impl Transport for Fake {
         ));
         assert!(!url.contains("ghr_"), "a refresh token reached a URL");
         let (status, value) = match (request.method().as_str(), url.as_str()) {
+            ("GET", ISSUES) => (
+                200,
+                json!([
+                    // Anyone can write a marker; only a bot's counts.
+                    {"user": {"type": "User"},
+                        "body": "<!-- patchula-server:https://evil.acme.dev -->"},
+                    {"user": {"type": "Bot"}, "body": "no marker here"},
+                    {"user": {"type": "Bot"},
+                        "body": format!("table\n<!-- patchula-server:{SERVER} -->\n")},
+                ]),
+            ),
             ("GET", "https://patchula.acme.dev/api/v1/auth") => {
                 (200, json!({"clientId": "Iv23client"}))
             }
@@ -119,6 +131,15 @@ fn services(fake: Arc<Fake>, dir: &std::path::Path) -> Services {
         config_dir: Some(dir.to_owned()),
         ..Services::default()
     }
+}
+fn asking(fake: Arc<Fake>, dir: &std::path::Path, answer: bool) -> Services {
+    Services {
+        answer: Some(answer),
+        ..services(fake, dir)
+    }
+}
+fn choices(dir: &std::path::Path) -> Value {
+    serde_json::from_slice(&std::fs::read(dir.join("repositories.json")).unwrap()).unwrap()
 }
 fn stored(dir: &std::path::Path) -> Value {
     serde_json::from_slice(&std::fs::read(dir.join("servers.json")).unwrap()).unwrap()
@@ -297,4 +318,65 @@ async fn auth_login_and_logout_manage_the_store() {
         0
     );
     assert_eq!(stored(dir.path()), json!({}));
+}
+
+#[tokio::test]
+async fn a_checkout_finds_the_server_the_count_advertises_and_remembers_yes() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = Arc::new(Fake::default());
+    let chosen = choose(&asking(fake.clone(), dir.path(), true), "acme/app")
+        .await
+        .unwrap();
+    assert_eq!(chosen.as_deref(), Some(SERVER));
+    assert_eq!(choices(dir.path()), json!({"acme/app": {"server": SERVER}}));
+    // Remembered: no question, and no GitHub request, even without a terminal.
+    fake.requests.lock().unwrap().clear();
+    let again = choose(&services(fake.clone(), dir.path()), "acme/app")
+        .await
+        .unwrap();
+    assert_eq!(again.as_deref(), Some(SERVER));
+    assert!(fake.requests.lock().unwrap().is_empty());
+    // Signing out asks again next time.
+    run(
+        &app(&["auth", "logout", "--server", SERVER]),
+        &services(fake, dir.path()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(choices(dir.path()), json!({}));
+}
+
+#[tokio::test]
+async fn no_is_remembered_and_runs_here() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = Arc::new(Fake::default());
+    let chosen = choose(&asking(fake.clone(), dir.path(), false), "acme/app")
+        .await
+        .unwrap();
+    assert_eq!(chosen, None);
+    assert_eq!(choices(dir.path()), json!({"acme/app": {"server": null}}));
+    fake.requests.lock().unwrap().clear();
+    let again = choose(&asking(fake.clone(), dir.path(), true), "acme/app")
+        .await
+        .unwrap();
+    assert_eq!(again, None);
+    assert!(fake.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn without_a_terminal_nothing_is_discovered_or_remembered() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = Arc::new(Fake::default());
+    let chosen = choose(&services(fake.clone(), dir.path()), "acme/app")
+        .await
+        .unwrap();
+    assert_eq!(chosen, None);
+    assert!(fake.requests.lock().unwrap().is_empty());
+    assert!(!dir.path().join("repositories.json").exists());
+}
+
+#[test]
+fn no_server_conflicts_with_server() {
+    let args = ["lookup", "--server", SERVER, "--no-server", "acme/app"];
+    assert!(App::parse_from(&args.iter().map(std::ffi::OsStr::new).collect::<Vec<_>>()).is_err());
 }

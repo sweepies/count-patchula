@@ -28,7 +28,7 @@ fn held_back_dashboard_reports_the_reused_catalog_timestamp() {
         }))
         .unwrap(),
     );
-    let text = dashboard::render(&repo, &[], &[], Recheck::NextRun);
+    let text = dashboard::render(&repo, &[], &[], Recheck::NextRun, None);
     assert!(
         text.contains("eligible at 2026-10-16T00:00:00Z; catalog fetched at 2026-10-15T09:00:00Z")
     );
@@ -37,7 +37,7 @@ fn held_back_dashboard_reports_the_reused_catalog_timestamp() {
 fn dashboard_snapshot_and_identity_do_not_depend_on_wording() {
     let repo = repository();
     let dep = &repo.package_files[0].dependencies[0];
-    let text = dashboard::render(&repo, &[], &[], Recheck::NextRun);
+    let text = dashboard::render(&repo, &[], &[], Recheck::NextRun, None);
     let repo_target = text
         .lines()
         .find(|l| l.contains("\"recheck\""))
@@ -60,7 +60,7 @@ fn dashboard_snapshot_and_identity_do_not_depend_on_wording() {
         );
     assert_eq!(snapshot, include_str!("snapshots/dashboard.md"));
     assert_eq!(
-        dashboard::render(&repo, &[], &[], Recheck::Now),
+        dashboard::render(&repo, &[], &[], Recheck::Now, None),
         text.replace("on the next run", "now")
     );
     let mut other = dep.clone();
@@ -77,7 +77,7 @@ fn dashboard_orders_pr_numbers_numerically_and_dependency_summaries_last() {
         .into_iter()
         .map(|number| json!({"number":number,"state":"open","title":format!("PR {number}")}))
         .collect();
-    let text = dashboard::render(&repo, &[], &prs, Recheck::NextRun);
+    let text = dashboard::render(&repo, &[], &prs, Recheck::NextRun, None);
     let positions: Vec<_> = [
         "## Open PRs",
         "- #3:",
@@ -96,7 +96,7 @@ fn dashboard_orders_pr_numbers_numerically_and_dependency_summaries_last() {
     reversed.reverse();
     assert_eq!(
         text,
-        dashboard::render(&repo, &[], &reversed, Recheck::NextRun)
+        dashboard::render(&repo, &[], &reversed, Recheck::NextRun, None)
     );
 }
 
@@ -119,7 +119,7 @@ fn issue_discovery_checks_marker_author_and_ambiguity_never_title() {
 #[test]
 fn checkbox_parser_rejects_malformed_duplicate_fenced_foreign_and_wrong_repository_markers() {
     let repo = repository();
-    let text = dashboard::render(&repo, &[], &[], Recheck::NextRun);
+    let text = dashboard::render(&repo, &[], &[], Recheck::NextRun, None);
     let line = text
         .lines()
         .find(|l| l.contains("\"recheck\""))
@@ -288,4 +288,24 @@ async fn shared_inventory_follows_each_connection_without_duplicating_finished_p
         ["issue0", "issue1", "issue2"]
     );
     assert_eq!(*fake.0.lock().unwrap(), 3);
+}
+#[test]
+fn the_dashboard_hides_the_advertised_server_under_its_marker() {
+    let repo = repository();
+    let text = dashboard::render(
+        &repo,
+        &[],
+        &[],
+        Recheck::Now,
+        Some("https://patchula.acme.dev"),
+    );
+    assert_eq!(
+        patchula_update::advertise::find(&text),
+        Some("https://patchula.acme.dev")
+    );
+    assert_eq!(text.lines().filter(|l| *l == dashboard::MARKER).count(), 1);
+    assert_eq!(
+        patchula_update::advertise::find(&dashboard::render(&repo, &[], &[], Recheck::Now, None)),
+        None
+    );
 }

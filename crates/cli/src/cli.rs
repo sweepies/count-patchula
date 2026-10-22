@@ -187,9 +187,13 @@ pub struct Lookup {
     pub local: Option<PathBuf>,
     /// Run on a Count Patchula server with its App's credentials and caches; also
     /// PATCHULA_SERVER. You sign in with GitHub on first use, and need push access
-    /// to each repository. Local config, cache and HTTP flags do not apply.
+    /// to each repository. Local config, cache and HTTP flags do not apply. In a
+    /// checkout, the Count's server for its repository is offered once.
     #[usage(long)]
     pub server: Option<String>,
+    /// Run on this machine, even with PATCHULA_SERVER set or a server chosen for this checkout.
+    #[usage(long, conflicts = "--server")]
+    pub no_server: bool,
 }
 
 #[derive(Args)]
