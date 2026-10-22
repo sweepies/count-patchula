@@ -146,12 +146,8 @@ stabilises. Tests never touch the network: they replay responses recorded by
 patchula itself.
 
 This site is Astro Starlight, in `docs/`, served from Cloudflare Workers. It is
-versioned from release tags: the root has the latest release's pages, `/next/`
-has `main`'s, and `/vX.Y.x/` has each older minor line's last release. Only
-tags whose tree has `docs/astro.config.mjs` count, since earlier releases had a
-different site. `mise run docs:build` lays the versions out with
-`mise run docs:assemble` and fails when no tag qualifies; `mise run docs:dev`
-serves a checkout's pages without versions.
+built from `main`'s pages, with no per-release versions: `mise run docs:build`
+builds it and `mise run docs:dev` serves it with live reload.
 
 ## Phases
 

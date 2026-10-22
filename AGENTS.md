@@ -38,17 +38,6 @@ Architecture, caching and the HTTP test design are in
 `docs/src/content/docs/internals/`. Read the relevant page before changing the
 engine, cache or GitHub client.
 
-## Docs site
-
-The site is versioned from release tags. The root serves the latest release
-whose tag has `docs/astro.config.mjs`, this checkout is under `/next/`, and
-each older minor line's last release is under `/vX.Y.x/`; earlier tags predate
-the Starlight site and are left out. `mise run docs:build` assembles that
-layout and fails if no tag qualifies; `mise run docs:dev` serves this checkout
-alone. A release pushes the version bump and its tag together, with
-`git push --atomic origin main vX.Y.Z`, so the site build for `main` sees the
-tag.
-
 ## Voice
 
 The Count is "he". Strings a user sees from the bot (PR bodies, dashboard,
