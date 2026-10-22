@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "astro/config";
 import { satteri } from "@astrojs/markdown-satteri";
@@ -45,6 +45,35 @@ function versionLinks({ fileURL }) {
   };
 }
 
+/**
+ * The agent setup instructions and the patchula skill are fetched from the
+ * repository, not the site, so the links validator never sees them. Their links
+ * to the site must reach a page, and a heading on it, at the root, which is
+ * what they link to.
+ */
+function agentLinks() {
+  const files = ["./agent-setup.md", "../skills/patchula/SKILL.md"];
+  const url = new RegExp(`${site.replace(/[.]/g, "\\.")}(/(?:[^\\s)]*[^\\s).,])?)?`, "g");
+  return {
+    name: "patchula-agent-links",
+    hooks: {
+      "astro:build:done": ({ dir }) => {
+        const broken = [];
+        for (const file of files) {
+          for (const [link, href = "/"] of read(file).matchAll(url)) {
+            const [path, anchor] = href.split("#");
+            const page = new URL(`.${path.replace(/\/?$/, "/")}index.html`, dir);
+            if (!existsSync(page) || (anchor && !readFileSync(page, "utf8").includes(` id="${anchor}"`))) {
+              broken.push(`${file}: ${link}`);
+            }
+          }
+        }
+        if (broken.length) throw new Error(`Broken links to the site:\n${broken.join("\n")}`);
+      },
+    },
+  };
+}
+
 export default defineConfig({
   site,
   srcDir: src,
@@ -56,6 +85,7 @@ export default defineConfig({
     }),
   },
   integrations: [
+    agentLinks(),
     // Only the latest release is indexed.
     sitemap({ filter: (page) => !versionOf(new URL(page).pathname) }),
     starlight({

@@ -9,6 +9,18 @@ This page takes one repository from nothing to its first update pull requests.
 You need a GitHub token, [mise](https://mise.jdx.dev) on the machine that runs
 the Count, and about five minutes.
 
+The fastest way is to have a coding agent do it. Give this prompt to an agent
+working in your repository:
+
+```text wrap
+Fetch https://raw.githubusercontent.com/sweepies/count-patchula/main/docs/agent-setup.md and follow its instructions to set up Count Patchula for this repository.
+```
+
+The instructions it fetches have the agent check whether you use Renovate and
+what carries over, ask how you want to run the Count, set him up, and migrate
+your Renovate config. It asks before each decision, and never asks for your
+secrets. The steps below do the same by hand.
+
 <Steps>
 
 1. ### Install patchula
