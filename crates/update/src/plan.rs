@@ -133,7 +133,13 @@ pub fn plan(
                     if best != Some(update) {
                         continue;
                     }
+                    // Pins share one branch, except reference data: its own PR
+                    // lets it merge without waiting on unrelated pins.
+                    let reference_data = dep
+                        .kinds()
+                        .contains(&patchula_config::DependencyKind::ReferenceData);
                     let (identity, label) = if update.update_type == "pin"
+                        && !reference_data
                         && (allow_pending || crate::lockfiles::job(dep, update, snapshot).is_ok())
                     {
                         ("pins".into(), "pin-dependencies".into())
