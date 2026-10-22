@@ -509,7 +509,7 @@ fn branch_identity(
                 let manager = if package_names[&package].len() > 1 {
                     format!("{}-", manager_slug(dep))
                 } else {
-                    String::new()
+                    String::default()
                 };
                 let variants: BTreeSet<_> = dependencies
                     .iter()
@@ -518,8 +518,7 @@ fn branch_identity(
                     .collect();
                 let display = if variants.len() == 1 && line.contains(".x-") {
                     line.split_once(".x-")
-                        .map(|(major, _)| format!("{major}.x"))
-                        .unwrap_or_else(|| line.clone())
+                        .map_or_else(|| line.clone(), |(major, _)| format!("{major}.x"))
                 } else {
                     line.clone()
                 };
