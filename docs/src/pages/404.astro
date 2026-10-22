@@ -1,0 +1,23 @@
+---
+import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
+import logo from "../assets/logo.png";
+---
+
+<StarlightPage
+  frontmatter={{
+    title: "Page not found",
+    template: "splash",
+    editUrl: false,
+    lastUpdated: false,
+    pagefind: false,
+    hero: {
+      title: "Page not found",
+      tagline: "There is nothing at this address. Check the URL or try the search bar.",
+      image: { file: logo, alt: "Count Patchula, a bat holding a wrench" },
+      actions: [
+        { text: "Home", link: "/", icon: "right-arrow" },
+        { text: "Getting started", link: "/getting-started/", variant: "secondary" },
+      ],
+    },
+  }}
+/>

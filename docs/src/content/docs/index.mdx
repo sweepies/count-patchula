@@ -1,0 +1,95 @@
+---
+title: Count Patchula
+description: He never sleeps. Neither do your CVEs. A modern dependency updater with strong defaults.
+template: splash
+editUrl: false
+lastUpdated: false
+head:
+  - tag: title
+    content: Count Patchula | Dependency updates for GitHub
+hero:
+  title: Count Patchula <span class="hero-subtitle">vants to update your deps.</span>
+  tagline: He never sleeps. Neither do your CVEs. A modern dependency updater with strong defaults.
+  image:
+    file: ../../assets/logo.png
+    alt: Count Patchula, a bat holding a wrench
+  actions:
+    - text: Get started
+      link: /getting-started/
+      icon: right-arrow
+    - text: Coming from Renovate
+      link: /renovate/compatibility/
+      variant: secondary
+    - text: GitHub
+      link: https://github.com/sweepies/count-patchula
+      variant: minimal
+      icon: github
+      attrs:
+        rel: noopener
+---
+
+import { Card, CardGrid, LinkButton } from "@astrojs/starlight/components";
+
+<CardGrid>
+  <Card title="One run, every repository" icon="rocket">
+    Repositories are scanned concurrently, and each package is looked up once per batch however many repositories use it. Unchanged work is skipped through validators and receipts.
+
+    <LinkButton href="/guide/how-it-works/" variant="minimal" icon="right-arrow">How it works</LinkButton>
+  </Card>
+  <Card title="Real lockfiles" icon="seti:lock">
+    npm, pnpm, Yarn, Bun, Cargo, Go, Terraform, uv, Poetry, NuGet, Bundler, Composer and mise locks are regenerated with the real tools, installed by mise into a store the Count keeps between runs.
+
+    <LinkButton href="/guide/lockfiles/" variant="minimal" icon="right-arrow">Lockfiles</LinkButton>
+  </Card>
+  <Card title="Typed configuration" icon="pkl">
+    Policy is written in Pkl against a published schema. Unknown fields are errors with a file and line, not a silently ignored typo.
+
+    <LinkButton href="/guide/configuration/" variant="minimal" icon="right-arrow">Configuration</LinkButton>
+  </Card>
+  <Card title="Batch it yourself" icon="approve-check">
+    Tick a box on any update PR and the Count moves it into one batch PR with the version you reviewed, then closes the original. Untick to send it back.
+
+    <LinkButton href="/guide/batch/" variant="minimal" icon="right-arrow">Batching</LinkButton>
+  </Card>
+  <Card title="Built in Rust" icon="seti:rust">
+    One native binary. Against Renovate 44.173.1 on six large public repositories, the Count was 6.1 times faster cold and 18.5 times faster warm, using a fraction of the memory.
+
+    <LinkButton href="/benchmarks/" variant="minimal" icon="right-arrow">Benchmarks</LinkButton>
+  </Card>
+  <Card title="The server is MIT too" icon="server">
+    The GitHub App server, with webhooks, scheduled sweeps and warm caches, ships in the same MIT-licensed binary as the CLI. No paid edition, no feature gates, no licence key.
+
+    <LinkButton href="/guide/server/" variant="minimal" icon="right-arrow">Server mode</LinkButton>
+  </Card>
+</CardGrid>
+
+## What it does
+
+Point the Count at some repositories with a token and a small Pkl file. He reads
+their manifests through the GitHub API, looks up newer versions, and opens one
+pull request per update, each with a regenerated lockfile, release notes and a
+verified commit signed by GitHub.
+
+```sh
+patchula run --dry-run acme/my-app   # look first
+patchula run acme/my-app             # then let him bite
+```
+
+```pkl
+// patchula.pkl
+amends "PatchulaConfig.pkl"
+
+prs { dashboard = true }
+rules {
+  new Rule {
+    select { updates { "patch" } }
+    apply { merge = true }
+  }
+}
+```
+
+Supported ecosystems include npm, pnpm, Yarn and Bun, GitHub Actions, mise,
+Cargo, Go, Docker and Compose, Kubernetes, Kustomize, Flux and Helm, Terraform,
+Python (requirements, PEP 621, uv and Poetry), Maven and Gradle, NuGet, Bundler,
+Composer, pre-commit and devcontainers. The [compatibility
+matrix](/renovate/compatibility/) lists what is covered and what is not.

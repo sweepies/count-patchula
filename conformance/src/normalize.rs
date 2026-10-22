@@ -193,7 +193,7 @@ pub(super) fn reports(
                 updates,
                 rule,
                 departure: departure.into(),
-                link: format!("docs/renovate/departures.md#{departure}"),
+                link: format!("docs/src/content/docs/renovate/departures.md#{departure}"),
             });
         }
     }

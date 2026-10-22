@@ -1,7 +1,8 @@
 # AGENTS.md
 
 Count Patchula is a dependency update bot for GitHub, written in Rust. The
-binary is `patchula`. Docs live in `docs/` and are the published site.
+binary is `patchula`. Docs live in `docs/` and are the published site, built
+with Astro Starlight; the pages are under `docs/src/content/docs/`.
 
 ## Clean room
 
@@ -11,8 +12,8 @@ results. Its source code, preset data and test fixtures stay unread: before you
 fetch anything from `renovatebot/*` on GitHub, confirm it is documentation.
 
 When the Count behaves differently from Renovate on purpose, record the
-departure and its reason in `docs/renovate/departures.md`. An unrecorded
-difference is a bug.
+departure and its reason in `docs/src/content/docs/renovate/departures.md`.
+An unrecorded difference is a bug.
 
 ## Working
 
@@ -27,14 +28,26 @@ difference is a bug.
 - An intended change to extraction updates the corpus snapshot with
   `mise run corpus:snapshot`. Review the diff in `tests/corpus-extraction.tsv`
   as part of the change.
-- A change to CLI flags regenerates `docs/reference/cli.md` and `generated/`
-  with `mise run docs:cli`.
-- User-facing behaviour changes update the matching page under `docs/guide/`
-  in the same commit. The compatibility matrix is
-  `docs/renovate/compatibility.md`.
+- A change to CLI flags regenerates `docs/src/content/docs/reference/cli.md`
+  and `generated/` with `mise run docs:cli`.
+- User-facing behaviour changes update the matching page under
+  `docs/src/content/docs/guide/` in the same commit. The compatibility matrix
+  is `docs/src/content/docs/renovate/compatibility.md`.
 
-Architecture, caching and the HTTP test design are in `docs/internals/`. Read
-the relevant page before changing the engine, cache or GitHub client.
+Architecture, caching and the HTTP test design are in
+`docs/src/content/docs/internals/`. Read the relevant page before changing the
+engine, cache or GitHub client.
+
+## Docs site
+
+The site is versioned from release tags. The root serves the latest release
+whose tag has `docs/astro.config.mjs`, this checkout is under `/next/`, and
+each older minor line's last release is under `/vX.Y.x/`; earlier tags predate
+the Starlight site and are left out. `mise run docs:build` assembles that
+layout and fails if no tag qualifies; `mise run docs:dev` serves this checkout
+alone. A release pushes the version bump and its tag together, with
+`git push --atomic origin main vX.Y.Z`, so the site build for `main` sees the
+tag.
 
 ## Voice
 

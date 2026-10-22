@@ -11,7 +11,7 @@ use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 
 /// Environment variables the CLI reads. Their meanings are in
-/// docs/reference/environment.md.
+/// docs/src/content/docs/reference/environment.md.
 const TOKEN_VARS: [&str; 3] = ["PATCHULA_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"];
 const LOG_VAR: &str = "PATCHULA_LOG";
 const RECHECK_VAR: &str = "PATCHULA_RECHECK";

@@ -38,7 +38,7 @@ fn hand_written_output_classifies_all_four_cases_and_keeps_registry_identity() {
     assert!(
         triage
             .markdown()
-            .contains("docs/renovate/departures.md#explicit-defaults")
+            .contains("docs/src/content/docs/renovate/departures.md#explicit-defaults")
     );
     assert!(
         triage
@@ -609,7 +609,7 @@ fn real_lookup_shape_retains_skipped_and_digest_only_deps_and_audits_exclusion()
     );
     assert_eq!(
         excluded.link,
-        "docs/renovate/departures.md#configuration-dependencies"
+        "docs/src/content/docs/renovate/departures.md#configuration-dependencies"
     );
     assert_eq!(
         parsed

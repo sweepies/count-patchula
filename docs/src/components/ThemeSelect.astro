@@ -1,0 +1,44 @@
+---
+import { getCollection } from "astro:content";
+import Default from "@astrojs/starlight/components/ThemeSelect.astro";
+import VersionSelect from "starlight-versions/components/VersionSelect.astro";
+import { versionOf } from "../versions";
+
+// The version picker opens the same page in the chosen version. The versions
+// without this page are listed here, and open on their home page instead.
+const ids = new Set((await getCollection("docs")).map((entry) => entry.id));
+const versions = ["", ...new Set([...ids].map(versionOf).filter((version) => version !== undefined))];
+const { id } = Astro.locals.starlightRoute.entry;
+const current = versionOf(id);
+const page = (current ? id.slice(current.length + 1) : id).replace(/^index$/, "");
+const missing = versions.filter(
+  (version) => !ids.has([version, page].filter(Boolean).join("/") || "index"),
+);
+---
+
+<patchula-versions data-missing={JSON.stringify(missing)}>
+  <VersionSelect />
+</patchula-versions>
+<Default><slot /></Default>
+
+<script>
+  import { versionOf } from "../versions";
+
+  for (const element of document.querySelectorAll<HTMLElement>("patchula-versions")) {
+    const missing: string[] = JSON.parse(element.dataset.missing ?? "[]");
+    for (const option of element.querySelectorAll("option")) {
+      const version = versionOf(option.value) ?? "";
+      if (missing.includes(version)) option.value = version ? `/${version}/` : "/";
+    }
+  }
+</script>
+
+<style>
+  patchula-versions {
+    display: contents;
+  }
+  /* Fit labels such as "Next (unreleased)". */
+  patchula-versions :global(select) {
+    width: auto;
+  }
+</style>

@@ -1,0 +1,7 @@
+{
+  "page.editLink": "Edit this page on GitHub",
+  "starlightVersions.outdated.label": "These docs are for {{label}}, not the latest release.",
+  "starlightVersions.link.latest": "Read <a href={{link}}>the latest release's docs</a>.",
+  "starlightVersions.search.outdated.label": "Searching {{label}} only.",
+  "starlightVersions.search.link.latest": "Search <a href={{link}}>the latest release's docs</a> instead."
+}

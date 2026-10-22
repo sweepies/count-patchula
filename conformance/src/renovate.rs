@@ -24,7 +24,7 @@ pub struct Exclusion {
     pub dependencies: usize,
     pub updates: usize,
     pub rule: String,
-    /// The departure's section anchor in docs/renovate/departures.md.
+    /// The departure's section anchor in docs/src/content/docs/renovate/departures.md.
     pub departure: String,
     pub link: String,
 }
@@ -431,7 +431,7 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
                                 .sum(),
                             rule: "renovate-config-manager".into(),
                             departure: "configuration-dependencies".into(),
-                            link: "docs/renovate/departures.md#configuration-dependencies".into(),
+                            link: "docs/src/content/docs/renovate/departures.md#configuration-dependencies".into(),
                         });
                         continue;
                     }

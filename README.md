@@ -4,10 +4,10 @@
   <p><strong>Count Patchula vants to update your deps. He never sleeps. Neither do your CVEs.</strong></p>
   <p>A modern dependency updater with strong defaults.</p>
   <p>
-    <a href="https://count-patchula.sweepy.dev/getting-started">Get started</a> ·
+    <a href="https://count-patchula.sweepy.dev/getting-started/">Get started</a> ·
     <a href="https://count-patchula.sweepy.dev">Documentation</a> ·
-    <a href="https://count-patchula.sweepy.dev/renovate/compatibility">Coming from Renovate</a> ·
-    <a href="https://count-patchula.sweepy.dev/benchmarks">Benchmarks</a>
+    <a href="https://count-patchula.sweepy.dev/renovate/compatibility/">Coming from Renovate</a> ·
+    <a href="https://count-patchula.sweepy.dev/benchmarks/">Benchmarks</a>
   </p>
 </div>
 
@@ -22,7 +22,7 @@ however many repositories use it.
 mise use -g packslip:github.com/sweepies/count-patchula
 ```
 
-Other ways to install him are on the [installation page](https://count-patchula.sweepy.dev/installation).
+Other ways to install him are on the [installation page](https://count-patchula.sweepy.dev/installation/).
 
 Invite the Count into a repository with `patchula.pkl`:
 
@@ -40,12 +40,12 @@ patchula run acme/my-app             # then let him bite
 ```
 
 Lockfile tools come from [mise](https://mise.jdx.dev), so it needs to be on the
-`PATH`. See [getting started](https://count-patchula.sweepy.dev/getting-started).
+`PATH`. See [getting started](https://count-patchula.sweepy.dev/getting-started/).
 
 The CLI is the quickest way to try him, and the [GitHub
-Action](https://count-patchula.sweepy.dev/guide/github-actions) runs him on a
+Action](https://count-patchula.sweepy.dev/guide/github-actions/) runs him on a
 schedule. The recommended way to run him is the [GitHub App
-server](https://count-patchula.sweepy.dev/guide/server): one long-running
+server](https://count-patchula.sweepy.dev/guide/server/): one long-running
 process keeps every cache warm, batches work across repositories, and acts on
 PR checkboxes the moment you tick them. It idles cheaply between batches, so
 usage-billed hosts such as Railway suit it well. Once it is up, `patchula run
@@ -84,14 +84,14 @@ grafana, monica, jellyfin, kafka), each tool alone on the same c7i.xlarge:
 | All six, warm | **14.8 s** | 274.3 s | 18.5× faster |
 | Peak memory, grafana cold | **494 MB** | 3.6 GB | 7.3× less |
 
-The [benchmarks page](https://count-patchula.sweepy.dev/benchmarks) has
+The [benchmarks page](https://count-patchula.sweepy.dev/benchmarks/) has
 the method and every run.
 
 ## Coming from Renovate
 
-The [compatibility matrix](https://count-patchula.sweepy.dev/renovate/compatibility)
+The [compatibility matrix](https://count-patchula.sweepy.dev/renovate/compatibility/)
 lists every manager, datasource and feature, and [migrating a
-config](https://count-patchula.sweepy.dev/renovate/migrating) maps
+config](https://count-patchula.sweepy.dev/renovate/migrating/) maps
 `renovate.json` options onto Pkl.
 
 ## Development
@@ -103,7 +103,7 @@ mise run build      # build the workspace
 mise run test       # offline tests
 mise run lint       # rustfmt, Clippy (warnings denied) and jactionlint
 mise run ci         # fixtures check, lint, test and build
-mise run docs:dev   # the documentation site
+mise run docs:dev   # the documentation site for this checkout
 ```
 
 Builds go through [mr boxington](https://mr-boxington.jdx.dev) for a shared
