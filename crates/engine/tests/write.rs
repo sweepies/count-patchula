@@ -682,28 +682,26 @@ async fn an_advertised_server_is_hidden_in_the_pr_and_the_dashboard() {
     let mut engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
         .unwrap()
         .with_versions_host(false);
-    engine.set_advertised_server(Some("https://patchula.acme.dev".into()));
-    let report = engine
-        .run(
-            Options {
-                repositories: vec!["demo/sandbox".into()],
-                ..Default::default()
-            },
-            false,
-            false,
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        report.repositories[0].status,
-        Status::Complete,
-        "{report:?}"
-    );
+    let options = || Options {
+        repositories: vec!["demo/sandbox".into()],
+        ..Options::default()
+    };
+    // Turning it on later still reaches the PR the first run wrote.
+    for server in [None, Some("https://patchula.acme.dev")] {
+        fake.writes.lock().unwrap().clear();
+        engine.set_advertised_server(server.map(str::to_owned));
+        let report = engine.run(options(), false, false).await.unwrap();
+        assert_eq!(
+            report.repositories[0].status,
+            Status::Complete,
+            "{report:?}"
+        );
+    }
     let writes = fake.writes.lock().unwrap();
     for kind in ["/pulls", "/issues"] {
         let body = writes
             .iter()
-            .filter(|(path, _)| path.ends_with(kind))
+            .filter(|(path, _)| path.contains(kind))
             .find_map(|(_, body)| body["body"].as_str())
             .unwrap_or_else(|| panic!("no {kind} write: {writes:?}"));
         assert_eq!(

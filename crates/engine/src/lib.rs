@@ -350,6 +350,7 @@ impl Engine {
                     &config,
                     &mut plans,
                     self.recheck,
+                    self.advertised_server.as_deref(),
                     inventory.as_ref().expect("write inventory"),
                 )
                 .await;

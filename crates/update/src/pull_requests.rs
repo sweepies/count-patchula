@@ -200,7 +200,7 @@ pub struct Lifecycle {
     /// Update keys now carried by the batch PR; their PRs close as batched.
     batched: BTreeSet<String>,
     /// The server URL to advertise to the CLI, if any.
-    server: Option<String>,
+    pub(crate) server: Option<String>,
 }
 impl Lifecycle {
     pub fn set_advertised_server(&mut self, url: Option<String>) {
@@ -908,15 +908,20 @@ impl Lifecycle {
                 )
             })
             .collect();
+        let inputs = (
+            "notes-render-v4",
+            &text,
+            ranges,
+            self.recheck,
+            self.branch_permits.get(&plan.action.branch),
+        );
+        // Only an advertised server joins the hash, so bodies written without
+        // one keep their hash.
         let content_hash = hash(
-            &serde_json::to_vec(&(
-                "notes-render-v4",
-                &text,
-                ranges,
-                self.recheck,
-                self.branch_permits.get(&plan.action.branch),
-                &self.server,
-            ))
+            &match &self.server {
+                None => serde_json::to_vec(&inputs),
+                Some(url) => serde_json::to_vec(&(inputs, url)),
+            }
             .expect("serializable body intent"),
         );
         let content_marker = format!("<!-- patchula-content:{content_hash} -->");

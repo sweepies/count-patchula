@@ -18,6 +18,8 @@ const ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const LOGINS: &str = "servers.json";
 const CHOICES: &str = "repositories.json";
+/// Open issues and PRs read while looking for the server, 100 a page.
+const DISCOVERY_PAGES: u32 = 5;
 
 type Result<T> = std::result::Result<T, (u8, miette::Report)>;
 fn fail(message: impl std::fmt::Display) -> (u8, miette::Report) {
@@ -153,7 +155,7 @@ pub fn forget(services: &Services, server: &str) -> Result<bool> {
         CHOICES,
         |choices: &mut BTreeMap<String, Choice>| {
             let before = choices.len();
-            choices.retain(|_, choice| choice.server.as_deref() != Some(server));
+            choices.retain(|_, choice| choice.server != server);
             choices.len() != before
         },
     )?;
@@ -165,23 +167,27 @@ fn forget_login(services: &Services, server: &str) -> Result<bool> {
     })
 }
 
-/// Where a repository runs, as the user chose: a server, or this machine.
+/// The user's answer for a repository's advertised server. A refusal keeps
+/// the URL too, so signing out of that server asks again.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Choice {
-    server: Option<String>,
+    server: String,
+    remote: bool,
 }
 
 /// The server for the current checkout's `repository`: the one the user chose
 /// before, or one the Count advertises, if the user wants it. None runs here.
 pub async fn choose(services: &Services, repository: &str) -> Result<Option<String>> {
     if let Some(choice) = load::<Choice>(services, CHOICES)?.remove(repository) {
-        if let Some(server) = &choice.server {
-            eprintln!(
-                "patchula: running {repository} on {server}, as you chose; --no-server runs it here"
-            );
+        if !choice.remote {
+            return Ok(None);
         }
-        return Ok(choice.server);
+        eprintln!(
+            "patchula: running {repository} on {}, as you chose; --no-server runs it here",
+            choice.server
+        );
+        return Ok(Some(choice.server));
     }
     if !services.interactive() {
         return Ok(None);
@@ -194,7 +200,6 @@ pub async fn choose(services: &Services, repository: &str) -> Result<Option<Stri
             "patchula: the Count runs {repository} on {server}. Run there instead of on this machine? [Y/n] "
         ))
         .map_err(|e| fail(format!("cannot read the answer: {e}")))?;
-    let chosen = remote.then_some(server);
     update(
         services,
         CHOICES,
@@ -202,40 +207,75 @@ pub async fn choose(services: &Services, repository: &str) -> Result<Option<Stri
             choices.insert(
                 repository.to_owned(),
                 Choice {
-                    server: chosen.clone(),
+                    server: server.clone(),
+                    remote,
                 },
             );
             true
         },
     )?;
     eprintln!(
-        "patchula: remembered for {repository}. --server or --no-server overrides it once; patchula auth logout --server {} asks again",
-        chosen.as_deref().unwrap_or("<url>")
+        "patchula: remembered for {repository}. --server or --no-server overrides it once; patchula auth logout --server {server} asks again"
     );
-    Ok(chosen)
+    Ok(remote.then_some(server))
 }
 
-/// The server URL in the newest open bot-written issue or PR that has one.
-/// Only an installed App can write as a bot, so no passer-by can plant one.
+/// The server URL in the newest open issue or PR that the server's own bot
+/// wrote. Anyone can paste the marker, and any installed App can write as a
+/// bot, so the author must be the bot the server names.
 async fn discover(services: &Services, repository: &str) -> Option<String> {
     let transport = services.transport().ok()?;
-    let url = format!(
-        "https://api.github.com/repos/{repository}/issues?state=open&sort=updated&direction=desc&per_page=100"
-    );
     // Public repositories answer without a token.
     let token = services.token().ok();
-    let (status, value) = send(&*transport, Method::GET, &url, token.as_deref(), None)
-        .await
-        .ok()?;
-    if status != 200 {
-        return None;
+    let mut checked = std::collections::BTreeSet::new();
+    for page in 1..=DISCOVERY_PAGES {
+        let url = format!(
+            "https://api.github.com/repos/{repository}/issues?state=open&sort=updated&direction=desc&per_page=100&page={page}"
+        );
+        let (status, value) = send(&*transport, Method::GET, &url, token.as_deref(), None)
+            .await
+            .ok()?;
+        let items = value.as_array().filter(|_| status == 200)?;
+        for item in items.iter().filter(|item| item["user"]["type"] == "Bot") {
+            let (Some(author), Some(body)) =
+                (item["user"]["login"].as_str(), item["body"].as_str())
+            else {
+                continue;
+            };
+            let Some(server) = patchula_update::advertise::find(body)
+                .filter(|url| url.starts_with("https://"))
+                .and_then(|url| server(Some(url)).ok().flatten())
+            else {
+                continue;
+            };
+            if !checked.insert((server.clone(), author.to_owned())) {
+                continue;
+            }
+            if names_bot(services, &server).await.as_deref() == Some(author) {
+                return Some(server);
+            }
+        }
+        if items.len() < 100 {
+            break;
+        }
     }
-    value.as_array()?.iter().find_map(|item| {
-        let url = patchula_update::advertise::find(item["body"].as_str()?)?;
-        (item["user"]["type"] == "Bot" && url.starts_with("https://"))
-            .then(|| server(Some(url)).ok().flatten())
-            .flatten()
-    })
+    None
+}
+/// The bot login the server says its App writes as.
+async fn names_bot(services: &Services, server: &str) -> Option<String> {
+    let transport = services.remote_transport().ok()?;
+    let (status, value) = send(
+        &*transport,
+        Method::GET,
+        &format!("{server}/api/v1/auth"),
+        None,
+        None,
+    )
+    .await
+    .ok()?;
+    (status == 200)
+        .then(|| value["bot"].as_str().map(str::to_owned))
+        .flatten()
 }
 
 #[derive(Clone, Serialize, Deserialize)]

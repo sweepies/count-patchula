@@ -59,16 +59,22 @@ fn key(repo: &str, prefix: &str) -> ExtractionKey {
         config_hash: "verified-write-receipts-v3".into(),
     }
 }
-fn intent(plan: &Plan, config: &Config, recheck: Recheck) -> String {
+/// `server` is the advertised URL, which the PR body carries. Only a server
+/// joins the hash, so receipts written without one stay valid.
+fn intent(plan: &Plan, config: &Config, recheck: Recheck, server: Option<&str>) -> String {
+    let inputs = (
+        "release-notes-v4",
+        &plan.identity,
+        &plan.input_fingerprint,
+        &plan.changes,
+        config,
+        recheck,
+    );
     hash(
-        serde_json::to_string(&(
-            "release-notes-v4",
-            &plan.identity,
-            &plan.input_fingerprint,
-            &plan.changes,
-            config,
-            recheck,
-        ))
+        match server {
+            None => serde_json::to_string(&inputs),
+            Some(url) => serde_json::to_string(&(inputs, url)),
+        }
         .expect("serializable intent")
         .as_bytes(),
     )
@@ -136,9 +142,13 @@ pub async fn restore_unchanged(
     config: &Config,
     plans: &mut [Plan],
     recheck: Recheck,
+    server: Option<&str>,
 ) -> Result<bool, String> {
     let inventory = Inventory::read(client, cache, repository, config).await?;
-    restore_inventory(cache, repository, config, plans, recheck, &inventory).await
+    restore_inventory(
+        cache, repository, config, plans, recheck, server, &inventory,
+    )
+    .await
 }
 
 /// Fresh control and branch state shared by lookup, dashboard and write receipts.
@@ -263,6 +273,7 @@ pub async fn restore_inventory(
     config: &Config,
     plans: &mut [Plan],
     recheck: Recheck,
+    server: Option<&str>,
     inventory: &Inventory,
 ) -> Result<bool, String> {
     let bytes = cache
@@ -315,7 +326,7 @@ pub async fn restore_inventory(
         } else if let Some(receipt) = receipts.closed.get(&plan.action.branch) {
             if receipt.actor != actor {
                 Err("actor-mismatch")
-            } else if receipt.intent != intent(plan, config, recheck) {
+            } else if receipt.intent != intent(plan, config, recheck, server) {
                 Err("intent-changed")
             } else if !closed.iter().any(|pr| {
                 pr["id"] == receipt.pr["node_id"]
@@ -333,7 +344,7 @@ pub async fn restore_inventory(
                 Ok(())
             }
         } else {
-            restore_write(&receipts, refs, actor, plan, config, recheck)
+            restore_write(&receipts, refs, actor, plan, config, recheck, server)
         };
         match result {
             Ok(()) => {
@@ -360,6 +371,7 @@ fn restore_write(
     plan: &mut Plan,
     config: &Config,
     recheck: Recheck,
+    server: Option<&str>,
 ) -> Result<(), &'static str> {
     let receipt = receipts
         .writes
@@ -368,7 +380,7 @@ fn restore_write(
     if receipt.actor != actor {
         return Err("actor-mismatch");
     }
-    if receipt.intent != intent(plan, config, recheck) {
+    if receipt.intent != intent(plan, config, recheck, server) {
         return Err("intent-changed");
     }
     let r = refs
@@ -469,7 +481,7 @@ pub async fn save_receipts(
                 plan.action.branch.clone(),
                 ClosedReceipt {
                     actor: actor.into(),
-                    intent: intent(plan, config, lifecycle.recheck),
+                    intent: intent(plan, config, lifecycle.recheck, lifecycle.server.as_deref()),
                     pr: json!({"node_id":pr["node_id"],"body":pr["body"]}),
                 },
             );
@@ -517,7 +529,7 @@ pub async fn save_receipts(
                 commit: commit.clone(),
                 tree: tree.clone(),
                 base: plan.action.base_commit.clone(),
-                intent: intent(plan, config, lifecycle.recheck),
+                intent: intent(plan, config, lifecycle.recheck, lifecycle.server.as_deref()),
                 pr: pr_state(pr),
                 fingerprint: plan.fingerprint.clone(),
                 files: plan.action.files.clone(),

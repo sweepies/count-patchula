@@ -73,7 +73,7 @@ impl Services {
             eprintln!();
             return Ok(answer);
         }
-        let mut line = String::new();
+        let mut line = String::default();
         io::stdin().read_line(&mut line)?;
         Ok(!matches!(
             line.trim().to_ascii_lowercase().as_str(),

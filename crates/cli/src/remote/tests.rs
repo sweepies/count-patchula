@@ -4,7 +4,7 @@ use patchula_http::{Exchange, Response};
 use std::sync::{Arc, Mutex};
 
 const SERVER: &str = "https://patchula.acme.dev";
-const ISSUES: &str = "https://api.github.com/repos/acme/app/issues?state=open&sort=updated&direction=desc&per_page=100";
+const ISSUES: &str = "https://api.github.com/repos/acme/app/issues?state=open&sort=updated&direction=desc&per_page=100&page=";
 
 /// The server and GitHub's login endpoints. `revoked` tokens get a 401 from the server.
 #[derive(Default)]
@@ -38,20 +38,33 @@ impl Transport for Fake {
         ));
         assert!(!url.contains("ghr_"), "a refresh token reached a URL");
         let (status, value) = match (request.method().as_str(), url.as_str()) {
-            ("GET", ISSUES) => (
-                200,
-                json!([
-                    // Anyone can write a marker; only a bot's counts.
-                    {"user": {"type": "User"},
-                        "body": "<!-- patchula-server:https://evil.acme.dev -->"},
-                    {"user": {"type": "Bot"}, "body": "no marker here"},
-                    {"user": {"type": "Bot"},
-                        "body": format!("table\n<!-- patchula-server:{SERVER} -->\n")},
-                ]),
-            ),
-            ("GET", "https://patchula.acme.dev/api/v1/auth") => {
-                (200, json!({"clientId": "Iv23client"}))
+            ("GET", issues) if issues.starts_with(ISSUES) => {
+                let page: usize = issues[ISSUES.len()..].parse().unwrap();
+                // A full first page of other items, then the markers.
+                let items = if page == 1 {
+                    vec![json!({"user": {"type": "User", "login": "human"}, "body": ""}); 100]
+                } else {
+                    vec![
+                        // Anyone can write a marker; only the server's own bot counts.
+                        json!({"user": {"type": "User", "login": "human"},
+                            "body": "<!-- patchula-server:https://evil.acme.dev -->"}),
+                        json!({"user": {"type": "Bot", "login": "other[bot]"},
+                            "body": "<!-- patchula-server:https://evil.acme.dev -->"}),
+                        json!({"user": {"type": "Bot", "login": "imposter[bot]"},
+                            "body": format!("<!-- patchula-server:{SERVER} -->")}),
+                        json!({"user": {"type": "Bot", "login": "patchula[bot]"},
+                            "body": format!("table\n<!-- patchula-server:{SERVER} -->\n")}),
+                    ]
+                };
+                (200, json!(items))
             }
+            ("GET", "https://evil.acme.dev/api/v1/auth") => {
+                (200, json!({"clientId": "Iv23evil", "bot": "evil[bot]"}))
+            }
+            ("GET", "https://patchula.acme.dev/api/v1/auth") => (
+                200,
+                json!({"clientId": "Iv23client", "bot": "patchula[bot]"}),
+            ),
             ("POST", DEVICE_CODE_URL) => {
                 assert_eq!(body, "client_id=Iv23client");
                 (
@@ -328,7 +341,10 @@ async fn a_checkout_finds_the_server_the_count_advertises_and_remembers_yes() {
         .await
         .unwrap();
     assert_eq!(chosen.as_deref(), Some(SERVER));
-    assert_eq!(choices(dir.path()), json!({"acme/app": {"server": SERVER}}));
+    assert_eq!(
+        choices(dir.path()),
+        json!({"acme/app": {"server": SERVER, "remote": true}})
+    );
     // Remembered: no question, and no GitHub request, even without a terminal.
     fake.requests.lock().unwrap().clear();
     let again = choose(&services(fake.clone(), dir.path()), "acme/app")
@@ -354,13 +370,24 @@ async fn no_is_remembered_and_runs_here() {
         .await
         .unwrap();
     assert_eq!(chosen, None);
-    assert_eq!(choices(dir.path()), json!({"acme/app": {"server": null}}));
+    assert_eq!(
+        choices(dir.path()),
+        json!({"acme/app": {"server": SERVER, "remote": false}})
+    );
     fake.requests.lock().unwrap().clear();
     let again = choose(&asking(fake.clone(), dir.path(), true), "acme/app")
         .await
         .unwrap();
     assert_eq!(again, None);
     assert!(fake.requests.lock().unwrap().is_empty());
+    // Signing out of the declined server asks again too.
+    run(
+        &app(&["auth", "logout", "--server", SERVER]),
+        &services(fake, dir.path()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(choices(dir.path()), json!({}));
 }
 
 #[tokio::test]

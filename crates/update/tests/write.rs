@@ -1677,6 +1677,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
             &config,
             std::slice::from_mut(&mut next),
             Default::default(),
+            None,
         )
         .await
         .unwrap();
@@ -1989,6 +1990,7 @@ async fn closed_update_receipts_are_freshly_verified_and_invalidated() {
             &config,
             std::slice::from_mut(&mut warm),
             Default::default(),
+            None,
         )
         .await
         .unwrap();

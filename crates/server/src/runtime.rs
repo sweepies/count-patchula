@@ -130,11 +130,17 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
         derived_url,
         signs_in: client_id.is_some(),
     });
-    let webhook = Webhook::new(cache.clone(), settings.clone(), bot, options.webhook_secret)
-        .with_app(app.clone());
+    let webhook = Webhook::new(
+        cache.clone(),
+        settings.clone(),
+        bot.clone(),
+        options.webhook_secret,
+    )
+    .with_app(app.clone());
     let api = crate::remote::Api::new(crate::remote::Parts {
         app: app.clone(),
         client_id,
+        bot: bot.clone(),
         transport,
         cache: cache.clone(),
         settings: settings.clone(),

@@ -166,12 +166,15 @@ before it exits, within the shutdown deadline.
 
 The server hides its URL in an HTML comment in each PR and dashboard it writes.
 `patchula lookup` or `patchula run` in a checkout, with no repository named and
-no `--server`, looks for that comment in the repository's open issues and PRs.
-Only ones written by a bot count, since only an installed App can write as one.
-If it finds a server, it asks whether to run there, and remembers your answer
-for that repository in `~/.config/patchula/repositories.json`.
+no `--server`, looks for that comment in the newest 500 open issues and PRs.
+The comment counts only if its author is the bot that the server names at
+`/api/v1/auth`, so a comment pasted by someone else, or written by another
+App, is ignored. If it finds a server, it asks whether to run there, and
+remembers your answer for that repository in
+`~/.config/patchula/repositories.json`.
 
-The answer holds until you sign out of that server with `patchula auth logout`.
+The answer, yes or no, holds until you sign out of that server with
+`patchula auth logout`.
 `--server` or `--no-server` overrides it for one command. Nothing is looked up
 without a terminal, and local-only flags such as `--local` always run locally.
 
