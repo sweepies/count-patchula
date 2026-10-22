@@ -16,7 +16,7 @@ yaml-rust2 = "0.11.0"
 patchula-mise = { path = "../mise" }
 jsonc-parser = "0.34.0"
 regex = "1.13.1"
-patchula-config = { version = "0.1.0", path = "../config" }
+patchula-config = { version = "0.2.0", path = "../config" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_yaml_ng = "0.10.0"
