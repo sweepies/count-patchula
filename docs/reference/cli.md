@@ -22,16 +22,46 @@ Exit codes: 0 = success; 1 = runtime error; 2 = usage or configuration error.
 
 | Flag | Description | Default |
 | --- | --- | --- |
-| `--server` | Run the API-only GitHub App webhook server (no subcommand). |  |
-| `--settings <SETTINGS>` | Operator Pkl settings file; also PATCHULA_SERVER_SETTINGS. |  |
-| `--listen <LISTEN>` | Server bind address; also PATCHULA_LISTEN (default 127.0.0.1:8080). |  |
-| `--server-cache <SERVER_CACHE>` | Persistent server cache/queue; also PATCHULA_SERVER_CACHE. |  |
-| `--app-id <APP_ID>` | GitHub App ID; also PATCHULA_APP_ID. |  |
-| `--private-key-file <PRIVATE_KEY_FILE>` | PEM private key file; also PATCHULA_APP_PRIVATE_KEY_FILE. |  |
-| `--webhook-secret-file <WEBHOOK_SECRET_FILE>` | Webhook secret file; also PATCHULA_WEBHOOK_SECRET_FILE. |  |
-| `--shutdown-timeout-secs <SHUTDOWN_TIMEOUT_SECS>` | Graceful server drain deadline; also PATCHULA_SHUTDOWN_TIMEOUT_SECS (default 60). |  |
 | `-h --help` | Print help |  |
 | `-V --version` | Print version |  |
+
+## `patchula auth`
+
+- **Usage:** `patchula auth <SUBCOMMAND>`
+
+Sign in to or out of a Count Patchula server for `--server`.
+
+### Flags
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `-h --help` | Print help |  |
+
+## `patchula auth login`
+
+- **Usage:** `patchula auth login [--server <SERVER>]`
+
+Sign in with the server's GitHub App, replacing any stored token.
+
+### Flags
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--server <SERVER>` | Server URL; also PATCHULA_SERVER. |  |
+| `-h --help` | Print help |  |
+
+## `patchula auth logout`
+
+- **Usage:** `patchula auth logout [--server <SERVER>]`
+
+Forget the stored token for a server.
+
+### Flags
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--server <SERVER>` | Server URL; also PATCHULA_SERVER. |  |
+| `-h --help` | Print help |  |
 
 ## `patchula config`
 
@@ -130,6 +160,7 @@ Extract dependencies and report available updates without writing repositories.
 | `--config <CONFIG>` | Local Pkl override applied to every selected repository. |  |
 | `--config-dir <CONFIG_DIR>` | Per-repository local overrides: `<dir>/<owner>/<name>.pkl` wins over `<dir>/<name>.pkl`. Unmatched repositories use their own `patchula.pkl`, and are skipped without one. All matched files are validated before repository scans. Mutually exclusive with `--config`. |  |
 | `--local <LOCAL>` | Read one repository from this local directory instead of GitHub. Lookups still reach registries, and nothing is written: use it with `lookup` or `run --dry-run`. |  |
+| `--server <SERVER>` | Run on a Count Patchula server with its App's credentials and caches; also PATCHULA_SERVER. You sign in with GitHub on first use, and need push access to each repository. Local config, cache and HTTP flags do not apply. |  |
 | `-h --help` | Print help |  |
 
 ## `patchula run`
@@ -157,8 +188,28 @@ Create or update dependency branches and pull requests with verified API commits
 | `--config <CONFIG>` | Local Pkl override applied to every selected repository. |  |
 | `--config-dir <CONFIG_DIR>` | Per-repository local overrides: `<dir>/<owner>/<name>.pkl` wins over `<dir>/<name>.pkl`. Unmatched repositories use their own `patchula.pkl`, and are skipped without one. All matched files are validated before repository scans. Mutually exclusive with `--config`. |  |
 | `--local <LOCAL>` | Read one repository from this local directory instead of GitHub. Lookups still reach registries, and nothing is written: use it with `lookup` or `run --dry-run`. |  |
+| `--server <SERVER>` | Run on a Count Patchula server with its App's credentials and caches; also PATCHULA_SERVER. You sign in with GitHub on first use, and need push access to each repository. Local config, cache and HTTP flags do not apply. |  |
 | `--dry-run` | Print planned branches, files and unified diffs without writing to GitHub. |  |
 | `--allow-lockfile-pending` | Permit manifest-only test branches for unsupported binary bun locks. |  |
+| `-h --help` | Print help |  |
+
+## `patchula serve`
+
+- **Usage:** `patchula serve [FLAGS]`
+
+Run the API-only GitHub App webhook server.
+
+### Flags
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--settings <SETTINGS>` | Operator Pkl settings file; also PATCHULA_SERVER_SETTINGS. |  |
+| `--listen <LISTEN>` | Server bind address; also PATCHULA_LISTEN (default 127.0.0.1:8080). |  |
+| `--cache <CACHE>` | Persistent server cache and queue; also PATCHULA_SERVER_CACHE. |  |
+| `--app-id <APP_ID>` | GitHub App ID; also PATCHULA_APP_ID. |  |
+| `--private-key-file <PRIVATE_KEY_FILE>` | PEM private key file; also PATCHULA_APP_PRIVATE_KEY_FILE. |  |
+| `--webhook-secret-file <WEBHOOK_SECRET_FILE>` | Webhook secret file; also PATCHULA_WEBHOOK_SECRET_FILE. |  |
+| `--shutdown-timeout-secs <SHUTDOWN_TIMEOUT_SECS>` | Graceful server drain deadline; also PATCHULA_SHUTDOWN_TIMEOUT_SECS (default 60). |  |
 | `-h --help` | Print help |  |
 
 ## `patchula tools`
@@ -225,5 +276,6 @@ Browse dependencies and updates in the terminal; with `--local`, apply selected 
 | `--config <CONFIG>` | Local Pkl override applied to every selected repository. |  |
 | `--config-dir <CONFIG_DIR>` | Per-repository local overrides: `<dir>/<owner>/<name>.pkl` wins over `<dir>/<name>.pkl`. Unmatched repositories use their own `patchula.pkl`, and are skipped without one. All matched files are validated before repository scans. Mutually exclusive with `--config`. |  |
 | `--local <LOCAL>` | Read one repository from this local directory instead of GitHub. Lookups still reach registries, and nothing is written: use it with `lookup` or `run --dry-run`. |  |
+| `--server <SERVER>` | Run on a Count Patchula server with its App's credentials and caches; also PATCHULA_SERVER. You sign in with GitHub on first use, and need push access to each repository. Local config, cache and HTTP flags do not apply. |  |
 | `--once` | Print a plain-text snapshot of the updates and exit, for pipes and CI logs. |  |
 | `-h --help` | Print help |  |

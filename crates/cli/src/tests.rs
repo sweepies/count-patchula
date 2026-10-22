@@ -263,6 +263,7 @@ async fn cli_run_reopens_disk_receipts_with_bot_authors_and_mixed_pr_inventory()
         let services = Services {
             token: Some("offline-installation".into()),
             transport: Some(fake.clone()),
+            ..Services::default()
         };
         assert_eq!(run(&app, &services).await.unwrap(), 0);
         let cache = Cache::open(&cache_path, Default::default()).await.unwrap();

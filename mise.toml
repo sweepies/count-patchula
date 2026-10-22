@@ -284,7 +284,7 @@ run = "cargo run --quiet --locked -p patchula-cli -- run"
 [tasks.server]
 description = "Run the API-only GitHub App server; accepts server flags"
 raw_args = true
-run = "cargo run --quiet --locked -p patchula-cli -- --server"
+run = "cargo run --quiet --locked -p patchula-cli -- serve"
 
 [tasks."server:schema"]
 description = "Print the published operator settings schema"

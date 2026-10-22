@@ -169,7 +169,7 @@ Renovate's other schemes, including `regex` versioning, `node`, `debian`,
 | Commit signing | configurable author | always API commits signed by GitHub |
 | Batch PR by checkbox | no | [yes](/guide/batch) |
 | Machine-readable output | logs | a [versioned JSON report](/reference/report) |
-| Self-hosted server | Renovate CE, the Mend app | [`patchula --server`](/guide/server) |
+| Self-hosted server | Renovate CE, the Mend app | [`patchula serve`](/guide/server) |
 
 ## Performance
 

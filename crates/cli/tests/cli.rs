@@ -66,7 +66,7 @@ fn settings_diagnostics_reach_check_and_server_startup() {
     assert!(diagnostic.contains("server.pkl") && diagnostic.contains("concurrency"));
     assert!(diagnostic.contains('│'), "{diagnostic}");
     let output = Command::new(env!("CARGO_BIN_EXE_patchula"))
-        .args(["--server", "--app-id", "1", "--settings"])
+        .args(["serve", "--app-id", "1", "--settings"])
         .arg(&settings)
         .env(
             "PATCHULA_APP_PRIVATE_KEY",
@@ -98,7 +98,7 @@ fn server_startup_errors_are_json_and_never_echo_secret_values() {
     std::fs::write(&settings, "amends \"PatchulaServer.pkl\"\n").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_patchula"))
         .args([
-            "--server",
+            "serve",
             "--app-id",
             "1",
             "--listen",
@@ -108,7 +108,7 @@ fn server_startup_errors_are_json_and_never_echo_secret_values() {
             "--settings",
         ])
         .arg(settings)
-        .arg("--server-cache")
+        .arg("--cache")
         .arg(dir.path().join("cache.sqlite"))
         .env(
             "PATCHULA_APP_PRIVATE_KEY",

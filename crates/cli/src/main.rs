@@ -2,10 +2,11 @@
 #![forbid(unsafe_code)]
 
 mod cli;
+mod remote;
 mod server;
 mod tui;
 
-use cli::{App, Command, ConfigCommand, ToolsCommand};
+use cli::{App, AuthCommand, Command, ConfigCommand, ToolsCommand};
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 
@@ -28,6 +29,8 @@ struct Services {
     token: Option<String>,
     #[cfg(test)]
     transport: Option<std::sync::Arc<dyn patchula_http::Transport>>,
+    #[cfg(test)]
+    config_dir: Option<std::path::PathBuf>,
 }
 impl Services {
     fn token(&self) -> Result<String, std::env::VarError> {
@@ -48,31 +51,74 @@ impl Services {
         }
         Ok(std::sync::Arc::new(patchula_http::Network::new()?))
     }
+    /// For `--server`, which may be a `patchula serve` on loopback without TLS.
+    fn remote_transport(
+        &self,
+    ) -> Result<std::sync::Arc<dyn patchula_http::Transport>, patchula_http::Error> {
+        #[cfg(test)]
+        if let Some(transport) = &self.transport {
+            return Ok(transport.clone());
+        }
+        Ok(std::sync::Arc::new(
+            patchula_http::Network::with_loopback_http()?,
+        ))
+    }
 }
 
 async fn run(app: &App, services: &Services) -> Result<u8, (u8, miette::Report)> {
-    if app.server {
-        if app.command.is_some() {
-            return Err((
-                2,
-                miette::miette!("--server cannot be combined with a subcommand"),
-            ));
-        }
-        return server::run(app).await;
-    }
-    let command = app.command.as_ref().ok_or_else(|| {
-        (
-            2,
-            miette::miette!("choose a subcommand or --server; see --help"),
-        )
-    })?;
+    let command = app
+        .command
+        .as_ref()
+        .ok_or_else(|| (2, miette::miette!("choose a subcommand; see --help")))?;
     match command {
+        Command::Auth(auth) => auth_command(app, auth, services).await,
         Command::Config(config) => config_command(app, config),
         Command::Lookup(options) => batch(app, options, None, services).await,
         Command::Run(options) => batch(app, &options.lookup, Some(options), services).await,
         Command::Tui(tui) => tui_command(app, tui, services).await,
         Command::Tools(tools) => tools_command(app, tools).await,
+        Command::Serve(serve) => server::run(app, serve).await,
     }
+}
+
+/// `patchula auth login|logout`: manage the token for a `--server`.
+async fn auth_command(
+    app: &App,
+    auth: &cli::Auth,
+    services: &Services,
+) -> Result<u8, (u8, miette::Report)> {
+    let (AuthCommand::Login(target) | AuthCommand::Logout(target)) = &auth.command;
+    let server = remote::server(target.server.as_deref())?.ok_or_else(|| {
+        (
+            2,
+            miette::miette!("name the server with --server or {}", remote::SERVER_VAR),
+        )
+    })?;
+    let (done, message) = match auth.command {
+        AuthCommand::Login(_) => {
+            remote::sign_in(services, &server).await?;
+            (true, format!("Signed in to {server}"))
+        }
+        AuthCommand::Logout(_) => {
+            let removed = remote::forget(services, &server)?;
+            (
+                removed,
+                if removed {
+                    format!("Signed out of {server}")
+                } else {
+                    format!("Not signed in to {server}")
+                },
+            )
+        }
+    };
+    let result = if app.json {
+        serde_json::json!({"schemaVersion":1,"server":server,"changed":done}).to_string()
+    } else {
+        message
+    };
+    writeln!(io::stdout().lock(), "{result}")
+        .map(|_| 0)
+        .map_err(|e| (1, miette::miette!("{e}")))
 }
 
 /// `patchula config ...`: print or validate configuration and server settings.
@@ -205,6 +251,7 @@ async fn tools_command(app: &App, tools: &cli::Tools) -> Result<u8, (u8, miette:
 #[tokio::main]
 async fn main() -> ExitCode {
     let app = App::parse();
+    let serving = matches!(app.command, Some(Command::Serve(_)));
     // Only our explicitly sanitized events reach stderr. Dependency HTTP debug
     // logs can contain headers even when the user requests maximum verbosity.
     use tracing_subscriber::{filter::Targets, prelude::*};
@@ -213,12 +260,12 @@ async fn main() -> ExitCode {
         .and_then(|value| value.parse::<tracing::level_filters::LevelFilter>().ok())
         .unwrap_or(if app.verbose >= 2 {
             tracing::level_filters::LevelFilter::DEBUG
-        } else if app.server {
+        } else if serving {
             tracing::level_filters::LevelFilter::INFO
         } else {
             tracing::level_filters::LevelFilter::WARN
         });
-    let layer = if app.server {
+    let layer = if serving {
         tracing_subscriber::fmt::layer()
             .json()
             .with_writer(io::stderr)
@@ -246,7 +293,7 @@ async fn main() -> ExitCode {
     match run(&app, &Services::default()).await {
         Ok(code) => ExitCode::from(code),
         Err((code, error)) => {
-            if app.server {
+            if serving {
                 let diagnostic = if error.source_code().is_some() {
                     format!("{error:?}")
                 } else {
@@ -380,6 +427,45 @@ async fn batch(
         );
     }
     Ok(if errors == 0 { 0 } else { 1 })
+}
+
+/// A lookup or run on a server. Only the repositories and the mode travel;
+/// the server applies each repository's own `patchula.pkl`.
+async fn remote_report(
+    app: &App,
+    options: &cli::Lookup,
+    run: Option<&cli::Run>,
+    services: &Services,
+    server: &str,
+) -> Result<patchula_report::Report, (u8, miette::Report)> {
+    let local_only = [
+        (options.local.is_some(), "--local"),
+        (options.config.is_some(), "--config"),
+        (options.config_dir.is_some(), "--config-dir"),
+        (options.all_repos, "--all-repos"),
+        (
+            run.is_some_and(|r| r.allow_lockfile_pending),
+            "--allow-lockfile-pending",
+        ),
+        // The server's operator setting decides the checkbox wording.
+        (app.recheck.is_some(), "--recheck"),
+    ];
+    if let Some((_, flag)) = local_only.iter().find(|(set, _)| *set) {
+        return Err((
+            2,
+            miette::miette!(
+                "{flag} only works on this machine, not with --server or {}",
+                remote::SERVER_VAR
+            ),
+        ));
+    }
+    let repositories = repositories(options).map_err(|e| (2, e))?;
+    let mode = match run {
+        None => remote::Mode::Lookup,
+        Some(run) if run.dry_run => remote::Mode::DryRun,
+        Some(_) => remote::Mode::Run,
+    };
+    remote::report(services, server, repositories, mode).await
 }
 
 /// HTTP settings from the lookup flags.
@@ -577,6 +663,9 @@ async fn report(
     use patchula_engine::{Engine, Options};
     if options.concurrency == 0 || options.concurrency > 100 {
         return Err((2, miette::miette!("concurrency must be 1..100")));
+    }
+    if let Some(server) = remote::server(options.server.as_deref())? {
+        return remote_report(app, options, run, services, &server).await;
     }
     let repositories = repositories(options).map_err(|e| (2, e))?;
     let http_options = http_options(options)?;

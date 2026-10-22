@@ -1,5 +1,5 @@
 //! Flags/env are operator overrides; secret contents never enter the usage model.
-use crate::cli::{App, Recheck};
+use crate::cli::{App, Recheck, Serve};
 use std::{path::PathBuf, time::Duration};
 
 type Result<T> = std::result::Result<T, (u8, miette::Report)>;
@@ -40,25 +40,25 @@ fn secret(path: Option<&PathBuf>, file_env: &str, value_env: &str) -> Result<Vec
     }
     Ok(bytes)
 }
-pub async fn run(app: &App) -> Result<u8> {
-    let settings = app
+pub async fn run(app: &App, serve: &Serve) -> Result<u8> {
+    let settings = serve
         .settings
         .clone()
         .or(env("PATCHULA_SERVER_SETTINGS")?.map(PathBuf::from))
-        .ok_or_else(|| invalid("--server requires --settings or PATCHULA_SERVER_SETTINGS"))?;
-    let listen = app.listen.map(Ok).unwrap_or_else(|| {
+        .ok_or_else(|| invalid("serve requires --settings or PATCHULA_SERVER_SETTINGS"))?;
+    let listen = serve.listen.map(Ok).unwrap_or_else(|| {
         env("PATCHULA_LISTEN")?
             .unwrap_or_else(|| "127.0.0.1:8080".into())
             .parse()
             .map_err(|_| invalid("invalid server listen address"))
     })?;
-    let app_id = app.app_id.map(Ok).unwrap_or_else(|| {
+    let app_id = serve.app_id.map(Ok).unwrap_or_else(|| {
         env("PATCHULA_APP_ID")?
             .ok_or_else(|| invalid("server requires --app-id or PATCHULA_APP_ID"))?
             .parse()
             .map_err(|_| invalid("invalid App ID"))
     })?;
-    let timeout = app.shutdown_timeout_secs.map(Ok).unwrap_or_else(|| {
+    let timeout = serve.shutdown_timeout_secs.map(Ok).unwrap_or_else(|| {
         env("PATCHULA_SHUTDOWN_TIMEOUT_SECS")?
             .unwrap_or_else(|| "60".into())
             .parse::<u64>()
@@ -74,20 +74,20 @@ pub async fn run(app: &App) -> Result<u8> {
     };
     patchula_server::serve(patchula_server::Options {
         settings,
-        cache: app
-            .server_cache
+        cache: serve
+            .cache
             .clone()
             .or(env("PATCHULA_SERVER_CACHE")?.map(PathBuf::from))
             .unwrap_or_else(|| ".patchula-server.sqlite".into()),
         listen,
         app_id,
         private_key: secret(
-            app.private_key_file.as_ref(),
+            serve.private_key_file.as_ref(),
             "PATCHULA_APP_PRIVATE_KEY_FILE",
             "PATCHULA_APP_PRIVATE_KEY",
         )?,
         webhook_secret: secret(
-            app.webhook_secret_file.as_ref(),
+            serve.webhook_secret_file.as_ref(),
             "PATCHULA_WEBHOOK_SECRET_FILE",
             "PATCHULA_WEBHOOK_SECRET",
         )?,

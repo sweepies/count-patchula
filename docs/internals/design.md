@@ -106,10 +106,13 @@ ends over it, so a batch behaves the same however it was started.
 
 - **CLI** (`patchula run`, `patchula lookup`): one batch per invocation,
   with a token supplied by the caller.
-- **Server** (`patchula --server`): a long-running process that exposes an API
+- **Server** (`patchula serve`): a long-running process that exposes an API
   for GitHub webhooks (signatures verified before parsing) plus health and
   readiness endpoints, keeps one de-duplicated queue, runs sweeps on a cron
   schedule, and drains work in batches with caches kept warm.
+- **CLI on a server** (`--server`): the CLI signs in with the server's App
+  through GitHub's device flow, and the server runs the lookup or run with its
+  own credentials once the user is shown to have push access.
 
 Checkboxes patchula adds to issues and PRs say when a click takes effect:
 "re-check now" in server mode, "re-check on the next run" in CLI mode. Operators
