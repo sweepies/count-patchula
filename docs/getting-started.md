@@ -7,12 +7,13 @@ the Count, and about five minutes.
 ## 1. Install patchula
 
 ```sh
-cargo install --git https://github.com/sweepies/count-patchula --locked patchula-cli
+mise use -g packslip:github.com/sweepies/count-patchula
 patchula --version
 ```
 
-There are no release binaries yet. See [installation](/installation) for
-building from a checkout and for what the runner needs at run time.
+mise checks the download against the release's signed manifest. See
+[installation](/installation) for release archives, Cargo, building from a
+checkout, and what the runner needs at run time.
 
 ## 2. Add a config to the repository
 
