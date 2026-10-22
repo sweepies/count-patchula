@@ -239,105 +239,16 @@ dir = "docs"
 tools = { node = "24.21.0", aube = "2.8.1" }
 run = "aube ci"
 
-[tasks."docs:assemble"]
-description = "Lay out the versioned documentation site in docs/.site from the release tags whose tree has docs/astro.config.mjs: the latest at the root, this checkout under /next/, and each older minor line's last release under /vX.Y.x/"
-dir = "docs"
-run = '''
-#!/usr/bin/env bash
-set -euo pipefail
-# Workers Builds and Actions clone without tags, often shallowly.
-if [ -z "$(git tag -l 'v*')" ] || [ "$(git rev-parse --is-shallow-repository)" = true ]; then
-  git fetch --quiet --depth=1 origin '+refs/tags/v*:refs/tags/v*'
-fi
-tags=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | command grep -v -- - || true)
-if [ -z "$tags" ]; then
-  echo "docs:assemble: no release tags; is origin reachable?" >&2
-  exit 1
-fi
-# Only releases whose tree has this Starlight site are versions of it. Earlier
-# releases had a different site and are left out.
-config=docs/astro.config.mjs
-starlight=""
-for tag in $tags; do
-  if git -C .. cat-file -e "$tag:$config" 2>/dev/null; then starlight="$starlight $tag"; fi
-done
-tags="${starlight# }"
-latest="${tags%% *}"
-if [ -z "$latest" ]; then
-  echo "docs:assemble: no release tag has $config, so there is no release to serve at the root. The site builds once a release is tagged from a commit with the Starlight site; until then, mise run docs:dev serves this checkout." >&2
-  exit 1
-fi
-rm -rf .site
-# The site's machinery is this checkout's src/. Only the pages and the sidebar
-# differ by version.
-cp -R src .site
-rm -rf .site/content/docs
-mkdir -p .site/content/docs .site/content/versions
-docs=docs/src/content/docs
-# version NAME TREE: a version's pages, from git tree TREE or from this checkout
-# when TREE is empty, in content/docs/NAME, or at the root when NAME is empty.
-version() {
-  local name="$1" tree="$2" dir=".site/content/docs${1:+/$1}" key="${1:-root}" matches match page ref path up sidebar
-  mkdir -p "$dir"
-  if [ -n "$tree" ]; then
-    if ! git -C .. cat-file -e "$tree:$docs" 2>/dev/null; then
-      echo "docs:assemble: $tree has no $docs" >&2
-      exit 1
-    fi
-    git -C .. archive "$tree" "$docs" | tar -x -C "$dir" --strip-components=4
-    sidebar=$(git -C .. show "$tree:docs/sidebar.json")
-  else
-    cp -R src/content/docs/. "$dir"
-    sidebar=$(cat sidebar.json)
-  fi
-  if [ -n "$name" ]; then
-    printf '{"sidebar": %s}\n' "$sidebar" > ".site/content/versions/$name.json"
-  else
-    printf '%s\n' "$sidebar" > .site/sidebar.json
-  fi
-  # Pages reach files outside the docs collection by relative path, such as the
-  # Pkl schemas and the hero logo. Each version gets its own copies, from the
-  # same tree, under repo/NAME/, and its pages point there.
-  matches=$(command grep -rEo --include='*.md' --include='*.mdx' "(from [\"']|^ *(file|dark|light): |\]\()\.\./[^\"') ]+" "$dir" || true)
-  while IFS= read -r match; do
-    [ -n "$match" ] || continue
-    page="${match%%:*}"
-    ref="../${match#*../}"
-    rel="${page#"$dir"/}"
-    path=$(printf '%s\n' "$docs/$(dirname "$rel")/${ref%%\?*}" | sed -E -e ':a' -e 's#/\./#/#' -e 's#(^|/)[^/.][^/]*/\.\./#\1#' -e 'ta')
-    case "$path" in "$docs"/*) continue ;; esac
-    mkdir -p ".site/repo/$key/$(dirname "$path")"
-    if [ -n "$tree" ]; then git -C .. show "$tree:$path" > ".site/repo/$key/$path"; else cp "../$path" ".site/repo/$key/$path"; fi
-    up=$(dirname "${page#.site/}" | sed 's#[^/][^/]*#..#g')
-    sed -i.orig "s#${ref//./\\.}#$up/repo/$key/$path${ref#"${ref%%\?*}"}#g" "$page" && rm "$page.orig"
-  done <<< "$matches"
-}
-version "" "$latest"
-printf '%s\n' "$latest" > .site/current
-version next ""
-seen="${latest%.*}"
-older=""
-for tag in $tags; do
-  minor="${tag%.*}"
-  case " $seen " in *" $minor "*) continue ;; esac
-  seen="$seen $minor"
-  older="$older /$minor.x/"
-  version "$minor.x" "$tag"
-done
-echo "docs:assemble: $latest at the root, this checkout at /next/${older:+, older lines at$older}"
-'''
-
 [tasks."docs:dev"]
-description = "Serve this checkout's documentation site with live reload, unversioned"
+description = "Serve the documentation site with live reload"
 depends = ["docs:install"]
 dir = "docs"
 tools = { node = "24.21.0", aube = "2.8.1" }
-env = { PATCHULA_DOCS_DEV = "1" }
 run = "aube run dev"
 
 [tasks."docs:build"]
-description = "Build the versioned documentation site into docs/dist"
-depends = ["docs:install", "docs:assemble"]
+description = "Build the documentation site into docs/dist"
+depends = ["docs:install"]
 dir = "docs"
 tools = { node = "24.21.0", aube = "2.8.1" }
 run = "aube run build"
