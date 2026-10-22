@@ -133,56 +133,14 @@ pub fn plan(
                     if best != Some(update) {
                         continue;
                     }
-                    // Pins share one branch, except reference data: a pin branch of
-                    // its own lets it merge without waiting on unrelated pins, and
-                    // keeps it apart from that package's version upgrade.
-                    let reference_data = dep
-                        .kinds()
-                        .contains(&patchula_config::DependencyKind::ReferenceData);
-                    let (identity, label) = if update.update_type == "pin"
-                        && !reference_data
-                        && (allow_pending || crate::lockfiles::job(dep, update, snapshot).is_ok())
-                    {
-                        ("pins".into(), "pin-dependencies".into())
-                    } else if update.update_type == "pin" && reference_data {
-                        (
-                            serde_json::json!(["pin", word(&dep.source), dep.package]).to_string(),
-                            format!("pin-{}", package_slug(&dep.package)),
-                        )
-                    } else if let Some(group) = &update.group {
-                        let major = update.update_type == "major";
-                        (
-                            serde_json::json!(["group", group, major]).to_string(),
-                            format!("{}{}", if major { "major-" } else { "" }, slug(group)),
-                        )
-                    } else {
-                        let line = line(dep, reported, update);
-                        (
-                            serde_json::json!(["dependency", word(&dep.source), dep.package, line])
-                                .to_string(),
-                            {
-                                let package = package_slug(&dep.package);
-                                let manager = if package_names[&package].len() > 1 {
-                                    format!("{}-", manager_slug(dep))
-                                } else {
-                                    String::new()
-                                };
-                                let variants: BTreeSet<_> = dependencies
-                                    .iter()
-                                    .filter(|d| d.package == dep.package && d.source == dep.source)
-                                    .map(|d| d.current.split_once('-').map(|(_, v)| v))
-                                    .collect();
-                                let display = if variants.len() == 1 && line.contains(".x-") {
-                                    line.split_once(".x-")
-                                        .map(|(major, _)| format!("{major}.x"))
-                                        .unwrap_or_else(|| line.clone())
-                                } else {
-                                    line.clone()
-                                };
-                                format!("{manager}{package}-{display}")
-                            },
-                        )
-                    };
+                    let (identity, label) = branch_identity(
+                        dep,
+                        reported,
+                        update,
+                        dependencies,
+                        &package_names,
+                        (!allow_pending).then_some(snapshot),
+                    );
                     groups
                         .entry(identity)
                         .or_insert_with(|| (label, Vec::new()))
@@ -507,6 +465,70 @@ fn proposal_order(dep: &Dependency, a: &Update, b: &Update) -> std::cmp::Orderin
     }
     value(a).cmp(&value(b))
 }
+/// The branch an update belongs to, as its identity and name label. `snapshot`
+/// is `None` when lockfile-pending branches are allowed; otherwise a pin joins
+/// the shared pins branch only when its lockfile can be regenerated.
+fn branch_identity(
+    dep: &Dependency,
+    reported: &patchula_report::Dependency,
+    update: &Update,
+    dependencies: &[Dependency],
+    package_names: &BTreeMap<String, BTreeSet<(String, String)>>,
+    snapshot: Option<&Snapshot>,
+) -> (String, String) {
+    // Pins share one branch, except reference data: a pin branch of
+    // its own lets it merge without waiting on unrelated pins, and
+    // keeps it apart from that package's version upgrade. Like
+    // other pins it never joins a group, where it would share a
+    // line with the grouped upgrade.
+    let reference_data = dep
+        .kinds()
+        .contains(&patchula_config::DependencyKind::ReferenceData);
+    if update.update_type == "pin"
+        && !reference_data
+        && snapshot.is_none_or(|snapshot| crate::lockfiles::job(dep, update, snapshot).is_ok())
+    {
+        ("pins".into(), "pin-dependencies".into())
+    } else if update.update_type == "pin" && reference_data {
+        (
+            serde_json::json!(["pin", word(&dep.source), dep.package]).to_string(),
+            format!("pin-{}", package_slug(&dep.package)),
+        )
+    } else if let Some(group) = &update.group {
+        let major = update.update_type == "major";
+        (
+            serde_json::json!(["group", group, major]).to_string(),
+            format!("{}{}", if major { "major-" } else { "" }, slug(group)),
+        )
+    } else {
+        let line = line(dep, reported, update);
+        (
+            serde_json::json!(["dependency", word(&dep.source), dep.package, line]).to_string(),
+            {
+                let package = package_slug(&dep.package);
+                let manager = if package_names[&package].len() > 1 {
+                    format!("{}-", manager_slug(dep))
+                } else {
+                    String::new()
+                };
+                let variants: BTreeSet<_> = dependencies
+                    .iter()
+                    .filter(|d| d.package == dep.package && d.source == dep.source)
+                    .map(|d| d.current.split_once('-').map(|(_, v)| v))
+                    .collect();
+                let display = if variants.len() == 1 && line.contains(".x-") {
+                    line.split_once(".x-")
+                        .map(|(major, _)| format!("{major}.x"))
+                        .unwrap_or_else(|| line.clone())
+                } else {
+                    line.clone()
+                };
+                format!("{manager}{package}-{display}")
+            },
+        )
+    }
+}
+
 fn line(dep: &Dependency, reported: &patchula_report::Dependency, update: &Update) -> String {
     let value = if update.update_type == "major" {
         update
