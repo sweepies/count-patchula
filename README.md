@@ -40,8 +40,15 @@ patchula run acme/my-app             # then let him bite
 ```
 
 Lockfile tools come from [mise](https://mise.jdx.dev), so it needs to be on the
-`PATH`. See [getting started](https://count-patchula.sweepy.dev/getting-started), or run him on a schedule
-with the [GitHub Action](https://count-patchula.sweepy.dev/guide/github-actions).
+`PATH`. See [getting started](https://count-patchula.sweepy.dev/getting-started).
+
+The CLI is the quickest way to try him, and the [GitHub
+Action](https://count-patchula.sweepy.dev/guide/github-actions) runs him on a
+schedule. The recommended way to run him is the [GitHub App
+server](https://count-patchula.sweepy.dev/guide/server): one long-running
+process keeps every cache warm, batches work across repositories, and acts on
+PR checkboxes the moment you tick them. It idles cheaply between batches, so
+usage-billed hosts such as Railway suit it well.
 
 ## What you get
 

@@ -6,6 +6,10 @@ when it invites him with a `patchula.pkl` (see [getting
 started](/getting-started)), or when an organization runner supplies its config
 with `--config-dir`.
 
+For a handful of repositories this is the simplest setup. For more, or for PR
+checkboxes that act straight away, run the [GitHub App server](/guide/server)
+instead.
+
 Both setups use a GitHub App installation token. Pull requests opened with a
 workflow's own `GITHUB_TOKEN` do not trigger other workflows, so your checks
 would never run on them and auto-merge would wait forever. The App needs the

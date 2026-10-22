@@ -5,6 +5,12 @@
 deduplicated queue, sweeps every installed repository on a schedule, mints its
 own installation tokens, and keeps every cache warm between batches.
 
+This is the recommended way to run the Count. Caches that stay warm make every
+batch after the first cheap, webhooks batch together work from many
+repositories, and a ticked checkbox on a PR or the dashboard is acted on within
+seconds instead of at the next scheduled run. Between batches the server sits
+idle with little memory in use.
+
 There is no web UI. The only routes are `POST /webhook`, `GET /healthz` and
 `GET /readyz`. It listens on `127.0.0.1:8080` by default, so put an HTTPS
 reverse proxy in front for GitHub's deliveries.
@@ -121,6 +127,37 @@ posts it to a loopback listener. It prints only the HTTP status and refuses
 non-loopback targets. Set only one of `PATCHULA_WEBHOOK_SECRET_FILE` and
 `PATCHULA_WEBHOOK_SECRET` when you use it. A repeated delivery ID is accepted
 but ignored, so use a new ID to trigger again.
+
+## Hosting on Railway
+
+[Railway](https://railway.com) suits the server well. It bills for the CPU and
+memory a service actually uses, by the minute, and the Count spends most of his
+time idle between batches with little memory in use.
+
+- Deploy an image with `patchula`, mise and `git` (see [what the runner
+  needs](/installation#what-the-runner-needs)) that starts `patchula --server`.
+- Set `PATCHULA_LISTEN=0.0.0.0:8080` and give the service a public domain on
+  port 8080. Railway terminates HTTPS, so the App's webhook URL is
+  `https://<domain>/webhook`.
+- Attach a volume and keep the server cache and tool store on it, with
+  `PATCHULA_SERVER_CACHE` and `PATCHULA_TOOLS_DIR`, so they survive deploys.
+- Put `PATCHULA_APP_ID`, `PATCHULA_APP_PRIVATE_KEY` and
+  `PATCHULA_WEBHOOK_SECRET` in the service's variables.
+
+Railway's Serverless setting (formerly App Sleeping) puts a service to sleep
+after 5 to 10 minutes without outbound traffic. A sleeping server misses its
+sweep schedule, so choose one of these:
+
+- Turn Serverless off, under the service's Settings, Deploy. The server stays
+  up and sweeps on schedule.
+- Keep Serverless on and add a small Railway cron service that requests the
+  server's `/healthz` over the private network on the sweep schedule. A request
+  wakes the server, and the server sweeps when it starts. Railway cron
+  schedules use UTC and must be at least five minutes apart.
+
+With Serverless on, the request that wakes the server can fail while it starts,
+and GitHub does not resend a failed webhook on its own. The sweep that runs on
+waking picks up what that webhook would have started.
 
 ## systemd
 

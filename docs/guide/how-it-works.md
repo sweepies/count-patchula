@@ -58,6 +58,10 @@ server](/guide/server): it verifies webhooks, keeps a deduplicated queue, sweeps
 on a cron schedule and keeps every cache warm between batches. Both use the same
 engine, so a batch behaves the same however it started.
 
+The server is the recommended way to run him for real: its caches never go
+cold, work from many repositories shares one batch, and webhooks mean a ticked
+checkbox is handled within seconds rather than at the next scheduled run.
+
 `--local <dir>` reads one repository from a directory on disk instead of
 GitHub, with the same config discovery and file selection. Lookups still reach
 the registries, and nothing is written, so it works with `lookup` and

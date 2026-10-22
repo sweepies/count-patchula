@@ -84,6 +84,16 @@ checkout, through its `origin` remote (or its only remote) on github.com. Pass
 
 To run him on a schedule, use the [GitHub Action](/guide/github-actions).
 
+## Run him as a server
+
+Once you are happy with what he proposes, run the [GitHub App
+server](/guide/server). It is the recommended way to run the Count: one
+long-running process keeps every cache warm between batches, batches work from
+many repositories together, and reacts to webhooks, so a ticked checkbox on one
+of his PRs or the dashboard is acted on straight away instead of at the next
+scheduled run. It sits idle most of the time, which makes usage-billed hosts
+such as [Railway](/guide/server#hosting-on-railway) cheap to run it on.
+
 ## Where to go next
 
 - [Configuration](/guide/configuration) for rules, groups, schedules and limits.
