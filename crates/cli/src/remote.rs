@@ -188,7 +188,8 @@ fn update(
     let dir = path.parent().expect("store path has a parent");
     std::fs::create_dir_all(dir)
         .map_err(|e| fail(format!("cannot create {}: {e}", dir.display())))?;
-    let lock = std::fs::File::options()
+    // Held until this function returns; the OS releases it with the file.
+    let _lock = std::fs::File::options()
         .create(true)
         .truncate(false)
         .write(true)
@@ -200,7 +201,6 @@ fn update(
     if changed {
         save(&path, &logins)?;
     }
-    drop(lock);
     Ok(changed)
 }
 fn save(path: &std::path::Path, logins: &BTreeMap<String, Login>) -> Result<()> {

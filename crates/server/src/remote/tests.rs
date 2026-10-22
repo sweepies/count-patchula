@@ -22,6 +22,7 @@ impl Transport for GitHub {
                 "Bearer ghu_writer" | "Bearer ghp_personal" => (200, json!({"login": "writer"})),
                 "Bearer ghu_reader" => (200, json!({"login": "reader"})),
                 "Bearer ghu_elsewhere" => (200, json!({"login": "writer"})),
+                "Bearer ghu_limited" => (403, json!({})),
                 _ => (401, json!({})),
             },
             // Only this App's user tokens can list its installations.
@@ -52,10 +53,14 @@ impl Transport for GitHub {
             }
             other => panic!("unexpected request {other}"),
         };
+        let mut headers = reqwest::header::HeaderMap::new();
+        if auth == "Bearer ghu_limited" {
+            headers.insert("x-ratelimit-remaining", "0".parse().unwrap());
+        }
         Box::pin(async move {
             Ok(patchula_http::Response {
                 status: reqwest::StatusCode::from_u16(status).unwrap(),
-                headers: reqwest::header::HeaderMap::new(),
+                headers,
                 body: serde_json::to_vec(&body).unwrap(),
             })
         })
@@ -232,6 +237,13 @@ async fn rejections_name_the_reason() {
             run(json!(["acme/app"])),
             401,
             "unauthorized",
+        ),
+        // A rate limit keeps the token: it is not an authorization failure.
+        (
+            "ghu_limited",
+            run(json!(["acme/app"])),
+            503,
+            "github-rate-limited",
         ),
         // This App's token, but it does not reach installation 1.
         (

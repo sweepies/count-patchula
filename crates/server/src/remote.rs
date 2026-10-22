@@ -390,10 +390,22 @@ impl Api {
             .send(request)
             .await
             .map_err(|_| github_unavailable())?;
+        // A rate limit is also a 403, but the token is fine: the CLI must
+        // keep it, so it is not reported as unauthorized.
+        let limited = response
+            .headers
+            .get("x-ratelimit-remaining")
+            .is_some_and(|remaining| remaining == "0")
+            || response.headers.contains_key(header::RETRY_AFTER);
         match response.status {
             status if status.is_success() => {
                 serde_json::from_slice(&response.body).map_err(|_| github_unavailable())
             }
+            StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS if limited => Err(reject(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "github-rate-limited",
+                "GitHub is rate limiting this sign-in; try again shortly",
+            )),
             // GitHub answers 403 to a token that is not one of this App's user tokens.
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(unauthorized()),
             _ => Err(github_unavailable()),
