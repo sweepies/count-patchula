@@ -1,0 +1,18 @@
+---
+import Default from "@astrojs/starlight/components/Footer.astro";
+---
+
+<Default><slot /></Default>
+<p class="copyright">© 2026 <a href="https://sweepy.dev">Sweepy</a></p>
+
+<style>
+  .copyright {
+    margin-top: 2rem;
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+    text-align: center;
+  }
+  .copyright a {
+    color: inherit;
+  }
+</style>

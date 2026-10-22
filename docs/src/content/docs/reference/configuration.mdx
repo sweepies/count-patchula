@@ -1,0 +1,77 @@
+---
+title: "Configuration schema"
+---
+
+import { Code } from "@astrojs/starlight/components";
+import schema from "../../../../../PatchulaConfig.pkl?raw";
+
+This is the complete repository schema, `PatchulaConfig.pkl`, bundled with every
+build. Print it with `patchula config schema`. The [configuration guide](/guide/configuration/)
+explains how the pieces fit together.
+
+## Top-level fields
+
+| Field | Type | Default |
+|---|---|---|
+| `managers` | `Listing<Manager>` | every manager |
+| `defaults` | `Policy` | see below |
+| `rules` | `Listing<Rule>` | none |
+| `files` | `Listing<FileSet>` | each manager's own patterns |
+| `extractors` | `Listing<Extractor>` | none |
+| `ignore` | `Listing<String>` | none |
+| `exclude` | `Listing<String>` | `**/node_modules/**`, `**/vendor/**`, `**/.git/**` |
+| `prs` | `PullRequests` | see below |
+| `lockfiles` | `Lockfiles` | see below |
+| `useVersionsHost` | `Boolean` | `true` |
+| `submodules` | `Boolean` | `false` |
+| `ignoreAuthors` | `Listing<String>` | none |
+
+## Policy
+
+The defaults every rule starts from.
+
+| Field | Type | Default |
+|---|---|---|
+| `active` | `Boolean` | `true` |
+| `versions` | `"exact"\|"preserve"\|"widen"` | `"exact"` |
+| `channel` | `"stable"\|"lts"` | `"stable"` |
+| `actionDigests` | `Boolean` | `true` |
+| `imageDigests` | `Boolean` | `true` |
+| `merge` | `Boolean` | `false` |
+| `group` | `String?` | `null` |
+| `labels` | `Listing<String>` | `"dependencies"` |
+| `commitPrefix` | `String` | `"chore(deps):"` |
+| `releaseNotes` | `Boolean` | `true` |
+| `bodyNotes` | `Listing<String>` | none |
+| `permitted` | `String?` | `null` |
+| `waitHours` | `Int` | `24` |
+| `windows` | `Listing<Window>` | none (any time) |
+
+A rule's `apply` has the same fields as nullable overrides, plus `digest`, and
+leaves out the two digest switches. `null` leaves the earlier value alone.
+
+## Pull requests
+
+| Field | Type | Default |
+|---|---|---|
+| `concurrent` | `Int?` | `null` (unlimited) |
+| `perHour` | `Int?` | `null` (unlimited) |
+| `dashboard` | `Boolean` | `false` |
+| `branch` | `String` | `"patchula/"` |
+| `rebase` | `"conflicts"\|"behind"` | `"conflicts"` |
+| `batchMerge` | `Boolean` | `false` |
+
+## Lockfiles
+
+| Field | Type | Default |
+|---|---|---|
+| `refresh` | `Boolean` | `false` |
+| `waitHours` | `Int` | `0` |
+| `group` | `String` | `"lockfile refresh"` |
+| `tidyGo` | `Boolean` | `false` |
+| `npmEngine` | `"aube"\|"npm"` | `"aube"` |
+| `php` | `"static"\|"compiled"` | `"static"` |
+
+## The schema
+
+<Code code={schema} lang="pkl" title="PatchulaConfig.pkl" />

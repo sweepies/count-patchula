@@ -39,9 +39,9 @@ The Count supplies `PatchulaConfig.pkl` when the repository has no copy.
 completion; a vendored copy is the one evaluated.
 
 Unknown fields are errors, so read the schema rather than guessing a field:
-https://count-patchula.sweepy.dev/reference/configuration. Rules, selectors
+https://count-patchula.sweepy.dev/reference/configuration/. Rules, selectors
 and what a rule can change are in
-https://count-patchula.sweepy.dev/guide/configuration.
+https://count-patchula.sweepy.dev/guide/configuration/.
 
 ## Run it
 
@@ -65,16 +65,16 @@ directory on disk instead of GitHub, for `lookup` and `run --dry-run`.
 
 `--json` prints one report for the batch. Check each repository's `status`:
 `skipped` and `error` carry a `reason`, and an `error` makes the CLI exit 1.
-Field meanings are in https://count-patchula.sweepy.dev/reference/report.
+Field meanings are in https://count-patchula.sweepy.dev/reference/report/.
 
 An update that is missing usually has a reason in policy: the 24-hour release
 age wait (`metadata.heldBack`), a rule with `active = false`, or a `permitted`
-filter. See https://count-patchula.sweepy.dev/guide/lookup-policy.
+filter. See https://count-patchula.sweepy.dev/guide/lookup-policy/.
 
 ## Pull requests
 
 Change what the Count proposes through the config. A `patchula/` branch that
 gains a commit he did not make is protected: he stops rebasing, updating or
 deleting it. PR checkboxes re-check an update or move it into a batch PR; see
-https://count-patchula.sweepy.dev/guide/pull-requests and
-https://count-patchula.sweepy.dev/guide/batch.
+https://count-patchula.sweepy.dev/guide/pull-requests/ and
+https://count-patchula.sweepy.dev/guide/batch/.

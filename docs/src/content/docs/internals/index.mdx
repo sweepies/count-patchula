@@ -1,0 +1,25 @@
+---
+title: Internals
+description: How the Count is put together, for people working on him.
+---
+
+import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+How the Count is put together, for people working on him. None of this is
+needed to use him.
+
+<CardGrid>
+  <LinkCard title="Design" href="/internals/design/" description="The goals, principles and crate layout." />
+  <LinkCard title="Engine" href="/internals/engine/" description="How a batch moves from extraction to writes." />
+  <LinkCard title="SQLite cache" href="/internals/cache/" description="HTTP entries, catalogs, freshness and host limits." />
+  <LinkCard title="GitHub client" href="/internals/github-client/" description="REST and GraphQL, conditional requests and the rate-limit governor." />
+  <LinkCard title="HTTP fixtures" href="/internals/http-testing/" description="How tests record and replay registries offline." />
+  <LinkCard title="CI cache" href="/internals/ci-cache/" description="The mbx build cache in GitHub Actions." />
+</CardGrid>
+
+<Aside type="caution" title="Clean room">
+The source lives at
+[sweepies/count-patchula](https://github.com/sweepies/count-patchula). The
+clean-room rule applies to every change: Renovate may be run as a black box,
+but its source code, presets and test fixtures are never read or copied.
+</Aside>

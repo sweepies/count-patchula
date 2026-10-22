@@ -42,7 +42,7 @@ pub struct Difference {
 #[serde(rename_all = "camelCase")]
 pub struct Departure {
     pub rule: String,
-    /// The departure's section anchor in docs/renovate/departures.md.
+    /// The departure's section anchor in docs/src/content/docs/renovate/departures.md.
     pub id: String,
     pub link: String,
 }
@@ -106,7 +106,7 @@ impl Rules {
             if rule.id.is_empty()
                 || !ids.insert(&rule.id)
                 || rule.managers.is_empty()
-                || !include_str!("../../docs/renovate/departures.md")
+                || !include_str!("../../docs/src/content/docs/renovate/departures.md")
                     .lines()
                     .any(|line| line.ends_with(&format!("{{#{}}}", rule.departure)))
                 || !matches!(
@@ -197,7 +197,7 @@ impl Rules {
                 )
             {
                 return Err(Error::Input(
-                    "invalid departure rule, duplicate ID or missing docs/renovate/departures.md section".into(),
+                    "invalid departure rule, duplicate ID or missing docs/src/content/docs/renovate/departures.md section".into(),
                 ));
             }
         }
@@ -539,7 +539,10 @@ impl Rules {
                 difference.departure = Some(Departure {
                     rule: rule.id.clone(),
                     id: rule.departure.clone(),
-                    link: format!("docs/renovate/departures.md#{}", rule.departure),
+                    link: format!(
+                        "docs/src/content/docs/renovate/departures.md#{}",
+                        rule.departure
+                    ),
                 });
                 return;
             }

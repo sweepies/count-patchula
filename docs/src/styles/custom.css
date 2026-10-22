@@ -1,0 +1,145 @@
+/* Colours taken from the Count: coral wings, a gold wrench, a purple outline. */
+:root {
+  --patchula-coral: #e85a4f;
+  --patchula-coral-deep: #c9443b;
+  --patchula-gold: #f2b544;
+  --patchula-purple: #6b4a7a;
+
+  --patchula-font-display: "Righteous", var(--__sl-font);
+
+  /* Dark mode: a night sky with a purple cast. */
+  --sl-color-accent-low: #4b1d1a;
+  --sl-color-accent: var(--patchula-coral);
+  --sl-color-accent-high: #ff9f95;
+
+  --sl-color-white: #ffffff;
+  --sl-color-gray-1: hsl(285, 22%, 94%);
+  --sl-color-gray-2: hsl(285, 9%, 78%);
+  --sl-color-gray-3: hsl(285, 7%, 59%);
+  --sl-color-gray-4: hsl(285, 8%, 39%);
+  --sl-color-gray-5: hsl(285, 13%, 25%);
+  --sl-color-gray-6: hsl(285, 20%, 13%);
+  --sl-color-black: hsl(282, 24%, 9%);
+
+  --sl-hue-orange: 39;
+  --sl-hue-purple: 283;
+  --sl-hue-red: 5;
+}
+
+:root[data-theme="light"] {
+  --sl-color-accent-low: #fde1dd;
+  --sl-color-accent: #b9382f;
+  --sl-color-accent-high: #7a1f18;
+
+  --sl-color-white: hsl(282, 24%, 9%);
+  --sl-color-gray-1: hsl(285, 18%, 15%);
+  --sl-color-gray-2: hsl(285, 11%, 24%);
+  --sl-color-gray-3: hsl(285, 7%, 38%);
+  --sl-color-gray-4: hsl(285, 6%, 57%);
+  --sl-color-gray-5: hsl(285, 9%, 80%);
+  --sl-color-gray-6: hsl(285, 25%, 95%);
+  --sl-color-gray-7: hsl(285, 25%, 97.5%);
+  --sl-color-black: #ffffff;
+}
+
+/* Righteous for display type only; it ships a single 400 weight. */
+.site-title,
+h1#_top,
+.hero h1 {
+  font-family: var(--patchula-font-display);
+  font-weight: 400;
+  letter-spacing: 0.01em;
+}
+
+.site-title {
+  font-size: var(--sl-text-xl);
+}
+
+.site-title img {
+  height: 2.25rem;
+  width: auto;
+}
+
+/* Landing page hero: the name in a coral-to-gold gradient, as on the wings and wrench. */
+.hero h1 {
+  background: linear-gradient(120deg, var(--patchula-coral) 15%, var(--patchula-gold) 85%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  line-height: 1.05;
+}
+
+.hero .hero-subtitle {
+  display: block;
+  margin-top: 0.5rem;
+  font-size: 0.55em;
+  background: none;
+  color: var(--sl-color-white);
+  -webkit-text-fill-color: var(--sl-color-white);
+}
+
+.hero > img {
+  filter: drop-shadow(0 0 2.5rem rgb(232 90 79 / 0.35)) drop-shadow(0 0 5rem rgb(107 74 122 / 0.45));
+}
+
+[data-has-hero] .main-frame {
+  background:
+    radial-gradient(60rem 30rem at 85% 0%, rgb(107 74 122 / 0.22), transparent 70%),
+    radial-gradient(40rem 24rem at 10% 10%, rgb(232 90 79 / 0.1), transparent 70%);
+}
+
+:root[data-theme="light"] [data-has-hero] .main-frame {
+  background:
+    radial-gradient(60rem 30rem at 85% 0%, rgb(107 74 122 / 0.12), transparent 70%),
+    radial-gradient(40rem 24rem at 10% 10%, rgb(232 90 79 / 0.08), transparent 70%);
+}
+
+/* Feature cards cycle through the Count's coral, gold and purple. */
+.card {
+  border-radius: 0.75rem;
+  transition:
+    border-color 0.2s,
+    transform 0.2s;
+}
+
+.card:hover {
+  border-color: var(--sl-card-border);
+  transform: translateY(-2px);
+}
+
+.card:nth-child(3n + 1) {
+  --sl-card-border: var(--patchula-coral);
+  --sl-card-bg: rgb(232 90 79 / 0.16);
+}
+
+.card:nth-child(3n + 2) {
+  --sl-card-border: var(--patchula-gold);
+  --sl-card-bg: rgb(242 181 68 / 0.16);
+}
+
+.card:nth-child(3n + 3) {
+  --sl-card-border: #a77bbb;
+  --sl-card-bg: rgb(107 74 122 / 0.22);
+}
+
+.card .sl-link-button {
+  margin-top: 0.5rem;
+  padding-inline: 0;
+}
+
+/* Tables: a light header band so wide reference tables are easier to scan. */
+.sl-markdown-content table th {
+  background-color: var(--sl-color-gray-6);
+}
+
+/* Primary buttons in coral on the night background, rather than the pale accent. */
+:root[data-theme="dark"] .sl-link-button.primary {
+  background-color: var(--patchula-coral);
+  border-color: var(--patchula-coral);
+  color: var(--sl-color-black);
+}
+
+:root[data-theme="dark"] .sl-link-button.primary:hover {
+  background-color: #f07a70;
+  border-color: #f07a70;
+}

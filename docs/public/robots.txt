@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://count-patchula.sweepy.dev/sitemap.xml
+Sitemap: https://count-patchula.sweepy.dev/sitemap-index.xml
