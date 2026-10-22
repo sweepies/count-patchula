@@ -51,27 +51,17 @@ impl Services {
 }
 
 async fn run(app: &App, services: &Services) -> Result<u8, (u8, miette::Report)> {
-    if app.server {
-        if app.command.is_some() {
-            return Err((
-                2,
-                miette::miette!("--server cannot be combined with a subcommand"),
-            ));
-        }
-        return server::run(app).await;
-    }
-    let command = app.command.as_ref().ok_or_else(|| {
-        (
-            2,
-            miette::miette!("choose a subcommand or --server; see --help"),
-        )
-    })?;
+    let command = app
+        .command
+        .as_ref()
+        .ok_or_else(|| (2, miette::miette!("choose a subcommand; see --help")))?;
     match command {
         Command::Config(config) => config_command(app, config),
         Command::Lookup(options) => batch(app, options, None, services).await,
         Command::Run(options) => batch(app, &options.lookup, Some(options), services).await,
         Command::Tui(tui) => tui_command(app, tui, services).await,
         Command::Tools(tools) => tools_command(app, tools).await,
+        Command::Serve(serve) => server::run(app, serve).await,
     }
 }
 
@@ -205,6 +195,7 @@ async fn tools_command(app: &App, tools: &cli::Tools) -> Result<u8, (u8, miette:
 #[tokio::main]
 async fn main() -> ExitCode {
     let app = App::parse();
+    let serving = matches!(app.command, Some(Command::Serve(_)));
     // Only our explicitly sanitized events reach stderr. Dependency HTTP debug
     // logs can contain headers even when the user requests maximum verbosity.
     use tracing_subscriber::{filter::Targets, prelude::*};
@@ -213,12 +204,12 @@ async fn main() -> ExitCode {
         .and_then(|value| value.parse::<tracing::level_filters::LevelFilter>().ok())
         .unwrap_or(if app.verbose >= 2 {
             tracing::level_filters::LevelFilter::DEBUG
-        } else if app.server {
+        } else if serving {
             tracing::level_filters::LevelFilter::INFO
         } else {
             tracing::level_filters::LevelFilter::WARN
         });
-    let layer = if app.server {
+    let layer = if serving {
         tracing_subscriber::fmt::layer()
             .json()
             .with_writer(io::stderr)
@@ -246,7 +237,7 @@ async fn main() -> ExitCode {
     match run(&app, &Services::default()).await {
         Ok(code) => ExitCode::from(code),
         Err((code, error)) => {
-            if app.server {
+            if serving {
                 let diagnostic = if error.source_code().is_some() {
                     format!("{error:?}")
                 } else {

@@ -1,6 +1,6 @@
 # GitHub App server
 
-`patchula --server` keeps the Count up all night. It runs the same engine as
+`patchula serve` keeps the Count up all night. It runs the same engine as
 `patchula run`, but as a long-lived process: it takes GitHub webhooks, keeps one
 deduplicated queue, sweeps every installed repository on a schedule, mints its
 own installation tokens, and keeps every cache warm between batches.
@@ -63,7 +63,7 @@ export PATCHULA_APP_PRIVATE_KEY_FILE=/etc/patchula/app.pem
 export PATCHULA_WEBHOOK_SECRET_FILE=/etc/patchula/webhook-secret
 export PATCHULA_SERVER_SETTINGS=/etc/patchula/server.pkl
 export PATCHULA_SERVER_CACHE=/var/lib/patchula/cache.sqlite
-patchula --server
+patchula serve
 ```
 
 `PATCHULA_APP_PRIVATE_KEY` and `PATCHULA_WEBHOOK_SECRET` can hold the values
@@ -136,7 +136,7 @@ memory a service actually uses, by the minute, and the Count spends most of his
 time idle between batches with little memory in use.
 
 - Deploy an image with `patchula`, mise and `git` (see [what the runner
-  needs](/installation#what-the-runner-needs)) that starts `patchula --server`.
+  needs](/installation#what-the-runner-needs)) that starts `patchula serve`.
 - Set `PATCHULA_LISTEN=0.0.0.0:8080` and give the service a public domain on
   port 8080. Railway terminates HTTPS, so the App's webhook URL is
   `https://<domain>/webhook`.
@@ -171,7 +171,7 @@ WorkingDirectory=/var/lib/patchula
 EnvironmentFile=/etc/patchula/environment
 LoadCredential=app.pem:/etc/patchula/app.pem
 LoadCredential=webhook-secret:/etc/patchula/webhook-secret
-ExecStart=/usr/local/bin/patchula --server --settings /etc/patchula/server.pkl --server-cache /var/lib/patchula/cache.sqlite --private-key-file %d/app.pem --webhook-secret-file %d/webhook-secret --shutdown-timeout-secs 60
+ExecStart=/usr/local/bin/patchula serve --settings /etc/patchula/server.pkl --cache /var/lib/patchula/cache.sqlite --private-key-file %d/app.pem --webhook-secret-file %d/webhook-secret --shutdown-timeout-secs 60
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=75

@@ -7,30 +7,6 @@ use usage_rs::{Args, Cli, Subcommands, ValueEnum};
 #[derive(Cli)]
 #[usage(bin = "patchula", version)]
 pub struct App {
-    /// Run the API-only GitHub App webhook server (no subcommand).
-    #[usage(long)]
-    pub server: bool,
-    /// Operator Pkl settings file; also PATCHULA_SERVER_SETTINGS.
-    #[usage(long)]
-    pub settings: Option<PathBuf>,
-    /// Server bind address; also PATCHULA_LISTEN (default 127.0.0.1:8080).
-    #[usage(long)]
-    pub listen: Option<std::net::SocketAddr>,
-    /// Persistent server cache/queue; also PATCHULA_SERVER_CACHE.
-    #[usage(long)]
-    pub server_cache: Option<PathBuf>,
-    /// GitHub App ID; also PATCHULA_APP_ID.
-    #[usage(long)]
-    pub app_id: Option<u64>,
-    /// PEM private key file; also PATCHULA_APP_PRIVATE_KEY_FILE.
-    #[usage(long)]
-    pub private_key_file: Option<PathBuf>,
-    /// Webhook secret file; also PATCHULA_WEBHOOK_SECRET_FILE.
-    #[usage(long)]
-    pub webhook_secret_file: Option<PathBuf>,
-    /// Graceful server drain deadline; also PATCHULA_SHUTDOWN_TIMEOUT_SECS (default 60).
-    #[usage(long)]
-    pub shutdown_timeout_secs: Option<u64>,
     /// Checkbox wording; also PATCHULA_RECHECK. Default: now in server, next-run in CLI.
     #[usage(long, value_enum, global)]
     pub recheck: Option<Recheck>,
@@ -62,10 +38,37 @@ pub enum Command {
     Lookup(Lookup),
     /// Create or update dependency branches and pull requests with verified API commits.
     Run(Run),
+    /// Run the API-only GitHub App webhook server.
+    Serve(Serve),
     /// Manage the lockfile runner's tool store (`PATCHULA_TOOLS_DIR`, or `<cache>.tools`).
     Tools(Tools),
     /// Browse dependencies and updates in the terminal; with `--local`, apply selected updates.
     Tui(Tui),
+}
+
+#[derive(Args)]
+pub struct Serve {
+    /// Operator Pkl settings file; also PATCHULA_SERVER_SETTINGS.
+    #[usage(long)]
+    pub settings: Option<PathBuf>,
+    /// Server bind address; also PATCHULA_LISTEN (default 127.0.0.1:8080).
+    #[usage(long)]
+    pub listen: Option<std::net::SocketAddr>,
+    /// Persistent server cache and queue; also PATCHULA_SERVER_CACHE.
+    #[usage(long)]
+    pub cache: Option<PathBuf>,
+    /// GitHub App ID; also PATCHULA_APP_ID.
+    #[usage(long)]
+    pub app_id: Option<u64>,
+    /// PEM private key file; also PATCHULA_APP_PRIVATE_KEY_FILE.
+    #[usage(long)]
+    pub private_key_file: Option<PathBuf>,
+    /// Webhook secret file; also PATCHULA_WEBHOOK_SECRET_FILE.
+    #[usage(long)]
+    pub webhook_secret_file: Option<PathBuf>,
+    /// Graceful server drain deadline; also PATCHULA_SHUTDOWN_TIMEOUT_SECS (default 60).
+    #[usage(long)]
+    pub shutdown_timeout_secs: Option<u64>,
 }
 
 #[derive(Args)]
@@ -190,10 +193,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn server_has_no_subcommand_and_global_recheck_still_works_for_run() {
+    fn serve_takes_its_flags_and_global_recheck_still_works_for_run() {
         let app = App::parse_from(
             &[
-                "--server",
+                "serve",
                 "--settings",
                 "/operator/server.pkl",
                 "--recheck",
@@ -202,8 +205,13 @@ mod tests {
             .map(std::ffi::OsStr::new),
         )
         .unwrap();
-        assert!(app.server);
-        assert!(app.command.is_none());
+        let Some(Command::Serve(serve)) = &app.command else {
+            panic!("serve")
+        };
+        assert_eq!(
+            serve.settings.as_deref(),
+            Some(std::path::Path::new("/operator/server.pkl"))
+        );
         assert_eq!(app.recheck, Some(Recheck::NextRun));
         let app =
             App::parse_from(&["run", "--recheck", "now", "owner/repo"].map(std::ffi::OsStr::new))

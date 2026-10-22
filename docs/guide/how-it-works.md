@@ -53,7 +53,7 @@ the Count. Logs are for people and are never meant to be parsed.
 ## Two ways to run
 
 `patchula run` and `patchula lookup` process one batch with a token you supply
-and exit. `patchula --server` is a long-running [GitHub App
+and exit. `patchula serve` is a long-running [GitHub App
 server](/guide/server): it verifies webhooks, keeps a deduplicated queue, sweeps
 on a cron schedule and keeps every cache warm between batches. Both use the same
 engine, so a batch behaves the same however it started.

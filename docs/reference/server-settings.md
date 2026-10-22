@@ -1,6 +1,6 @@
 # Server settings
 
-Operator settings for [`patchula --server`](/guide/server), in a Pkl file that
+Operator settings for [`patchula serve`](/guide/server), in a Pkl file that
 amends the bundled `PatchulaServer.pkl`. Print the schema with
 `patchula config server-schema` and check a file with
 `patchula config check-server <path>`. Secrets are never settings.

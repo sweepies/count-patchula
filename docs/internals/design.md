@@ -106,7 +106,7 @@ ends over it, so a batch behaves the same however it was started.
 
 - **CLI** (`patchula run`, `patchula lookup`): one batch per invocation,
   with a token supplied by the caller.
-- **Server** (`patchula --server`): a long-running process that exposes an API
+- **Server** (`patchula serve`): a long-running process that exposes an API
   for GitHub webhooks (signatures verified before parsing) plus health and
   readiness endpoints, keeps one de-duplicated queue, runs sweeps on a cron
   schedule, and drains work in batches with caches kept warm.
