@@ -17,6 +17,8 @@ published. Brand-new releases are where broken and malicious versions tend to
 show up, and a day is usually enough for someone else to notice.
 
 - Undated releases have no wait. `waitHours = 0` turns the wait off.
+- [Reference data](/guide/configuration#reference-data), such as CA root
+  bundles, has no wait by default.
 - Versions you already use, and versions pinned in lockfiles, are never held
   back by age.
 - The report lists held-back releases with `publishedAt`, `eligibleAt` and

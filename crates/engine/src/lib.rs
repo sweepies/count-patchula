@@ -1248,7 +1248,7 @@ impl Engine {
                             BTreeMap::new()
                         },
                         source: word(&dep.source),
-                        kinds: vec![word(&dep.kind)],
+                        kinds: dep.kinds().iter().map(word).collect(),
                         locations: vec![patchula_report::Location {
                             start: dep.location.start,
                             end: dep.location.end,

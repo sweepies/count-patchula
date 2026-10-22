@@ -1,6 +1,8 @@
 # Auto-merge
 
-Nothing merges unless a rule says so:
+Nothing merges unless a rule says so. The one rule built into the schema merges
+[reference data](/guide/configuration#reference-data), such as CA root bundles;
+everything else needs a rule of your own:
 
 ```pkl
 rules {

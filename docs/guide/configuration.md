@@ -72,7 +72,8 @@ starts out cautious:
   pinned to digests;
 - every update gets its own PR with the `dependencies` label and a
   `chore(deps):` commit prefix, and release notes are included;
-- nothing auto-merges;
+- nothing auto-merges, except [reference data](#reference-data) such as CA
+  root bundles, which also skips the release-age wait;
 - dated releases wait 24 hours before they are proposed;
 - there is no limit on open PRs or PRs per hour, no schedule window and no
   dashboard;
@@ -116,7 +117,7 @@ OR. An empty list means "any".
 | `files` | paths in the repository |
 | `updates` | `major`, `minor`, `patch`, `digest` or `pin` |
 | `sources` | sources, such as `npm` or `docker` |
-| `kinds` | dependency roles: `production`, `development`, `peer`, `optional`, `build`, `action`, `reusable-workflow`, `runner`, `container-image`, `tool`, `go-directive`, `toolchain`, `provider`, `module`, `chart` |
+| `kinds` | dependency roles: `production`, `development`, `peer`, `optional`, `build`, `action`, `reusable-workflow`, `runner`, `container-image`, `tool`, `go-directive`, `toolchain`, `provider`, `module`, `chart`, and `reference-data` on top of a dependency's own kind |
 | `current` | the current version, through `semver:` or `regex:` |
 
 Patterns are case-sensitive, path-aware globs (`/` is a separator), optionally
@@ -159,6 +160,44 @@ defaults {
   }
 }
 ```
+
+## Reference data
+
+Some packages ship data rather than code: CA root bundles, the time zone
+database and the public suffix list. They only help while they are current.
+When a certificate authority is distrusted, a client that bundles its own roots
+keeps trusting it until that package is updated.
+
+So these packages also have the kind `reference-data`, and the schema's first
+rule fast-tracks them: no release-age wait, no schedule window, a PR of their
+own, and [auto-merge](/guide/auto-merge) once checks pass. Failing checks,
+required reviews and branch protection still stop the merge.
+
+| Ecosystem | Packages |
+|---|---|
+| Python | `certifi`, `tzdata`, `pytz`, `publicsuffixlist` |
+| Rust | `webpki-roots`, `webpki-root-certs`, `chrono-tz`, `psl` |
+| Go | `golang.org/x/crypto/x509roots/fallback` |
+| npm | `psl`, `tldts` |
+| Ruby | `tzinfo-data`, `public_suffix` |
+| PHP | `composer/ca-bundle` |
+
+The built-in rule comes first, so a rule of your own can change it:
+
+```pkl
+rules {
+  new Rule {
+    note = "Review root bundle updates by hand."
+    select { kinds { "reference-data" } }
+    apply { merge = false; waitHours = 24 }
+  }
+}
+```
+
+Assigning `rules = new Listing { ... }` replaces the whole list, the built-in
+rule included. Root certificates inside container images come from the image's
+operating system packages; the Count only sees the image's digest change, so
+those are not covered.
 
 ## Pull requests and lockfiles
 

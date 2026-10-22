@@ -54,6 +54,27 @@ impl Location {
         }
     }
 }
+/// Packages that ship reference data rather than code: CA root bundles, the
+/// time zone database and the public suffix list. They are only useful while
+/// current, so besides its own kind each is also `reference-data`, which the
+/// schema's built-in rule fast-tracks.
+const REFERENCE_DATA: &[(Source, &str)] = &[
+    (Source::Pypi, "certifi"),
+    (Source::Pypi, "tzdata"),
+    (Source::Pypi, "pytz"),
+    (Source::Pypi, "publicsuffixlist"),
+    (Source::Crates, "webpki-roots"),
+    (Source::Crates, "webpki-root-certs"),
+    (Source::Crates, "chrono-tz"),
+    (Source::Crates, "psl"),
+    (Source::Go, "golang.org/x/crypto/x509roots/fallback"),
+    (Source::Npm, "psl"),
+    (Source::Npm, "tldts"),
+    (Source::Rubygems, "tzinfo-data"),
+    (Source::Rubygems, "public_suffix"),
+    (Source::Packagist, "composer/ca-bundle"),
+];
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Dependency {
     pub manager: Manager,
@@ -68,6 +89,17 @@ pub struct Dependency {
     pub source: Source,
     pub scheme: Scheme,
     pub extract: Option<String>,
+}
+impl Dependency {
+    /// The kinds rules select this dependency by: its own, plus
+    /// `reference-data` for a package on the reference data list.
+    pub fn kinds(&self) -> Vec<DependencyKind> {
+        let mut kinds = vec![self.kind];
+        if REFERENCE_DATA.contains(&(self.source, self.package.as_str())) {
+            kinds.push(DependencyKind::ReferenceData);
+        }
+        kinds
+    }
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Extraction {
