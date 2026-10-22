@@ -1,10 +1,8 @@
 name: Benchmarks
 
-# Report-only measurements: weekly on main, or on demand from the Actions tab.
-# Nothing here gates a change.
+# Report-only measurements, run on demand from the Actions tab. Nothing here
+# gates a change.
 on:
-  schedule:
-    - cron: "17 6 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -17,7 +15,7 @@ concurrency:
 jobs:
   benchmarks:
     name: Benchmarks (report only)
-    runs-on: namespace-profile-ubuntu-amd64-md
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

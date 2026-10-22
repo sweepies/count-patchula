@@ -39,8 +39,7 @@ jobs:
           # The first target of each runs on the runner itself, so it can
           # generate the man page and completions.
           - name: Linux
-            # Namespace, except for pull requests from forks.
-            runner: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'namespace-profile-ubuntu-amd64-md' }}
+            runner: ubuntu-latest
             targets: x86_64-unknown-linux-musl aarch64-unknown-linux-musl
           - name: macOS
             runner: macos-26

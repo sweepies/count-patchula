@@ -38,8 +38,8 @@ information. Release benchmark settings stay at Cargo's defaults. No task uses
 `--all-features`: the existing feature selection already avoids optional Pkl
 engines and extra HTTP/TLS backends. Conformance is a member of the root
 workspace and builds in the same debug target. Tak consumes release binaries
-in the Benchmarks workflow, which runs weekly and on demand rather than on
-every push; it does not build another profile inside the CI job.
+in the Benchmarks workflow, which runs only on demand; it does not build
+another profile inside the CI job.
 
 `MBX_TARGET_LANES=0` makes the sequential Clippy/test/build commands share one
 target tree instead of producing `target/check/debug` beside `target/debug`.
