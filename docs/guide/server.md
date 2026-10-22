@@ -86,7 +86,8 @@ detail.
 - one of his PRs being closed;
 - the App being installed, or a repository being added;
 - checks completing on one of his PRs;
-- the sweep schedule, and startup.
+- the sweep schedule. Starting the server does not sweep; queued work survives
+  restarts.
 
 Each trigger can be turned off under `triggers`. Events from the App itself,
 disallowed repositories and unrelated events are acknowledged and ignored.
@@ -144,20 +145,11 @@ time idle between batches with little memory in use.
 - Put `PATCHULA_APP_ID`, `PATCHULA_APP_PRIVATE_KEY` and
   `PATCHULA_WEBHOOK_SECRET` in the service's variables.
 
-Railway's Serverless setting (formerly App Sleeping) puts a service to sleep
-after 5 to 10 minutes without outbound traffic. A sleeping server misses its
-sweep schedule, so choose one of these:
-
-- Turn Serverless off, under the service's Settings, Deploy. The server stays
-  up and sweeps on schedule.
-- Keep Serverless on and add a small Railway cron service that requests the
-  server's `/healthz` over the private network on the sweep schedule. A request
-  wakes the server, and the server sweeps when it starts. Railway cron
-  schedules use UTC and must be at least five minutes apart.
-
-With Serverless on, the request that wakes the server can fail while it starts,
-and GitHub does not resend a failed webhook on its own. The sweep that runs on
-waking picks up what that webhook would have started.
+Leave Railway's Serverless setting (formerly App Sleeping) off, under the
+service's Settings, Deploy. Serverless sleeps a service after a few minutes
+without outbound traffic, but the server checks its App with GitHub every 30
+seconds, so it would never sleep anyway, and a server that did would miss its
+scheduled sweeps.
 
 ## systemd
 

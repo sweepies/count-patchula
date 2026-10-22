@@ -578,8 +578,10 @@ async fn maintenance(
     mut stop: watch::Receiver<bool>,
 ) {
     let mut probe_at = tokio::time::Instant::now();
-    let mut next_sweep = Some(Utc::now()); // Recover the installation inventory on startup.
-    let mut startup = true;
+    // The first sweep is the next one the schedule names, never one at startup:
+    // queued work survives restarts, and the readiness probe below checks the
+    // installations straight away.
+    let mut next_sweep = sweep_after(&settings.current(), Utc::now());
     let mut schedule = (
         settings.current().sweep_cron,
         settings.current().sweep_timezone,
@@ -623,11 +625,7 @@ async fn maintenance(
                                 .collect(),
                             Utc::now().timestamp_millis(),
                             current.coalescing_ms as i64,
-                            Attribution::reason(if startup {
-                                "startup discovery"
-                            } else {
-                                "sweep"
-                            }),
+                            Attribution::reason("sweep"),
                         )
                         .await
                         .map_err(|_| Error("cannot persist cron sweep"))?;
@@ -649,7 +647,6 @@ async fn maintenance(
             probe_at = tokio::time::Instant::now() + Duration::from_secs(30);
             if sweep_due {
                 next_sweep = if success {
-                    startup = false;
                     sweep_after(&current, Utc::now())
                 } else {
                     Some(Utc::now() + chrono::Duration::seconds(60))
