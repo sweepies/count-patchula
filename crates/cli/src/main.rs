@@ -2,10 +2,11 @@
 #![forbid(unsafe_code)]
 
 mod cli;
+mod remote;
 mod server;
 mod tui;
 
-use cli::{App, Command, ConfigCommand, ToolsCommand};
+use cli::{App, AuthCommand, Command, ConfigCommand, ToolsCommand};
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 
@@ -28,6 +29,8 @@ struct Services {
     token: Option<String>,
     #[cfg(test)]
     transport: Option<std::sync::Arc<dyn patchula_http::Transport>>,
+    #[cfg(test)]
+    config_dir: Option<std::path::PathBuf>,
 }
 impl Services {
     fn token(&self) -> Result<String, std::env::VarError> {
@@ -56,6 +59,7 @@ async fn run(app: &App, services: &Services) -> Result<u8, (u8, miette::Report)>
         .as_ref()
         .ok_or_else(|| (2, miette::miette!("choose a subcommand; see --help")))?;
     match command {
+        Command::Auth(auth) => auth_command(app, auth, services).await,
         Command::Config(config) => config_command(app, config),
         Command::Lookup(options) => batch(app, options, None, services).await,
         Command::Run(options) => batch(app, &options.lookup, Some(options), services).await,
@@ -63,6 +67,46 @@ async fn run(app: &App, services: &Services) -> Result<u8, (u8, miette::Report)>
         Command::Tools(tools) => tools_command(app, tools).await,
         Command::Serve(serve) => server::run(app, serve).await,
     }
+}
+
+/// `patchula auth login|logout`: manage the token for a `--server`.
+async fn auth_command(
+    app: &App,
+    auth: &cli::Auth,
+    services: &Services,
+) -> Result<u8, (u8, miette::Report)> {
+    let (AuthCommand::Login(target) | AuthCommand::Logout(target)) = &auth.command;
+    let server = remote::server(target.server.as_deref())?.ok_or_else(|| {
+        (
+            2,
+            miette::miette!("name the server with --server or {}", remote::SERVER_VAR),
+        )
+    })?;
+    let (done, message) = match auth.command {
+        AuthCommand::Login(_) => {
+            remote::sign_in(services, &server).await?;
+            (true, format!("Signed in to {server}"))
+        }
+        AuthCommand::Logout(_) => {
+            let removed = remote::forget(services, &server)?;
+            (
+                removed,
+                if removed {
+                    format!("Signed out of {server}")
+                } else {
+                    format!("Not signed in to {server}")
+                },
+            )
+        }
+    };
+    let result = if app.json {
+        serde_json::json!({"schemaVersion":1,"server":server,"changed":done}).to_string()
+    } else {
+        message
+    };
+    writeln!(io::stdout().lock(), "{result}")
+        .map(|_| 0)
+        .map_err(|e| (1, miette::miette!("{e}")))
 }
 
 /// `patchula config ...`: print or validate configuration and server settings.
@@ -373,6 +417,42 @@ async fn batch(
     Ok(if errors == 0 { 0 } else { 1 })
 }
 
+/// A lookup or run on a server. Only the repositories and the mode travel;
+/// the server applies each repository's own `patchula.pkl`.
+async fn remote_report(
+    options: &cli::Lookup,
+    run: Option<&cli::Run>,
+    services: &Services,
+    server: &str,
+) -> Result<patchula_report::Report, (u8, miette::Report)> {
+    let local_only = [
+        (options.local.is_some(), "--local"),
+        (options.config.is_some(), "--config"),
+        (options.config_dir.is_some(), "--config-dir"),
+        (options.all_repos, "--all-repos"),
+        (
+            run.is_some_and(|r| r.allow_lockfile_pending),
+            "--allow-lockfile-pending",
+        ),
+    ];
+    if let Some((_, flag)) = local_only.iter().find(|(set, _)| *set) {
+        return Err((
+            2,
+            miette::miette!(
+                "{flag} only works on this machine, not with --server or {}",
+                remote::SERVER_VAR
+            ),
+        ));
+    }
+    let repositories = repositories(options).map_err(|e| (2, e))?;
+    let mode = match run {
+        None => remote::Mode::Lookup,
+        Some(run) if run.dry_run => remote::Mode::DryRun,
+        Some(_) => remote::Mode::Run,
+    };
+    remote::report(services, server, repositories, mode).await
+}
+
 /// HTTP settings from the lookup flags.
 fn http_options(options: &cli::Lookup) -> Result<patchula_http::Options, (u8, miette::Report)> {
     let mut http_options = patchula_http::Options {
@@ -568,6 +648,9 @@ async fn report(
     use patchula_engine::{Engine, Options};
     if options.concurrency == 0 || options.concurrency > 100 {
         return Err((2, miette::miette!("concurrency must be 1..100")));
+    }
+    if let Some(server) = remote::server(options.server.as_deref())? {
+        return remote_report(options, run, services, &server).await;
     }
     let repositories = repositories(options).map_err(|e| (2, e))?;
     let http_options = http_options(options)?;

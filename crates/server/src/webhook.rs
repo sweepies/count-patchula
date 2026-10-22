@@ -95,6 +95,7 @@ pub struct Webhook {
     pub accepting: Arc<AtomicBool>,
     secret: Arc<Vec<u8>>,
     resolver: Option<Arc<crate::installations::Resolver>>,
+    pub(crate) api: Option<crate::remote::Api>,
 }
 impl Webhook {
     pub fn new(cache: Cache, settings: Reload, bot_login: String, secret: Vec<u8>) -> Self {
@@ -105,7 +106,12 @@ impl Webhook {
             secret: Arc::new(secret),
             accepting: Arc::new(AtomicBool::new(true)),
             resolver: None,
+            api: None,
         }
+    }
+    pub(crate) fn with_api(mut self, api: crate::remote::Api) -> Self {
+        self.api = Some(api);
+        self
     }
     pub fn with_app(mut self, app: Arc<patchula_github::app::App>) -> Self {
         self.resolver = Some(Arc::new(crate::installations::Resolver::new(

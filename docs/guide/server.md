@@ -11,9 +11,10 @@ repositories, and a ticked checkbox on a PR or the dashboard is acted on within
 seconds instead of at the next scheduled run. Between batches the server sits
 idle with little memory in use.
 
-There is no web UI. The only routes are `POST /webhook`, `GET /healthz` and
-`GET /readyz`. It listens on `127.0.0.1:8080` by default, so put an HTTPS
-reverse proxy in front for GitHub's deliveries.
+There is no web UI. The routes are `POST /webhook`, `GET /healthz`,
+`GET /readyz` and the small `/api/v1` API behind [`--server`](#run-from-your-machine).
+It listens on `127.0.0.1:8080` by default, so put an HTTPS reverse proxy in
+front for GitHub's deliveries.
 
 ## Create the GitHub App
 
@@ -24,7 +25,9 @@ The App needs:
   commit statuses read (merge fallback);
 - events: push, issues, pull request, installation, installation repositories,
   check suite and check run;
-- a webhook secret.
+- a webhook secret;
+- **Enable Device Flow** ticked, so people can [run from their
+  machines](#run-from-your-machine).
 
 A repository or organisation webhook can point at the server instead of the
 App's own webhook URL, using the same secret.
@@ -116,6 +119,39 @@ requeued.
 Queue rows survive restarts. SIGTERM stops new work, drains the current batch
 within `--shutdown-timeout-secs` (60 by default), and requeues the rest. A lock
 beside the cache allows one server per cache; give CLI jobs a separate cache.
+
+## Run from your machine
+
+`--server` hands a `lookup`, `run --dry-run` or `run` to the server instead of
+running it locally:
+
+```sh
+patchula run --dry-run --server https://patchula.acme.dev acme/my-app
+```
+
+The run uses the server's App credentials, warm caches and lockfile tools, so
+the machine needs no GitHub token and no mise. Set `PATCHULA_SERVER` to make
+it the default.
+
+On first use the CLI asks you to sign in: it prints a code to enter at
+`github.com/login/device`, and you authorise the server's App. The token is
+stored in `~/.config/patchula/servers.json` (or under `XDG_CONFIG_HOME`) and
+refreshed as it expires, so this happens once. `patchula auth login` and
+`patchula auth logout` sign in and out explicitly; to revoke the App's access,
+use GitHub's Settings → Applications.
+
+Each repository in the request must:
+
+- have the App installed, in the same installation as the others, and be
+  allowed by the server settings;
+- let you push. Read access is not enough, because on a public repository
+  everyone has it.
+
+A server runs one request per user at a time, and a real run shares the queue's
+engine, so it never races a webhook batch. The repository's own `patchula.pkl`
+applies; `--config`, `--config-dir`, `--local`, `--all-repos` and
+`--allow-lockfile-pending` only work locally, and the cache and HTTP flags are
+ignored.
 
 ## Replaying a webhook locally
 

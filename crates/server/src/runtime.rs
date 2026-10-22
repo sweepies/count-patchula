@@ -95,9 +95,14 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
         .bot_login()
         .await
         .map_err(|_| Error("GitHub App authentication failed"))?;
+    // Without a client ID the CLI cannot sign in, but webhooks still work.
+    let client_id = app.client_id().await.ok();
+    if client_id.is_none() {
+        tracing::warn!(target: "patchula_server", "cannot read the App's client ID; --server runs are unavailable");
+    }
     let runner = Arc::new(Engines {
         app: app.clone(),
-        transport,
+        transport: transport.clone(),
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
         recheck: options.recheck,
@@ -105,6 +110,16 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
     });
     let webhook = Webhook::new(cache.clone(), settings.clone(), bot, options.webhook_secret)
         .with_app(app.clone());
+    let api = crate::remote::Api::new(crate::remote::Parts {
+        app: app.clone(),
+        client_id,
+        transport,
+        cache: cache.clone(),
+        settings: settings.clone(),
+        accepting: webhook.accepting.clone(),
+        runner: runner.clone(),
+    });
+    let webhook = webhook.with_api(api);
     let ready = Arc::new(AtomicBool::new(false));
     let listener = TcpListener::bind(options.listen)
         .await
@@ -152,10 +167,11 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
 }
 
 fn router(webhook: Webhook, ready: Arc<AtomicBool>) -> Router {
+    let api = webhook.api.clone();
     let settings = webhook.settings.clone();
     let accepting = webhook.accepting.clone();
     let cache = webhook.cache.clone();
-    Router::new()
+    let router = Router::new()
         .route("/webhook", post(crate::webhook::receive))
         .route("/healthz", get(|| async { StatusCode::OK }))
         .route(
@@ -182,7 +198,12 @@ fn router(webhook: Webhook, ready: Arc<AtomicBool>) -> Router {
         )
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(axum::middleware::from_fn(crate::webhook::observe))
-        .with_state(webhook)
+        .with_state(webhook);
+    // The API answers in its own JSON, outside the webhook observer.
+    match api {
+        Some(api) => router.merge(crate::remote::routes(api)),
+        None => router,
+    }
 }
 
 #[derive(Default, Debug)]
@@ -337,33 +358,7 @@ impl Batch for Engines {
                 return Ok(BatchOutcome::default());
             }
             let mut engines = self.engines.lock().await;
-            if let std::collections::btree_map::Entry::Vacant(entry) = engines.entry(id) {
-                let mut engine = Engine::with_credentials(
-                    credentials,
-                    self.cache.clone(),
-                    settings.concurrency,
-                    self.transport.clone(),
-                )
-                .map_err(|_| Error("cannot create batch engine"))?;
-                match (
-                    std::env::var("PATCHULA_DOCKERHUB_USERNAME").ok(),
-                    std::env::var("PATCHULA_DOCKERHUB_TOKEN").ok(),
-                ) {
-                    (None, None) => {}
-                    (Some(user), Some(token)) if !user.is_empty() && !token.is_empty() => {
-                        engine = engine.with_dockerhub_credentials(user, token)
-                    }
-                    _ => return Err(Error("set both Docker Hub credentials to nonempty values")),
-                }
-                entry.insert(engine);
-            }
-            let engine = engines.get_mut(&id).expect("installation engine");
-            engine
-                .set_batch_options(
-                    settings.concurrency,
-                    settings.recheck(self.recheck.as_deref()),
-                )
-                .map_err(|_| Error("invalid batch options"))?;
+            let engine = self.engine(&mut engines, id, settings)?;
             let result = engine
                 .run(
                     patchula_engine::Options {
@@ -400,6 +395,80 @@ impl Batch for Engines {
                 outcome.error_kinds.insert("engine-error", 1);
             }
             Ok(outcome)
+        })
+    }
+}
+impl Engines {
+    /// The installation's engine, created on first use and set to the current settings.
+    fn engine<'a>(
+        &self,
+        engines: &'a mut BTreeMap<u64, Engine>,
+        id: u64,
+        settings: &Settings,
+    ) -> Result<&'a mut Engine, Error> {
+        if let std::collections::btree_map::Entry::Vacant(entry) = engines.entry(id) {
+            let mut engine = Engine::with_credentials(
+                self.app.installation(id),
+                self.cache.clone(),
+                settings.concurrency,
+                self.transport.clone(),
+            )
+            .map_err(|_| Error("cannot create batch engine"))?;
+            match (
+                std::env::var("PATCHULA_DOCKERHUB_USERNAME").ok(),
+                std::env::var("PATCHULA_DOCKERHUB_TOKEN").ok(),
+            ) {
+                (None, None) => {}
+                (Some(user), Some(token)) if !user.is_empty() && !token.is_empty() => {
+                    engine = engine.with_dockerhub_credentials(user, token)
+                }
+                _ => return Err(Error("set both Docker Hub credentials to nonempty values")),
+            }
+            entry.insert(engine);
+        }
+        let engine = engines.get_mut(&id).expect("installation engine");
+        engine
+            .set_batch_options(
+                settings.concurrency,
+                settings.recheck(self.recheck.as_deref()),
+            )
+            .map_err(|_| Error("invalid batch options"))?;
+        Ok(engine)
+    }
+}
+impl crate::remote::Runner for Engines {
+    fn run<'a>(
+        &'a self,
+        installation: u64,
+        repositories: Vec<String>,
+        mode: crate::remote::Mode,
+        login: &'a str,
+        settings: &'a Settings,
+    ) -> BoxFuture<'a, Result<Report, &'static str>> {
+        use crate::remote::Mode;
+        Box::pin(async move {
+            // The same lock as queued batches, so a remote run never races one.
+            let mut engines = self.engines.lock().await;
+            let engine = self
+                .engine(&mut engines, installation, settings)
+                .map_err(|e| e.0)?;
+            let options = patchula_engine::Options {
+                repositories,
+                ..Default::default()
+            };
+            let report = match mode {
+                Mode::Lookup => engine.lookup(options).await,
+                Mode::DryRun => engine.run(options, true, false).await,
+                Mode::Run => engine.run(options, false, false).await,
+            }
+            .map_err(|_| "the run failed on the server")?;
+            if mode == Mode::Run {
+                tracing::info!(target: "patchula_server", installation, user = login, "remote run report");
+                output_report(&report, settings.report_directory.as_deref())
+                    .await
+                    .map_err(|e| e.0)?;
+            }
+            Ok(report)
         })
     }
 }

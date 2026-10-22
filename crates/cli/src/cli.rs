@@ -32,6 +32,8 @@ pub enum Color {
 
 #[derive(Subcommands)]
 pub enum Command {
+    /// Sign in to or out of a Count Patchula server for `--server`.
+    Auth(Auth),
     /// Inspect and validate Pkl configuration.
     Config(Config),
     /// Extract dependencies and report available updates without writing repositories.
@@ -44,6 +46,27 @@ pub enum Command {
     Tools(Tools),
     /// Browse dependencies and updates in the terminal; with `--local`, apply selected updates.
     Tui(Tui),
+}
+
+#[derive(Args)]
+pub struct Auth {
+    #[usage(subcommand)]
+    pub command: AuthCommand,
+}
+
+#[derive(Subcommands)]
+pub enum AuthCommand {
+    /// Sign in with the server's GitHub App, replacing any stored token.
+    Login(AuthServer),
+    /// Forget the stored token for a server.
+    Logout(AuthServer),
+}
+
+#[derive(Args)]
+pub struct AuthServer {
+    /// Server URL; also PATCHULA_SERVER.
+    #[usage(long)]
+    pub server: Option<String>,
 }
 
 #[derive(Args)]
@@ -162,6 +185,11 @@ pub struct Lookup {
     /// registries, and nothing is written: use it with `lookup` or `run --dry-run`.
     #[usage(long, conflicts = "--config-dir")]
     pub local: Option<PathBuf>,
+    /// Run on a Count Patchula server with its App's credentials and caches; also
+    /// PATCHULA_SERVER. You sign in with GitHub on first use, and need push access
+    /// to each repository. Local config, cache and HTTP flags do not apply.
+    #[usage(long)]
+    pub server: Option<String>,
 }
 
 #[derive(Args)]

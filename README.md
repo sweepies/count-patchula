@@ -48,7 +48,9 @@ schedule. The recommended way to run him is the [GitHub App
 server](https://count-patchula.sweepy.dev/guide/server): one long-running
 process keeps every cache warm, batches work across repositories, and acts on
 PR checkboxes the moment you tick them. It idles cheaply between batches, so
-usage-billed hosts such as Railway suit it well.
+usage-billed hosts such as Railway suit it well. Once it is up, `patchula run
+--server <url>` runs on it from your machine, signed in with GitHub, with no
+token or toolchain of your own.
 
 ## What you get
 
