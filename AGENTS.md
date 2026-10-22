@@ -44,6 +44,7 @@ are plain and direct.
 
 ## Done
 
-A change is done when `mise run ci` passes locally and, after pushing, the
-**CI result** check on GitHub is green. Commits use conventional commit
+A change is done when the **CI result** check on GitHub is green after pushing.
+GitHub runs the full `mise run ci`, so run only the checks for what changed
+locally, such as one crate's tests. Commits use conventional commit
 messages (`feat(manager): …`, `fix(lookup): …`).
