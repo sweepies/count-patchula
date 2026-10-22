@@ -133,8 +133,9 @@ pub fn plan(
                     if best != Some(update) {
                         continue;
                     }
-                    // Pins share one branch, except reference data: its own PR
-                    // lets it merge without waiting on unrelated pins.
+                    // Pins share one branch, except reference data: a pin branch of
+                    // its own lets it merge without waiting on unrelated pins, and
+                    // keeps it apart from that package's version upgrade.
                     let reference_data = dep
                         .kinds()
                         .contains(&patchula_config::DependencyKind::ReferenceData);
@@ -143,6 +144,11 @@ pub fn plan(
                         && (allow_pending || crate::lockfiles::job(dep, update, snapshot).is_ok())
                     {
                         ("pins".into(), "pin-dependencies".into())
+                    } else if update.update_type == "pin" && reference_data {
+                        (
+                            serde_json::json!(["pin", word(&dep.source), dep.package]).to_string(),
+                            format!("pin-{}", package_slug(&dep.package)),
+                        )
                     } else if let Some(group) = &update.group {
                         let major = update.update_type == "major";
                         (
