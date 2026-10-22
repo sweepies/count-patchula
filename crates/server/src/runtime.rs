@@ -458,7 +458,7 @@ impl crate::remote::Runner for Engines {
                 .map_err(|e| e.0)?;
             let options = patchula_engine::Options {
                 repositories,
-                ..Default::default()
+                ..patchula_engine::Options::default()
             };
             let report = match mode {
                 Mode::Lookup => engine.lookup(options).await,
