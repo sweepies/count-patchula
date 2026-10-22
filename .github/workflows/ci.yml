@@ -16,7 +16,9 @@ concurrency:
 
 jobs:
   # The workflow always runs, so "CI result" can be a required check. Changes
-  # that only touch the docs site (which Cloudflare builds) skip the Rust jobs.
+  # that no Rust job reads, such as the docs site (which Cloudflare builds),
+  # skip the Rust jobs. Changes to workflows other than this one only lint
+  # the workflows.
   changes:
     name: Changed paths
     runs-on: ubuntu-latest
@@ -26,6 +28,7 @@ jobs:
       pull-requests: read
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
+      actions: ${{ steps.filter.outputs.actions }}
     steps:
       - id: filter
         env:
@@ -44,13 +47,26 @@ jobs:
             # The compare API lists at most 300 files; assume more means Rust.
             files=$(gh api "repos/$REPO/compare/$BEFORE...$AFTER" --jq 'if (.files | length) >= 300 then "unknown" else .files[].filename end')
           fi
-          if printf '%s\n' "$files" | grep -Eqv '^(docs/|README\.md$)'; then
-            rust=true
-          else
-            rust=false
-          fi
-          echo "rust=$rust" >> "$GITHUB_OUTPUT"
-          echo "Rust jobs: $rust" >> "$GITHUB_STEP_SUMMARY"
+          rust=false
+          actions=false
+          while IFS= read -r file; do
+            case "$file" in
+              # The conformance tests read the departures page.
+              docs/src/content/docs/renovate/departures.md) rust=true ;;
+              docs/* | assets/* | skills/* | .claude/* | conformance/README.md | README.md | AGENTS.md | CLAUDE.md | LICENSE | .gitignore | .deepsource.toml | socket.yml | communique.toml | tak.toml | fnox.toml) ;;
+              action.yml | .github/workflows/action.yml | .github/workflows/release.yml | .github/workflows/benchmarks.yml) actions=true ;;
+              # Anything else, including "unknown", may change what the Rust jobs check.
+              *) rust=true ;;
+            esac
+          done <<< "$files"
+          {
+            echo "rust=$rust"
+            echo "actions=$actions"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "Rust jobs: $rust"
+            echo "Workflow lint only: $([ "$rust" = false ] && echo "$actions" || echo false)"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   ci:
     needs: changes
@@ -95,6 +111,22 @@ jobs:
         run: |
           du -sh target/.
           df -h . "${RUNNER_TEMP}"
+
+  # The ci job lints the workflows too; this runs when only workflows changed.
+  actions:
+    name: Workflow lint
+    needs: changes
+    if: needs.changes.outputs.rust != 'true' && needs.changes.outputs.actions == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          cache: true
+      - run: mise run lint:actions
 
   corpus:
     name: Corpus lookup
@@ -157,11 +189,11 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  # The one check to require. Skipped Rust jobs count as passing; failed or
+  # The one check to require. Skipped jobs count as passing; failed or
   # cancelled ones, or a failed path check, do not.
   result:
     name: CI result
-    needs: [changes, ci, corpus]
+    needs: [changes, ci, actions, corpus]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
