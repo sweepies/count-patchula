@@ -146,7 +146,8 @@ lockfiles {
 refreshes every lockfile within the manifests' ranges, at most once per ISO
 week, and no sooner than `waitHours` after the last successful refresh. The
 default window is Monday 00:00 to 04:00 UTC; explicit update windows
-replace it. The CLI does not schedule itself, so run it during the window.
+replace it. Windows work as for updates: the first run after a window time
+picks it up, however often the Count runs.
 Failures do not count as a completed refresh, and a closed maintenance PR can
 come back the following week.
 

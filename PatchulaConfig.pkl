@@ -31,7 +31,8 @@ class Selector {
 }
 
 class Window {
-  /// Five-field cron expressions, interpreted in the named IANA timezone.
+  /// Five-field cron expressions in the named IANA timezone; weekday 0 or 7 is
+  /// Sunday. Each time they name is due on the first run after it.
   cron: Listing<String> = new {}
   zone: String = "UTC"
 }

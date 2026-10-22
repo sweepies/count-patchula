@@ -61,7 +61,7 @@ impl Settings {
             return Err("coalescingMs must be 0..60000");
         }
         if let Some(cron) = &self.sweep_cron {
-            cron::Schedule::from_str(cron)
+            patchula_config::schedule(cron, true)
                 .map_err(|_| "sweepCron must be valid (six or seven fields)")?;
         }
         chrono_tz::Tz::from_str(&self.sweep_timezone).map_err(|_| "sweepTimezone must be valid")?;

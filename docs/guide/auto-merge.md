@@ -34,8 +34,8 @@ holds:
 - The PR is one he wrote in an earlier run, with a stored receipt for exactly
   this head, base, body and author.
 - Policy still says merge, and every update on the branch is past its release
-  age and inside its schedule window. Creating an update early from the
-  dashboard does not waive these.
+  age. Creating an update early from the dashboard does not waive that.
+  Schedule windows do not apply to merging.
 - The PR is open, not a draft, and GitHub reports it mergeable with state
   `clean`. Conflicts, required reviews, a behind base or an unknown state wait.
 - The head has at least one check run or commit status, every check run is

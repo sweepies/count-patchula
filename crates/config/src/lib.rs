@@ -15,6 +15,46 @@ pub const SCHEMA: &str = include_str!("../../../PatchulaConfig.pkl");
 /// when the repository has no copy of its own.
 pub const SCHEMA_NAME: &str = "PatchulaConfig.pkl";
 
+/// Parse a cron expression whose day-of-week field uses standard numbering, where
+/// 0 and 7 are Sunday and 1 is Monday. The underlying parser counts from 1 for
+/// Sunday, so numbers there are rewritten as day names first. `seconds` says the
+/// expression starts with a seconds field, as the server's sweep schedule does;
+/// schedule windows have five fields and run at second zero.
+pub fn schedule(expr: &str, seconds: bool) -> Result<cron::Schedule, cron::error::Error> {
+    use std::str::FromStr;
+    const DAYS: [&str; 8] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
+    let day = |token: &str| {
+        token
+            .parse::<usize>()
+            .ok()
+            .and_then(|n| DAYS.get(n))
+            .map_or_else(|| token.to_owned(), |name| (*name).to_owned())
+    };
+    let mut fields: Vec<String> = expr.split_whitespace().map(str::to_owned).collect();
+    if !seconds {
+        fields.insert(0, "0".into());
+    }
+    if let Some(weekdays) = fields.get_mut(5) {
+        *weekdays = weekdays
+            .split(',')
+            .map(|part| {
+                let (range, step) = part
+                    .split_once('/')
+                    .map_or((part, None), |(r, s)| (r, Some(s)));
+                let range = match range.split_once('-') {
+                    // A range ending on Sunday as 7 wraps past Saturday.
+                    Some((from, "7")) => format!("{}-SAT,SUN", day(from)),
+                    Some((from, to)) => format!("{}-{}", day(from), day(to)),
+                    None => day(range),
+                };
+                step.map_or(range.clone(), |step| format!("{range}/{step}"))
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+    }
+    cron::Schedule::from_str(&fields.join(" "))
+}
+
 /// A repository's config file, relative to its root.
 pub const CONFIG_PATH: &str = "patchula.pkl";
 

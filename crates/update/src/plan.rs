@@ -97,6 +97,7 @@ pub fn plan(
     dependencies: &[Dependency],
     snapshot: &Snapshot,
     allow_pending: bool,
+    since: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Vec<Plan>, String> {
     let evaluator = patchula_lookup::Evaluator::new(config)?;
@@ -180,6 +181,7 @@ pub fn plan(
             &evaluator,
             snapshot,
             allow_pending,
+            since,
             now,
             &identity,
             branch,
@@ -197,6 +199,7 @@ fn build(
     evaluator: &patchula_lookup::Evaluator,
     snapshot: &Snapshot,
     allow_pending: bool,
+    since: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
     identity: &str,
     branch: String,
@@ -219,7 +222,7 @@ fn build(
         }
         if let Some(policy) = &update.policy {
             prefixes.insert(policy.commit_prefix.clone());
-            if !in_window(&policy.windows, now) {
+            if !in_window(&policy.windows, since, now) {
                 reason = Some("outside the configured update windows".into());
             }
         }
@@ -365,21 +368,31 @@ fn build(
     })
 }
 
+/// Whether a schedule lets this run propose updates: one of the times its cron
+/// expressions name fell after the repository's previous run (`since`) and at
+/// or before `now`. However often runs happen, a daily time is due on the first
+/// run after it. With no previous run recorded, the current minute must be one
+/// of those times.
 pub(crate) fn in_window(
     windows: &[patchula_report::Window],
+    since: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> bool {
-    use std::str::FromStr;
     windows.is_empty()
         || windows.iter().any(|w| {
             let Ok(zone) = w.zone.parse::<chrono_tz::Tz>() else {
                 return false;
             };
             let local = now.with_timezone(&zone);
+            let from = since
+                .filter(|since| *since < now)
+                .map_or(local - chrono::Duration::minutes(1), |since| {
+                    since.with_timezone(&zone)
+                });
             w.cron.iter().any(|expr| {
-                cron::Schedule::from_str(&format!("0 {expr}"))
+                patchula_config::schedule(expr, false)
                     .ok()
-                    .and_then(|s| s.after(&(local - chrono::Duration::minutes(1))).next())
+                    .and_then(|s| s.after(&from).next())
                     .is_some_and(|t| t <= local)
             })
         })
@@ -568,6 +581,7 @@ fn line(dep: &Dependency, reported: &patchula_report::Dependency, update: &Updat
 
 /// The batch branch: the approved targets of every batched update, applied to
 /// the current extraction. Targets the base already satisfies are complete.
+#[allow(clippy::too_many_arguments)]
 pub fn batch_plan(
     repo: &Repository,
     config: &Config,
@@ -575,6 +589,7 @@ pub fn batch_plan(
     snapshot: &Snapshot,
     targets: &[Change],
     allow_pending: bool,
+    since: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Option<Plan>, String> {
     let evaluator = patchula_lookup::Evaluator::new(config)?;
@@ -641,6 +656,7 @@ pub fn batch_plan(
         &evaluator,
         snapshot,
         allow_pending,
+        since,
         now,
         "[\"batch\"]",
         branch,
@@ -668,4 +684,76 @@ pub fn batch_plan(
     );
     plan.input_fingerprint = plan.fingerprint.clone();
     Ok(Some(plan))
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::in_window;
+    use chrono::{DateTime, Utc};
+    fn at(text: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(text).unwrap().to_utc()
+    }
+    fn window(cron: &str) -> Vec<patchula_report::Window> {
+        vec![patchula_report::Window {
+            cron: vec![cron.into()],
+            zone: "UTC".into(),
+        }]
+    }
+
+    #[test]
+    fn a_daily_time_is_due_once_on_the_first_run_after_it() {
+        let daily = window("0 3 * * *");
+        // Hourly runs: only the one after 03:00 proposes.
+        assert!(in_window(
+            &daily,
+            Some(at("2026-10-22T02:00:00Z")),
+            at("2026-10-22T03:00:05Z")
+        ));
+        assert!(!in_window(
+            &daily,
+            Some(at("2026-10-22T03:00:05Z")),
+            at("2026-10-22T04:00:00Z")
+        ));
+        // A run every six hours still catches it.
+        assert!(in_window(
+            &daily,
+            Some(at("2026-10-22T00:00:00Z")),
+            at("2026-10-22T06:00:00Z")
+        ));
+        // A webhook run at 03:30 takes the day's turn; the next sweep does not.
+        assert!(in_window(
+            &daily,
+            Some(at("2026-10-22T02:59:00Z")),
+            at("2026-10-22T03:30:00Z")
+        ));
+        assert!(!in_window(
+            &daily,
+            Some(at("2026-10-22T03:30:00Z")),
+            at("2026-10-22T04:00:00Z")
+        ));
+    }
+
+    #[test]
+    fn without_a_previous_run_only_the_current_minute_counts() {
+        let daily = window("0 3 * * *");
+        assert!(in_window(&daily, None, at("2026-10-22T03:00:30Z")));
+        assert!(!in_window(&daily, None, at("2026-10-22T04:00:00Z")));
+    }
+
+    #[test]
+    fn ranges_stay_open_and_empty_windows_always_allow() {
+        let mornings = window("* 0-6 * * 1");
+        // 2026-10-19 is a Monday.
+        assert!(in_window(
+            &mornings,
+            Some(at("2026-10-19T02:00:00Z")),
+            at("2026-10-19T03:00:00Z")
+        ));
+        assert!(!in_window(
+            &mornings,
+            Some(at("2026-10-19T08:00:00Z")),
+            at("2026-10-19T09:00:00Z")
+        ));
+        assert!(in_window(&[], None, at("2026-10-22T12:00:00Z")));
+    }
 }

@@ -504,10 +504,18 @@ fn setup(
 }
 fn make_plan(target: &str) -> (Plan, Snapshot) {
     let (config, repo, deps, snapshot) = setup(target, false);
-    let plan = plan(&repo, &config, &deps, &snapshot, false, chrono::Utc::now())
-        .unwrap()
-        .pop()
-        .unwrap();
+    let plan = plan(
+        &repo,
+        &config,
+        &deps,
+        &snapshot,
+        false,
+        None,
+        chrono::Utc::now(),
+    )
+    .unwrap()
+    .pop()
+    .unwrap();
     (plan, snapshot)
 }
 fn fake(snapshot: &Snapshot) -> Arc<Fake> {
@@ -879,10 +887,18 @@ async fn conflicts_mode_recreates_when_the_default_changes_a_touched_file() {
     }
     let (config, mut repo, deps, _) = setup("22.0.0", false);
     repo.commit = Some("base2".into());
-    let mut next = plan(&repo, &config, &deps, &snapshot, false, chrono::Utc::now())
-        .unwrap()
-        .pop()
-        .unwrap();
+    let mut next = plan(
+        &repo,
+        &config,
+        &deps,
+        &snapshot,
+        false,
+        None,
+        chrono::Utc::now(),
+    )
+    .unwrap()
+    .pop()
+    .unwrap();
     apply(
         &github,
         &mut next,
@@ -1029,20 +1045,36 @@ fn grouped_files_and_prefixes_are_stable_when_occurrence_order_changes() {
         .extract(&files)
         .unwrap()
         .dependencies;
-    let first = plan(&repo, &config, &deps, &snapshot, false, chrono::Utc::now())
-        .unwrap()
-        .pop()
-        .unwrap();
+    let first = plan(
+        &repo,
+        &config,
+        &deps,
+        &snapshot,
+        false,
+        None,
+        chrono::Utc::now(),
+    )
+    .unwrap()
+    .pop()
+    .unwrap();
     assert_eq!(first.action.status, ActionStatus::Planned);
     assert_eq!(first.action.files.len(), 2);
     assert!(first.action.branch.starts_with("deps/major-node-runtime"));
     assert!(first.action.message.starts_with("build(deps):"));
     repo.package_files.reverse();
     deps.reverse();
-    let second = plan(&repo, &config, &deps, &snapshot, false, chrono::Utc::now())
-        .unwrap()
-        .pop()
-        .unwrap();
+    let second = plan(
+        &repo,
+        &config,
+        &deps,
+        &snapshot,
+        false,
+        None,
+        chrono::Utc::now(),
+    )
+    .unwrap()
+    .pop()
+    .unwrap();
     assert_eq!(first.action, second.action);
     assert_eq!(first.fingerprint, second.fingerprint);
 }
@@ -1078,10 +1110,18 @@ fn unsupported_lockfile_plans_skip_and_opt_in_marks_manifest_only_updates() {
     // Binary Bun locks stay unsupported; pnpm and Yarn locks are supported.
     snapshot.paths.insert("bun.lockb".into());
     for allow in [false, true] {
-        let p = plan(&repo, &config, &deps, &snapshot, allow, chrono::Utc::now())
-            .unwrap()
-            .pop()
-            .unwrap();
+        let p = plan(
+            &repo,
+            &config,
+            &deps,
+            &snapshot,
+            allow,
+            None,
+            chrono::Utc::now(),
+        )
+        .unwrap()
+        .pop()
+        .unwrap();
         assert!(p.action.lockfile_pending);
         assert_eq!(
             p.action.status,
@@ -1126,10 +1166,18 @@ fn pnpm_and_yarn_locks_are_supported_and_never_pending() {
         snapshot.paths.remove("bun.lock");
         snapshot.paths.insert(lock.into());
         for allow in [false, true] {
-            let p = plan(&repo, &config, &deps, &snapshot, allow, chrono::Utc::now())
-                .unwrap()
-                .pop()
-                .unwrap();
+            let p = plan(
+                &repo,
+                &config,
+                &deps,
+                &snapshot,
+                allow,
+                None,
+                chrono::Utc::now(),
+            )
+            .unwrap()
+            .pop()
+            .unwrap();
             assert!(!p.action.lockfile_pending, "{lock}");
             assert_eq!(p.action.status, ActionStatus::Planned, "{lock}");
             assert_eq!(p.lock_jobs.len(), 1, "{lock}");
@@ -1162,7 +1210,16 @@ fn consolidates_minor_patch_digest_pins_and_keeps_only_latest_major() {
         u.new_version = Some(version.into());
         updates.push(u);
     }
-    let plans = plan(&repo, &config, &deps, &snapshot, false, chrono::Utc::now()).unwrap();
+    let plans = plan(
+        &repo,
+        &config,
+        &deps,
+        &snapshot,
+        false,
+        None,
+        chrono::Utc::now(),
+    )
+    .unwrap();
     let names: BTreeSet<_> = plans.iter().map(|p| p.action.branch.as_str()).collect();
     assert_eq!(
         names,
@@ -1247,7 +1304,16 @@ fn container_occurrences_across_managers_share_target_and_slug_collisions_gain_m
         },
     );
     deps.push(docker);
-    let plans = plan(&repo, &config, &deps, &snapshot, false, chrono::Utc::now()).unwrap();
+    let plans = plan(
+        &repo,
+        &config,
+        &deps,
+        &snapshot,
+        false,
+        None,
+        chrono::Utc::now(),
+    )
+    .unwrap();
     let names: BTreeSet<_> = plans.iter().map(|p| p.action.branch.as_str()).collect();
     assert_eq!(
         names,
@@ -1274,7 +1340,16 @@ fn container_occurrences_across_managers_share_target_and_slug_collisions_gain_m
         path: ".tool-versions".into(),
         dependencies: repo.package_files[0].dependencies.clone(),
     });
-    let plans = plan(&repo, &config, &deps, &snapshot, false, chrono::Utc::now()).unwrap();
+    let plans = plan(
+        &repo,
+        &config,
+        &deps,
+        &snapshot,
+        false,
+        None,
+        chrono::Utc::now(),
+    )
+    .unwrap();
     assert_eq!(plans.len(), 2);
     assert_eq!(
         plans
@@ -2628,7 +2703,16 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
             });
         }
     }
-    let plans = plan(&repo, &config, &deps, &snapshot, false, chrono::Utc::now()).unwrap();
+    let plans = plan(
+        &repo,
+        &config,
+        &deps,
+        &snapshot,
+        false,
+        None,
+        chrono::Utc::now(),
+    )
+    .unwrap();
     let names: BTreeSet<_> = plans
         .iter()
         .filter(|p| p.action.status == ActionStatus::Planned)
@@ -2678,7 +2762,16 @@ async fn pin_title_respects_prefix_and_pin_rows_never_request_release_notes() {
     let (mut config, mut repo, deps, snapshot) = setup("22.0.0", false);
     config.defaults.commit_prefix = "build(deps):".into();
     repo.package_files[0].dependencies[0].updates[0].update_type = "pin".into();
-    let mut plans = plan(&repo, &config, &deps, &snapshot, false, chrono::Utc::now()).unwrap();
+    let mut plans = plan(
+        &repo,
+        &config,
+        &deps,
+        &snapshot,
+        false,
+        None,
+        chrono::Utc::now(),
+    )
+    .unwrap();
     assert_eq!(plans[0].action.message, "build(deps): pin dependencies");
     plans[0].changes[0].source = "github-tags".into();
     plans[0].changes[0].package = "actions/checkout".into();
@@ -2870,7 +2963,16 @@ async fn merged_pr_branch_can_be_reused_for_the_next_update_on_its_major_line() 
     r.updates[0].update_type = "minor".into();
     r.updates[0].new_value = Some("22.1.0".into());
     r.updates[0].new_version = Some("22.1.0".into());
-    let mut plans = plan(&repo, &config, &deps, &snapshot, false, chrono::Utc::now()).unwrap();
+    let mut plans = plan(
+        &repo,
+        &config,
+        &deps,
+        &snapshot,
+        false,
+        None,
+        chrono::Utc::now(),
+    )
+    .unwrap();
     assert_eq!(plans[0].action.branch, p.action.branch);
     let actions = pr_cycle(&github, &repo, &config, &mut plans, &snapshot).await;
     assert_eq!(
@@ -2891,7 +2993,16 @@ async fn titles_name_versions_and_branches_skip_registry_urls() {
     let dep = &mut repo.package_files[0].dependencies[0];
     dep.package = package;
     dep.updates[0].new_value = Some("==22.0.0".into());
-    let plans = plan(&repo, &config, &deps, &snapshot, false, chrono::Utc::now()).unwrap();
+    let plans = plan(
+        &repo,
+        &config,
+        &deps,
+        &snapshot,
+        false,
+        None,
+        chrono::Utc::now(),
+    )
+    .unwrap();
     assert_eq!(
         plans[0].action.message,
         "chore(deps): update node to 22.0.0"
@@ -2971,7 +3082,16 @@ fn reference_data_pins_get_their_own_branch() {
             }),
         }
     }
-    let plans = plan(&repo, &config, &deps, &snapshot, false, chrono::Utc::now()).unwrap();
+    let plans = plan(
+        &repo,
+        &config,
+        &deps,
+        &snapshot,
+        false,
+        None,
+        chrono::Utc::now(),
+    )
+    .unwrap();
     let branches: BTreeSet<_> = plans.iter().map(|p| p.action.branch.as_str()).collect();
     assert!(
         branches.contains("patchula/pin-dependencies"),

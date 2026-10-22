@@ -676,7 +676,7 @@ async fn check_candidate(client: &Client, work: &Work, bot: &str) -> Result<bool
     Ok(false)
 }
 fn sweep_after(settings: &Settings, now: chrono::DateTime<Utc>) -> Option<chrono::DateTime<Utc>> {
-    let schedule = cron::Schedule::from_str(settings.sweep_cron.as_deref()?).ok()?;
+    let schedule = patchula_config::schedule(settings.sweep_cron.as_deref()?, true).ok()?;
     let tz = chrono_tz::Tz::from_str(&settings.sweep_timezone).ok()?;
     schedule
         .after(&now.with_timezone(&tz))

@@ -147,14 +147,23 @@ lockfile is not an update type; it is configured under
 | `windows` | when proposals may be created |
 | `permitted` | a version filter targets must match, such as `"semver:^24"`; an explicit filter also allows prereleases |
 
-Windows are cron expressions in an IANA timezone. A window restricts when an
-update is proposed, not when an open PR may merge.
+Windows are five-field cron expressions in an IANA timezone; weekdays count
+0 or 7 for Sunday and 1 for Monday. Each time an expression names opens a turn:
+the first run after it proposes and updates PRs, and later runs hold them until
+the next time comes round. A window of `"0 3 * * *"` therefore means once a day,
+after 03:00, however often the Count runs, whether from a server's sweeps, a
+webhook or a CI schedule. An expression that covers a range, such as every
+minute of a morning, lets every run in that range propose.
+
+Windows decide when updates are proposed, not when they merge: a PR whose
+checks pass later still merges. A repository's first run, before the Count has
+recorded one, proposes only if it falls on one of the window's minutes.
 
 ```pkl
 defaults {
   windows {
     new Window {
-      cron { "* 0-6 * * 1" }   // Mondays before 07:00
+      cron { "0 3 * * 1" }   // once a week, after 03:00 on Mondays
       zone = "Europe/London"
     }
   }
