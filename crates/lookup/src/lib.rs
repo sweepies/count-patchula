@@ -242,7 +242,7 @@ impl Evaluator {
                 || !compiled.files.matches(&dep.file)
                 || !any(&s.managers, dep.manager)
                 || !any(&s.sources, dep.source)
-                || !any(&s.kinds, dep.kind)
+                || !(s.kinds.is_empty() || dep.kinds().iter().any(|kind| s.kinds.contains(kind)))
                 || !any(&s.updates, update)
                 || compiled
                     .current

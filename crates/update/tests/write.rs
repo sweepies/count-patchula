@@ -2898,3 +2898,104 @@ async fn titles_name_versions_and_branches_skip_registry_urls() {
     );
     assert_eq!(plans[0].action.branch, "patchula/node-22.x");
 }
+
+/// Pins share one branch, but a reference data pin gets its own, so it can
+/// merge without waiting on unrelated pins.
+#[test]
+fn reference_data_pins_get_their_own_branch() {
+    let (mut config, mut repo, ..) = setup("22.0.0", false);
+    config.managers = vec![Manager::Npm];
+    let files = Files::from([(
+        "package.json".to_string(),
+        "{\"dependencies\":{\"prettier\":\"^3.3.0\",\"psl\":\"^1.9.0\"}}\n".to_string(),
+    )]);
+    let deps = Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies;
+    let mut snapshot = Snapshot {
+        paths: files.keys().cloned().collect(),
+        files: files
+            .iter()
+            .map(|(p, c)| {
+                (
+                    p.clone(),
+                    Blob {
+                        sha: blob_sha(c),
+                        mode: "100644".into(),
+                        content: c.clone(),
+                    },
+                )
+            })
+            .collect(),
+    };
+    snapshot.paths.insert("bun.lock".into());
+    repo.package_files.clear();
+    for dep in &deps {
+        // psl also has a minor upgrade, which keeps its own branch.
+        let targets: &[(&str, &str)] = if dep.package == "psl" {
+            &[("pin", "1.9.0"), ("minor", "1.15.0")]
+        } else {
+            &[("pin", "3.9.10")]
+        };
+        let report = ReportDependency {
+            manager: word(&dep.manager),
+            name: dep.name.clone(),
+            package: dep.package.clone(),
+            occurrence: None,
+            current: Current {
+                value: Some(dep.current.clone()),
+                version: dep.resolved.clone(),
+                digest: dep.digest.clone(),
+            },
+            metadata: None,
+            updates: targets
+                .iter()
+                .map(|(kind, target)| Update {
+                    new_value: Some((*target).into()),
+                    new_version: Some((*target).into()),
+                    new_digest: None,
+                    update_type: (*kind).into(),
+                    group: None,
+                    policy: None,
+                    release_age: None,
+                })
+                .collect(),
+        };
+        match repo.package_files.iter_mut().find(|f| f.path == dep.file) {
+            Some(file) => file.dependencies.push(report),
+            None => repo.package_files.push(PackageFile {
+                path: dep.file.clone(),
+                dependencies: vec![report],
+            }),
+        }
+    }
+    let plans = plan(&repo, &config, &deps, &snapshot, false, chrono::Utc::now()).unwrap();
+    let branches: BTreeSet<_> = plans.iter().map(|p| p.action.branch.as_str()).collect();
+    assert!(
+        branches.contains("patchula/pin-dependencies"),
+        "{branches:?}"
+    );
+    let pins = plans
+        .iter()
+        .find(|p| p.action.branch == "patchula/pin-dependencies")
+        .unwrap();
+    assert_eq!(
+        pins.changes.len(),
+        1,
+        "only prettier shares the pins branch"
+    );
+    assert!(branches.contains("patchula/pin-psl"), "{branches:?}");
+    assert!(
+        branches.iter().any(|b| b.starts_with("patchula/psl-")),
+        "{branches:?}"
+    );
+    assert!(
+        plans
+            .iter()
+            .filter(|p| p.action.branch.contains("psl"))
+            .all(|p| p.action.status == ActionStatus::Planned),
+        "both psl branches are planned, not skipped as overlapping"
+    );
+}

@@ -498,6 +498,15 @@ and the observed minor-to-major Cargo taxonomy. Both missing/extra rows remain
 separately audited. Changed ranges, different compatibility intervals, stale
 lookups and unrelated taxonomy remain actionable. Tests cover negative cases.
 
+### Reference data {#reference-data}
+
+- **Renovate:** No built-in category; release age, schedules and automerge apply as configured
+- **Count Patchula:** CA root bundles, time zone data and the public suffix list are `reference-data`; by default their updates skip the wait and windows, get their own PR and merge once checks pass
+- **Why:** A stale trust store keeps trusting a distrusted CA, and these packages change data, not APIs
+
+See [reference data](/guide/configuration#reference-data) for the packages and
+how to turn it off.
+
 ## Lockfiles and digests
 
 ### npm integrity {#npm-integrity}

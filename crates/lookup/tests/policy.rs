@@ -181,7 +181,7 @@ fn node_lts_is_explicit_uses_catalog_evidence_and_respects_ordered_rules() {
             .unwrap_err()
             .contains("no LTS channel evidence")
     );
-    cfg.rules[0].apply.channel = Some(ReleaseChannel::Stable);
+    cfg.rules.last_mut().unwrap().apply.channel = Some(ReleaseChannel::Stable);
     assert!(
         Evaluator::new(&cfg)
             .unwrap()
@@ -1026,4 +1026,49 @@ fn unlocked_composer_and_gem_ranges_classify_from_their_floor() {
             .unwrap()
             .is_empty()
     );
+}
+
+/// Reference data, such as a CA root bundle, skips the release-age wait and
+/// merges once checks pass through the schema's built-in rule, while the same
+/// release of an ordinary package still waits.
+#[test]
+fn reference_data_is_fast_tracked_by_the_built_in_rule() {
+    let eval = Evaluator::new(&config("defaults")).unwrap();
+    let mut versions = catalog(&["2026.10.20"]);
+    versions.versions[0].published_at = Some("2026-10-22T11:00:00Z".into());
+    let now = chrono::DateTime::parse_from_rfc3339("2026-10-22T12:00:00Z")
+        .unwrap()
+        .to_utc();
+    let mut certifi = dependency("certifi");
+    certifi.manager = Manager::Requirements;
+    certifi.file = "requirements.txt".into();
+    certifi.source = Source::Pypi;
+    certifi.scheme = Scheme::Pep440;
+    certifi.current = "2025.1.31".into();
+    certifi.resolved = Some("2025.1.31".into());
+    assert_eq!(
+        certifi.kinds(),
+        [DependencyKind::Production, DependencyKind::ReferenceData]
+    );
+    let result = eval.evaluate_at(&certifi, &versions, now).unwrap();
+    assert!(result.held_back.is_empty());
+    assert_eq!(result.updates.len(), 1);
+    let update = &result.updates[0];
+    assert_eq!(update.new_version.as_deref(), Some("2026.10.20"));
+    let policy = update.policy.as_ref().unwrap();
+    assert!(policy.merge);
+    assert_eq!(policy.wait_hours, 0);
+    assert!(policy.windows.is_empty());
+    assert!(
+        update.group.as_deref().is_none_or(str::is_empty),
+        "{update:?}"
+    );
+
+    let mut requests = certifi.clone();
+    requests.name = "requests".into();
+    requests.package = "requests".into();
+    assert_eq!(requests.kinds(), [DependencyKind::Production]);
+    let result = eval.evaluate_at(&requests, &versions, now).unwrap();
+    assert!(result.updates.is_empty());
+    assert_eq!(result.held_back.len(), 1);
 }

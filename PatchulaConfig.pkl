@@ -14,7 +14,7 @@ typealias Scheme = "semver"|"docker"|"pep440"|"poetry"|"maven"|"nuget"|"rubygems
 /// production. Actions distinguish steps from reusable workflows; containers,
 /// mise tools, Go language directives, Terraform providers/modules and Helm
 /// charts have explicit roles. These are exact values, not match patterns.
-typealias DependencyKind = "production"|"development"|"peer"|"optional"|"build"|"action"|"reusable-workflow"|"runner"|"container-image"|"tool"|"go-directive"|"toolchain"|"provider"|"module"|"chart"
+typealias DependencyKind = "production"|"development"|"peer"|"optional"|"build"|"action"|"reusable-workflow"|"runner"|"container-image"|"tool"|"go-directive"|"toolchain"|"provider"|"module"|"chart"|"reference-data"
 
 /// Match lists are OR; populated selector fields are AND. Empty means any.
 /// Patterns are path-aware globs, or `regex:...`; prefix `!` excludes a match.
@@ -36,7 +36,8 @@ class Window {
   zone: String = "UTC"
 }
 
-/// Policy applied before rules. No implicit grouping or automatic merging.
+/// Policy applied before rules. No implicit grouping, and nothing merges by
+/// default except reference data, through the built-in rule below.
 class Policy {
   active: Boolean = true
   versions: VersionPolicy = "exact"
@@ -135,7 +136,23 @@ managers: Listing<Manager> = new {
   "requirements"; "pyproject"; "pre-commit"; "helm"; "devcontainer"; "maven"; "gradle"; "nuget"; "bundler"; "composer"; "regex"
 }
 defaults: Policy = new {}
-rules: Listing<Rule> = new {}
+/// Rules apply in order after `defaults`. The first one is built in: reference
+/// data (CA root bundles, time zone data, the public suffix list) is only useful
+/// while current, so its updates skip the release-age wait and schedule
+/// windows, get their own PR and merge once checks pass. Later rules can change
+/// that; assigning a new Listing to `rules` drops it.
+rules: Listing<Rule> = new {
+  new Rule {
+    note = "Reference data: no wait, no window, its own PR, merged once checks pass."
+    select { kinds = new Listing { "reference-data" } }
+    apply {
+      waitHours = 0
+      windows = new Listing {}
+      group = ""
+      merge = true
+    }
+  }
+}
 files: Listing<FileSet> = new {}
 extractors: Listing<Extractor> = new {}
 /// Dependency identifiers to leave untouched, using the same pattern syntax.
