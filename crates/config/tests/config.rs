@@ -361,4 +361,8 @@ fn cron_weekdays_use_standard_numbering() {
     assert_eq!(days("0 12 * * 5-7", false), [5, 6, 7]);
     assert_eq!(days("0 12 * * MON,WED", false), [1, 3]);
     assert_eq!(days("0 0 12 * * 1", true), [1]);
+    // Steps apply across the whole range, and 7 alone is Sunday.
+    assert_eq!(days("0 12 * * 5-7/2", false), [5, 7]);
+    assert_eq!(days("0 12 * * 7-7", false), [7]);
+    assert_eq!(days("0 12 * * */2", false), [2, 4, 6, 7]);
 }

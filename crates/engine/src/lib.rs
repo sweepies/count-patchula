@@ -598,11 +598,18 @@ impl Engine {
                 }
             }
             branches.extend(plans.into_iter().map(|p| p.action));
-            if !dry_run
-                && repo.status == Status::Complete
-                && let Err(error) = self.record_run(&repo.repository, now).await
+        }
+        // Every repository that finished cleanly, including ones settled from
+        // their write receipts, has taken this run's schedule turn.
+        if !dry_run {
+            for repo in report
+                .repositories
+                .iter_mut()
+                .filter(|repo| repo.status == Status::Complete)
             {
-                repo.warnings.push(format!("last run cache: {error}"));
+                if let Err(error) = self.record_run(&repo.repository, now).await {
+                    repo.warnings.push(format!("last run cache: {error}"));
+                }
             }
         }
         branches.sort_by(|a, b| (&a.repository, &a.branch).cmp(&(&b.repository, &b.branch)));
@@ -1862,7 +1869,7 @@ impl Engine {
 fn last_run_key(repo: &str) -> ExtractionKey {
     ExtractionKey {
         repo: format!("last-run:{repo}"),
-        default_branch_commit: String::new(),
+        default_branch_commit: String::default(),
         config_hash: "last-run-v1".into(),
     }
 }
