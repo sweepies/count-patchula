@@ -1,0 +1,76 @@
+name: Benchmarks
+
+# Report-only measurements: weekly on main, or on demand from the Actions tab.
+# Nothing here gates a change.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmarks:
+    name: Benchmarks (report only)
+    runs-on: namespace-profile-ubuntu-amd64-md
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          cache: false
+      - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
+        continue-on-error: true
+        with:
+          backend: github
+          github-cache-mode: objects
+          isolate-objects-cache: true
+          clean-target-before-export: true
+          # Release benchmarks must not publish or restore the CI debug bundle.
+          cache-generation: v3-benchmarks-objects
+          save-on-pull-request: false
+      # No Valgrind entry in mise's registry; host installation is CI-only.
+      # If unavailable, tak still reports wall time. Nothing here gates CI.
+      - name: Install optional instruction counter
+        continue-on-error: true
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y valgrind
+      - name: Measure and record locally (no notes push)
+        env:
+          GIT_AUTHOR_NAME: patchula benchmarks
+          GIT_AUTHOR_EMAIL: noreply@patchula.invalid
+          GIT_COMMITTER_NAME: patchula benchmarks
+          GIT_COMMITTER_EMAIL: noreply@patchula.invalid
+        run: mise run benchmarks:record
+      - name: Export portable measurement artifact
+        run: mise run benchmarks:export
+      - name: Measure build storage before cache export
+        run: |
+          du -sh target/.
+          df -h . "${RUNNER_TEMP}"
+      - name: Publish timing summary
+        if: always()
+        run: |
+          if [ -f benchmark-results/summary.txt ]; then
+            {
+              printf '<pre>\n'
+              mise exec -- cat benchmark-results/summary.txt
+              printf '</pre>\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Publish report-only results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tak-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: benchmark-results/
+          if-no-files-found: warn
+          retention-days: 14
