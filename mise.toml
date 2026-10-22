@@ -7,6 +7,9 @@ zig = "0.17.0"
 bun = "1.4.3"
 node = "24.21.0"
 go = "1.27.2"
+# The DeepSource CLI, for the deepsource agent skill. Its current builds are
+# published on cli.deepsource.com, not as GitHub releases.
+"http:deepsource" = { version = "2.0.55", url = 'https://cli.deepsource.com/build/deepsource_{{ version }}_{{ os(macos="darwin") }}_{{ arch(x64="amd64") }}.tar.gz' }
 
 [env]
 MBX_DISPLAY = "plain"
