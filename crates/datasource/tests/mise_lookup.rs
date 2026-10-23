@@ -6,7 +6,7 @@ use patchula_config::Source;
 use patchula_datasource::{Client, Error};
 use patchula_http::{Cached, Exchange, Response, Transport};
 use patchula_mise::Lookup;
-use patchula_testkit::MiseReplay;
+use patchula_testkit::{MiseReplay, Outcome, Run};
 use std::{path::Path, sync::Arc};
 
 /// Answers the one public registry read the notes tests need.
@@ -20,7 +20,7 @@ impl Transport for Npm {
             );
             Ok(Response {
                 status: reqwest::StatusCode::OK,
-                headers: Default::default(),
+                headers: reqwest::header::HeaderMap::default(),
                 body: br#"{"repository":{"type":"git","url":"git+https://github.com/prettier/prettier.git"}}"#.to_vec(),
             })
         })
@@ -32,14 +32,16 @@ fn replay() -> Arc<MiseReplay> {
     Arc::new(MiseReplay::open(&path).unwrap())
 }
 async fn memory() -> Cache {
-    Cache::open(":memory:", Default::default()).await.unwrap()
+    Cache::open(":memory:", patchula_cache::Options::default())
+        .await
+        .unwrap()
 }
 fn client(replay: Option<&Arc<MiseReplay>>, cache: Cache, token: &str) -> Client {
     let transport = Arc::new(Npm);
     let github = patchula_github::Client::with_transport(
         token,
         cache.clone(),
-        Default::default(),
+        patchula_github::Options::default(),
         transport.clone(),
     )
     .unwrap();
@@ -312,4 +314,70 @@ async fn release_notes_follow_an_npm_backend_when_the_listing_has_no_release_url
             vec!["tool", "--json", "--", "prettier"],
         ]
     );
+}
+
+/// Listings the tests write themselves, for what no recording has: a run
+/// that mise failed, and versions that do not order.
+fn run(tool: &[&str], outcome: Outcome) -> Run {
+    let mut args = ["ls-remote", "--json", "--prerelease", "--"]
+        .map(String::from)
+        .to_vec();
+    args.extend(tool.iter().map(|a| (*a).to_owned()));
+    Run {
+        args,
+        result: outcome,
+    }
+}
+fn listing(versions: &[&str]) -> Outcome {
+    Outcome::Output(serde_json::Value::Array(
+        versions
+            .iter()
+            .map(|v| serde_json::json!({ "version": v }))
+            .collect(),
+    ))
+}
+
+#[tokio::test]
+async fn node_keeps_its_catalog_when_the_lts_listing_fails() {
+    let replay = Arc::new(MiseReplay::new(vec![
+        run(&["node"], listing(&["22.1.0", "24.2.0", "26.1.0"])),
+        run(
+            &["node", "lts"],
+            Outcome::Error("exit status: 1: mise ERROR no such release line".into()),
+        ),
+    ]));
+    let catalog = client(Some(&replay), memory().await, "a-token")
+        .lookup(Source::Mise, "node")
+        .await
+        .unwrap();
+    assert_eq!(catalog.versions.len(), 3);
+    assert_eq!(catalog.versions[0].version, "26.1.0");
+    assert!(catalog.dist_tags.is_empty());
+    // An empty `lts` listing is the same: no evidence, and no failure.
+    let replay = Arc::new(MiseReplay::new(vec![
+        run(&["node"], listing(&["22.1.0", "24.2.0"])),
+        run(&["node", "lts"], listing(&[])),
+    ]));
+    let catalog = client(Some(&replay), memory().await, "a-token")
+        .lookup(Source::Mise, "node")
+        .await
+        .unwrap();
+    assert_eq!(catalog.versions.len(), 2);
+    assert!(catalog.dist_tags.is_empty());
+}
+
+#[tokio::test]
+async fn versions_that_do_not_order_are_not_taken_for_a_git_ref() {
+    let replay = Arc::new(MiseReplay::new(vec![
+        run(&["nightlies"], listing(&["nightly", "stable"])),
+        run(&["mixed"], listing(&["HEAD", "nightly"])),
+        run(&["pinned"], listing(&["HEAD"])),
+    ]));
+    let source = client(Some(&replay), memory().await, "a-token");
+    for tool in ["nightlies", "mixed"] {
+        let catalog = source.lookup(Source::Mise, tool).await.unwrap();
+        assert!(!catalog.versions.is_empty(), "{tool}");
+    }
+    let error = source.lookup(Source::Mise, "pinned").await.unwrap_err();
+    assert!(error.to_string().contains("Git ref"), "{error}");
 }

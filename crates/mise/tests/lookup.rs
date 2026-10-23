@@ -256,6 +256,29 @@ async fn plugin_backends_and_option_syntax_never_reach_mise() {
     );
 }
 
+#[test]
+fn an_at_sign_opens_an_npm_scope_and_never_selects_a_version() {
+    for tool in ["npm:@types/node", "npm:@scope/pkg", "prettier", "jq"] {
+        patchula_mise::check(tool).unwrap_or_else(|e| panic!("{tool}: {e}"));
+    }
+    // mise reads each of these as a tool and a version selector, or as a
+    // plugin name, and lists something other than the tool asked for.
+    for tool in [
+        "prettier@3",
+        "npm:prettier@3",
+        "npm:@types/node@18",
+        "github:cli/cli@2",
+        "@types/node",
+        "@scope/x",
+        "npm@x:prettier",
+        "cargo:https://user@example.invalid/repo",
+    ] {
+        let error = patchula_mise::check(tool).unwrap_err();
+        assert!(matches!(error, Error::Refused(_)), "{tool}: {error}");
+        assert!(error.to_string().contains("selector"), "{tool}: {error}");
+    }
+}
+
 #[tokio::test]
 async fn a_backend_the_count_does_not_know_is_left_to_mise_to_refuse() {
     let replay = replay();
@@ -375,11 +398,11 @@ async fn a_stuck_install_is_reported_and_retried_by_the_next_lookup() {
             })
         }
     }
-    let executor = Arc::new(Failing(Default::default()));
+    let executor = Arc::new(Failing(std::sync::atomic::AtomicUsize::default()));
     let lookup = Lookup::new(
         executor.clone(),
         "mise".into(),
-        "/tmp/tools".into(),
+        "/var/lib/patchula/tools".into(),
         "1".into(),
     );
     for attempt in 1..=2 {

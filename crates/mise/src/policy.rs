@@ -25,6 +25,18 @@ pub fn check(tool: &str) -> Result<(), Error> {
     if tool.starts_with('-') || name.starts_with('-') {
         return refuse("the name starts with `-`");
     }
+    // `@` opens an npm scope (`npm:@types/node`) and nowhere else: anywhere else
+    // mise reads `tool@version` as a selector, and a bare `@scope/pkg` is not
+    // a registry name, so mise tries it as a plugin.
+    let scope = tool
+        .split_once(':')
+        .is_some_and(|(_, name)| name.starts_with('@'));
+    if tool.matches('@').count() > usize::from(scope) {
+        return refuse(
+            "`@` is allowed only to open an npm scope right after the backend, as in `npm:@scope/pkg`; \
+             a `tool@version` selector is not looked up",
+        );
+    }
     if let Some(bad) = tool
         .chars()
         .find(|c| !(c.is_ascii_alphanumeric() || "._:/@+~%-".contains(*c)))

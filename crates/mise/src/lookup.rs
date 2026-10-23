@@ -64,7 +64,7 @@ impl Lookup {
             mise,
             data,
             version,
-            installed: Default::default(),
+            installed: tokio::sync::OnceCell::new(),
             slots: tokio::sync::Semaphore::new(PARALLEL),
         }
     }

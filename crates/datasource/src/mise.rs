@@ -15,6 +15,10 @@ struct Listing {
     releases: Vec<Release>,
 }
 
+/// What mise lists for a tool installed from a Git ref, with or without a
+/// `#tag=`, `#branch=` or `#rev=` fragment.
+const GIT_REF: &str = "HEAD";
+
 fn is_node(tool: &str) -> bool {
     matches!(tool, "node" | "core:node")
 }
@@ -107,30 +111,27 @@ impl Client {
             .collect();
         sort(&mut versions, Ecosystem::Loose);
         // A backend that installs from a Git ref, such as `cargo:` with a Git
-        // URL, lists `HEAD` and no releases: there is nothing to update to.
-        if !versions
-            .iter()
-            .any(|v| Ecosystem::Loose.parse(&v.version).is_ok())
-        {
+        // URL, lists the one version `HEAD`: there is nothing to update to.
+        // Any other listing is kept, even when its versions do not order.
+        if versions.iter().all(|v| v.version == GIT_REF) {
             return Err(patchula_mise::Error::NoReleases {
                 tool: tool.into(),
-                sample: versions
-                    .first()
-                    .map_or_else(String::new, |v| v.version.clone()),
+                sample: GIT_REF.into(),
             }
             .into());
         }
         let mut dist_tags = BTreeMap::new();
-        // mise lists no channels, but `lts` selects the newest LTS line.
-        if is_node(tool) {
-            let lts = self.mise_releases(tool, Some("lts")).await?;
-            if let Some(newest) = lts
+        // mise lists no channels, but `lts` selects the newest LTS line. When
+        // that listing fails the catalog stays whole and has no LTS evidence,
+        // which only a dependency on the LTS channel reports.
+        if is_node(tool)
+            && let Ok(lts) = self.mise_releases(tool, Some("lts")).await
+            && let Some(newest) = lts
                 .into_iter()
                 .filter_map(|r| Some((Ecosystem::Loose.parse(&r.version).ok()?, r.version)))
                 .max_by(|(a, _), (b, _)| Ecosystem::Loose.order(a, b))
-            {
-                dist_tags.insert("lts".into(), newest.1);
-            }
+        {
+            dist_tags.insert("lts".into(), newest.1);
         }
         Ok(Catalog {
             versions,

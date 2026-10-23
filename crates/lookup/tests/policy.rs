@@ -182,11 +182,16 @@ fn node_lts_is_explicit_uses_catalog_evidence_and_respects_ordered_rules() {
             .contains("no LTS channel evidence")
     );
     cfg.rules.last_mut().unwrap().apply.channel = Some(ReleaseChannel::Stable);
+    // A catalog without LTS evidence, as when the `lts` listing failed, still
+    // serves the stable channel.
+    let stable = Evaluator::new(&cfg)
+        .unwrap()
+        .propose(&dep, &versions)
+        .unwrap();
     assert!(
-        Evaluator::new(&cfg)
-            .unwrap()
-            .propose(&dep, &versions)
-            .is_ok()
+        stable
+            .iter()
+            .any(|p| p.new_version.as_deref() == Some("26.1.0"))
     );
     cfg.defaults.channel = ReleaseChannel::Lts;
     cfg.rules.clear();

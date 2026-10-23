@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     future::Future,
+    io::Write,
     path::{Path, PathBuf},
     pin::Pin,
     sync::{Arc, Mutex},
@@ -82,10 +83,14 @@ pub struct MiseReplay {
 }
 impl MiseReplay {
     pub fn open(path: &Path) -> Result<Self, Error> {
-        Ok(Self {
-            runs: read(path, &Redactor::default())?.runs,
-            calls: Default::default(),
-        })
+        Ok(Self::new(read(path, &Redactor::default())?.runs))
+    }
+    /// A replay of runs written in the test, for listings no recording has.
+    pub fn new(runs: Vec<Run>) -> Self {
+        Self {
+            runs,
+            calls: Mutex::default(),
+        }
     }
     pub fn calls(&self) -> Vec<Call> {
         self.calls.lock().expect("calls lock").clone()
@@ -192,10 +197,19 @@ impl Executor for MiseRecorder {
             Redactor::default()
                 .check(&bytes)
                 .map_err(|e| e.to_string())?;
-            std::fs::create_dir_all(self.path.parent().unwrap_or(Path::new(".")))
+            // A temporary file in the same directory, renamed over the fixture, so a
+            // stopped recording never leaves half a file.
+            let parent = self
+                .path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+            file.write_all(&bytes)
+                .and_then(|()| file.write_all(b"\n"))
                 .map_err(|e| e.to_string())?;
-            std::fs::write(&self.path, [bytes, b"\n".to_vec()].concat())
-                .map_err(|e| e.to_string())?;
+            file.persist(&self.path).map_err(|e| e.to_string())?;
             result
         })
     }

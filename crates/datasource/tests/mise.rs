@@ -95,7 +95,7 @@ async fn pypi_uses_real_metadata_shapes_and_fresh_bodies() {
             provenance: "Independently simulated from PyPI JSON API documentation".into(),
             interactions,
         },
-        &Default::default(),
+        &patchula_testkit::Redactor::default(),
     )
     .unwrap();
     let replay = Arc::new(Replay::open(&path, Default::default()).unwrap());

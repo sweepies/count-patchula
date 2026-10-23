@@ -70,6 +70,10 @@ The Count runs mise the way he runs the lockfile tools, and more strictly:
   hooks (`MISE_NO_HOOKS`), so there is nothing to trust and neither your
   global configuration nor a repository's `mise.toml` can apply. Nothing is
   inherited from the environment the Count runs in.
+- With tool names checked first: no leading `-`, no brackets (tool options can
+  redirect a backend), and no `@version` selector. `@` is allowed only to open an
+  npm scope right after the backend, as in `npm:@types/node`; `prettier@3` is
+  refused because mise would list a selector rather than the tool.
 - With the backends `asdf` and `vfox` disabled (`MISE_DISABLE_BACKENDS`), and
   names for them refused before mise starts. A backend prefix mise does not
   know fails in mise, which runs no plugin for it. Nothing installs during a lookup
@@ -83,9 +87,15 @@ The Count runs mise the way he runs the lockfile tools, and more strictly:
 A listing is stored in the cache and reused for an hour, per tool, token scope
 and mirror setting; a manual retry, or a failed lookup, asks mise again. The
 Node LTS line comes from `mise ls-remote node lts`, which lists the newest LTS
-line. Where there is no release URL, release notes find a tool's repository from
-the backend mise picks for it when that is npm, PyPI or crates.io. A tool whose
-listing and backend name no repository has no release notes.
+line; when that listing fails or is empty the catalog stays whole without LTS
+evidence, so only a dependency on the LTS channel reports it. A tool installed
+from a Git ref (`cargo:` with a Git URL) lists only `HEAD`, which the Count
+reports as having no release versions. Any other listing is kept: versions that
+do not order are never proposed, and a pin that does not order is reported as
+one the Count cannot classify. Where there is no release URL, release notes
+find a tool's repository from the backend mise picks for it when that is npm,
+PyPI or crates.io. A tool whose listing and backend name no repository has no
+release notes.
 
 ## mise-versions host
 
