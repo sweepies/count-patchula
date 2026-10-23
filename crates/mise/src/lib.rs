@@ -137,7 +137,11 @@ mod tests {
             ("ubi:org/tool", Source::GithubReleases, "org/tool"),
             ("aqua:org/tool/cmd", Source::GithubReleases, "org/tool"),
             ("packslip:org/tool", Source::GithubReleases, "org/tool"),
-            ("packslip:github.com/org/tool", Source::GithubReleases, "org/tool"),
+            (
+                "packslip:github.com/org/tool",
+                Source::GithubReleases,
+                "org/tool",
+            ),
             ("npm:@scope/tool", Source::Npm, "@scope/tool"),
             ("cargo:spec-tool", Source::Crates, "spec-tool"),
             ("python", Source::GithubTags, "python/cpython"),
