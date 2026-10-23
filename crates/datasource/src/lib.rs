@@ -30,6 +30,10 @@ pub enum Error {
     Cache(#[from] patchula_cache::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Mise(#[from] patchula_mise::Error),
+    #[error("mise lookups need the Count's tool store, which this cache does not have")]
+    NoMise,
     #[error("invalid package identity or upstream payload")]
     Invalid,
     #[error("release-note read failed: {0}")]
@@ -75,7 +79,7 @@ pub struct Client {
     note_reads: Option<notes::ReadCache>,
     release_bodies: notes::BodyCache,
     use_versions_host: bool,
-    versions_index: std::sync::Arc<tokio::sync::OnceCell<std::result::Result<Value, String>>>,
+    mise: Option<std::sync::Arc<patchula_mise::Lookup>>,
     stale_registry: std::sync::Arc<tokio::sync::Mutex<BTreeMap<String, BTreeMap<String, i64>>>>,
 }
 impl Client {
@@ -95,7 +99,7 @@ impl Client {
             note_reads: None,
             release_bodies: Default::default(),
             use_versions_host: true,
-            versions_index: Default::default(),
+            mise: None,
             stale_registry: Default::default(),
         }
     }

@@ -261,8 +261,9 @@ ignore { "glob:@internal/*" }
 ```
 
 `useVersionsHost = false` skips the public
-[mise-versions](/guide/sources/#mise-versions-host) mirror and reads every catalog
-from its upstream.
+[mise-versions](/guide/sources/#mise-versions-host) mirror, for GitHub releases and
+tags and for the mise lookups that mise runs, and reads every catalog from its
+upstream.
 
 :::note[Not acted on yet]
 `submodules` and `ignoreAuthors` are accepted and validated, but the Count does

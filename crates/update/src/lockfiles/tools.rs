@@ -12,8 +12,6 @@ const SEEDED: &str = "patchula-seeded.json";
 /// the Count's store. Python, Ruby and PHP builds embed their install path,
 /// .NET versions share one SDK root, and Rust goes through rustup.
 const SEEDABLE: &[&str] = &["node", "go", "bun", "aube", "yarn", "uv", "terraform"];
-/// mise itself, which is not in mise's registry under its own name.
-pub(super) const MISE: &str = "aqua:jdx/mise";
 /// Time allowed for installing tools. Some hosts are slow: static-php.dev
 /// served about 44 KB/s when measured.
 pub(super) const INSTALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1800);
@@ -48,7 +46,11 @@ pub(super) fn defaults() -> Result<Vec<(String, String)>, String> {
             if !matches!(tool, "rust" | "php" | "composer")
                 && let Some(version) = version.as_str()
             {
-                let tool = if tool == "mise" { MISE } else { tool };
+                let tool = if tool == "mise" {
+                    patchula_mise::PACKAGE
+                } else {
+                    tool
+                };
                 tools.push((tool.to_string(), version.to_string()));
             }
         }

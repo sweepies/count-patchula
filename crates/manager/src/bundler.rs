@@ -5,23 +5,19 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 fn ruby(path: &str, text: &str, start: usize, version: &str, pointer: &str) -> Dependency {
-    let (source, package, extract) = patchula_mise::resolve("ruby").map_or_else(
-        || (Source::Mise, "ruby".to_string(), None),
-        |r| (r.source, r.package, r.extract),
-    );
     Dependency {
         manager: Manager::Bundler,
         file: path.into(),
         location: Location::new(text, start, start + version.len(), pointer.into()),
         name: "ruby".into(),
-        package,
+        package: "ruby".into(),
         kind: DependencyKind::Toolchain,
         current: version.into(),
         resolved: Some(version.into()),
         digest: None,
-        source,
+        source: Source::Mise,
         scheme: Scheme::Loose,
-        extract,
+        extract: None,
     }
 }
 fn numeric(version: &str) -> bool {

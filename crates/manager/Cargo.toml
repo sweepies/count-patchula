@@ -13,7 +13,6 @@ workspace = true
 patchula-versioning = { path = "../versioning" }
 hcl-edit = "0.9.7"
 yaml-rust2 = "0.11.0"
-patchula-mise = { path = "../mise" }
 jsonc-parser = "0.34.0"
 regex = "1.13.1"
 patchula-config = { version = "0.2.0", path = "../config" }

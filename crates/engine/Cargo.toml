@@ -30,5 +30,6 @@ sha2 = "0.11.1"
 base64 = "0.22"
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+patchula-process = { path = "../process" }
 patchula-testkit = { path = "../testkit" }
 tempfile = "3"

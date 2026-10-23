@@ -1,80 +1,166 @@
+//! Tool versions as the pinned `mise ls-remote --json` lists them.
 use super::*;
+use patchula_cache::ExtractionKey;
+use patchula_mise::{Lookup, Query, Release};
+use std::sync::Arc;
+
+/// A stored listing is reused for this long. mise keeps its own version lists
+/// for about as long; a release-age wait is evaluated against the dates in the
+/// listing, so a stored listing never hides a release for longer than this.
+const FRESH_MS: i64 = 3_600_000;
+
+#[derive(Serialize, Deserialize)]
+struct Listing {
+    fetched_at: i64,
+    releases: Vec<Release>,
+}
+
+fn is_node(tool: &str) -> bool {
+    matches!(tool, "node" | "core:node")
+}
+
+fn date(raw: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(raw).map_or_else(
+        |_| raw.to_owned(),
+        |date| date.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    )
+}
 
 impl Client {
-    pub(super) async fn mise(&self, package: &str) -> Result<Catalog> {
-        match package {
-            "node" | "core:node" => self.node().await,
-            _ => {
-                let r = patchula_mise::resolve(package).ok_or(Error::Invalid)?;
-                // Box the recursion: aliases resolve to actual release sources.
-                if r.source == Source::Mise && r.package == package {
-                    return Err(Error::Invalid);
-                }
-                let mut catalog = Box::pin(self.lookup(r.source, &r.package)).await?;
-                if let Some(extract) = r.extract {
-                    let regex = regex::Regex::new(&extract).map_err(|_| Error::Invalid)?;
-                    catalog.versions.retain_mut(|v| {
-                        let Some(value) = regex
-                            .captures(&v.version)
-                            .and_then(|c| c.name("version"))
-                            .map(|v| v.as_str().to_owned())
-                        else {
-                            return false;
-                        };
-                        // Ruby tags its 3.x releases v3_4_11 and its 4.x
-                        // releases v4.0.7; underscores separate release numbers.
-                        v.version = if value.contains('_')
-                            && value
-                                .split('_')
-                                .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
-                        {
-                            value.replace('_', ".")
-                        } else {
-                            value
-                        };
-                        true
-                    });
-                }
-                Ok(catalog)
-            }
+    /// Where mise runs. Without it (an in-memory cache has no tool store) a
+    /// mise tool cannot be looked up.
+    pub fn with_mise(mut self, lookup: Arc<Lookup>) -> Self {
+        self.mise = Some(lookup);
+        self
+    }
+    pub(crate) fn mise_lookup(&self) -> Result<&Arc<Lookup>> {
+        self.mise.as_ref().ok_or(Error::NoMise)
+    }
+    /// Only a token for github.com is passed to mise.
+    pub(crate) async fn mise_token(&self) -> Option<String> {
+        if self.github.versions_host_eligible() {
+            self.github.token().await.ok()
+        } else {
+            None
         }
     }
-    pub(super) async fn node(&self) -> Result<Catalog> {
+    fn mise_key(&self, lookup: &Lookup, tool: &str, prefix: Option<&str>) -> ExtractionKey {
+        ExtractionKey {
+            repo: format!("mise-ls-remote:{tool}:{}", prefix.unwrap_or("")),
+            default_branch_commit: self.github.credential_scope().into(),
+            config_hash: format!(
+                "mise-ls-remote-v1:{}:{}",
+                lookup.version(),
+                self.use_versions_host
+            ),
+        }
+    }
+    /// One tool's listing, from the store while fresh and from mise otherwise.
+    /// A manual retry skips the stored listing.
+    pub(crate) async fn mise_releases(
+        &self,
+        tool: &str,
+        prefix: Option<&str>,
+    ) -> Result<Vec<Release>> {
+        patchula_mise::check(tool)?;
+        let lookup = self.mise_lookup()?;
+        let key = self.mise_key(lookup, tool, prefix);
+        let now = chrono::Utc::now().timestamp_millis();
+        if !self.http.is_revalidating()
+            && let Some(bytes) = self.cache.extraction_get(&key).await?
+            && let Ok(saved) = serde_json::from_slice::<Listing>(&bytes)
+            && (0..FRESH_MS).contains(&now.saturating_sub(saved.fetched_at))
+        {
+            return Ok(saved.releases);
+        }
+        let token = self.mise_token().await;
+        let releases = lookup
+            .ls_remote(&Query {
+                tool,
+                prefix,
+                token: token.as_deref(),
+                versions_host: self.use_versions_host,
+            })
+            .await?;
+        self.cache
+            .extraction_put(
+                &key,
+                &serde_json::to_vec(&Listing {
+                    fetched_at: now,
+                    releases: releases.clone(),
+                })?,
+            )
+            .await?;
+        Ok(releases)
+    }
+    pub(super) async fn mise(&self, tool: &str) -> Result<Catalog> {
+        let releases = self.mise_releases(tool, None).await?;
+        let mut versions: Vec<Version> = releases
+            .into_iter()
+            .filter(|release| release.prerelease != Some(true))
+            .map(|release| Version {
+                version: release.version,
+                published_at: release.created_at.as_deref().map(date),
+                digest: None,
+                deprecated: false,
+                yanked: false,
+            })
+            .collect();
+        sort(&mut versions, Ecosystem::Loose);
+        // A backend that installs from a Git ref, such as `cargo:` with a Git
+        // URL, lists `HEAD` and no releases: there is nothing to update to.
+        if !versions
+            .iter()
+            .any(|v| Ecosystem::Loose.parse(&v.version).is_ok())
+        {
+            return Err(patchula_mise::Error::NoReleases {
+                tool: tool.into(),
+                sample: versions
+                    .first()
+                    .map_or_else(String::new, |v| v.version.clone()),
+            }
+            .into());
+        }
+        let mut dist_tags = BTreeMap::new();
+        // mise lists no channels, but `lts` selects the newest LTS line.
+        if is_node(tool) {
+            let lts = self.mise_releases(tool, Some("lts")).await?;
+            if let Some(newest) = lts
+                .into_iter()
+                .filter_map(|r| Some((Ecosystem::Loose.parse(&r.version).ok()?, r.version)))
+                .max_by(|(a, _), (b, _)| Ecosystem::Loose.order(a, b))
+            {
+                dist_tags.insert("lts".into(), newest.1);
+            }
+        }
+        Ok(Catalog {
+            versions,
+            dist_tags,
+        })
+    }
+    /// The LTS evidence nodejs.org publishes, for `actions/node-versions`: its
+    /// releases are GitHub releases, so mise does not list them.
+    pub(super) async fn node_lts(&self) -> Result<BTreeMap<String, String>> {
         let response = self
             .http
             .get("https://nodejs.org/dist/index.json", "application/json")
             .await?;
         let values: Vec<Value> = serde_json::from_slice(&response.body)?;
-        let mut versions = Vec::with_capacity(values.len());
         let mut lts = Vec::new();
         for value in values {
             let version = value["version"]
                 .as_str()
                 .ok_or(Error::Invalid)?
                 .trim_start_matches('v');
-            let date = value["date"].as_str().ok_or(Error::Invalid)?;
             if value["lts"].as_str().is_some_and(|s| !s.is_empty()) {
                 lts.push(version.to_owned());
             }
-            versions.push(Version {
-                version: version.into(),
-                published_at: Some(format!("{date}T00:00:00Z")),
-                digest: None,
-                deprecated: false,
-                yanked: false,
-            });
         }
-        sort(&mut versions, Ecosystem::Loose);
-        let latest_lts = lts
+        Ok(lts
             .into_iter()
             .filter_map(|v| Some((Ecosystem::Loose.parse(&v).ok()?, v)))
             .max_by(|(a, _), (b, _)| Ecosystem::Loose.order(a, b))
-            .map(|(_, v)| v);
-        Ok(Catalog {
-            versions,
-            dist_tags: latest_lts
-                .map(|v| BTreeMap::from([("lts".into(), v)]))
-                .unwrap_or_default(),
-        })
+            .map(|(_, v)| BTreeMap::from([("lts".into(), v)]))
+            .unwrap_or_default())
     }
 }

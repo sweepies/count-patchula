@@ -2249,7 +2249,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
- "toml_edit",
 ]
 
 [[package]]
@@ -2266,6 +2265,7 @@ dependencies = [
  "patchula-http",
  "patchula-lookup",
  "patchula-manager",
+ "patchula-process",
  "patchula-report",
  "patchula-testkit",
  "patchula-update",
@@ -2339,7 +2339,6 @@ dependencies = [
  "hcl-edit",
  "jsonc-parser",
  "patchula-config",
- "patchula-mise",
  "patchula-versioning",
  "regex",
  "serde",
@@ -2353,8 +2352,22 @@ dependencies = [
 name = "patchula-mise"
 version = "0.2.0"
 dependencies = [
- "patchula-config",
+ "patchula-process",
+ "patchula-testkit",
+ "serde",
  "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "patchula-process"
+version = "0.2.0"
+dependencies = [
+ "base64 0.22.1",
+ "rustix",
+ "tokio",
 ]
 
 [[package]]
@@ -2405,6 +2418,7 @@ name = "patchula-testkit"
 version = "0.2.0"
 dependencies = [
  "patchula-http",
+ "patchula-process",
  "percent-encoding",
  "regex",
  "reqwest",
@@ -2430,10 +2444,12 @@ dependencies = [
  "patchula-http",
  "patchula-lookup",
  "patchula-manager",
+ "patchula-mise",
+ "patchula-process",
  "patchula-report",
+ "patchula-testkit",
  "patchula-versioning",
  "reqwest",
- "rustix",
  "serde",
  "serde_json",
  "serde_yaml_ng",

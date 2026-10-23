@@ -928,8 +928,9 @@ fn release_age(version: &Version, now: DateTime<Utc>) -> Option<ReleaseAge> {
             evaluated_at: timestamp(now),
         })
 }
-/// Resolve an extracted mise version to its source identity without applying
-/// proposal filters. Aqua/Bun/Go extraction strips backend-specific tag prefixes.
+/// Resolve an extracted version to its source identity without applying
+/// proposal filters. mise lists versions without tag prefixes; the extraction
+/// pattern strips them for sources that list raw tags, such as GitHub Actions.
 pub fn resolved_tool_version(dep: &Dependency, catalog: &Catalog) -> Option<String> {
     if dep.manager != Manager::Mise
         && !(dep.manager == Manager::GithubActions && dep.kind == DependencyKind::Tool)

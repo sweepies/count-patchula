@@ -323,7 +323,7 @@ coverage = "7.6.0"
             ("rich", "^13.7", None),
             ("attrs", "~23.2", None),
             ("coverage", "7.6.0", None),
-            ("python/cpython", "3.12.4", Some("3.12.4")),
+            ("python", "3.12.4", Some("3.12.4")),
         ]
     );
     for dep in &deps {
@@ -425,7 +425,7 @@ fn toolchain_files_charts_and_devcontainers() {
                 "ghcr.io/devcontainers/features/node",
                 "1"
             ),
-            (".terraform-version", "hashicorp/terraform", "1.14.7"),
+            (".terraform-version", "terraform", "1.14.7"),
             (
                 "chart/Chart.yaml",
                 "https://charts.bitnami.com/bitnami|redis",
@@ -436,7 +436,7 @@ fn toolchain_files_charts_and_devcontainers() {
                 "registry-1.docker.io/bitnamicharts/pg",
                 "1.2.3"
             ),
-            ("rust-toolchain.toml", "rust-lang/rust", "1.82.0"),
+            ("rust-toolchain.toml", "rust", "1.82.0"),
         ]
     );
     for dep in &deps {
@@ -535,11 +535,7 @@ android = { id = "com.android.application", version.ref = "agp" }
                 "https://plugins.gradle.org/m2|com.android.application:com.android.application.gradle.plugin",
                 "8.5.0"
             ),
-            (
-                "gradle/wrapper/gradle-wrapper.properties",
-                "gradle/gradle-distributions",
-                "8.10"
-            ),
+            ("gradle/wrapper/gradle-wrapper.properties", "gradle", "8.10"),
             (
                 "pom.xml",
                 "org.springframework.boot:spring-boot-starter-parent",

@@ -10,9 +10,7 @@ use std::sync::{Arc, Mutex};
 struct Host {
     status: u16,
     empty: bool,
-    partial: bool,
     lost: bool,
-    missing_tool: bool,
     requests: Mutex<Vec<(String, bool)>>,
 }
 impl Transport for Host {
@@ -32,17 +30,6 @@ impl Transport for Host {
             let body = if github {
                 assert_eq!(path, "/graphql");
                 json!({"data":{"r0":{"releases":{"nodes":[{"tagName":"v2.0.0","publishedAt":"2026-01-01T00:00:00Z","isDraft":false,"isPrerelease":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}).to_string()
-            } else if path.ends_with("index.v1.json") {
-                if self.missing_tool {
-                    json!({"format":1,"tools":{}}).to_string()
-                } else {
-                    json!({"format":1,"tools":{
-                    "age":{"count":if self.partial {99} else {1},"versions":[["2.0.0",1767225600000i64,0]],"tail":0,"prefixes":{}},
-                    "fnox":{"count":1,"versions":[["3.0.0",1767225600000i64,0]],"tail":0,"prefixes":{}}
-                }}).to_string()
-                }
-            } else if path.ends_with("age.toml") {
-                "[versions]\n'1.0.0'={created_at=2025-01-01T00:00:00Z}\n'2.0.0'={created_at=2026-01-01T00:00:00Z}\n'3.0.0'={created_at=2026-02-01T00:00:00Z,prerelease=true}\n".into()
             } else if path.ends_with("tags.json") {
                 json!({"tags":[{"tag":"v2.0.0","sha":"a".repeat(40),"date":"2099-01-01T00:00:00Z"}],"truncated":false}).to_string()
             } else {
@@ -80,7 +67,7 @@ async fn client(host: Arc<Host>, cache: Cache) -> Client {
         host.clone(),
     )
     .unwrap();
-    Client::new(github, Cached::new(cache.clone(), host, 4).unwrap(), cache).catalog_batch()
+    Client::new(github, Cached::new(cache.clone(), host, 4).unwrap(), cache)
 }
 async fn memory() -> Cache {
     Cache::open(":memory:", Default::default()).await.unwrap()
@@ -177,73 +164,6 @@ async fn private_unlisted_repositories_and_explicit_opt_out_skip_the_host() {
             [("/graphql".into(), false)]
         );
     }
-    let host = Arc::new(Host {
-        missing_tool: true,
-        ..Default::default()
-    });
-    let source = client(host.clone(), memory().await).await;
-    assert!(
-        !source
-            .mise_tool_catalog("age")
-            .await
-            .unwrap()
-            .versions
-            .is_empty()
-    );
-    assert_eq!(
-        host.requests.lock().unwrap().as_slice(),
-        [
-            ("/data/index.v1.json".into(), false),
-            ("/graphql".into(), false)
-        ]
-    );
-}
-
-#[tokio::test]
-async fn complete_index_resolves_many_tools_once_and_partial_index_uses_full_toml() {
-    let host = Arc::new(Host::default());
-    let cache = memory().await;
-    for _ in 0..2 {
-        let source = client(host.clone(), cache.clone()).await;
-        let (age, fnox) = tokio::join!(
-            source.mise_tool_catalog("age"),
-            source.mise_tool_catalog("fnox")
-        );
-        assert_eq!(age.unwrap().versions[0].version, "2.0.0");
-        assert_eq!(fnox.unwrap().versions[0].version, "3.0.0");
-    }
-    assert_eq!(
-        host.requests.lock().unwrap().as_slice(),
-        [
-            ("/data/index.v1.json".into(), false),
-            ("/data/index.v1.json".into(), true)
-        ]
-    );
-    let host = Arc::new(Host {
-        partial: true,
-        ..Default::default()
-    });
-    let catalog = client(host.clone(), memory().await)
-        .await
-        .mise_tool_catalog("age")
-        .await
-        .unwrap();
-    assert_eq!(
-        catalog
-            .versions
-            .iter()
-            .map(|v| v.version.as_str())
-            .collect::<Vec<_>>(),
-        ["1.0.0", "2.0.0"]
-    );
-    assert_eq!(host.requests.lock().unwrap().len(), 2);
-    assert!(
-        host.requests
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|(path, _)| path.ends_with("age.toml"))
-    );
 }
 
 #[tokio::test]

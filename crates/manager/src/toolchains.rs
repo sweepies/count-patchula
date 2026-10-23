@@ -18,23 +18,19 @@ fn pin(
     start: usize,
     version: &str,
 ) -> Dependency {
-    let (source, package, extract) = patchula_mise::resolve(tool).map_or_else(
-        || (Source::Mise, tool.to_string(), None),
-        |r| (r.source, r.package, r.extract),
-    );
     Dependency {
         manager,
         file: path.into(),
         location: Location::new(text, start, start + version.len(), format!("/{tool}")),
         name: tool.into(),
-        package,
+        package: tool.into(),
         kind: DependencyKind::Toolchain,
         current: version.into(),
         resolved: Some(version.into()),
         digest: None,
-        source,
+        source: Source::Mise,
         scheme: Scheme::Loose,
-        extract,
+        extract: None,
     }
 }
 

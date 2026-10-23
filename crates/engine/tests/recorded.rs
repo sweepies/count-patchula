@@ -2,8 +2,9 @@
 use patchula_cache::Cache;
 use patchula_engine::{Engine, Options};
 use patchula_http::Network;
+use patchula_process::{Executor, SystemExecutor};
 use patchula_report::{Report, Status};
-use patchula_testkit::{Options as FixtureOptions, Redactor, Replay};
+use patchula_testkit::{MiseRecorder, MiseReplay, Options as FixtureOptions, Redactor, Replay};
 use std::{path::Path, sync::Arc};
 fn config() -> patchula_config::Config {
     patchula_config::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/public.pkl")).unwrap()
@@ -41,8 +42,25 @@ async fn public_multi_repo_report_cold_and_warm() {
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await
         .unwrap();
+    // The repositories' mise tools are listed by mise, replayed from what it
+    // printed when this was recorded.
+    let mise_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/mise/public-batch.json");
+    let tools = dir.path().join("cache.sqlite");
+    let probe = patchula_update::lockfiles::Runner::new(tools.clone(), &token);
+    let executor: Arc<dyn Executor> = if recording {
+        Arc::new(MiseRecorder::new(
+            &mise_path,
+            Arc::new(SystemExecutor),
+            probe.mise_lookup().version(),
+            "Recorded from the pinned mise with `mise run fixtures:record-engine`: what `mise ls-remote --json` printed for the mise tools of jdx/usage and jdx/mr-boxington",
+        ))
+    } else {
+        Arc::new(MiseReplay::open(&mise_path).unwrap())
+    };
     let engine = Engine::with_transport(&token, cache, 4, transport)
         .unwrap()
+        .with_lockfile_runner(probe.with_executor(executor))
         .with_versions_host(false);
     let options = || Options {
         repositories: vec!["jdx/usage".into(), "jdx/mr-boxington".into()],
@@ -83,8 +101,8 @@ async fn public_multi_repo_report_cold_and_warm() {
     // reads prime their validators; the tag namespace already revalidates.
     if !recording {
         assert_eq!(
-            stats.requests, 7,
-            "four conditional repository reads, release and tag-release heads, one tag namespace"
+            stats.requests, 6,
+            "four conditional repository reads, actions/checkout's release head, one tag namespace; mise lists the repositories' tools"
         );
         assert_eq!(stats.not_modified, 1);
     }

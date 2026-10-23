@@ -101,7 +101,9 @@ The rest of Renovate's 82 datasources (`git-refs`, `git-tags`, the GitLab and
 Gitea release sources, `artifactory`, `conda`, `hex`, `dart`, `pod`, `cdnjs`,
 `endoflife-date`, `repology`, `deb`, `rpm`, `apk`, AWS and Azure sources,
 `custom` and others) have no equivalent. The Count also has a `mise` source
-of his own, resolving tools through mise's registry.
+of his own, listing tools with `mise ls-remote`, so a tool on any backend mise
+can list (`conda:`, `gem:`, `go:`, `dotnet:`, `spm:` and others) is looked up
+through it. See [mise backends](/renovate/departures/#mise-backends).
 
 ## Versioning
 

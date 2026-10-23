@@ -56,8 +56,12 @@ The Count is one binary, `patchula`. Releases have static builds for Linux
 ## What the runner needs
 
 Lockfiles are regenerated with the real tools (aube, Yarn, Bun, Cargo, Go,
-Terraform, uv, Poetry, dotnet, Bundler, Composer), so `mise` must be on the
-`PATH`. Each tool goes into the Count's own tool store, never your personal
+Terraform, uv, Poetry, dotnet, Bundler, Composer), and the versions of every
+tool in a `mise.toml` or `.tool-versions` are listed by mise itself, so `mise`
+must be on the `PATH`. Without it, mise tools and lockfiles report an error and
+everything else works. The Count installs his own pinned mise into the tool
+store on first use and runs that; the mise on `PATH` only installs and starts it.
+Each tool goes into the Count's own tool store, never your personal
 mise installs: on a local run he borrows a version you already have by
 hard-linking it in, and otherwise mise installs it on first use (see [the tool
 store](/guide/lockfiles/#the-tool-store)). The store is `PATCHULA_TOOLS_DIR`, or

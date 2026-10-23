@@ -125,6 +125,7 @@ impl Engine {
         engine.lockfiles = cache.workspace_dir().map(|path| {
             patchula_update::lockfiles::Runner::new(path.into(), "").with_credentials(credentials)
         });
+        engine.look_up_mise_tools_with_runner();
         Ok(engine)
     }
     /// Settings change only between batches; warm clients and receipts stay intact.
@@ -181,7 +182,7 @@ impl Engine {
         let lockfiles = cache
             .workspace_dir()
             .map(|path| patchula_update::lockfiles::Runner::new(path.into(), token));
-        Ok(Self {
+        let mut engine = Self {
             lockfiles,
             github,
             http,
@@ -192,10 +193,20 @@ impl Engine {
             recheck: Recheck::default(),
             versions_host_override: None,
             advertised_server: None,
-        })
+        };
+        engine.look_up_mise_tools_with_runner();
+        Ok(engine)
+    }
+    /// Tool versions come from the pinned mise in the lockfile runner's tool
+    /// store, through its executor. An in-memory cache has neither.
+    fn look_up_mise_tools_with_runner(&mut self) {
+        if let Some(runner) = &self.lockfiles {
+            self.sources = self.sources.clone().with_mise(runner.mise_lookup());
+        }
     }
     pub fn with_lockfile_runner(mut self, runner: patchula_update::lockfiles::Runner) -> Self {
         self.lockfiles = Some(runner);
+        self.look_up_mise_tools_with_runner();
         self
     }
     /// Seed the lockfile tool store from this mise data directory's installs.
@@ -211,12 +222,10 @@ impl Engine {
         let enabled = self
             .versions_host_override
             .unwrap_or(config.is_none_or(|config| config.use_versions_host));
-        let (source, package) = if dep.manager == Manager::Mise && enabled {
-            ("mise-tool".into(), dep.name.clone())
-        } else {
-            (word(&dep.source), dep.package.clone())
-        };
-        (format!("{enabled}:{source}"), package)
+        (
+            format!("{enabled}:{}", word(&dep.source)),
+            dep.package.clone(),
+        )
     }
     async fn lookup_key(
         sources: &Sources,
@@ -224,12 +233,6 @@ impl Engine {
     ) -> std::result::Result<patchula_datasource::Catalog, String> {
         let (enabled, source) = key.0.split_once(':').ok_or("invalid catalog key")?;
         let sources = sources.clone().with_versions_host(enabled == "true");
-        if source == "mise-tool" {
-            return sources
-                .mise_tool_catalog(&key.1)
-                .await
-                .map_err(|e| e.to_string());
-        }
         let source: Source =
             serde_json::from_value(Value::String(source.into())).map_err(|e| e.to_string())?;
         sources
@@ -677,7 +680,7 @@ impl Engine {
             ));
         }
         let local = options.local.clone();
-        let sources = self.sources.catalog_batch();
+        let sources = self.sources.clone();
         let total = Instant::now();
         let _total_span = PhaseTrace::new("total");
         let before_g = self.github.stats().await;
@@ -703,14 +706,13 @@ impl Engine {
         // Hints overlap mutable digest reads with the repository head read.
         // Catalogs wait for current policy, age-cache and checkbox decisions.
         let hint_hash = format!(
-            "lookup-hint-v2:{}:{}:{}:{}",
+            "lookup-hint-v3:{}:{}:{}",
             hash(&serde_json::to_vec(&(
                 &options.config,
                 &overrides,
                 self.versions_host_override
             ))?),
             hash(patchula_config::SCHEMA.as_bytes()),
-            hash(patchula_manager::MISE_REGISTRY.as_bytes()),
             self.github.credential_scope()
         );
         let mut hint = LookupHint::default();
@@ -821,7 +823,7 @@ impl Engine {
         // Catalog reads wait for authoritative policy and checkbox state. Only
         // digest hints are speculative, so a warm cache hit sends no list read.
         let retry_keys = self.forced_catalog_keys(&work).await?;
-        let fresh_sources = sources.revalidating().catalog_batch();
+        let fresh_sources = sources.revalidating();
         // Digest retries use the same scoped HTTP client later in the batch.
         let evaluators: Vec<_> = work
             .iter()
@@ -1745,11 +1747,7 @@ impl Engine {
         let key = ExtractionKey {
             repo: repo.into(),
             default_branch_commit: commit,
-            config_hash: format!(
-                "extract-v7:{}:{}",
-                hash(&serde_json::to_vec(&config)?),
-                hash(patchula_manager::MISE_REGISTRY.as_bytes())
-            ),
+            config_hash: format!("extract-v8:{}", hash(&serde_json::to_vec(&config)?)),
         };
         let cached: CachedExtraction = if let Some(bytes) = self.cache.extraction_get(&key).await? {
             self.extraction_hits.fetch_add(1, Ordering::Relaxed);

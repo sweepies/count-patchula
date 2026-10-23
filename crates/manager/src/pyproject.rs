@@ -289,23 +289,18 @@ fn python_version(path: &str, text: &str) -> Vec<Dependency> {
         return Vec::new();
     }
     let start = text.find(token).expect("token from text");
-    let resolution = patchula_mise::resolve("python");
-    let (source, package, extract) = resolution.map_or_else(
-        || (Source::Mise, "python".into(), None),
-        |r| (r.source, r.package, r.extract),
-    );
     vec![Dependency {
         manager: Manager::Pyproject,
         file: path.into(),
         location: Location::new(text, start, start + token.len(), "/python".into()),
         name: "python".into(),
-        package,
+        package: "python".into(),
         kind: DependencyKind::Toolchain,
         current: token.into(),
         resolved: Some(token.into()),
         digest: None,
-        source,
+        source: Source::Mise,
         scheme: Scheme::Loose,
-        extract,
+        extract: None,
     }]
 }

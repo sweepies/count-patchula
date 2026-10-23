@@ -10,5 +10,14 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-patchula-config = { path = "../config" }
+patchula-process = { path = "../process" }
+serde.workspace = true
 serde_json.workspace = true
+tempfile = "3"
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+patchula-process = { path = "../process" }
+patchula-testkit = { path = "../testkit" }
+tokio = { workspace = true, features = ["test-util"] }

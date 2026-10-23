@@ -206,8 +206,8 @@ impl Client {
         if package == "actions/node-versions" {
             // Stable setup-node targets remain usable during a Node-index
             // outage. An explicit LTS policy fails closed without this evidence.
-            if let Ok(node) = self.node().await {
-                catalog.dist_tags = node.dist_tags;
+            if let Ok(lts) = self.node_lts().await {
+                catalog.dist_tags = lts;
             }
         }
         Ok(catalog)

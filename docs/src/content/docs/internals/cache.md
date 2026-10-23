@@ -183,7 +183,7 @@ for each branch requiring verification, without PR bodies or credentials.
 # Catalog views and release-age policy (departure 50)
 
 Successful catalog views are stored separately from HTTP bodies, scoped to the
-credential identity, source mode and mise registry mapping. A dependency with
+credential identity and source mode. A dependency with
 positive effective `waitHours` reuses a catalog younger than
 `clamp(waitHours - 1, 1, 24)` hours: 23 hours for the default 24-hour wait.
 Zero keeps the existing HTTP/validator freshness rules. The shortest active
@@ -211,6 +211,17 @@ Mutable Git tags and image digests keep their independent freshness. Reused tag
 catalogs never freeze target commits: bounded GraphQL reads resolve only the
 currently needed refs, including annotated tags, without revalidating version
 lists. Missing objects fall back to the existing per-ref lookup.
+
+## mise listings
+
+What `mise ls-remote --json` printed for a tool is stored in the extraction
+table, not the HTTP table, because it has no validators. The key holds the tool
+(and a version prefix, such as `lts`), the credential scope, whether mise may
+read the mise-versions mirror, and the pinned mise version; the value holds the
+parsed releases and the fetch time. A listing younger than an hour is reused
+without starting mise. A manual retry skips the stored listing and replaces it,
+and only successful lookups are stored. Catalog views above this are still
+bounded by `waitHours`.
 
 Offline regressions cover reopen, expiry/clamping, zero-age rules, credential
 isolation, eligibility transitions, targeted PR/dashboard controls, failed

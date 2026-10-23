@@ -177,7 +177,7 @@ impl Runner {
         let mut command = self.command(driver);
         command.args.extend([
             "exec".into(),
-            format!("{}@{version}", tools::MISE),
+            format!("{}@{version}", patchula_mise::PACKAGE),
             "--".into(),
             "env".into(),
             "-u".into(),

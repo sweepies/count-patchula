@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "provenance": "Recorded from the pinned mise with `mise run fixtures:record-engine`: what `mise ls-remote --json` printed for the mise tools of jdx/usage and jdx/mr-boxington",
+  "mise_version": "2026.10.11",
+  "runs": [
+    {
+      "args": [
+        "ls-remote",
+        "--json",
+        "--",
+        "mr-boxington"
+      ],
+      "output": [
+        {
+          "created_at": "2026-09-05T17:18:41Z",
+          "prerelease": false,
+          "release_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.8.3",
+          "version": "1.8.3"
+        },
+        {
+          "created_at": "2026-09-06T16:11:24Z",
+          "prerelease": false,
+          "release_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.9.0",
+          "version": "1.9.0"
+        },
+        {
+          "created_at": "2026-09-08T04:29:25Z",
+          "prerelease": false,
+          "release_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.10.0",
+          "version": "1.10.0"
+        },
+        {
+          "created_at": "2026-09-10T20:51:45Z",
+          "prerelease": false,
+          "release_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.10.1",
+          "version": "1.10.1"
+        },
+        {
+          "created_at": "2026-09-11T20:10:13Z",
+          "prerelease": false,
+          "release_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.11.0",
+          "version": "1.11.0"
+        },
+        {
+          "created_at": "2026-09-14T20:29:36Z",
+          "prerelease": false,
+          "release_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.11.1",
+          "version": "1.11.1"
+        },
+        {
+          "created_at": "2026-09-15T22:02:02Z",
+          "prerelease": false,
+          "release_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.12.0",
+          "version": "1.12.0"
+        },
+        {
+          "created_at": "2026-09-17T15:37:39Z",
+          "prerelease": false,
+          "release_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.13.0",
+          "version": "1.13.0"
+        },
+        {
+          "created_at": "2026-09-18T14:25:19Z",
+          "prerelease": false,
+          "release_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.14.0",
+          "version": "1.14.0"
+        },
+        {
+          "created_at": "2026-09-20T01:25:27Z",
+          "prerelease": false,
+          "release_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.15.0",
+          "version": "1.15.0"
+        },
+        {
+          "created_at": "2026-09-23T11:08:32Z",
+          "prerelease": false,
+          "release_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.16.0",
+          "version": "1.16.0"
+        },
+        {
+          "created_at": "2026-09-23T19:34:39Z",
+          "prerelease": false,
+          "release_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.17.0",
+          "version": "1.17.0"
+        },
+        {
+          "created_at": "2026-09-25T17:46:28Z",
+          "prerelease": false,
+          "release_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.18.0",
+          "version": "1.18.0"
+        },
+        {
+          "created_at": "2026-09-27T16:39:59Z",
+          "prerelease": false,
+          "release_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.19.0",
+          "version": "1.19.0"
+        },
+        {
+          "created_at": "2026-09-28T18:14:29Z",
+          "prerelease": false,
+          "release_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.20.0",
+          "version": "1.20.0"
+        },
+        {
+          "created_at": "2026-09-29T18:08:02Z",
+          "prerelease": false,
+          "release_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.21.0",
+          "version": "1.21.0"
+        },
+        {
+          "created_at": "2026-10-02T12:50:15Z",
+          "prerelease": false,
+          "release_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.21.1",
+          "version": "1.21.1"
+        },
+        {
+          "created_at": "2026-10-03T19:03:40Z",
+          "prerelease": false,
+          "release_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.22.0",
+          "version": "1.22.0"
+        },
+        {
+          "created_at": "2026-10-09T00:26:14Z",
+          "prerelease": false,
+          "release_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.23.0",
+          "version": "1.23.0"
+        },
+        {
+          "created_at": "2026-10-13T19:15:26Z",
+          "prerelease": false,
+          "release_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.24.0",
+          "version": "1.24.0"
+        },
+        {
+          "created_at": "2026-10-16T10:37:18Z",
+          "prerelease": false,
+          "release_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.24.1",
+          "version": "1.24.1"
+        },
+        {
+          "created_at": "2026-10-19T13:23:24Z",
+          "prerelease": false,
+          "release_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.25.0",
+          "version": "1.25.0"
+        },
+        {
+          "created_at": "2026-10-20T19:16:25Z",
+          "prerelease": false,
+          "release_url": "https://github.com/jdx/mr-boxington/releases/tag/v1.26.0",
+          "version": "1.26.0"
+        }
+      ]
+    }
+  ]
+}

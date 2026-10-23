@@ -205,7 +205,7 @@
       "id": "published-mise-backends",
       "departure": "mise-backends",
       "classification": "field-mismatch",
-      "managers": ["mise"],
+      "managers": ["mise", "npm", "bun", "cargo", "terraform", "bundler", "pyproject", "gradle", "go"],
       "field": "package",
       "predicate": "mise-backend-identity"
     },

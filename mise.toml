@@ -345,6 +345,11 @@ description = "Record full public npm metadata in existing cassettes without Git
 env = { PATCHULA_RECORD = "1" }
 run = ["cargo test --locked -p patchula-datasource --test recorded refresh_public_npm_metadata -- --ignored", "mise run fixtures:check"]
 
+[tasks."fixtures:record-mise"]
+description = "Record what the pinned mise lists for the tools in fixtures/mise; needs the network, a mise on PATH and GH_TOKEN"
+env = { PATCHULA_RECORD = "1" }
+run = ["cargo test --locked -p patchula-update --test mise_listings -- --nocapture", "mise run fixtures:check"]
+
 [tasks."fixtures:record-wave1"]
 description = "Record only Phase 1 public sources and multi-repo lookup fixtures"
 env = { PATCHULA_RECORD = "1" }
@@ -364,6 +369,6 @@ description = "Replay wave 2 source fixtures in release mode"
 run = "cargo test --release --locked -p patchula-datasource --test wave2 -- --nocapture"
 
 [tasks."fixtures:record-engine"]
-description = "Record the public multi-repository manager/engine fixture"
+description = "Record the public multi-repository manager/engine fixture, and what mise lists for its tools; needs a mise on PATH"
 env = { PATCHULA_RECORD = "1" }
 run = ["cargo test --locked -p patchula-engine --test recorded -- --nocapture", "mise run fixtures:check"]

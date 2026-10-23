@@ -22,10 +22,7 @@ impl Engine {
         ExtractionKey {
             repo: format!("catalog:{}:{}", key.0, key.1),
             default_branch_commit: self.github.credential_scope().into(),
-            config_hash: format!(
-                "age-catalog-v1:{}",
-                hash(patchula_manager::MISE_REGISTRY.as_bytes())
-            ),
+            config_hash: "age-catalog-v2".into(),
         }
     }
     pub(super) async fn age_catalogs(
@@ -84,7 +81,7 @@ impl Engine {
                 ordinary.insert(key);
             }
         }
-        let fresh = sources.revalidating().catalog_batch();
+        let fresh = sources.revalidating();
         let (mut fetched, forced) = tokio::join!(
             self.catalogs(ordinary, sources),
             self.catalogs(forced, &fresh)

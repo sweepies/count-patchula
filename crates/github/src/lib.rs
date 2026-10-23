@@ -188,6 +188,21 @@ impl Client {
         self.0.options.concurrency
     }
 
+    /// The current token, for a tool that makes its own GitHub requests and is
+    /// handed it explicitly. Refreshable credentials renew it.
+    pub async fn token(&self) -> Result<String> {
+        if let Some(credentials) = &self.0.credentials {
+            return credentials.token().await;
+        }
+        self.0
+            .authorization
+            .to_str()
+            .ok()
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .map(str::to_owned)
+            .ok_or(Error::Configuration)
+    }
+
     /// Public metadata reads share the transport pool but never GitHub auth.
     pub fn public_http(&self) -> patchula_http::Cached {
         patchula_http::Cached::new(

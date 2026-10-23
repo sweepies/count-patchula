@@ -268,7 +268,7 @@ fn action_digest_targets_resolve_the_new_commit_without_expanding_ref_precision(
 }
 
 #[test]
-fn prefixed_mise_product_releases_pin_latest_without_sdk_tags() {
+fn mise_latest_pins_the_newest_listed_version() {
     let cfg = config("benchmark-public");
     let dependencies = patchula_manager::Scanner::new(&cfg)
         .unwrap()
@@ -280,12 +280,13 @@ fn prefixed_mise_product_releases_pin_latest_without_sdk_tags() {
         .dependencies;
     let eval = Evaluator::new(&cfg).unwrap();
     for dep in dependencies {
-        let (tags, target) = if dep.name == "jq" {
-            (vec!["jq-1.8.2", "jq-1.8.1"], "1.8.2")
+        // mise lists versions without their tag prefixes (`jq-1.8.2`, `bws-v2.1.0`).
+        let (versions, target) = if dep.name == "jq" {
+            (vec!["1.8.1", "1.8.2"], "1.8.2")
         } else {
-            (vec!["python-v9.0.0", "bws-v2.1.0", "rust-v9.0.0"], "2.1.0")
+            (vec!["2.0.0", "2.1.0"], "2.1.0")
         };
-        let proposals = eval.propose(&dep, &catalog(&tags)).unwrap();
+        let proposals = eval.propose(&dep, &catalog(&versions)).unwrap();
         assert_eq!(proposals.len(), 1);
         assert_eq!(proposals[0].update_type, "pin");
         assert_eq!(proposals[0].new_version.as_deref(), Some(target));
@@ -756,7 +757,7 @@ fn runner_latest_is_floating_and_versioned_images_never_get_digests() {
 }
 
 #[test]
-fn mise_current_versions_follow_backend_tag_identity_without_proposal_filters() {
+fn mise_current_versions_resolve_from_the_listing_without_proposal_filters() {
     let cfg = config("renovate-migration");
     let deps = patchula_manager::Scanner::new(&cfg)
         .unwrap()
@@ -766,13 +767,13 @@ fn mise_current_versions_follow_backend_tag_identity_without_proposal_filters() 
         )]))
         .unwrap()
         .dependencies;
-    for (name, source_version, expected) in [
-        ("age", "v1.2.3", "1.2.3"),
-        ("fnox", "v2.3.4", "v2.3.4"),
-        ("bun", "bun-v3.4.5", "3.4.5"),
+    for (name, listed, expected) in [
+        ("age", "1.2.3", "1.2.3"),
+        ("fnox", "2.3.4", "2.3.4"),
+        ("bun", "3.4.5", "3.4.5"),
     ] {
         let dep = deps.iter().find(|d| d.name == name).unwrap();
-        let mut catalog = catalog(&[source_version]);
+        let mut catalog = catalog(&[listed]);
         catalog.versions[0].published_at = Some("2099-01-01T00:00:00Z".into());
         catalog.versions[0].yanked = true;
         assert_eq!(
