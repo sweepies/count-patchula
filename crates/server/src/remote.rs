@@ -60,6 +60,7 @@ pub(crate) struct Api(Arc<Inner>);
 struct Inner {
     app: Arc<App>,
     client_id: Option<String>,
+    bot: String,
     transport: Arc<dyn Transport>,
     cache: Cache,
     settings: Reload,
@@ -92,6 +93,8 @@ enum JobState {
 pub(crate) struct Parts {
     pub app: Arc<App>,
     pub client_id: Option<String>,
+    /// The App's bot login, which the CLI matches against the advertisement.
+    pub bot: String,
     pub transport: Arc<dyn Transport>,
     pub cache: Cache,
     pub settings: Reload,
@@ -103,6 +106,7 @@ impl Api {
         Self(Arc::new(Inner {
             app: parts.app,
             client_id: parts.client_id,
+            bot: parts.bot,
             transport: parts.transport,
             cache: parts.cache,
             settings: parts.settings,
@@ -164,7 +168,7 @@ async fn auth(State(api): State<Api>) -> Result<Json<serde_json::Value>, Reject>
             "the server could not read its GitHub App's client ID",
         )
     })?;
-    Ok(Json(json!({"clientId": client_id})))
+    Ok(Json(json!({"clientId": client_id, "bot": api.0.bot})))
 }
 
 #[derive(Deserialize)]

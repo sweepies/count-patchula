@@ -675,6 +675,43 @@ async fn token_only_run_uses_repository_config_cold_and_cached_and_reports_actio
     }
 }
 
+#[tokio::test(start_paused = true)]
+async fn an_advertised_server_is_hidden_in_the_pr_and_the_dashboard() {
+    let fake = Arc::new(Fake::new(false));
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let mut engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    let options = || Options {
+        repositories: vec!["demo/sandbox".into()],
+        ..Options::default()
+    };
+    // Turning it on later still reaches the PR the first run wrote.
+    for server in [None, Some("https://patchula.acme.dev")] {
+        fake.writes.lock().unwrap().clear();
+        engine.set_advertised_server(server.map(str::to_owned));
+        let report = engine.run(options(), false, false).await.unwrap();
+        assert_eq!(
+            report.repositories[0].status,
+            Status::Complete,
+            "{report:?}"
+        );
+    }
+    let writes = fake.writes.lock().unwrap();
+    for kind in ["/pulls", "/issues"] {
+        let body = writes
+            .iter()
+            .filter(|(path, _)| path.contains(kind))
+            .find_map(|(_, body)| body["body"].as_str())
+            .unwrap_or_else(|| panic!("no {kind} write: {writes:?}"));
+        assert_eq!(
+            patchula_update::advertise::find(body),
+            Some("https://patchula.acme.dev"),
+            "{kind}"
+        );
+    }
+}
+
 struct FailTools;
 
 #[tokio::test(start_paused = true)]
@@ -852,6 +889,7 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
                 &[],
                 &prs,
                 Default::default(),
+                None,
             );
             assert!(
                 next_dashboard.contains("## Merged by the Count")

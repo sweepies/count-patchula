@@ -8,7 +8,7 @@ title: "Environment variables"
 | `PATCHULA_RECHECK` | `run`, server | `now` or `next-run`: when a ticked checkbox says it takes effect |
 | `PATCHULA_TOOLS_DIR` | `run`, `tools` | the lockfile tool store; default `<cache>.tools` |
 | `PATCHULA_SERVER` | `lookup`, `run`, `tui`, `auth` | a [server](/guide/server/#run-from-your-machine) URL to run on instead of this machine |
-| `XDG_CONFIG_HOME` | `--server` | where the server sign-ins are stored (`patchula/servers.json`); default `~/.config` |
+| `XDG_CONFIG_HOME` | `lookup`, `run`, `tui`, `auth` | where the server sign-ins (`patchula/servers.json`) and per-repository server choices (`patchula/repositories.json`) are stored; default `~/.config` |
 | `PATCHULA_DOCKERHUB_USERNAME` | lookups | Docker Hub user for authenticated pulls; set with the token |
 | `PATCHULA_DOCKERHUB_TOKEN` | lookups | Docker Hub access token |
 | `PATCHULA_APP_ID` | server | GitHub App ID |

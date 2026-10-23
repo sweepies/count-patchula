@@ -63,6 +63,8 @@ pub struct Engine {
     extraction_hits: AtomicU64,
     recheck: Recheck,
     versions_host_override: Option<bool>,
+    /// The server URL hidden in PRs and the dashboard for the CLI to find.
+    advertised_server: Option<String>,
 }
 struct Work {
     report: Repository,
@@ -134,6 +136,10 @@ impl Engine {
         self.recheck = recheck;
         Ok(())
     }
+    /// A server sets this between batches as its settings change.
+    pub fn set_advertised_server(&mut self, url: Option<String>) {
+        self.advertised_server = url;
+    }
     pub fn with_recheck(mut self, recheck: Recheck) -> Self {
         self.recheck = recheck;
         self
@@ -185,6 +191,7 @@ impl Engine {
             extraction_hits: AtomicU64::new(0),
             recheck: Recheck::default(),
             versions_host_override: None,
+            advertised_server: None,
         })
     }
     pub fn with_lockfile_runner(mut self, runner: patchula_update::lockfiles::Runner) -> Self {
@@ -343,6 +350,7 @@ impl Engine {
                     &config,
                     &mut plans,
                     self.recheck,
+                    self.advertised_server.as_deref(),
                     inventory.as_ref().expect("write inventory"),
                 )
                 .await;
@@ -385,6 +393,7 @@ impl Engine {
                                     &plans,
                                 ),
                                 self.recheck,
+                                self.advertised_server.as_deref(),
                             ),
                         )
                         .await
@@ -453,6 +462,7 @@ impl Engine {
                 .await
                 {
                     Ok(mut state) => {
+                        state.set_advertised_server(self.advertised_server.clone());
                         state.set_merge_settings(
                             inventory
                                 .as_ref()
@@ -551,6 +561,7 @@ impl Engine {
                             &plans,
                         ),
                         self.recheck,
+                        self.advertised_server.as_deref(),
                     ),
                 )
                 .await

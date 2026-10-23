@@ -134,6 +134,7 @@ async fn api(runner: Arc<Recorder>, client_id: Option<&str>, settings: &str) -> 
     routes(Api::new(Parts {
         app: app(),
         client_id: client_id.map(str::to_owned),
+        bot: "patchula[bot]".into(),
         transport: Arc::new(GitHub),
         cache: Cache::open(":memory:", patchula_cache::Options::default())
             .await
@@ -172,7 +173,10 @@ async fn auth_publishes_the_client_id_only_when_known() {
     let request = || Request::get("/api/v1/auth").body(Body::empty()).unwrap();
     assert_eq!(
         call(&router, request()).await,
-        (StatusCode::OK, json!({"clientId": "Iv23client"}))
+        (
+            StatusCode::OK,
+            json!({"clientId": "Iv23client", "bot": "patchula[bot]"})
+        )
     );
     let router = api(Arc::new(Recorder::default()), None, "").await;
     let (status, body) = call(&router, request()).await;
@@ -329,6 +333,7 @@ async fn drain_waits_for_runs_in_progress() {
     let api = Api::new(Parts {
         app: app(),
         client_id: Some("client".into()),
+        bot: "patchula[bot]".into(),
         transport: Arc::new(GitHub),
         cache: Cache::open(":memory:", patchula_cache::Options::default())
             .await

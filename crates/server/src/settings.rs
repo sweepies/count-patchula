@@ -20,6 +20,8 @@ pub struct Settings {
     pub report_directory: Option<PathBuf>,
     pub allowed_installations: Vec<u64>,
     pub allowed_repositories: Vec<String>,
+    pub advertise: bool,
+    pub public_url: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -93,7 +95,25 @@ impl Settings {
         {
             return Err("allowedRepositories entries must be owner/repo");
         }
+        if self
+            .public_url
+            .as_deref()
+            .is_some_and(|url| public_url(url).is_none())
+        {
+            return Err("publicUrl must be an https URL without a query, fragment or user");
+        }
         Ok(())
+    }
+    /// The URL to hide in what the Count writes: `publicUrl`, else the one
+    /// derived from the App's webhook URL.
+    pub fn advertised(&self, derived: Option<&str>) -> Option<String> {
+        if !self.advertise {
+            return None;
+        }
+        match &self.public_url {
+            Some(url) => public_url(url),
+            None => derived.map(str::to_owned),
+        }
     }
     pub fn installation_allowed(&self, id: u64) -> bool {
         id > 0
@@ -228,6 +248,27 @@ impl Reload {
     }
 }
 
+/// `url` normalised for advertising, or None if the CLI would refuse it.
+pub fn public_url(url: &str) -> Option<String> {
+    let url = reqwest::Url::parse(url).ok()?;
+    (url.scheme() == "https"
+        && url.host().is_some()
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && url.username().is_empty()
+        && url.password().is_none())
+    .then(|| url.as_str().trim_end_matches('/').to_owned())
+}
+/// The server's base URL from its webhook URL, if that URL ends in /webhook.
+/// A relay such as smee.io does not, and needs `publicUrl`.
+pub fn from_webhook(url: &str) -> Option<String> {
+    let mut url = reqwest::Url::parse(url).ok()?;
+    let base = url.path().strip_suffix("/webhook")?.to_owned();
+    url.set_path(&base);
+    url.set_query(None);
+    public_url(url.as_str())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,6 +307,36 @@ mod tests {
                 "missing source span: {diagnostic}"
             );
             assert!(!diagnostic.contains("server settings Pkl evaluation failed"));
+        }
+    }
+    #[test]
+    fn the_advertised_url_comes_from_public_url_or_the_webhook() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server.pkl");
+        let load = |body: &str| {
+            std::fs::write(&path, format!("amends \"PatchulaServer.pkl\"\n{body}\n")).unwrap();
+            Settings::load(&path)
+        };
+        let derived = from_webhook("https://patchula.acme.dev/count/webhook?x=1");
+        assert_eq!(derived.as_deref(), Some("https://patchula.acme.dev/count"));
+        assert_eq!(from_webhook("https://smee.io/abc"), None);
+        assert_eq!(from_webhook("http://patchula.acme.dev/webhook"), None);
+        let defaults = load("").unwrap();
+        assert_eq!(defaults.advertised(derived.as_deref()), derived);
+        assert_eq!(defaults.advertised(None), None);
+        let explicit = load("publicUrl = \"https://count.acme.dev/\"").unwrap();
+        assert_eq!(
+            explicit.advertised(derived.as_deref()).as_deref(),
+            Some("https://count.acme.dev")
+        );
+        let off = load("advertise = false\npublicUrl = \"https://count.acme.dev\"").unwrap();
+        assert_eq!(off.advertised(derived.as_deref()), None);
+        for bad in [
+            "http://count.acme.dev",
+            "https://count.acme.dev/?a=b",
+            "count",
+        ] {
+            assert!(load(&format!("publicUrl = \"{bad}\"")).is_err(), "{bad}");
         }
     }
     #[test]

@@ -544,6 +544,8 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
         engines: Mutex::new(BTreeMap::new()),
         recheck: None,
         bot_login: "patchula[bot]".into(),
+        derived_url: None,
+        signs_in: false,
     };
     let mut settings = settings();
     settings.report_directory = Some(directory.path().to_owned());
@@ -649,6 +651,8 @@ async fn concurrent_deliveries_during_startup_token_mint_and_database_contention
         engines: Mutex::new(BTreeMap::new()),
         recheck: None,
         bot_login: "patchula[bot]".into(),
+        derived_url: None,
+        signs_in: false,
     });
     let (stop, stopped) = watch::channel(false);
     let worker = tokio::spawn(worker(cache.clone(), settings, runner, stopped));

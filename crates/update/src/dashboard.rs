@@ -350,7 +350,14 @@ pub fn issue(inventory: &Inventory) -> Result<Option<&Value>, String> {
 }
 
 /// No wall clock or lookup evaluation timestamps: unchanged evidence renders identically.
-pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck) -> String {
+/// `server` is the URL to advertise to the CLI, if any.
+pub fn render(
+    repo: &Repository,
+    plans: &[Plan],
+    prs: &[Value],
+    recheck: Recheck,
+    server: Option<&str>,
+) -> String {
     // Keep the numeric PR identity separate from the rendered Markdown.
     let mut sections = BTreeMap::<String, BTreeSet<(Option<u64>, String)>>::new();
     for pr in prs.iter().filter(|p| !p["merged_at"].is_null()) {
@@ -558,8 +565,11 @@ pub fn render(repo: &Repository, plans: &[Plan], prs: &[Value], recheck: Recheck
         Recheck::Now => "now",
         Recheck::NextRun => "on the next run",
     };
+    let advertised = server
+        .map(|url| format!("{}\n", crate::advertise::marker(url)))
+        .unwrap_or_default();
     let mut text = format!(
-        "{MARKER}\n\nThe Count keeps watch over this repository's dependencies. Tick a box and he will see to it {timing}.\n\n"
+        "{MARKER}\n{advertised}\nThe Count keeps watch over this repository's dependencies. Tick a box and he will see to it {timing}.\n\n"
     );
     text.push_str(&checkbox(
         "Ask the Count to re-check this repository",
