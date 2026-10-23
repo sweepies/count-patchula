@@ -632,6 +632,13 @@ fn receipt_key(repo: &str) -> ExtractionKey {
         config_hash: "dashboard-receipt-v1".into(),
     }
 }
+/// The dashboard issue the Count last wrote in `repo`.
+pub async fn issue_number(cache: &Cache, repo: &str) -> Option<u64> {
+    let bytes = cache.extraction_get(&receipt_key(repo)).await.ok()??;
+    serde_json::from_slice::<Receipt>(&bytes)
+        .ok()
+        .map(|receipt| receipt.number)
+}
 pub async fn reconcile(
     client: &Client,
     cache: &Cache,

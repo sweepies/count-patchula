@@ -24,6 +24,7 @@ amends the bundled `PatchulaServer.pkl`. Print the schema with
 | `allowedRepositories` | `Listing<String>` | any | `owner/repo` names to serve, case-insensitive |
 | `advertise` | `Boolean` | `true` | hide the server's URL in PRs and the dashboard, so the CLI in a checkout can [offer it](/guide/server/#found-from-a-checkout) |
 | `publicUrl` | `String?` | `null` | the HTTPS URL to advertise; `null` uses the App's webhook URL without its `/webhook` path |
+| `publicApi` | `Boolean` | `true` | serve the [repository API](/guide/server/#repository-api), which shows anyone what the Count last saw of each public repository |
 
 `triggers` has `push`, `dashboard`, `pullRequestEdited`, `pullRequestClosed`,
 `installation` and `checks`, all `true` by default.

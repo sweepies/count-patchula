@@ -199,6 +199,7 @@ fn router(webhook: Webhook, ready: Arc<AtomicBool>) -> Router {
     let settings = webhook.settings.clone();
     let accepting = webhook.accepting.clone();
     let cache = webhook.cache.clone();
+    let (public_cache, public_settings) = (webhook.cache.clone(), webhook.settings.clone());
     let router = Router::new()
         .route("/webhook", post(crate::webhook::receive))
         .route("/healthz", get(|| async { StatusCode::OK }))
@@ -227,7 +228,11 @@ fn router(webhook: Webhook, ready: Arc<AtomicBool>) -> Router {
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(axum::middleware::from_fn(crate::webhook::observe))
         .with_state(webhook);
-    // The API answers in its own JSON, outside the webhook observer.
+    // The APIs answer in their own JSON, outside the webhook observer.
+    let router = router.merge(crate::public::routes(crate::public::Public {
+        cache: public_cache,
+        settings: public_settings,
+    }));
     match api {
         Some(api) => router.merge(crate::remote::routes(api)),
         None => router,
@@ -320,6 +325,7 @@ impl Batch for Engines {
                 )
                 .map_err(|_| Error("cannot create installation client"))?;
                 let mut repos = Vec::new();
+                let mut listed = Vec::new();
                 for page in 1..=1000 {
                     let value = client
                         .get(&format!(
@@ -337,7 +343,11 @@ impl Batch for Engines {
                             .as_str()
                             .ok_or(Error("invalid installation repository"))?;
                         if settings.allows(id, repo) {
-                            repos.push(Work::repository(id, repo.to_ascii_lowercase()));
+                            let repo = repo.to_ascii_lowercase();
+                            // Unknown visibility counts as private, which the public API hides.
+                            let private = entry["private"].as_bool().unwrap_or(true);
+                            listed.push((repo.clone(), private));
+                            repos.push(Work::repository(id, repo));
                         }
                     }
                     if entries.len() < 100 {
@@ -357,6 +367,10 @@ impl Batch for Engines {
                     )
                     .await
                     .map_err(|_| Error("cannot persist discovered repositories"))?;
+                self.cache
+                    .repositories_listed(id, listed)
+                    .await
+                    .map_err(|_| Error("cannot record discovered repositories"))?;
                 tracing::info!(target: "patchula_server", installation = id,
                     "discovery completed; repository work queued for a separate batch");
             }
@@ -401,6 +415,10 @@ impl Batch for Engines {
                     false,
                 )
                 .await;
+            drop(engines);
+            if let Ok(report) = &result {
+                crate::public::record(&self.cache, &client, id, report).await;
+            }
             let report = match &result {
                 Ok(report) => report.clone(),
                 Err(_) => Report {
@@ -499,7 +517,16 @@ impl crate::remote::Runner for Engines {
                 Mode::Run => engine.run(options, false, false).await,
             }
             .map_err(|_| "the run failed on the server")?;
+            drop(engines);
             if mode == Mode::Run {
+                if let Ok(client) = Client::with_credentials(
+                    self.app.installation(installation),
+                    self.cache.clone(),
+                    Default::default(),
+                    self.transport.clone(),
+                ) {
+                    crate::public::record(&self.cache, &client, installation, &report).await;
+                }
                 tracing::info!(target: "patchula_server", installation, user = login, "remote run report");
                 output_report(&report, settings.report_directory.as_deref())
                     .await
@@ -721,6 +748,11 @@ async fn maintenance(
                     .into_iter()
                     .filter(|id| current.installation_allowed(*id))
                     .collect();
+                // Repositories of removed or disallowed installations leave the public API.
+                cache
+                    .repositories_retain(ids.clone())
+                    .await
+                    .map_err(|_| Error("cannot prune recorded repositories"))?;
                 if ids.is_empty() {
                     return Err(Error(
                         "no allowed App installations available for token probe",

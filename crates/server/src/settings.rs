@@ -22,6 +22,7 @@ pub struct Settings {
     pub allowed_repositories: Vec<String>,
     pub advertise: bool,
     pub public_url: Option<String>,
+    pub public_api: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

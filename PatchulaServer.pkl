@@ -20,6 +20,9 @@ advertise: Boolean = true
 /// The https URL to advertise. null uses the App's webhook URL without its
 /// /webhook path.
 publicUrl: String? = null
+/// Serve /api/v1/repositories, which shows anyone what the Count last saw of
+/// each public repository he runs.
+publicApi: Boolean = true
 
 class Triggers {
   push: Boolean = true

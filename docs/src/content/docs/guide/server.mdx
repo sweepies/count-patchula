@@ -17,7 +17,8 @@ idle with little memory in use.
 
 :::note[No web UI]
 There is no web UI. The routes are `POST /webhook`, `GET /healthz`,
-`GET /readyz` and the small `/api/v1` API behind [`--server`](#run-from-your-machine).
+`GET /readyz`, the small `/api/v1` API behind [`--server`](#run-from-your-machine)
+and the read-only [repository API](#repository-api).
 It listens on `127.0.0.1:8080` by default, so put an HTTPS reverse proxy in
 front for GitHub's deliveries.
 :::
@@ -183,6 +184,62 @@ removed. A webhook relay such as smee.io gives no server URL, so set
 `publicUrl` there. Set `advertise = false` to keep the URL out of what the
 Count writes. Turning it on or off edits the open PRs once. A server whose
 App has no client ID advertises nothing, because the CLI could not sign in.
+
+## Repository API
+
+A read-only JSON API shows what the Count last saw of each public repository
+he runs, for a dashboard to display. It needs no sign-in and answers any
+origin (`Access-Control-Allow-Origin: *`), so a page on another site can call
+it from the browser. Set `publicApi = false` to turn it off.
+
+`GET /api/v1/repositories` lists the repositories in name order:
+
+```json
+{
+  "repositories": [
+    {
+      "repository": "acme/my-app",
+      "ranAt": "2026-10-23T09:00:00+00:00",
+      "queued": null,
+      "status": "complete",
+      "reason": null,
+      "defaultBranch": "main",
+      "dependencies": 42,
+      "updates": 3,
+      "pullRequests": 2,
+      "dashboard": 7
+    }
+  ]
+}
+```
+
+`updates` counts dependencies with at least one update, `pullRequests` counts
+the Count's open PRs, and `dashboard` is the dependency dashboard's issue
+number. A repository that discovery found but that has not run yet has only
+`repository`, `ranAt: null` and `queued`. `queued` is `null`, or
+`{"at", "running"}` when work for the repository is waiting or in a batch.
+
+`GET /api/v1/repositories/{owner}/{repo}` returns everything from the last run:
+
+| Field | Meaning |
+|---|---|
+| `repository`, `ranAt`, `queued`, `status`, `reason`, `defaultBranch`, `dashboard` | as in the list |
+| `commit` | the default branch commit the run read |
+| `warnings` | the run's warnings |
+| `packageFiles` | each package file's dependencies and their updates, as in the [report](/reference/report/) |
+| `branches` | each update branch: `branch`, `status`, `reason`, `message`, `baseCommit`, `commit`, `lockfilePending`, and the `files` it changes, without diffs |
+| `pullRequests` | each PR action: `branch`, `number`, `url`, `status`, `reason` |
+| `merged` | up to 20 PRs the Count merged himself: `number`, `title`, `url`, `mergedAt` |
+
+The server records a repository after each run that writes: queued batches and
+`--server` runs, but not lookups or dry runs. Each sweep refreshes the list
+from the App's installations, so repositories that are removed, uninstalled or
+no longer allowed by the settings drop out. A private repository is never
+shown, and neither is one whose visibility the server could not read. A
+repository made private shows until the next run or sweep, by default within
+the hour. An unknown or hidden repository is a 404 with `errorKind`
+`unknown-repository`, and with the API off every request is a 404 with
+`errorKind` `disabled`.
 
 ## Replaying a webhook locally
 

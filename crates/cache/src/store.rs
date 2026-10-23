@@ -30,7 +30,7 @@ fn initialize(mut conn: Connection) -> Result<Connection> {
         return Err(Error::Corrupt);
     }
     let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if version > 7 {
+    if version > 8 {
         return Err(Error::FutureSchema(version));
     }
     conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -57,6 +57,9 @@ fn initialize(mut conn: Connection) -> Result<Connection> {
     }
     if version < 7 {
         transaction.execute_batch(include_str!("migrations/007.sql"))?;
+    }
+    if version < 8 {
+        transaction.execute_batch(include_str!("migrations/008.sql"))?;
     }
     transaction.commit()?;
     Ok(conn)

@@ -566,6 +566,8 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
     let claims = cache.claim_batch(i64::MAX, 10).await.unwrap();
     assert_eq!(claims.len(), 1);
     assert!(claims[0].attribution.reasons.contains("startup discovery"));
+    let listed = cache.repository("owner/repo").await.unwrap().unwrap();
+    assert_eq!((listed.private, listed.ran_at), (false, None));
     for _ in 0..2 {
         assert!(
             runner
@@ -586,6 +588,10 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
         assert_eq!(actual.repositories[0].repository, "owner/repo");
         assert_eq!(actual.repositories[0].status, Status::Error);
     }
+    // GitHub would not show the repository, so the public API hides it.
+    let ran = cache.repository("owner/repo").await.unwrap().unwrap();
+    assert!(ran.private);
+    assert!(ran.ran_at.is_some());
 }
 
 struct DiscoveryAndMissingRepository;
@@ -779,7 +785,7 @@ impl Transport for DiscoveryAndMissingRepository {
             ),
             "/installation/repositories" => (
                 reqwest::StatusCode::OK,
-                json!({"repositories":[{"full_name":"owner/repo"}]}),
+                json!({"repositories":[{"full_name":"owner/repo","private":false}]}),
             ),
             "/graphql" => (
                 reqwest::StatusCode::NOT_FOUND,
