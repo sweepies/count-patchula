@@ -68,7 +68,12 @@ fn backend(name: &str) -> Option<Resolution> {
             extract = Some("^v?(?<version>.+)$".into());
             (Source::GithubReleases, package)
         }
-        "packslip" => (Source::GithubReleases, package.strip_prefix("github.com/")?),
+        // A packslip source is `owner/repo` on GitHub, or a host-qualified path.
+        "packslip" => match package.strip_prefix("github.com/") {
+            Some(package) => (Source::GithubReleases, package),
+            None if package.split('/').next()?.contains('.') => return None,
+            None => (Source::GithubReleases, package),
+        },
         "core" => match package {
             "node" => (Source::Mise, "node"),
             "bun" => {
@@ -131,6 +136,8 @@ mod tests {
             ("core:go", Source::GithubTags, "golang/go"),
             ("ubi:org/tool", Source::GithubReleases, "org/tool"),
             ("aqua:org/tool/cmd", Source::GithubReleases, "org/tool"),
+            ("packslip:org/tool", Source::GithubReleases, "org/tool"),
+            ("packslip:github.com/org/tool", Source::GithubReleases, "org/tool"),
             ("npm:@scope/tool", Source::Npm, "@scope/tool"),
             ("cargo:spec-tool", Source::Crates, "spec-tool"),
             ("python", Source::GithubTags, "python/cpython"),
@@ -141,6 +148,8 @@ mod tests {
         }
         assert!(resolve("unknown-clean-room-tool").is_none());
         assert!(resolve("asdf:org/plugin").is_none());
+        assert!(resolve("packslip:gitlab.com/org/tool").is_none());
+        assert!(resolve("packslip:packslip.dev").is_none());
         assert_eq!(
             resolve("bun").unwrap().extract.as_deref(),
             Some("^bun-v(?<version>.+)$")
