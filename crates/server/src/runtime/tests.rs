@@ -1375,6 +1375,7 @@ async fn webhooks_keep_the_public_repositories_current() {
     let mut renamed = payload();
     renamed["action"] = json!("renamed");
     renamed["repository"] = json!({"full_name": "owner/renamed", "private": false});
+    renamed["changes"] = json!({"repository": {"name": {"from": "Repo"}}});
     send("repository", "renamed", renamed).await;
     send(
         "installation_repositories",
@@ -1385,10 +1386,7 @@ async fn webhooks_keep_the_public_repositories_current() {
     .await;
     assert_eq!(
         names().await,
-        [
-            ("owner/renamed".into(), false),
-            ("owner/repo".into(), false)
-        ],
-        "discovery drops the old name later"
+        [("owner/renamed".into(), false)],
+        "a rename drops the old name"
     );
 }

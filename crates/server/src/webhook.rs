@@ -294,9 +294,19 @@ pub(crate) async fn track(
                 .collect();
             cache.repositories_removed(removed).await?
         }
-        // The payload names the repository as it is now. Discovery drops the
-        // old name, since it is no longer listed.
-        ("repository", "renamed" | "transferred") => {
+        // The payload names the repository as it is now. A rename names the
+        // old one too; after a transfer, discovery drops the old name.
+        ("repository", action @ ("renamed" | "transferred")) => {
+            let old = payload["changes"]["repository"]["name"]["from"]
+                .as_str()
+                .zip(name(repository))
+                .filter(|_| action == "renamed")
+                .and_then(|(from, repo)| Some(format!("{}/{from}", repo.split_once('/')?.0)));
+            if let Some(old) = old {
+                cache
+                    .repositories_removed(vec![old.to_ascii_lowercase()])
+                    .await?;
+            }
             if let Some(repo) = name(repository).filter(|repo| settings.allows(id, repo)) {
                 let private = repository["private"].as_bool().unwrap_or(true);
                 cache.repositories_added(id, vec![(repo, private)]).await?;
