@@ -112,6 +112,10 @@ impl Cached {
     pub fn revalidating(&self) -> Self {
         Self(self.0.clone(), true)
     }
+    /// Whether this handle is a scoped manual retry.
+    pub fn is_revalidating(&self) -> bool {
+        self.1
+    }
     pub fn new(
         cache: Cache,
         transport: Arc<dyn Transport>,

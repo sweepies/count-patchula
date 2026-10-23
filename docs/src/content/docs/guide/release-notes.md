@@ -17,7 +17,7 @@ running package code:
 | PyPI | project URLs named Source, Source Code, Repository, Code, GitHub or Changelog |
 | Go | the module path; vanity paths through `?go-get=1`; `golang.org/x` through its GitHub mirrors |
 | Docker and OCI | the image's `org.opencontainers.image.source` label, then a small table for official images |
-| mise | the published registry's backend, and a table for core tools |
+| mise | the release URL mise lists for the version; a table for core tools; the npm, PyPI or crates.io metadata when that is the backend mise picks for the tool |
 
 GitHub, GitLab (gitlab.com and hosts with `gitlab` in the name), Codeberg,
 gitea.com and hosts named `gitea` or `forgejo` are supported. Other hosts are

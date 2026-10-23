@@ -48,6 +48,23 @@ checks raw and parsed JSON (including escaped tokens), all nested fields, and
 URLs. Failures name the cassette path without printing matched values.
 `mise run ci` runs the scan as well as the test suite.
 
+## mise
+
+A subprocess has no HTTP cassette. Mise lookups run through
+`patchula_process::Executor`, and tests replace it with
+`patchula_testkit::MiseReplay`, which answers from
+`fixtures/mise/listings.json`: for each command after `mise` (such as
+`ls-remote --json --prerelease -- jq`), the JSON mise printed or the error it failed with.
+The replay also keeps every command it was given, with the environment and
+working directory, so tests can assert the sandbox. A lookup the fixture lacks
+fails the test; replay never runs mise.
+
+`mise run fixtures:record-mise` (or `mise run fixtures:record`) runs the pinned
+mise through `MiseRecorder` and rewrites the file. It needs the network, a
+`mise` on `PATH` and `GH_TOKEN`, which mise gets as it would in production and
+which is never written down. `mise run fixtures:check` scans these files for
+secrets with the cassettes.
+
 Every real cassette must say it was recorded by patchula from the endpoint
 URLs. Simulated rate-limit and transport responses are explicitly labelled.
 Never import another bot's fixtures, including Renovate's.

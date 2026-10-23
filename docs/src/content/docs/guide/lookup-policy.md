@@ -75,11 +75,13 @@ rules {
 }
 ```
 
-The LTS line is the highest version with an LTS codename in Node's own
-[distribution index](https://nodejs.org/dist/index.json), not a guess based on
-even majors. The release-age wait and `permitted` filters still apply. If there
-is no LTS evidence for a source, the Count reports it rather than quietly
-falling back to stable.
+For mise's `node` the LTS line is what `mise ls-remote node lts` lists, which
+mise defines as the current LTS line (`node@lts`); for setup-node inputs it is
+the highest version with an LTS codename in Node's own [distribution
+index](https://nodejs.org/dist/index.json). Neither is a guess based on even
+majors. The release-age wait and `permitted` filters still apply. If there is
+no LTS evidence for a source, the Count reports it rather than quietly falling
+back to stable.
 
 To stay on a fixed line for something that is not Node itself, such as
 `@types/node`, say so with a filter:

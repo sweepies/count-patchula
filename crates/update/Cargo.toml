@@ -27,15 +27,17 @@ reqwest.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 chrono-tz = "0.10"
 cron = "0.17"
-tokio = { workspace = true, features = ["process", "io-util"] }
+tokio.workspace = true
 tempfile = "3"
 toml_edit = "0.25.17"
 serde_yaml_ng = "0.10.0"
-rustix = { version = "1", features = ["process"] }
 base64 = "0.22"
 tracing = "0.1"
 patchula-http = { path = "../http" }
+patchula-mise = { path = "../mise" }
+patchula-process = { path = "../process" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 patchula-http = { path = "../http" }
+patchula-testkit = { path = "../testkit" }

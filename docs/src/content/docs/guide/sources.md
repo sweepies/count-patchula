@@ -17,7 +17,7 @@ manager, and rules can select by it.
 | `github-releases`, `github-tags` | `owner/repo` | GitHub, through mise-versions when it can |
 | `github-runners` | runner family | a catalog of GitHub-hosted runner labels |
 | `forge-tags` | `host/path` | GitLab and Gitea/Forgejo tags |
-| `mise` | tool name | mise's published registry and the mise-versions index |
+| `mise` | tool name, as written in `mise.toml` | `mise ls-remote --json`, run by the Count's pinned mise ([mise lookups](#mise-lookups)) |
 | `maven` | `group:artifact` | `maven-metadata.xml` on Maven Central, Google Maven or the Gradle plugin portal |
 | `nuget` | package ID | the nuget.org flat container and registration pages |
 | `rubygems` | gem name | the RubyGems versions API |
@@ -47,6 +47,56 @@ them in pieces:
 A history-head check cannot see a release deleted or edited behind an
 unchanged head. Webhook invalidation or periodic reconciliation covers that.
 
+## mise lookups
+
+A `mise` dependency's versions are what `mise ls-remote --json --prerelease
+<tool>` prints, so every backend mise reads release metadata from works, and the Count keeps
+no copy of mise's registry or backend rules for it. mise lists a version, its
+date, whether it is a prerelease and, for GitHub-hosted tools, a release URL.
+Backends leave out what they do not know: Node lists a date only, and some
+`go:` versions have no date and so no release-age wait. The listing includes
+the prereleases a backend reports (npm, for one) and the Count leaves the
+choice to his [prerelease rules](/guide/lookup-policy/): a pin on a stable
+version is not offered one, and a pin on a prerelease is offered later ones. mise's
+`prerelease` flag is kept in the listing but does not filter.
+
+The Count runs mise the way he runs the lockfile tools, and more strictly:
+
+- With his own pinned mise, installed once into the [tool
+  store](/guide/lockfiles/#the-tool-store), apart from yours. The mise on `PATH` only
+  installs and starts it.
+- From a new, empty directory for each lookup, with a scratch `HOME`. mise
+  loads no configuration (`MISE_NO_CONFIG`), env templates (`MISE_NO_ENV`) or
+  hooks (`MISE_NO_HOOKS`), so there is nothing to trust and neither your
+  global configuration nor a repository's `mise.toml` can apply. Nothing is
+  inherited from the environment the Count runs in.
+- With tool names checked first: no leading `-`, no brackets (tool options can
+  redirect a backend), and no `@version` selector. `@` is allowed only to open an
+  npm scope right after the backend, as in `npm:@types/node`; `prettier@3` is
+  refused because mise would list a selector rather than the tool.
+- With the backends `asdf` and `vfox` disabled (`MISE_DISABLE_BACKENDS`), and
+  names for them refused before mise starts. A backend prefix mise does not
+  know fails in mise, which runs no plugin for it. Nothing installs during a lookup
+  (`MISE_AUTO_INSTALL=0`).
+- With the GitHub token he runs with, as `MISE_GITHUB_TOKEN`, and no other
+  credential: mise's `gh` login, credential command and Git credential helper
+  lookups are off, and the home directory it sees is empty. The token is only
+  given to mise when the Count talks to github.com.
+- With a three-minute limit per lookup and at most four running at once.
+
+A listing is stored in the cache and reused for an hour, per tool, token scope
+and mirror setting; a manual retry, or a failed lookup, asks mise again. The
+Node LTS line comes from `mise ls-remote node lts`, which lists the newest LTS
+line; when that listing fails or is empty the catalog stays whole without LTS
+evidence, so only a dependency on the LTS channel reports it. A tool installed
+from a Git ref (`cargo:` with a Git URL) lists only `HEAD`, which the Count
+reports as having no release versions. Any other listing is kept: versions that
+do not order are never proposed, and a pin that does not order is reported as
+one the Count cannot classify. Where there is no release URL, release notes
+find a tool's repository from the backend mise picks for it when that is npm,
+PyPI or crates.io. A tool whose listing and backend name no repository has no
+release notes.
+
 ## mise-versions host
 
 By default (`useVersionsHost = true`), public GitHub repositories that appear in
@@ -56,8 +106,9 @@ mise's registry are read from the public
 registry, including private ones, go straight to GitHub. If the mirror fails
 with a transport error, 429 or 5xx, the Count falls back to GitHub; a 403, 404 or
 empty list does not, and a truncated list is reported as an incomplete lookup.
-mise tools read the mise-versions index once per batch. Set
-`useVersionsHost = false` to read everything upstream.
+mise tools do not use this path: mise reads the mirror itself, and
+`useVersionsHost = false` turns that off too (`MISE_USE_VERSIONS_HOST=0`). Set
+it to read everything upstream.
 
 ## Registries and limits
 
@@ -82,7 +133,8 @@ wait; versions the proxy lists but cannot describe are dropped. npm, crates,
 PyPI, RubyGems, NuGet and Packagist report them directly. Maven Central's search
 API lags by months, so Maven uses each POM's `Last-Modified` header, for the ten
 newest versions only. GitHub tags use the release date, then the annotated tag
-date. mise tools use mise's own first-seen date. Lightweight tags, Gitea tags
+date. mise tools use the date mise lists, which is a backend's own release or
+publication date. Lightweight tags, Gitea tags
 and hosted runner labels are undated and have no wait.
 
 ## Where the upstream lives

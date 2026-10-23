@@ -263,14 +263,16 @@ fn terraform_opentofu_locks_and_runtime_constraints_use_the_same_identity() {
 }
 
 #[test]
-fn mise_git_tags_use_github_without_the_selector_prefix() {
+fn mise_git_tag_pins_are_read_without_the_selector_prefix() {
     let deps = extract(&Files::from([(
         "mise.toml".into(),
         "[tools]\n\"cargo:https://github.com/example/tool\" = \"tag:v0.3.1\"\n".into(),
     )]));
     assert_eq!(deps.len(), 1);
-    assert_eq!(deps[0].source, Source::GithubTags);
-    assert_eq!(deps[0].package, "example/tool");
+    // mise lists only `HEAD` for a Git URL, so the lookup reports that rather
+    // than reading the repository's tags itself.
+    assert_eq!(deps[0].source, Source::Mise);
+    assert_eq!(deps[0].package, "cargo:https://github.com/example/tool");
     assert_eq!(deps[0].current, "v0.3.1");
     assert_eq!(deps[0].resolved.as_deref(), Some("v0.3.1"));
 }

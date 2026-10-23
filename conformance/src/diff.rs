@@ -398,7 +398,7 @@ impl Rules {
                     })
                 }),
                 Predicate::FloatingPin => dependency.is_some_and(|left| {
-                    left.package == patchula.package
+                    (left.package == patchula.package || mise_backend_identity(left, patchula))
                         && left.current.digest == patchula.current.digest
                         && left.current.value.as_deref() == Some("latest")
                         && left.updates.is_empty()
@@ -1417,32 +1417,21 @@ fn declared_go_floor(left: &Dependency, right: &Dependency, difference: &Differe
     })
 }
 
-fn mise_backend_identity(left: &Dependency, right: &Dependency) -> bool {
-    right.manager == "mise"
-        && left.current == right.current
-        && left.current.value.as_deref() == Some("latest")
-        && left.updates.is_empty()
-        && right.updates.is_empty()
-        && left
-            .metadata
-            .as_ref()
-            .is_some_and(|m| m.source == "github-releases" && m.kinds == ["tools"])
-        && right.metadata.as_ref().is_some_and(|m| {
-            m.kinds == ["tool"]
-                && match right.name.as_str() {
-                    "prettier" => {
-                        left.package == "prettier/prettier"
-                            && right.package == "prettier"
-                            && m.source == "npm"
-                    }
-                    "bitwarden-secrets-manager" => {
-                        left.package == "bitwarden/sdk"
-                            && right.package == "bitwarden/sdk-sm"
-                            && m.source == "github-releases"
-                    }
-                    _ => false,
-                }
+/// The Count names a tool that mise lists by its own name, with the source
+/// `mise`, where Renovate names the package of the backend it picked.
+fn mise_tool_identity(dep: &Dependency) -> bool {
+    dep.package == dep.name
+        && dep.metadata.as_ref().is_some_and(|m| {
+            m.source == "mise"
+                && matches!(m.kinds.as_slice(), [kind] if kind == "tool" || kind == "toolchain")
         })
+}
+
+fn mise_backend_identity(left: &Dependency, right: &Dependency) -> bool {
+    mise_tool_identity(right)
+        && left.package != right.package
+        && left.current.value == right.current.value
+        && left.current.digest == right.current.digest
 }
 
 fn action_alias_precision(left: &Dependency, right: &Dependency, difference: &Difference) -> bool {

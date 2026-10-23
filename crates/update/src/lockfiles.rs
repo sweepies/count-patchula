@@ -16,8 +16,8 @@ use crate::{
 };
 use patchula_config::{Config, Manager, NpmEngine, Source};
 use patchula_manager::Dependency;
+use patchula_process::{Executor, SystemExecutor};
 use patchula_report::{ActionStatus, BranchAction, FileAction, Repository, Update};
-pub use process::{CommandSpec, Executor, SystemExecutor};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -470,6 +470,20 @@ impl Runner {
     pub fn with_executor(mut self, executor: Arc<dyn Executor>) -> Self {
         self.executor = executor;
         self
+    }
+    /// Version lookups through the pinned mise, in this runner's tool store and
+    /// through its executor.
+    pub fn mise_lookup(&self) -> Arc<patchula_mise::Lookup> {
+        let defaults = tool_defaults().expect("embedded tool defaults parse");
+        let version = defaults["tools"]["mise"]
+            .as_str()
+            .expect("embedded defaults pin mise");
+        Arc::new(patchula_mise::Lookup::new(
+            self.executor.clone(),
+            self.mise.clone(),
+            self.mise_data.clone(),
+            version.into(),
+        ))
     }
     pub fn with_credentials(mut self, credentials: Arc<dyn patchula_github::Credentials>) -> Self {
         self.credentials = Some(credentials);

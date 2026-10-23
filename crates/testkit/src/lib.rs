@@ -1,7 +1,9 @@
 //! Opt-in recording, fail-closed offline replay, and secret scanning for tests.
 #![forbid(unsafe_code)]
 
+mod mise;
 mod redact;
+pub use mise::{Call, MiseFixture, MiseRecorder, MiseReplay, Outcome, Run};
 pub use redact::Redactor;
 
 use patchula_http::{Error, Exchange, Response, Transport};
@@ -328,10 +330,19 @@ pub fn check_directory(path: &Path, redactor: &Redactor) -> Result<usize, Error>
             redactor
                 .check(&bytes)
                 .map_err(|_| failure(format!("possible secret in cassette {}", path.display())))?;
-            let cassette: Cassette = serde_json::from_slice(&bytes)
-                .map_err(|_| failure(format!("invalid cassette {}", path.display())))?;
-            if cassette.schema_version != 1 {
-                return Err(failure("unsupported cassette schema version"));
+            if path
+                .parent()
+                .and_then(Path::file_name)
+                .is_some_and(|dir| dir == "mise")
+            {
+                mise::parse(&bytes)
+                    .map_err(|_| failure(format!("invalid mise fixture {}", path.display())))?;
+            } else {
+                let cassette: Cassette = serde_json::from_slice(&bytes)
+                    .map_err(|_| failure(format!("invalid cassette {}", path.display())))?;
+                if cassette.schema_version != 1 {
+                    return Err(failure("unsupported cassette schema version"));
+                }
             }
             count += 1;
         }

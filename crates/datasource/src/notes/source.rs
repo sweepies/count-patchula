@@ -240,6 +240,35 @@ pub(super) fn vanity(html: &str, package: &str) -> Option<(String, Repository)> 
 }
 
 impl Client {
+    /// The upstream of a mise tool. Core tools have a fixed one. Otherwise the
+    /// release URL mise lists for the version names it. Failing that, the
+    /// project's registry names it when mise's backend for the tool is npm,
+    /// PyPI or crates.io.
+    async fn mise_source(&self, tool: &str, version: &str) -> Result<Option<Repository>> {
+        if let Some(source) = mapped("mise-core", tool.trim_start_matches("core:")) {
+            return Ok(Some(source));
+        }
+        let releases = self.mise_releases(tool, None).await?;
+        let url = |release: &patchula_mise::Release| release.release_url.clone();
+        if let Some(source) = releases
+            .iter()
+            .find(|release| release.version == version)
+            .and_then(url)
+            .or_else(|| releases.iter().rev().find_map(url))
+            .and_then(|url| Repository::from_url(&url))
+        {
+            return Ok(Some(source));
+        }
+        let token = self.mise_token().await;
+        let backend = self.mise_lookup()?.backend(tool, token.as_deref()).await?;
+        let (source, package) = match backend.split_once(':') {
+            Some(("npm", package)) => (Source::Npm, package),
+            Some(("pypi", package)) => (Source::Pypi, package),
+            Some(("cargo", package)) if !package.contains('/') => (Source::Crates, package),
+            _ => return Ok(None),
+        };
+        Box::pin(self.source_repository(source, package, version)).await
+    }
     /// Only called while rendering changed PRs. Registry metadata uses independent
     /// compact representations and the batch's conditional public HTTP cache.
     pub async fn source_repository(
@@ -260,18 +289,7 @@ impl Client {
                     "https://github.com/{package}"
                 )));
             }
-            Source::Mise => {
-                if let Some(source) = mapped("mise-core", package.trim_start_matches("core:")) {
-                    return Ok(Some(source));
-                }
-                let Some(r) = patchula_mise::resolve(package) else {
-                    return Ok(None);
-                };
-                if r.source == Source::Mise {
-                    return Ok(None);
-                }
-                return Box::pin(self.source_repository(r.source, &r.package, version)).await;
-            }
+            Source::Mise => return self.mise_source(package, version).await,
             Source::Go => {
                 if package.starts_with("github.com/") {
                     let mut repository = Repository::from_url(&format!("https://{package}"));

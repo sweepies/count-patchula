@@ -75,15 +75,10 @@ async fn setup_node_uses_node_lts_membership_without_replacing_github_release_da
 }
 
 #[tokio::test]
-async fn core_node_and_pypi_use_real_metadata_shapes_and_fresh_bodies() {
+async fn pypi_uses_real_metadata_shapes_and_fresh_bodies() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("mise.json");
     let interactions = [
-        ("https://nodejs.org/dist/index.json", json!([
-            {"version":"v24.2.0","date":"2026-10-14","lts":false},
-            {"version":"v24.1.0","date":"2026-10-01","lts":"Example"},
-            {"version":"v22.9.0","date":"2026-10-02","lts":"Previous"}
-        ])),
         ("https://pypi.org/pypi/spec-cli/json", json!({"releases":{
             "1.0.0":[{"upload_time_iso_8601":"2026-10-01T09:00:00Z","yanked":false}],
             "1.1.0":[{"upload_time_iso_8601":"2026-10-14T11:00:00Z","yanked":true}, {"upload_time_iso_8601":"2026-10-14T10:00:00Z","yanked":true}],
@@ -93,7 +88,16 @@ async fn core_node_and_pypi_use_real_metadata_shapes_and_fresh_bodies() {
         request: RecordedRequest { method: "GET".into(), url: url.into(), headers: BTreeMap::from([("accept".into(), vec!["application/json".into()])]), body: Body::Text(String::new()) },
         response: RecordedResponse { status: 200, headers: BTreeMap::from([("etag".into(), vec!["metadata".into()]), ("cache-control".into(), vec!["public,max-age=300".into()])]), body: Body::Json(value) },
     }).collect();
-    patchula_testkit::save(&path, &Cassette { schema_version:1, provenance:"Independently simulated from Node distribution index and PyPI JSON API documentation".into(), interactions }, &Default::default()).unwrap();
+    patchula_testkit::save(
+        &path,
+        &Cassette {
+            schema_version: 1,
+            provenance: "Independently simulated from PyPI JSON API documentation".into(),
+            interactions,
+        },
+        &patchula_testkit::Redactor::default(),
+    )
+    .unwrap();
     let replay = Arc::new(Replay::open(&path, Default::default()).unwrap());
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await
@@ -107,14 +111,6 @@ async fn core_node_and_pypi_use_real_metadata_shapes_and_fresh_bodies() {
     .unwrap();
     let http = Cached::new(cache.clone(), replay.clone(), 4).unwrap();
     let client = Client::new(github, http.clone(), cache).with_versions_host(false);
-    let node = client.lookup(Source::Mise, "node").await.unwrap();
-    assert_eq!(node.versions[0].version, "24.2.0");
-    assert_eq!(node.dist_tags["lts"], "24.1.0");
-    assert_eq!(
-        node.versions[0].published_at.as_deref(),
-        Some("2026-10-14T00:00:00Z")
-    );
-    client.lookup(Source::Mise, "core:node").await.unwrap();
     let pypi = client.lookup(Source::Pypi, "spec-cli").await.unwrap();
     assert_eq!(pypi.versions.len(), 2);
     assert!(pypi.versions[0].yanked);
@@ -122,15 +118,8 @@ async fn core_node_and_pypi_use_real_metadata_shapes_and_fresh_bodies() {
         pypi.versions[0].published_at.as_deref(),
         Some("2026-10-14T10:00:00Z")
     );
-    assert_eq!(http.stats().requests, 2);
-    assert_eq!(http.stats().cache_hits, 1);
+    assert_eq!(http.stats().requests, 1);
     replay.assert_finished().unwrap();
-    assert!(
-        client
-            .lookup(Source::Mise, "unknown-spec-tool")
-            .await
-            .is_err()
-    );
     assert!(client.lookup(Source::Pypi, "../unsafe").await.is_err());
     let runners = client
         .lookup(Source::GithubRunners, "ubuntu-arm")

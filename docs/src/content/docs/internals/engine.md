@@ -21,8 +21,7 @@ dynamic import targets require future discovery support. `config check` and
 local overrides use the same supplied-module evaluator, and nested object
 amendments retain class defaults in either path (SWE-105).
 An unchanged commit/config fingerprint reuses extraction without tree/blob calls.
-The extraction fingerprint includes the mise registry snapshot; its namespace
-changes when extraction semantics change. Warm scans conditionally revalidate
+The extraction fingerprint's namespace changes when extraction semantics change. Warm scans conditionally revalidate
 metadata and the hinted branch in parallel; if the default branch changed, they
 retry only the new branch. Both paths always check the current default branch.
 Catalog and digest/ref requests are deduplicated across the whole batch. Opaque
@@ -103,7 +102,7 @@ Registry max-age is honored rather than replaced with an arbitrary local TTL.
 
 `Engine::run` shares lookup, discovery, configuration and policy with `lookup`.
 The extraction cache now retains original file contents, Git blob SHAs, modes and
-the full path inventory. Its v7 namespace invalidates older extraction rows.
+the full path inventory. Its v8 namespace invalidates older extraction rows.
 Files needed only for lockfile detection need not be downloaded.
 
 The pure updater derives branches and scalar edits from proposals and extracted

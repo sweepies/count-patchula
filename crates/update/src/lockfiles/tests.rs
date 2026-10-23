@@ -1,5 +1,6 @@
 use super::*;
 use patchula_http::{Exchange, Transport};
+use patchula_process::CommandSpec;
 use std::{future::Future, pin::Pin, sync::Mutex};
 
 struct Fixture {

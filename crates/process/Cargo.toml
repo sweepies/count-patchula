@@ -1,0 +1,15 @@
+[package]
+name = "patchula-process"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+base64 = "0.22"
+rustix = { version = "1", features = ["process"] }
+tokio = { workspace = true, features = ["process", "io-util"] }

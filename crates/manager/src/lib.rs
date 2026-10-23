@@ -6,8 +6,6 @@ mod edit;
 pub use actions::replacement as action_replacement;
 pub use actions::runner_replacement;
 pub use edit::{Edit, apply, edits};
-/// Included in persistent extraction fingerprints because backend mappings can change.
-pub const MISE_REGISTRY: &str = patchula_mise::REGISTRY_JSON;
 mod cargo;
 mod composer;
 mod custom;

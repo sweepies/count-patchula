@@ -161,8 +161,8 @@ behavior has no comparison exemption: stale targets still need a live rerun.
 ### mise-versions catalogs {#mise-versions-catalogs}
 
 - **Renovate:** Upstream API catalogs
-- **Count Patchula:** Public mise-versions release/tag lists and tool metadata, conditional by ETag; `useVersionsHost = false` restores direct sources
-- **Why:** Fewer GitHub API reads; authenticated non-registry repos route directly, transient mirror errors may fall back, while 403/404/empty answers do not. Tool first-seen dates retain mise's provenance; tag commit dates are not release-age evidence. Partial index subsets are never cached as full catalogs.
+- **Count Patchula:** Public mise-versions release/tag lists for plain GitHub lookups, conditional by ETag; mise tools are listed by mise, which reads the mirror itself; `useVersionsHost = false` restores direct sources for both
+- **Why:** Fewer GitHub API reads; authenticated non-registry repos route directly, transient mirror errors may fall back, while 403/404/empty answers do not. Tag commit dates are not release-age evidence. The Count no longer reads the mirror's tool index or tool files: mise does that when it lists a tool, with its own fallbacks.
 
 ### Release-age catalog reuse {#catalog-reuse}
 
@@ -274,16 +274,57 @@ visible. This explains the three reviewed rows without a generic Go exemption.
 ### mise backends {#mise-backends}
 
 - **Renovate:** Can select older or different backend identities
-- **Count Patchula:** Follow the first supported backend in the published mise registry snapshot
-- **Why:** Use the tool's current published backend; never equate distinct package identities
+- **Count Patchula:** Ask the pinned mise to list each tool (`mise ls-remote --json --prerelease`), in a sandbox, and report the tool's own name as its package with the source `mise`
+- **Why:** Every backend mise lists works, with mise's own registry and version rules, without the Count keeping a copy of them
 
-The published registry selects bitwarden-secrets-manager from bitwarden/sdk-sm
-rather than bitwarden/sdk, and prettier from npm rather than prettier/prettier.
-The identity remains distinct in both reports. The narrow rule classifies only
-those two observed migrations with matching `latest` current fields, no
-proposals, and the exact old/new source and tool-kind metadata. Other backend
-changes and all target changes remain visible; this is not package equivalence.
-Explicit backend selectors can choose another source.
+The Count used to read a snapshot of mise's registry and map the first backend
+he knew to one of his own sources. That left out the forms mise adds first
+(`packslip:` monorepo paths and publisher domains, `go:`, `gem:`, `dotnet:`,
+`spm:`, `conda:`, `http:`, `s3:` and more) and could drift from mise. Now the
+lookup is mise's, so the report differs from Renovate's for every mise tool:
+the package is `prettier`, `bitwarden-secrets-manager` or `jq` rather than the
+backend's own repository or registry package, and the source is `mise`. The
+comparison rule explains the `package` field only: a dependency listed by mise
+whose package is its own name, of kind tool or toolchain, with the same current
+value and digest as Renovate's. Proposals and targets are compared separately
+and stay visible. This is not package equivalence.
+
+- Branches for mise tools are named after the tool: `patchula/jq-1.x`, not
+  `patchula/jqlang-jq-1.x`. A pull request opened under the old name is no
+  longer an update he plans, so he treats it as any other update that is no
+  longer needed (see [pull requests](/guide/pull-requests/)) and opens the new
+  one.
+- The snapshot stays for one thing only: telling which GitHub repositories the
+  mise-versions mirror lists, for plain GitHub lookups.
+- mise's listing carries no tag prefixes, so the Count's version patterns for
+  `jq-1.7`, `bun-v1.1`, `go1.22` and `v3_4_11` are gone with the table of
+  tools they served.
+- A tool installed from a Git ref (`cargo:https://github.com/owner/repo`) lists
+  only `HEAD`, so the lookup reports that there are no releases. The Count
+  used to read that repository's GitHub tags for it, including for `tag:` pins.
+- Tool options (in brackets, or in a table) are not passed to mise. A
+  `github:` tool with `version_prefix` or `tag_regex` lists the way mise lists
+  it without them. The Count never read these options either. Some options
+  redirect a backend to another host (`api_url`, for one) and the lookup
+  carries the GitHub token, so passing them needs a list of safe options first.
+- Release notes find the repository from the release URL in mise's listing,
+  from a table for core tools, or from npm, PyPI and crates.io when mise picks
+  one of them as the backend. A tool with none of these, such as a `go:` tool
+  or the `java` and `dotnet` core tools, has no release notes.
+
+### mise plugins are never run {#mise-plugins}
+
+- **Renovate:** No equivalence is claimed
+- **Count Patchula:** Refuse `asdf:` and `vfox:` tools, and registry names that only have a plugin backend, with a lookup warning
+- **Why:** An asdf plugin is shell scripts and a vfox plugin is Lua, both cloned from a repository the dependency file names. Running them would run code from the repository the Count is reading, on the machine that holds his token
+
+Names for the two backends are refused before mise starts. mise itself is told
+not to use them (`MISE_DISABLE_BACKENDS=asdf,vfox`), so a registry name such as
+`aapt2`, whose only backend is a vfox plugin, fails with mise's error, and a
+name that lists a plugin first and another backend later uses the other
+backend. Names with bracketed tool options, a leading `-` or whitespace are
+refused as well. A backend prefix mise does not know is not checked by the
+Count, so a backend mise adds later works; mise fails the lookup for one it lacks.
 
 ## Which updates are proposed
 

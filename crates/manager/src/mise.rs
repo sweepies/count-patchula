@@ -77,11 +77,6 @@ fn add(
         return;
     }
     let version = version.strip_prefix("tag:").unwrap_or(version);
-    let resolution = patchula_mise::resolve(name);
-    let (source, package, extract) = resolution.map_or_else(
-        || (Source::Mise, name.into(), None),
-        |r| (r.source, r.package, r.extract),
-    );
     // Mise versions are values, unlike npm ranges. A numeric extracted value
     // is already known even before querying a source; floating selectors are not.
     let resolved = (version
@@ -101,13 +96,13 @@ fn add(
         file: path.into(),
         location: Location::new(text, start, end, format!("/tools/{name}")),
         name: name.into(),
-        package,
+        package: name.into(),
         kind: DependencyKind::Tool,
         current: version.into(),
         resolved,
         digest: None,
-        source,
+        source: Source::Mise,
         scheme: Scheme::Loose,
-        extract,
+        extract: None,
     });
 }

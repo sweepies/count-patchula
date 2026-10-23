@@ -182,11 +182,16 @@ fn node_lts_is_explicit_uses_catalog_evidence_and_respects_ordered_rules() {
             .contains("no LTS channel evidence")
     );
     cfg.rules.last_mut().unwrap().apply.channel = Some(ReleaseChannel::Stable);
+    // A catalog without LTS evidence, as when the `lts` listing failed, still
+    // serves the stable channel.
+    let stable = Evaluator::new(&cfg)
+        .unwrap()
+        .propose(&dep, &versions)
+        .unwrap();
     assert!(
-        Evaluator::new(&cfg)
-            .unwrap()
-            .propose(&dep, &versions)
-            .is_ok()
+        stable
+            .iter()
+            .any(|p| p.new_version.as_deref() == Some("26.1.0"))
     );
     cfg.defaults.channel = ReleaseChannel::Lts;
     cfg.rules.clear();
@@ -268,7 +273,7 @@ fn action_digest_targets_resolve_the_new_commit_without_expanding_ref_precision(
 }
 
 #[test]
-fn prefixed_mise_product_releases_pin_latest_without_sdk_tags() {
+fn mise_latest_pins_the_newest_listed_version() {
     let cfg = config("benchmark-public");
     let dependencies = patchula_manager::Scanner::new(&cfg)
         .unwrap()
@@ -280,12 +285,13 @@ fn prefixed_mise_product_releases_pin_latest_without_sdk_tags() {
         .dependencies;
     let eval = Evaluator::new(&cfg).unwrap();
     for dep in dependencies {
-        let (tags, target) = if dep.name == "jq" {
-            (vec!["jq-1.8.2", "jq-1.8.1"], "1.8.2")
+        // mise lists versions without their tag prefixes (`jq-1.8.2`, `bws-v2.1.0`).
+        let (versions, target) = if dep.name == "jq" {
+            (vec!["1.8.1", "1.8.2"], "1.8.2")
         } else {
-            (vec!["python-v9.0.0", "bws-v2.1.0", "rust-v9.0.0"], "2.1.0")
+            (vec!["2.0.0", "2.1.0"], "2.1.0")
         };
-        let proposals = eval.propose(&dep, &catalog(&tags)).unwrap();
+        let proposals = eval.propose(&dep, &catalog(&versions)).unwrap();
         assert_eq!(proposals.len(), 1);
         assert_eq!(proposals[0].update_type, "pin");
         assert_eq!(proposals[0].new_version.as_deref(), Some(target));
@@ -756,7 +762,7 @@ fn runner_latest_is_floating_and_versioned_images_never_get_digests() {
 }
 
 #[test]
-fn mise_current_versions_follow_backend_tag_identity_without_proposal_filters() {
+fn mise_current_versions_resolve_from_the_listing_without_proposal_filters() {
     let cfg = config("renovate-migration");
     let deps = patchula_manager::Scanner::new(&cfg)
         .unwrap()
@@ -766,13 +772,13 @@ fn mise_current_versions_follow_backend_tag_identity_without_proposal_filters() 
         )]))
         .unwrap()
         .dependencies;
-    for (name, source_version, expected) in [
-        ("age", "v1.2.3", "1.2.3"),
-        ("fnox", "v2.3.4", "v2.3.4"),
-        ("bun", "bun-v3.4.5", "3.4.5"),
+    for (name, listed, expected) in [
+        ("age", "1.2.3", "1.2.3"),
+        ("fnox", "2.3.4", "2.3.4"),
+        ("bun", "3.4.5", "3.4.5"),
     ] {
         let dep = deps.iter().find(|d| d.name == name).unwrap();
-        let mut catalog = catalog(&[source_version]);
+        let mut catalog = catalog(&[listed]);
         catalog.versions[0].published_at = Some("2099-01-01T00:00:00Z".into());
         catalog.versions[0].yanked = true;
         assert_eq!(
@@ -1071,4 +1077,61 @@ fn reference_data_is_fast_tracked_by_the_built_in_rule() {
     let result = eval.evaluate_at(&requests, &versions, now).unwrap();
     assert!(result.updates.is_empty());
     assert_eq!(result.held_back.len(), 1);
+}
+
+/// Versions as `mise ls-remote --json --prerelease` lists prettier: the
+/// prereleases are in the catalog and the policy decides who is offered one.
+fn prettier_tool(current: &str) -> Dependency {
+    let mut dep = dependency("npm:prettier");
+    dep.manager = Manager::Mise;
+    dep.source = Source::Mise;
+    dep.scheme = Scheme::Loose;
+    dep.kind = DependencyKind::Tool;
+    dep.current = current.into();
+    dep.resolved = Some(current.into());
+    dep
+}
+const PRETTIER: &[&str] = &[
+    "2.8.8",
+    "3.0.0-alpha.0",
+    "3.0.0-alpha.1",
+    "3.0.0-alpha.10",
+    "3.0.0-alpha.11",
+    "3.0.0-beta.1",
+    "3.0.0",
+];
+
+#[test]
+fn a_stable_mise_pin_is_not_offered_a_prerelease_from_the_listing() {
+    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let proposals = eval
+        .propose(
+            &prettier_tool("2.8.8"),
+            &catalog(&PRETTIER[..PRETTIER.len() - 1]),
+        )
+        .unwrap();
+    assert!(proposals.is_empty(), "{proposals:?}");
+    let proposals = eval
+        .propose(&prettier_tool("2.8.8"), &catalog(PRETTIER))
+        .unwrap();
+    assert!(!proposals.is_empty());
+    assert!(
+        proposals
+            .iter()
+            .all(|p| p.new_version.as_deref() == Some("3.0.0")),
+        "{proposals:?}"
+    );
+}
+
+#[test]
+fn a_prerelease_mise_pin_is_offered_a_newer_prerelease() {
+    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let proposals = eval
+        .propose(
+            &prettier_tool("3.0.0-alpha.1"),
+            &catalog(&PRETTIER[..PRETTIER.len() - 1]),
+        )
+        .unwrap();
+    assert_eq!(proposals.len(), 1, "{proposals:?}");
+    assert_eq!(proposals[0].new_version.as_deref(), Some("3.0.0-beta.1"));
 }

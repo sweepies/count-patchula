@@ -67,12 +67,34 @@ not editable yet and report an error.
 
 ## mise
 
-Strings, arrays, version tables and `.tool-versions`. Short names resolve
-through mise's published registry to their real source (aqua, GitHub, npm,
-cargo, PyPI, packslip and the core tools), and unknown aliases produce a lookup
-warning. Packslip tools on GitHub can be written `packslip:owner/repo` or
-`packslip:github.com/owner/repo`.
-Plugins are never run. An existing `mise.lock` is regenerated with the update.
+Strings, arrays, version tables and `.tool-versions`. The Count asks mise
+itself for each tool's versions (`mise ls-remote --json`), so a tool is found
+wherever mise finds it: a short registry name such as `jq`, or an identifier for
+any backend that reads release metadata (`aqua`, `github`, `gitlab`,
+`forgejo`, `packslip`, `npm`, `pypi`, `cargo`, `go`, `gem`, `dotnet`,
+`conda`, `spm`, `http`, `s3` and `core`). That includes every form of
+packslip source: `packslip:owner/repo`, `packslip:github.com/owner/repo`, a
+tool inside a monorepo (`packslip:github.com/owner/repo/tools/name`) and a
+tool on a publisher's domain. An existing `mise.lock` is regenerated with the
+update.
+
+mise runs in a sandbox: from an empty directory, with none of your mise
+configuration and no hooks, using the Count's pinned mise from his own tool
+store. It receives the GitHub token he runs with and nothing else from your
+environment. See [how lookups run](/guide/sources/#mise-lookups).
+
+Some tools are not looked up, each with a lookup warning:
+
+- `asdf:` and `vfox:` tools, and registry names whose only backend is an asdf
+  or vfox plugin, because those backends run plugin code. A short name that
+  lists a plugin first and another backend after it uses the other backend.
+- Names with tool options in brackets, such as `pypi:black[extras=jupyter]`.
+  Options can point a backend at another host, so the Count passes none, and
+  mise's options in a table (`{ version = "1", asset_pattern = "..." }`) are
+  not read either.
+- Backends that install from a Git ref rather than from releases, such as
+  `cargo:https://github.com/owner/repo`: mise lists only `HEAD` for them, so
+  there is no version to update to, including with a `tag:` pin.
 
 ## Cargo, Go and Terraform
 

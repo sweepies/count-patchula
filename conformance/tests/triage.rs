@@ -174,15 +174,11 @@ fn declared_go_floor_requires_provenance_and_limits_targets_to_observed_compiler
 }
 
 #[test]
-fn mise_migrations_keep_distinct_identities_and_reject_other_sources_or_targets() {
-    for (name, old, new, source) in [
-        ("prettier", "prettier/prettier", "prettier", "npm"),
-        (
-            "bitwarden-secrets-manager",
-            "bitwarden/sdk",
-            "bitwarden/sdk-sm",
-            "github-releases",
-        ),
+fn mise_tools_are_named_by_mise_and_only_their_package_is_explained() {
+    for (name, old) in [
+        ("prettier", "prettier/prettier"),
+        ("bitwarden-secrets-manager", "bitwarden/sdk"),
+        ("jq", "jqlang/jq"),
     ] {
         let mut tool = dep(name, "github-releases", "latest");
         tool["packageName"] = json!(old);
@@ -191,8 +187,8 @@ fn mise_migrations_keep_distinct_identities_and_reject_other_sources_or_targets(
         let baseline = snapshot(json!({"mise":[{"packageFile":"mise.toml","deps":[tool]}]}));
         let mut actual = baseline.clone();
         let d = &mut actual.repositories[0].package_files[0].dependencies[0];
-        d.package = new.into();
-        d.metadata.as_mut().unwrap().source = source.into();
+        d.package = name.into();
+        d.metadata.as_mut().unwrap().source = "mise".into();
         d.metadata.as_mut().unwrap().kinds = vec!["tool".into()];
         let triage = compare(&baseline, &actual, &rules()).unwrap();
         assert_eq!(triage.differences.len(), 1);
@@ -204,18 +200,48 @@ fn mise_migrations_keep_distinct_identities_and_reject_other_sources_or_targets(
             triage.differences[0].renovate,
             triage.differences[0].patchula
         );
+        // A proposal is a separate difference and stays visible.
         actual.repositories[0].package_files[0].dependencies[0].updates =
             vec![update("2.0.0", "pin")];
+        let triage = compare(&baseline, &actual, &rules()).unwrap();
         assert!(
-            compare(&baseline, &actual, &rules())
-                .unwrap()
+            triage
                 .differences
                 .iter()
                 .find(|d| d.field == "package")
                 .unwrap()
                 .departure
-                .is_none()
+                .is_some()
         );
+        assert!(
+            triage
+                .differences
+                .iter()
+                .filter(|d| d.field.starts_with("updates"))
+                .all(|d| d.departure.is_none()
+                    || d.departure.as_ref().unwrap().id != "mise-backends")
+        );
+        // Another source, a package that is not the tool's name, or another
+        // kind of dependency is not the departure.
+        for change in [
+            |d: &mut patchula_report::Dependency| {
+                d.metadata.as_mut().unwrap().source = "npm".into()
+            },
+            |d: &mut patchula_report::Dependency| d.package = format!("other/{}", d.package),
+            |d: &mut patchula_report::Dependency| {
+                d.metadata.as_mut().unwrap().kinds = vec!["go-directive".into()]
+            },
+        ] {
+            let mut other = baseline.clone();
+            let d = &mut other.repositories[0].package_files[0].dependencies[0];
+            d.package = name.into();
+            d.metadata.as_mut().unwrap().source = "mise".into();
+            d.metadata.as_mut().unwrap().kinds = vec!["tool".into()];
+            change(d);
+            let triage = compare(&baseline, &other, &rules()).unwrap();
+            let found = triage.differences.iter().find(|d| d.field == "package");
+            assert!(found.unwrap().departure.is_none());
+        }
     }
 }
 
@@ -562,7 +588,7 @@ fn digest_rate_limit_attribution_does_not_excuse_missing_major_policy() {
 }
 
 #[test]
-fn mise_cargo_git_url_normalization_retains_other_sources_and_repository_changes() {
+fn mise_cargo_git_urls_are_named_by_mise_and_other_identities_stay_visible() {
     let mut d = dep(
         "cargo:https://github.com/example/tool",
         "git-tags",
@@ -572,21 +598,23 @@ fn mise_cargo_git_url_normalization_retains_other_sources_and_repository_changes
     let baseline = snapshot(json!({"mise":[{"packageFile":"mise.toml","deps":[d]}]}));
     let mut actual = baseline.clone();
     let d = &mut actual.repositories[0].package_files[0].dependencies[0];
-    d.package = "example/tool".into();
-    d.metadata.as_mut().unwrap().source = "github-tags".into();
-    assert!(
-        compare(&baseline, &actual, &rules())
-            .unwrap()
-            .differences
-            .is_empty()
+    d.package = "cargo:https://github.com/example/tool".into();
+    d.metadata.as_mut().unwrap().source = "mise".into();
+    d.metadata.as_mut().unwrap().kinds = vec!["tool".into()];
+    let triage = compare(&baseline, &actual, &rules()).unwrap();
+    assert_eq!(triage.differences.len(), 1);
+    assert_eq!(
+        triage.differences[0].departure.as_ref().unwrap().id,
+        "mise-backends"
     );
+    // A package that is not the dependency's name is not mise's own identity.
     actual.repositories[0].package_files[0].dependencies[0].package = "example/other".into();
     assert!(
         compare(&baseline, &actual, &rules())
             .unwrap()
             .differences
             .iter()
-            .any(|d| d.field == "package")
+            .any(|d| d.field == "package" && d.departure.is_none())
     );
 }
 

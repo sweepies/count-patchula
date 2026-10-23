@@ -1641,10 +1641,10 @@ async fn human_authored_dashboard_checkboxes_never_request_branch_work() {
     );
     assert_eq!(fake.issues.lock().unwrap().len(), 2);
 }
-impl patchula_update::lockfiles::Executor for FailTools {
+impl patchula_process::Executor for FailTools {
     fn run(
         &self,
-        _: patchula_update::lockfiles::CommandSpec,
+        _: patchula_process::CommandSpec,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + Send + '_>>
     {
         Box::pin(async { Err("fixture tool unavailable".into()) })

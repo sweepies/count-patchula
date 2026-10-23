@@ -365,23 +365,18 @@ pub(super) fn node_version(path: &str, text: &str, manager: Manager) -> Vec<Depe
         return Vec::new();
     }
     let start = text.find(token).expect("token from text") + (token.len() - version.len());
-    let resolution = patchula_mise::resolve("node");
-    let (source, package, extract) = resolution.map_or_else(
-        || (Source::Mise, "node".into(), None),
-        |r| (r.source, r.package, r.extract),
-    );
     vec![Dependency {
         manager,
         file: path.into(),
         location: Location::new(text, start, start + version.len(), "/node".into()),
         name: "node".into(),
-        package,
+        package: "node".into(),
         kind: DependencyKind::Toolchain,
         current: version.into(),
         resolved: Some(version.into()),
         digest: None,
-        source,
+        source: Source::Mise,
         scheme: Scheme::Loose,
-        extract,
+        extract: None,
     }]
 }

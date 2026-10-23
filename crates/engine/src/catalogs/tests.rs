@@ -70,7 +70,7 @@ async fn read(engine: &Engine, wait: u32, now: DateTime<Utc>, force: bool) -> (C
             } else {
                 BTreeSet::new()
             },
-            &engine.sources.catalog_batch(),
+            &engine.sources,
             now,
         )
         .await
