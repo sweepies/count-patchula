@@ -274,7 +274,7 @@ visible. This explains the three reviewed rows without a generic Go exemption.
 ### mise backends {#mise-backends}
 
 - **Renovate:** Can select older or different backend identities
-- **Count Patchula:** Ask the pinned mise to list each tool (`mise ls-remote --json`), in a sandbox, and report the tool's own name as its package with the source `mise`
+- **Count Patchula:** Ask the pinned mise to list each tool (`mise ls-remote --json --prerelease`), in a sandbox, and report the tool's own name as its package with the source `mise`
 - **Why:** Every backend mise lists works, with mise's own registry and version rules, without the Count keeping a copy of them
 
 The Count used to read a snapshot of mise's registry and map the first backend
@@ -299,14 +299,14 @@ and stay visible. This is not package equivalence.
 - mise's listing carries no tag prefixes, so the Count's version patterns for
   `jq-1.7`, `bun-v1.1`, `go1.22` and `v3_4_11` are gone with the table of
   tools they served.
-- mise's default listing leaves out the prereleases a backend reports (npm
-  does). A tool pinned to such a prerelease is not offered a later one.
 - A tool installed from a Git ref (`cargo:https://github.com/owner/repo`) lists
   only `HEAD`, so the lookup reports that there are no releases. The Count
   used to read that repository's GitHub tags for it, including for `tag:` pins.
 - Tool options (in brackets, or in a table) are not passed to mise. A
   `github:` tool with `version_prefix` or `tag_regex` lists the way mise lists
-  it without them.
+  it without them. The Count never read these options either. Some options
+  redirect a backend to another host (`api_url`, for one) and the lookup
+  carries the GitHub token, so passing them needs a list of safe options first.
 - Release notes find the repository from the release URL in mise's listing,
   from a table for core tools, or from npm, PyPI and crates.io when mise picks
   one of them as the backend. A tool with none of these, such as a `go:` tool
@@ -322,8 +322,9 @@ Names for the two backends are refused before mise starts. mise itself is told
 not to use them (`MISE_DISABLE_BACKENDS=asdf,vfox`), so a registry name such as
 `aapt2`, whose only backend is a vfox plugin, fails with mise's error, and a
 name that lists a plugin first and another backend later uses the other
-backend. Names with bracketed tool options, a leading `-`, whitespace or
-an unknown backend prefix are refused as well.
+backend. Names with bracketed tool options, a leading `-` or whitespace are
+refused as well. A backend prefix mise does not know is not checked by the
+Count, so a backend mise adds later works; mise fails the lookup for one it lacks.
 
 ## Which updates are proposed
 

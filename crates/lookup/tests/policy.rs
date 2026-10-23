@@ -1073,3 +1073,60 @@ fn reference_data_is_fast_tracked_by_the_built_in_rule() {
     assert!(result.updates.is_empty());
     assert_eq!(result.held_back.len(), 1);
 }
+
+/// Versions as `mise ls-remote --json --prerelease` lists prettier: the
+/// prereleases are in the catalog and the policy decides who is offered one.
+fn prettier_tool(current: &str) -> Dependency {
+    let mut dep = dependency("npm:prettier");
+    dep.manager = Manager::Mise;
+    dep.source = Source::Mise;
+    dep.scheme = Scheme::Loose;
+    dep.kind = DependencyKind::Tool;
+    dep.current = current.into();
+    dep.resolved = Some(current.into());
+    dep
+}
+const PRETTIER: &[&str] = &[
+    "2.8.8",
+    "3.0.0-alpha.0",
+    "3.0.0-alpha.1",
+    "3.0.0-alpha.10",
+    "3.0.0-alpha.11",
+    "3.0.0-beta.1",
+    "3.0.0",
+];
+
+#[test]
+fn a_stable_mise_pin_is_not_offered_a_prerelease_from_the_listing() {
+    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let proposals = eval
+        .propose(
+            &prettier_tool("2.8.8"),
+            &catalog(&PRETTIER[..PRETTIER.len() - 1]),
+        )
+        .unwrap();
+    assert!(proposals.is_empty(), "{proposals:?}");
+    let proposals = eval
+        .propose(&prettier_tool("2.8.8"), &catalog(PRETTIER))
+        .unwrap();
+    assert!(!proposals.is_empty());
+    assert!(
+        proposals
+            .iter()
+            .all(|p| p.new_version.as_deref() == Some("3.0.0")),
+        "{proposals:?}"
+    );
+}
+
+#[test]
+fn a_prerelease_mise_pin_is_offered_a_newer_prerelease() {
+    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let proposals = eval
+        .propose(
+            &prettier_tool("3.0.0-alpha.1"),
+            &catalog(&PRETTIER[..PRETTIER.len() - 1]),
+        )
+        .unwrap();
+    assert_eq!(proposals.len(), 1, "{proposals:?}");
+    assert_eq!(proposals[0].new_version.as_deref(), Some("3.0.0-beta.1"));
+}

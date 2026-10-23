@@ -77,7 +77,13 @@ async fn a_packslip_tool_lists_versions_with_dates_newest_first() {
     assert!(catalog.dist_tags.is_empty());
     assert_eq!(
         replay.lookups(),
-        [["ls-remote", "--json", "--", "packslip:jdx/hk"]]
+        [[
+            "ls-remote",
+            "--json",
+            "--prerelease",
+            "--",
+            "packslip:jdx/hk"
+        ]]
     );
 }
 
@@ -92,6 +98,22 @@ async fn versions_a_backend_cannot_date_stay_undated() {
         .unwrap();
     assert!(catalog.versions.iter().any(|v| v.published_at.is_none()));
     assert!(catalog.versions.iter().any(|v| v.published_at.is_some()));
+}
+
+#[tokio::test]
+async fn prereleases_stay_in_the_catalog_for_the_policy_to_decide() {
+    let source = client(Some(&replay()), memory().await, "a-token");
+    // npm reports `prerelease` for these; the Count does not drop them.
+    let prettier = source.lookup(Source::Mise, "prettier").await.unwrap();
+    for version in ["3.0.0-alpha.0", "3.0.0-alpha.11", "1.11.0-rc.1"] {
+        assert!(
+            prettier.versions.iter().any(|v| v.version == version),
+            "{version}"
+        );
+    }
+    // GitHub-backed tools mark them too, with versions that look stable.
+    let jq = source.lookup(Source::Mise, "jq").await.unwrap();
+    assert!(jq.versions.iter().any(|v| v.version == "1.7rc2"));
 }
 
 #[tokio::test]
@@ -112,10 +134,17 @@ async fn node_takes_its_lts_line_from_mise() {
     assert_eq!(
         replay.lookups(),
         [
-            vec!["ls-remote", "--json", "--", "node"],
-            vec!["ls-remote", "--json", "--", "node", "lts"],
-            vec!["ls-remote", "--json", "--", "core:node"],
-            vec!["ls-remote", "--json", "--", "core:node", "lts"],
+            vec!["ls-remote", "--json", "--prerelease", "--", "node"],
+            vec!["ls-remote", "--json", "--prerelease", "--", "node", "lts"],
+            vec!["ls-remote", "--json", "--prerelease", "--", "core:node"],
+            vec![
+                "ls-remote",
+                "--json",
+                "--prerelease",
+                "--",
+                "core:node",
+                "lts"
+            ],
         ]
     );
 }
@@ -279,7 +308,7 @@ async fn release_notes_follow_an_npm_backend_when_the_listing_has_no_release_url
     assert_eq!(
         replay.lookups(),
         [
-            vec!["ls-remote", "--json", "--", "prettier"],
+            vec!["ls-remote", "--json", "--prerelease", "--", "prettier"],
             vec!["tool", "--json", "--", "prettier"],
         ]
     );

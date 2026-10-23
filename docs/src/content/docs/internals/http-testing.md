@@ -54,7 +54,7 @@ A subprocess has no HTTP cassette. Mise lookups run through
 `patchula_process::Executor`, and tests replace it with
 `patchula_testkit::MiseReplay`, which answers from
 `fixtures/mise/listings.json`: for each command after `mise` (such as
-`ls-remote --json -- jq`), the JSON mise printed or the error it failed with.
+`ls-remote --json --prerelease -- jq`), the JSON mise printed or the error it failed with.
 The replay also keeps every command it was given, with the environment and
 working directory, so tests can assert the sandbox. A lookup the fixture lacks
 fails the test; replay never runs mise.

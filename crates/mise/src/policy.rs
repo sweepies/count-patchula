@@ -1,19 +1,15 @@
 //! Which tool names the Count passes to mise.
 use crate::Error;
 
-/// Backends that list versions from a registry or an API. `mise backends ls`
-/// names these and the asdf and vfox plugin backends.
-const BACKENDS: &[&str] = &[
-    "aqua", "cargo", "conda", "core", "dotnet", "forgejo", "gem", "github", "gitlab", "go", "http",
-    "npm", "packslip", "pypi", "s3", "spinel", "spm", "ubi",
-];
 /// Backends that clone a plugin and run its scripts.
 const PLUGINS: &[&str] = &["asdf", "vfox"];
 
 /// Names the Count lets through to `mise ls-remote`: a registry shorthand or
-/// `backend:tool` for a backend that only reads release metadata. mise would
-/// otherwise take these arguments as flags, bracketed tool options (which can
-/// redirect a backend to another host, token included) or a `tool@version`.
+/// `backend:tool` for any backend mise has, apart from the plugin backends.
+/// An unknown backend is left to mise, which fails the lookup without running
+/// anything. mise would otherwise take these arguments as flags, bracketed tool
+/// options (which can redirect a backend to another host, token included) or a
+/// `tool@version`.
 pub fn check(tool: &str) -> Result<(), Error> {
     let refuse = |why: &str| {
         Err(Error::Refused(format!(
@@ -38,15 +34,12 @@ pub fn check(tool: &str) -> Result<(), Error> {
             bad.escape_default()
         ));
     }
-    if let Some((backend, _)) = tool.split_once(':') {
-        if PLUGINS.contains(&backend) {
-            return refuse(&format!(
-                "the {backend} backend runs plugin code, which the Count never runs"
-            ));
-        }
-        if !BACKENDS.contains(&backend) {
-            return refuse(&format!("`{backend}` is not a backend the Count reads"));
-        }
+    if let Some((backend, _)) = tool.split_once(':')
+        && PLUGINS.contains(&backend)
+    {
+        return refuse(&format!(
+            "the {backend} backend runs plugin code, which the Count never runs"
+        ));
     }
     Ok(())
 }

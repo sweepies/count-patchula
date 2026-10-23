@@ -49,13 +49,16 @@ unchanged head. Webhook invalidation or periodic reconciliation covers that.
 
 ## mise lookups
 
-A `mise` dependency's versions are what `mise ls-remote --json <tool>` prints,
-so every backend mise reads release metadata from works, and the Count keeps
+A `mise` dependency's versions are what `mise ls-remote --json --prerelease
+<tool>` prints, so every backend mise reads release metadata from works, and the Count keeps
 no copy of mise's registry or backend rules for it. mise lists a version, its
 date, whether it is a prerelease and, for GitHub-hosted tools, a release URL.
 Backends leave out what they do not know: Node lists a date only, and some
-`go:` versions have no date and so no release-age wait. mise's default listing
-leaves out the prereleases that a backend reports (npm, for one).
+`go:` versions have no date and so no release-age wait. The listing includes
+the prereleases a backend reports (npm, for one) and the Count leaves the
+choice to his [prerelease rules](/guide/lookup-policy/): a pin on a stable
+version is not offered one, and a pin on a prerelease is offered later ones. mise's
+`prerelease` flag is kept in the listing but does not filter.
 
 The Count runs mise the way he runs the lockfile tools, and more strictly:
 
@@ -68,7 +71,8 @@ The Count runs mise the way he runs the lockfile tools, and more strictly:
   global configuration nor a repository's `mise.toml` can apply. Nothing is
   inherited from the environment the Count runs in.
 - With the backends `asdf` and `vfox` disabled (`MISE_DISABLE_BACKENDS`), and
-  names for them refused before mise starts. Nothing installs during a lookup
+  names for them refused before mise starts. A backend prefix mise does not
+  know fails in mise, which runs no plugin for it. Nothing installs during a lookup
   (`MISE_AUTO_INSTALL=0`).
 - With the GitHub token he runs with, as `MISE_GITHUB_TOKEN`, and no other
   credential: mise's `gh` login, credential command and Git credential helper

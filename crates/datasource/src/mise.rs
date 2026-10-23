@@ -49,7 +49,7 @@ impl Client {
             repo: format!("mise-ls-remote:{tool}:{}", prefix.unwrap_or("")),
             default_branch_commit: self.github.credential_scope().into(),
             config_hash: format!(
-                "mise-ls-remote-v1:{}:{}",
+                "mise-ls-remote-v2:{}:{}",
                 lookup.version(),
                 self.use_versions_host
             ),
@@ -97,7 +97,6 @@ impl Client {
         let releases = self.mise_releases(tool, None).await?;
         let mut versions: Vec<Version> = releases
             .into_iter()
-            .filter(|release| release.prerelease != Some(true))
             .map(|release| Version {
                 version: release.version,
                 published_at: release.created_at.as_deref().map(date),

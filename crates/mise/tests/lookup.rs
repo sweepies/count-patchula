@@ -77,7 +77,7 @@ async fn a_prefix_selects_a_line_and_follows_the_tool() {
     assert!(lts.len() < 100);
     assert_eq!(
         replay.lookups(),
-        [["ls-remote", "--json", "--", "node", "lts"]]
+        [["ls-remote", "--json", "--prerelease", "--", "node", "lts"]]
     );
 }
 
@@ -109,6 +109,7 @@ async fn mise_runs_pinned_in_an_empty_sandbox_with_only_the_given_token() {
             "mise",
             "ls-remote",
             "--json",
+            "--prerelease",
             "--",
             "packslip:jdx/hk"
         ]
@@ -221,8 +222,6 @@ async fn plugin_backends_and_option_syntax_never_reach_mise() {
     for tool in [
         "asdf:mise-plugins/asdf-tiny",
         "vfox:version-fox/vfox-cmake",
-        "vfox-backend:acme:tool",
-        "acme:tool",
         "github:jdx/mise[api_url=http://127.0.0.1:9]",
         "pypi:black[extras=jupyter]",
         "-x",
@@ -258,6 +257,32 @@ async fn plugin_backends_and_option_syntax_never_reach_mise() {
 }
 
 #[tokio::test]
+async fn a_backend_the_count_does_not_know_is_left_to_mise_to_refuse() {
+    let replay = replay();
+    let lookup = lookup(&replay);
+    // mise adds backends over time, so no list of them is kept here. One it
+    // does not have fails in mise, which runs no plugin and installs nothing.
+    let error = lookup
+        .ls_remote(&query("nosuch:foo", None))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::Failed(_)), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("nosuch is not a valid plugin name"),
+        "{error}"
+    );
+    assert_eq!(
+        replay.lookups(),
+        [["ls-remote", "--json", "--prerelease", "--", "nosuch:foo"]]
+    );
+    let call = &replay.calls()[1];
+    assert_eq!(call.env["MISE_DISABLE_BACKENDS"], "asdf,vfox");
+    assert_eq!(call.env["MISE_AUTO_INSTALL"], "0");
+}
+
+#[tokio::test]
 async fn names_for_release_backends_are_passed_through_unchanged() {
     let replay = replay();
     let lookup = lookup(&replay);
@@ -273,12 +298,14 @@ async fn names_for_release_backends_are_passed_through_unchanged() {
             [
                 "ls-remote",
                 "--json",
+                "--prerelease",
                 "--",
                 "packslip:github.com/jdx/hk/tools/lint"
             ],
             [
                 "ls-remote",
                 "--json",
+                "--prerelease",
                 "--",
                 "cargo:https://github.com/BurntSushi/ripgrep"
             ]

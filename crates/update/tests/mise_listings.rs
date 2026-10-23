@@ -27,6 +27,7 @@ const LISTINGS: &[&[&str]] = &[
     &["aapt2"],
     &["packslip:packslip.dev"],
     &["somethingunknownxyz"],
+    &["nosuch:foo"],
 ];
 const BACKENDS: &[&str] = &["prettier"];
 

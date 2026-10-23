@@ -7,6 +7,7 @@
       "args": [
         "ls-remote",
         "--json",
+        "--prerelease",
         "--",
         "packslip:jdx/hk"
       ],
@@ -95,6 +96,7 @@
       "args": [
         "ls-remote",
         "--json",
+        "--prerelease",
         "--",
         "packslip:github.com/jdx/hk/tools/lint"
       ],
@@ -104,6 +106,7 @@
       "args": [
         "ls-remote",
         "--json",
+        "--prerelease",
         "--",
         "jq"
       ],
@@ -119,6 +122,18 @@
           "version": "1.4"
         },
         {
+          "created_at": "2015-01-01T02:54:01.0Z",
+          "prerelease": true,
+          "release_url": "https://github.com/jqlang/jq/releases/tag/jq-1.5rc1",
+          "version": "1.5rc1"
+        },
+        {
+          "created_at": "2015-07-27T04:14:01.0Z",
+          "prerelease": true,
+          "release_url": "https://github.com/jqlang/jq/releases/tag/jq-1.5rc2",
+          "version": "1.5rc2"
+        },
+        {
           "created_at": "2015-08-16T06:39:17.0Z",
           "release_url": "https://github.com/jqlang/jq/releases/tag/jq-1.5",
           "version": "1.5"
@@ -127,6 +142,18 @@
           "created_at": "2018-11-02T01:54:23.0Z",
           "release_url": "https://github.com/jqlang/jq/releases/tag/jq-1.6",
           "version": "1.6"
+        },
+        {
+          "created_at": "2023-07-31T23:04:03.0Z",
+          "prerelease": true,
+          "release_url": "https://github.com/jqlang/jq/releases/tag/jq-1.7rc1",
+          "version": "1.7rc1"
+        },
+        {
+          "created_at": "2023-08-27T18:10:22.0Z",
+          "prerelease": true,
+          "release_url": "https://github.com/jqlang/jq/releases/tag/jq-1.7rc2",
+          "version": "1.7rc2"
         },
         {
           "created_at": "2023-09-06T22:54:12.0Z",
@@ -159,6 +186,7 @@
       "args": [
         "ls-remote",
         "--json",
+        "--prerelease",
         "--",
         "prettier"
       ],
@@ -324,6 +352,11 @@
           "version": "1.3.1"
         },
         {
+          "created_at": "2017-06-02T03:31:21.378Z",
+          "prerelease": true,
+          "version": "1.4.0-beta"
+        },
+        {
           "created_at": "2017-06-02T15:55:50.613Z",
           "prerelease": false,
           "version": "1.4.0"
@@ -367,6 +400,11 @@
           "created_at": "2017-07-15T09:53:32.355Z",
           "prerelease": false,
           "version": "1.5.3"
+        },
+        {
+          "created_at": "2017-08-26T03:20:27.043Z",
+          "prerelease": true,
+          "version": "1.6.0-beta2"
         },
         {
           "created_at": "2017-08-28T16:05:27.943Z",
@@ -447,6 +485,11 @@
           "created_at": "2018-01-11T01:59:08.832Z",
           "prerelease": false,
           "version": "1.10.2"
+        },
+        {
+          "created_at": "2018-02-24T00:01:49.203Z",
+          "prerelease": true,
+          "version": "1.11.0-rc.1"
         },
         {
           "created_at": "2018-02-27T01:26:44.031Z",
@@ -769,6 +812,66 @@
           "version": "2.8.8"
         },
         {
+          "created_at": "2022-08-17T09:12:49.537Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.0"
+        },
+        {
+          "created_at": "2022-10-08T08:54:58.929Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.1"
+        },
+        {
+          "created_at": "2022-10-13T09:12:25.759Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.2"
+        },
+        {
+          "created_at": "2022-10-20T01:59:24.589Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.3"
+        },
+        {
+          "created_at": "2022-10-26T03:05:17.724Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.4"
+        },
+        {
+          "created_at": "2023-03-01T10:00:47.035Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.5"
+        },
+        {
+          "created_at": "2023-03-02T09:19:46.624Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.6"
+        },
+        {
+          "created_at": "2023-04-23T10:51:27.118Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.10"
+        },
+        {
+          "created_at": "2023-04-25T02:47:52.655Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.11"
+        },
+        {
+          "created_at": "2023-05-26T14:12:45.252Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.12"
+        },
+        {
+          "created_at": "2023-04-23T08:07:28.795Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.8-for-vscode"
+        },
+        {
+          "created_at": "2023-04-23T08:50:26.138Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.9-for-vscode"
+        },
+        {
           "created_at": "2023-07-05T12:44:13.820Z",
           "prerelease": false,
           "version": "3.0.0"
@@ -1007,6 +1110,76 @@
           "created_at": "2026-10-10T08:35:28.472Z",
           "prerelease": false,
           "version": "3.9.10"
+        },
+        {
+          "created_at": "2023-11-30T05:45:34.115Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.0"
+        },
+        {
+          "created_at": "2023-11-30T06:42:36.440Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.1"
+        },
+        {
+          "created_at": "2023-11-30T16:49:10.348Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.2"
+        },
+        {
+          "created_at": "2023-12-01T05:34:45.202Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.3"
+        },
+        {
+          "created_at": "2023-12-10T08:09:33.912Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.4"
+        },
+        {
+          "created_at": "2023-12-14T05:53:18.886Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.5"
+        },
+        {
+          "created_at": "2023-12-16T03:16:14.815Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.6"
+        },
+        {
+          "created_at": "2023-12-17T18:47:04.955Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.7"
+        },
+        {
+          "created_at": "2023-12-20T18:12:56.119Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.8"
+        },
+        {
+          "created_at": "2024-06-17T22:48:53.722Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.9"
+        },
+        {
+          "created_at": "2024-09-02T22:37:55.892Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.10"
+        },
+        {
+          "created_at": "2025-02-24T22:11:36.974Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.11"
+        },
+        {
+          "created_at": "2025-03-06T09:58:16.951Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.12"
+        },
+        {
+          "created_at": "2025-11-18T08:04:21.677Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.13"
         }
       ]
     },
@@ -1014,6 +1187,7 @@
       "args": [
         "ls-remote",
         "--json",
+        "--prerelease",
         "--",
         "npm:prettier"
       ],
@@ -1179,6 +1353,11 @@
           "version": "1.3.1"
         },
         {
+          "created_at": "2017-06-02T03:31:21.378Z",
+          "prerelease": true,
+          "version": "1.4.0-beta"
+        },
+        {
           "created_at": "2017-06-02T15:55:50.613Z",
           "prerelease": false,
           "version": "1.4.0"
@@ -1222,6 +1401,11 @@
           "created_at": "2017-07-15T09:53:32.355Z",
           "prerelease": false,
           "version": "1.5.3"
+        },
+        {
+          "created_at": "2017-08-26T03:20:27.043Z",
+          "prerelease": true,
+          "version": "1.6.0-beta2"
         },
         {
           "created_at": "2017-08-28T16:05:27.943Z",
@@ -1302,6 +1486,11 @@
           "created_at": "2018-01-11T01:59:08.832Z",
           "prerelease": false,
           "version": "1.10.2"
+        },
+        {
+          "created_at": "2018-02-24T00:01:49.203Z",
+          "prerelease": true,
+          "version": "1.11.0-rc.1"
         },
         {
           "created_at": "2018-02-27T01:26:44.031Z",
@@ -1624,6 +1813,66 @@
           "version": "2.8.8"
         },
         {
+          "created_at": "2022-08-17T09:12:49.537Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.0"
+        },
+        {
+          "created_at": "2022-10-08T08:54:58.929Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.1"
+        },
+        {
+          "created_at": "2022-10-13T09:12:25.759Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.2"
+        },
+        {
+          "created_at": "2022-10-20T01:59:24.589Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.3"
+        },
+        {
+          "created_at": "2022-10-26T03:05:17.724Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.4"
+        },
+        {
+          "created_at": "2023-03-01T10:00:47.035Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.5"
+        },
+        {
+          "created_at": "2023-03-02T09:19:46.624Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.6"
+        },
+        {
+          "created_at": "2023-04-23T10:51:27.118Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.10"
+        },
+        {
+          "created_at": "2023-04-25T02:47:52.655Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.11"
+        },
+        {
+          "created_at": "2023-05-26T14:12:45.252Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.12"
+        },
+        {
+          "created_at": "2023-04-23T08:07:28.795Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.8-for-vscode"
+        },
+        {
+          "created_at": "2023-04-23T08:50:26.138Z",
+          "prerelease": true,
+          "version": "3.0.0-alpha.9-for-vscode"
+        },
+        {
           "created_at": "2023-07-05T12:44:13.820Z",
           "prerelease": false,
           "version": "3.0.0"
@@ -1862,6 +2111,76 @@
           "created_at": "2026-10-10T08:35:28.472Z",
           "prerelease": false,
           "version": "3.9.10"
+        },
+        {
+          "created_at": "2023-11-30T05:45:34.115Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.0"
+        },
+        {
+          "created_at": "2023-11-30T06:42:36.440Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.1"
+        },
+        {
+          "created_at": "2023-11-30T16:49:10.348Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.2"
+        },
+        {
+          "created_at": "2023-12-01T05:34:45.202Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.3"
+        },
+        {
+          "created_at": "2023-12-10T08:09:33.912Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.4"
+        },
+        {
+          "created_at": "2023-12-14T05:53:18.886Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.5"
+        },
+        {
+          "created_at": "2023-12-16T03:16:14.815Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.6"
+        },
+        {
+          "created_at": "2023-12-17T18:47:04.955Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.7"
+        },
+        {
+          "created_at": "2023-12-20T18:12:56.119Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.8"
+        },
+        {
+          "created_at": "2024-06-17T22:48:53.722Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.9"
+        },
+        {
+          "created_at": "2024-09-02T22:37:55.892Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.10"
+        },
+        {
+          "created_at": "2025-02-24T22:11:36.974Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.11"
+        },
+        {
+          "created_at": "2025-03-06T09:58:16.951Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.12"
+        },
+        {
+          "created_at": "2025-11-18T08:04:21.677Z",
+          "prerelease": true,
+          "version": "4.0.0-alpha.13"
         }
       ]
     },
@@ -1869,6 +2188,7 @@
       "args": [
         "ls-remote",
         "--json",
+        "--prerelease",
         "--",
         "cargo:ripgrep"
       ],
@@ -2115,6 +2435,7 @@
       "args": [
         "ls-remote",
         "--json",
+        "--prerelease",
         "--",
         "go:github.com/golangci/golangci-lint/cmd/golangci-lint"
       ],
@@ -2684,6 +3005,7 @@
       "args": [
         "ls-remote",
         "--json",
+        "--prerelease",
         "--",
         "node"
       ],
@@ -6194,6 +6516,7 @@
       "args": [
         "ls-remote",
         "--json",
+        "--prerelease",
         "--",
         "node",
         "lts"
@@ -6329,6 +6652,7 @@
       "args": [
         "ls-remote",
         "--json",
+        "--prerelease",
         "--",
         "core:node"
       ],
@@ -9839,6 +10163,7 @@
       "args": [
         "ls-remote",
         "--json",
+        "--prerelease",
         "--",
         "core:node",
         "lts"
@@ -9974,6 +10299,7 @@
       "args": [
         "ls-remote",
         "--json",
+        "--prerelease",
         "--",
         "cargo:https://github.com/BurntSushi/ripgrep"
       ],
@@ -9987,6 +10313,7 @@
       "args": [
         "ls-remote",
         "--json",
+        "--prerelease",
         "--",
         "1password"
       ],
@@ -9996,6 +10323,7 @@
       "args": [
         "ls-remote",
         "--json",
+        "--prerelease",
         "--",
         "aapt2"
       ],
@@ -10005,6 +10333,7 @@
       "args": [
         "ls-remote",
         "--json",
+        "--prerelease",
         "--",
         "packslip:packslip.dev"
       ],
@@ -10014,10 +10343,21 @@
       "args": [
         "ls-remote",
         "--json",
+        "--prerelease",
         "--",
         "somethingunknownxyz"
       ],
       "error": "exit exit status: 1:  mise ERROR somethingunknownxyz not found in mise tool registry\nmise ERROR Version: 2026.10.11 linux-x64 (2026-10-15)\nmise ERROR Run with --verbose or MISE_VERBOSE=1 for more information\n"
+    },
+    {
+      "args": [
+        "ls-remote",
+        "--json",
+        "--prerelease",
+        "--",
+        "nosuch:foo"
+      ],
+      "error": "exit exit status: 1:  mise ERROR nosuch is not a valid plugin name\nmise ERROR Version: 2026.10.11 linux-x64 (2026-10-15)\nmise ERROR Run with --verbose or MISE_VERBOSE=1 for more information\n"
     },
     {
       "args": [

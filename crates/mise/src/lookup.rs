@@ -148,7 +148,8 @@ impl Lookup {
         ]);
         spec.args.extend(args.iter().map(|a| (*a).to_owned()));
     }
-    /// `mise ls-remote --json`, as mise lists the tool.
+    /// `mise ls-remote --json --prerelease`, as mise lists the tool. Prereleases
+    /// are listed so the Count's own policy decides who is offered one.
     pub async fn ls_remote(&self, query: &Query<'_>) -> Result<Vec<Release>, Error> {
         policy::check(query.tool)?;
         if let Some(prefix) = query.prefix {
@@ -160,7 +161,7 @@ impl Lookup {
             .await
             .map_err(|e| Error::Failed(e.to_string()))?;
         self.install(query.token).await?;
-        let mut args = vec!["ls-remote", "--json", "--", query.tool];
+        let mut args = vec!["ls-remote", "--json", "--prerelease", "--", query.tool];
         args.extend(query.prefix);
         let out = self
             .run(query.token, query.versions_host, |spec| {
