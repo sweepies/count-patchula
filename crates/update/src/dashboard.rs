@@ -628,9 +628,16 @@ struct Receipt {
 fn receipt_key(repo: &str) -> ExtractionKey {
     ExtractionKey {
         repo: repo.into(),
-        default_branch_commit: String::new(),
+        default_branch_commit: String::default(),
         config_hash: "dashboard-receipt-v1".into(),
     }
+}
+/// The dashboard issue the Count last wrote in `repo`.
+pub async fn issue_number(cache: &Cache, repo: &str) -> Option<u64> {
+    let bytes = cache.extraction_get(&receipt_key(repo)).await.ok()??;
+    serde_json::from_slice::<Receipt>(&bytes)
+        .ok()
+        .map(|receipt| receipt.number)
 }
 pub async fn reconcile(
     client: &Client,
@@ -652,7 +659,11 @@ pub async fn reconcile(
                 .await
                 .map_err(|e| e.to_string())?;
         }
-        return Ok(());
+        // A closed dashboard is no longer the repository's dashboard.
+        return cache
+            .extraction_remove(&receipt_key(&repo.repository))
+            .await
+            .map_err(|e| e.to_string());
     }
     let digest = hash(body.as_bytes());
     let previous = cache

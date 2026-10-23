@@ -135,7 +135,9 @@ Secrets (App private key, webhook secret) never appear in settings; they come
 from environment variables or files.
 
 Not planned for now (decision 2026-10-15): a web UI and settings managed by
-patchula itself. The server exposes only the webhook API and health checks.
+patchula itself. Besides the webhook and health checks, the server has the
+`/api/v1` API behind `--server` and a read-only repository API that a separate
+dashboard can read.
 
 ## Tooling
 

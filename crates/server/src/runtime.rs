@@ -190,7 +190,8 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
     reload.abort();
     let _ = maintenance.await;
     let _ = reload.await;
-    drop(lock);
+    // Closing the file would release it too; this says so.
+    let _ = lock.unlock();
     result
 }
 
@@ -199,6 +200,7 @@ fn router(webhook: Webhook, ready: Arc<AtomicBool>) -> Router {
     let settings = webhook.settings.clone();
     let accepting = webhook.accepting.clone();
     let cache = webhook.cache.clone();
+    let (public_cache, public_settings) = (webhook.cache.clone(), webhook.settings.clone());
     let router = Router::new()
         .route("/webhook", post(crate::webhook::receive))
         .route("/healthz", get(|| async { StatusCode::OK }))
@@ -227,7 +229,11 @@ fn router(webhook: Webhook, ready: Arc<AtomicBool>) -> Router {
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(axum::middleware::from_fn(crate::webhook::observe))
         .with_state(webhook);
-    // The API answers in its own JSON, outside the webhook observer.
+    // The APIs answer in their own JSON, outside the webhook observer.
+    let router = router.merge(crate::public::routes(crate::public::Public {
+        cache: public_cache,
+        settings: public_settings,
+    }));
     match api {
         Some(api) => router.merge(crate::remote::routes(api)),
         None => router,
@@ -315,11 +321,12 @@ impl Batch for Engines {
                 let client = Client::with_credentials(
                     credentials.clone(),
                     self.cache.clone(),
-                    Default::default(),
+                    patchula_github::Options::default(),
                     self.transport.clone(),
                 )
                 .map_err(|_| Error("cannot create installation client"))?;
                 let mut repos = Vec::new();
+                let mut listed = Vec::new();
                 for page in 1..=1000 {
                     let value = client
                         .get(&format!(
@@ -337,7 +344,11 @@ impl Batch for Engines {
                             .as_str()
                             .ok_or(Error("invalid installation repository"))?;
                         if settings.allows(id, repo) {
-                            repos.push(Work::repository(id, repo.to_ascii_lowercase()));
+                            let repo = repo.to_ascii_lowercase();
+                            // Unknown visibility counts as private, which the public API hides.
+                            let private = entry["private"].as_bool().unwrap_or(true);
+                            listed.push((repo.clone(), private));
+                            repos.push(Work::repository(id, repo));
                         }
                     }
                     if entries.len() < 100 {
@@ -357,13 +368,17 @@ impl Batch for Engines {
                     )
                     .await
                     .map_err(|_| Error("cannot persist discovered repositories"))?;
+                self.cache
+                    .repositories_listed(id, listed)
+                    .await
+                    .map_err(|_| Error("cannot record discovered repositories"))?;
                 tracing::info!(target: "patchula_server", installation = id,
                     "discovery completed; repository work queued for a separate batch");
             }
             let client = Client::with_credentials(
                 credentials.clone(),
                 self.cache.clone(),
-                Default::default(),
+                patchula_github::Options::default(),
                 self.transport.clone(),
             )
             .map_err(|_| Error("cannot create check-event client"))?;
@@ -389,18 +404,33 @@ impl Batch for Engines {
                 );
                 return Ok(BatchOutcome::default());
             }
-            let mut engines = self.engines.lock().await;
-            let engine = self.engine(&mut engines, id, settings)?;
-            let result = engine
-                .run(
-                    patchula_engine::Options {
-                        repositories: repositories.clone(),
-                        ..Default::default()
-                    },
-                    false,
-                    false,
+            let started = Utc::now();
+            let result = {
+                let mut engines = self.engines.lock().await;
+                let engine = self.engine(&mut engines, id, settings)?;
+                engine
+                    .run(
+                        patchula_engine::Options {
+                            repositories: repositories.clone(),
+                            ..patchula_engine::Options::default()
+                        },
+                        false,
+                        false,
+                    )
+                    .await
+            };
+            if let Ok(report) = &result {
+                crate::public::record(
+                    &self.cache,
+                    &client,
+                    &self.bot_login,
+                    id,
+                    report,
+                    started,
+                    &self.member(id),
                 )
                 .await;
+            }
             let report = match &result {
                 Ok(report) => report.clone(),
                 Err(_) => Report {
@@ -431,6 +461,16 @@ impl Batch for Engines {
     }
 }
 impl Engines {
+    /// Asks GitHub whether a repository is in this App's installation `id`.
+    fn member(&self, id: u64) -> impl Fn(String) -> BoxFuture<'static, bool> + Send + Sync + use<> {
+        let app = self.app.clone();
+        move |repo| {
+            let app = app.clone();
+            Box::pin(
+                async move { app.repository_installation(&repo).await.ok().flatten() == Some(id) },
+            )
+        }
+    }
     /// The installation's engine, created on first use and set to the current settings.
     fn engine<'a>(
         &self,
@@ -484,22 +524,42 @@ impl crate::remote::Runner for Engines {
     ) -> BoxFuture<'a, Result<Report, &'static str>> {
         use crate::remote::Mode;
         Box::pin(async move {
-            // The same lock as queued batches, so a remote run never races one.
-            let mut engines = self.engines.lock().await;
-            let engine = self
-                .engine(&mut engines, installation, settings)
-                .map_err(|e| e.0)?;
-            let options = patchula_engine::Options {
-                repositories,
-                ..patchula_engine::Options::default()
+            let started = Utc::now();
+            let report = {
+                // The same lock as queued batches, so a remote run never races one.
+                let mut engines = self.engines.lock().await;
+                let engine = self
+                    .engine(&mut engines, installation, settings)
+                    .map_err(|e| e.0)?;
+                let options = patchula_engine::Options {
+                    repositories,
+                    ..patchula_engine::Options::default()
+                };
+                match mode {
+                    Mode::Lookup => engine.lookup(options).await,
+                    Mode::DryRun => engine.run(options, true, false).await,
+                    Mode::Run => engine.run(options, false, false).await,
+                }
+                .map_err(|_| "the run failed on the server")?
             };
-            let report = match mode {
-                Mode::Lookup => engine.lookup(options).await,
-                Mode::DryRun => engine.run(options, true, false).await,
-                Mode::Run => engine.run(options, false, false).await,
-            }
-            .map_err(|_| "the run failed on the server")?;
             if mode == Mode::Run {
+                if let Ok(client) = Client::with_credentials(
+                    self.app.installation(installation),
+                    self.cache.clone(),
+                    patchula_github::Options::default(),
+                    self.transport.clone(),
+                ) {
+                    crate::public::record(
+                        &self.cache,
+                        &client,
+                        &self.bot_login,
+                        installation,
+                        &report,
+                        started,
+                        &self.member(installation),
+                    )
+                    .await;
+                }
                 tracing::info!(target: "patchula_server", installation, user = login, "remote run report");
                 output_report(&report, settings.report_directory.as_deref())
                     .await
@@ -721,6 +781,11 @@ async fn maintenance(
                     .into_iter()
                     .filter(|id| current.installation_allowed(*id))
                     .collect();
+                // Repositories of removed or disallowed installations leave the public API.
+                cache
+                    .repositories_retain(ids.clone())
+                    .await
+                    .map_err(|_| Error("cannot prune recorded repositories"))?;
                 if ids.is_empty() {
                     return Err(Error(
                         "no allowed App installations available for token probe",
@@ -732,7 +797,7 @@ async fn maintenance(
                             None,
                             ids.iter()
                                 .copied()
-                                .map(|id| Work::repository(id, String::new()))
+                                .map(|id| Work::repository(id, String::default()))
                                 .collect(),
                             Utc::now().timestamp_millis(),
                             current.coalescing_ms as i64,

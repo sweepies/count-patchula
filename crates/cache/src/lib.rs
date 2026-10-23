@@ -3,6 +3,7 @@
 
 pub mod installations;
 pub mod queue;
+pub mod repositories;
 mod store;
 
 use rusqlite::OptionalExtension;
@@ -30,7 +31,7 @@ pub enum Error {
     Worker,
     #[error("cache URL must be absolute HTTP(S) without credentials")]
     Url,
-    #[error("cache schema {0} is newer than supported schema 7")]
+    #[error("cache schema {0} is newer than supported schema 8")]
     FutureSchema(i64),
     #[error("cache integrity check failed")]
     Corrupt,
@@ -418,6 +419,18 @@ impl Cache {
                 rusqlite::params![key.repo, key.default_branch_commit, key.config_hash, serialized])?;
             Ok(())
         }).await
+    }
+
+    pub async fn extraction_remove(&self, key: &ExtractionKey) -> Result<()> {
+        let key = key.clone();
+        self.call(move |store| {
+            store.conn.execute(
+                "DELETE FROM extraction WHERE repo=?1 AND branch_commit=?2 AND config_hash=?3",
+                rusqlite::params![key.repo, key.default_branch_commit, key.config_hash],
+            )?;
+            Ok(())
+        })
+        .await
     }
 }
 

@@ -226,6 +226,11 @@ pub async fn receive(
     } else {
         "repository trigger"
     };
+    if let Err(error) = track(&state.cache, event, &payload, &settings).await {
+        return Failure::new(error.kind())
+            .delivery(event, delivery, &payload)
+            .response(StatusCode::SERVICE_UNAVAILABLE);
+    }
     let enqueued = !work.is_empty();
     let result = state
         .cache
@@ -248,6 +253,76 @@ pub async fn receive(
     };
     log_delivery(event, delivery, &payload, outcome, reason, resolution);
     StatusCode::ACCEPTED.into_response()
+}
+/// Keeps the repositories behind the public API current, whether or not the
+/// delivery starts a batch: installations add and remove them, and every
+/// repository payload carries the repository's visibility.
+pub(crate) async fn track(
+    cache: &Cache,
+    event: &str,
+    payload: &Value,
+    settings: &Settings,
+) -> patchula_cache::Result<()> {
+    let Some(id) = payload["installation"]["id"].as_u64() else {
+        return Ok(());
+    };
+    let name = |repo: &Value| repo["full_name"].as_str().map(str::to_ascii_lowercase);
+    let listed = |key: &str| -> Vec<(String, bool)> {
+        payload[key]
+            .as_array()
+            .into_iter()
+            .flatten()
+            // Unknown visibility counts as private, which the public API hides.
+            .filter_map(|repo| Some((name(repo)?, repo["private"].as_bool().unwrap_or(true))))
+            .filter(|(repo, _)| settings.allows(id, repo))
+            .collect()
+    };
+    let repository = &payload["repository"];
+    match (event, payload["action"].as_str().unwrap_or("")) {
+        ("installation", "created") => cache.repositories_added(id, listed("repositories")).await?,
+        ("installation_repositories", "added") => {
+            cache
+                .repositories_added(id, listed("repositories_added"))
+                .await?
+        }
+        ("installation_repositories", "removed") => {
+            let removed = payload["repositories_removed"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(name)
+                .collect();
+            cache.repositories_removed(removed).await?
+        }
+        // The payload names the repository as it is now. A rename names the
+        // old one too; after a transfer, discovery drops the old name.
+        ("repository", action @ ("renamed" | "transferred")) => {
+            let old = payload["changes"]["repository"]["name"]["from"]
+                .as_str()
+                .zip(name(repository))
+                .filter(|_| action == "renamed")
+                // A change of case only is the same repository.
+                .filter(|(from, repo)| {
+                    repo.split_once('/')
+                        .is_none_or(|(_, now)| !now.eq_ignore_ascii_case(from))
+                })
+                .and_then(|(from, repo)| Some(format!("{}/{from}", repo.split_once('/')?.0)));
+            if let Some(old) = old {
+                cache
+                    .repositories_removed(vec![old.to_ascii_lowercase()])
+                    .await?;
+            }
+            if let Some(repo) = name(repository).filter(|repo| settings.allows(id, repo)) {
+                let private = repository["private"].as_bool().unwrap_or(true);
+                cache.repositories_added(id, vec![(repo, private)]).await?;
+            }
+        }
+        _ => {}
+    }
+    if let (Some(repo), Some(private)) = (name(repository), repository["private"].as_bool()) {
+        cache.repository_visibility(&repo, private).await?;
+    }
+    Ok(())
 }
 fn log_delivery(
     event: &str,

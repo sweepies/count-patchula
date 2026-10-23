@@ -566,6 +566,8 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
     let claims = cache.claim_batch(i64::MAX, 10).await.unwrap();
     assert_eq!(claims.len(), 1);
     assert!(claims[0].attribution.reasons.contains("startup discovery"));
+    let listed = cache.repository("owner/repo").await.unwrap().unwrap();
+    assert_eq!((listed.private, listed.ran_at), (false, None));
     for _ in 0..2 {
         assert!(
             runner
@@ -586,6 +588,10 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
         assert_eq!(actual.repositories[0].repository, "owner/repo");
         assert_eq!(actual.repositories[0].status, Status::Error);
     }
+    // GitHub would not show the repository, so the public API hides it.
+    let ran = cache.repository("owner/repo").await.unwrap().unwrap();
+    assert!(ran.private);
+    assert!(ran.ran_at.is_some());
 }
 
 struct DiscoveryAndMissingRepository;
@@ -779,7 +785,7 @@ impl Transport for DiscoveryAndMissingRepository {
             ),
             "/installation/repositories" => (
                 reqwest::StatusCode::OK,
-                json!({"repositories":[{"full_name":"owner/repo"}]}),
+                json!({"repositories":[{"full_name":"owner/repo","private":false}]}),
             ),
             "/graphql" => (
                 reqwest::StatusCode::NOT_FOUND,
@@ -1317,4 +1323,96 @@ async fn check_events_verify_real_ownership_with_custom_branch_prefixes() {
             expected
         );
     }
+}
+
+#[tokio::test]
+async fn webhooks_keep_the_public_repositories_current() {
+    let _capture = LOG_TEST_LOCK.lock().await;
+    let state = state().await;
+    let router = router(state.clone(), Arc::new(AtomicBool::new(true)));
+    let send = |event: &'static str, id: &'static str, payload: Value| {
+        let router = router.clone();
+        async move {
+            let response = router
+                .oneshot(request(serde_json::to_vec(&payload).unwrap(), event, id))
+                .await
+                .unwrap();
+            assert!(response.status().is_success(), "{event} {id}");
+        }
+    };
+    let names = || async {
+        state
+            .cache
+            .repositories()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| (row.repo, row.private))
+            .collect::<Vec<_>>()
+    };
+    send(
+        "installation_repositories",
+        "added",
+        json!({"action": "added", "installation": {"id": 1}, "sender": {"login": "human"},
+            "repositories_added": [{"full_name": "Owner/Repo", "private": false},
+                {"full_name": "owner/other", "private": true}]}),
+    )
+    .await;
+    assert_eq!(
+        names().await,
+        [("owner/other".into(), true), ("owner/repo".into(), false)]
+    );
+    // Any repository payload carries its visibility, here the change itself.
+    let mut privatized = payload();
+    privatized["action"] = json!("privatized");
+    privatized["repository"]["private"] = json!(true);
+    send("repository", "privatized", privatized).await;
+    assert_eq!(names().await[1], ("owner/repo".into(), true));
+    let mut push = payload();
+    push["repository"]["private"] = json!(false);
+    send("push", "push", push).await;
+    assert_eq!(names().await[1], ("owner/repo".into(), false));
+    let mut renamed = payload();
+    renamed["action"] = json!("renamed");
+    renamed["repository"] = json!({"full_name": "owner/renamed", "private": false});
+    renamed["changes"] = json!({"repository": {"name": {"from": "Repo"}}});
+    send("repository", "renamed", renamed.clone()).await;
+    state
+        .cache
+        .repository_ran(patchula_cache::repositories::Run {
+            installation: 1,
+            repo: "owner/renamed".into(),
+            private: false,
+            ran_at: 100,
+            summary: b"{}".to_vec(),
+            snapshot: b"{}".to_vec(),
+        })
+        .await
+        .unwrap();
+    let mut recased = renamed.clone();
+    recased["changes"] = json!({"repository": {"name": {"from": "Renamed"}}});
+    send("repository", "recased", recased).await;
+    assert_eq!(
+        state
+            .cache
+            .repository("owner/renamed")
+            .await
+            .unwrap()
+            .unwrap()
+            .ran_at,
+        Some(100),
+        "a change of case keeps the run"
+    );
+    send(
+        "installation_repositories",
+        "removed",
+        json!({"action": "removed", "installation": {"id": 1}, "sender": {"login": "human"},
+            "repositories_removed": [{"full_name": "owner/other"}]}),
+    )
+    .await;
+    assert_eq!(
+        names().await,
+        [("owner/renamed".into(), false)],
+        "a rename drops the old name"
+    );
 }

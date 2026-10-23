@@ -17,7 +17,8 @@ idle with little memory in use.
 
 :::note[No web UI]
 There is no web UI. The routes are `POST /webhook`, `GET /healthz`,
-`GET /readyz` and the small `/api/v1` API behind [`--server`](#run-from-your-machine).
+`GET /readyz`, the small `/api/v1` API behind [`--server`](#run-from-your-machine)
+and the read-only [repository API](#repository-api).
 It listens on `127.0.0.1:8080` by default, so put an HTTPS reverse proxy in
 front for GitHub's deliveries.
 :::
@@ -30,7 +31,8 @@ The App needs:
   (dashboard and labels), workflows write (workflow updates), and checks and
   commit statuses read (merge fallback);
 - events: push, issues, pull request, installation, installation repositories,
-  check suite and check run;
+  check suite, check run and repository (which keeps the
+  [repository API](#repository-api) current);
 - a webhook secret;
 - **Enable Device Flow** ticked, so people can [run from their
   machines](#run-from-your-machine).
@@ -183,6 +185,78 @@ removed. A webhook relay such as smee.io gives no server URL, so set
 `publicUrl` there. Set `advertise = false` to keep the URL out of what the
 Count writes. Turning it on or off edits the open PRs once. A server whose
 App has no client ID advertises nothing, because the CLI could not sign in.
+
+## Repository API
+
+A read-only JSON API shows what the Count last saw of each public repository
+he runs, for a dashboard to display. It needs no sign-in and answers any
+origin (`Access-Control-Allow-Origin: *`), so a page on another site can call
+it from the browser. Set `publicApi = false` to turn it off.
+
+`GET /api/v1/repositories` lists the repositories in name order:
+
+```json
+{
+  "repositories": [
+    {
+      "repository": "acme/my-app",
+      "ranAt": "2026-10-23T09:00:00+00:00",
+      "queued": null,
+      "status": "complete",
+      "reason": null,
+      "defaultBranch": "main",
+      "dependencies": 42,
+      "updates": 3,
+      "pullRequests": 2,
+      "dashboard": 7
+    }
+  ]
+}
+```
+
+`updates` counts dependencies with at least one update, `pullRequests` counts
+the Count's open PRs, and `dashboard` is the dependency dashboard's issue
+number. A repository that has not run yet has only `repository`,
+`ranAt: null` and `queued`. `queued` is `null`, or `{"at", "running"}` when
+work for the repository is waiting or in a batch.
+
+`GET /api/v1/repositories/{owner}/{repo}` returns everything from the last run:
+
+| Field | Meaning |
+|---|---|
+| `repository`, `ranAt`, `queued`, `status`, `reason`, `defaultBranch`, `dashboard` | as in the list |
+| `commit` | the default branch commit the run read |
+| `warnings` | the run's warnings |
+| `packageFiles` | each package file's dependencies and their updates, as in the [report](/reference/report/) |
+| `branches` | each update branch the run planned: `branch`, `status`, `reason`, `message`, `baseCommit`, `commit`, `lockfilePending`, and the `files` it changes, without diffs |
+| `pullRequests` | the Count's open PRs, read from GitHub after the run; `null` if GitHub would not list them |
+| `merged` | up to 20 PRs the Count merged himself: `number`, `title`, `url`, and `mergedAt` when GitHub recorded it |
+
+Each open PR has `number`, `url`, `branch`, `title`, `body`, `draft`, `labels`,
+`headSha`, `base`, `createdAt`, `updatedAt`, `mergeable`, `mergeableState`,
+`autoMerge`, and `action`: what the run did to it (`{"status", "reason"}`), or
+`null` if the run left it alone. GitHub works out `mergeable` and
+`mergeableState` in the background, so either can be `null`.
+
+The API is read-only. A dashboard that merges sends GitHub's
+`PUT /repos/{owner}/{repo}/pulls/{number}/merge` with its own token, passing
+`headSha` as `sha` so that GitHub refuses if the PR changed since the run.
+
+Discovery and installation events decide which repositories are listed: a
+sweep replaces each installation's list, repositories added to or removed from
+an installation, and renamed ones, come and go straight away, and an uninstalled installation's
+repositories go within a minute. A run of a repository the server
+has not listed yet adds it once GitHub confirms it is in the installation.
+Settings that no longer allow a repository hide it at once. Every webhook
+about a repository updates its visibility, and a run can hide it but never
+show it, since a webhook may have changed it during the run. A private repository is never shown, and neither is one
+whose visibility the server could not read.
+
+The server records a repository after each run that writes: queued batches and
+`--server` runs, but not lookups or dry runs. A run never replaces one that
+started later. An unknown or hidden repository is a 404 with `errorKind`
+`unknown-repository`, and with the API off every request is a 404 with
+`errorKind` `disabled`.
 
 ## Replaying a webhook locally
 

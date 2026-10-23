@@ -34,6 +34,17 @@ pub(crate) async fn load_history(
         .map(|h| h.prs)
         .unwrap_or_default())
 }
+/// The PRs the Count last recorded merging in `repo`, oldest first, at most 20.
+pub async fn merged(cache: &Cache, repo: &str) -> Vec<Value> {
+    cache
+        .extraction_get(&history_key(repo))
+        .await
+        .ok()
+        .flatten()
+        .and_then(|bytes| serde_json::from_slice::<History>(&bytes).ok())
+        .map(|h| h.prs)
+        .unwrap_or_default()
+}
 async fn save_history(
     cache: &Cache,
     repo: &str,
