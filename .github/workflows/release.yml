@@ -142,8 +142,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release edit "$GITHUB_REF_NAME" --draft=false
-      # The Anthropic key lives in Infisical (project INFISICAL_PROJECT_ID,
-      # environment prod), read through GitHub OIDC by a machine identity
+      # The Anthropic key lives in Infisical as anthropic-api-key (project
+      # INFISICAL_PROJECT_ID, environment prod), read through GitHub OIDC by a machine identity
       # bound to tag refs. Until both repository variables are set, the
       # release keeps GitHub's generated notes.
       - if: vars.INFISICAL_IDENTITY_ID != '' && vars.INFISICAL_PROJECT_ID != ''
@@ -153,7 +153,7 @@ jobs:
           identity-id: ${{ vars.INFISICAL_IDENTITY_ID }}
           project-id: ${{ vars.INFISICAL_PROJECT_ID }}
           env-slug: prod
-          secret-name: ANTHROPIC_API_KEY
+          secret-name: anthropic-api-key
       - if: vars.INFISICAL_IDENTITY_ID != '' && vars.INFISICAL_PROJECT_ID != ''
         uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
@@ -166,4 +166,6 @@ jobs:
           # Only the release tool, not the workspace toolchains.
           MISE_ENABLE_TOOLS: communique
           GITHUB_TOKEN: ${{ github.token }}
+          # The action exports the secret under its Infisical name.
+          ANTHROPIC_API_KEY: ${{ env['anthropic-api-key'] }}
         run: mise run release:notes "$GITHUB_REF_NAME"
