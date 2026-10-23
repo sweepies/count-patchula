@@ -190,7 +190,8 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
     reload.abort();
     let _ = maintenance.await;
     let _ = reload.await;
-    drop(lock);
+    // Closing the file would release it too; this says so.
+    let _ = lock.unlock();
     result
 }
 
@@ -320,7 +321,7 @@ impl Batch for Engines {
                 let client = Client::with_credentials(
                     credentials.clone(),
                     self.cache.clone(),
-                    Default::default(),
+                    patchula_github::Options::default(),
                     self.transport.clone(),
                 )
                 .map_err(|_| Error("cannot create installation client"))?;
@@ -377,7 +378,7 @@ impl Batch for Engines {
             let client = Client::with_credentials(
                 credentials.clone(),
                 self.cache.clone(),
-                Default::default(),
+                patchula_github::Options::default(),
                 self.transport.clone(),
             )
             .map_err(|_| Error("cannot create check-event client"))?;
@@ -796,7 +797,7 @@ async fn maintenance(
                             None,
                             ids.iter()
                                 .copied()
-                                .map(|id| Work::repository(id, String::new()))
+                                .map(|id| Work::repository(id, String::default()))
                                 .collect(),
                             Utc::now().timestamp_millis(),
                             current.coalescing_ms as i64,

@@ -628,7 +628,7 @@ struct Receipt {
 fn receipt_key(repo: &str) -> ExtractionKey {
     ExtractionKey {
         repo: repo.into(),
-        default_branch_commit: String::new(),
+        default_branch_commit: String::default(),
         config_hash: "dashboard-receipt-v1".into(),
     }
 }
