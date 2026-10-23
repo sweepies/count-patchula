@@ -125,7 +125,6 @@ work inspired it, and it is built on his tools at every step:
 [mr boxington](https://mr-boxington.jdx.dev) caches the builds,
 [usage](https://usage.jdx.dev) generates the CLI reference and completions,
 [tak](https://github.com/jdx/tak) runs the benchmarks,
-[fnox](https://fnox.jdx.dev) keeps the release secrets,
 [communique](https://communique.jdx.dev) writes the release notes, and
 [packslip](https://packslip.dev) signs the releases. Thank you, Jeff.
 

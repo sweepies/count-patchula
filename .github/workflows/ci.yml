@@ -53,7 +53,7 @@ jobs:
             case "$file" in
               # The conformance tests read the departures page.
               docs/src/content/docs/renovate/departures.md) rust=true ;;
-              docs/* | assets/* | skills/* | .claude/* | conformance/README.md | README.md | AGENTS.md | CLAUDE.md | LICENSE | .gitignore | .deepsource.toml | socket.yml | communique.toml | tak.toml | fnox.toml) ;;
+              docs/* | assets/* | skills/* | .claude/* | conformance/README.md | README.md | AGENTS.md | CLAUDE.md | LICENSE | .gitignore | .deepsource.toml | socket.yml | communique.toml | tak.toml) ;;
               action.yml | .github/workflows/action.yml | .github/workflows/release.yml | .github/workflows/benchmarks.yml) actions=true ;;
               # Anything else, including "unknown", may change what the Rust jobs check.
               *) rust=true ;;

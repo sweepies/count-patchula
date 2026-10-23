@@ -226,10 +226,10 @@ done
 tools = { jq = "1.8.2" }
 
 [tasks."release:notes"]
-description = "Rewrite a published GitHub release's notes with communique; needs ANTHROPIC_API_KEY in fnox.toml"
+description = "Rewrite a published GitHub release's notes with communique; needs ANTHROPIC_API_KEY (Infisical, environment prod)"
 usage = 'arg "<tag>" help="Release tag, such as v0.1.0"'
-tools = { fnox = "1.41.0", communique = "1.6.1" }
-run = 'fnox exec -- communique generate "${usage_tag?}" --github-release'
+tools = { communique = "1.6.1" }
+run = 'communique generate "${usage_tag?}" --github-release'
 
 # The documentation site. Node and aube are task-scoped, like the test-only
 # lockfile engines, so a development `mise install` does not fetch them.

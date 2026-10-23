@@ -361,19 +361,30 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release edit "$GITHUB_REF_NAME" --draft=false
-      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+      # The Anthropic key lives in Infisical as anthropic-api-key (project
+      # INFISICAL_PROJECT_ID, environment prod), read through GitHub OIDC by a machine identity
+      # bound to tag refs. Until both repository variables are set, the
+      # release keeps GitHub's generated notes.
+      - if: vars.INFISICAL_IDENTITY_ID != '' && vars.INFISICAL_PROJECT_ID != ''
+        uses: Infisical/secrets-action@d2e351f16c6ca20d17c85e6c992e04bdeb64e87d # v1.0.18
+        with:
+          method: oidc
+          identity-id: ${{ vars.INFISICAL_IDENTITY_ID }}
+          project-id: ${{ vars.INFISICAL_PROJECT_ID }}
+          env-slug: prod
+          secret-name: anthropic-api-key
+      - if: vars.INFISICAL_IDENTITY_ID != '' && vars.INFISICAL_PROJECT_ID != ''
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
           install: false
           # A release never restores a cache, so nothing cached reaches the artifacts.
           cache: false
-      # Until ANTHROPIC_API_KEY is in fnox.toml, the release keeps GitHub's
-      # generated notes.
       - name: Write the release notes
-        continue-on-error: true
+        if: vars.INFISICAL_IDENTITY_ID != '' && vars.INFISICAL_PROJECT_ID != ''
         env:
-          # Only the release tools, not the workspace toolchains.
-          MISE_ENABLE_TOOLS: fnox,communique
+          # Only the release tool, not the workspace toolchains.
+          MISE_ENABLE_TOOLS: communique
           GITHUB_TOKEN: ${{ github.token }}
-          FNOX_AGE_KEY: ${{ secrets.FNOX_AGE_KEY }}
-          FNOX_IF_MISSING: error
+          # The action exports the secret under its Infisical name.
+          ANTHROPIC_API_KEY: ${{ env['anthropic-api-key'] }}
         run: mise run release:notes "$GITHUB_REF_NAME"
