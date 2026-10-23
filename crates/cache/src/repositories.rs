@@ -129,10 +129,12 @@ impl Cache {
 
     /// Records a run of a known repository in its installation, unless a run
     /// that started later is already recorded. Returns whether it was recorded.
+    /// A run can make a repository private but never public: its visibility
+    /// was read before a webhook may have changed it.
     pub async fn repository_ran(&self, run: Run) -> Result<bool> {
         self.call(move |store| {
             Ok(store.conn.execute(
-                "UPDATE server_repositories SET private=?3,ran_at=?4,summary=?5,snapshot=?6 \
+                "UPDATE server_repositories SET private=MAX(private,?3),ran_at=?4,summary=?5,snapshot=?6 \
                  WHERE repo=?1 AND installation=?2 AND (ran_at IS NULL OR ran_at<=?4)",
                 params![
                     run.repo,
@@ -295,6 +297,12 @@ mod tests {
         let app = cache.repository("acme/app").await.unwrap().unwrap();
         assert_eq!(app.ran_at, Some(200));
         assert_eq!(app.snapshot.as_deref(), Some(&b"{\"at\":200}"[..]));
+        cache.repository_visibility("acme/app", true).await.unwrap();
+        assert!(cache.repository_ran(run("acme/app", 400)).await.unwrap());
+        assert!(
+            cache.repository("acme/app").await.unwrap().unwrap().private,
+            "a run read as public does not undo a later privatized webhook"
+        );
     }
 
     #[tokio::test]

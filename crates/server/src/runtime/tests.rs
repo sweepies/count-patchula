@@ -1376,7 +1376,33 @@ async fn webhooks_keep_the_public_repositories_current() {
     renamed["action"] = json!("renamed");
     renamed["repository"] = json!({"full_name": "owner/renamed", "private": false});
     renamed["changes"] = json!({"repository": {"name": {"from": "Repo"}}});
-    send("repository", "renamed", renamed).await;
+    send("repository", "renamed", renamed.clone()).await;
+    state
+        .cache
+        .repository_ran(patchula_cache::repositories::Run {
+            installation: 1,
+            repo: "owner/renamed".into(),
+            private: false,
+            ran_at: 100,
+            summary: b"{}".to_vec(),
+            snapshot: b"{}".to_vec(),
+        })
+        .await
+        .unwrap();
+    let mut recased = renamed.clone();
+    recased["changes"] = json!({"repository": {"name": {"from": "Renamed"}}});
+    send("repository", "recased", recased).await;
+    assert_eq!(
+        state
+            .cache
+            .repository("owner/renamed")
+            .await
+            .unwrap()
+            .unwrap()
+            .ran_at,
+        Some(100),
+        "a change of case keeps the run"
+    );
     send(
         "installation_repositories",
         "removed",

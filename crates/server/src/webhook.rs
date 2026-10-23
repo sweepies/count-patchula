@@ -301,6 +301,11 @@ pub(crate) async fn track(
                 .as_str()
                 .zip(name(repository))
                 .filter(|_| action == "renamed")
+                // A change of case only is the same repository.
+                .filter(|(from, repo)| {
+                    repo.split_once('/')
+                        .is_none_or(|(_, now)| !now.eq_ignore_ascii_case(from))
+                })
                 .and_then(|(from, repo)| Some(format!("{}/{from}", repo.split_once('/')?.0)));
             if let Some(old) = old {
                 cache

@@ -419,8 +419,16 @@ impl Batch for Engines {
                     .await
             };
             if let Ok(report) = &result {
-                crate::public::record(&self.cache, &client, &self.bot_login, id, report, started)
-                    .await;
+                crate::public::record(
+                    &self.cache,
+                    &client,
+                    &self.bot_login,
+                    id,
+                    report,
+                    started,
+                    &self.member(id),
+                )
+                .await;
             }
             let report = match &result {
                 Ok(report) => report.clone(),
@@ -452,6 +460,16 @@ impl Batch for Engines {
     }
 }
 impl Engines {
+    /// Asks GitHub whether a repository is in this App's installation `id`.
+    fn member(&self, id: u64) -> impl Fn(String) -> BoxFuture<'static, bool> + Send + Sync + use<> {
+        let app = self.app.clone();
+        move |repo| {
+            let app = app.clone();
+            Box::pin(
+                async move { app.repository_installation(&repo).await.ok().flatten() == Some(id) },
+            )
+        }
+    }
     /// The installation's engine, created on first use and set to the current settings.
     fn engine<'a>(
         &self,
@@ -537,6 +555,7 @@ impl crate::remote::Runner for Engines {
                         installation,
                         &report,
                         started,
+                        &self.member(installation),
                     )
                     .await;
                 }

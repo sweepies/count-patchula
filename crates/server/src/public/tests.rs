@@ -26,6 +26,7 @@ impl Transport for GitHub {
         let (status, body) = match request.url().path() {
             "/repos/acme/app" => (200, json!({"private": false})),
             "/repos/acme/secret" => (200, json!({"private": true})),
+            "/repos/acme/late" | "/repos/acme/stranger" => (200, json!({"private": false})),
             "/repos/acme/app/pulls" => {
                 let mut human = owned(9, "feature");
                 human["user"]["login"] = json!("someone");
@@ -71,7 +72,17 @@ async fn recorded() -> Cache {
         Arc::new(GitHub),
     )
     .unwrap();
-    record(&cache, &client, "patchula[bot]", 1, &report(), Utc::now()).await;
+    record(
+        &cache,
+        &client,
+        "patchula[bot]",
+        1,
+        &report(),
+        Utc::now(),
+        // Discovery has not listed acme/late yet; acme/stranger is not ours.
+        &|repo: String| Box::pin(async move { repo == "acme/late" }),
+    )
+    .await;
     cache
 }
 
@@ -99,7 +110,8 @@ fn report() -> Report {
     ]}]);
     serde_json::from_value(json!({
         "schemaVersion": 2,
-        "repositories": [app, repository("acme/secret"), repository("acme/broken")],
+        "repositories": [app, repository("acme/secret"), repository("acme/broken"),
+            repository("acme/late"), repository("acme/stranger")],
         "actions": {"schemaVersion": 1, "dryRun": false,
             "branches": [{"repository": "acme/app", "branch": "patchula/serde-2.x",
                 "baseCommit": "c".repeat(40), "status": "created", "reason": null,
@@ -139,7 +151,7 @@ async fn anyone_reads_what_the_last_run_left_of_public_repositories() {
     let cache = recorded().await;
     let dashboard = ExtractionKey {
         repo: "acme/app".into(),
-        default_branch_commit: String::new(),
+        default_branch_commit: String::default(),
         config_hash: "dashboard-receipt-v1".into(),
     };
     cache
@@ -153,7 +165,17 @@ async fn anyone_reads_what_the_last_run_left_of_public_repositories() {
         Arc::new(GitHub),
     )
     .unwrap();
-    record(&cache, &client, "patchula[bot]", 1, &report(), Utc::now()).await;
+    record(
+        &cache,
+        &client,
+        "patchula[bot]",
+        1,
+        &report(),
+        Utc::now(),
+        // Discovery has not listed acme/late yet; acme/stranger is not ours.
+        &|repo: String| Box::pin(async move { repo == "acme/late" }),
+    )
+    .await;
     cache
         .enqueue(None, vec![Work::repository(1, "acme/app")], 0, 0)
         .await
@@ -170,8 +192,8 @@ async fn anyone_reads_what_the_last_run_left_of_public_repositories() {
     let names: Vec<_> = repositories.iter().map(|r| &r["repository"]).collect();
     assert_eq!(
         names,
-        ["acme/app", "acme/fresh"],
-        "private and unreadable ones are hidden"
+        ["acme/app", "acme/fresh", "acme/late"],
+        "private, unreadable and other installations' ones are hidden"
     );
     assert_eq!(
         repositories[1],

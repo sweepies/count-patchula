@@ -245,9 +245,11 @@ The API is read-only. A dashboard that merges sends GitHub's
 Discovery and installation events decide which repositories are listed: a
 sweep replaces each installation's list, repositories added to or removed from
 an installation, and renamed ones, come and go straight away, and an uninstalled installation's
-repositories go within a minute. Settings that no longer allow a repository
-hide it at once. Every webhook about a repository updates its visibility, and
-so does each run. A private repository is never shown, and neither is one
+repositories go within a minute. A run of a repository the server
+has not listed yet adds it once GitHub confirms it is in the installation.
+Settings that no longer allow a repository hide it at once. Every webhook
+about a repository updates its visibility, and a run can hide it but never
+show it, since a webhook may have changed it during the run. A private repository is never shown, and neither is one
 whose visibility the server could not read.
 
 The server records a repository after each run that writes: queued batches and

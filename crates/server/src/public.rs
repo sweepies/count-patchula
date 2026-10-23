@@ -157,12 +157,18 @@ struct Summary<'a> {
     dashboard: Option<u64>,
 }
 
+/// Whether GitHub says a repository is in the run's installation.
+pub(crate) type Member =
+    dyn Fn(String) -> futures_util::future::BoxFuture<'static, bool> + Send + Sync;
+
 /// Most open PRs read for one repository.
 const PULL_PAGES: u32 = 10;
 
-/// Records every known repository in a writing run's report, for a run that
+/// Records every repository in a writing run's report, for a run that
 /// started at `started`. A repository whose visibility cannot be read is
-/// recorded as private, so it stays hidden.
+/// recorded as private, so it stays hidden. One the server has not listed
+/// yet is added if `member` confirms it belongs to the installation, so a run
+/// before the first discovery still shows.
 pub(crate) async fn record(
     cache: &Cache,
     client: &Client,
@@ -170,6 +176,7 @@ pub(crate) async fn record(
     installation: u64,
     report: &Report,
     started: DateTime<Utc>,
+    member: &Member,
 ) {
     let actions = report.actions.as_ref();
     for repo in &report.repositories {
@@ -264,6 +271,19 @@ pub(crate) async fn record(
             summary,
             snapshot,
         };
+        let known = match cache.repository(name).await {
+            Ok(row) => row.is_some_and(|row| row.installation == installation),
+            Err(_) => false,
+        };
+        if !known
+            && member(name.to_owned()).await
+            && let Err(error) = cache
+                .repositories_added(installation, vec![(name.to_owned(), private)])
+                .await
+        {
+            tracing::warn!(target: "patchula_server", repository = name, error_kind = error.kind(),
+                "cannot add the repository to the public API");
+        }
         if let Err(error) = cache.repository_ran(run).await {
             tracing::warn!(target: "patchula_server", repository = name, error_kind = error.kind(),
                 "cannot record the repository for the public API");
