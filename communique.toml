@@ -1,5 +1,6 @@
 # Release notes for Count Patchula. The release workflow runs
-# `communique generate <tag> --github-release` with ANTHROPIC_API_KEY from fnox.
+# `communique generate <tag> --github-release` with ANTHROPIC_API_KEY from
+# Infisical.
 
 context = """
 Count Patchula is a dependency update bot for GitHub, written in Rust, with a
