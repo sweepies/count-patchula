@@ -91,5 +91,5 @@ runs:
         if [ "$version" = latest ]; then
           export MISE_USE_VERSIONS_HOST=0
         fi
-        bin=$(cd "$RUNNER_TEMP" && MISE_MINIMUM_RELEASE_AGE=0 mise exec "packslip:github.com/sweepies/count-patchula@$version" -- sh -c 'command -v patchula')
+        bin=$(cd "$RUNNER_TEMP" && MISE_MINIMUM_RELEASE_AGE=0 mise exec "packslip:sweepies/count-patchula@$version" -- sh -c 'command -v patchula')
         "$bin" "${args[@]}"

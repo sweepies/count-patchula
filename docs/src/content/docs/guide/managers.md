@@ -69,7 +69,9 @@ not editable yet and report an error.
 
 Strings, arrays, version tables and `.tool-versions`. Short names resolve
 through mise's published registry to their real source (aqua, GitHub, npm,
-cargo, PyPI and the core tools), and unknown aliases produce a lookup warning.
+cargo, PyPI, packslip and the core tools), and unknown aliases produce a lookup
+warning. Packslip tools on GitHub can be written `packslip:owner/repo` or
+`packslip:github.com/owner/repo`.
 Plugins are never run. An existing `mise.lock` is regenerated with the update.
 
 ## Cargo, Go and Terraform
