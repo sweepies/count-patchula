@@ -58,7 +58,8 @@ struct Snapshot<'a> {
     commit: Option<&'a str>,
     package_files: &'a [PackageFile],
     branches: Vec<Branch<'a>>,
-    pull_requests: Vec<&'a PullRequestAction>,
+    /// null when GitHub would not list them.
+    pull_requests: Option<Vec<PullRequest<'a>>>,
     dashboard: Option<u64>,
     merged: Vec<Merged>,
 }
@@ -73,6 +74,67 @@ struct Branch<'a> {
     commit: Option<&'a str>,
     lockfile_pending: bool,
     files: Vec<&'a str>,
+}
+/// One of the Count's open PRs as GitHub showed it after the run.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PullRequest<'a> {
+    number: u64,
+    url: Option<String>,
+    branch: Option<String>,
+    title: Option<String>,
+    body: Option<String>,
+    draft: bool,
+    labels: Vec<String>,
+    head_sha: Option<String>,
+    base: Option<String>,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+    /// GitHub computes these in the background, so either may be null.
+    mergeable: Option<bool>,
+    mergeable_state: Option<String>,
+    auto_merge: bool,
+    /// What the run did to the PR, when it acted on it.
+    action: Option<Action<'a>>,
+}
+#[derive(Serialize)]
+struct Action<'a> {
+    status: ActionStatus,
+    reason: Option<&'a str>,
+}
+impl<'a> PullRequest<'a> {
+    fn new(pr: &Value, actions: &[&'a PullRequestAction]) -> Option<Self> {
+        let text = |value: &Value| value.as_str().map(str::to_owned);
+        let number = pr["number"].as_u64()?;
+        Some(Self {
+            number,
+            url: text(&pr["html_url"]),
+            branch: text(&pr["head"]["ref"]),
+            title: text(&pr["title"]),
+            body: text(&pr["body"]),
+            draft: pr["draft"].as_bool().unwrap_or(false),
+            labels: pr["labels"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|label| text(&label["name"]))
+                .collect(),
+            head_sha: text(&pr["head"]["sha"]),
+            base: text(&pr["base"]["ref"]),
+            created_at: text(&pr["created_at"]),
+            updated_at: text(&pr["updated_at"]),
+            mergeable: pr["mergeable"].as_bool(),
+            mergeable_state: text(&pr["mergeable_state"]),
+            auto_merge: !pr["auto_merge"].is_null(),
+            action: actions
+                .iter()
+                .find(|action| action.number == Some(number))
+                .map(|action| Action {
+                    status: action.status,
+                    reason: action.reason.as_deref(),
+                }),
+        })
+    }
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,15 +153,24 @@ struct Summary<'a> {
     default_branch: Option<&'a str>,
     dependencies: usize,
     updates: usize,
-    pull_requests: usize,
+    pull_requests: Option<usize>,
     dashboard: Option<u64>,
 }
 
-/// Records every repository in a writing run's report. A repository whose
-/// visibility cannot be read is recorded as private, so it stays hidden.
-pub(crate) async fn record(cache: &Cache, client: &Client, installation: u64, report: &Report) {
-    let now = Utc::now();
-    let empty = Vec::new();
+/// Most open PRs read for one repository.
+const PULL_PAGES: u32 = 10;
+
+/// Records every known repository in a writing run's report, for a run that
+/// started at `started`. A repository whose visibility cannot be read is
+/// recorded as private, so it stays hidden.
+pub(crate) async fn record(
+    cache: &Cache,
+    client: &Client,
+    bot: &str,
+    installation: u64,
+    report: &Report,
+    started: DateTime<Utc>,
+) {
     let actions = report.actions.as_ref();
     for repo in &report.repositories {
         let name = repo.repository.as_str();
@@ -110,11 +181,19 @@ pub(crate) async fn record(cache: &Cache, client: &Client, installation: u64, re
                 .unwrap_or(true),
             Err(_) => true,
         };
-        let pull_requests: Vec<_> = actions
-            .map_or(&empty, |a| &a.pull_requests)
+        let pull_actions: Vec<_> = actions
+            .map(|a| a.pull_requests.as_slice())
+            .unwrap_or_default()
             .iter()
             .filter(|pr| pr.repository == name)
             .collect();
+        let pulls = open_pulls(client, bot, name).await;
+        let pull_requests: Option<Vec<_>> = pulls.as_ref().map(|pulls| {
+            pulls
+                .iter()
+                .filter_map(|pr| PullRequest::new(pr, &pull_actions))
+                .collect()
+        });
         let branches = actions
             .map(|a| a.branches.as_slice())
             .unwrap_or_default()
@@ -140,7 +219,11 @@ pub(crate) async fn record(cache: &Cache, client: &Client, installation: u64, re
                     number: pr["number"].as_u64()?,
                     title: pr["title"].as_str().map(str::to_owned),
                     url: pr["html_url"].as_str().map(str::to_owned),
-                    merged_at: pr["merged_at"].as_str().map(str::to_owned),
+                    // A merge the Count made himself has no recorded time.
+                    merged_at: pr["merged_at"]
+                        .as_str()
+                        .filter(|at| DateTime::parse_from_rfc3339(at).is_ok())
+                        .map(str::to_owned),
                 })
             })
             .collect();
@@ -151,12 +234,12 @@ pub(crate) async fn record(cache: &Cache, client: &Client, installation: u64, re
             default_branch: repo.default_branch.as_deref(),
             dependencies: dependencies.clone().count(),
             updates: dependencies.filter(|d| !d.updates.is_empty()).count(),
-            pull_requests: pull_requests.iter().filter(|pr| open(pr)).count(),
+            pull_requests: pull_requests.as_ref().map(Vec::len),
             dashboard,
         };
         let snapshot = Snapshot {
             repository: name,
-            ran_at: now.to_rfc3339(),
+            ran_at: started.to_rfc3339(),
             status: repo.status,
             reason: repo.reason.as_deref(),
             warnings: &repo.warnings,
@@ -177,7 +260,7 @@ pub(crate) async fn record(cache: &Cache, client: &Client, installation: u64, re
             installation,
             repo: name.to_owned(),
             private,
-            ran_at: now.timestamp(),
+            ran_at: started.timestamp(),
             summary,
             snapshot,
         };
@@ -188,13 +271,42 @@ pub(crate) async fn record(cache: &Cache, client: &Client, installation: u64, re
     }
 }
 
-/// A PR the Count still has open after the run.
-fn open(pr: &PullRequestAction) -> bool {
-    pr.number.is_some()
-        && !matches!(
-            pr.status,
-            ActionStatus::Closed | ActionStatus::Merged | ActionStatus::Deleted
-        )
+/// The Count's open PRs in `repo`, each read on its own for its merge state.
+/// None when GitHub would not list them.
+async fn open_pulls(client: &Client, bot: &str, repo: &str) -> Option<Vec<Value>> {
+    let mut owned = Vec::new();
+    for page in 1..=PULL_PAGES {
+        let response = client
+            .get(&format!(
+                "repos/{repo}/pulls?state=open&per_page=100&page={page}"
+            ))
+            .await
+            .ok()?;
+        let pulls: Vec<Value> = serde_json::from_slice(&response.body).ok()?;
+        let full = pulls.len() == 100;
+        owned.extend(
+            pulls
+                .into_iter()
+                .filter(|pr| patchula_update::pull_requests::owned_pr(pr, bot, repo)),
+        );
+        if !full {
+            break;
+        }
+    }
+    for pr in &mut owned {
+        let Some(number) = pr["number"].as_u64() else {
+            continue;
+        };
+        if let Some(full) = client
+            .get(&format!("repos/{repo}/pulls/{number}"))
+            .await
+            .ok()
+            .and_then(|response| serde_json::from_slice::<Value>(&response.body).ok())
+        {
+            *pr = full;
+        }
+    }
+    Some(owned)
 }
 
 struct Reject(StatusCode, &'static str, &'static str);

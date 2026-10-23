@@ -509,7 +509,7 @@ async fn steady_runs_only_lookup_and_one_inventory_with_open_or_closed_updates()
 async fn dashboard_renames_are_preserved_and_disabling_closes_only_the_owned_issue() {
     let fake = Arc::new(Fake::new(false));
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+    let engine = Engine::with_transport("offline-installation", cache.clone(), 4, fake.clone())
         .unwrap()
         .with_versions_host(false);
     let run = |config| {
@@ -560,8 +560,18 @@ async fn dashboard_renames_are_preserved_and_disabling_closes_only_the_owned_iss
         patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap();
     config.prs.dashboard = false;
     config.defaults.wait_hours = 0;
+    assert!(
+        patchula_update::dashboard::issue_number(&cache, "demo/sandbox")
+            .await
+            .is_some()
+    );
     run(Some(config)).await.unwrap();
     assert_eq!(fake.issues.lock().unwrap()[0]["state"], "CLOSED");
+    assert_eq!(
+        patchula_update::dashboard::issue_number(&cache, "demo/sandbox").await,
+        None,
+        "a closed dashboard is forgotten"
+    );
     fake.writes.lock().unwrap().clear();
     let mut config =
         patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap();

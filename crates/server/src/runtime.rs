@@ -403,21 +403,24 @@ impl Batch for Engines {
                 );
                 return Ok(BatchOutcome::default());
             }
-            let mut engines = self.engines.lock().await;
-            let engine = self.engine(&mut engines, id, settings)?;
-            let result = engine
-                .run(
-                    patchula_engine::Options {
-                        repositories: repositories.clone(),
-                        ..Default::default()
-                    },
-                    false,
-                    false,
-                )
-                .await;
-            drop(engines);
+            let started = Utc::now();
+            let result = {
+                let mut engines = self.engines.lock().await;
+                let engine = self.engine(&mut engines, id, settings)?;
+                engine
+                    .run(
+                        patchula_engine::Options {
+                            repositories: repositories.clone(),
+                            ..patchula_engine::Options::default()
+                        },
+                        false,
+                        false,
+                    )
+                    .await
+            };
             if let Ok(report) = &result {
-                crate::public::record(&self.cache, &client, id, report).await;
+                crate::public::record(&self.cache, &client, &self.bot_login, id, report, started)
+                    .await;
             }
             let report = match &result {
                 Ok(report) => report.clone(),
@@ -502,30 +505,40 @@ impl crate::remote::Runner for Engines {
     ) -> BoxFuture<'a, Result<Report, &'static str>> {
         use crate::remote::Mode;
         Box::pin(async move {
-            // The same lock as queued batches, so a remote run never races one.
-            let mut engines = self.engines.lock().await;
-            let engine = self
-                .engine(&mut engines, installation, settings)
-                .map_err(|e| e.0)?;
-            let options = patchula_engine::Options {
-                repositories,
-                ..patchula_engine::Options::default()
+            let started = Utc::now();
+            let report = {
+                // The same lock as queued batches, so a remote run never races one.
+                let mut engines = self.engines.lock().await;
+                let engine = self
+                    .engine(&mut engines, installation, settings)
+                    .map_err(|e| e.0)?;
+                let options = patchula_engine::Options {
+                    repositories,
+                    ..patchula_engine::Options::default()
+                };
+                match mode {
+                    Mode::Lookup => engine.lookup(options).await,
+                    Mode::DryRun => engine.run(options, true, false).await,
+                    Mode::Run => engine.run(options, false, false).await,
+                }
+                .map_err(|_| "the run failed on the server")?
             };
-            let report = match mode {
-                Mode::Lookup => engine.lookup(options).await,
-                Mode::DryRun => engine.run(options, true, false).await,
-                Mode::Run => engine.run(options, false, false).await,
-            }
-            .map_err(|_| "the run failed on the server")?;
-            drop(engines);
             if mode == Mode::Run {
                 if let Ok(client) = Client::with_credentials(
                     self.app.installation(installation),
                     self.cache.clone(),
-                    Default::default(),
+                    patchula_github::Options::default(),
                     self.transport.clone(),
                 ) {
-                    crate::public::record(&self.cache, &client, installation, &report).await;
+                    crate::public::record(
+                        &self.cache,
+                        &client,
+                        &self.bot_login,
+                        installation,
+                        &report,
+                        started,
+                    )
+                    .await;
                 }
                 tracing::info!(target: "patchula_server", installation, user = login, "remote run report");
                 output_report(&report, settings.report_directory.as_deref())

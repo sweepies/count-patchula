@@ -8,7 +8,7 @@ pub struct Row {
     pub repo: String,
     pub installation: u64,
     pub private: bool,
-    /// UTC Unix seconds of the last recorded run.
+    /// UTC Unix seconds when the last recorded run started.
     pub ran_at: Option<i64>,
     pub summary: Option<Vec<u8>>,
     /// Only [`Cache::repository`] reads it.
@@ -25,6 +25,7 @@ pub struct Run {
     pub installation: u64,
     pub repo: String,
     pub private: bool,
+    /// UTC Unix seconds when the run started.
     pub ran_at: i64,
     pub summary: Vec<u8>,
     pub snapshot: Vec<u8>,
@@ -46,6 +47,9 @@ fn row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
         running: row.get::<_, Option<bool>>(6)?.unwrap_or(false),
     })
 }
+
+const ADD: &str = "INSERT INTO server_repositories (repo,installation,private) VALUES (?1,?2,?3) \
+    ON CONFLICT(repo) DO UPDATE SET installation=excluded.installation,private=excluded.private";
 
 impl Cache {
     /// Sets an installation's repositories to a discovery listing of
@@ -72,11 +76,7 @@ impl Cache {
                 tx.execute("DELETE FROM server_repositories WHERE repo=?1", [repo])?;
             }
             for (repo, private) in &listed {
-                tx.execute(
-                    "INSERT INTO server_repositories (repo,installation,private) VALUES (?1,?2,?3) \
-                     ON CONFLICT(repo) DO UPDATE SET installation=excluded.installation,private=excluded.private",
-                    params![repo, installation as i64, private],
-                )?;
+                tx.execute(ADD, params![repo, installation as i64, private])?;
             }
             tx.commit()?;
             Ok(())
@@ -84,13 +84,56 @@ impl Cache {
         .await
     }
 
-    /// Records a run, replacing the repository's previous one.
-    pub async fn repository_ran(&self, run: Run) -> Result<()> {
+    /// Adds `(repo, private)` repositories to an installation, keeping any runs.
+    pub async fn repositories_added(
+        &self,
+        installation: u64,
+        added: Vec<(String, bool)>,
+    ) -> Result<()> {
+        self.call(move |store| {
+            let tx = store.conn.transaction()?;
+            for (repo, private) in &added {
+                tx.execute(ADD, params![repo, installation as i64, private])?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Removes repositories with their runs.
+    pub async fn repositories_removed(&self, removed: Vec<String>) -> Result<()> {
+        self.call(move |store| {
+            let tx = store.conn.transaction()?;
+            for repo in &removed {
+                tx.execute("DELETE FROM server_repositories WHERE repo=?1", [repo])?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Sets a known repository's visibility.
+    pub async fn repository_visibility(&self, repo: &str, private: bool) -> Result<()> {
+        let repo = repo.to_owned();
         self.call(move |store| {
             store.conn.execute(
-                "INSERT INTO server_repositories VALUES (?1,?2,?3,?4,?5,?6) \
-                 ON CONFLICT(repo) DO UPDATE SET installation=excluded.installation,private=excluded.private,\
-                 ran_at=excluded.ran_at,summary=excluded.summary,snapshot=excluded.snapshot",
+                "UPDATE server_repositories SET private=?2 WHERE repo=?1",
+                params![repo, private],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Records a run of a known repository in its installation, unless a run
+    /// that started later is already recorded. Returns whether it was recorded.
+    pub async fn repository_ran(&self, run: Run) -> Result<bool> {
+        self.call(move |store| {
+            Ok(store.conn.execute(
+                "UPDATE server_repositories SET private=?3,ran_at=?4,summary=?5,snapshot=?6 \
+                 WHERE repo=?1 AND installation=?2 AND (ran_at IS NULL OR ran_at<=?4)",
                 params![
                     run.repo,
                     run.installation as i64,
@@ -99,8 +142,7 @@ impl Cache {
                     run.summary,
                     run.snapshot
                 ],
-            )?;
-            Ok(())
+            )? > 0)
         })
         .await
     }
@@ -163,68 +205,148 @@ impl Cache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::queue::Work;
+    use crate::{Options, queue::Work};
 
-    fn run(repo: &str, private: bool) -> Run {
+    fn run(repo: &str, ran_at: i64) -> Run {
         Run {
             installation: 1,
             repo: repo.into(),
-            private,
-            ran_at: 100,
+            private: false,
+            ran_at,
             summary: b"{}".to_vec(),
-            snapshot: b"{\"full\":true}".to_vec(),
+            snapshot: format!("{{\"at\":{ran_at}}}").into_bytes(),
         }
+    }
+    async fn names(cache: &Cache) -> Vec<String> {
+        cache
+            .repositories()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.repo)
+            .collect()
     }
 
     #[tokio::test]
     async fn listings_add_refresh_and_remove_repositories_and_keep_runs() {
         let directory = tempfile::tempdir().unwrap();
-        let cache = Cache::open(directory.path().join("cache.sqlite"), Default::default())
+        let cache = Cache::open(directory.path().join("cache.sqlite"), Options::default())
             .await
             .unwrap();
+        let listed = |repos: &[(&str, bool)]| {
+            repos
+                .iter()
+                .map(|(repo, private)| ((*repo).to_owned(), *private))
+                .collect::<Vec<_>>()
+        };
         cache
-            .repositories_listed(
-                1,
-                vec![("acme/app".into(), false), ("acme/gone".into(), false)],
-            )
+            .repositories_listed(1, listed(&[("acme/app", false), ("acme/gone", false)]))
             .await
             .unwrap();
-        cache.repository_ran(run("acme/app", false)).await.unwrap();
+        assert!(cache.repository_ran(run("acme/app", 100)).await.unwrap());
+        assert!(
+            !cache
+                .repository_ran(run("acme/unknown", 100))
+                .await
+                .unwrap(),
+            "only known repositories are recorded"
+        );
         cache
-            .repository_ran(run("acme/other", false))
-            .await
-            .unwrap();
-        cache
-            .repositories_listed(
-                1,
-                vec![("acme/app".into(), true), ("acme/new".into(), false)],
-            )
+            .repositories_listed(1, listed(&[("acme/app", true), ("acme/new", false)]))
             .await
             .unwrap();
         let rows = cache.repositories().await.unwrap();
-        let names: Vec<_> = rows.iter().map(|r| r.repo.as_str()).collect();
-        assert_eq!(names, ["acme/app", "acme/new"]);
+        assert_eq!(names(&cache).await, ["acme/app", "acme/new"]);
         assert!(rows[0].private);
         assert_eq!(rows[0].ran_at, Some(100));
         assert_eq!(rows[0].snapshot, None);
         assert_eq!(rows[1].summary, None);
         let app = cache.repository("acme/app").await.unwrap().unwrap();
-        assert_eq!(app.snapshot.as_deref(), Some(&b"{\"full\":true}"[..]));
+        assert_eq!(app.snapshot.as_deref(), Some(&b"{\"at\":100}"[..]));
         assert_eq!(cache.repository("acme/gone").await.unwrap(), None);
+        assert!(
+            !cache.repository_ran(run("acme/gone", 200)).await.unwrap(),
+            "a removed repository does not come back from a run"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_earlier_run_never_replaces_a_later_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = Cache::open(directory.path().join("cache.sqlite"), Options::default())
+            .await
+            .unwrap();
+        cache
+            .repositories_added(1, vec![("acme/app".into(), false)])
+            .await
+            .unwrap();
+        assert!(cache.repository_ran(run("acme/app", 200)).await.unwrap());
+        assert!(!cache.repository_ran(run("acme/app", 100)).await.unwrap());
+        assert!(
+            !cache
+                .repository_ran(Run {
+                    installation: 2,
+                    ..run("acme/app", 300)
+                })
+                .await
+                .unwrap(),
+            "another installation's run is not this repository's"
+        );
+        let app = cache.repository("acme/app").await.unwrap().unwrap();
+        assert_eq!(app.ran_at, Some(200));
+        assert_eq!(app.snapshot.as_deref(), Some(&b"{\"at\":200}"[..]));
+    }
+
+    #[tokio::test]
+    async fn webhooks_change_visibility_and_membership() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = Cache::open(directory.path().join("cache.sqlite"), Options::default())
+            .await
+            .unwrap();
+        cache
+            .repositories_added(
+                1,
+                vec![("acme/app".into(), false), ("acme/b".into(), false)],
+            )
+            .await
+            .unwrap();
+        cache.repository_ran(run("acme/app", 100)).await.unwrap();
+        cache.repository_visibility("acme/app", true).await.unwrap();
+        cache
+            .repository_visibility("acme/unknown", false)
+            .await
+            .unwrap();
+        let app = cache.repository("acme/app").await.unwrap().unwrap();
+        assert!(app.private);
+        assert_eq!(app.ran_at, Some(100), "visibility keeps the run");
+        cache
+            .repositories_added(1, vec![("acme/app".into(), false)])
+            .await
+            .unwrap();
+        assert_eq!(
+            cache.repository("acme/app").await.unwrap().unwrap().ran_at,
+            Some(100),
+            "adding again keeps the run"
+        );
+        cache
+            .repositories_removed(vec!["acme/b".into()])
+            .await
+            .unwrap();
+        assert_eq!(names(&cache).await, ["acme/app"]);
     }
 
     #[tokio::test]
     async fn rows_show_queued_work_and_uninstalled_repositories_go() {
         let directory = tempfile::tempdir().unwrap();
-        let cache = Cache::open(directory.path().join("cache.sqlite"), Default::default())
+        let cache = Cache::open(directory.path().join("cache.sqlite"), Options::default())
             .await
             .unwrap();
-        cache.repository_ran(run("acme/app", false)).await.unwrap();
         cache
-            .repository_ran(Run {
-                installation: 2,
-                ..run("acme/elsewhere", false)
-            })
+            .repositories_added(1, vec![("acme/app".into(), false)])
+            .await
+            .unwrap();
+        cache
+            .repositories_added(2, vec![("acme/elsewhere".into(), false)])
             .await
             .unwrap();
         cache
@@ -236,15 +358,8 @@ mod tests {
         cache.claim_batch(5_000, 10).await.unwrap();
         assert!(cache.repository("acme/app").await.unwrap().unwrap().running);
         cache.repositories_retain(vec![1]).await.unwrap();
-        let names: Vec<_> = cache
-            .repositories()
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|r| r.repo)
-            .collect();
-        assert_eq!(names, ["acme/app"]);
+        assert_eq!(names(&cache).await, ["acme/app"]);
         cache.repositories_retain(Vec::new()).await.unwrap();
-        assert!(cache.repositories().await.unwrap().is_empty());
+        assert!(names(&cache).await.is_empty());
     }
 }

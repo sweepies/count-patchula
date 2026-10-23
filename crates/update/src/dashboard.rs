@@ -659,7 +659,11 @@ pub async fn reconcile(
                 .await
                 .map_err(|e| e.to_string())?;
         }
-        return Ok(());
+        // A closed dashboard is no longer the repository's dashboard.
+        return cache
+            .extraction_remove(&receipt_key(&repo.repository))
+            .await
+            .map_err(|e| e.to_string());
     }
     let digest = hash(body.as_bytes());
     let previous = cache

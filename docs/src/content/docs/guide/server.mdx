@@ -31,7 +31,8 @@ The App needs:
   (dashboard and labels), workflows write (workflow updates), and checks and
   commit statuses read (merge fallback);
 - events: push, issues, pull request, installation, installation repositories,
-  check suite and check run;
+  check suite, check run and repository (which keeps the
+  [repository API](#repository-api) current);
 - a webhook secret;
 - **Enable Device Flow** ticked, so people can [run from their
   machines](#run-from-your-machine).
@@ -215,9 +216,9 @@ it from the browser. Set `publicApi = false` to turn it off.
 
 `updates` counts dependencies with at least one update, `pullRequests` counts
 the Count's open PRs, and `dashboard` is the dependency dashboard's issue
-number. A repository that discovery found but that has not run yet has only
-`repository`, `ranAt: null` and `queued`. `queued` is `null`, or
-`{"at", "running"}` when work for the repository is waiting or in a batch.
+number. A repository that has not run yet has only `repository`,
+`ranAt: null` and `queued`. `queued` is `null`, or `{"at", "running"}` when
+work for the repository is waiting or in a batch.
 
 `GET /api/v1/repositories/{owner}/{repo}` returns everything from the last run:
 
@@ -227,17 +228,31 @@ number. A repository that discovery found but that has not run yet has only
 | `commit` | the default branch commit the run read |
 | `warnings` | the run's warnings |
 | `packageFiles` | each package file's dependencies and their updates, as in the [report](/reference/report/) |
-| `branches` | each update branch: `branch`, `status`, `reason`, `message`, `baseCommit`, `commit`, `lockfilePending`, and the `files` it changes, without diffs |
-| `pullRequests` | each PR action: `branch`, `number`, `url`, `status`, `reason` |
-| `merged` | up to 20 PRs the Count merged himself: `number`, `title`, `url`, `mergedAt` |
+| `branches` | each update branch the run planned: `branch`, `status`, `reason`, `message`, `baseCommit`, `commit`, `lockfilePending`, and the `files` it changes, without diffs |
+| `pullRequests` | the Count's open PRs, read from GitHub after the run; `null` if GitHub would not list them |
+| `merged` | up to 20 PRs the Count merged himself: `number`, `title`, `url`, and `mergedAt` when GitHub recorded it |
+
+Each open PR has `number`, `url`, `branch`, `title`, `body`, `draft`, `labels`,
+`headSha`, `base`, `createdAt`, `updatedAt`, `mergeable`, `mergeableState`,
+`autoMerge`, and `action`: what the run did to it (`{"status", "reason"}`), or
+`null` if the run left it alone. GitHub works out `mergeable` and
+`mergeableState` in the background, so either can be `null`.
+
+The API is read-only. A dashboard that merges sends GitHub's
+`PUT /repos/{owner}/{repo}/pulls/{number}/merge` with its own token, passing
+`headSha` as `sha` so that GitHub refuses if the PR changed since the run.
+
+Discovery and installation events decide which repositories are listed: a
+sweep replaces each installation's list, repositories added to or removed from
+an installation come and go straight away, and an uninstalled installation's
+repositories go within a minute. Settings that no longer allow a repository
+hide it at once. Every webhook about a repository updates its visibility, and
+so does each run. A private repository is never shown, and neither is one
+whose visibility the server could not read.
 
 The server records a repository after each run that writes: queued batches and
-`--server` runs, but not lookups or dry runs. Each sweep refreshes the list
-from the App's installations, so repositories that are removed, uninstalled or
-no longer allowed by the settings drop out. A private repository is never
-shown, and neither is one whose visibility the server could not read. A
-repository made private shows until the next run or sweep, by default within
-the hour. An unknown or hidden repository is a 404 with `errorKind`
+`--server` runs, but not lookups or dry runs. A run never replaces one that
+started later. An unknown or hidden repository is a 404 with `errorKind`
 `unknown-repository`, and with the API off every request is a 404 with
 `errorKind` `disabled`.
 

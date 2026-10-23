@@ -420,6 +420,18 @@ impl Cache {
             Ok(())
         }).await
     }
+
+    pub async fn extraction_remove(&self, key: &ExtractionKey) -> Result<()> {
+        let key = key.clone();
+        self.call(move |store| {
+            store.conn.execute(
+                "DELETE FROM extraction WHERE repo=?1 AND branch_commit=?2 AND config_hash=?3",
+                rusqlite::params![key.repo, key.default_branch_commit, key.config_hash],
+            )?;
+            Ok(())
+        })
+        .await
+    }
 }
 
 #[cfg(test)]

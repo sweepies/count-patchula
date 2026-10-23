@@ -1324,3 +1324,71 @@ async fn check_events_verify_real_ownership_with_custom_branch_prefixes() {
         );
     }
 }
+
+#[tokio::test]
+async fn webhooks_keep_the_public_repositories_current() {
+    let _capture = LOG_TEST_LOCK.lock().await;
+    let state = state().await;
+    let router = router(state.clone(), Arc::new(AtomicBool::new(true)));
+    let send = |event: &'static str, id: &'static str, payload: Value| {
+        let router = router.clone();
+        async move {
+            let response = router
+                .oneshot(request(serde_json::to_vec(&payload).unwrap(), event, id))
+                .await
+                .unwrap();
+            assert!(response.status().is_success(), "{event} {id}");
+        }
+    };
+    let names = || async {
+        state
+            .cache
+            .repositories()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| (row.repo, row.private))
+            .collect::<Vec<_>>()
+    };
+    send(
+        "installation_repositories",
+        "added",
+        json!({"action": "added", "installation": {"id": 1}, "sender": {"login": "human"},
+            "repositories_added": [{"full_name": "Owner/Repo", "private": false},
+                {"full_name": "owner/other", "private": true}]}),
+    )
+    .await;
+    assert_eq!(
+        names().await,
+        [("owner/other".into(), true), ("owner/repo".into(), false)]
+    );
+    // Any repository payload carries its visibility, here the change itself.
+    let mut privatized = payload();
+    privatized["action"] = json!("privatized");
+    privatized["repository"]["private"] = json!(true);
+    send("repository", "privatized", privatized).await;
+    assert_eq!(names().await[1], ("owner/repo".into(), true));
+    let mut push = payload();
+    push["repository"]["private"] = json!(false);
+    send("push", "push", push).await;
+    assert_eq!(names().await[1], ("owner/repo".into(), false));
+    let mut renamed = payload();
+    renamed["action"] = json!("renamed");
+    renamed["repository"] = json!({"full_name": "owner/renamed", "private": false});
+    send("repository", "renamed", renamed).await;
+    send(
+        "installation_repositories",
+        "removed",
+        json!({"action": "removed", "installation": {"id": 1}, "sender": {"login": "human"},
+            "repositories_removed": [{"full_name": "owner/other"}]}),
+    )
+    .await;
+    assert_eq!(
+        names().await,
+        [
+            ("owner/renamed".into(), false),
+            ("owner/repo".into(), false)
+        ],
+        "discovery drops the old name later"
+    );
+}
