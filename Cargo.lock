@@ -2153,7 +2153,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-cache"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "rusqlite",
  "serde",
@@ -2168,7 +2168,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2195,7 +2195,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-config"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -2214,7 +2214,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-conformance"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "patchula-report",
@@ -2228,7 +2228,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-datasource"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2253,7 +2253,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-engine"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2282,7 +2282,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-github"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "httpdate",
@@ -2302,7 +2302,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-http"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "httpdate",
@@ -2318,7 +2318,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-lookup"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "nodejs-semver",
@@ -2334,7 +2334,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-manager"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "hcl-edit",
  "jsonc-parser",
@@ -2350,7 +2350,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-mise"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "patchula-process",
  "patchula-testkit",
@@ -2363,7 +2363,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-process"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "rustix",
@@ -2372,7 +2372,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-report"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2381,7 +2381,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-server"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "axum",
  "chrono",
@@ -2415,7 +2415,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-testkit"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "patchula-http",
  "patchula-process",
@@ -2430,7 +2430,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-update"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2463,7 +2463,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-versioning"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "nodejs-semver",
  "patchula-config",

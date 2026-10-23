@@ -16,11 +16,11 @@ serde_yaml_ng = "0.10.0"
 patchula-mise = { path = "../mise" }
 regex = "1.13.1"
 reqwest.workspace = true
-patchula-cache = { version = "0.2.0", path = "../cache" }
-patchula-config = { version = "0.2.0", path = "../config" }
-patchula-github = { version = "0.2.0", path = "../github" }
-patchula-http = { version = "0.2.0", path = "../http" }
-patchula-versioning = { version = "0.2.0", path = "../versioning" }
+patchula-cache = { version = "0.3.0", path = "../cache" }
+patchula-config = { version = "0.3.0", path = "../config" }
+patchula-github = { version = "0.3.0", path = "../github" }
+patchula-http = { version = "0.3.0", path = "../http" }
+patchula-versioning = { version = "0.3.0", path = "../versioning" }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.11.1"

@@ -13,11 +13,11 @@ workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 nodejs-semver = "7.0.0"
 regex = "1.13.1"
-patchula-config = { version = "0.2.0", path = "../config" }
-patchula-datasource = { version = "0.2.0", path = "../datasource" }
-patchula-manager = { version = "0.2.0", path = "../manager" }
-patchula-report = { version = "0.2.0", path = "../report" }
-patchula-versioning = { version = "0.2.0", path = "../versioning" }
+patchula-config = { version = "0.3.0", path = "../config" }
+patchula-datasource = { version = "0.3.0", path = "../datasource" }
+patchula-manager = { version = "0.3.0", path = "../manager" }
+patchula-report = { version = "0.3.0", path = "../report" }
+patchula-versioning = { version = "0.3.0", path = "../versioning" }
 semver = "1.0.28"
 
 [dev-dependencies]
