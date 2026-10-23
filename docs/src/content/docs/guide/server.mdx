@@ -270,6 +270,66 @@ non-loopback targets. Set only one of `PATCHULA_WEBHOOK_SECRET_FILE` and
 `PATCHULA_WEBHOOK_SECRET` when you use it. A repeated delivery ID is accepted
 but ignored, so use a new ID to trigger again.
 
+## Container image
+
+Each release publishes an image for linux/amd64 and linux/arm64 to the GitHub
+Container Registry:
+
+```text
+ghcr.io/sweepies/count-patchula:X.Y.Z
+```
+
+The tags are a release's version without the `v`, in place of `X.Y.Z`, and
+`latest`. A prerelease does not move `latest`. There are no minor, major or
+edge tags, so pin the version and upgrade on purpose. Every image carries an
+SBOM and a provenance attestation from BuildKit.
+
+It is Debian slim with `patchula`, [mise](https://mise.jdx.dev) and `git` (see
+[what the runner needs](/installation/#what-the-runner-needs)), and starts
+`patchula serve` as user and group 10001. Lockfile tools are not in the image:
+mise installs each one into the volume the first time a repository needs it.
+
+`/var/lib/patchula` is a volume. It holds the server cache and queue, the
+partial clones, and the tool store, so a new container picks up where the last
+one stopped. A new named volume takes the directory's owner; a bind mount must
+be writable by user 10001.
+
+| Variable | Image default |
+|---|---|
+| `PATCHULA_LISTEN` | `0.0.0.0:8080` |
+| `PATCHULA_SERVER_SETTINGS` | `/etc/patchula/server.pkl`, which only amends `PatchulaServer.pkl` |
+| `PATCHULA_SERVER_CACHE` | `/var/lib/patchula/cache.sqlite` |
+| `PATCHULA_TOOLS_DIR` | `/var/lib/patchula/tools` |
+| `RUSTUP_HOME` | `/var/lib/patchula/rustup` |
+
+The credentials have no default. Mount your [settings](#settings) file over
+`/etc/patchula/server.pkl`, or point `PATCHULA_SERVER_SETTINGS` at another path.
+
+```sh
+docker run --detach --name patchula \
+  --publish 127.0.0.1:8080:8080 \
+  --stop-timeout 75 \
+  --volume patchula:/var/lib/patchula \
+  --volume /etc/patchula/server.pkl:/etc/patchula/server.pkl:ro \
+  --volume /etc/patchula/app.pem:/run/secrets/app.pem:ro \
+  --volume /etc/patchula/webhook-secret:/run/secrets/webhook-secret:ro \
+  --env PATCHULA_APP_ID=12345 \
+  --env PATCHULA_APP_PRIVATE_KEY_FILE=/run/secrets/app.pem \
+  --env PATCHULA_WEBHOOK_SECRET_FILE=/run/secrets/webhook-secret \
+  ghcr.io/sweepies/count-patchula:X.Y.Z
+```
+
+The mounted secret files must be readable by user 10001. To pass the values
+instead, use `--env PATCHULA_APP_PRIVATE_KEY` and `--env
+PATCHULA_WEBHOOK_SECRET` with no value, which read them from your shell.
+`--stop-timeout 75` keeps the stop signal's grace period longer than the
+60-second drain, because Docker's default of 10 seconds would kill a running
+batch.
+
+The image's health check calls `/healthz`. The lockfile runner works in the
+container's temporary directory, so a read-only root filesystem needs a
+writable `/tmp`.
+
 ## Hosting on Railway
 
 [Railway](https://railway.com) suits the server well. It bills for the CPU and
@@ -278,13 +338,17 @@ time idle between batches with little memory in use.
 
 <Steps>
 
-1. Deploy an image with `patchula`, mise and `git` (see [what the runner
-   needs](/installation/#what-the-runner-needs)) that starts `patchula serve`.
-2. Set `PATCHULA_LISTEN=0.0.0.0:8080` and give the service a public domain on
-   port 8080. Railway terminates HTTPS, so the App's webhook URL is
-   `https://<domain>/webhook`.
-3. Attach a volume and keep the server cache and tool store on it, with
-   `PATCHULA_SERVER_CACHE` and `PATCHULA_TOOLS_DIR`, so they survive deploys.
+1. Create a service from the Docker image
+   `ghcr.io/sweepies/count-patchula:X.Y.Z` (see [the container
+   image](#container-image)). It starts `patchula serve` and already listens on
+   `0.0.0.0:8080`.
+2. Give the service a public domain on port 8080. Railway terminates HTTPS, so
+   the App's webhook URL is `https://<domain>/webhook`.
+3. Attach a volume mounted at `/var/lib/patchula`, so the cache, queue and tool
+   store survive deploys. Railway mounts volumes owned by root, which user
+   10001 cannot write, so set `RAILWAY_RUN_UID=0` in the service's variables,
+   as [Railway's volume reference](https://docs.railway.com/volumes/reference)
+   describes.
 4. Put `PATCHULA_APP_ID`, `PATCHULA_APP_PRIVATE_KEY` and
    `PATCHULA_WEBHOOK_SECRET` in the service's variables.
 

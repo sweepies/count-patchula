@@ -30,6 +30,16 @@ The Count is one binary, `patchula`. Releases have static builds for Linux
     `bin/patchula`, the man page under `share/man`, and bash, zsh and fish
     completions under `share/`.
   </TabItem>
+  <TabItem label="Container" icon="seti:docker">
+    ```sh
+    docker pull ghcr.io/sweepies/count-patchula:X.Y.Z
+    ```
+
+    The image runs `patchula serve` with mise and `git` included, for linux/amd64
+    and linux/arm64. Each release has a tag with its version, and `latest`. The
+    [server guide](/guide/server/#container-image) covers the volume,
+    settings and credentials.
+  </TabItem>
   <TabItem label="Cargo" icon="seti:rust">
     ```sh
     cargo install --git https://github.com/sweepies/count-patchula --locked patchula-cli
