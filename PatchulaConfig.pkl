@@ -13,8 +13,10 @@ typealias Scheme = "semver"|"docker"|"pep440"|"poetry"|"maven"|"nuget"|"rubygems
 /// four roles; Cargo also uses build. Ordinary Go/Python/regex packages use
 /// production. Actions distinguish steps from reusable workflows; containers,
 /// mise tools, Go language directives, Terraform providers/modules and Helm
-/// charts have explicit roles. These are exact values, not match patterns.
-typealias DependencyKind = "production"|"development"|"peer"|"optional"|"build"|"action"|"reusable-workflow"|"runner"|"container-image"|"tool"|"go-directive"|"toolchain"|"provider"|"module"|"chart"|"reference-data"
+/// charts have explicit roles. A `transitive` package is one only a lockfile
+/// records; it gets an update only to fix an advisory. These are exact values,
+/// not match patterns.
+typealias DependencyKind = "production"|"development"|"peer"|"optional"|"build"|"action"|"reusable-workflow"|"runner"|"container-image"|"tool"|"go-directive"|"toolchain"|"provider"|"module"|"chart"|"reference-data"|"transitive"
 
 /// Match lists are OR; populated selector fields are AND. Empty means any.
 /// Patterns are path-aware globs, or `regex:...`; prefix `!` excludes a match.

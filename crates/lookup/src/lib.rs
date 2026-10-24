@@ -243,7 +243,9 @@ impl Evaluator {
             || (!self.config.exclude.is_empty() && self.exclude.matches(&dep.file))
     }
     pub fn needs_lookup(&self, dep: &Dependency) -> bool {
-        if dep.kind == DependencyKind::Runner && dep.current == "latest" {
+        if (dep.kind == DependencyKind::Runner && dep.current == "latest")
+            || dep.kind == DependencyKind::Transitive
+        {
             return false;
         }
         if self.ignored(dep)
@@ -360,6 +362,50 @@ impl Evaluator {
             }
         }
         Some(proposal)
+    }
+    /// A lockfile-only package's one update: the lowest fixed release that
+    /// fixes the most of its advisories without a breaking change, under
+    /// `security.apply`. Only Cargo locks can be moved to an exact version of
+    /// one package.
+    pub fn transitive_fix(&self, dep: &Dependency, advisories: Advisories<'_>) -> Option<Proposal> {
+        let (query, found) = advisories;
+        if dep.kind != DependencyKind::Transitive
+            || dep.source != Source::Crates
+            || self.ignored(dep)
+        {
+            return None;
+        }
+        let scheme = scheme(dep).ok()?;
+        let current = scheme.parse(&dep.current).ok()?;
+        let (target, fixes) = found
+            .iter()
+            .filter_map(|a| crate::advisories::fixed_in(a, query, scheme, &current))
+            .filter_map(|v| Some((scheme.parse(&v).ok()?, v)))
+            // The lock can only move within what the dependents already allow.
+            .filter(|(parsed, _)| scheme.classify(&current, parsed) != Update::Major)
+            .map(|(parsed, v)| {
+                let fixes = crate::fixes(dep, query, found, &v);
+                (parsed, v, fixes)
+            })
+            .filter(|(_, _, fixes)| !fixes.is_empty())
+            .max_by(|a, b| {
+                a.2.len()
+                    .cmp(&b.2.len())
+                    .then_with(|| scheme.order(&b.0, &a.0))
+            })
+            .map(|(_, v, fixes)| (v, fixes))?;
+        let kind = scheme.classify(&current, &scheme.parse(&target).ok()?);
+        let mut effective = self.effective(dep, kind);
+        effective.apply(
+            &self.config.security.apply,
+            self.security_permitted.as_ref(),
+        );
+        if !effective.policy.active {
+            return None;
+        }
+        let mut update = proposal(None, Some(target), None, kind, &effective.policy);
+        update.fixes = fixes;
+        Some(update)
     }
     pub fn propose(&self, dep: &Dependency, catalog: &Catalog) -> Result<Vec<Proposal>> {
         Ok(self.evaluate_at(dep, catalog, Utc::now())?.updates)

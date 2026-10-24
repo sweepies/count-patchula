@@ -253,6 +253,10 @@ fn build(
                 .or(update.new_digest.as_deref())
                 .unwrap_or(value)
         ));
+        // A lockfile-only package changes through its lockfile tool alone.
+        if dep.kind == patchula_config::DependencyKind::Transitive {
+            continue;
+        }
         let Some(blob) = snapshot.files.get(&dep.file) else {
             return Err(format!("missing extracted file {}", dep.file));
         };
@@ -297,7 +301,13 @@ fn build(
             Err(error) => reason = Some(format!("{path}: {error}")),
         }
     }
-    if contents.is_empty() && reason.is_none() {
+    let transitive = items
+        .iter()
+        .all(|item| item.dep.kind == patchula_config::DependencyKind::Transitive);
+    if transitive && lock_jobs.iter().any(|job| job.target.is_none()) {
+        reason = Some("no lockfile tool can move this package to an exact version".into());
+    }
+    if contents.is_empty() && reason.is_none() && !(transitive && !lock_jobs.is_empty()) {
         reason = Some(
             "no editable manifest change: the declaration already allows the target, or is inherited from its workspace root"
                 .into(),

@@ -72,6 +72,8 @@ struct Work {
     report: Repository,
     config: Option<Config>,
     dependencies: Vec<Dependency>,
+    /// Lockfile packages no manifest declares, for advisory checks.
+    locked: Vec<patchula_manager::Locked>,
     snapshot: patchula_update::Snapshot,
     inventory: Option<patchula_update::Inventory>,
     controls: patchula_update::dashboard::Controls,
@@ -757,6 +759,7 @@ impl Engine {
                             report: repository(&repo, Status::Error, Some(error.to_string())),
                             config: None,
                             dependencies: Vec::new(),
+                            locked: Vec::new(),
                             snapshot: patchula_update::Snapshot::default(),
                             inventory: None,
                             controls: patchula_update::dashboard::Controls::default(),
@@ -925,8 +928,10 @@ impl Engine {
                 advisory_queries.extend(
                     repo.dependencies
                         .iter()
+                        .cloned()
+                        .chain(repo.locked.iter().map(patchula_manager::Locked::dependency))
                         .filter(|dep| !eval.ignored(dep))
-                        .filter_map(patchula_lookup::advisory_query),
+                        .filter_map(|dep| patchula_lookup::advisory_query(&dep)),
                 );
             }
         }
@@ -958,6 +963,22 @@ impl Engine {
             BTreeMap::new()
         });
         let (mut remaining, mut catalog_evidence) = remaining?;
+        // A lockfile-only package joins the dependencies once it is vulnerable.
+        for (repo, eval) in work.iter_mut().zip(&evaluators) {
+            if eval.is_some() {
+                let vulnerable: Vec<_> = repo
+                    .locked
+                    .iter()
+                    .map(patchula_manager::Locked::dependency)
+                    .filter(|dep| {
+                        patchula_lookup::advisory_query(dep)
+                            .and_then(|q| advisories.get(&q))
+                            .is_some_and(|found| !found.is_empty())
+                    })
+                    .collect();
+                repo.dependencies.extend(vulnerable);
+            }
+        }
         // A vulnerable dependency's fix may be newer than a catalog reused
         // under its release-age wait, so those catalogs are read again.
         let mut vulnerable = BTreeSet::new();
@@ -1263,6 +1284,11 @@ impl Engine {
                 let advisory = patchula_lookup::advisory_query(dep)
                     .and_then(|query| advisories.get(&query).map(|found| (query, found)))
                     .filter(|(_, found)| !found.is_empty());
+                if let (Some(eval), Some((query, found))) = (eval, &advisory)
+                    && let Some(fix) = eval.transitive_fix(dep, (query, found))
+                {
+                    proposals.push(fix);
+                }
                 if let Some((query, found)) = &advisory {
                     let label = repo
                         .config
@@ -1719,6 +1745,7 @@ impl Engine {
                             ),
                             config: None,
                             dependencies: Vec::new(),
+                            locked: Vec::new(),
                             snapshot: patchula_update::Snapshot::default(),
                             inventory: None,
                             controls: patchula_update::dashboard::Controls::default(),
@@ -1793,6 +1820,7 @@ impl Engine {
             report,
             config: Some(config),
             dependencies: extraction.dependencies,
+            locked: extraction.locked,
             snapshot: patchula_update::Snapshot {
                 paths,
                 files: blobs,
@@ -1857,6 +1885,7 @@ impl Engine {
                 report,
                 config: None,
                 dependencies: Vec::new(),
+                locked: Vec::new(),
                 snapshot: patchula_update::Snapshot::default(),
                 inventory: None,
                 controls: patchula_update::dashboard::Controls::default(),
@@ -1865,7 +1894,7 @@ impl Engine {
         let key = ExtractionKey {
             repo: repo.into(),
             default_branch_commit: commit,
-            config_hash: format!("extract-v8:{}", hash(&serde_json::to_vec(&config)?)),
+            config_hash: format!("extract-v9:{}", hash(&serde_json::to_vec(&config)?)),
         };
         let cached: CachedExtraction = if let Some(bytes) = self.cache.extraction_get(&key).await? {
             self.extraction_hits.fetch_add(1, Ordering::Relaxed);
@@ -1928,6 +1957,7 @@ impl Engine {
             report,
             config: Some(config),
             dependencies: cached.extraction.dependencies,
+            locked: cached.extraction.locked,
             snapshot: cached.snapshot,
             inventory: None,
             controls: patchula_update::dashboard::Controls::default(),

@@ -225,3 +225,111 @@ async fn advisories_mark_fixing_updates_and_warm_runs_reuse_records() {
     );
     replay.assert_finished().unwrap();
 }
+
+#[tokio::test]
+async fn a_vulnerable_lockfile_only_crate_is_reported_with_its_fix() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("spec.json");
+    let config = "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"cargo\" }\n";
+    let manifest = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n";
+    let lock = "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\n\n[[package]]\nname = \"time\"\nversion = \"0.3.20\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n\n[[package]]\nname = \"itoa\"\nversion = \"1.0.9\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
+    let mut interactions = vec![exchange(
+        "POST",
+        "https://api.github.com/graphql",
+        &[GITHUB[0], GITHUB[1], ("content-type", "application/json")],
+        Body::Json(
+            json!({"query":patchula_engine::REPOSITORY_HEAD_QUERY,"variables":{"owner":"demo","name":"app"}}),
+        ),
+        200,
+        json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"oid":"head","tree":{"oid":"tree"}}}}}}),
+        None,
+    )];
+    interactions.push(github(
+        "repos/demo/app/git/trees/tree?recursive=1",
+        json!({"truncated":false,"tree":[
+            {"path":"patchula.pkl","type":"blob","sha":"config"},
+            {"path":"Cargo.toml","type":"blob","sha":"manifest"},
+            {"path":"Cargo.lock","type":"blob","sha":"lock"}
+        ]}),
+        200,
+        "tree",
+        false,
+    ));
+    for (sha, text) in [("config", config), ("manifest", manifest), ("lock", lock)] {
+        interactions.push(github(
+            &format!("repos/demo/app/git/blobs/{sha}"),
+            json!({"encoding":"base64","content":STANDARD.encode(text)}),
+            200,
+            sha,
+            false,
+        ));
+    }
+    interactions.push(exchange(
+        "POST",
+        "https://api.osv.dev/v1/querybatch",
+        &[("accept", "application/json"), ("content-type", "application/json")],
+        Body::Json(json!({"queries":[
+            {"package":{"ecosystem":"crates.io","name":"itoa"},"version":"1.0.9"},
+            {"package":{"ecosystem":"crates.io","name":"time"},"version":"0.3.20"}
+        ]})),
+        200,
+        json!({"results":[{},{"vulns":[{"id":"RUSTSEC-2020-0071","modified":"2026-01-01T00:00:00Z"}]}]}),
+        None,
+    ));
+    interactions.push(osv_record(
+        "RUSTSEC-2020-0071",
+        json!({
+            "id":"RUSTSEC-2020-0071","modified":"2026-01-01T00:00:00Z",
+            "summary":"Potential segfault in the time crate","aliases":["CVE-2020-26235","GHSA-wcg3-cvx6-7396"],
+            "affected":[{"package":{"ecosystem":"crates.io","name":"time"},
+                "ranges":[{"type":"SEMVER","events":[{"introduced":"0.2.23"},{"fixed":"0.3.23"}]}]}]
+        }),
+    ));
+    let cassette = Cassette {
+        schema_version: 1,
+        provenance: "Simulated from the GitHub and OSV.dev API documentation; the advisory record is trimmed from OSV.dev".into(),
+        interactions,
+    };
+    patchula_testkit::save(&path, &cassette, &Default::default()).unwrap();
+    let replay = Arc::new(Replay::open(&path, Default::default()).unwrap());
+    let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
+        .await
+        .unwrap();
+    let engine = Engine::with_transport("offline", cache, 4, replay.clone())
+        .unwrap()
+        .with_advisories();
+    let report = engine
+        .lookup_at(
+            Options {
+                repositories: vec!["demo/app".into()],
+                ..Options::default()
+            },
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    let repo = &report.repositories[0];
+    assert!(repo.warnings.is_empty(), "{:?}", repo.warnings);
+    assert_eq!(repo.package_files.len(), 1);
+    let file = &repo.package_files[0];
+    assert_eq!(file.path, "Cargo.lock");
+    // Only the vulnerable lockfile package is reported.
+    assert_eq!(file.dependencies.len(), 1);
+    let time = &file.dependencies[0];
+    assert_eq!(time.name, "time");
+    assert_eq!(time.metadata.as_ref().unwrap().kinds, ["transitive"]);
+    assert_eq!(time.updates.len(), 1);
+    let fix = &time.updates[0];
+    assert_eq!(fix.new_version.as_deref(), Some("0.3.23"));
+    assert_eq!(fix.new_value, None);
+    assert_eq!(fix.update_type, "patch");
+    assert_eq!(fix.fixes, ["RUSTSEC-2020-0071"]);
+    assert!(
+        fix.policy
+            .as_ref()
+            .unwrap()
+            .labels
+            .contains(&"security".to_owned())
+    );
+    replay.assert_finished().unwrap();
+}

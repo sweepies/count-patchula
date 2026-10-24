@@ -102,7 +102,8 @@ Registry max-age is honored rather than replaced with an arbitrary local TTL.
 
 `Engine::run` shares lookup, discovery, configuration and policy with `lookup`.
 The extraction cache now retains original file contents, Git blob SHAs, modes and
-the full path inventory. Its v8 namespace invalidates older extraction rows.
+the full path inventory, and the lockfile-only packages checked for advisories.
+Its v9 namespace invalidates older extraction rows.
 Files needed only for lockfile detection need not be downloaded.
 
 The pure updater derives branches and scalar edits from proposals and extracted

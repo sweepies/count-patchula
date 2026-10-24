@@ -421,3 +421,40 @@ fn the_lowest_release_fixing_the_most_is_proposed_past_permitted_filters() {
         [("4.17.20".into(), 1)]
     );
 }
+
+#[test]
+fn lockfile_only_crates_get_the_lowest_compatible_fix() {
+    let eval = patchula_lookup::Evaluator::new(
+        &patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap(),
+    )
+    .unwrap();
+    let mut dep = dependency(Source::Crates, "time", "0.3.20", Some("0.3.20"));
+    dep.kind = DependencyKind::Transitive;
+    dep.file = "Cargo.lock".into();
+    let q = advisory_query(&dep).unwrap();
+    let ranges = |fixed: &[&str]| {
+        fixed
+            .iter()
+            .map(|f| vec![Event::Introduced("0".into()), Event::Fixed((*f).into())])
+            .collect()
+    };
+    let mut breaking = advisory("crates.io", "time", ranges(&["0.4.0"]), &[]);
+    breaking.id = "RUSTSEC-breaking".into();
+    let found = vec![
+        Arc::new(advisory("crates.io", "time", ranges(&["0.3.23"]), &[])),
+        Arc::new(breaking),
+    ];
+    let fix = eval.transitive_fix(&dep, (&q, &found)).unwrap();
+    assert_eq!(fix.new_version.as_deref(), Some("0.3.23"));
+    assert_eq!(fix.new_value, None);
+    assert_eq!(fix.fixes, ["GHSA-test"]);
+    assert_eq!(fix.policy.unwrap().wait_hours, 0);
+    // Only a breaking release fixes it: the lock cannot get there alone.
+    assert!(eval.transitive_fix(&dep, (&q, &found[1..])).is_none());
+    // npm locks cannot be moved to an exact version of one package.
+    let mut npm = dependency(Source::Npm, "bar", "2.0.0", Some("2.0.0"));
+    npm.kind = DependencyKind::Transitive;
+    let q = advisory_query(&npm).unwrap();
+    let found = vec![Arc::new(advisory("npm", "bar", ranges(&["2.0.1"]), &[]))];
+    assert!(eval.transitive_fix(&npm, (&q, &found)).is_none());
+}

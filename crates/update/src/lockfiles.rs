@@ -865,6 +865,31 @@ fn validate_targets(
     let paths: BTreeSet<String> = files.keys().cloned().collect();
     for change in &plan.changes {
         let leaf = change.file.rsplit('/').next().unwrap_or("");
+        // A lockfile-only change must have moved the lock to its exact target.
+        if leaf == "Cargo.lock" {
+            let lock = files
+                .get(&change.file)
+                .and_then(|text| toml_edit::Document::parse(text.as_str()).ok());
+            let moved = lock.as_ref().is_some_and(|lock| {
+                lock.get("package")
+                    .and_then(toml_edit::Item::as_array_of_tables)
+                    .is_some_and(|packages| {
+                        packages.iter().any(|p| {
+                            p.get("name").and_then(toml_edit::Item::as_str) == Some(&change.package)
+                                && p.get("version").and_then(toml_edit::Item::as_str)
+                                    == change.version.as_deref()
+                        })
+                    })
+            });
+            if !moved {
+                return Err(format!(
+                    "lockfile did not resolve {} to requested version {}",
+                    change.package,
+                    change.version.as_deref().unwrap_or("?")
+                ));
+            }
+            continue;
+        }
         if !matches!(
             leaf,
             "package.json"

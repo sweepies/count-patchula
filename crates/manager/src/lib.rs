@@ -15,6 +15,8 @@ mod gradle;
 mod gradle_vars;
 mod helm;
 mod images;
+mod locked;
+pub use locked::Locked;
 mod maven;
 mod mise;
 mod npm;
@@ -103,6 +105,9 @@ impl Dependency {
 pub struct Extraction {
     pub dependencies: Vec<Dependency>,
     pub warnings: Vec<String>,
+    /// Lockfile packages no manifest declares, checked only for advisories.
+    #[serde(default)]
+    pub locked: Vec<Locked>,
 }
 pub type Files = BTreeMap<String, String>;
 pub fn supported(manager: Manager) -> bool {
@@ -377,6 +382,12 @@ impl Scanner {
                 .extend(gradle_vars::extract(files, |path| {
                     self.selected(Manager::Gradle, path)
                 }));
+        }
+        result.locked = locked::cargo(files, &cargo, &result.dependencies);
+        if node == Manager::Npm && self.config.managers.contains(&Manager::Npm) {
+            result
+                .locked
+                .extend(locked::npm(files, &locks, &result.dependencies));
         }
         Ok(result)
     }
