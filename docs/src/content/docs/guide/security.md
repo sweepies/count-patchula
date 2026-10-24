@@ -47,12 +47,37 @@ advisory whose ranges the Count cannot evaluate is never claimed as fixed.
   [report reference](/reference/report/).
 - **The terminal UI** marks security updates in red and names what they fix.
 
+## Security updates go first
+
+`security.apply` holds policy overrides, like a rule's `apply`, for any
+candidate version that fixes an advisory. They are applied after your rules.
+The defaults are:
+
+- **No release-age wait:** a fix published an hour ago is proposed now. Releases
+  that fix nothing still wait as usual.
+- **No schedule windows:** the PR opens on the next run, whatever `windows` say.
+- **A PR of its own:** the update leaves its group, so one fix does not wait on
+  the rest of the group.
+
+Whatever `apply` says, a PR with a security update never waits for
+`prs.concurrent` or `prs.perHour`, and a vulnerable package's release list is
+read fresh rather than reused under the release-age wait.
+
+Other overrides work too. For example, `apply { active = true }` lets a fix
+through even for an update type your rules turned off, and
+`apply { merge = true }` merges fixes once checks pass.
+
 ## Configuration
 
 ```pkl
 security {
   advisories = true    // check dependencies against OSV.dev
   label = "security"   // added to PRs that fix an advisory; "" adds none
+  apply {              // overrides for updates that fix an advisory
+    waitHours = 0
+    windows = new Listing {}
+    group = ""
+  }
 }
 ```
 

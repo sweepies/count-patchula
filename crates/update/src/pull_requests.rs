@@ -437,7 +437,10 @@ impl Lifecycle {
                 plan.retry |= checked(pr);
                 continue;
             }
-            let bypass = controls.create.contains(&key) || controls.recreate.contains(&key);
+            // Security updates never queue behind ordinary ones.
+            let bypass = controls.create.contains(&key)
+                || controls.recreate.contains(&key)
+                || plan.changes.iter().any(|c| !c.advisories.is_empty());
             if !bypass && config.prs.concurrent.is_some_and(|n| active >= n) {
                 limit(plan, "prs.concurrent limit reached");
                 continue;

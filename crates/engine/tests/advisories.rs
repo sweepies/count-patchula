@@ -89,7 +89,7 @@ fn osv_record(id: &str, record: Value) -> Interaction {
 async fn advisories_mark_fixing_updates_and_warm_runs_reuse_records() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("spec.json");
-    let config = "amends \"PatchulaConfig.pkl\"\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n";
+    let config = "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"npm\" }\n";
     let manifest = "{\"dependencies\":{\"lodash\":\"4.17.11\"}}";
     let mut interactions = vec![exchange(
         "POST",
@@ -152,7 +152,8 @@ async fn advisories_mark_fixing_updates_and_warm_runs_reuse_records() {
                 "ranges":[{"type":"SEMVER","events":[{"introduced":"0"},{"fixed":"4.17.21"}]}]}]
         }),
     ));
-    // Warm: conditional repository reads, a 304 catalog, and one OSV query.
+    // Warm: conditional repository reads and one OSV query. The catalog would be
+    // reused under the release-age wait, but a vulnerable package is read again.
     interactions.push(github(
         "repos/demo/app",
         json!({"default_branch":"main"}),

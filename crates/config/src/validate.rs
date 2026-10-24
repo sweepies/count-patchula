@@ -151,6 +151,10 @@ impl Config {
                 windows(&format!("{field}.apply.windows"), value)?;
             }
         }
+        filter("security.apply.permitted", &self.security.apply.permitted)?;
+        if let Some(value) = &self.security.apply.windows {
+            windows("security.apply.windows", value)?;
+        }
         for (i, files) in self.files.iter().enumerate() {
             required(&format!("files[{i}].paths"), &files.paths)?;
         }
