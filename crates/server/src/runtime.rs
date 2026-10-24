@@ -485,7 +485,8 @@ impl Engines {
                 settings.concurrency,
                 self.transport.clone(),
             )
-            .map_err(|_| Error("cannot create batch engine"))?;
+            .map_err(|_| Error("cannot create batch engine"))?
+            .with_advisories();
             match (
                 std::env::var(DOCKERHUB_USERNAME_VAR).ok(),
                 std::env::var(DOCKERHUB_TOKEN_VAR).ok(),

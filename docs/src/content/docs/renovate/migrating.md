@@ -127,7 +127,7 @@ directory has a dozen real configs translated this way.
 ## Things that do not carry over
 
 Presets, onboarding, config migration, `hostRules`, private registries,
-`postUpgradeTasks`, vulnerability alerts, replacement PRs and platforms other
+`postUpgradeTasks`, `vulnerabilityAlerts`, replacement PRs and platforms other
 than GitHub have no equivalent. The [compatibility
 matrix](/renovate/compatibility/) lists everything. A `# renovate:` comment used
 by a regex manager can stay in your files: it is only text, and your Pkl

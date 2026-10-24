@@ -3,7 +3,7 @@ title: "Compatibility with Renovate"
 ---
 The Count covers the managers most repositories on GitHub actually use, and
 does them fast. Renovate covers far more ground: more platforms, more managers,
-private registries and vulnerability alerts. This page says which is which, so
+private registries and GitHub's vulnerability alerts. This page says which is which, so
 you can tell whether your repositories will notice the switch.
 
 Renovate's lists below come from its public documentation (version 44.174),
@@ -164,7 +164,7 @@ Renovate's other schemes, including `regex` versioning, `node`, `debian`,
 | JSONata managers, custom datasources | yes | no |
 | Private registries, `hostRules` | yes | no; tool environments are scrubbed |
 | `postUpgradeTasks` | yes, admin-allowed | no, on purpose |
-| Vulnerability alerts, OSV | yes | no |
+| Vulnerability alerts, OSV | yes | OSV.dev advisories mark fixing updates in PRs, labels, the dashboard and the report; see [security advisories](/guide/security/) |
 | Merge confidence | Mend beta | no |
 | Abandonment detection | yes | no |
 | Replacement PRs | yes | no |

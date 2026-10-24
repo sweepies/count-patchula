@@ -63,6 +63,8 @@ pub struct Engine {
     extraction_hits: AtomicU64,
     recheck: Recheck,
     versions_host_override: Option<bool>,
+    /// Whether repositories' `security.advisories` setting may query OSV.dev.
+    advisories: bool,
     /// The server URL hidden in PRs and the dashboard for the CLI to find.
     advertised_server: Option<String>,
 }
@@ -192,6 +194,7 @@ impl Engine {
             extraction_hits: AtomicU64::new(0),
             recheck: Recheck::default(),
             versions_host_override: None,
+            advisories: false,
             advertised_server: None,
         };
         engine.look_up_mise_tools_with_runner();
@@ -216,6 +219,12 @@ impl Engine {
     }
     pub fn with_versions_host(mut self, enabled: bool) -> Self {
         self.versions_host_override = Some(enabled);
+        self
+    }
+    /// Check dependencies against OSV.dev where a repository's config allows
+    /// it. Off by default, so offline callers never reach the advisory API.
+    pub fn with_advisories(mut self) -> Self {
+        self.advisories = true;
         self
     }
     fn catalog_key(&self, dep: &Dependency, config: Option<&Config>) -> LookupKey {
@@ -907,10 +916,47 @@ impl Engine {
         current_refs.retain(|key| !digests.contains_key(key));
         // Revalidate current action refs alongside source heads. These network
         // reads used to serialize behind all catalogs inside the policy phase.
-        let (remaining, refs) = tokio::join!(
+        let mut advisory_queries = BTreeSet::new();
+        for (repo, eval) in work.iter().zip(&evaluators) {
+            if let (Some(eval), Some(config)) = (eval, &repo.config)
+                && self.advisories
+                && config.security.advisories
+            {
+                advisory_queries.extend(
+                    repo.dependencies
+                        .iter()
+                        .filter(|dep| !eval.ignored(dep))
+                        .filter_map(patchula_lookup::advisory_query),
+                );
+            }
+        }
+        let (remaining, refs, advisories) = tokio::join!(
             self.age_catalogs(keys, &waits, &retry_keys, &sources, now),
-            self.digests(current_refs)
+            self.digests(current_refs),
+            async {
+                if advisory_queries.is_empty() {
+                    Ok(BTreeMap::new())
+                } else {
+                    self.sources.advisories(&advisory_queries).await
+                }
+            }
         );
+        let advisories = advisories.unwrap_or_else(|error| {
+            for (repo, eval) in work.iter_mut().zip(&evaluators) {
+                if eval.as_ref().is_some_and(|eval| {
+                    repo.dependencies.iter().any(|dep| {
+                        !eval.ignored(dep)
+                            && patchula_lookup::advisory_query(dep)
+                                .is_some_and(|q| advisory_queries.contains(&q))
+                    })
+                }) {
+                    repo.report
+                        .warnings
+                        .push(format!("advisory lookup on OSV.dev failed: {error}"));
+                }
+            }
+            BTreeMap::new()
+        });
         let (remaining, catalog_evidence) = remaining?;
         catalogs.extend(remaining);
         digests.extend(refs);
@@ -1174,6 +1220,33 @@ impl Engine {
                         }
                     }
                 }
+                let advisory = patchula_lookup::advisory_query(dep)
+                    .and_then(|query| advisories.get(&query).map(|found| (query, found)))
+                    .filter(|(_, found)| !found.is_empty());
+                if let Some((query, found)) = &advisory {
+                    let label = repo
+                        .config
+                        .as_ref()
+                        .map(|c| c.security.label.as_str())
+                        .unwrap_or_default();
+                    for proposal in &mut proposals {
+                        let Some(target) = proposal
+                            .new_version
+                            .as_ref()
+                            .or(proposal.new_value.as_ref())
+                        else {
+                            continue;
+                        };
+                        proposal.fixes = patchula_lookup::fixes(dep, query, found, target);
+                        if let Some(policy) = &mut proposal.policy
+                            && !proposal.fixes.is_empty()
+                            && !label.is_empty()
+                            && !policy.labels.iter().any(|l| l == label)
+                        {
+                            policy.labels.push(label.into());
+                        }
+                    }
+                }
                 proposals.sort();
                 proposals.dedup();
                 let stale = if matches!(dep.source, Source::Docker | Source::Oci) {
@@ -1313,6 +1386,11 @@ impl Engine {
                             evidence
                         }),
                         resolution,
+                        advisories: advisory
+                            .map(|(query, found)| {
+                                patchula_lookup::report_advisories(dep, &query, found)
+                            })
+                            .unwrap_or_default(),
                     }),
                 };
                 files.entry(dep.file.clone()).or_default().push(value);

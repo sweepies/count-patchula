@@ -1,5 +1,7 @@
 //! Ordered repository policy evaluated over looked-up, batch-shared catalogs.
 #![forbid(unsafe_code)]
+mod advisories;
+pub use advisories::{advisory_query, affects, fixes, report_advisories};
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use patchula_config::{
     Config, DependencyKind, Manager, Patterns, Policy, Rule, Scheme, Source, Update, VersionPolicy,
@@ -909,6 +911,7 @@ fn proposal(
             body_notes: policy.body_notes.clone(),
         }),
         release_age: None,
+        fixes: Vec::new(),
     }
 }
 fn timestamp(value: DateTime<Utc>) -> String {
