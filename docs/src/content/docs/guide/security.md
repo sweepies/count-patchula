@@ -67,6 +67,20 @@ Other overrides work too. For example, `apply { active = true }` lets a fix
 through even for an update type your rules turned off, and
 `apply { merge = true }` merges fixes once checks pass.
 
+## The lowest fix
+
+Your rules may hold every fix back: a `permitted` filter that stops below the
+fixed release, or an LTS `channel` that the fix is not on. When no proposal
+fixes as many advisories as some release could, the Count also proposes the
+lowest release that fixes the most, and ignores `permitted` and `channel` to do
+it. `active` and the release-age wait from `security.apply` still apply.
+
+Say `permitted = "semver:<4.17.21"` keeps lodash at 4.17.20, which fixes one of
+your two advisories, and 4.17.21 fixes both. The Count proposes 4.17.21. In the
+same update track, the update that fixes more wins the branch. If the newest
+permitted release already fixes everything, nothing extra is proposed.
+`lowestFix = false` turns this off.
+
 ## Configuration
 
 ```pkl
@@ -78,6 +92,7 @@ security {
     windows = new Listing {}
     group = ""
   }
+  lowestFix = true     // propose the lowest full fix past permitted and channel
 }
 ```
 
