@@ -3,13 +3,13 @@ title: "Terminal UI"
 ---
 `patchula tui` runs a lookup and lets you browse the result: every update, the
 releases held back by the release-age wait, every dependency found, warnings
-and the run's stats. Point it at a directory with `--local` and you can pick
-updates and have the Count write them into your files.
+and the run's stats. Run it in a checkout with no repository named and you
+can pick updates and have the Count write them into its files.
 
 ```sh
-patchula tui acme/my-app            # browse a GitHub repository
-patchula tui --local .                  # browse, and apply, the current directory
-patchula tui --once --local . | less    # a plain-text snapshot instead
+patchula tui acme/my-app      # browse a GitHub repository
+patchula tui                  # browse, and apply, the working tree here
+patchula tui --once | less    # a plain-text snapshot instead
 ```
 
 It takes the same flags as [`lookup`](/reference/cli/#patchula-lookup): `--cache`,
@@ -68,7 +68,8 @@ published 2026-09-24T19:36:54Z
 
 ## Applying updates
 
-Applying only works with `--local`. The Count reads each selected file again,
+Applying only works on the working tree in the current directory, with no
+repository named and not on a server. The Count reads each selected file again,
 finds the same declaration at the same place, and rewrites just the version,
 the way he edits a branch. If a file changed since the lookup he refuses
 rather than guess, and nothing is written. Lockfiles are not regenerated, so

@@ -142,6 +142,7 @@ fn services(fake: Arc<Fake>, dir: &std::path::Path) -> Services {
     Services {
         transport: Some(fake),
         config_dir: Some(dir.to_owned()),
+        server: Some(SERVER.into()),
         ..Services::default()
     }
 }
@@ -178,15 +179,10 @@ fn methods(fake: &Fake) -> Vec<String> {
 
 #[test]
 fn server_urls_are_https_or_localhost() {
+    assert_eq!(parse("https://patchula.acme.dev/").unwrap(), SERVER);
     assert_eq!(
-        server(Some("https://patchula.acme.dev/"))
-            .unwrap()
-            .as_deref(),
-        Some(SERVER)
-    );
-    assert_eq!(
-        server(Some("http://localhost:8080")).unwrap().as_deref(),
-        Some("http://localhost:8080")
+        parse("http://localhost:8080").unwrap(),
+        "http://localhost:8080"
     );
     for bad in [
         "http://patchula.acme.dev",
@@ -194,7 +190,7 @@ fn server_urls_are_https_or_localhost() {
         "https://user@patchula.acme.dev",
         "patchula.acme.dev",
     ] {
-        assert_eq!(server(Some(bad)).unwrap_err().0, 2, "{bad}");
+        assert_eq!(parse(bad).unwrap_err().0, 2, "{bad}");
     }
 }
 
@@ -206,7 +202,7 @@ async fn first_run_signs_in_with_the_device_flow_and_stores_the_token() {
         ..Fake::default()
     });
     let services = services(fake.clone(), dir.path());
-    let app = app(&["run", "--dry-run", "--server", SERVER, "acme/app", "--json"]);
+    let app = app(&["run", "--dry-run", "--remote", "acme/app", "--json"]);
     assert_eq!(run(&app, &services).await.unwrap(), 0);
     let requests = fake.requests.lock().unwrap().clone();
     let start = requests
@@ -254,7 +250,7 @@ async fn an_expired_token_is_refreshed_without_a_new_sign_in() {
     let fake = Arc::new(Fake::default());
     let services = services(fake.clone(), dir.path());
     assert_eq!(
-        run(&app(&["lookup", "--server", SERVER, "acme/app"]), &services)
+        run(&app(&["lookup", "--remote", "acme/app"]), &services)
             .await
             .unwrap(),
         0
@@ -274,7 +270,7 @@ async fn a_revoked_token_signs_in_again_once() {
     });
     let services = services(fake.clone(), dir.path());
     assert_eq!(
-        run(&app(&["run", "--server", SERVER, "acme/app"]), &services)
+        run(&app(&["run", "--remote", "acme/app"]), &services)
             .await
             .unwrap(),
         0
@@ -284,31 +280,43 @@ async fn a_revoked_token_signs_in_again_once() {
 }
 
 #[tokio::test]
-async fn local_only_flags_are_refused_with_a_server() {
+async fn local_only_flags_are_refused_with_remote() {
     let dir = tempfile::tempdir().unwrap();
     let fake = Arc::new(Fake::default());
     let services = services(fake.clone(), dir.path());
     for args in [
-        &["lookup", "--server", SERVER, "--local", "."][..],
-        &[
-            "lookup", "--server", SERVER, "--config", "x.pkl", "acme/app",
-        ],
-        &["lookup", "--server", SERVER, "--all-repos"],
-        &[
-            "run",
-            "--server",
-            SERVER,
-            "--allow-lockfile-pending",
-            "acme/app",
-        ],
-        &["run", "--server", SERVER, "--recheck", "now", "acme/app"],
+        &["lookup", "--remote", "--config", "x.pkl", "acme/app"][..],
+        &["lookup", "--remote", "--config-dir", "policy", "acme/app"],
+        &["lookup", "--remote", "--all-repos"],
+        &["run", "--remote", "--allow-lockfile-pending", "acme/app"],
+        &["run", "--remote", "--recheck", "now", "acme/app"],
     ] {
         let Err((code, error)) = run(&app(args), &services).await else {
             panic!("{args:?}")
         };
         assert_eq!(code, 2, "{args:?}");
-        assert!(error.to_string().contains("only works on this machine"));
+        assert!(
+            error
+                .to_string()
+                .contains("only works on this machine, not with --remote")
+        );
     }
+    assert!(fake.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn remote_with_named_repositories_needs_a_configured_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = Arc::new(Fake::default());
+    let services = Services {
+        server: None,
+        ..services(fake.clone(), dir.path())
+    };
+    let Err((code, error)) = run(&app(&["lookup", "--remote", "acme/app"]), &services).await else {
+        panic!("ran without a server")
+    };
+    assert_eq!(code, 2);
+    assert!(error.to_string().contains("PATCHULA_SERVER"), "{error}");
     assert!(fake.requests.lock().unwrap().is_empty());
 }
 
@@ -403,7 +411,7 @@ async fn without_a_terminal_nothing_is_discovered_or_remembered() {
 }
 
 #[test]
-fn no_server_conflicts_with_server() {
-    let args = ["lookup", "--server", SERVER, "--no-server", "acme/app"];
+fn here_conflicts_with_remote() {
+    let args = ["lookup", "--remote", "--here", "acme/app"];
     assert!(App::parse_from(&args.iter().map(std::ffi::OsStr::new).collect::<Vec<_>>()).is_err());
 }

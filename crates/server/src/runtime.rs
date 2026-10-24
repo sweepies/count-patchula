@@ -102,7 +102,7 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
     // Without a client ID the CLI cannot sign in, but webhooks still work.
     let client_id = app.client_id().await.ok();
     if client_id.is_none() {
-        tracing::warn!(target: "patchula_server", "cannot read the App's client ID; --server runs are unavailable");
+        tracing::warn!(target: "patchula_server", "cannot read the App's client ID; --remote runs are unavailable");
     }
     // Advertising a server the CLI cannot sign in to would only send users to an error.
     let derived_url = match &client_id {

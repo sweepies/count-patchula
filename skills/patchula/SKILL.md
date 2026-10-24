@@ -54,10 +54,16 @@ patchula run --dry-run                 # branches, files and diffs, no writes
 patchula run                           # create branches and pull requests
 ```
 
-With no repository argument, commands work on the current checkout's GitHub
-repository (its `origin` remote). Name repositories as `owner/repo`, or pass
-`--all-repos` for every repository the token can reach. `--local <dir>` reads a
-directory on disk instead of GitHub, for `lookup` and `run --dry-run`.
+With no repository argument, `lookup`, `run --dry-run` and `tui` read the
+working tree in the current directory, uncommitted changes included, and `tui`
+can apply selected updates to it. A real `run` with no argument opens pull
+requests for the checkout's GitHub repository (its `origin` remote), so it
+refuses a working tree with uncommitted changes or a HEAD other than the
+remote's default branch. Name repositories as `owner/repo`, or pass
+`--all-repos` for every repository the token can reach; both read through the
+GitHub API. `--remote` runs on a Count server (`PATCHULA_SERVER`, or the one
+found for the checkout), and `--here` keeps a command on this machine
+when the checkout was set to run remotely.
 
 `patchula tui` browses the same results interactively.
 

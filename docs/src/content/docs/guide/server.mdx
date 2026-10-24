@@ -17,7 +17,7 @@ idle with little memory in use.
 
 :::note[No web UI]
 There is no web UI. The routes are `POST /webhook`, `GET /healthz`,
-`GET /readyz`, the small `/api/v1` API behind [`--server`](#run-from-your-machine)
+`GET /readyz`, the small `/api/v1` API behind [`--remote`](#run-from-your-machine)
 and the read-only [repository API](#repository-api).
 It listens on `127.0.0.1:8080` by default, so put an HTTPS reverse proxy in
 front for GitHub's deliveries.
@@ -130,23 +130,32 @@ beside the cache allows one server per cache; give CLI jobs a separate cache.
 
 ## Run from your machine
 
-`--server` hands a `lookup`, `run --dry-run` or `run` to the server instead of
-running it locally:
+`--remote` hands a `lookup`, `run --dry-run`, `run` or `tui` to the server
+instead of running it locally:
 
 ```sh
-patchula run --dry-run --server https://patchula.acme.dev acme/my-app
+export PATCHULA_SERVER=https://patchula.acme.dev
+patchula run --dry-run --remote acme/my-app
 ```
 
 The run uses the server's App credentials, warm caches and lockfile tools, so
-the machine needs no GitHub token and no mise. Set `PATCHULA_SERVER` to make
-it the default. The URL must use HTTPS, except for a server on
-`localhost` or a loopback address.
+the machine needs no GitHub token and no mise. The server is
+`PATCHULA_SERVER`, or, in a checkout with no repository named, the one
+[found for the checkout](#found-from-a-checkout); with neither, `--remote`
+fails. The URL must use HTTPS, except for a server on `localhost` or a
+loopback address.
+
+With no repository named, `--remote` runs the checkout's GitHub repository, so
+the server reads what is pushed, not the working tree. A real `run` there
+needs the working tree to be clean and at the remote's default branch, the
+same as one on this machine.
 
 On first use the CLI asks you to sign in: it prints a code to enter at
 `github.com/login/device`, and you authorise the server's App. The token is
 stored in `~/.config/patchula/servers.json` (or under `XDG_CONFIG_HOME`) and
 refreshed as it expires, so this happens once. `patchula auth login` and
-`patchula auth logout` sign in and out explicitly; to revoke the App's access,
+`patchula auth logout` sign in and out explicitly, with `--server <URL>` or
+`PATCHULA_SERVER`; to revoke the App's access,
 use GitHub's Settings → Applications. Only a token from this sign-in works:
 the server refuses personal access tokens and other Apps' tokens.
 
@@ -159,7 +168,7 @@ Each repository in the request must:
 
 A server runs one request per user at a time, and a real run shares the queue's
 engine, so it never races a webhook batch. The repository's own `patchula.pkl`
-applies; `--config`, `--config-dir`, `--local`, `--all-repos`,
+applies; `--config`, `--config-dir`, `--all-repos`,
 `--allow-lockfile-pending` and `--recheck` only work locally, and the cache and
 HTTP flags are ignored. A run in progress when the server shuts down finishes
 before it exits, within the shutdown deadline.
@@ -167,18 +176,23 @@ before it exits, within the shutdown deadline.
 ### Found from a checkout
 
 The server hides its URL in an HTML comment in each PR and dashboard it writes.
-`patchula lookup` or `patchula run` in a checkout, with no repository named and
-no `--server`, looks for that comment in the newest 500 open issues and PRs.
+`patchula lookup`, `run` or `tui` in a checkout, with no repository named and
+neither `--remote` nor `--here`, looks for that comment in the newest 500
+open issues and PRs.
 The comment counts only if its author is the bot that the server names at
 `/api/v1/auth`, so a comment pasted by someone else, or written by another
-App, is ignored. If it finds a server, it asks whether to run there, and
+App, is ignored. If it finds a server, it asks once whether to run there, and
 remembers your answer for that repository in
-`~/.config/patchula/repositories.json`.
+`~/.config/patchula/repositories.json`. Answer yes and plain commands in that
+checkout run on the server from then on; answer no and they read the working
+tree, as they do anywhere else.
 
 The answer, yes or no, holds until you sign out of that server with
 `patchula auth logout`.
-`--server` or `--no-server` overrides it for one command. Nothing is looked up
-without a terminal, and local-only flags such as `--local` always run locally.
+`--here` runs one command on this machine anyway, and `--remote` uses the
+remembered server even after a no. Without a terminal nothing is looked up or
+asked, and the command reads the working tree. Local-only flags such as
+`--config` always run locally.
 
 The advertised URL is `publicUrl`, or the App's webhook URL with `/webhook`
 removed. A webhook relay such as smee.io gives no server URL, so set
@@ -253,7 +267,7 @@ show it, since a webhook may have changed it during the run. A private repositor
 whose visibility the server could not read.
 
 The server records a repository after each run that writes: queued batches and
-`--server` runs, but not lookups or dry runs. A run never replaces one that
+`--remote` runs, but not lookups or dry runs. A run never replaces one that
 started later. An unknown or hidden repository is a 404 with `errorKind`
 `unknown-repository`, and with the API off every request is a 404 with
 `errorKind` `disabled`.

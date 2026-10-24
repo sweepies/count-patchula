@@ -1,4 +1,4 @@
-//! `--server`: hand a lookup or run to a Count Patchula server. The user signs
+//! `--remote`: hand a lookup or run to a Count Patchula server. The user signs
 //! in once with the server's GitHub App through GitHub's device flow; the
 //! resulting user access token is stored per server and refreshed as it
 //! expires. A checkout's repository can also find its server, hidden by the
@@ -29,16 +29,22 @@ fn usage(message: impl std::fmt::Display) -> (u8, miette::Report) {
     (2, miette::miette!("{message}"))
 }
 
-/// The server's base URL from `--server`, then `PATCHULA_SERVER`.
-pub fn server(flag: Option<&str>) -> Result<Option<String>> {
-    let value = match flag {
-        Some(value) => value.to_owned(),
-        None => match std::env::var(SERVER_VAR) {
-            Ok(value) if !value.is_empty() => value,
-            _ => return Ok(None),
-        },
-    };
-    let url = Url::parse(&value).map_err(|_| usage(format!("{value} is not a server URL")))?;
+/// The server named by `PATCHULA_SERVER`, if it is set.
+pub fn configured(services: &Services) -> Result<Option<String>> {
+    #[cfg(test)]
+    if let Some(server) = &services.server {
+        return parse(server).map(Some);
+    }
+    let _ = services;
+    match std::env::var(SERVER_VAR) {
+        Ok(value) if !value.is_empty() => parse(&value).map(Some),
+        _ => Ok(None),
+    }
+}
+
+/// A server's base URL: https, or http only on loopback.
+pub fn parse(value: &str) -> Result<String> {
+    let url = Url::parse(value).map_err(|_| usage(format!("{value} is not a server URL")))?;
     let local = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
     if !(url.scheme() == "https" || (url.scheme() == "http" && local)) {
         return Err(usage(
@@ -50,7 +56,7 @@ pub fn server(flag: Option<&str>) -> Result<Option<String>> {
             "the server URL must not have a query, fragment or user",
         ));
     }
-    Ok(Some(url.as_str().trim_end_matches('/').to_owned()))
+    Ok(url.as_str().trim_end_matches('/').to_owned())
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -184,7 +190,7 @@ pub async fn choose(services: &Services, repository: &str) -> Result<Option<Stri
             return Ok(None);
         }
         eprintln!(
-            "patchula: running {repository} on {}, as you chose; --no-server runs it here",
+            "patchula: running {repository} on {}, as you chose; --here runs it on this machine",
             choice.server
         );
         return Ok(Some(choice.server));
@@ -215,9 +221,18 @@ pub async fn choose(services: &Services, repository: &str) -> Result<Option<Stri
         },
     )?;
     eprintln!(
-        "patchula: remembered for {repository}. --server or --no-server overrides it once; patchula auth logout --server {server} asks again"
+        "patchula: remembered for {repository}. --remote or --here overrides it once; patchula auth logout --server {server} asks again"
     );
     Ok(remote.then_some(server))
+}
+
+/// The server for `--remote` in the current checkout's `repository`: the one
+/// remembered for it, whatever the answer was, or one the Count advertises.
+pub async fn find(services: &Services, repository: &str) -> Result<Option<String>> {
+    if let Some(choice) = load::<Choice>(services, CHOICES)?.remove(repository) {
+        return Ok(Some(choice.server));
+    }
+    Ok(discover(services, repository).await)
 }
 
 /// The server URL in the newest open issue or PR that the server's own bot
@@ -244,7 +259,7 @@ async fn discover(services: &Services, repository: &str) -> Option<String> {
             };
             let Some(server) = patchula_update::advertise::find(body)
                 .filter(|url| url.starts_with("https://"))
-                .and_then(|url| server(Some(url)).ok().flatten())
+                .and_then(|url| parse(url).ok())
             else {
                 continue;
             };

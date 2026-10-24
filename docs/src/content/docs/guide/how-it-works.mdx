@@ -19,7 +19,8 @@ He does the same job differently. One process takes the whole batch.
    with `--all-repos` everything the token can reach. Each one needs a
    `patchula.pkl` at its root; the rest are skipped.
 2. Files are read through the GitHub API at the default branch's
-   commit. No clone. If neither the commit nor the resolved config changed
+   commit, or from the working tree when no repository is named. No clone.
+   If neither the commit nor the resolved config changed
    since the last run, the previous extraction is reused.
 3. Every dependency's source is queried once per batch, however
    many repositories share it. Responses are stored with their ETag or
@@ -85,8 +86,13 @@ The server is the recommended way to run him for real: its caches never go
 cold, work from many repositories shares one batch, and webhooks mean a ticked
 checkbox is handled within seconds rather than at the next scheduled run.
 
-`--local <dir>` reads one repository from a directory on disk instead of
-GitHub, with the same config discovery and file selection. Lookups still reach
-the registries, and nothing is written, so it works with `lookup` and
-`run --dry-run`. The Count's own CI uses it to look up a corpus of about 2,600
-real dependencies on every pull request.
+With no repository named, the CLI reads the working tree in the current
+directory, uncommitted changes included, with the same config discovery and
+file selection as a repository read from GitHub. To read another checkout,
+`cd` there first. Lookups still reach the registries. `lookup` and
+`run --dry-run` write nothing, and [`tui`](/guide/tui/) writes only the
+updates you select. A real `run` opens pull requests from what GitHub has, so
+with no repository named it reads the checkout's GitHub repository, and
+refuses a working tree with uncommitted changes or a HEAD other than the
+remote's default branch. The Count's own CI looks up a corpus of about 2,600
+real dependencies this way on every pull request.
