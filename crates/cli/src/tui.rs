@@ -1,5 +1,5 @@
-//! `patchula tui`: browse a lookup report, and with `--local`, apply selected
-//! updates to the files on disk. Rendering is a pure function of [`Model`], so
+//! `patchula tui`: browse a lookup report, and in a working tree, apply
+//! selected updates to the files on disk. Rendering is a pure function of [`Model`], so
 //! tests draw frames on a test backend and drive it with key events.
 use patchula_report::Report;
 use ratatui::{
@@ -396,7 +396,7 @@ impl Model {
             }
             KeyCode::Char('A') if self.tab == Tab::Updates => {
                 self.message = Some(if self.local.is_none() {
-                    "Apply only works with --local. For GitHub repositories, let `patchula run` open the PRs.".into()
+                    "Apply only works on a working tree: run patchula tui in a checkout with no repository named. For GitHub repositories, let `patchula run` open the PRs.".into()
                 } else if self.selected() == 0 {
                     "Select updates with space first.".into()
                 } else {
@@ -878,7 +878,7 @@ fn draw_help(frame: &mut Frame) {
         ("t", "cycle the update type filter"),
         ("space", "select an update"),
         ("a", "select every visible update"),
-        ("A", "apply the selection to the files (--local)"),
+        ("A", "apply the selection to the working tree"),
     ];
     let text: Vec<Line> = lines
         .iter()
@@ -1031,7 +1031,7 @@ mod tests {
         let text = screen(&mut model);
         assert!(text.contains("hono") && !text.contains("zod "), "{text}");
         press(&mut model, KeyCode::Char('A'));
-        assert!(model.message.as_deref().unwrap().contains("--local"));
+        assert!(model.message.as_deref().unwrap().contains("working tree"));
         press(&mut model, KeyCode::Char('3'));
         assert_eq!(model.tab, Tab::Dependencies);
         press(&mut model, KeyCode::Char('?'));
