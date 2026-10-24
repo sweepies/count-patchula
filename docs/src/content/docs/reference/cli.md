@@ -164,7 +164,7 @@ Report available updates without writing; with no repository, reads the working 
 | `--config <FILE>` | Local Pkl override applied to every selected repository. |  |
 | `--config-dir <DIR>` | Per-repository local overrides: `DIR/<owner>/<name>.pkl` wins over `DIR/<name>.pkl`. Unmatched repositories use their own `patchula.pkl`, and are skipped without one. All matched files are validated before repository scans. Mutually exclusive with `--config`. |  |
 | `--remote` | Run on a Count Patchula server: PATCHULA_SERVER, or the one found for this checkout.  The server uses its App's credentials and caches. You sign in with GitHub on first use, and need push access to each repository. Local config, cache and HTTP flags do not apply. In a checkout whose repository the Count serves, a run with no repository offers the server once and remembers the answer. |  |
-| `--no-remote` | Run on this machine, even if you chose to run this checkout on a server. |  |
+| `--here` | Run on this machine, even if you chose to run this checkout on a server. |  |
 | `-h --help` | Print help |  |
 
 ## `patchula run`
@@ -194,7 +194,7 @@ With no repository, `--dry-run` plans from the working tree in the current direc
 | `--config <FILE>` | Local Pkl override applied to every selected repository. |  |
 | `--config-dir <DIR>` | Per-repository local overrides: `DIR/<owner>/<name>.pkl` wins over `DIR/<name>.pkl`. Unmatched repositories use their own `patchula.pkl`, and are skipped without one. All matched files are validated before repository scans. Mutually exclusive with `--config`. |  |
 | `--remote` | Run on a Count Patchula server: PATCHULA_SERVER, or the one found for this checkout.  The server uses its App's credentials and caches. You sign in with GitHub on first use, and need push access to each repository. Local config, cache and HTTP flags do not apply. In a checkout whose repository the Count serves, a run with no repository offers the server once and remembers the answer. |  |
-| `--no-remote` | Run on this machine, even if you chose to run this checkout on a server. |  |
+| `--here` | Run on this machine, even if you chose to run this checkout on a server. |  |
 | `--dry-run` | Print planned branches, files and unified diffs without writing to GitHub. |  |
 | `--allow-lockfile-pending` | Permit manifest-only test branches for unsupported binary bun locks. |  |
 | `-h --help` | Print help |  |
@@ -282,6 +282,6 @@ Browse dependencies and updates in the terminal; with no repository, apply selec
 | `--config <FILE>` | Local Pkl override applied to every selected repository. |  |
 | `--config-dir <DIR>` | Per-repository local overrides: `DIR/<owner>/<name>.pkl` wins over `DIR/<name>.pkl`. Unmatched repositories use their own `patchula.pkl`, and are skipped without one. All matched files are validated before repository scans. Mutually exclusive with `--config`. |  |
 | `--remote` | Run on a Count Patchula server: PATCHULA_SERVER, or the one found for this checkout.  The server uses its App's credentials and caches. You sign in with GitHub on first use, and need push access to each repository. Local config, cache and HTTP flags do not apply. In a checkout whose repository the Count serves, a run with no repository offers the server once and remembers the answer. |  |
-| `--no-remote` | Run on this machine, even if you chose to run this checkout on a server. |  |
+| `--here` | Run on this machine, even if you chose to run this checkout on a server. |  |
 | `--once` | Print a plain-text snapshot of the updates and exit, for pipes and CI logs. |  |
 | `-h --help` | Print help |  |

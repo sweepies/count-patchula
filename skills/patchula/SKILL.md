@@ -62,7 +62,7 @@ refuses a working tree with uncommitted changes or a HEAD other than the
 remote's default branch. Name repositories as `owner/repo`, or pass
 `--all-repos` for every repository the token can reach; both read through the
 GitHub API. `--remote` runs on a Count server (`PATCHULA_SERVER`, or the one
-found for the checkout), and `--no-remote` keeps a command on this machine
+found for the checkout), and `--here` keeps a command on this machine
 when the checkout was set to run remotely.
 
 `patchula tui` browses the same results interactively.

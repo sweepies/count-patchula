@@ -411,7 +411,7 @@ async fn without_a_terminal_nothing_is_discovered_or_remembered() {
 }
 
 #[test]
-fn no_remote_conflicts_with_remote() {
-    let args = ["lookup", "--remote", "--no-remote", "acme/app"];
+fn here_conflicts_with_remote() {
+    let args = ["lookup", "--remote", "--here", "acme/app"];
     assert!(App::parse_from(&args.iter().map(std::ffi::OsStr::new).collect::<Vec<_>>()).is_err());
 }

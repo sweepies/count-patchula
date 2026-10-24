@@ -177,7 +177,7 @@ before it exits, within the shutdown deadline.
 
 The server hides its URL in an HTML comment in each PR and dashboard it writes.
 `patchula lookup`, `run` or `tui` in a checkout, with no repository named and
-neither `--remote` nor `--no-remote`, looks for that comment in the newest 500
+neither `--remote` nor `--here`, looks for that comment in the newest 500
 open issues and PRs.
 The comment counts only if its author is the bot that the server names at
 `/api/v1/auth`, so a comment pasted by someone else, or written by another
@@ -189,7 +189,7 @@ tree, as they do anywhere else.
 
 The answer, yes or no, holds until you sign out of that server with
 `patchula auth logout`.
-`--no-remote` runs one command on this machine anyway, and `--remote` uses the
+`--here` runs one command on this machine anyway, and `--remote` uses the
 remembered server even after a no. Without a terminal nothing is looked up or
 asked, and the command reads the working tree. Local-only flags such as
 `--config` always run locally.

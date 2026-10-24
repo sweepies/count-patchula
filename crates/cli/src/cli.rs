@@ -193,11 +193,11 @@ pub struct Lookup {
     /// use, and need push access to each repository. Local config, cache and HTTP flags do
     /// not apply. In a checkout whose repository the Count serves, a run with no repository
     /// offers the server once and remembers the answer.
-    #[usage(long, conflicts = "--no-remote")]
+    #[usage(long, conflicts = "--here")]
     pub remote: bool,
     /// Run on this machine, even if you chose to run this checkout on a server.
     #[usage(long)]
-    pub no_remote: bool,
+    pub here: bool,
 }
 
 #[derive(Args)]
@@ -317,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_and_no_remote_are_bare_flags_that_conflict() {
+    fn remote_and_here_are_bare_flags_that_conflict() {
         fn words<'a>(args: &[&'a str]) -> Vec<&'a std::ffi::OsStr> {
             args.iter().map(|arg| std::ffi::OsStr::new(*arg)).collect()
         }
@@ -332,7 +332,8 @@ mod tests {
             panic!("run")
         };
         assert_eq!(run.lookup.repositories, ["acme/app"]);
-        assert!(App::parse_from(&words(&["lookup", "--remote", "--no-remote"])).is_err());
+        assert!(App::parse_from(&words(&["lookup", "--remote", "--here"])).is_err());
+        assert!(App::parse_from(&words(&["lookup", "--no-remote"])).is_err());
         assert!(App::parse_from(&words(&["lookup", "--local"])).is_err());
         assert!(App::parse_from(&words(&["lookup", "--server", "https://x.dev"])).is_err());
     }

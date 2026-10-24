@@ -699,7 +699,7 @@ async fn source(
             .map(Source::GitHub)
             .map_err(|e| (2, e));
     }
-    if !options.no_remote
+    if !options.here
         && local_flag.is_none()
         && let Ok(repository) = current_repository()
         && let Some(server) = remote::choose(services, &repository).await?

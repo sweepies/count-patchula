@@ -190,7 +190,7 @@ pub async fn choose(services: &Services, repository: &str) -> Result<Option<Stri
             return Ok(None);
         }
         eprintln!(
-            "patchula: running {repository} on {}, as you chose; --no-remote runs it here",
+            "patchula: running {repository} on {}, as you chose; --here runs it on this machine",
             choice.server
         );
         return Ok(Some(choice.server));
@@ -221,7 +221,7 @@ pub async fn choose(services: &Services, repository: &str) -> Result<Option<Stri
         },
     )?;
     eprintln!(
-        "patchula: remembered for {repository}. --remote or --no-remote overrides it once; patchula auth logout --server {server} asks again"
+        "patchula: remembered for {repository}. --remote or --here overrides it once; patchula auth logout --server {server} asks again"
     );
     Ok(remote.then_some(server))
 }
