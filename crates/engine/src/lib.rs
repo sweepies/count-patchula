@@ -957,7 +957,38 @@ impl Engine {
             }
             BTreeMap::new()
         });
-        let (remaining, catalog_evidence) = remaining?;
+        let (mut remaining, mut catalog_evidence) = remaining?;
+        // A vulnerable dependency's fix may be newer than a catalog reused
+        // under its release-age wait, so those catalogs are read again.
+        let mut vulnerable = BTreeSet::new();
+        for (repo, eval) in work.iter().zip(&evaluators) {
+            if let Some(eval) = eval {
+                for dep in &repo.dependencies {
+                    let key = self.catalog_key(dep, repo.config.as_ref());
+                    if eval.needs_lookup(dep)
+                        && catalog_evidence.get(&key).is_some_and(|e| e.reused)
+                        && patchula_lookup::advisory_query(dep)
+                            .and_then(|q| advisories.get(&q))
+                            .is_some_and(|found| !found.is_empty())
+                    {
+                        vulnerable.insert(key);
+                    }
+                }
+            }
+        }
+        if !vulnerable.is_empty() {
+            let (fresh, evidence) = self
+                .age_catalogs(
+                    vulnerable,
+                    &BTreeMap::new(),
+                    &BTreeSet::new(),
+                    &sources,
+                    now,
+                )
+                .await?;
+            remaining.extend(fresh);
+            catalog_evidence.extend(evidence);
+        }
         catalogs.extend(remaining);
         digests.extend(refs);
         let lookup_time = prefetch_time + micros(started);
@@ -974,50 +1005,59 @@ impl Engine {
                 if let Some(eval) = eval
                     && !eval.ignored(dep)
                 {
+                    let found = patchula_lookup::advisory_query(dep)
+                        .and_then(|query| advisories.get(&query).map(|found| (query, found)));
+                    let found = found
+                        .as_ref()
+                        .map(|(query, found)| (query, found.as_slice()));
                     match catalogs.get(&self.catalog_key(dep, repo.config.as_ref())) {
-                        Some(Ok(catalog)) => match eval.evaluate_at(dep, catalog, now) {
-                            Ok(p) => {
-                                let dep_key = patchula_update::dashboard::extracted_key(dep);
-                                let overrides: BTreeSet<_> = p
-                                    .held_back
-                                    .iter()
-                                    .flat_map(|h| {
-                                        h.versions
-                                            .iter()
-                                            .chain(std::iter::once(&h.version))
-                                            .map(|v| (v.clone(), h.update_type.clone()))
-                                    })
-                                    .filter(|(v, k)| {
-                                        let target =
-                                            patchula_update::dashboard::held_target(&dep_key, v, k);
-                                        repo.controls.create.contains(&target)
-                                            || repo.controls.age_permits.contains(&target)
-                                    })
-                                    .collect();
-                                if overrides.is_empty() {
-                                    evaluation = p;
-                                } else {
-                                    match eval
-                                        .evaluate_with_age_overrides(dep, catalog, now, &overrides)
-                                    {
-                                        Ok(p) => {
-                                            for (v, k) in overrides {
-                                                repo.controls.age_permits.insert(
-                                                    patchula_update::dashboard::held_target(
-                                                        &dep_key, &v, &k,
-                                                    ),
-                                                );
+                        Some(Ok(catalog)) => {
+                            match eval.evaluate_with(dep, catalog, now, &BTreeSet::new(), found) {
+                                Ok(p) => {
+                                    let dep_key = patchula_update::dashboard::extracted_key(dep);
+                                    let overrides: BTreeSet<_> = p
+                                        .held_back
+                                        .iter()
+                                        .flat_map(|h| {
+                                            h.versions
+                                                .iter()
+                                                .chain(std::iter::once(&h.version))
+                                                .map(|v| (v.clone(), h.update_type.clone()))
+                                        })
+                                        .filter(|(v, k)| {
+                                            let target = patchula_update::dashboard::held_target(
+                                                &dep_key, v, k,
+                                            );
+                                            repo.controls.create.contains(&target)
+                                                || repo.controls.age_permits.contains(&target)
+                                        })
+                                        .collect();
+                                    if overrides.is_empty() {
+                                        evaluation = p;
+                                    } else {
+                                        match eval
+                                            .evaluate_with(dep, catalog, now, &overrides, found)
+                                        {
+                                            Ok(p) => {
+                                                for (v, k) in overrides {
+                                                    repo.controls.age_permits.insert(
+                                                        patchula_update::dashboard::held_target(
+                                                            &dep_key, &v, &k,
+                                                        ),
+                                                    );
+                                                }
+                                                evaluation = p;
                                             }
-                                            evaluation = p;
-                                        }
-                                        Err(e) => {
-                                            repo.report.warnings.push(format!("{}: {e}", dep.name))
+                                            Err(e) => repo
+                                                .report
+                                                .warnings
+                                                .push(format!("{}: {e}", dep.name)),
                                         }
                                     }
                                 }
+                                Err(e) => repo.report.warnings.push(format!("{}: {e}", dep.name)),
                             }
-                            Err(e) => repo.report.warnings.push(format!("{}: {e}", dep.name)),
-                        },
+                        }
                         Some(Err(error)) => repo
                             .report
                             .warnings

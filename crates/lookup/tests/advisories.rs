@@ -294,3 +294,54 @@ fn go_versions_without_their_prefix_and_pypi_names_match() {
     ))];
     assert_eq!(fixes(&py, &q, &found, "4.2.8"), ["GHSA-test"]);
 }
+
+#[test]
+fn a_fix_skips_the_release_age_wait_and_group_but_other_releases_still_wait() {
+    let mut config =
+        patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap();
+    config.defaults.group = Some("all".into());
+    let eval = patchula_lookup::Evaluator::new(&config).unwrap();
+    let dep = dependency(Source::Npm, "lodash", "4.17.11", None);
+    let q = advisory_query(&dep).unwrap();
+    let found = vec![Arc::new(advisory(
+        "npm",
+        "lodash",
+        vec![vec![
+            Event::Introduced("0".into()),
+            Event::Fixed("4.17.12".into()),
+        ]],
+        &[],
+    ))];
+    let now = chrono::Utc::now();
+    let hour_ago = (now - chrono::Duration::hours(1)).to_rfc3339();
+    let catalog = patchula_datasource::Catalog {
+        versions: ["4.17.11", "4.17.12", "5.0.0"]
+            .iter()
+            .map(|v| patchula_datasource::Version {
+                version: (*v).into(),
+                published_at: Some(hour_ago.clone()),
+                digest: None,
+                deprecated: false,
+                yanked: false,
+            })
+            .collect(),
+        dist_tags: Default::default(),
+    };
+    let none = Default::default();
+    let plain = eval
+        .evaluate_with(&dep, &catalog, now, &none, None)
+        .unwrap();
+    assert!(plain.updates.is_empty());
+    let secure = eval
+        .evaluate_with(&dep, &catalog, now, &none, Some((&q, &found)))
+        .unwrap();
+    assert_eq!(secure.updates.len(), 2, "{:?}", secure.updates);
+    for update in &secure.updates {
+        assert_eq!(update.fixes, ["GHSA-test"]);
+        assert_eq!(update.group, None);
+        let policy = update.policy.as_ref().unwrap();
+        assert_eq!(policy.wait_hours, 0);
+        assert!(policy.windows.is_empty());
+    }
+    assert!(secure.held_back.is_empty());
+}

@@ -137,6 +137,7 @@ pub struct Window {
 pub struct Security {
     pub advisories: bool,
     pub label: String,
+    pub apply: Overrides,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

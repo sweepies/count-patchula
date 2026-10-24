@@ -137,6 +137,14 @@ class Security {
   advisories: Boolean = true
   /// Added to PRs with an update that fixes an advisory. Empty adds none.
   label: String = "security"
+  /// Applied after `rules` to updates that fix an advisory. By default they
+  /// skip the release-age wait and schedule windows and get a PR of their own.
+  /// Their PRs never wait for `prs.concurrent` or `prs.perHour` either.
+  apply: Overrides = new {
+    waitHours = 0
+    windows = new Listing {}
+    group = ""
+  }
 }
 
 /// All first-release managers are selected unless a repository replaces this list.
