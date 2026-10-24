@@ -2178,6 +2178,7 @@ dependencies = [
  "patchula-engine",
  "patchula-http",
  "patchula-manager",
+ "patchula-process",
  "patchula-report",
  "patchula-server",
  "patchula-update",

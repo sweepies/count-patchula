@@ -226,7 +226,7 @@ pub async fn choose(services: &Services, repository: &str) -> Result<Option<Stri
 async fn discover(services: &Services, repository: &str) -> Option<String> {
     let transport = services.transport().ok()?;
     // Public repositories answer without a token.
-    let token = services.token().ok();
+    let token = services.token().await;
     let mut checked = std::collections::BTreeSet::new();
     for page in 1..=DISCOVERY_PAGES {
         let url = format!(

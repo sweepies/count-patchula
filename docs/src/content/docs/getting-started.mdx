@@ -65,6 +65,8 @@ secrets. The steps below do the same by hand.
 3. ### Get a token
 
    Export a token in `PATCHULA_TOKEN` (`GITHUB_TOKEN` and `GH_TOKEN` also work).
+   With none of them set, the Count asks a signed-in [GitHub
+   CLI](/guide/how-it-works/#tokens) for its github.com token.
 
    - For `lookup` and dry runs, any token that can read the repository is enough.
    - For real runs, use a GitHub App installation token. Commits are created

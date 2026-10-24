@@ -100,6 +100,12 @@ of the optional update classification rules in `conformance/departures.json`.
 - **Count Patchula:** Repos without config are skipped
 - **Why:** Configs are added deliberately
 
+### Token from the GitHub CLI {#gh-token}
+
+- **Renovate:** The token comes from its own configuration or environment
+- **Count Patchula:** `PATCHULA_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN`, then a signed-in GitHub CLI's github.com token
+- **Why:** A local `lookup` or dry run works on a machine already signed in to `gh`, with no token to copy
+
 ### One process per batch {#batch-execution}
 
 - **Renovate:** One repository at a time, caches reset per repository

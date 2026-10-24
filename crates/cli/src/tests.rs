@@ -340,3 +340,102 @@ fn github_remotes_name_their_repository() {
         assert_eq!(github_repository(url), None, "{url}");
     }
 }
+
+/// Stands in for `gh`: records each command and answers with `result`.
+struct Gh {
+    result: Result<&'static str, &'static str>,
+    calls: Mutex<Vec<(String, Vec<String>, std::time::Duration)>>,
+}
+impl Gh {
+    fn answering(result: Result<&'static str, &'static str>) -> Self {
+        Self {
+            result,
+            calls: Mutex::default(),
+        }
+    }
+}
+impl patchula_process::Executor for Gh {
+    fn run(
+        &self,
+        command: patchula_process::CommandSpec,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + Send + '_>>
+    {
+        self.calls.lock().unwrap().push((
+            command.program.display().to_string(),
+            command.args,
+            command.timeout,
+        ));
+        let result = self
+            .result
+            .map(|out| out.as_bytes().to_vec())
+            .map_err(String::from);
+        Box::pin(async move { result })
+    }
+}
+
+#[tokio::test]
+async fn token_variables_win_in_order_and_skip_gh() {
+    let gh = Gh::answering(Ok("gho_cli\n"));
+    let env = |set: &'static [(&'static str, &'static str)]| {
+        move |name: &str| {
+            set.iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| (*value).to_owned())
+        }
+    };
+    let all = &[
+        ("PATCHULA_TOKEN", "p"),
+        ("GITHUB_TOKEN", "g"),
+        ("GH_TOKEN", "h"),
+    ];
+    assert_eq!(
+        super::resolve_token(env(all), &gh).await.as_deref(),
+        Some("p")
+    );
+    let later = &[
+        ("PATCHULA_TOKEN", ""),
+        ("GITHUB_TOKEN", "g"),
+        ("GH_TOKEN", "h"),
+    ];
+    assert_eq!(
+        super::resolve_token(env(later), &gh).await.as_deref(),
+        Some("g")
+    );
+    assert_eq!(
+        super::resolve_token(env(&[("GH_TOKEN", "h")]), &gh)
+            .await
+            .as_deref(),
+        Some("h")
+    );
+    assert!(gh.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn without_variables_the_github_cli_token_for_github_com_is_used() {
+    let gh = Gh::answering(Ok("gho_cli\n"));
+    let token = super::resolve_token(|_| Some(String::new()), &gh).await;
+    assert_eq!(token.as_deref(), Some("gho_cli"));
+    let calls = gh.calls.lock().unwrap();
+    let (program, args, timeout) = &calls[0];
+    assert_eq!(program, "gh");
+    assert_eq!(args, &["auth", "token", "--hostname", "github.com"]);
+    assert!(*timeout <= std::time::Duration::from_secs(10));
+}
+
+#[tokio::test]
+async fn a_missing_signed_out_or_hung_github_cli_gives_no_token() {
+    for result in [
+        Err("cannot start gh: No such file or directory"),
+        Err("exit status: 1: no oauth token found for github.com"),
+        Err("tool exceeded 10s time limit"),
+        Ok("  \n"),
+    ] {
+        let gh = Gh::answering(result);
+        assert_eq!(
+            super::resolve_token(|_| None, &gh).await,
+            None,
+            "{result:?}"
+        );
+        assert_eq!(gh.calls.lock().unwrap().len(), 1);
+    }
+}
