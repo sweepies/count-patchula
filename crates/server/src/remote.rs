@@ -1,4 +1,4 @@
-//! The API behind the CLI's `--server` option. A GitHub user access token from
+//! The API behind the CLI's `--remote` option. A GitHub user access token from
 //! the App's device flow identifies the caller, and every repository in a
 //! request must let that user push. Jobs live in memory only: a restart loses
 //! them, and the CLI reports that.

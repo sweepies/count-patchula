@@ -9,7 +9,7 @@ dependencies across 19 managers.
   in that file. Regenerate it with `mise run corpus:snapshot`.
 - On pull requests, CI also looks up every dependency against the live
   registries and plans every branch without writing (`mise run corpus:check`,
-  which is `patchula run --dry-run --local tests/corpus`). A branch that fails
+  which is `patchula run --dry-run` in `tests/corpus`). A branch that fails
   to plan fails the job; counts, skips and timings go in the job summary.
 
 Each directory keeps its project's own relative paths. The `.github/workflows`

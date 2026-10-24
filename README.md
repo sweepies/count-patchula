@@ -51,7 +51,7 @@ PR checkboxes the moment you tick them. It idles cheaply between batches, so
 usage-billed hosts such as Railway suit it well. Each release publishes it as
 a [container image](https://count-patchula.sweepy.dev/guide/server/#container-image),
 `ghcr.io/sweepies/count-patchula`, for linux/amd64 and linux/arm64. Once it is up, `patchula run
---server <url>` runs on it from your machine, signed in with GitHub, with no
+--remote` runs on it from your machine, signed in with GitHub, with no
 token or toolchain of your own.
 
 ## What you get
@@ -72,7 +72,7 @@ token or toolchain of your own.
   you reviewed.
 - A dependency dashboard, schedule windows, PR limits, grouping, auto-merge
   behind check gates, and a GitHub App server mode driven by webhooks.
-- A terminal UI (`patchula tui`) to browse updates, and with `--local`, pick
+- A terminal UI (`patchula tui`) to browse updates, and in a checkout, pick
   some and write them into your files.
 
 ## How fast

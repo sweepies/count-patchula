@@ -347,18 +347,18 @@ fn recheck_flag_overrides_environment_and_invalid_environment_is_a_usage_error()
 }
 
 #[test]
-fn repositories_default_to_the_current_github_remote() {
+fn no_repository_reads_the_working_tree_and_a_real_run_needs_it_pushed() {
     let git = |dir: &std::path::Path, args: &[&str]| {
         let status = Command::new("git")
+            .args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
             .args(args)
             .current_dir(dir)
             .status()
             .unwrap();
         assert!(status.success(), "git {args:?}");
     };
-    let lookup = |dir: &std::path::Path, args: &[&str]| {
+    let patchula = |dir: &std::path::Path, args: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_patchula"))
-            .arg("lookup")
             .args(args)
             .arg("--json")
             .current_dir(dir)
@@ -366,6 +366,8 @@ fn repositories_default_to_the_current_github_remote() {
             .env_remove("PATCHULA_TOKEN")
             .env_remove("GH_TOKEN")
             .env("GH_CONFIG_DIR", SIGNED_OUT_GH)
+            .env_remove("PATCHULA_SERVER")
+            .env("XDG_CONFIG_HOME", dir.join(".config"))
             .env("GIT_CEILING_DIRECTORIES", dir.parent().unwrap())
             .output()
             .unwrap()
@@ -374,40 +376,80 @@ fn repositories_default_to_the_current_github_remote() {
         let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         json["error"].as_str().unwrap().to_owned()
     };
+    let refused = |dir: &std::path::Path, args: &[&str], message: &str| {
+        let output = patchula(dir, args);
+        assert_eq!(output.status.code(), Some(2), "{args:?} {output:?}");
+        assert!(error(&output).contains(message), "{args:?} {output:?}");
+    };
+    let needs_token = |dir: &std::path::Path, args: &[&str]| {
+        let output = patchula(dir, args);
+        assert_eq!(output.status.code(), Some(1), "{args:?} {output:?}");
+        assert!(
+            error(&output).contains("PATCHULA_TOKEN"),
+            "{args:?} {output:?}"
+        );
+    };
 
     let dir = tempfile::tempdir().unwrap();
-    let output = lookup(dir.path(), &[]);
-    assert_eq!(output.status.code(), Some(2), "{output:?}");
-    assert!(error(&output).contains("not a Git checkout"));
-
-    git(dir.path(), &["init", "--quiet"]);
-    let output = lookup(dir.path(), &[]);
-    assert_eq!(output.status.code(), Some(2), "{output:?}");
-    assert!(error(&output).contains("no Git remote"));
-
+    let dir = dir.path();
+    // The working tree needs a config to read.
+    refused(dir, &["lookup"], "has no patchula.pkl");
+    refused(dir, &["run", "--dry-run"], "has no patchula.pkl");
+    refused(
+        dir,
+        &["lookup", "--config-dir", "policy"],
+        "--config-dir picks config",
+    );
+    // A real run needs this checkout's GitHub repository.
+    refused(dir, &["run"], "not a Git checkout");
+    git(dir, &["init", "--quiet", "--initial-branch=main"]);
+    refused(dir, &["run"], "no Git remote");
     git(
-        dir.path(),
+        dir,
         &["remote", "add", "origin", "https://gitlab.com/demo/app.git"],
     );
-    let output = lookup(dir.path(), &[]);
-    assert_eq!(output.status.code(), Some(2), "{output:?}");
-    assert!(error(&output).contains("origin remote is not a github.com repository"));
-
-    // A GitHub remote resolves, so the run gets as far as needing a token.
+    refused(
+        dir,
+        &["run"],
+        "origin remote is not a github.com repository",
+    );
     git(
-        dir.path(),
+        dir,
         &["remote", "set-url", "origin", "git@github.com:demo/app.git"],
     );
-    let output = lookup(dir.path(), &[]);
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert!(error(&output).contains("PATCHULA_TOKEN"));
 
-    let output = lookup(dir.path(), &["--all-repos", "demo/app"]);
-    assert_eq!(output.status.code(), Some(2), "{output:?}");
-    assert!(error(&output).contains("--all-repos cannot be combined"));
+    // Uncommitted changes are read by a lookup or a dry run, and refused by a real run.
+    std::fs::write(dir.join("patchula.pkl"), "amends \"patchula:Config\"\n").unwrap();
+    needs_token(dir, &["lookup"]);
+    needs_token(dir, &["run", "--dry-run"]);
+    refused(dir, &["run"], "uncommitted changes");
+    git(dir, &["add", "patchula.pkl"]);
+    git(dir, &["commit", "--quiet", "-m", "config"]);
+    refused(dir, &["run"], "cannot tell the default branch of origin");
+    git(dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(
+        dir,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
+    // At the pushed default branch, a real run goes ahead against GitHub.
+    needs_token(dir, &["run"]);
+    git(
+        dir,
+        &["commit", "--quiet", "--allow-empty", "-m", "unpushed"],
+    );
+    refused(dir, &["run"], "HEAD is not at origin/main");
+    needs_token(dir, &["run", "--dry-run"]);
 
+    refused(
+        dir,
+        &["lookup", "--all-repos", "demo/app"],
+        "--all-repos cannot be combined",
+    );
     let elsewhere = tempfile::tempdir().unwrap();
-    let output = lookup(elsewhere.path(), &["--all-repos"]);
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert!(error(&output).contains("PATCHULA_TOKEN"));
+    needs_token(elsewhere.path(), &["lookup", "--all-repos"]);
+    needs_token(elsewhere.path(), &["run", "demo/app"]);
 }

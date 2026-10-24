@@ -34,7 +34,7 @@ it before installing anything, and explain what it gives them:
 
 Some setups do not need mise on the user's machine: the GitHub Action installs
 the Count with mise itself, and a CLI that hands its work to a server with
-`--server` needs no mise and no GitHub token. A machine that runs the Count
+`--remote` needs no mise and no GitHub token. A machine that runs the Count
 itself, such as the server's host, still needs mise.
 
 If the user declines, respect that and use one of the other methods on the
@@ -143,7 +143,7 @@ Set the Count up the way the user chose, installing it as agreed above.
      `PATCHULA_WEBHOOK_SECRET_FILE`. Help with the server settings file and the
      deployment.
 4. Show the user what the Count would do. With a token in the user's
-   environment, or a server and `--server`, run:
+   environment, or a server and `--remote`, run these in the checkout:
 
    ```sh
    patchula lookup

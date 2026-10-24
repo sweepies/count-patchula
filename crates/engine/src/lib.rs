@@ -270,7 +270,7 @@ impl Engine {
     ) -> Result<Report> {
         if options.local.is_some() && !dry_run {
             return Err(Error::Configuration(
-                "--local never writes; use it with lookup or run --dry-run".into(),
+                "a local directory is never written; read it with lookup or run --dry-run".into(),
             ));
         }
         let started = Instant::now();
@@ -676,7 +676,7 @@ impl Engine {
         }
         if options.local.is_some() && !options.repositories.is_empty() {
             return Err(Error::Configuration(
-                "--local reads one directory; omit repository arguments".into(),
+                "a local directory is read alone; name no repositories with it".into(),
             ));
         }
         let local = options.local.clone();

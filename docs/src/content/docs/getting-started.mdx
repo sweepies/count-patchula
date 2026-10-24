@@ -102,9 +102,12 @@ secrets. The steps below do the same by hand.
    the same command again and the Count notices nothing changed: an unchanged
    repository costs one GraphQL query on the write side.
 
-   Without a repository argument the Count works on the current directory's
-   checkout, through its `origin` remote (or its only remote) on github.com. Pass
-   `--all-repos` to process every repository the token can reach.
+   Without a repository argument, `lookup` and `run --dry-run` read the working
+   tree in the current directory, uncommitted changes included. A real `run`
+   opens PRs for the checkout's repository on github.com (its `origin` remote, or
+   its only remote), and only once the working tree is clean and at the remote's
+   default branch. Pass `--all-repos` to process every repository the token can
+   reach.
 
    To run him on a schedule, use the [GitHub Action](/guide/github-actions/).
 
