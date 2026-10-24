@@ -13,6 +13,11 @@ use std::process::ExitCode;
 /// Environment variables the CLI reads. Their meanings are in
 /// docs/src/content/docs/reference/environment.md.
 const TOKEN_VARS: [&str; 3] = ["PATCHULA_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"];
+/// The GitHub CLI host whose token is the last fallback; the Count only talks
+/// to github.com, whatever host `gh` defaults to.
+const GH_HOST: &str = "github.com";
+const GH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const TOKEN_HELP: &str = "lookup/run requires PATCHULA_TOKEN, GITHUB_TOKEN or GH_TOKEN, or a GitHub CLI signed in with `gh auth login`";
 const LOG_VAR: &str = "PATCHULA_LOG";
 const RECHECK_VAR: &str = "PATCHULA_RECHECK";
 const DOCKERHUB_USERNAME_VAR: &str = "PATCHULA_DOCKERHUB_USERNAME";
@@ -36,14 +41,19 @@ struct Services {
     answer: Option<bool>,
 }
 impl Services {
-    fn token(&self) -> Result<String, std::env::VarError> {
+    async fn token(&self) -> Option<String> {
         #[cfg(test)]
-        if let Some(token) = &self.token {
-            return Ok(token.clone());
+        {
+            self.token.clone()
         }
-        std::env::var(TOKEN_VARS[0])
-            .or_else(|_| std::env::var(TOKEN_VARS[1]))
-            .or_else(|_| std::env::var(TOKEN_VARS[2]))
+        #[cfg(not(test))]
+        {
+            resolve_token(
+                |name| std::env::var(name).ok(),
+                &patchula_process::SystemExecutor,
+            )
+            .await
+        }
     }
     fn transport(
         &self,
@@ -92,6 +102,38 @@ impl Services {
             patchula_http::Network::with_loopback_http()?,
         ))
     }
+}
+
+/// The first non-empty token variable, else the token of a GitHub CLI signed in
+/// to github.com. A missing, signed-out, failing or hung `gh` gives nothing,
+/// and its output never reaches an error or a log.
+async fn resolve_token(
+    var: impl Fn(&str) -> Option<String>,
+    executor: &dyn patchula_process::Executor,
+) -> Option<String> {
+    if let Some(token) = TOKEN_VARS
+        .iter()
+        .filter_map(|name| var(name))
+        .find(|token| !token.is_empty())
+    {
+        return Some(token);
+    }
+    let output = executor
+        .run(patchula_process::CommandSpec {
+            program: "gh".into(),
+            args: ["auth", "token", "--hostname", GH_HOST]
+                .map(String::from)
+                .into(),
+            cwd: std::env::temp_dir(),
+            env: std::env::vars_os().collect(),
+            timeout: GH_TIMEOUT,
+            output_limit: 4096,
+            complete_output: true,
+        })
+        .await
+        .ok()?;
+    let token = String::from_utf8(output).ok()?.trim().to_owned();
+    (!token.is_empty()).then_some(token)
 }
 
 async fn run(app: &App, services: &Services) -> Result<u8, (u8, miette::Report)> {
@@ -735,12 +777,10 @@ async fn report(
         .map(|path| patchula_config::load(path))
         .transpose()
         .map_err(|e| (2, e))?;
-    let token = services.token().map_err(|_| {
-        (
-            1,
-            miette::miette!("lookup/run requires PATCHULA_TOKEN, GITHUB_TOKEN or GH_TOKEN"),
-        )
-    })?;
+    let token = services
+        .token()
+        .await
+        .ok_or_else(|| (1, miette::miette!("{TOKEN_HELP}")))?;
     if let Some(parent) = options.cache.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)
             .map_err(|e| (1, miette::miette!("cannot create cache directory: {e}")))?;

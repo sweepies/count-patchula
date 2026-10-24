@@ -66,6 +66,21 @@ server](/guide/server/): it verifies webhooks, keeps a deduplicated queue, sweep
 on a cron schedule and keeps every cache warm between batches. Both use the same
 engine, so a batch behaves the same however it started.
 
+### Tokens
+
+`run` and `lookup` take the first of these that is set and not empty:
+
+1. `PATCHULA_TOKEN`
+2. `GITHUB_TOKEN`
+3. `GH_TOKEN`
+4. the token of a GitHub CLI signed in with `gh auth login`, read with
+   `gh auth token --hostname github.com`
+
+The Count only talks to github.com, so he asks `gh` for that host whatever
+its default host is. If `gh` is not installed, is not signed in, fails, or
+does not answer within 10 seconds, he carries on without it and the error
+names all four sources. The token is never printed or logged.
+
 The server is the recommended way to run him for real: its caches never go
 cold, work from many repositories shares one batch, and webhooks mean a ticked
 checkbox is handled within seconds rather than at the next scheduled run.

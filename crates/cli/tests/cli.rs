@@ -2,6 +2,10 @@
 
 use std::process::{Command, Output};
 
+/// A GitHub CLI config directory with no sign-in, so token resolution never
+/// picks up the developer's own `gh` login.
+const SIGNED_OUT_GH: &str = concat!(env!("CARGO_TARGET_TMPDIR"), "/gh-signed-out");
+
 fn cli(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_patchula"))
         .args(args)
@@ -145,13 +149,18 @@ fn run_requires_only_the_standard_token_and_accepts_write_options() {
             .env_remove("PATCHULA_TOKEN")
             .env_remove("GITHUB_TOKEN")
             .env_remove("GH_TOKEN")
+            .env("GH_CONFIG_DIR", SIGNED_OUT_GH)
             .output()
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(output.status.code(), Some(1));
         assert_eq!(json["exitCode"], 1);
         assert_eq!(json["schemaVersion"], 1);
-        assert!(json["error"].as_str().unwrap().contains("PATCHULA_TOKEN"));
+        let error = json["error"].as_str().unwrap();
+        assert!(
+            error.contains("PATCHULA_TOKEN") && error.contains("gh auth login"),
+            "{error}"
+        );
     }
 }
 
@@ -171,6 +180,7 @@ fn lookup_requires_token_without_network_and_validates_concurrency() {
         .env_remove("GITHUB_TOKEN")
         .env_remove("PATCHULA_TOKEN")
         .env_remove("GH_TOKEN")
+        .env("GH_CONFIG_DIR", SIGNED_OUT_GH)
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
@@ -314,6 +324,7 @@ fn recheck_flag_overrides_environment_and_invalid_environment_is_a_usage_error()
             .env_remove("PATCHULA_TOKEN")
             .env_remove("GITHUB_TOKEN")
             .env_remove("GH_TOKEN")
+            .env("GH_CONFIG_DIR", SIGNED_OUT_GH)
             .env("PATCHULA_RECHECK", "invalid");
         command
     };
@@ -354,6 +365,7 @@ fn repositories_default_to_the_current_github_remote() {
             .env_remove("GITHUB_TOKEN")
             .env_remove("PATCHULA_TOKEN")
             .env_remove("GH_TOKEN")
+            .env("GH_CONFIG_DIR", SIGNED_OUT_GH)
             .env("GIT_CEILING_DIRECTORIES", dir.parent().unwrap())
             .output()
             .unwrap()
