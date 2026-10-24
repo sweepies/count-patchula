@@ -140,7 +140,7 @@ pub fn affects(
 }
 
 /// The lowest fixed version above `current` in the package's ranges.
-fn fixed_in(
+pub(crate) fn fixed_in(
     advisory: &Advisory,
     query: &AdvisoryQuery,
     scheme: Ecosystem,

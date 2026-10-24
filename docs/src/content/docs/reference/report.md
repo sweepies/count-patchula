@@ -74,7 +74,7 @@ A `complete` repository with no package files had nothing the Count supports.
 
 | Field | |
 |---|---|
-| `source`, `kinds` | Where the dependency came from and its kinds, such as `devDependencies` |
+| `source`, `kinds` | Where the dependency came from and its kinds, such as `devDependencies`, or `transitive` for a vulnerable package only a lockfile records |
 | `locations` | Byte offsets, line, column and a pointer into the file |
 | `resolution` | How `current.version` was found: `declared`, `lockfile`, `pinned-commit`, `floating-ref`, `release-line` or `supported-range` |
 | `heldBack` | Updates waiting on release age, per update type, with when they become eligible |

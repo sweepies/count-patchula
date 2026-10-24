@@ -265,6 +265,7 @@ async fn checkbox_controls_refresh_only_the_selected_dependency_and_failures_do_
             report: repository("demo/app", Status::Complete, None),
             config: Some(config.clone()),
             dependencies: current,
+            locked: Vec::new(),
             snapshot: Default::default(),
             inventory: None,
             controls,

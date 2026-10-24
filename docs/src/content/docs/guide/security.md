@@ -31,6 +31,30 @@ and fetched again only when OSV reports them modified, so a warm run costs one
 request. If OSV cannot be reached, the run carries on without advisories and
 the report says why in a warning.
 
+## Lockfile-only packages
+
+Most vulnerable code arrives through dependencies of dependencies, which only
+a lockfile records. The Count checks every registry package in `Cargo.lock`
+and `package-lock.json` too. A lockfile-only package that turns out to be
+vulnerable shows up in the report, the dashboard and the TUI as a dependency of
+kind `transitive` on its lockfile. Packages without a known vulnerability stay
+out of the report.
+
+For Cargo, the Count also fixes it: the update targets the lowest fixed release
+that fixes the most advisories without crossing a breaking version, and the
+branch changes only `Cargo.lock`, with
+`cargo update -p <crate>@<current> --precise <fix>`. The new lock must record
+the fix, or nothing is published. A fix that only a breaking release provides
+needs the crate that depends on it to move first, so it is reported but not
+proposed.
+
+npm locks have no tool that moves one nested package to an exact version, so
+for now a vulnerable lockfile-only npm package is reported with the release
+that fixes it, and the fix is up to you, or to updating whatever depends on it.
+
+Rules select these packages with `kinds { "transitive" }`. For example,
+`apply { active = false }` reports them without proposing fixes.
+
 ## What a security update looks like
 
 An update fixes an advisory when the current version is affected and the
