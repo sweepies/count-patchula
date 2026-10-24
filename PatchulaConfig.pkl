@@ -130,6 +130,15 @@ class Lockfiles {
   php: "static"|"compiled" = "static"
 }
 
+/// Known vulnerabilities, from OSV.dev.
+class Security {
+  /// Check each dependency's current version against OSV.dev, and mark updates
+  /// that leave an advisory behind. Only package names and versions are sent.
+  advisories: Boolean = true
+  /// Added to PRs with an update that fixes an advisory. Empty adds none.
+  label: String = "security"
+}
+
 /// All first-release managers are selected unless a repository replaces this list.
 managers: Listing<Manager> = new {
   "npm"; "bun"; "github-actions"; "mise"; "cargo"; "dockerfile"; "compose"
@@ -162,6 +171,7 @@ ignore: Listing<String> = new {}
 exclude: Listing<String> = new { "**/node_modules/**"; "**/vendor/**"; "**/.git/**" }
 prs: PullRequests = new {}
 lockfiles: Lockfiles = new {}
+security: Security = new {}
 /// Prefer mise-versions for public catalogs; false uses the upstream sources.
 useVersionsHost: Boolean = true
 submodules: Boolean = false

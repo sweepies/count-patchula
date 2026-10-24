@@ -59,7 +59,10 @@ impl Transport for Fake {
             path.into(),
             body.clone(),
         ));
-        let (status, value) = if request.url().host_str() == Some("registry.npmjs.org") {
+        let (status, value) = if request.url().host_str() == Some("api.osv.dev") {
+            let queries = body["queries"].as_array().map_or(0, Vec::len);
+            (200, json!({"results": vec![json!({}); queries]}))
+        } else if request.url().host_str() == Some("registry.npmjs.org") {
             (
                 200,
                 json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}}}),
@@ -286,12 +289,13 @@ async fn cli_run_reopens_disk_receipts_with_bot_authors_and_mixed_pr_inventory()
                 .iter()
                 .position(|(_, _, b)| b["query"] == patchula_update::INVENTORY_QUERY)
                 .unwrap();
-            assert_eq!(requests.len(), 6, "{requests:?}");
+            assert_eq!(requests.len(), 7, "{requests:?}");
             assert!(inventory > 0, "inventory follows repository discovery");
             assert!(
-                requests.iter().all(|(method, _, body)| method == "GET"
-                    || body["query"] == patchula_update::INVENTORY_QUERY),
-                "only the inventory query may use POST: {requests:?}"
+                requests.iter().all(|(method, path, body)| method == "GET"
+                    || body["query"] == patchula_update::INVENTORY_QUERY
+                    || path == "/v1/querybatch"),
+                "only the inventory and advisory queries may use POST: {requests:?}"
             );
             assert!(fake.writes.lock().unwrap().is_empty());
         }

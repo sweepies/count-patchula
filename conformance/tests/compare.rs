@@ -75,6 +75,7 @@ fn equal_proposals_are_order_independent_and_never_paired_by_position() {
         group: None,
         policy: None,
         release_age: None,
+        fixes: Vec::new(),
     };
     dep.updates.push(u.clone());
     u.new_value = Some("6".into());
@@ -106,6 +107,7 @@ fn departures_do_not_hide_version_changes_or_other_managers() {
         group: None,
         policy: None,
         release_age: None,
+        fixes: Vec::new(),
     });
     assert_eq!(
         compare(&a, &b, &rules()).unwrap().differences[0].classification,
@@ -839,6 +841,7 @@ fn cargo_pre1_departure_is_limited_to_identical_breaking_targets() {
         group: None,
         policy: None,
         release_age: None,
+        fixes: Vec::new(),
     }];
     let mut b = a.clone();
     b.repositories[0].package_files[0].dependencies[0].updates[0].update_type = "major".into();

@@ -492,6 +492,7 @@ fn setup(
                     group: None,
                     policy: None,
                     release_age: None,
+                    fixes: Vec::new(),
                 }],
             }],
         }],
@@ -2681,6 +2682,7 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
                 group: None,
                 policy: None,
                 release_age: None,
+                fixes: Vec::new(),
             })
             .collect();
         let r = ReportDependency {
@@ -3073,6 +3075,7 @@ fn reference_data_pins_get_their_own_branch() {
                     group: None,
                     policy: None,
                     release_age: None,
+                    fixes: Vec::new(),
                 })
                 .collect(),
         };

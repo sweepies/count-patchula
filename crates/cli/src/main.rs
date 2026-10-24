@@ -414,10 +414,22 @@ async fn batch(
             .map(|d| d.updates.len())
             .sum();
         updates += proposals;
+        let advisories: usize = repo
+            .package_files
+            .iter()
+            .flat_map(|f| &f.dependencies)
+            .filter_map(|d| d.metadata.as_ref())
+            .map(|m| m.advisories.len())
+            .sum();
         eprintln!(
-            "{}: {:?}, {deps} dependencies, {proposals} proposals{}",
+            "{}: {:?}, {deps} dependencies, {proposals} proposals{}{}",
             repo.repository,
             repo.status,
+            match advisories {
+                0 => String::new(),
+                1 => ", 1 known vulnerability".into(),
+                n => format!(", {n} known vulnerabilities"),
+            },
             repo.reason
                 .as_ref()
                 .map_or(String::new(), |r| format!(" ({r})"))
@@ -754,7 +766,8 @@ async fn report(
     let mut engine =
         Engine::with_http_options(&token, cache, options.concurrency, transport, http_options)
             .map_err(|e| (1, miette::miette!("{e}")))?
-            .with_recheck(recheck);
+            .with_recheck(recheck)
+            .with_advisories();
     if let Some(mise_data) = user_mise_data() {
         engine = engine.with_tool_seed(mise_data);
     }

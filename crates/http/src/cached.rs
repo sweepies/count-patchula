@@ -231,6 +231,45 @@ impl Cached {
             .await
     }
 
+    /// An uncached JSON request, for APIs whose answers carry no validators.
+    /// It shares the host's concurrency limit and the batch's counters.
+    pub async fn json(
+        &self,
+        method: Method,
+        url: &str,
+        body: Option<Vec<u8>>,
+    ) -> Result<Response, Error> {
+        let url = Url::parse(url).map_err(|_| Error::Configuration)?;
+        if url.scheme() != "https" || url.host_str().is_none() {
+            return Err(Error::Configuration);
+        }
+        let trace = RequestTrace::new(method.as_str(), &url);
+        let mut request = Request::new(method, url.clone());
+        let headers = request.headers_mut();
+        headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+        headers.insert(
+            header::USER_AGENT,
+            HeaderValue::from_static(concat!("patchula/", env!("CARGO_PKG_VERSION"))),
+        );
+        if let Some(body) = body {
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            );
+            *request.body_mut() = Some(body.into());
+        }
+        let queued = Instant::now();
+        let _permit = self.acquire(&url, false).await?;
+        self.0.requests.fetch_add(1, Ordering::Relaxed);
+        let response = trace
+            .send(self.0.transport.as_ref(), request, queued.elapsed(), false)
+            .await?;
+        if !response.status.is_success() {
+            return Err(Error::Status(response.status.as_u16()));
+        }
+        Ok(response)
+    }
+
     /// Public registry content; bearer tokens never enter the persisted key.
     pub async fn registry_get(
         &self,

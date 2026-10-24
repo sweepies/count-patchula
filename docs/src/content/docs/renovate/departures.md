@@ -549,6 +549,12 @@ lookups and unrelated taxonomy remain actionable. Tests cover negative cases.
 See [reference data](/guide/configuration/#reference-data) for the packages and
 how to turn it off.
 
+### Advisories from OSV.dev {#advisories}
+
+- **Renovate:** `vulnerabilityAlerts` reads the repository's GitHub Dependabot alerts; OSV is a separate opt-in
+- **Count Patchula:** OSV.dev only, on by default, one batched query per run; fixing updates are marked and labelled, not given separate alert PRs
+- **Why:** Works without the App's `vulnerability_alerts` permission or Dependabot being enabled, covers RustSec and the Go database, and fits one lookup per batch
+
 ## Lockfiles and digests
 
 ### npm integrity {#npm-integrity}

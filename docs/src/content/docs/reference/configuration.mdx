@@ -22,6 +22,7 @@ explains how the pieces fit together.
 | `exclude` | `Listing<String>` | `**/node_modules/**`, `**/vendor/**`, `**/.git/**` |
 | `prs` | `PullRequests` | see below |
 | `lockfiles` | `Lockfiles` | see below |
+| `security` | `Security` | see below |
 | `useVersionsHost` | `Boolean` | `true` |
 | `submodules` | `Boolean` | `false` |
 | `ignoreAuthors` | `Listing<String>` | none |
@@ -71,6 +72,15 @@ leaves out the two digest switches. `null` leaves the earlier value alone.
 | `tidyGo` | `Boolean` | `false` |
 | `npmEngine` | `"aube"\|"npm"` | `"aube"` |
 | `php` | `"static"\|"compiled"` | `"static"` |
+
+## Security
+
+| Field | Type | Default |
+|---|---|---|
+| `advisories` | `Boolean` | `true` |
+| `label` | `String` | `"security"` |
+
+See [security advisories](/guide/security/).
 
 ## The schema
 

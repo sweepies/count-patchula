@@ -50,6 +50,9 @@ pub struct Change {
     pub labels: Vec<String>,
     pub release_notes: bool,
     pub body_notes: Vec<String>,
+    /// Advisories affecting the current version that this change leaves behind.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub advisories: Vec<patchula_report::Advisory>,
 }
 pub(crate) fn hash(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -89,6 +92,7 @@ struct Item<'a> {
     dep: &'a Dependency,
     update: &'a Update,
     current_version: Option<&'a str>,
+    advisories: &'a [patchula_report::Advisory],
 }
 
 pub fn plan(
@@ -150,6 +154,10 @@ pub fn plan(
                             dep,
                             update,
                             current_version: reported.current.version.as_deref(),
+                            advisories: reported
+                                .metadata
+                                .as_ref()
+                                .map_or(&[], |m| m.advisories.as_slice()),
                         });
                 }
             }
@@ -261,7 +269,7 @@ fn build(
         reason = Some("group has conflicting commitPrefix policies".into());
     }
     let prefix = prefixes.first().unwrap_or(&config.defaults.commit_prefix);
-    let message = if items.iter().all(|item| item.update.update_type == "pin") {
+    let mut message = if items.iter().all(|item| item.update.update_type == "pin") {
         format!("{prefix} pin dependencies")
     } else {
         format!(
@@ -269,6 +277,9 @@ fn build(
             titles.into_iter().collect::<Vec<_>>().join(", ")
         )
     };
+    if items.iter().any(|item| !item.update.fixes.is_empty()) {
+        message.push_str(" [security]");
+    }
     let mut contents = BTreeMap::new();
     let mut files = Vec::new();
     for (path, edits) in changes {
@@ -347,6 +358,12 @@ fn build(
                     || config.defaults.body_notes.clone(),
                     |p| p.body_notes.clone(),
                 ),
+                advisories: item
+                    .advisories
+                    .iter()
+                    .filter(|a| u.fixes.contains(&a.id))
+                    .cloned()
+                    .collect(),
             }
         })
         .collect();
@@ -635,6 +652,7 @@ pub fn batch_plan(
                 group: None,
                 policy: None,
                 release_age: None,
+                fixes: Vec::new(),
             },
         ));
     }
@@ -647,6 +665,7 @@ pub fn batch_plan(
             dep,
             update,
             current_version: None,
+            advisories: &[],
         })
         .collect();
     let branch = branch_name(&config.prs.branch, "batch", "batch")?;

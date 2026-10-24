@@ -309,3 +309,25 @@ fn the_dashboard_hides_the_advertised_server_under_its_marker() {
         None
     );
 }
+
+#[test]
+fn known_vulnerabilities_lead_the_dashboard_with_their_fix() {
+    let mut repo = repository();
+    let dep = &mut repo.package_files[0].dependencies[0];
+    dep.updates = vec![serde_json::from_value(json!({
+        "newValue":"1.0.5","newVersion":"1.0.5","newDigest":null,"updateType":"patch","group":null,
+        "fixes":["GHSA-fixed"]
+    }))
+    .unwrap()];
+    dep.metadata.as_mut().unwrap().advisories = serde_json::from_value(json!([
+        {"id":"GHSA-fixed","aliases":["CVE-2026-0001"],"severity":"high","summary":"Prototype pollution",
+         "url":"https://osv.dev/vulnerability/GHSA-fixed","fixedIn":"1.0.5"},
+        {"id":"GHSA-open","url":"https://osv.dev/vulnerability/GHSA-open"}
+    ]))
+    .unwrap();
+    let text = dashboard::render(&repo, &[], &[], Recheck::NextRun, None);
+    let section = text.find("## Known vulnerabilities").unwrap();
+    assert!(section < text.find("## Pending updates").unwrap());
+    assert!(text.contains("- fixture 1.0.0 (package.json): [GHSA-fixed](https://osv.dev/vulnerability/GHSA-fixed) (CVE-2026-0001), high; fixed by the update to 1.0.5. Prototype pollution\n"), "{text}");
+    assert!(text.contains("- fixture 1.0.0 (package.json): [GHSA-open](https://osv.dev/vulnerability/GHSA-open), unrated; no fixed release yet\n"), "{text}");
+}

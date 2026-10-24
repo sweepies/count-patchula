@@ -214,6 +214,7 @@ fn update(value: &Value, inherited_group: Option<String>, ctx: &mut Context<'_>)
         group: ctx.text(value, "groupName").or(inherited_group),
         policy: None,
         release_age: None,
+        fixes: Vec::new(),
     };
     if proposed.new_value.is_none()
         && proposed.new_version.is_none()
@@ -323,6 +324,7 @@ fn dependency(value: &Value, source_manager: &str, ctx: &mut Context<'_>) -> Res
                     rejected: Vec::new(),
                 }),
             resolution: None,
+            advisories: Vec::new(),
             source,
             kinds: value
                 .get("depType")
