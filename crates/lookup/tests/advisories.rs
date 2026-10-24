@@ -345,3 +345,79 @@ fn a_fix_skips_the_release_age_wait_and_group_but_other_releases_still_wait() {
     }
     assert!(secure.held_back.is_empty());
 }
+
+#[test]
+fn the_lowest_release_fixing_the_most_is_proposed_past_permitted_filters() {
+    let dep = dependency(Source::Npm, "lodash", "4.17.11", None);
+    let q = advisory_query(&dep).unwrap();
+    let mut late = advisory(
+        "npm",
+        "lodash",
+        vec![vec![
+            Event::Introduced("0".into()),
+            Event::Fixed("4.17.21".into()),
+        ]],
+        &[],
+    );
+    late.id = "GHSA-late".into();
+    let found = vec![
+        Arc::new(advisory(
+            "npm",
+            "lodash",
+            vec![vec![
+                Event::Introduced("0".into()),
+                Event::Fixed("4.17.12".into()),
+            ]],
+            &[],
+        )),
+        Arc::new(late),
+    ];
+    let catalog = patchula_datasource::Catalog {
+        versions: ["4.17.11", "4.17.12", "4.17.20", "4.17.21", "4.17.23"]
+            .iter()
+            .map(|v| patchula_datasource::Version {
+                version: (*v).into(),
+                published_at: None,
+                digest: None,
+                deprecated: false,
+                yanked: false,
+            })
+            .collect(),
+        dist_tags: Default::default(),
+    };
+    let targets = |permitted: Option<&str>, lowest_fix: bool| {
+        let mut config =
+            patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap();
+        config.defaults.permitted = permitted.map(Into::into);
+        config.security.lowest_fix = lowest_fix;
+        let eval = patchula_lookup::Evaluator::new(&config).unwrap();
+        eval.evaluate_with(
+            &dep,
+            &catalog,
+            chrono::Utc::now(),
+            &Default::default(),
+            Some((&q, &found)),
+        )
+        .unwrap()
+        .updates
+        .into_iter()
+        .map(|u| (u.new_version.unwrap(), u.fixes.len()))
+        .collect::<Vec<_>>()
+    };
+    // The newest release already fixes everything: nothing extra.
+    assert_eq!(targets(None, true), [("4.17.23".into(), 2)]);
+    // Held below every fix: the lowest full fix is proposed anyway.
+    assert_eq!(
+        targets(Some("semver:<4.17.12"), true),
+        [("4.17.21".into(), 2)]
+    );
+    // A partial fix is allowed, so the full fix joins it.
+    assert_eq!(
+        targets(Some("semver:<4.17.21"), true),
+        [("4.17.20".into(), 1), ("4.17.21".into(), 2)]
+    );
+    assert_eq!(
+        targets(Some("semver:<4.17.21"), false),
+        [("4.17.20".into(), 1)]
+    );
+}

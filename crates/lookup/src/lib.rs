@@ -623,6 +623,13 @@ impl Evaluator {
             );
             (kind, effective)
         });
+        // The lowest fix answers to neither `permitted` nor `channel`.
+        let unfiltered = secured.clone().map(|(kind, mut effective)| {
+            effective.permitted = None;
+            effective.policy.channel = patchula_config::ReleaseChannel::Stable;
+            (kind, effective)
+        });
+        let mut fix_candidates: Vec<(Parsed, &Version, String, Update, usize)> = Vec::new();
         let mut best: Vec<(Parsed, &Version, String, Update, &Effective<'_>)> =
             Vec::with_capacity(3);
         for version in &catalog.versions {
@@ -676,15 +683,15 @@ impl Evaluator {
             } else {
                 scheme.classify(&baseline, &parsed)
             };
-            let effective = &if fixes(&normalized).is_empty() {
-                &policies
-            } else {
-                &secured
+            let fixed = fixes(&normalized).len();
+            if fixed > 0 && self.config.security.lowest_fix {
+                fix_candidates.push((parsed.clone(), version, normalized.clone(), kind, fixed));
             }
-            .iter()
-            .find(|(update, _)| *update == kind)
-            .expect("version classification")
-            .1;
+            let effective = &if fixed == 0 { &policies } else { &secured }
+                .iter()
+                .find(|(update, _)| *update == kind)
+                .expect("version classification")
+                .1;
             if !effective.policy.active
                 || effective.permitted.is_some_and(|p| !p.matches(&normalized))
             {
@@ -725,6 +732,35 @@ impl Evaluator {
                 }
             } else {
                 best.push((parsed, version, normalized, kind, effective));
+            }
+        }
+        // When no proposal fixes as much as some release could, also propose
+        // the lowest release that fixes the most.
+        let covered = best
+            .iter()
+            .map(|(_, _, normalized, _, _)| fixes(normalized).len())
+            .max()
+            .unwrap_or(0);
+        if fix_candidates.iter().any(|c| c.4 > covered) {
+            fix_candidates.sort_by(|a, b| b.4.cmp(&a.4).then_with(|| scheme.order(&a.0, &b.0)));
+            for (parsed, version, normalized, kind, _) in fix_candidates {
+                let effective = &unfiltered
+                    .iter()
+                    .find(|(update, _)| *update == kind)
+                    .expect("version classification")
+                    .1;
+                if !effective.policy.active
+                    || (!parsed.0.pre.is_empty() && baseline.0.pre.is_empty())
+                    || (matches!(dep.manager, Manager::Npm | Manager::Terraform)
+                        && dep.kind == DependencyKind::Toolchain
+                        && effective.policy.versions == VersionPolicy::Preserve)
+                {
+                    continue;
+                }
+                if eligible(version, &normalized, kind, effective)? {
+                    best.push((parsed, version, normalized, kind, effective));
+                    break;
+                }
             }
         }
         let mut result = Vec::with_capacity(best.len() + 1);

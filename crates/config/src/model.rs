@@ -133,11 +133,12 @@ pub struct Window {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Security {
     pub advisories: bool,
     pub label: String,
     pub apply: Overrides,
+    pub lowest_fix: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

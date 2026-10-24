@@ -145,6 +145,11 @@ class Security {
     windows = new Listing {}
     group = ""
   }
+  /// When no proposal fixes as many advisories as some release could, also
+  /// propose the lowest release that fixes the most, even if `permitted` or
+  /// `channel` would hold it back. `active` and the release-age wait from
+  /// `apply` still count.
+  lowestFix: Boolean = true
 }
 
 /// All first-release managers are selected unless a repository replaces this list.
