@@ -2,21 +2,24 @@
 //! the user's own `copier`, environment and permissions. Only the working-tree
 //! TUI (after its own confirmation) and `patchula apply --copier` call this;
 //! lookups, runs, the server and `--remote` never reach it. Copier inherits
-//! the terminal so it can ask its own questions. The Count never passes `--trust` and never commits.
-use std::{path::Path, process::Command};
+//! the terminal so it can ask its own questions. The Count never passes
+//! `--trust` and never commits.
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Outcome {
-    /// Every path copier changed, created or deleted, relative to the tree.
+    /// Every path copier changed, created or deleted, relative to the Git root.
     pub touched: Vec<String>,
     /// Touched files holding conflict markers, and `.rej` files.
     pub conflicts: Vec<String>,
 }
 
-/// Paths `git status` reports in `dir`, untracked files included.
-fn changed(dir: &Path) -> Result<Vec<String>, String> {
+fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let output = Command::new("git")
-        .args(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
+        .args(args)
         .current_dir(dir)
         .output()
         .map_err(|e| format!("copier needs git to check the working tree: {e}"))?;
@@ -26,7 +29,16 @@ fn changed(dir: &Path) -> Result<Vec<String>, String> {
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
-    let text = String::from_utf8_lossy(&output.stdout);
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Paths `git status` reports in the checkout holding `dir`, relative to its
+/// root, untracked files included.
+fn changed(dir: &Path) -> Result<Vec<String>, String> {
+    let text = git(
+        dir,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    )?;
     let mut paths = Vec::new();
     let mut entries = text.split('\0').filter(|e| !e.is_empty());
     while let Some(entry) = entries.next() {
@@ -83,21 +95,40 @@ pub fn update(
     let touched = changed(dir)?;
     if !status.success() {
         return Err(format!(
-            "copier stopped ({status}) and {} file{} changed. If it asked for --trust, review the template and run copier update --trust yourself; the Count never trusts a template for you",
-            touched.len(),
-            if touched.len() == 1 { "" } else { "s" }
+            "copier stopped ({status}) and changed {}. If it asked for --trust, review the template and run copier update --trust yourself; the Count never trusts a template for you",
+            if touched.is_empty() {
+                "nothing".into()
+            } else {
+                touched.join(", ")
+            }
         ));
     }
+    let root = PathBuf::from(git(dir, &["rev-parse", "--show-toplevel"])?.trim_end());
     let conflicts = touched
         .iter()
         .filter(|path| {
             path.ends_with(".rej")
-                || std::fs::read_to_string(dir.join(path))
+                || std::fs::read_to_string(root.join(path))
                     .is_ok_and(|text| text.lines().any(|l| l.starts_with("<<<<<<< ")))
         })
         .cloned()
         .collect();
     Ok(Outcome { touched, conflicts })
+}
+
+/// What copier did to one template, for the TUI and `apply`.
+pub fn summary(name: &str, tag: &str, outcome: &Outcome) -> String {
+    let count = outcome.touched.len();
+    format!(
+        "Copier moved {name} to {tag}: {count} file{} changed ({}){}. Review and commit them yourself.",
+        if count == 1 { "" } else { "s" },
+        outcome.touched.join(", "),
+        if outcome.conflicts.is_empty() {
+            String::new()
+        } else {
+            format!(", conflicts in {}", outcome.conflicts.join(", "))
+        }
+    )
 }
 
 #[cfg(test)]
@@ -128,7 +159,10 @@ mod tests {
         let fake = dir.path().join("copier");
         std::fs::write(
             &fake,
-            format!("#!/bin/sh\necho \"$PWD $*\" > ../args\n{body}\n"),
+            format!(
+                "#!/bin/sh\necho \"$PWD $*\" > {}\n{body}\n",
+                dir.path().join("args").display()
+            ),
         )
         .unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -163,6 +197,27 @@ mod tests {
     }
 
     #[test]
+    fn from_a_subdirectory_paths_and_conflicts_are_found_from_the_git_root() {
+        let (dir, fake) = checkout(
+            "printf '_commit: v1.6.0\n' > .copier-answers.yml
+printf '<<<<<<< before updating\n' > notes.md",
+        );
+        let api = dir.path().join("tree/api");
+        let outcome = update(&fake, &api, ".copier-answers.yml", "v1.6.0", false).unwrap();
+        assert_eq!(
+            outcome,
+            Outcome {
+                touched: vec!["api/.copier-answers.yml".into(), "api/notes.md".into()],
+                conflicts: vec!["api/notes.md".into()],
+            }
+        );
+        assert_eq!(
+            summary("gh:acme/template", "v1.6.0", &outcome),
+            "Copier moved gh:acme/template to v1.6.0: 2 files changed (api/.copier-answers.yml, api/notes.md), conflicts in api/notes.md. Review and commit them yourself."
+        );
+    }
+
+    #[test]
     fn a_dirty_tree_is_refused_before_copier_runs() {
         let (dir, fake) = checkout("exit 0");
         let tree = dir.path().join("tree");
@@ -178,7 +233,7 @@ mod tests {
             checkout("echo 'Template uses potentially unsafe feature: tasks.' >&2\nexit 1");
         let tree = dir.path().join("tree");
         let error = update(&fake, &tree, "api/.copier-answers.yml", "v1.6.0", false).unwrap_err();
-        assert!(error.contains("0 files changed"), "{error}");
+        assert!(error.contains("changed nothing"), "{error}");
         assert!(error.contains("copier update --trust yourself"), "{error}");
     }
 }

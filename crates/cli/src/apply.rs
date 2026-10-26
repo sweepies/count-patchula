@@ -249,18 +249,14 @@ fn templates(
             Err("copier needs a terminal to ask the template's questions; run it in one, or pass --copier-defaults".into())
         };
         match result {
-            Ok(outcome) => out.push_str(&format!(
-                "Copier moved {} to {}: {} file{} changed{}. Review and commit them yourself.\n",
-                notice.name,
-                notice.available,
-                outcome.touched.len(),
-                if outcome.touched.len() == 1 { "" } else { "s" },
-                if outcome.conflicts.is_empty() {
-                    String::new()
-                } else {
-                    format!(", conflicts in {}", outcome.conflicts.join(", "))
-                }
-            )),
+            Ok(outcome) => {
+                out.push_str(&crate::copier::summary(
+                    &notice.name,
+                    &notice.available,
+                    &outcome,
+                ));
+                out.push('\n');
+            }
             Err(error) => {
                 moved = false;
                 out.push_str(&format!(
@@ -398,7 +394,7 @@ mod tests {
         let (text, moved) = templates(&notices, &tree, &fake, true, false);
         assert!(!moved);
         assert!(
-            text.contains("Copier moved gh:a/one to v2.0.0: 1 file changed."),
+            text.contains("Copier moved gh:a/one to v2.0.0: 1 file changed (.copier-answers.yml)."),
             "{text}"
         );
         assert!(text.contains("Copier did not update gh:a/two (b/.copier-answers.yml): the working tree has uncommitted changes"), "{text}");

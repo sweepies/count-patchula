@@ -493,8 +493,15 @@ impl Model {
                 } else {
                     self.confirming_template = Some(self.cursor);
                     format!(
-                        "Run copier update --vcs-ref {} for {}? The template's code runs on this machine as you. y/n",
-                        template.notice.available, template.notice.name
+                        "Run copier update --vcs-ref {} for {}? The template's code runs on this machine as you{}. y/n",
+                        template.notice.available,
+                        template.notice.name,
+                        template
+                            .notice
+                            .compare_url
+                            .as_ref()
+                            .map(|url| format!("; its changes: {url}"))
+                            .unwrap_or_default()
                     )
                 });
             }
@@ -556,18 +563,7 @@ impl Model {
             {
                 Ok(outcome) => {
                     self.templates[index].applied = true;
-                    format!(
-                        "Copier moved {} to {}: {} file{} changed{}. Review and commit them yourself.",
-                        notice.name,
-                        notice.available,
-                        outcome.touched.len(),
-                        plural(outcome.touched.len()),
-                        if outcome.conflicts.is_empty() {
-                            String::new()
-                        } else {
-                            format!(", conflicts in {}", outcome.conflicts.join(", "))
-                        }
-                    )
+                    crate::copier::summary(&notice.name, &notice.available, &outcome)
                 }
                 Err(error) => format!("Copier did not finish: {error}"),
             },
@@ -1013,6 +1009,7 @@ fn draw_held(frame: &mut Frame, model: &mut Model, area: Rect) {
 }
 
 fn draw_templates(frame: &mut Frame, model: &mut Model, area: Rect) {
+    let [area, detail] = Layout::vertical([Constraint::Min(3), Constraint::Length(2)]).areas(area);
     let rows: Vec<TableRow> = if model.templates.is_empty() {
         vec![TableRow::new(["No template updates. The night is quiet."])]
     } else {
@@ -1059,6 +1056,21 @@ fn draw_templates(frame: &mut Frame, model: &mut Model, area: Rect) {
         ),
         area,
         &mut state,
+    );
+    let changes = match model.templates.get(model.cursor) {
+        Some(t) => match &t.notice.compare_url {
+            Some(url) => format!("changes: {url}"),
+            None => "no compare page for this host".into(),
+        },
+        None => String::new(),
+    };
+    frame.render_widget(
+        Paragraph::new(changes).style(Style::new().fg(DIM)).block(
+            Block::new()
+                .borders(Borders::TOP)
+                .border_style(Style::new().fg(DIM)),
+        ),
+        detail,
     );
 }
 
@@ -1402,7 +1414,8 @@ mod tests {
         let mut report = report(&[("zod", "3.22.0", "4.1.0", "major")]);
         report.repositories[0].notices = serde_json::from_value(serde_json::json!([{
             "manager":"copier","path":".copier-answers.yml","line":1,"name":"gh:acme/template",
-            "package":"acme/template","current":"v1.4.0","available":"v1.6.0"
+            "package":"acme/template","current":"v1.4.0","available":"v1.6.0",
+            "compareUrl":"https://github.com/acme/template/compare/v1.4.0...v1.6.0"
         }]))
         .unwrap();
         let mut remote = Model::new(&report, None);
@@ -1412,6 +1425,10 @@ mod tests {
         press(&mut remote, KeyCode::Char('4'));
         assert_eq!(remote.tab, Tab::Templates);
         let text = screen(&mut remote);
+        assert!(
+            text.contains("changes: https://github.com/acme/template/compare/v1.4.0...v1.6.0"),
+            "{text}"
+        );
         assert!(
             text.contains("gh:acme/template") && text.contains("v1.6.0"),
             "{text}"
@@ -1458,7 +1475,7 @@ mod tests {
                 .message
                 .as_deref()
                 .unwrap()
-                .contains("--vcs-ref v1.6.0")
+                .contains("--vcs-ref v1.6.0 for gh:acme/template? The template's code runs on this machine as you; its changes: https://github.com/acme/template/compare/v1.4.0...v1.6.0. y/n")
         );
         press(&mut model, KeyCode::Char('n'));
         assert_eq!(model.copier, None);
@@ -1469,11 +1486,9 @@ mod tests {
         assert_eq!(model.copier, None);
         assert!(model.templates[0].applied);
         assert!(
-            model
-                .message
-                .as_deref()
-                .unwrap()
-                .contains("Copier moved gh:acme/template to v1.6.0: 1 file changed"),
+            model.message.as_deref().unwrap().contains(
+                "Copier moved gh:acme/template to v1.6.0: 1 file changed (.copier-answers.yml)"
+            ),
             "{:?}",
             model.message
         );
