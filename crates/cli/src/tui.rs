@@ -1,7 +1,8 @@
 //! `patchula tui`: browse a lookup report, and in a working tree, apply
 //! selected updates to the files on disk. Rendering is a pure function of [`Model`], so
 //! tests draw frames on a test backend and drive it with key events.
-use patchula_report::Report;
+use crate::palette;
+use patchula_report::{LookupFailure, Report};
 use ratatui::{
     Frame,
     crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
@@ -16,11 +17,6 @@ use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
 };
-
-const CORAL: Color = Color::Rgb(232, 90, 79);
-const GOLD: Color = Color::Rgb(242, 181, 68);
-const PURPLE: Color = Color::Rgb(160, 120, 180);
-const DIM: Color = Color::Rgb(140, 130, 150);
 
 /// One proposed update, flattened from the report.
 #[derive(Clone, Debug, PartialEq)]
@@ -160,6 +156,12 @@ pub struct Found {
     pub current: String,
     pub resolved: Option<String>,
     pub updates: usize,
+}
+
+/// One entry on the Warnings tab.
+pub enum Warning {
+    Failure(LookupFailure),
+    Note(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -475,7 +477,9 @@ pub struct Model {
     pub held: Vec<Held>,
     pub templates: Vec<Template>,
     pub found: Vec<Found>,
-    pub warnings: Vec<(String, String)>,
+    /// Each repository's warnings in report order, so a repository's
+    /// entries are next to each other.
+    pub warnings: Vec<(String, Warning)>,
     pub stats: Vec<(String, String)>,
     pub repositories: usize,
     pub filter: Filter,
@@ -483,6 +487,8 @@ pub struct Model {
     pub searching: bool,
     pub cursor: usize,
     pub scroll: usize,
+    /// Each tab's cursor and scroll while another tab is shown.
+    places: [(usize, usize); TABS.len()],
     pub confirming: bool,
     /// The template awaiting a y/n before copier runs.
     pub confirming_template: Option<usize>,
@@ -508,7 +514,7 @@ impl Model {
         let mut managers = BTreeMap::<String, usize>::new();
         for repo in &report.repositories {
             for warning in &repo.warnings {
-                warnings.push((repo.repository.clone(), warning.clone()));
+                warnings.push((repo.repository.clone(), Warning::Note(warning.clone())));
             }
             for notice in &repo.notices {
                 templates.push(Template {
@@ -518,12 +524,12 @@ impl Model {
                 });
             }
             for failure in &repo.lookup_failures {
-                warnings.push((repo.repository.clone(), format!("lookup failed: {failure}")));
+                warnings.push((repo.repository.clone(), Warning::Failure(failure.clone())));
             }
             if let Some(reason) = &repo.reason {
                 warnings.push((
                     repo.repository.clone(),
-                    format!("{:?}: {reason}", repo.status),
+                    Warning::Note(format!("{:?}: {reason}", repo.status)),
                 ));
             }
             for file in &repo.package_files {
@@ -598,6 +604,7 @@ impl Model {
             searching: false,
             cursor: 0,
             scroll: 0,
+            places: [(0, 0); TABS.len()],
             confirming: false,
             confirming_template: None,
             copier: None,
@@ -689,6 +696,7 @@ impl Model {
                     _ => label,
                 })
             })
+            .chain((self.tab == Tab::Warnings).then(|| "j/k scroll  PgUp/PgDn page".to_owned()))
             .collect::<Vec<_>>()
             .join("  ")
     }
@@ -790,8 +798,7 @@ impl Model {
             Action::PreviousTab => self.switch(TABS.len() - 1),
             Action::JumpTab => {
                 if let KeyCode::Char(c @ '1'..='6') = key.code {
-                    self.tab = TABS[(c as usize) - ('1' as usize)].0;
-                    self.cursor = 0;
+                    self.show((c as usize) - ('1' as usize));
                 }
             }
             Action::Down => self.cursor = (self.cursor + 1).min(rows.saturating_sub(1)),
@@ -856,9 +863,17 @@ impl Model {
         }
     }
     fn switch(&mut self, step: usize) {
-        let index = TABS.iter().position(|(t, _)| *t == self.tab).unwrap_or(0);
-        self.tab = TABS[(index + step) % TABS.len()].0;
-        self.cursor = 0;
+        self.show((self.index() + step) % TABS.len());
+    }
+    fn index(&self) -> usize {
+        TABS.iter().position(|(t, _)| *t == self.tab).unwrap_or(0)
+    }
+    /// Show a tab where it was left: its cursor and scroll are kept while
+    /// another tab is shown.
+    fn show(&mut self, index: usize) {
+        self.places[self.index()] = (self.cursor, self.scroll);
+        self.tab = TABS[index].0;
+        (self.cursor, self.scroll) = self.places[index];
     }
 
     /// Write the selected updates into the local directory's files, all or none.
@@ -1048,11 +1063,12 @@ fn plural(n: usize) -> &'static str {
 }
 fn kind_style(kind: &str) -> Style {
     Style::new().fg(match kind {
-        "major" => CORAL,
-        "minor" => GOLD,
-        "patch" => Color::Green,
-        _ => Color::Cyan,
-    })
+        "major" => palette::ERROR,
+        "minor" => palette::WARNING,
+        "patch" => palette::SUCCESS,
+        _ => palette::ACCENT_DIM,
+    }
+    .tui())
 }
 fn age(published: Option<&str>) -> String {
     let Some(published) = published else {
@@ -1079,7 +1095,7 @@ pub fn draw(frame: &mut Frame, model: &mut Model) {
         footer_lines.extend(
             wrap(message, width)
                 .into_iter()
-                .map(|l| Line::styled(format!(" {l}"), Style::new().fg(GOLD))),
+                .map(|l| Line::styled(format!(" {l}"), Style::new().fg(palette::WARNING.tui()))),
         );
     }
     let (status, style) = if model.searching {
@@ -1088,9 +1104,9 @@ pub fn draw(frame: &mut Frame, model: &mut Model) {
             Style::new(),
         )
     } else if let Some(prompt) = model.prompt() {
-        (prompt, Style::new().fg(CORAL).bold())
+        (prompt, Style::new().fg(palette::ACCENT.tui()).bold())
     } else {
-        (model.bar(), Style::new().fg(DIM))
+        (model.bar(), Style::new().fg(palette::MUTED.tui()))
     };
     footer_lines.extend(
         wrap(&status, width)
@@ -1115,7 +1131,10 @@ pub fn draw(frame: &mut Frame, model: &mut Model) {
         Paragraph::new(Line::from(vec![
             Span::styled(
                 " Count Patchula ",
-                Style::new().fg(Color::Black).bg(CORAL).bold(),
+                Style::new()
+                    .fg(Color::Black)
+                    .bg(palette::ACCENT.tui())
+                    .bold(),
             ),
             Span::raw(format!(
                 "  {} repositor{} · {} dependencies · {} updates",
@@ -1130,7 +1149,7 @@ pub fn draw(frame: &mut Frame, model: &mut Model) {
                 } else {
                     String::new()
                 },
-                Style::new().fg(GOLD),
+                Style::new().fg(palette::WARNING.tui()),
             ),
             Span::styled(
                 match model.origin {
@@ -1138,7 +1157,7 @@ pub fn draw(frame: &mut Frame, model: &mut Model) {
                     Origin::Server => "  server",
                     Origin::GitHub => "",
                 },
-                Style::new().fg(PURPLE),
+                Style::new().fg(palette::ACCENT_DIM.tui()),
             ),
         ])),
         header,
@@ -1151,8 +1170,8 @@ pub fn draw(frame: &mut Frame, model: &mut Model) {
                 .map(|(i, (_, name))| format!("{} {name}", i + 1)),
         )
         .select(index)
-        .highlight_style(Style::new().fg(CORAL).bold())
-        .style(Style::new().fg(DIM)),
+        .highlight_style(Style::new().fg(palette::ACCENT.tui()).bold())
+        .style(Style::new().fg(palette::MUTED.tui())),
         tabs,
     );
     match model.tab {
@@ -1196,9 +1215,57 @@ fn draw_updates(frame: &mut Frame, model: &mut Model, area: Rect) {
     let [list, detail] = Layout::vertical([Constraint::Min(3), Constraint::Length(6)]).areas(area);
     let visible = model.visible();
     let many = model.repositories > 1;
-    let rows: Vec<TableRow> = visible
+    let cells: Vec<[String; 6]> = visible
         .iter()
         .map(|&i| {
+            let u = &model.updates[i];
+            [
+                if u.fixes.is_empty() {
+                    u.name.clone()
+                } else {
+                    format!("{} (security)", u.name)
+                },
+                u.current.clone(),
+                u.target(),
+                u.kind.clone(),
+                age(u.published_at.as_deref()),
+                if many {
+                    format!("{}:{}", u.repository, u.file)
+                } else {
+                    u.file.clone()
+                },
+            ]
+        })
+        .collect();
+    let header = ["", "Dependency", "Current", "Target", "Type", "Age", "File"];
+    let natural = |c: usize| {
+        cells
+            .iter()
+            .map(|row| Span::raw(row[c - 1].as_str()).width())
+            .chain([header[c].len()])
+            .max()
+            .unwrap_or(0)
+    };
+    // Versions keep their full width up to a cap; the dependency name and
+    // the file give way first, the name down to 24 columns before the file
+    // goes below 12.
+    let widths = fit(
+        usize::from(list.width),
+        &[
+            (4, 4),
+            (natural(1), 12),
+            (natural(2).min(32), 8),
+            (natural(3).min(48), 12),
+            (natural(4), 5),
+            (natural(5), 3),
+            (natural(6), 4),
+        ],
+        &[(1, 24), (6, 12), (1, 12), (6, 4), (2, 8), (3, 12)],
+    );
+    let rows: Vec<TableRow> = visible
+        .iter()
+        .zip(cells)
+        .map(|(&i, [name, current, target, kind, age, file])| {
             let u = &model.updates[i];
             let mark = if u.applied {
                 "done"
@@ -1209,25 +1276,20 @@ fn draw_updates(frame: &mut Frame, model: &mut Model, area: Rect) {
             };
             TableRow::new(vec![
                 Cell::from(mark).style(Style::new().fg(if u.applied {
-                    Color::Green
+                    palette::SUCCESS.tui()
                 } else {
-                    GOLD
+                    palette::WARNING.tui()
                 })),
-                if u.fixes.is_empty() {
-                    Cell::from(u.name.clone())
+                Cell::from(middle(&name, widths[1])).style(if u.fixes.is_empty() {
+                    Style::new()
                 } else {
-                    Cell::from(format!("{} (security)", u.name)).style(Style::new().fg(Color::Red))
-                },
-                Cell::from(u.current.clone()).style(Style::new().fg(DIM)),
-                Cell::from(u.target()),
-                Cell::from(u.kind.clone()).style(kind_style(&u.kind)),
-                Cell::from(age(u.published_at.as_deref())).style(Style::new().fg(DIM)),
-                Cell::from(if many {
-                    format!("{}:{}", u.repository, u.file)
-                } else {
-                    u.file.clone()
-                })
-                .style(Style::new().fg(DIM)),
+                    Style::new().fg(palette::ERROR.tui())
+                }),
+                Cell::from(current).style(Style::new().fg(palette::MUTED.tui())),
+                Cell::from(target),
+                Cell::from(kind).style(kind_style(&u.kind)),
+                Cell::from(age).style(Style::new().fg(palette::MUTED.tui())),
+                Cell::from(middle(&file, widths[6])).style(Style::new().fg(palette::MUTED.tui())),
             ])
         })
         .collect();
@@ -1239,29 +1301,22 @@ fn draw_updates(frame: &mut Frame, model: &mut Model, area: Rect) {
         model.filter.label()
     );
     frame.render_stateful_widget(
-        Table::new(
-            rows,
-            [
-                Constraint::Length(4),
-                Constraint::Fill(3),
-                Constraint::Length(14),
-                Constraint::Length(20),
-                Constraint::Length(6),
-                Constraint::Length(5),
-                Constraint::Fill(2),
-            ],
-        )
-        .header(
-            TableRow::new(["", "Dependency", "Current", "Target", "Type", "Age", "File"])
-                .style(Style::new().fg(PURPLE).add_modifier(Modifier::BOLD)),
-        )
-        .row_highlight_style(Style::new().bg(Color::Rgb(50, 36, 60)))
-        .block(
-            Block::new()
-                .borders(Borders::TOP)
-                .title(title)
-                .title_style(Style::new().fg(CORAL)),
-        ),
+        Table::new(rows, widths.iter().map(|&w| Constraint::Length(w as u16)))
+            .column_spacing(GAP as u16)
+            .header(
+                TableRow::new(header).style(
+                    Style::new()
+                        .fg(palette::ACCENT_DIM.tui())
+                        .add_modifier(Modifier::BOLD),
+                ),
+            )
+            .row_highlight_style(Style::new().bg(palette::SELECTION.tui()))
+            .block(
+                Block::new()
+                    .borders(Borders::TOP)
+                    .title(title)
+                    .title_style(Style::new().fg(palette::ACCENT.tui())),
+            ),
         list,
         &mut state,
     );
@@ -1271,7 +1326,7 @@ fn draw_updates(frame: &mut Frame, model: &mut Model, area: Rect) {
                 Span::styled(u.package.clone(), Style::new().bold()),
                 Span::styled(
                     format!("  {} · {}", u.manager, u.file),
-                    Style::new().fg(DIM),
+                    Style::new().fg(palette::MUTED.tui()),
                 ),
             ]),
             Line::from(format!("{} → {}  ({})", u.current, u.target(), u.kind)),
@@ -1288,10 +1343,10 @@ fn draw_updates(frame: &mut Frame, model: &mut Model, area: Rect) {
                     Some(p) => format!("published {p}"),
                     None => "no publication date".into(),
                 })
-                .style(Style::new().fg(DIM))
+                .style(Style::new().fg(palette::MUTED.tui()))
             } else {
                 Line::from(format!("fixes {}", u.fixes.join(", ")))
-                    .style(Style::new().fg(Color::Red))
+                    .style(Style::new().fg(palette::ERROR.tui()))
             },
         ],
         None => vec![Line::from(if model.updates.is_empty() {
@@ -1304,10 +1359,66 @@ fn draw_updates(frame: &mut Frame, model: &mut Model, area: Rect) {
         Paragraph::new(text).wrap(Wrap { trim: true }).block(
             Block::new()
                 .borders(Borders::TOP)
-                .border_style(Style::new().fg(DIM)),
+                .border_style(Style::new().fg(palette::MUTED.tui())),
         ),
         detail,
     );
+}
+
+/// Column widths from content. Each column is `(natural, minimum)`: it starts
+/// at its natural width, and while the row is wider than `width` the
+/// `(column, floor)` steps in `order` take it back towards the floor, never
+/// below its minimum. Room left over goes to the last column. Columns are
+/// [GAP] apart.
+const GAP: usize = 2;
+
+fn fit(width: usize, columns: &[(usize, usize)], order: &[(usize, usize)]) -> Vec<usize> {
+    let mut widths: Vec<usize> = columns.iter().map(|&(natural, _)| natural).collect();
+    let total =
+        |widths: &[usize]| widths.iter().sum::<usize>() + widths.len().saturating_sub(1) * GAP;
+    for &(column, floor) in order {
+        let excess = total(&widths).saturating_sub(width);
+        let floor = floor.max(columns[column].1);
+        widths[column] -= excess.min(widths[column].saturating_sub(floor));
+    }
+    let used = total(&widths);
+    if let Some(last) = widths.last_mut() {
+        *last += width.saturating_sub(used);
+    }
+    widths
+}
+
+/// `text` cut to `width` columns in the middle, so both its scope or host
+/// and its last segment stay readable.
+fn middle(text: &str, width: usize) -> String {
+    let columns = |s: &str| Span::raw(s).width();
+    if columns(text) <= width {
+        return text.to_owned();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let tail_width = (width - 1) / 2;
+    let head_width = width - 1 - tail_width;
+    let take = |chars: &mut dyn Iterator<Item = char>, room: usize| {
+        let mut taken = Vec::new();
+        let mut used = 0;
+        for c in chars {
+            let w = columns(c.encode_utf8(&mut [0; 4]));
+            if used + w > room {
+                break;
+            }
+            used += w;
+            taken.push(c);
+        }
+        taken
+    };
+    let head: String = take(&mut text.chars(), head_width).into_iter().collect();
+    let tail: String = take(&mut text.chars().rev(), tail_width)
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{head}…{tail}")
 }
 
 fn draw_held(frame: &mut Frame, model: &mut Model, area: Rect) {
@@ -1319,8 +1430,8 @@ fn draw_held(frame: &mut Frame, model: &mut Model, area: Rect) {
                 Cell::from(h.name.clone()),
                 Cell::from(h.version.clone()),
                 Cell::from(h.kind.clone()).style(kind_style(&h.kind)),
-                Cell::from(h.published_at.clone()).style(Style::new().fg(DIM)),
-                Cell::from(h.eligible_at.clone()).style(Style::new().fg(GOLD)),
+                Cell::from(h.published_at.clone()).style(Style::new().fg(palette::MUTED.tui())),
+                Cell::from(h.eligible_at.clone()).style(Style::new().fg(palette::WARNING.tui())),
             ])
         })
         .collect();
@@ -1338,9 +1449,9 @@ fn draw_held(frame: &mut Frame, model: &mut Model, area: Rect) {
         )
         .header(
             TableRow::new(["Dependency", "Version", "Type", "Published", "Eligible"])
-                .style(Style::new().fg(PURPLE).bold()),
+                .style(Style::new().fg(palette::ACCENT_DIM.tui()).bold()),
         )
-        .row_highlight_style(Style::new().bg(Color::Rgb(50, 36, 60)))
+        .row_highlight_style(Style::new().bg(palette::SELECTION.tui()))
         .block(
             Block::new()
                 .borders(Borders::TOP)
@@ -1348,7 +1459,7 @@ fn draw_held(frame: &mut Frame, model: &mut Model, area: Rect) {
                     " Held back by the release-age wait ({}) ",
                     model.held.len()
                 ))
-                .title_style(Style::new().fg(CORAL)),
+                .title_style(Style::new().fg(palette::ACCENT.tui())),
         ),
         area,
         &mut state,
@@ -1366,11 +1477,13 @@ fn draw_templates(frame: &mut Frame, model: &mut Model, area: Rect) {
             .map(|t| {
                 TableRow::new(vec![
                     Cell::from(if t.applied { "done" } else { "" })
-                        .style(Style::new().fg(Color::Green)),
+                        .style(Style::new().fg(palette::SUCCESS.tui())),
                     Cell::from(t.notice.name.clone()),
-                    Cell::from(t.notice.current.clone()).style(Style::new().fg(DIM)),
-                    Cell::from(t.notice.available.clone()).style(Style::new().fg(GOLD)),
-                    Cell::from(t.notice.path.clone()).style(Style::new().fg(DIM)),
+                    Cell::from(t.notice.current.clone())
+                        .style(Style::new().fg(palette::MUTED.tui())),
+                    Cell::from(t.notice.available.clone())
+                        .style(Style::new().fg(palette::WARNING.tui())),
+                    Cell::from(t.notice.path.clone()).style(Style::new().fg(palette::MUTED.tui())),
                 ])
             })
             .collect()
@@ -1389,9 +1502,9 @@ fn draw_templates(frame: &mut Frame, model: &mut Model, area: Rect) {
         )
         .header(
             TableRow::new(["", "Template", "Current", "Available", "Answers file"])
-                .style(Style::new().fg(PURPLE).bold()),
+                .style(Style::new().fg(palette::ACCENT_DIM.tui()).bold()),
         )
-        .row_highlight_style(Style::new().bg(Color::Rgb(50, 36, 60)))
+        .row_highlight_style(Style::new().bg(palette::SELECTION.tui()))
         .block(
             Block::new()
                 .borders(Borders::TOP)
@@ -1399,7 +1512,7 @@ fn draw_templates(frame: &mut Frame, model: &mut Model, area: Rect) {
                     " Template updates: reported, never edited ({}) ",
                     model.templates.len()
                 ))
-                .title_style(Style::new().fg(CORAL)),
+                .title_style(Style::new().fg(palette::ACCENT.tui())),
         ),
         area,
         &mut state,
@@ -1412,11 +1525,13 @@ fn draw_templates(frame: &mut Frame, model: &mut Model, area: Rect) {
         None => String::new(),
     };
     frame.render_widget(
-        Paragraph::new(changes).style(Style::new().fg(DIM)).block(
-            Block::new()
-                .borders(Borders::TOP)
-                .border_style(Style::new().fg(DIM)),
-        ),
+        Paragraph::new(changes)
+            .style(Style::new().fg(palette::MUTED.tui()))
+            .block(
+                Block::new()
+                    .borders(Borders::TOP)
+                    .border_style(Style::new().fg(palette::MUTED.tui())),
+            ),
         detail,
     );
 }
@@ -1427,56 +1542,70 @@ fn draw_found(frame: &mut Frame, model: &mut Model, area: Rect) {
         .iter()
         .filter(|f| model.query_matches(&[&f.name, &f.file, &f.manager]))
         .collect();
+    let header = [
+        "Manager",
+        "Dependency",
+        "Current",
+        "Resolved",
+        "Updates",
+        "File",
+    ];
+    let natural = |c: usize, cell: &dyn Fn(&Found) -> usize| {
+        found
+            .iter()
+            .map(|f| cell(f))
+            .chain([header[c].len()])
+            .max()
+            .unwrap_or(0)
+    };
+    let width = |s: &str| Span::raw(s).width();
+    let widths = fit(
+        usize::from(area.width),
+        &[
+            (natural(0, &|f| width(&f.manager)), 6),
+            (natural(1, &|f| width(&f.name)), 12),
+            (natural(2, &|f| width(&f.current)).min(40), 8),
+            (
+                natural(3, &|f| width(f.resolved.as_deref().unwrap_or(""))).min(24),
+                8,
+            ),
+            (7, 7),
+            (natural(5, &|f| width(&f.file)), 4),
+        ],
+        &[(1, 24), (5, 12), (1, 12), (5, 4), (3, 8), (2, 8)],
+    );
     let rows: Vec<TableRow> = found
         .iter()
         .map(|f| {
             TableRow::new(vec![
-                Cell::from(f.manager.clone()).style(Style::new().fg(PURPLE)),
-                Cell::from(f.name.clone()),
+                Cell::from(f.manager.clone()).style(Style::new().fg(palette::ACCENT_DIM.tui())),
+                Cell::from(middle(&f.name, widths[1])),
                 Cell::from(f.current.clone()),
-                Cell::from(f.resolved.clone().unwrap_or_default()).style(Style::new().fg(DIM)),
+                Cell::from(f.resolved.clone().unwrap_or_default())
+                    .style(Style::new().fg(palette::MUTED.tui())),
                 Cell::from(if f.updates > 0 {
                     f.updates.to_string()
                 } else {
                     String::new()
                 })
-                .style(Style::new().fg(GOLD)),
-                Cell::from(f.file.clone()).style(Style::new().fg(DIM)),
+                .style(Style::new().fg(palette::WARNING.tui())),
+                Cell::from(middle(&f.file, widths[5])).style(Style::new().fg(palette::MUTED.tui())),
             ])
         })
         .collect();
     let count = found.len();
     let mut state = table_state(model, count, area.height);
     frame.render_stateful_widget(
-        Table::new(
-            rows,
-            [
-                Constraint::Length(14),
-                Constraint::Percentage(30),
-                Constraint::Percentage(16),
-                Constraint::Percentage(14),
-                Constraint::Length(7),
-                Constraint::Fill(1),
-            ],
-        )
-        .header(
-            TableRow::new([
-                "Manager",
-                "Dependency",
-                "Current",
-                "Resolved",
-                "Updates",
-                "File",
-            ])
-            .style(Style::new().fg(PURPLE).bold()),
-        )
-        .row_highlight_style(Style::new().bg(Color::Rgb(50, 36, 60)))
-        .block(
-            Block::new()
-                .borders(Borders::TOP)
-                .title(format!(" Dependencies ({count}) "))
-                .title_style(Style::new().fg(CORAL)),
-        ),
+        Table::new(rows, widths.iter().map(|&w| Constraint::Length(w as u16)))
+            .column_spacing(GAP as u16)
+            .header(TableRow::new(header).style(Style::new().fg(palette::ACCENT_DIM.tui()).bold()))
+            .row_highlight_style(Style::new().bg(palette::SELECTION.tui()))
+            .block(
+                Block::new()
+                    .borders(Borders::TOP)
+                    .title(format!(" Dependencies ({count}) "))
+                    .title_style(Style::new().fg(palette::ACCENT.tui())),
+            ),
         area,
         &mut state,
     );
@@ -1492,41 +1621,29 @@ fn draw_list(frame: &mut Frame, model: &mut Model, area: Rect, title: &str, line
     let mut state = table_state(model, count, area.height);
     frame.render_stateful_widget(
         Table::new(rows, [Constraint::Fill(1)])
-            .row_highlight_style(Style::new().bg(Color::Rgb(50, 36, 60)))
+            .row_highlight_style(Style::new().bg(palette::SELECTION.tui()))
             .block(
                 Block::new()
                     .borders(Borders::TOP)
                     .title(format!(" {title} ({count}) "))
-                    .title_style(Style::new().fg(CORAL)),
+                    .title_style(Style::new().fg(palette::ACCENT.tui())),
             ),
         area,
         &mut state,
     );
 }
 
-/// The Warnings tab is a pager: every warning wraps to the pane's width, and
-/// the cursor is the first line shown, so nothing is cut at any width.
+/// The Warnings tab is a pager laid out like the report's sections: grouped
+/// by repository when there are several, failed lookups as aligned rows with
+/// their message under each, then the other warnings. Everything wraps to the
+/// pane's width, and the cursor is the first line shown, so nothing is cut.
 fn draw_warnings(frame: &mut Frame, model: &mut Model, area: Rect) {
     let block = Block::new()
         .borders(Borders::TOP)
-        .title_style(Style::new().fg(CORAL));
+        .title_style(Style::new().fg(palette::ACCENT.tui()));
     let inner = block.inner(area);
-    let width = usize::from(inner.width).saturating_sub(2).max(1);
-    let mut lines: Vec<Line> = model
-        .warnings
-        .iter()
-        .flat_map(|(repository, warning)| {
-            wrap(&format!("{repository}: {warning}"), width)
-                .into_iter()
-                .enumerate()
-                .map(|(i, line)| {
-                    Line::from(vec![
-                        Span::styled(if i == 0 { "• " } else { "  " }, Style::new().fg(GOLD)),
-                        Span::raw(line),
-                    ])
-                })
-        })
-        .collect();
+    let width = usize::from(inner.width).saturating_sub(1).max(1);
+    let mut lines = warning_lines(model, width);
     if lines.is_empty() {
         lines.push(Line::from("Nothing here. The night is quiet."));
     }
@@ -1537,7 +1654,7 @@ fn draw_warnings(frame: &mut Frame, model: &mut Model, area: Rect) {
     let count = model.warnings.len();
     let title = if lines.len() > height {
         format!(
-            " Warnings ({count}) · lines {}–{} of {}, j/k to scroll ",
+            " Warnings ({count}) · lines {}–{} of {} ",
             model.cursor + 1,
             (model.cursor + height).min(lines.len()),
             lines.len()
@@ -1547,6 +1664,106 @@ fn draw_warnings(frame: &mut Frame, model: &mut Model, area: Rect) {
     };
     let shown: Vec<Line> = lines.into_iter().skip(model.cursor).take(height).collect();
     frame.render_widget(Paragraph::new(shown).block(block.title(title)), area);
+}
+
+fn warning_lines(model: &Model, width: usize) -> Vec<Line<'static>> {
+    let indented = |indent: usize, text: &str, style: Style| -> Vec<Line<'static>> {
+        wrap(text, width.saturating_sub(indent))
+            .into_iter()
+            .map(|line| Line::styled(format!("{:indent$}{line}", ""), style))
+            .collect()
+    };
+    let heading = |title: &str, count: usize, colour: palette::Colour, indent: usize| {
+        Line::from(vec![
+            Span::raw(" ".repeat(indent)),
+            Span::styled(title.to_owned(), Style::new().fg(colour.tui()).bold()),
+            Span::styled(format!(" ({count})"), Style::new().fg(palette::MUTED.tui())),
+        ])
+    };
+    let many = model.repositories > 1;
+    let mut lines = Vec::new();
+    let mut entries = model.warnings.iter().peekable();
+    while let Some((repository, _)) = entries.peek() {
+        let repository = repository.clone();
+        let mut failures = Vec::new();
+        let mut notes = Vec::new();
+        while let Some((_, warning)) = entries.next_if(|(r, _)| *r == repository) {
+            match warning {
+                Warning::Failure(failure) => failures.push(failure),
+                Warning::Note(note) => notes.push(note),
+            }
+        }
+        let indent = if many {
+            if !lines.is_empty() {
+                lines.push(Line::from(""));
+            }
+            lines.extend(indented(0, &repository, Style::new().bold()));
+            2
+        } else {
+            0
+        };
+        let start = lines.len();
+        if !failures.is_empty() {
+            lines.push(heading(
+                "Lookup failures",
+                failures.len(),
+                palette::ERROR,
+                indent,
+            ));
+            let name = failures
+                .iter()
+                .map(|f| f.name.chars().count())
+                .max()
+                .unwrap_or(0);
+            let path = failures
+                .iter()
+                .map(|f| f.path.chars().count())
+                .max()
+                .unwrap_or(0);
+            for failure in failures {
+                let mut source = failure.datasource.clone();
+                if failure.package != failure.name {
+                    source = format!("{source} {}", failure.package);
+                }
+                let source = format!("{source}, {}", failure.kind.as_str());
+                let row = format!(
+                    "{:pad$}{:<name$}  {:<path$}  {source}",
+                    "",
+                    failure.name,
+                    failure.path,
+                    pad = indent + 2
+                );
+                if Span::raw(row.as_str()).width() <= width {
+                    lines.push(Line::from(vec![
+                        Span::raw(" ".repeat(indent + 2)),
+                        Span::styled(format!("{:<name$}  ", failure.name), Style::new().bold()),
+                        Span::styled(
+                            format!("{:<path$}  ", failure.path),
+                            Style::new().fg(palette::MUTED.tui()),
+                        ),
+                        Span::raw(source),
+                    ]));
+                } else {
+                    lines.extend(indented(
+                        indent + 2,
+                        &format!("{}  {}  {source}", failure.name, failure.path),
+                        Style::new().bold(),
+                    ));
+                }
+                lines.extend(indented(indent + 4, &failure.message, Style::new()));
+            }
+        }
+        if !notes.is_empty() {
+            if lines.len() > start {
+                lines.push(Line::from(""));
+            }
+            lines.push(heading("Warnings", notes.len(), palette::WARNING, indent));
+            for note in notes {
+                lines.extend(indented(indent + 2, note, Style::new()));
+            }
+        }
+    }
+    lines
 }
 
 /// Greedy word wrap to `width` columns. A word longer than a line is broken,
@@ -1604,7 +1821,10 @@ fn draw_help(frame: &mut Frame) {
         .iter()
         .map(|b| {
             Line::from(vec![
-                Span::styled(format!("{:<column$}", b.keys()), Style::new().fg(GOLD)),
+                Span::styled(
+                    format!("{:<column$}", b.keys()),
+                    Style::new().fg(palette::WARNING.tui()),
+                ),
                 Span::raw(match b.tab {
                     Some(tab) => format!("{} ({})", b.help, tab_name(tab)),
                     None => b.help.to_owned(),
@@ -1613,7 +1833,7 @@ fn draw_help(frame: &mut Frame) {
         })
         .chain([
             Line::from(""),
-            Line::from("Any key closes this.").style(Style::new().fg(DIM)),
+            Line::from("Any key closes this.").style(Style::new().fg(palette::MUTED.tui())),
         ])
         .collect();
     let width = area.width.min(80);
@@ -1631,8 +1851,8 @@ fn draw_help(frame: &mut Frame) {
         Paragraph::new(text).wrap(Wrap { trim: false }).block(
             Block::bordered()
                 .title(" The Count's keys ")
-                .title_style(Style::new().fg(CORAL))
-                .border_style(Style::new().fg(PURPLE)),
+                .title_style(Style::new().fg(palette::ACCENT.tui()))
+                .border_style(Style::new().fg(palette::ACCENT_DIM.tui())),
         ),
         popup,
     );
@@ -1681,7 +1901,12 @@ pub fn snapshot(model: &Model) -> String {
         ));
     }
     for (repo, warning) in &model.warnings {
-        out.push_str(&format!("warning {repo}: {warning}\n"));
+        match warning {
+            Warning::Failure(failure) => {
+                out.push_str(&format!("warning {repo}: lookup failed: {failure}\n"))
+            }
+            Warning::Note(note) => out.push_str(&format!("warning {repo}: {note}\n")),
+        }
     }
     out
 }
@@ -2231,5 +2456,107 @@ mod tests {
             let text = flat(&sized(&mut model, width, height));
             assert!(text.contains(&flat(&message)), "{text}");
         }
+    }
+
+    #[test]
+    fn targets_stay_whole_and_long_names_are_cut_in_the_middle() {
+        let name = "cloud.google.com/go/auth/oauth2adapt/with/a/very/long/module/path";
+        let target = "18-alpine@8d6421d663b4";
+        let mut model = Model::new(
+            &report(&[
+                (name, "18-alpine", target, "pin"),
+                ("zod", "3.22.0", "4.1.0", "major"),
+            ]),
+            Origin::GitHub,
+        );
+        for width in [80, 120] {
+            let text = sized(&mut model, width, 24);
+            assert!(text.contains(target), "{text}");
+            assert!(text.contains("cloud.goog") && text.contains("…"), "{text}");
+            assert!(text.contains("module/path"), "{text}");
+            assert!(text.contains("package.json"), "{text}");
+        }
+        assert_eq!(middle("abcdefghij", 5), "ab…ij");
+        assert_eq!(middle("abc", 5), "abc");
+        assert_eq!(
+            fit(30, &[(10, 4), (20, 4)], &[(0, 4)]),
+            vec![8, 20],
+            "the first column gives way to fit"
+        );
+        assert_eq!(
+            fit(40, &[(5, 4), (5, 4)], &[]),
+            vec![5, 33],
+            "room goes to the last column"
+        );
+    }
+
+    #[test]
+    fn each_tab_keeps_its_cursor() {
+        let mut model = Model::new(
+            &report(&[
+                ("zod", "3.22.0", "4.1.0", "major"),
+                ("hono", "4.6.0", "4.7.2", "minor"),
+                ("ms", "2.1.2", "2.1.3", "patch"),
+            ]),
+            Origin::GitHub,
+        );
+        screen(&mut model);
+        press(&mut model, KeyCode::Char('j'));
+        press(&mut model, KeyCode::Char('j'));
+        press(&mut model, KeyCode::Char('3'));
+        assert_eq!(model.cursor, 0, "a tab not visited yet starts at the top");
+        press(&mut model, KeyCode::Char('j'));
+        press(&mut model, KeyCode::Char('1'));
+        assert_eq!(model.cursor, 2);
+        press(&mut model, KeyCode::Tab);
+        press(&mut model, KeyCode::Tab);
+        assert_eq!((model.tab, model.cursor), (Tab::Dependencies, 1));
+        press(&mut model, KeyCode::BackTab);
+        press(&mut model, KeyCode::BackTab);
+        assert_eq!((model.tab, model.cursor), (Tab::Updates, 2));
+    }
+
+    #[test]
+    fn warnings_read_like_the_report_sections() {
+        let mut report = report(&[("zod", "3.22.0", "4.1.0", "major")]);
+        report.repositories[0].warnings = vec!["advisory lookup on OSV.dev failed".into()];
+        report.repositories[0].lookup_failures = serde_json::from_value(serde_json::json!([
+            {"manager": "mise", "path": "mise.toml", "name": "pipx:acme/tidy", "package": "pipx:acme/tidy",
+             "datasource": "mise", "kind": "not-found", "message": "mise lists no versions of pipx:acme/tidy"},
+            {"manager": "npm", "path": "package.json", "name": "@acme/gone", "package": "@acme/gone",
+             "datasource": "npm", "kind": "not-found", "message": "registry HTTP 404"}
+        ]))
+        .unwrap();
+        let mut model = Model::new(&report, Origin::GitHub);
+        press(&mut model, KeyCode::Char('5'));
+        let text = sized(&mut model, 100, 24);
+        assert!(
+            !text.contains("local/app"),
+            "one repository needs no name: {text}"
+        );
+        assert!(text.contains("Lookup failures (2)"), "{text}");
+        assert!(
+            text.contains("  pipx:acme/tidy  mise.toml     mise, not-found"),
+            "{text}"
+        );
+        assert!(
+            text.contains("    mise lists no versions of pipx:acme/tidy"),
+            "{text}"
+        );
+        assert!(
+            text.contains("  @acme/gone      package.json  npm, not-found"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Warnings (1)") && text.contains("  advisory lookup"),
+            "{text}"
+        );
+        assert!(text.contains("j/k scroll  PgUp/PgDn page"), "{text}");
+        assert!(
+            snapshot(&model)
+                .contains("warning local/app: lookup failed: pipx:acme/tidy in mise.toml")
+        );
+        press(&mut model, KeyCode::Char('1'));
+        assert!(!flat(&screen(&mut model)).contains("j/k scroll"));
     }
 }

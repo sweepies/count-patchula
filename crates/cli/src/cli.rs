@@ -11,9 +11,10 @@ const LOGO: &str = "
          ⠈⠁
 ";
 
-/// Help colours: teal headings, bold names, dim placeholders.
+/// Help colours: accent headings, bold names, dim placeholders. The accent
+/// and the bat's gradient are painted by [`crate::palette::help`].
 pub const PALETTE: Palette = Palette::DEFAULT
-    .heading("cyan+bold")
+    .heading(crate::palette::HELP_HEADING)
     .option("bold")
     .metavar("dim")
     .command("bold");
@@ -28,6 +29,7 @@ pub const PALETTE: Palette = Palette::DEFAULT
     version,
     unknown_flags = "error",
     logo = LOGO,
+    logo_style = "bright-yellow",
     help_template = "{$dim}{{about}}{/$}
 
 {{usage}}
@@ -453,8 +455,13 @@ mod tests {
         let mut pages = String::new();
         let style = Style::COLOURED.palette(PALETTE);
         self::pages(&mut vec![App::command()], style, &mut pages);
-        assert!(pages.contains("\x1b[1;36mUsage:\x1b[0m"));
-        assert!(pages.contains("\x1b[1;36mExamples:\x1b[0m"));
+        let pages = crate::palette::help(&pages, crate::palette::Depth::True);
+        assert!(pages.contains("\x1b[1;38;2;232;90;79mUsage:\x1b[0m"));
+        assert!(pages.contains("\x1b[1;38;2;232;90;79mExamples:\x1b[0m"));
+        assert!(
+            !pages.contains(";36m") && !pages.contains("[36m"),
+            "no teal is left"
+        );
         assert!(pages.contains("\x1b[1m--dry-run\x1b[0m"));
         assert!(pages.contains("\x1b[2m<MANAGER>\x1b[0m"));
         assert!(pages.contains("\x1b[2;3mRun 'patchula <command> --help'"));

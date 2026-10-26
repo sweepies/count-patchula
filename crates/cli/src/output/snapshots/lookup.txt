@@ -1,4 +1,5 @@
-The Count visited local/web-chat and found 4 dependencies, 5 updates, 1 vulnerability, 1 failed lookup, 1 notice, 1 skipped value and 1 warning.
+The Count visited local/web-chat and found 4 dependencies, 5 updates, 1
+vulnerability, 1 failed lookup, 1 notice, 1 skipped value and 1 warning.
 
 Updates (5)
   major  actions/checkout  v4.1.0 → v5.0.0    .github/workflows/ci.yml

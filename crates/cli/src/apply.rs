@@ -224,7 +224,7 @@ pub async fn command(
     );
     if options.copier {
         if !templates.is_empty() {
-            style.heading(&mut text, 0, "Copier", notices.len(), Paint::Plain);
+            style.heading(&mut text, 0, "Copier", notices.len(), Paint::Accent);
             for line in templates.lines() {
                 style.wrap(&mut text, 2, line, Paint::Plain);
             }
@@ -369,7 +369,7 @@ fn summary(
     let rows: Vec<_> = applied.iter().map(|u| row(u)).collect();
     style.table(&mut out, 2, &rows, 3);
     if !skipped.is_empty() {
-        style.heading(&mut out, 0, "Left alone", skipped.len(), Paint::Yellow);
+        style.heading(&mut out, 0, "Left alone", skipped.len(), Paint::Warning);
         let rows: Vec<_> = skipped.iter().map(|(u, _)| row(u)).collect();
         for (line, (_, reason)) in style.lines(2, &rows, 3).iter().zip(skipped) {
             out.push_str(line);

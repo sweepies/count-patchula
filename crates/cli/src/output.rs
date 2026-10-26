@@ -1,10 +1,14 @@
 //! The report as a person reads it: counts first, then each repository's
 //! updates, vulnerabilities, failed lookups, notices, skipped values and
 //! warnings. On a terminal it is coloured and fitted to the width; anywhere
-//! else it is plain text, one item per line, for grep and logs.
-use crate::{cli, tui};
+//! else it is plain text, one item per line, for grep and logs, with only the
+//! summary wrapped, at 80 columns.
+use crate::{cli, palette, tui};
 use patchula_report::{ActionStatus, Report, Repository, Status};
 use std::fmt::Write;
+
+/// The width the summary wraps to when the stream is not a terminal.
+const PIPED_WIDTH: usize = 80;
 
 /// How text is drawn on one stream.
 #[derive(Clone, Copy, Debug)]
@@ -15,15 +19,17 @@ pub struct Style {
     width: Option<usize>,
 }
 
+/// What a span means, painted from [`crate::palette`].
 #[derive(Clone, Copy)]
 pub enum Paint {
     Plain,
     Bold,
     Dim,
-    Red,
-    Green,
-    Yellow,
-    Cyan,
+    Accent,
+    AccentDim,
+    Success,
+    Warning,
+    Error,
 }
 
 impl Style {
@@ -58,14 +64,16 @@ impl Style {
     }
 
     pub fn paint(&self, paint: Paint, text: &str) -> String {
+        let colour = |colour: palette::Colour| colour.sgr(palette::depth());
         let code = match paint {
             Paint::Plain => return text.to_owned(),
-            Paint::Bold => "1",
-            Paint::Dim => "2",
-            Paint::Red => "31",
-            Paint::Green => "32",
-            Paint::Yellow => "33",
-            Paint::Cyan => "36",
+            Paint::Bold => "1".to_owned(),
+            Paint::Dim => "2".to_owned(),
+            Paint::Accent => colour(palette::ACCENT),
+            Paint::AccentDim => colour(palette::ACCENT_DIM),
+            Paint::Success => colour(palette::SUCCESS),
+            Paint::Warning => colour(palette::WARNING),
+            Paint::Error => colour(palette::ERROR),
         };
         if self.color && !text.is_empty() {
             format!("\x1b[{code}m{text}\x1b[0m")
@@ -176,6 +184,15 @@ impl Style {
         }
     }
 
+    /// The report's summary: prose, so it wraps at word boundaries everywhere,
+    /// to the terminal's width or to [`PIPED_WIDTH`] in a pipe, where nothing
+    /// else wraps it and a terminal showing the pipe would split words.
+    fn summary(&self, out: &mut String, text: &str, paint: Paint) {
+        for line in textwrap::wrap(text, self.width.unwrap_or(PIPED_WIDTH)) {
+            let _ = writeln!(out, "{}", self.paint(paint, &line));
+        }
+    }
+
     /// A URL on its own line: never cut, so it stays clickable.
     fn url(&self, out: &mut String, indent: usize, url: &str) {
         let _ = writeln!(out, "{:indent$}{}", "", self.dim(url));
@@ -271,10 +288,10 @@ fn status_paint(status: ActionStatus) -> Paint {
         ActionStatus::Created
         | ActionStatus::Updated
         | ActionStatus::Rebased
-        | ActionStatus::Merged => Paint::Green,
-        ActionStatus::Planned => Paint::Cyan,
-        ActionStatus::Skipped | ActionStatus::Protected => Paint::Yellow,
-        ActionStatus::Error => Paint::Red,
+        | ActionStatus::Merged => Paint::Success,
+        ActionStatus::Planned => Paint::AccentDim,
+        ActionStatus::Skipped | ActionStatus::Protected => Paint::Warning,
+        ActionStatus::Error => Paint::Error,
         ActionStatus::Unchanged | ActionStatus::Deleted | ActionStatus::Closed => Paint::Dim,
     }
 }
@@ -289,17 +306,17 @@ fn word<T: serde::Serialize>(value: &T) -> String {
 
 pub fn kind_paint(kind: &str) -> Paint {
     match kind {
-        "major" => Paint::Red,
-        "minor" => Paint::Yellow,
-        "patch" => Paint::Green,
-        _ => Paint::Cyan,
+        "major" => Paint::Error,
+        "minor" => Paint::Warning,
+        "patch" => Paint::Success,
+        _ => Paint::AccentDim,
     }
 }
 
 fn severity_paint(severity: &str) -> Paint {
     match severity {
-        "critical" | "high" => Paint::Red,
-        "moderate" | "medium" => Paint::Yellow,
+        "critical" | "high" => Paint::Error,
+        "moderate" | "medium" => Paint::Warning,
         _ => Paint::Dim,
     }
 }
@@ -347,11 +364,11 @@ pub fn report(report: &Report, style: &Style) -> String {
         }
     };
     let paint = if single && errors > 0 {
-        Paint::Red
+        Paint::Error
     } else {
         Paint::Bold
     };
-    style.wrap(&mut out, 0, &format!("{}{headline}", style.bat()), paint);
+    style.summary(&mut out, &format!("{}{headline}", style.bat()), paint);
     let updates = tui::updates(report);
     let indent = if single { 0 } else { 2 };
     for repo in &report.repositories {
@@ -360,11 +377,11 @@ pub fn report(report: &Report, style: &Style) -> String {
                 Status::Complete => (sentence(&Counts::of(repo).phrases()), Paint::Dim),
                 Status::Skipped => (
                     format!("skipped: {}", repo.reason.as_deref().unwrap_or("no reason")),
-                    Paint::Yellow,
+                    Paint::Warning,
                 ),
                 Status::Error => (
                     format!("error: {}", repo.reason.as_deref().unwrap_or("no reason")),
-                    Paint::Red,
+                    Paint::Error,
                 ),
             };
             let _ = writeln!(
@@ -378,7 +395,7 @@ pub fn report(report: &Report, style: &Style) -> String {
                 &mut out,
                 0,
                 &format!("skipped: {}", repo.reason.as_deref().unwrap_or("no reason")),
-                Paint::Yellow,
+                Paint::Warning,
             );
         }
         if let Some(actions) = &report.actions {
@@ -390,7 +407,7 @@ pub fn report(report: &Report, style: &Style) -> String {
                 .collect();
             rows.sort_by(|a, b| (&a.file, &a.name).cmp(&(&b.file, &b.name)));
             if !rows.is_empty() {
-                style.heading(&mut out, indent, "Updates", rows.len(), Paint::Plain);
+                style.heading(&mut out, indent, "Updates", rows.len(), Paint::Accent);
                 let rows: Vec<_> = rows
                     .iter()
                     .map(|u| {
@@ -425,7 +442,7 @@ fn actions_section(
         .filter(|b| b.repository == repository)
         .collect();
     if !branches.is_empty() {
-        style.heading(out, indent, "Branches", branches.len(), Paint::Plain);
+        style.heading(out, indent, "Branches", branches.len(), Paint::Accent);
         let rows: Vec<_> = branches
             .iter()
             .map(|branch| {
@@ -453,9 +470,9 @@ fn actions_section(
                 for file in &branch.files {
                     for line in file.diff.lines() {
                         let paint = match line.chars().next() {
-                            Some('+') => Paint::Green,
-                            Some('-') => Paint::Red,
-                            Some('@') => Paint::Cyan,
+                            Some('+') => Paint::Success,
+                            Some('-') => Paint::Error,
+                            Some('@') => Paint::AccentDim,
                             _ => Paint::Plain,
                         };
                         let _ = writeln!(out, "{}", style.paint(paint, line));
@@ -470,7 +487,7 @@ fn actions_section(
         .filter(|p| p.repository == repository)
         .collect();
     if !prs.is_empty() {
-        style.heading(out, indent, "Pull requests", prs.len(), Paint::Plain);
+        style.heading(out, indent, "Pull requests", prs.len(), Paint::Accent);
         let rows: Vec<_> = prs
             .iter()
             .map(|pr| {
@@ -506,7 +523,13 @@ fn details(out: &mut String, style: &Style, indent: usize, repo: &Repository) {
         .flat_map(|(d, m)| m.advisories.iter().map(move |a| (d, a)))
         .collect();
     if !advisories.is_empty() {
-        style.heading(out, indent, "Vulnerabilities", advisories.len(), Paint::Red);
+        style.heading(
+            out,
+            indent,
+            "Vulnerabilities",
+            advisories.len(),
+            Paint::Error,
+        );
         let rows: Vec<_> = advisories
             .iter()
             .map(|(dep, advisory)| {
@@ -569,7 +592,7 @@ fn details(out: &mut String, style: &Style, indent: usize, repo: &Repository) {
         &repo.notices.iter().collect::<Vec<_>>(),
     );
     if !repo.skipped.is_empty() {
-        style.heading(out, indent, "Skipped", repo.skipped.len(), Paint::Plain);
+        style.heading(out, indent, "Skipped", repo.skipped.len(), Paint::Accent);
         let rows: Vec<_> = repo
             .skipped
             .iter()
@@ -601,7 +624,7 @@ pub fn failures(
     failures: &[&patchula_report::LookupFailure],
 ) {
     if !failures.is_empty() {
-        style.heading(out, indent, "Lookup failures", failures.len(), Paint::Red);
+        style.heading(out, indent, "Lookup failures", failures.len(), Paint::Error);
         let rows: Vec<_> = failures
             .iter()
             .map(|failure| {
@@ -633,7 +656,7 @@ pub fn notices(
     notices: &[&patchula_report::Notice],
 ) {
     if !notices.is_empty() {
-        style.heading(out, indent, title, notices.len(), Paint::Plain);
+        style.heading(out, indent, title, notices.len(), Paint::Accent);
         let rows: Vec<_> = notices
             .iter()
             .map(|notice| {
@@ -654,7 +677,7 @@ pub fn notices(
 
 pub fn warnings(out: &mut String, style: &Style, indent: usize, warnings: &[String]) {
     if !warnings.is_empty() {
-        style.heading(out, indent, "Warnings", warnings.len(), Paint::Yellow);
+        style.heading(out, indent, "Warnings", warnings.len(), Paint::Warning);
         for warning in warnings {
             style.wrap(out, indent + 2, warning, Paint::Plain);
         }
