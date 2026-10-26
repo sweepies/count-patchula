@@ -1192,3 +1192,246 @@ fn forgejo_and_gitea_workflows_resolve_bare_refs_on_their_default_action_host() 
         format!("actions/checkout@{} # v6.1.0", "d".repeat(40))
     );
 }
+#[test]
+fn gitlab_ci_images_services_components_and_project_includes() {
+    use patchula_config::Source;
+    let mut config = config();
+    config.managers = vec![Manager::Gitlabci, Manager::GitlabciInclude];
+    let scanner = Scanner::new(&config).unwrap();
+    assert!(scanner.needs(".gitlab-ci.yml"));
+    assert!(scanner.needs("ci/deploy.gitlab-ci.yaml"));
+    assert!(!scanner.needs("ci/templates.yml"));
+    let text = r#"spec:
+  inputs:
+    stage:
+      default: test
+---
+include:
+  - local: ci/lint.yml
+  - project: my-group/my-project
+    ref: v1.2.0
+    file: /templates/build.yml
+  - project: 'grp/sub/proj'
+    ref: "2.0.1"
+    file: [a.yml, b.yml]
+  - project: grp/pinned
+    ref: 0123456789abcdef0123456789abcdef01234567
+  - project: grp/default-branch
+    file: ci.yml
+  - project: $TEMPLATES
+    ref: v1
+  - component: $CI_SERVER_FQDN/components/sast/sast@3.4.0
+  - component: "gitlab.example.com/grp/tools/lint@1.0.0"
+  - component: gitlab.com/components/opentofu/full-pipeline@~latest
+  - component: $OTHER_HOST/grp/proj/name@1.0.0
+  - remote: https://example.com/ci.yml
+image: ruby:3.3
+variables:
+  image: not-an-image:1
+default:
+  services:
+    - postgres:16.3
+    - name: redis:7.2-alpine
+      alias: cache
+.base: &base
+  image:
+    name: node:22-slim
+    entrypoint: [""]
+build:
+  <<: *base
+  script: [make]
+test/unit:
+  image: $CI_REGISTRY_IMAGE:latest
+  services:
+    - name: ${CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX}/mysql:8
+pinned:
+  image: "alpine:3.20@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+"#;
+    let files = Files::from([(".gitlab-ci.yml".into(), text.into())]);
+    let extraction = scanner.extract(&files).unwrap();
+    assert!(extraction.warnings.is_empty(), "{:?}", extraction.warnings);
+    let mut got: Vec<_> = extraction
+        .dependencies
+        .iter()
+        .map(|d| {
+            (
+                d.manager,
+                d.kind,
+                d.source,
+                d.package.as_str(),
+                d.current.as_str(),
+                d.digest.is_some(),
+            )
+        })
+        .collect();
+    got.sort_by(|a, b| a.3.cmp(b.3));
+    use DependencyKind::{ContainerImage as Image, ReusableWorkflow as Include};
+    use Manager::{Gitlabci as Ci, GitlabciInclude as Project};
+    assert_eq!(
+        got,
+        [
+            (Ci, Image, Source::Docker, "alpine", "3.20", true),
+            (
+                Ci,
+                Include,
+                Source::ForgeTags,
+                "gitlab.com/components/sast",
+                "3.4.0",
+                false
+            ),
+            (
+                Project,
+                Include,
+                Source::ForgeTags,
+                "gitlab.com/grp/sub/proj",
+                "2.0.1",
+                false
+            ),
+            (
+                Project,
+                Include,
+                Source::ForgeTags,
+                "gitlab.com/my-group/my-project",
+                "v1.2.0",
+                false
+            ),
+            (
+                Ci,
+                Include,
+                Source::ForgeTags,
+                "gitlab.example.com/grp/tools",
+                "1.0.0",
+                false
+            ),
+            (Ci, Image, Source::Docker, "node", "22-slim", false),
+            (Ci, Image, Source::Docker, "postgres", "16.3", false),
+            (Ci, Image, Source::Docker, "redis", "7.2-alpine", false),
+            (Ci, Image, Source::Docker, "ruby", "3.3", false),
+        ]
+    );
+    for dep in &extraction.dependencies {
+        let slice = text[dep.location.start..dep.location.end].trim_matches(['"', '\'']);
+        if dep.kind == DependencyKind::ContainerImage {
+            assert!(
+                slice.starts_with(&format!("{}:{}", dep.package, dep.current)),
+                "{slice}"
+            );
+        } else {
+            assert_eq!(slice, dep.current);
+        }
+    }
+    let sast = extraction
+        .dependencies
+        .iter()
+        .find(|d| d.current == "3.4.0")
+        .unwrap();
+    assert_eq!(sast.name, "gitlab.com/components/sast/sast");
+    let skipped: Vec<_> = extraction
+        .skipped
+        .iter()
+        .map(|s| (s.manager, s.line, s.value.as_str(), s.reason.as_str()))
+        .collect();
+    assert_eq!(
+        skipped,
+        [
+            (
+                Ci,
+                Some(23),
+                "$OTHER_HOST/grp/proj/name@1.0.0",
+                "the component's host is a GitLab CI variable other than $CI_SERVER_FQDN"
+            ),
+            (
+                Ci,
+                Some(41),
+                "$CI_REGISTRY_IMAGE:latest",
+                "the image contains a GitLab CI variable"
+            ),
+            (
+                Ci,
+                Some(43),
+                "${CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX}/mysql:8",
+                "the image contains a GitLab CI variable"
+            ),
+            (
+                Project,
+                Some(19),
+                "$TEMPLATES@v1",
+                "the include contains a GitLab CI variable"
+            ),
+        ]
+    );
+}
+#[test]
+fn gitlab_include_projects_resolve_on_the_configured_host() {
+    let mut config = config();
+    config.managers = vec![Manager::Gitlabci, Manager::GitlabciInclude];
+    config.gitlab.host = "gitlab.example.com".into();
+    let scanner = Scanner::new(&config).unwrap();
+    let text = "include:\n  project: grp/proj\n  ref: 1.0\n---\ninclude:\n  - component: $CI_SERVER_HOST/grp/comp/name@2.1.0\n";
+    let files = Files::from([("sub/.gitlab-ci.yaml".into(), text.into())]);
+    let deps = scanner.extract(&files).unwrap().dependencies;
+    let got: Vec<_> = deps
+        .iter()
+        .map(|d| {
+            (
+                d.package.as_str(),
+                d.current.as_str(),
+                d.location.pointer.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (
+                "gitlab.example.com/grp/comp",
+                "2.1.0",
+                "/1/include/0/component"
+            ),
+            ("gitlab.example.com/grp/proj", "1.0", "/0/include/ref"),
+        ]
+    );
+}
+#[test]
+fn gitlab_ci_aliased_images_build_metadata_and_numeric_refs() {
+    let mut config = config();
+    config.managers = vec![Manager::Gitlabci, Manager::GitlabciInclude];
+    let scanner = Scanner::new(&config).unwrap();
+    let text = "variables:\n  BASE: &base alpine:3.20\ninclude:\n  - component: gitlab.com/grp/proj/comp@1.2.3+build.1\n  - project: grp/proj\n    ref: 1.0\none:\n  image: *base\ntwo:\n  image: *base\n";
+    let files = Files::from([(".gitlab-ci.yml".into(), text.into())]);
+    let deps = scanner.extract(&files).unwrap().dependencies;
+    let mut got: Vec<_> = deps
+        .iter()
+        .map(|d| (d.package.as_str(), d.current.as_str(), d.location.line))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        [
+            ("alpine", "3.20", 2),
+            ("gitlab.com/grp/proj", "1.0", 6),
+            ("gitlab.com/grp/proj", "1.2.3+build.1", 4),
+        ]
+    );
+}
+#[test]
+fn gitlab_refs_shared_through_an_anchor_are_skipped() {
+    let mut config = config();
+    config.managers = vec![Manager::GitlabciInclude];
+    let scanner = Scanner::new(&config).unwrap();
+    let text = "variables:\n  V: &v 1.0.0\ninclude:\n  - project: grp/a\n    ref: *v\n  - project: grp/b\n    ref: *v\n  - project: grp/c\n    ref: 2.0.0\n";
+    let files = Files::from([(".gitlab-ci.yml".into(), text.into())]);
+    let extraction = scanner.extract(&files).unwrap();
+    let got: Vec<_> = extraction
+        .dependencies
+        .iter()
+        .map(|d| d.package.as_str())
+        .collect();
+    assert_eq!(got, ["gitlab.com/grp/c"]);
+    let skipped: Vec<_> = extraction
+        .skipped
+        .iter()
+        .map(|s| (s.line, s.value.as_str()))
+        .collect();
+    assert_eq!(skipped, [(Some(2), "grp/a@1.0.0")]);
+}

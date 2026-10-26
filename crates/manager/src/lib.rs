@@ -10,6 +10,7 @@ mod cargo;
 mod composer;
 mod custom;
 mod devcontainer;
+mod gitlabci;
 mod go;
 mod gradle;
 mod gradle_vars;
@@ -164,6 +165,8 @@ pub fn supported(manager: Manager) -> bool {
         | Manager::Nuget
         | Manager::Bundler
         | Manager::Composer
+        | Manager::Gitlabci
+        | Manager::GitlabciInclude
         | Manager::Regex => true,
     }
 }
@@ -267,6 +270,9 @@ impl Scanner {
             Manager::Nuget => nuget::selected(path),
             Manager::Bundler => matches!(leaf, "Gemfile" | "Gemfile.lock" | ".ruby-version"),
             Manager::Composer => matches!(leaf, "composer.json" | "composer.lock"),
+            Manager::Gitlabci | Manager::GitlabciInclude => {
+                leaf.ends_with(".gitlab-ci.yml") || leaf.ends_with(".gitlab-ci.yaml")
+            }
             Manager::Devcontainer => {
                 matches!(leaf, "devcontainer.json" | ".devcontainer.json")
             }
@@ -412,6 +418,15 @@ impl Scanner {
                         (documents.get(path.as_str()), locations.get(path.as_str()))
                 {
                     match yaml::extract(manager, path, text, docs, spans, &repos) {
+                        Ok(dependencies) => result.dependencies.extend(dependencies),
+                        Err(e) => result.warnings.push(format!("{path}: skipped: {e}")),
+                    }
+                }
+            }
+            for manager in [Manager::Gitlabci, Manager::GitlabciInclude] {
+                if self.selected(manager, path) {
+                    let host = &self.config.gitlab.host;
+                    match gitlabci::extract(manager, path, text, host, &mut result.skipped) {
                         Ok(dependencies) => result.dependencies.extend(dependencies),
                         Err(e) => result.warnings.push(format!("{path}: skipped: {e}")),
                     }

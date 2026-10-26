@@ -23,6 +23,7 @@ explains how the pieces fit together.
 | `prs` | `PullRequests` | see below |
 | `lockfiles` | `Lockfiles` | see below |
 | `security` | `Security` | see below |
+| `gitlab` | `Gitlab` | see below |
 | `useVersionsHost` | `Boolean` | `true` |
 | `submodules` | `Boolean` | `false` |
 | `ignoreAuthors` | `Listing<String>` | none |
@@ -83,6 +84,16 @@ leaves out the two digest switches. `null` leaves the earlier value alone.
 | `lowestFix` | `Boolean` | `true` |
 
 See [security advisories](/guide/security/).
+
+## GitLab
+
+| Field | Type | Default |
+|---|---|---|
+| `host` | `String` | `"gitlab.com"` |
+
+The instance `include: project:` refs and `$CI_SERVER_FQDN` component
+references resolve on. It must be gitlab.com or have a `gitlab` label in its
+name. See [GitLab CI](/guide/managers/#gitlab-ci).
 
 ## The schema
 

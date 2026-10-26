@@ -352,6 +352,18 @@ backend. Names with bracketed tool options, a leading `-` or whitespace are
 refused as well. A backend prefix mise does not know is not checked by the
 Count, so a backend mise adds later works; mise fails the lookup for one it lacks.
 
+### GitLab CI variables {#gitlab-ci-variables}
+
+- **Renovate:** Resolves variables such as `$CI_REGISTRY` in GitLab CI images through `registryAliases`
+- **Count Patchula:** Skips images and include refs built from GitLab CI variables, listing each one with its reason; only `$CI_SERVER_FQDN` and `$CI_SERVER_HOST` at the start of a component reference resolve, to `gitlab.host`
+- **Why:** The Count has no registry aliases, and a guessed registry would pin the wrong image
+
+### The GitLab instance {#gitlab-instance}
+
+- **Renovate:** Looks up `include: project:` refs on the GitLab instance it runs against
+- **Count Patchula:** Looks them up on `gitlab.host`, gitlab.com by default, which must be gitlab.com or have a `gitlab` label in its name
+- **Why:** The Count runs on GitHub, so there is no GitLab platform to ask; recognising a GitLab instance by its name keeps lookups unauthenticated without probing unknown hosts
+
 ## Which updates are proposed
 
 ### Pins and lockfile refreshes {#update-types}

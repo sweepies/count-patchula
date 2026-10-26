@@ -43,3 +43,6 @@ unmodified copies; their licences are those of the projects below.
 | [actions/forgejo-release](https://code.forgejo.org/actions/forgejo-release) | `585a6614e80a` | MIT | `.forgejo/workflows` (`integration.yml`, `release.yml`, `tests.yml`) |
 | [actions/setup-forgejo](https://code.forgejo.org/actions/setup-forgejo) | `3e9e3e86161a` | MIT | `.forgejo/workflows` (`cascade-end-to-end.yml`, `integration-*.yml`) |
 | [gitea/tea](https://gitea.com/gitea/tea) | `2727270931ca` | MIT | `.gitea/workflows` |
+| [gitlab-org/gitaly](https://gitlab.com/gitlab-org/gitaly) | `42a4812bc672` | MIT | `ci/gitaly` |
+| [gitlab-org/container-registry](https://gitlab.com/gitlab-org/container-registry) | `672bd7536c95` | Apache-2.0 | `ci/container-registry` |
+| [gitlab-org/cli](https://gitlab.com/gitlab-org/cli) | `5419ed460090` | MIT | `ci/cli` |

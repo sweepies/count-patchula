@@ -178,6 +178,16 @@ impl Aliases {
         }
         pointer
     }
+    /// Whether the value at a pointer is reached through an alias, or sits
+    /// inside an anchored node that aliases reuse.
+    pub(super) fn shared(&self, pointer: &str) -> bool {
+        self.resolve(pointer) != pointer
+            || self.0.values().any(|target| {
+                pointer
+                    .strip_prefix(target.as_str())
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+            })
+    }
 }
 #[cfg(test)]
 mod tests {

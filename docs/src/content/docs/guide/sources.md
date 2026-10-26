@@ -16,7 +16,7 @@ manager, and rules can select by it.
 | `terraform` | `namespace/provider` or `namespace/module/system` | the public Terraform registry |
 | `github-releases`, `github-tags` | `owner/repo` | GitHub, through mise-versions when it can |
 | `github-runners` | runner family | a catalog of GitHub-hosted runner labels |
-| `forge-tags` | `host/path` | GitLab and Gitea/Forgejo tags |
+| `forge-tags` | `host/path` | GitLab and Gitea/Forgejo tags, for pre-commit hooks and GitLab CI includes and components |
 | `mise` | tool name, as written in `mise.toml` | `mise ls-remote --json`, run by the Count's pinned mise ([mise lookups](#mise-lookups)) |
 | `maven` | `group:artifact` | `maven-metadata.xml` on Maven Central, Google Maven or the Gradle plugin portal |
 | `nuget` | package ID | the nuget.org flat container and registration pages |
@@ -112,8 +112,10 @@ it to read everything upstream.
 
 ## Registries and limits
 
-Docker Hub and GHCR use anonymous registry tokens, cached until shortly before
-they expire. To use authenticated Docker Hub pulls, set both
+Docker Hub, GHCR and GitLab registries use anonymous registry tokens, cached
+until shortly before they expire. A token comes from the registry's own host,
+except Docker Hub's from `auth.docker.io` and a GitLab registry's
+(`registry.gitlab.com`) from its GitLab instance (`gitlab.com/jwt/auth`). To use authenticated Docker Hub pulls, set both
 `PATCHULA_DOCKERHUB_USERNAME` and `PATCHULA_DOCKERHUB_TOKEN`; they are only ever
 sent to Docker Hub's token service. When Docker Hub's `ratelimit-remaining` hits
 zero, queued reads stop. A 429 shares a cooldown across the host and retries at

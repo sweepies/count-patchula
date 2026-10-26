@@ -1,0 +1,191 @@
+.if-fork-merge-request: &if-fork-merge-request
+  if: '($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE != "merge_train") && $CI_PROJECT_NAMESPACE !~ /^gitlab(-org)?($|\/)/'
+
+include:
+  - local: .gitlab/ci/validate.yml
+  - local: .gitlab/ci/test.yml
+  - local: .gitlab/ci/integration.yml
+  - local: .gitlab/ci/release.yml
+  - local: .gitlab/ci/release_common.yml
+  - local: .gitlab/ci/release_prepare.yml
+  - local: .gitlab/ci/release_tag.yml
+  - local: .gitlab/ci/release_backport.yml
+  - local: .gitlab/ci/document.yml
+  - local: .gitlab/ci/aux_jobs.yml
+  - local: .gitlab/ci/migrate.yml
+  - component: ${CI_SERVER_FQDN}/gitlab-org/components/danger-review/danger-review@2.1.0
+    inputs:
+      job_allow_failure: true
+  - component: ${CI_SERVER_FQDN}/components/opentofu/fmt@3.11.0
+    inputs:
+      as: devvm:tofu:fmt
+      base_os: debian
+      root_dir: devvm/terraform
+      stage: validate
+      use_rootless_image: false
+  - component: ${CI_SERVER_FQDN}/components/opentofu/validate@3.11.0
+    inputs:
+      as: devvm:tofu:validate
+      auto_define_backend: false
+      base_os: debian
+      use_lockfile_for_cache_key: true
+      lockfile: readonly
+      root_dir: devvm/terraform
+      stage: validate
+      state_name: devvm
+      use_rootless_image: false
+      rules:
+        - changes:
+            - devvm/terraform/*
+        - if: $CI_COMMIT_REF_NAME == $CI_DEFAULT_BRANCH
+  - component: ${CI_SERVER_FQDN}/components/opentofu/plan@3.11.0
+    inputs:
+      as: devvm:tofu:plan
+      auto_define_backend: true
+      auto_encryption: true
+      base_os: debian
+      enable_id_tokens: true
+      use_lockfile_for_cache_key: true
+      lockfile: readonly
+      root_dir: devvm/terraform
+      stage: validate
+      state_name: devvm
+      use_rootless_image: false
+      warning_on_non_empty_plan: true
+      rules:
+        - changes:
+            - devvm/terraform/*
+        - if: $CI_COMMIT_REF_NAME == $CI_DEFAULT_BRANCH
+  - component: ${CI_SERVER_FQDN}/components/opentofu/apply@3.11.0
+    inputs:
+      as: devvm:tofu:apply
+      base_os: debian
+      stage: aux jobs
+      use_rootless_image: false
+      use_lockfile_for_cache_key: true
+      lockfile: readonly
+      root_dir: devvm/terraform
+      state_name: devvm
+      auto_encryption: true
+      auto_define_backend: true
+      enable_id_tokens: true
+      rules:
+        - when: manual
+          allow_failure: true
+  - component: ${CI_SERVER_FQDN}/components/opentofu/destroy@3.11.0
+    inputs:
+      as: devvm:tofu:destroy
+      base_os: debian
+      stage: aux jobs
+      use_rootless_image: false
+      root_dir: devvm/terraform
+      use_lockfile_for_cache_key: true
+      lockfile: readonly
+      state_name: devvm
+      auto_encryption: true
+      auto_define_backend: true
+      enable_id_tokens: true
+      rules:
+        - when: manual
+          allow_failure: true
+
+.gitlab-tofu:id_tokens:
+  id_tokens:
+    VAULT_ID_TOKEN:
+      aud: https://vault.gitlab.net
+  secrets:
+    TF_VAR_credentials_file:
+      vault: ${VAULT_SECRETS_PATH}/devvm/devvm_gcp_creds/json_key@ci
+      token: $VAULT_ID_TOKEN
+      file: true
+    GITLAB_TOFU_AUTO_ENCRYPTION_PASSPHRASE:
+      vault: ${VAULT_SECRETS_PATH}/devvm/devvm_state_encryption/pass@ci
+      token: $VAULT_ID_TOKEN
+      file: false
+
+default:
+  retry:
+    max: 2
+    when:
+      - api_failure
+      - runner_system_failure
+      - scheduler_failure
+      - stale_schedule
+      - unmet_prerequisites
+      - stuck_or_timeout_failure
+  image: golang:$GO_VERSION
+  tags:
+    - gitlab-org
+  cache:
+    key:
+      prefix: $GO_VERSION
+      files:
+        - go.mod
+        - go.sum
+    paths:
+      - .GOPATH/pkg/mod/
+    policy: pull
+
+# Single source of truth for the Go versions used across the whole pipeline.
+# `current` is the version used for non-matrix jobs and the `golang:$GO_VERSION`
+# image; `matrix` is the full list exercised by parallel:matrix jobs. The two
+# share the `&go-current-version` anchor so each version literal is written
+# exactly once. `min` tracks the minimum supported version (tied to the `go`
+# directive in go.mod); `current` matches the Go version used by CNG to build
+# the registry binary (see https://gitlab.com/gitlab-org/build/CNG/-/blob/master/gitlab-go/Dockerfile);
+# `next` is the upcoming version being validated: add it (and its matrix entry)
+# once that Go release has an RC image, and drop it when no release is pending.
+# Matrix jobs (including those in the included files under
+# .gitlab/ci/) pull the list via `!reference [.go-versions, matrix]`.
+# Update the versions here to change them everywhere.
+.go-versions:
+  min: &go-min-version "1.26"
+  current: &go-current-version "1.27"
+  matrix: [*go-min-version, *go-current-version]
+
+variables:
+  FF_TIMESTAMPS: 1
+  # default Go version
+  GO_VERSION: *go-current-version
+  BUILDTAGS: "continuous_profiler_stackdriver"
+  CGO_ENABLED: "1"
+  GOPATH: $CI_PROJECT_DIR/.GOPATH
+  GOTESTSUM_VERSION: v1.13.0
+  PG_PREV_VERSION: "16"
+  PG_CURR_VERSION: "17"
+  PG_NEXT_VERSION: "18"
+  # Must be built with a Go toolchain >= GO_VERSION, otherwise golangci-lint's
+  # type checker panics when loading the newer standard library.
+  GOLANGCI_LINT_VERSION: "2.15.0"
+  DOCKER_VERSION: "28.4"
+  GITLAB_TOFU_VAR_FILE: terraform.tfvars
+
+stages:
+  - validate
+  - test
+  - integration
+  - migrate
+  - aux jobs
+  - release
+  - document
+
+.go-pg-version-matrix:
+  parallel:
+    matrix:
+      - PG_VERSION: $PG_PREV_VERSION
+        GO_VERSION: !reference [.go-versions, matrix]
+      - PG_VERSION: $PG_CURR_VERSION
+        GO_VERSION: !reference [.go-versions, matrix]
+      - PG_VERSION: $PG_NEXT_VERSION
+        GO_VERSION: !reference [.go-versions, matrix]
+
+# docker defaults
+.docker:
+  image: docker:${DOCKER_VERSION}-cli
+  services:
+    - docker:${DOCKER_VERSION}-dind
+  tags:
+    - gitlab-org-docker
+  before_script:
+    - apk add --no-cache make bash
+    - echo "${CI_REGISTRY_PASSWORD}" | docker login --username "${CI_REGISTRY_USER}" --password-stdin "${CI_REGISTRY}"

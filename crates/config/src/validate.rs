@@ -151,6 +151,28 @@ impl Config {
                 windows(&format!("{field}.apply.windows"), value)?;
             }
         }
+        let host = &self.gitlab.host;
+        if host.is_empty()
+            || !host.split('.').all(|label| {
+                !label.is_empty()
+                    && !label.starts_with('-')
+                    && !label.ends_with('-')
+                    && label
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            })
+        {
+            return fail(
+                "gitlab.host",
+                "must be a lowercase host name, such as gitlab.example.com",
+            );
+        }
+        if host != "gitlab.com" && !host.split('.').any(|label| label == "gitlab") {
+            return fail(
+                "gitlab.host",
+                "must be gitlab.com or have a `gitlab` label, such as gitlab.example.com",
+            );
+        }
         filter("security.apply.permitted", &self.security.apply.permitted)?;
         if let Some(value) = &self.security.apply.windows {
             windows("security.apply.windows", value)?;

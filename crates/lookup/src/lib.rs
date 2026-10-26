@@ -255,7 +255,11 @@ impl Evaluator {
         {
             return false;
         }
-        if dep.tagged_action() {
+        // A branch ref has no version to compare; only tags are looked up.
+        if dep.tagged_action()
+            || matches!(dep.manager, Manager::Gitlabci | Manager::GitlabciInclude)
+                && dep.source == Source::ForgeTags
+        {
             return Ecosystem::Loose
                 .parse(dep.resolved.as_deref().unwrap_or(&dep.current))
                 .is_ok();
