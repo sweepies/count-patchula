@@ -1,0 +1,62 @@
+name: Boat snapshot
+
+# Builds the boat CI snapshot from main, checks that it deploys, then deletes
+# the older snapshots of this repository, so the account keeps exactly one.
+# Run it from the Actions tab after a toolchain or dependency change. See
+# docs/src/content/docs/internals/boat.md.
+on:
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: List the snapshots that a real run would create and delete, and change nothing
+        type: boolean
+        default: false
+
+permissions: {}
+
+# One run at a time on any ref. A second run waits for the first instead of
+# racing it, and a run is never cancelled halfway through a save.
+concurrency:
+  group: boat-snapshot
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    name: Build and prune
+    # The snapshot must match main, and Infisical issues the key to main only.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The boat key lives in Infisical as boat-api-key and is read through
+      # GitHub OIDC. The action exports it under its Infisical name.
+      - uses: Infisical/secrets-action@d2e351f16c6ca20d17c85e6c992e04bdeb64e87d # v1.0.18
+        with:
+          method: oidc
+          identity-id: ${{ vars.INFISICAL_BOAT_IDENTITY_ID || vars.INFISICAL_IDENTITY_ID }}
+          project-id: ${{ vars.INFISICAL_PROJECT_ID }}
+          env-slug: prod
+          secret-name: boat-api-key
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          install: false
+          # The snapshot is built in a sandbox, never from a runner cache.
+          cache: false
+      - name: Build the snapshot and delete the others
+        env:
+          BOAT_API_KEY: ${{ env['boat-api-key'] }}
+          DRY_RUN: ${{ inputs.dry-run }}
+          # Only the task's tools on the runner; the sandbox builds everything.
+          MISE_ENABLE_TOOLS: jq,http:boat
+        run: |
+          if [ "$DRY_RUN" = true ]; then
+            mise run boat:snapshot --dry-run
+          else
+            mise run boat:snapshot
+          fi
