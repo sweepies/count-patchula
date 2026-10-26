@@ -328,12 +328,15 @@ async fn tui_command(
             miette::miette!("patchula tui needs a terminal; use --once for a plain snapshot"),
         ));
     }
-    let (report, checkout) = report(app, &tui.lookup, None, services).await?;
-    let local = checkout
-        .map(|(dir, config)| tui::local(&dir, config))
-        .transpose()
-        .map_err(|e| (2, miette::miette!("{e}")))?;
-    let model = tui::Model::new(&report, local);
+    let (report, read) = report(app, &tui.lookup, None, services).await?;
+    let origin = match read {
+        Read::Checkout(checkout) => tui::Origin::Local(Box::new(
+            tui::local(&checkout.0, checkout.1).map_err(|e| (2, miette::miette!("{e}")))?,
+        )),
+        Read::Server => tui::Origin::Server,
+        Read::GitHub => tui::Origin::GitHub,
+    };
+    let model = tui::Model::new(&report, origin);
     if tui.once {
         write!(io::stdout().lock(), "{}", tui::snapshot(&model))
             .map(|_| 0)
@@ -387,7 +390,20 @@ async fn tools_command(app: &App, tools: &cli::Tools) -> Result<u8, (u8, miette:
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let app = App::parse();
+    // The embedded entry is the derive's one way to pass a help palette; it
+    // returns help, version and parse failures for us to print.
+    let argv: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    let app = match App::embedded_outcome_paletted(&argv, cli::PALETTE) {
+        usage_rs::embedded::Outcome::Parsed(app) => app,
+        usage_rs::embedded::Outcome::Exit(exit) => {
+            let _ = if exit.stderr {
+                io::stderr().lock().write_all(exit.text.as_bytes())
+            } else {
+                io::stdout().lock().write_all(exit.text.as_bytes())
+            };
+            return ExitCode::from(u8::try_from(exit.code).unwrap_or(1));
+        }
+    };
     let serving = matches!(app.command, Some(Command::Serve(_)));
     // Only our explicitly sanitized events reach stderr. Dependency HTTP debug
     // logs can contain headers even when the user requests maximum verbosity.
@@ -1010,6 +1026,13 @@ mod tests;
 /// the tree's own `patchula.pkl`.
 type Checkout = (std::path::PathBuf, Option<patchula_config::Config>);
 
+/// What a lookup read: the working tree here, GitHub, or a server.
+enum Read {
+    Checkout(Box<Checkout>),
+    GitHub,
+    Server,
+}
+
 /// Build the engine from lookup flags and run one lookup or run batch, with the
 /// working tree it read, if it read one.
 async fn report(
@@ -1017,7 +1040,7 @@ async fn report(
     options: &cli::Lookup,
     run: Option<&cli::Run>,
     services: &Services,
-) -> Result<(patchula_report::Report, Option<Checkout>), (u8, miette::Report)> {
+) -> Result<(patchula_report::Report, Read), (u8, miette::Report)> {
     use patchula_engine::{Engine, Options};
     let scan = &options.scan;
     if scan.concurrency == 0 || scan.concurrency > 100 {
@@ -1029,7 +1052,7 @@ async fn report(
             repositories,
         } => {
             let report = remote_report(services, &server, repositories, run).await?;
-            return Ok((report, None));
+            return Ok((report, Read::Server));
         }
         Source::GitHub(repositories) => {
             let config = options
@@ -1095,5 +1118,11 @@ async fn report(
         };
         (code, miette::miette!("{e}"))
     })?;
-    Ok((report, local.map(|dir| (dir, config))))
+    Ok((
+        report,
+        match local {
+            Some(dir) => Read::Checkout(Box::new((dir, config))),
+            None => Read::GitHub,
+        },
+    ))
 }

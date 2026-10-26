@@ -90,13 +90,14 @@ pub async fn command(
         remote: false,
         here: true,
     };
-    let (report, checkout) = crate::report(app, &lookup, None, services).await?;
-    let (dir, config) = checkout.ok_or_else(|| {
-        (
+    let (report, read) = crate::report(app, &lookup, None, services).await?;
+    let crate::Read::Checkout(checkout) = read else {
+        return Err((
             1,
             miette::miette!("the lookup did not read the working tree"),
-        )
-    })?;
+        ));
+    };
+    let (dir, config) = *checkout;
     let local = tui::local(&dir, config).map_err(|e| (2, miette::miette!("{e}")))?;
     let mut warnings = Vec::new();
     let mut failures = Vec::new();

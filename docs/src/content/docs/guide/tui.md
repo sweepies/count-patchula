@@ -42,7 +42,7 @@ v0.2.8 → v0.3.0  (minor)
 version v0.3.0
 published 2026-09-24T19:36:54Z
 
- q quit · ? help · tab switch · j/k move · / search · t type: all
+ q quit  ? help  / search  t type: all  space select  a all  w apply 2 selected
 ```
 
 ## Tabs
@@ -61,22 +61,35 @@ published 2026-09-24T19:36:54Z
 | Key | Action |
 |---|---|
 | `q`, `Esc`, `Ctrl-C` | quit |
+| `?` | show the keys |
 | `Tab`, `→`, `Shift-Tab`, `←` | next and previous tab |
 | `1` to `6` | jump to a tab |
-| `j`, `k`, `↓`, `↑` | move |
-| `PgDn`, `PgUp`, `g`, `G` | page down, page up, top, bottom |
+| `j`, `k`, `↓`, `↑` | move; on the Warnings tab, scroll a line |
+| `PgDn`, `PgUp`, `g`, `Home`, `G`, `End` | page down, page up, top, bottom |
 | `/` | search names, packages and files; `Enter` or `Esc` to finish |
-| `t` | cycle the update type filter: all, major, minor, patch, pin, digest |
-| `space` | select the update under the cursor |
-| `a` | select every visible update, or clear them if all are selected |
-| `A` | apply the selection (local directories only), after a `y` to confirm |
-| `u` | on the Templates tab, run `copier update` for the template under the cursor (local directories only), after a `y` to confirm |
-| `?` | help |
+| `t` | on the Updates tab, cycle the update type filter: all, major, minor, patch, pin, digest |
+| `space` | on the Updates tab, select or clear the update under the cursor |
+| `a` | on the Updates tab, select every visible update, or clear them if all are selected |
+| `w` | on the Updates tab, apply: write the selection into the working tree, after a `y` to confirm |
+| `u` | on the Templates tab, run `copier update` for the template under the cursor, after a `y` to confirm |
+
+The bar at the bottom lists the keys that work on the current tab, and wraps
+rather than cutting off on a narrow terminal. When `w` or `u` cannot run, the
+bar says why next to the key: the lookup ran on a server, the repositories come
+from GitHub, nothing is selected yet, or, for copier, the tree has uncommitted
+changes. A message from the last key appears above the bar until the next key.
+
+Warnings wrap to the width of the terminal. When they fill more than the pane,
+the title shows which lines are on screen, and `j`, `k`, `PgDn` and `PgUp`
+scroll through them.
 
 ## Applying updates
 
-Applying only works on the working tree in the current directory, with no
-repository named and not on a server. The Count reads each selected file again,
+Select updates with `space` or `a`, press `w`, then `y` to write them; any
+other key cancels. Applying only works on the working tree in the current
+directory, with no repository named and not on a server. If this checkout is
+set to run on a server, pass `--here` to look it up on this machine and apply.
+The Count reads each selected file again,
 finds the same declaration at the same place, and rewrites just the version,
 the way he edits a branch. If a selected update cannot be written in place,
 because its declaration changed since the lookup, the package is only in a
@@ -87,7 +100,7 @@ run your package manager afterwards (`aube install`, `cargo update -w`,
 
 ## Templates
 
-Template updates are never selected with the other updates, and `A` never
+Template updates are never selected with the other updates, and `w` never
 touches them. In the working tree, `u` on the Templates tab offers to run
 `copier update` for that one template, and `y` runs it; any other key cancels.
 Copier runs from your `PATH`, as you, from the root of the checkout:

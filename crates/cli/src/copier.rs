@@ -34,7 +34,7 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
 
 /// Paths `git status` reports in the checkout holding `dir`, relative to its
 /// root, untracked files included.
-fn changed(dir: &Path) -> Result<Vec<String>, String> {
+pub fn changed(dir: &Path) -> Result<Vec<String>, String> {
     let text = git(
         dir,
         &["status", "--porcelain=v1", "-z", "--untracked-files=all"],

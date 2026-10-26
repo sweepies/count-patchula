@@ -11,6 +11,44 @@ Count Patchula vants to update your deps. A modern dependency updater with stron
 Exit codes: 0 = success; 1 = runtime error; 2 = usage or configuration error; `apply` adds 3 = updates still waiting.
 
 
+## Examples
+
+Report updates for the checkout here
+
+```sh
+patchula lookup
+```
+
+Plan branches and diffs, writing nothing
+
+```sh
+patchula run --dry-run
+```
+
+Browse updates and apply the ones you pick
+
+```sh
+patchula tui
+```
+
+Exit 3 in CI while updates are waiting
+
+```sh
+patchula apply --check
+```
+
+Write only GitHub Actions updates
+
+```sh
+patchula apply --manager github-actions
+```
+
+Run the GitHub App webhook server
+
+```sh
+patchula serve --settings server.pkl
+```
+
 - **Usage:** `patchula [FLAGS] [SUBCOMMAND]`
 
 ## Global Flags
@@ -57,6 +95,32 @@ Exit codes: 0 = nothing selected is left to apply; 1 = runtime error; 2 = usage 
 | `--copier-defaults` | With `--copier`, take the defaults for questions copier would ask, for use without a terminal. |  |
 | `-h --help` | Print help |  |
 
+### Examples
+
+Write every available update here
+
+```sh
+patchula apply
+```
+
+Write nothing; exit 3 if updates are waiting
+
+```sh
+patchula apply --check
+```
+
+Show the patch updates as a diff
+
+```sh
+patchula apply --dry-run --type patch
+```
+
+Write only the actions/* updates
+
+```sh
+patchula apply --manager github-actions --dependency 'glob:actions/*'
+```
+
 ## `patchula auth`
 
 - **Usage:** `patchula auth <SUBCOMMAND>`
@@ -68,6 +132,20 @@ Sign in to or out of a Count Patchula server for `--remote`.
 | Flag | Description | Default |
 | --- | --- | --- |
 | `-h --help` | Print help |  |
+
+### Examples
+
+Sign in through the server's GitHub App
+
+```sh
+patchula auth login --server https://patchula.example.com
+```
+
+Forget the token for PATCHULA_SERVER
+
+```sh
+patchula auth logout
+```
 
 ## `patchula auth login`
 
@@ -106,6 +184,32 @@ Inspect and validate Pkl configuration.
 | Flag | Description | Default |
 | --- | --- | --- |
 | `-h --help` | Print help |  |
+
+### Examples
+
+Find and check this repository's config
+
+```sh
+patchula config check .
+```
+
+Check one config file
+
+```sh
+patchula config check patchula.pkl
+```
+
+Save the schema for your editor
+
+```sh
+patchula config schema > PatchulaConfig.pkl
+```
+
+Check operator settings
+
+```sh
+patchula config check-server server.pkl
+```
 
 ## `patchula config check`
 
@@ -196,6 +300,32 @@ Report available updates without writing; with no repository, reads the working 
 | `--here` | Run on this machine, even if you chose to run this checkout on a server. |  |
 | `-h --help` | Print help |  |
 
+### Examples
+
+Report updates for the checkout here
+
+```sh
+patchula lookup
+```
+
+Read two repositories through the API
+
+```sh
+patchula lookup acme/app acme/api
+```
+
+The same report, as JSON
+
+```sh
+patchula lookup --json
+```
+
+Look up on your Count Patchula server
+
+```sh
+patchula lookup --remote
+```
+
 ## `patchula run`
 
 - **Usage:** `patchula run [FLAGS] [OWNER/REPO]…`
@@ -229,6 +359,26 @@ With no repository, `--dry-run` plans from the working tree, uncommitted changes
 | `--allow-lockfile-pending` | For testing: write manifest-only branches for binary `bun.lockb` lockfiles, which can't be regenerated. |  |
 | `-h --help` | Print help |  |
 
+### Examples
+
+Plan branches and diffs from this tree
+
+```sh
+patchula run --dry-run
+```
+
+Open or update pull requests for acme/app
+
+```sh
+patchula run acme/app
+```
+
+Every repository the token reaches
+
+```sh
+patchula run --all-repos --config-dir overrides
+```
+
 ## `patchula serve`
 
 - **Usage:** `patchula serve [FLAGS]`
@@ -248,6 +398,20 @@ Run the API-only GitHub App webhook server.
 | `--shutdown-timeout-secs <SECS>` | Graceful server drain deadline; also PATCHULA_SHUTDOWN_TIMEOUT_SECS (default 60). |  |
 | `-h --help` | Print help |  |
 
+### Examples
+
+Serve with operator settings
+
+```sh
+patchula serve --settings server.pkl
+```
+
+Listen on every interface
+
+```sh
+patchula serve --settings server.pkl --listen 0.0.0.0:8080
+```
+
 ## `patchula tools`
 
 - **Usage:** `patchula tools <SUBCOMMAND>`
@@ -259,6 +423,20 @@ Manage the lockfile runner's tool store (`PATCHULA_TOOLS_DIR`, or `<cache>.tools
 | Flag | Description | Default |
 | --- | --- | --- |
 | `-h --help` | Print help |  |
+
+### Examples
+
+Install the pinned toolchains, e.g. in an image
+
+```sh
+patchula tools install
+```
+
+Drop versions unused for two weeks
+
+```sh
+patchula tools prune --days 14
+```
 
 ## `patchula tools install`
 
@@ -316,3 +494,23 @@ Browse dependencies and updates in the terminal; with no repository, apply selec
 | `--here` | Run on this machine, even if you chose to run this checkout on a server. |  |
 | `--once` | Print a plain-text snapshot of the updates and exit, for pipes and CI logs. |  |
 | `-h --help` | Print help |  |
+
+### Examples
+
+Pick updates and apply them here
+
+```sh
+patchula tui
+```
+
+Browse a repository through the API
+
+```sh
+patchula tui acme/app
+```
+
+Print a plain snapshot, for pipes and CI logs
+
+```sh
+patchula tui --once
+```
