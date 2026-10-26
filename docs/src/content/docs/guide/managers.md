@@ -308,9 +308,18 @@ move, the same as with nix itself.
 Inputs nix would fetch from outside the repository are skipped with a reason:
 `path:` and `git+file:` inputs that leave the repository, ssh URLs, plain
 `http`, and Mercurial. A `path:` input inside the repository changes with the
-repository, so it is skipped too. After nix runs, every node it added or changed
-in the lock is checked the same way, and the branch fails rather than publish
-a lock that reaches outside. How nix runs is under
+repository, so it is skipped too.
+
+nix fetches what `flake.nix` declares, so before it runs the Count reads the
+declared inputs, nested input overrides included, under nix's restricted
+evaluation, which fetches nothing and reads only the flake's directory. An
+input `flake.nix` adds or points somewhere refused fails the branch before any
+request. After nix runs, every node it added or changed in the lock is checked
+the same way, and an update must lock exactly the revision that passed the
+lookup and its release-age wait: if the branch moved in between, the update
+fails and is retried with the newer revision. Inputs that an upstream flake
+declares for itself are fetched by nix before the lock can be checked; a lock
+that reaches outside is still never published. How nix runs is under
 [Lockfiles](/guide/lockfiles/#nix).
 
 ## Kinds

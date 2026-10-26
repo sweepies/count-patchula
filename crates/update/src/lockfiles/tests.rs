@@ -2455,6 +2455,8 @@ struct NixFake {
     inner: Arc<Fixture>,
     lock: String,
     output: Vec<u8>,
+    /// What restricted evaluation of flake.nix's inputs prints.
+    declared: String,
     calls: Mutex<Vec<NixCall>>,
 }
 impl Executor for NixFake {
@@ -2472,6 +2474,9 @@ impl Executor for NixFake {
                 .map(|(k, v)| (k.to_string_lossy().into(), v.to_string_lossy().into()))
                 .collect();
             self.calls.lock().unwrap().push((spec.args.clone(), env));
+            if spec.args.iter().any(|a| a == "eval") {
+                return Ok(self.declared.clone().into_bytes());
+            }
             if spec.args.iter().any(|a| a == "update") {
                 std::fs::write(spec.cwd.join("flake.lock"), &self.lock).unwrap();
             }
@@ -2481,6 +2486,9 @@ impl Executor for NixFake {
 }
 const NIXPKGS: &str = "1111111111111111111111111111111111111111";
 const MOVED: &str = "9999999999999999999999999999999999999999";
+/// The inputs `flake.nix` declares for `flake_lock(true)`: `private` is the
+/// ssh input the lock already refuses.
+const DECLARED: &str = r#"{"nixpkgs":{"url":"github:NixOS/nixpkgs/nixos-unstable"},"private":{"url":"git+ssh://git@example.com/private.git"}}"#;
 fn flake_lock(private: bool) -> String {
     let private_node = r#""private":{"locked":{"lastModified":5,"narHash":"sha256-g","rev":"5555555555555555555555555555555555555555","type":"git","url":"ssh://git@example.com/private.git"},"original":{"type":"git","url":"ssh://git@example.com/private.git"}},"#;
     format!(
@@ -2508,6 +2516,11 @@ fn nix_fake(files: &BTreeMap<String, String>, lock: String) -> Arc<NixFake> {
         inner: fixture(files.clone(), false, false),
         lock,
         output: Vec::new(),
+        declared: if files.values().any(|f| f.contains("private.git")) {
+            DECLARED.into()
+        } else {
+            r#"{"nixpkgs":"github:NixOS/nixpkgs/nixos-unstable"}"#.into()
+        },
         calls: Mutex::new(Vec::new()),
     })
 }
@@ -2563,9 +2576,21 @@ async fn flake_inputs_move_through_nix_with_a_private_store() {
     assert!(!p.contents.contains_key("dev/flake.nix"));
     assert_eq!(p.action.branch, "patchula/nix-dev-nixpkgs");
     let calls = executor.calls.lock().unwrap();
-    let [(args, env)] = calls.as_slice() else {
-        panic!("one nix call expected: {calls:?}");
+    let [(eval, _), (args, env)] = calls.as_slice() else {
+        panic!("an eval and an update expected: {calls:?}");
     };
+    let (_, eval) = invocation(eval).unwrap();
+    assert!(contains(
+        &eval,
+        &[
+            "eval",
+            "--json",
+            "--impure",
+            "--option",
+            "restrict-eval",
+            "true"
+        ]
+    ));
     let (specs, command) = invocation(args).unwrap();
     assert_eq!(
         specs,
@@ -2641,7 +2666,7 @@ async fn flake_maintenance_skips_refused_inputs() {
         runner.prepare(&mut p, &mut snapshot, &config).await;
         assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
         let calls = executor.calls.lock().unwrap();
-        let (_, command) = invocation(&calls[0].0).unwrap();
+        let (_, command) = invocation(&calls[1].0).unwrap();
         let tail: Vec<&str> = command[7..].iter().map(String::as_str).collect();
         assert_eq!(expected.unwrap_or_default(), tail);
     }
@@ -2659,7 +2684,11 @@ async fn flake_locks_that_escape_or_do_not_move_fail() {
     );
     for (lock, reason) in [
         (escaped, "node host: it resolves outside the repository"),
-        (flake_lock(false), "flake input nixpkgs did not move"),
+        (flake_lock(false), "not the approved"),
+        (
+            flake_lock(false).replace(NIXPKGS, &"8".repeat(40)),
+            "it moved after the lookup",
+        ),
     ] {
         let (p, _temp) = flake_update(nix_fake(&files, lock), &files).await;
         assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
@@ -2681,6 +2710,7 @@ async fn flake_prefetch_runs_nix_only_for_remote_references() {
         inner: fixture(files.clone(), false, false),
         lock: String::new(),
         output: br#"{"hash":"sha256-x","locked":{"rev":"abc"}}"#.to_vec(),
+        declared: String::new(),
         calls: Mutex::new(Vec::new()),
     });
     let temp = tempfile::tempdir().unwrap();
@@ -2784,4 +2814,82 @@ async fn prune_empties_the_nix_store() {
         panic!("one nix call expected: {calls:?}");
     };
     assert_eq!(&invocation(args).unwrap().1[3..], ["store", "gc"]);
+}
+
+/// nix fetches what flake.nix declares, so inputs flake.nix adds or repoints
+/// to a refused place fail the branch before nix fetches anything; nested
+/// input overrides count too.
+#[tokio::test]
+async fn flake_nix_inputs_are_checked_before_nix_fetches() {
+    let files = flake(true);
+    for (declared, reason) in [
+        (
+            r#"{"nixpkgs":"github:NixOS/nixpkgs/nixos-unstable","evil":{"url":"tarball+http://127.0.0.1:8765/x","flake":false}}"#,
+            "input evil: only https URLs are fetched",
+        ),
+        (
+            r#"{"nixpkgs":{"url":"github:NixOS/nixpkgs","inputs":{"systems":{"url":"path:/etc"}}}}"#,
+            "input nixpkgs: systems: it resolves outside the repository",
+        ),
+        (
+            r#"{"private":{"url":"git+ssh://git@example.com/other.git"}}"#,
+            "input private: ssh is not allowed; only https",
+        ),
+    ] {
+        let executor = Arc::new(NixFake {
+            inner: fixture(files.clone(), false, false),
+            lock: flake_lock(true).replace(NIXPKGS, MOVED),
+            output: Vec::new(),
+            declared: declared.into(),
+            calls: Mutex::new(Vec::new()),
+        });
+        let (p, _temp) = flake_update(executor.clone(), &files).await;
+        assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+        assert!(
+            p.action.reason.as_deref().unwrap().contains(reason),
+            "{:?}",
+            p.action
+        );
+        let calls = executor.calls.lock().unwrap();
+        assert!(
+            !calls
+                .iter()
+                .any(|(args, _)| args.iter().any(|a| a == "update"))
+        );
+    }
+}
+
+/// Real nix reads flake.nix's inputs under restricted evaluation, and a plain
+/// http input is refused without a request.
+#[tokio::test]
+async fn real_nix_refuses_a_declared_http_input_before_fetching() {
+    let files = BTreeMap::from([
+        (
+            "flake.nix".to_string(),
+            "{\n  inputs.evil = { url = \"tarball+http://127.0.0.1:9/x\"; flake = false; };\n  outputs = _: { boom = builtins.fetchurl \"http://127.0.0.1:9/y\"; };\n}\n".to_string(),
+        ),
+        (
+            "flake.lock".to_string(),
+            "{\"nodes\":{\"root\":{}},\"root\":\"root\",\"version\":7}\n".to_string(),
+        ),
+    ]);
+    let executor = fixture(files.clone(), false, true);
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().into(), "offline-installation").with_executor(executor);
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        .unwrap()
+        .unwrap();
+    runner.prepare(&mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+    assert!(
+        p.action
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("flake.nix: input evil: only https URLs are fetched"),
+        "{:?}",
+        p.action
+    );
 }

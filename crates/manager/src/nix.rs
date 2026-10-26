@@ -40,6 +40,39 @@ pub fn refusal(attrs: &Map<String, Value>, dir: Option<&str>) -> Option<String> 
     }
 }
 
+/// [`refusal`] for a flake reference as `flake.nix` writes it, such as
+/// `git+ssh://host/repo` or `path:../shared`.
+pub fn reference_refusal(reference: &str, dir: Option<&str>) -> Option<String> {
+    let (scheme, rest) = reference.split_once(':').unwrap_or(("", reference));
+    let attrs = |kind: &str, key: &str, value: &str| {
+        Map::from_iter([
+            ("type".to_owned(), Value::from(kind)),
+            (key.to_owned(), Value::from(value)),
+        ])
+    };
+    let attrs = match scheme {
+        "" if rest.starts_with(['.', '/']) => attrs("path", "path", rest),
+        "" | "github" | "gitlab" | "sourcehut" | "flake" => return None,
+        "path" => attrs(
+            "path",
+            "path",
+            rest.split(['?', '#']).next().unwrap_or(rest),
+        ),
+        "https" | "http" | "file" => attrs("tarball", "url", reference),
+        _ => match scheme.split_once('+') {
+            Some((kind @ ("git" | "tarball" | "file" | "hg"), transport)) => {
+                attrs(kind, "url", &format!("{transport}:{rest}"))
+            }
+            _ => {
+                return Some(format!(
+                    "flake reference scheme {scheme:?} is not supported"
+                ));
+            }
+        },
+    };
+    refusal(&attrs, dir)
+}
+
 /// Whether a relative path from `dir` stays inside the repository.
 fn inside(dir: &str, path: &str) -> bool {
     let mut depth = dir.split('/').filter(|s| !s.is_empty()).count();

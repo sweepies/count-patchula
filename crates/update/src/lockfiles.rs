@@ -827,6 +827,11 @@ impl Runner {
         if let Some(cwd) = &call.cwd {
             spec.cwd = cwd.clone();
         }
+        // nix answers in JSON, which is read whole.
+        if call.bin == "nix" {
+            spec.output_limit = 1 << 20;
+            spec.complete_output = true;
+        }
         for (key, value) in &call.env {
             spec.env.insert(key.into(), value.into());
         }

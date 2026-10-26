@@ -22,7 +22,10 @@ pub use locked::Locked;
 mod maven;
 mod mise;
 mod nix;
-pub use nix::refusal as flake_input_refusal;
+pub use nix::{
+    reference as flake_input_reference, reference_refusal as flake_reference_refusal,
+    refusal as flake_input_refusal,
+};
 mod npm;
 mod nuget;
 mod precommit;

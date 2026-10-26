@@ -51,6 +51,36 @@ pub(super) fn tools() -> Result<Vec<(String, String)>, String> {
 }
 
 /// The direct inputs of a lock: input name to its node.
+/// Why an input `flake.nix` declares, or any input override nested in it, is
+/// refused.
+fn declared_refusal(input: &Value, directory: &str) -> Option<String> {
+    let dir = Some(directory);
+    match input {
+        Value::String(reference) => patchula_manager::flake_reference_refusal(reference, dir),
+        Value::Object(attrs) => attrs
+            .get("url")
+            .and_then(Value::as_str)
+            .and_then(|url| patchula_manager::flake_reference_refusal(url, dir))
+            .or_else(|| {
+                attrs
+                    .contains_key("type")
+                    .then(|| patchula_manager::flake_input_refusal(attrs, dir))
+                    .flatten()
+            })
+            .or_else(|| {
+                attrs
+                    .get("inputs")?
+                    .as_object()?
+                    .iter()
+                    .find_map(|(name, nested)| {
+                        declared_refusal(nested, directory)
+                            .map(|reason| format!("{name}: {reason}"))
+                    })
+            }),
+        _ => None,
+    }
+}
+
 fn inputs(lock: &Value) -> BTreeMap<String, &Value> {
     let nodes = &lock["nodes"];
     let root = lock["root"].as_str().unwrap_or("root");
@@ -129,7 +159,8 @@ impl Runner {
     }
     /// `nix flake update <inputs>` for updates, or bare for maintenance, in the
     /// flake's directory. The lock is diffed afterwards: each requested input
-    /// must have moved, and no node may point where the Count refuses to fetch.
+    /// must be locked at its approved target, and no node may point where the
+    /// Count refuses to fetch.
     pub(super) async fn flake_lock(
         &self,
         driver: &Path,
@@ -173,11 +204,54 @@ impl Runner {
         {
             return Err(format!("flake input {name} cannot be updated by the Count"));
         }
+        // nix fetches what flake.nix declares, not what the lock holds, so the
+        // declared inputs are checked before it runs. Restricted evaluation
+        // reads only the flake's directory and fetches nothing.
+        let flake = root.join(directory);
+        let declared = self
+            .nix(
+                driver,
+                None,
+                vec![
+                    "eval".into(),
+                    "--json".into(),
+                    "--impure".into(),
+                    "--option".into(),
+                    "restrict-eval".into(),
+                    "true".into(),
+                    "-I".into(),
+                    format!("flake={}", flake.display()),
+                    "--expr".into(),
+                    "(import <flake/flake.nix>).inputs or { }".into(),
+                ],
+                None,
+            )
+            .await?;
+        let declared: Value = serde_json::from_slice(&declared)
+            .map_err(|e| format!("{}: {e}", node::join(directory, "flake.nix")))?;
+        for (name, input) in declared.as_object().into_iter().flatten() {
+            // An input the lock already refuses is left alone above, as long
+            // as flake.nix still points it at the same place.
+            let unchanged = refused.contains(name)
+                && before_inputs
+                    .get(name)
+                    .and_then(|node| node["original"].as_object())
+                    .and_then(patchula_manager::flake_input_reference)
+                    .is_some_and(|reference| {
+                        input.as_str().or_else(|| input["url"].as_str()) == Some(reference.as_str())
+                    });
+            if !unchanged && let Some(reason) = declared_refusal(input, directory) {
+                return Err(format!(
+                    "{}: input {name}: {reason}",
+                    node::join(directory, "flake.nix")
+                ));
+            }
+        }
         let mut args = vec![
             "flake".to_string(),
             "update".into(),
             "--flake".into(),
-            format!("path:{}", root.join(directory).display()),
+            format!("path:{}", flake.display()),
         ];
         // Maintenance updates every input, naming them only when some are
         // refused, so nix never fetches those.
@@ -189,7 +263,7 @@ impl Runner {
             args.extend(requested.iter().map(|name| (*name).clone()));
         }
         let token = self.nix_token().await?;
-        self.nix(driver, Some(root.join(directory)), args, Some(&token))
+        self.nix(driver, Some(flake.clone()), args, Some(&token))
             .await?;
         let after: Value = serde_json::from_str(
             &std::fs::read_to_string(root.join(&lock)).map_err(|e| format!("{lock}: {e}"))?,
@@ -219,13 +293,19 @@ impl Runner {
                 }
             }
         }
-        if !maintenance {
-            for name in &requested {
-                let moved = before_inputs.get(*name).map(|n| &n["locked"])
-                    != after_inputs.get(*name).map(|n| &n["locked"]);
-                if !moved {
-                    return Err(format!("flake input {name} did not move in {lock}"));
-                }
+        // An update must lock the revision that passed lookup and its
+        // release-age wait; a branch that moved since is not published.
+        for job in jobs {
+            let (Some(name), Some(target)) = (&job.package, &job.target) else {
+                continue;
+            };
+            let locked = after_inputs.get(name).map(|n| &n["locked"]);
+            let got = locked.and_then(|l| l["rev"].as_str().or_else(|| l["narHash"].as_str()));
+            if got != Some(target.as_str()) {
+                return Err(format!(
+                    "nix locked flake input {name} at {}, not the approved {target}: it moved after the lookup",
+                    got.unwrap_or("nothing")
+                ));
             }
         }
         Ok(())
