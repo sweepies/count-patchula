@@ -1192,3 +1192,163 @@ fn forgejo_and_gitea_workflows_resolve_bare_refs_on_their_default_action_host() 
         format!("actions/checkout@{} # v6.1.0", "d".repeat(40))
     );
 }
+
+#[test]
+fn copier_answers_read_template_and_tag_and_skip_what_cannot_be_looked_up() {
+    let mut config = config();
+    config.managers = vec![Manager::Copier];
+    let scanner = Scanner::new(&config).unwrap();
+    for (path, needed) in [
+        (".copier-answers.yml", true),
+        (".copier-answers.yaml", true),
+        ("backend/.copier-answers.yml", true),
+        (".copier-answers.ci.yml", true),
+        (".copier-answers.docs.site.yaml", true),
+        (".copier-answers..yml", false),
+        ("copier-answers.yml", false),
+        (".copier-answers.json", false),
+        ("copier.yml", false),
+    ] {
+        assert_eq!(scanner.needs(path), needed, "{path}");
+    }
+    let answers = |src: &str, commit: &str| {
+        format!(
+            "# Changes here will be overwritten by Copier\n_commit: {commit}\n_src_path: {src}\nproject_name: demo\n"
+        )
+    };
+    let files = Files::from([
+        (
+            ".copier-answers.yml".into(),
+            answers("gh:acme/python-template", "v1.4.0"),
+        ),
+        (
+            "api/.copier-answers.yml".into(),
+            answers("git@gitlab.com:group/sub/template.git", "2.0.1"),
+        ),
+        (
+            "web/.copier-answers.web.yaml".into(),
+            answers("https://codeberg.org/acme/web-template", "v0.3.0"),
+        ),
+        (
+            "docs/.copier-answers.yml".into(),
+            answers("gl:acme/docs-template", "'1.2'"),
+        ),
+        (
+            "ssh/.copier-answers.yml".into(),
+            answers("git+ssh://git@github.com/acme/ssh-template.git", "v3.0.0"),
+        ),
+        (
+            "elsewhere/.copier-answers.yml".into(),
+            answers("https://git.example.com/acme/template.git", "v1.0.0"),
+        ),
+        (
+            "local/.copier-answers.yml".into(),
+            answers("../templates/local", "v1.0.0"),
+        ),
+        (
+            "untagged/.copier-answers.yml".into(),
+            answers("gh:acme/untagged", "v1.4.0-5-g1a2b3c4"),
+        ),
+        (
+            "nocommit/.copier-answers.yml".into(),
+            "_src_path: gh:acme/nocommit\n".into(),
+        ),
+    ]);
+    let extraction = scanner.extract(&files).unwrap();
+    assert!(extraction.warnings.is_empty(), "{:?}", extraction.warnings);
+    let got: Vec<_> = extraction
+        .dependencies
+        .iter()
+        .map(|d| {
+            assert_eq!(d.kind, DependencyKind::Template);
+            assert_eq!(d.scheme, patchula_config::Scheme::Pep440);
+            (
+                d.file.as_str(),
+                d.name.as_str(),
+                d.package.as_str(),
+                patchula_manager::word(&d.source),
+                d.current.as_str(),
+                &files[&d.file][d.location.start..d.location.end],
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (
+                ".copier-answers.yml",
+                "gh:acme/python-template",
+                "acme/python-template",
+                "github-tags".into(),
+                "v1.4.0",
+                "v1.4.0"
+            ),
+            (
+                "api/.copier-answers.yml",
+                "git@gitlab.com:group/sub/template.git",
+                "gitlab.com/group/sub/template",
+                "forge-tags".into(),
+                "2.0.1",
+                "2.0.1"
+            ),
+            (
+                "docs/.copier-answers.yml",
+                "gl:acme/docs-template",
+                "gitlab.com/acme/docs-template",
+                "forge-tags".into(),
+                "1.2",
+                "'1.2'"
+            ),
+            (
+                "ssh/.copier-answers.yml",
+                "git+ssh://git@github.com/acme/ssh-template.git",
+                "acme/ssh-template",
+                "github-tags".into(),
+                "v3.0.0",
+                "v3.0.0"
+            ),
+            (
+                "web/.copier-answers.web.yaml",
+                "https://codeberg.org/acme/web-template",
+                "codeberg.org/acme/web-template",
+                "forge-tags".into(),
+                "v0.3.0",
+                "v0.3.0"
+            ),
+        ]
+    );
+    let skipped: Vec<_> = extraction
+        .skipped
+        .iter()
+        .map(|s| (s.file.as_str(), s.line, s.value.as_str(), s.reason.as_str()))
+        .collect();
+    assert_eq!(
+        skipped,
+        [
+            (
+                "elsewhere/.copier-answers.yml",
+                Some(3),
+                "https://git.example.com/acme/template.git",
+                "no tag source for git.example.com/acme/template: the Count looks up templates in GitHub, GitLab, Gitea and Forgejo repositories"
+            ),
+            (
+                "local/.copier-answers.yml",
+                Some(3),
+                "../templates/local",
+                "a local template has no tags the Count can look up"
+            ),
+            (
+                "nocommit/.copier-answers.yml",
+                Some(1),
+                "gh:acme/nocommit",
+                "the answers file records no `_commit`"
+            ),
+            (
+                "untagged/.copier-answers.yml",
+                Some(3),
+                "gh:acme/untagged",
+                "`_commit` v1.4.0-5-g1a2b3c4 is not a release tag, so there is nothing to compare newer tags with"
+            ),
+        ]
+    );
+}

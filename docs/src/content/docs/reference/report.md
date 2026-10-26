@@ -42,6 +42,7 @@ too, so a new field means a new version.
 | `packageFiles` | Files with dependencies, each with a `path` and `dependencies` |
 | `warnings` | Optional. Files skipped, stale registry data and similar |
 | `skipped` | Optional. Declarations that are not read as versions, such as images built from variables: `manager`, `path`, `line`, `value` and `reason` |
+| `notices` | Optional. Newer versions that are reported and never proposed, such as a [Copier template](/guide/managers/#copier)'s tags: `manager`, `path`, `line`, `name`, `package`, `current`, `available`, and `compareUrl` when the host has a compare page |
 | `defaultBranch`, `commit` | Optional. The branch and commit that were read |
 
 A `complete` repository with no package files had nothing the Count supports.

@@ -456,6 +456,7 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
                             | "helm"
                             | "devcontainer"
                             | "woodpecker"
+                            | "copier"
                             | "maven"
                             | "gradle"
                             | "nuget"
@@ -636,6 +637,7 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
             package_files,
             warnings: Vec::new(),
             skipped: Vec::new(),
+            notices: Vec::new(),
             default_branch: None,
             commit: None,
         });
@@ -648,6 +650,7 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
             package_files: Vec::new(),
             warnings: Vec::new(),
             skipped: Vec::new(),
+            notices: Vec::new(),
             default_branch: None,
             commit: None,
         });

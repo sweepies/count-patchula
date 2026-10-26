@@ -15,6 +15,9 @@ pub fn edits(
     value: &str,
     digest: Option<&str>,
 ) -> Result<Vec<Edit>, String> {
+    if dep.manager == Manager::Copier {
+        return Err("a copier template moves only with copier update; a bare _commit bump would drop the template's changes".into());
+    }
     let raw = text
         .get(dep.location.start..dep.location.end)
         .ok_or("invalid UTF-8 edit range")?;

@@ -2,8 +2,8 @@
 title: "Terminal UI"
 ---
 `patchula tui` runs a lookup and lets you browse the result: every update, the
-releases held back by the release-age wait, every dependency found, warnings
-and the run's stats. Run it in a checkout with no repository named and you
+releases held back by the release-age wait, every dependency found, template
+updates, warnings and the run's stats. Run it in a checkout with no repository named and you
 can pick updates and have the Count write them into its files.
 
 ```sh
@@ -24,7 +24,7 @@ up front, and is required when there is no terminal to ask on.
 
 ```text
  Count Patchula   1 repository · 2576 dependencies · 131 updates · 2 selected
- 1 Updates │ 2 Held back │ 3 Dependencies │ 4 Warnings │ 5 Stats
+ 1 Updates │ 2 Held back │ 3 Dependencies │ 4 Templates │ 5 Warnings │ 6 Stats
  Updates (131 of 131, type: all) ───────────────────────────────────────────────────────────────────
      Dependency                  Current        Target               Type   Age   File
 [x]  cloud.google.com/go/auth    v0.23.3        v0.24.1              minor  12d   go/prometheus/go.m
@@ -52,8 +52,9 @@ published 2026-09-24T19:36:54Z
 | 1 Updates | every proposed update, with the selected one's package, versions, digest and publication date below |
 | 2 Held back | releases still inside the release-age wait, with when each becomes eligible |
 | 3 Dependencies | everything the Count found, with current and resolved versions and how many updates each has |
-| 4 Warnings | lookup and extraction warnings |
-| 5 Stats | counts per manager, requests, cache hits and the time each phase took |
+| 4 Templates | template updates the Count reports but never edits, such as a [Copier](/guide/managers/#copier) template's new tag |
+| 5 Warnings | lookup and extraction warnings |
+| 6 Stats | counts per manager, requests, cache hits and the time each phase took |
 
 ## Keys
 
@@ -61,7 +62,7 @@ published 2026-09-24T19:36:54Z
 |---|---|
 | `q`, `Esc`, `Ctrl-C` | quit |
 | `Tab`, `→`, `Shift-Tab`, `←` | next and previous tab |
-| `1` to `5` | jump to a tab |
+| `1` to `6` | jump to a tab |
 | `j`, `k`, `↓`, `↑` | move |
 | `PgDn`, `PgUp`, `g`, `G` | page down, page up, top, bottom |
 | `/` | search names, packages and files; `Enter` or `Esc` to finish |
@@ -69,6 +70,7 @@ published 2026-09-24T19:36:54Z
 | `space` | select the update under the cursor |
 | `a` | select every visible update, or clear them if all are selected |
 | `A` | apply the selection (local directories only), after a `y` to confirm |
+| `u` | on the Templates tab, run `copier update` for the template under the cursor (local directories only), after a `y` to confirm |
 | `?` | help |
 
 ## Applying updates
@@ -80,6 +82,37 @@ the way he edits a branch. If a file changed since the lookup he refuses
 rather than guess, and nothing is written. Lockfiles are not regenerated, so
 run your package manager afterwards (`aube install`, `cargo update -w`,
 `uv lock` and so on).
+
+## Templates
+
+Template updates are never selected with the other updates, and `A` never
+touches them. In the working tree, `u` on the Templates tab offers to run
+`copier update` for that one template, and `y` runs it; any other key cancels.
+Copier runs from your `PATH`, as you, from the root of the checkout:
+
+```sh
+copier update --vcs-ref <new tag> --skip-answered --answers-file <answers file name> <its directory>
+```
+
+It is your own copier, with your environment and copier settings (its
+`trust` list included), not a tool from the Count's store: the template's code
+runs with your permissions either way. That code is the new, unreviewed
+version of the template, so read the compare link first.
+
+- The checkout must be clean, untracked files included, as copier requires.
+  The Count refuses before running copier otherwise, so update a template
+  before applying other updates, or commit them first.
+- Copier gets the terminal, so it can ask the template's new questions.
+  Questions you already answered are not asked again.
+- The Count never passes `--trust`. If the template uses tasks, migrations or
+  extensions, copier stops, and you can review the template and run
+  `copier update --trust` yourself.
+- Conflicts stay as copier leaves them: inline markers, or `.rej` files. The
+  Count lists the files copier changed and the ones with conflicts, and
+  commits nothing.
+
+Copier only runs here. `lookup`, `run`, `--remote` and the server
+[never run it](/renovate/departures/#copier-templates).
 
 For GitHub repositories the TUI is for looking. Let [`patchula run`](/guide/pull-requests/)
 open the pull requests.

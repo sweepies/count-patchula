@@ -1609,3 +1609,28 @@ async fn forge_tags_page_newest_first_until_a_short_page() {
             .is_err()
     );
 }
+
+#[test]
+fn compare_urls_follow_the_tag_source() {
+    use patchula_config::Source;
+    use patchula_datasource::notes::compare_url;
+    assert_eq!(
+        compare_url(Source::GithubTags, "acme/template", "v1.4.0", "v1.6.0").as_deref(),
+        Some("https://github.com/acme/template/compare/v1.4.0...v1.6.0")
+    );
+    assert_eq!(
+        compare_url(
+            Source::ForgeTags,
+            "gitlab.com/group/sub/template",
+            "1.0",
+            "1.1"
+        )
+        .as_deref(),
+        Some("https://gitlab.com/group/sub/template/-/compare/1.0...1.1")
+    );
+    assert_eq!(
+        compare_url(Source::ForgeTags, "codeberg.org/acme/web", "0.3.0", "0.3.1").as_deref(),
+        Some("https://codeberg.org/acme/web/compare/0.3.0...0.3.1")
+    );
+    assert_eq!(compare_url(Source::Pypi, "copier", "9.0.0", "9.1.0"), None);
+}

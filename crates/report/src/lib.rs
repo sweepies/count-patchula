@@ -109,6 +109,10 @@ pub struct Repository {
     /// Declarations found but not read as versions, each with its reason.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skipped: Vec<Skipped>,
+    /// Newer versions the Count reports but never proposes, such as a Copier
+    /// template's tags: only regenerating the project applies them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notices: Vec<Notice>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_branch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -124,6 +128,31 @@ pub struct Skipped {
     pub line: Option<usize>,
     pub value: String,
     pub reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Notice {
+    pub manager: String,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
+    pub name: String,
+    pub package: String,
+    pub current: String,
+    pub available: String,
+    /// The changes between the two versions, where the host has a compare page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compare_url: Option<String>,
+}
+impl Notice {
+    /// One line in the Count's words, for summaries and the dashboard.
+    pub fn text(&self) -> String {
+        format!(
+            "template {}: {} → {} available",
+            self.name, self.current, self.available
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

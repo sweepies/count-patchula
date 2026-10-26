@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 mod actions;
 mod bundler;
+mod copier;
 mod edit;
 pub use actions::replacement as action_replacement;
 pub use actions::runner_replacement;
@@ -130,6 +131,28 @@ impl Dependency {
             && matches!(self.source, Source::GithubTags | Source::ForgeTags)
     }
 }
+/// The tag source of the Git repository `path` on `host`: GitHub tags, or
+/// forge tags on GitLab and Gitea/Forgejo hosts. `None` for other hosts and
+/// for paths that are not a repository.
+pub(crate) fn tag_source(host: &str, path: &str) -> Option<(Source, String)> {
+    let valid = path.split('/').count() >= 2
+        && path.split('/').all(|p| {
+            !p.is_empty()
+                && !matches!(p, "." | "..")
+                && p.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+        });
+    if !valid {
+        return None;
+    }
+    if host == "github.com" {
+        let mut parts = path.split('/');
+        let repo = format!("{}/{}", parts.next()?, parts.next()?);
+        return Some((Source::GithubTags, repo));
+    }
+    let forge = host == "gitlab.com" || host.split('.').any(|l| l == "gitlab") || gitea_host(host);
+    forge.then(|| (Source::ForgeTags, format!("{host}/{path}")))
+}
 /// Gitea and Forgejo hosts the `forge-tags` source recognises by name.
 pub(crate) fn gitea_host(host: &str) -> bool {
     let labels = || host.split('.');
@@ -159,6 +182,7 @@ pub fn supported(manager: Manager) -> bool {
         | Manager::Helm
         | Manager::Devcontainer
         | Manager::Woodpecker
+        | Manager::Copier
         | Manager::Maven
         | Manager::Gradle
         | Manager::Nuget
@@ -283,6 +307,7 @@ impl Scanner {
                         .strip_prefix(".woodpecker/")
                         .is_some_and(|name| !name.is_empty() && !name.contains('/'))
             }
+            Manager::Copier => copier::selected(leaf),
             Manager::Pyproject => matches!(
                 leaf,
                 "pyproject.toml" | "uv.lock" | "poetry.lock" | ".python-version"
@@ -385,6 +410,8 @@ impl Scanner {
                 devcontainer::extract(path, text)
             } else if self.selected(Manager::Woodpecker, path) {
                 woodpecker::extract(path, text, &mut result.skipped)
+            } else if self.selected(Manager::Copier, path) {
+                copier::extract(path, text, &mut result.skipped)
             } else if self.selected(Manager::Helm, path) {
                 helm::extract(path, text)
             } else if self.selected(Manager::PreCommit, path) {

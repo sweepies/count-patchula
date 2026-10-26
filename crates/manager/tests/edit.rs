@@ -416,3 +416,16 @@ fn woodpecker_pins_anchored_images_once_at_the_anchor() {
     assert!(new.contains("woodpeckerci/plugin-git:1.22@"), "{new}");
     assert!(new.ends_with("# plugin\n"), "{new}");
 }
+
+#[test]
+fn copier_commit_is_never_edited() {
+    let text = "_commit: v1.4.0\n_src_path: gh:acme/template\n";
+    let dependencies = Scanner::new(&config(Manager::Copier))
+        .unwrap()
+        .extract(&Files::from([(".copier-answers.yml".into(), text.into())]))
+        .unwrap()
+        .dependencies;
+    assert_eq!(dependencies.len(), 1);
+    let error = edits(&dependencies[0], text, "v1.6.0", None).unwrap_err();
+    assert!(error.contains("copier update"), "{error}");
+}

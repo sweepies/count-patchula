@@ -17,10 +17,12 @@ In order:
 1. open update PRs, grouped by update type, then the ones he merged;
 2. pending updates, each with the reason it is held (release age with the time
    it becomes eligible, PR limits, schedule windows);
-3. updates you closed ("Updates you closed"), with the target that was
+3. template updates, such as a Copier template's new tag, which only
+   `copier update` applies, so they have no PR and no checkbox;
+4. updates you closed ("Updates you closed"), with the target that was
    suppressed, and updates "Batched by the Count";
-4. lookup warnings and sources served from stale cache;
-5. every detected dependency, collapsed by manager and file.
+5. lookup warnings and sources served from stale cache;
+6. every detected dependency, collapsed by manager and file.
 
 The issue body is bounded to GitHub's size limit. An unchanged dashboard is not
 rewritten: the Count compares the rendered content with the issue's actual

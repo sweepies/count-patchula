@@ -74,6 +74,15 @@ pub struct Held {
     pub eligible_at: String,
 }
 
+/// A template update the Count reports but never edits; in a working tree,
+/// copier can apply it on request.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Template {
+    pub repository: String,
+    pub notice: patchula_report::Notice,
+    pub applied: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Found {
     pub repository: String,
@@ -90,13 +99,15 @@ pub enum Tab {
     Updates,
     Held,
     Dependencies,
+    Templates,
     Warnings,
     Stats,
 }
-const TABS: [(Tab, &str); 5] = [
+const TABS: [(Tab, &str); 6] = [
     (Tab::Updates, "Updates"),
     (Tab::Held, "Held back"),
     (Tab::Dependencies, "Dependencies"),
+    (Tab::Templates, "Templates"),
     (Tab::Warnings, "Warnings"),
     (Tab::Stats, "Stats"),
 ];
@@ -147,6 +158,7 @@ pub struct Model {
     pub tab: Tab,
     pub updates: Vec<Update>,
     pub held: Vec<Held>,
+    pub templates: Vec<Template>,
     pub found: Vec<Found>,
     pub warnings: Vec<(String, String)>,
     pub stats: Vec<(String, String)>,
@@ -157,6 +169,10 @@ pub struct Model {
     pub cursor: usize,
     pub scroll: usize,
     pub confirming: bool,
+    /// The template awaiting a y/n before copier runs.
+    pub confirming_template: Option<usize>,
+    /// The confirmed template; the terminal loop hands it to copier.
+    pub copier: Option<usize>,
     pub help: bool,
     pub message: Option<String>,
     pub local: Option<Local>,
@@ -167,12 +183,20 @@ impl Model {
     pub fn new(report: &Report, local: Option<Local>) -> Self {
         let mut updates = Vec::new();
         let mut held = Vec::new();
+        let mut templates = Vec::new();
         let mut found = Vec::new();
         let mut warnings = Vec::new();
         let mut managers = BTreeMap::<String, usize>::new();
         for repo in &report.repositories {
             for warning in &repo.warnings {
                 warnings.push((repo.repository.clone(), warning.clone()));
+            }
+            for notice in &repo.notices {
+                templates.push(Template {
+                    repository: repo.repository.clone(),
+                    notice: notice.clone(),
+                    applied: false,
+                });
             }
             if let Some(reason) = &repo.reason {
                 warnings.push((
@@ -260,6 +284,7 @@ impl Model {
             ("Dependencies".into(), found.len().to_string()),
             ("Updates".into(), updates.len().to_string()),
             ("Held back".into(), held.len().to_string()),
+            ("Template updates".into(), templates.len().to_string()),
         ];
         if let Some(s) = &report.stats {
             stats.push(("Requests".into(), s.requests.to_string()));
@@ -280,6 +305,7 @@ impl Model {
             tab: Tab::Updates,
             updates,
             held,
+            templates,
             found,
             warnings,
             stats,
@@ -290,6 +316,8 @@ impl Model {
             cursor: 0,
             scroll: 0,
             confirming: false,
+            confirming_template: None,
+            copier: None,
             help: false,
             message: None,
             local,
@@ -317,6 +345,7 @@ impl Model {
         match self.tab {
             Tab::Updates => self.visible().len(),
             Tab::Held => self.held.len(),
+            Tab::Templates => self.templates.len(),
             Tab::Dependencies => self
                 .found
                 .iter()
@@ -350,6 +379,15 @@ impl Model {
             self.cursor = 0;
             return;
         }
+        if let Some(index) = self.confirming_template.take() {
+            if matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
+                self.copier = Some(index);
+                self.message = Some("Copier is running in your terminal.".into());
+            } else {
+                self.message = Some("Copier was not run.".into());
+            }
+            return;
+        }
         if self.confirming {
             self.confirming = false;
             if matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
@@ -376,7 +414,7 @@ impl Model {
             KeyCode::Char('?') => self.help = true,
             KeyCode::Tab | KeyCode::Right => self.switch(1),
             KeyCode::BackTab | KeyCode::Left => self.switch(TABS.len() - 1),
-            KeyCode::Char(c @ '1'..='5') => {
+            KeyCode::Char(c @ '1'..='6') => {
                 self.tab = TABS[(c as usize) - ('1' as usize)].0;
                 self.cursor = 0;
             }
@@ -414,6 +452,22 @@ impl Model {
                         self.updates[i].selected = select;
                     }
                 }
+            }
+            KeyCode::Char('u') if self.tab == Tab::Templates => {
+                let Some(template) = self.templates.get(self.cursor) else {
+                    return;
+                };
+                self.message = Some(if self.local.is_none() {
+                    "Copier only runs on a working tree: run patchula tui in a checkout with no repository named.".into()
+                } else if template.applied {
+                    "Copier already updated this template. Review and commit its changes.".into()
+                } else {
+                    self.confirming_template = Some(self.cursor);
+                    format!(
+                        "Run copier update --vcs-ref {} for {}? The template's code runs on this machine as you. y/n",
+                        template.notice.available, template.notice.name
+                    )
+                });
             }
             KeyCode::Char('A') if self.tab == Tab::Updates => {
                 self.message = Some(if self.local.is_none() {
@@ -498,6 +552,34 @@ impl Model {
         }
         Ok((applied.len(), written.len()))
     }
+    /// Run copier for the confirmed template, with the terminal handed over
+    /// to it, and say what it changed.
+    pub fn run_copier(&mut self, program: &str) {
+        let (Some(index), Some(local)) = (self.copier.take(), self.local.as_ref()) else {
+            return;
+        };
+        let notice = self.templates[index].notice.clone();
+        self.message = Some(
+            match crate::copier::update(program, &local.dir, &notice.path, &notice.available) {
+                Ok(outcome) => {
+                    self.templates[index].applied = true;
+                    format!(
+                        "Copier moved {} to {}: {} file{} changed{}. Review and commit them yourself.",
+                        notice.name,
+                        notice.available,
+                        outcome.touched.len(),
+                        plural(outcome.touched.len()),
+                        if outcome.conflicts.is_empty() {
+                            String::new()
+                        } else {
+                            format!(", conflicts in {}", outcome.conflicts.join(", "))
+                        }
+                    )
+                }
+                Err(error) => format!("Copier did not finish: {error}"),
+            },
+        );
+    }
 }
 fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
@@ -579,6 +661,7 @@ pub fn draw(frame: &mut Frame, model: &mut Model) {
     match model.tab {
         Tab::Updates => draw_updates(frame, model, body),
         Tab::Held => draw_held(frame, model, body),
+        Tab::Templates => draw_templates(frame, model, body),
         Tab::Dependencies => draw_found(frame, model, body),
         Tab::Warnings => draw_list(
             frame,
@@ -616,10 +699,10 @@ pub fn draw(frame: &mut Frame, model: &mut Model) {
                 format!(" \"{}\"", model.search)
             },
             model.filter.label(),
-            if model.local.is_some() {
-                " · space select · A apply"
-            } else {
-                ""
+            match (model.local.is_some(), model.tab) {
+                (true, Tab::Templates) => " · u copier update",
+                (true, _) => " · space select · A apply",
+                (false, _) => "",
             }
         )
     };
@@ -805,6 +888,56 @@ fn draw_held(frame: &mut Frame, model: &mut Model, area: Rect) {
     );
 }
 
+fn draw_templates(frame: &mut Frame, model: &mut Model, area: Rect) {
+    let rows: Vec<TableRow> = if model.templates.is_empty() {
+        vec![TableRow::new(["No template updates. The night is quiet."])]
+    } else {
+        model
+            .templates
+            .iter()
+            .map(|t| {
+                TableRow::new(vec![
+                    Cell::from(if t.applied { "done" } else { "" })
+                        .style(Style::new().fg(Color::Green)),
+                    Cell::from(t.notice.name.clone()),
+                    Cell::from(t.notice.current.clone()).style(Style::new().fg(DIM)),
+                    Cell::from(t.notice.available.clone()).style(Style::new().fg(GOLD)),
+                    Cell::from(t.notice.path.clone()).style(Style::new().fg(DIM)),
+                ])
+            })
+            .collect()
+    };
+    let mut state = table_state(model, model.templates.len(), area.height);
+    frame.render_stateful_widget(
+        Table::new(
+            rows,
+            [
+                Constraint::Length(4),
+                Constraint::Percentage(36),
+                Constraint::Length(14),
+                Constraint::Length(14),
+                Constraint::Fill(1),
+            ],
+        )
+        .header(
+            TableRow::new(["", "Template", "Current", "Available", "Answers file"])
+                .style(Style::new().fg(PURPLE).bold()),
+        )
+        .row_highlight_style(Style::new().bg(Color::Rgb(50, 36, 60)))
+        .block(
+            Block::new()
+                .borders(Borders::TOP)
+                .title(format!(
+                    " Template updates: reported, never edited ({}) ",
+                    model.templates.len()
+                ))
+                .title_style(Style::new().fg(CORAL)),
+        ),
+        area,
+        &mut state,
+    );
+}
+
 fn draw_found(frame: &mut Frame, model: &mut Model, area: Rect) {
     let found: Vec<&Found> = model
         .found
@@ -891,7 +1024,7 @@ fn draw_list(frame: &mut Frame, model: &mut Model, area: Rect, title: &str, line
 fn draw_help(frame: &mut Frame) {
     let area = frame.area();
     let width = area.width.min(64);
-    let height = area.height.min(17);
+    let height = area.height.min(18);
     let popup = Rect::new(
         area.x + (area.width - width) / 2,
         area.y + (area.height - height) / 2,
@@ -901,7 +1034,7 @@ fn draw_help(frame: &mut Frame) {
     let lines = [
         ("q, Esc, Ctrl-C", "quit"),
         ("Tab, Shift-Tab, ←, →", "switch tabs"),
-        ("1 to 5", "jump to a tab"),
+        ("1 to 6", "jump to a tab"),
         ("j, k, ↑, ↓", "move"),
         ("PgUp, PgDn, g, G", "page, top, bottom"),
         ("/", "search names, packages and files"),
@@ -909,6 +1042,7 @@ fn draw_help(frame: &mut Frame) {
         ("space", "select an update"),
         ("a", "select every visible update"),
         ("A", "apply the selection to the working tree"),
+        ("u", "run copier update for a template, after y"),
     ];
     let text: Vec<Line> = lines
         .iter()
@@ -960,6 +1094,18 @@ pub fn snapshot(model: &Model) -> String {
             u.file
         ));
     }
+    for t in &model.templates {
+        out.push_str(&format!(
+            "notice  {} ({}{})\n",
+            t.notice.text(),
+            if model.repositories > 1 {
+                format!("{}:", t.repository)
+            } else {
+                String::new()
+            },
+            t.notice.path
+        ));
+    }
     for (repo, warning) in &model.warnings {
         out.push_str(&format!("warning {repo}: {warning}\n"));
     }
@@ -974,6 +1120,17 @@ pub fn interact(mut model: Model) -> std::io::Result<()> {
             terminal.draw(|frame| draw(frame, &mut model))?;
             if let Event::Key(key) = event::read()? {
                 model.key(key);
+            }
+            if model.copier.is_some() {
+                // Copier asks its own questions, so it gets the plain terminal.
+                ratatui::restore();
+                model.run_copier("copier");
+                println!(
+                    "\n{}\nPress Enter to return to the Count.",
+                    model.message.as_deref().unwrap_or("")
+                );
+                std::io::stdin().read_line(&mut String::new())?;
+                terminal = ratatui::init();
             }
         }
         Ok(())
@@ -1114,5 +1271,95 @@ mod tests {
         let written = std::fs::read_to_string(dir.path().join("package.json")).unwrap();
         assert_eq!(written, manifest.replace("3.22.0", "4.1.0"));
         assert!(model.updates[0].applied && !model.updates[0].selected);
+    }
+
+    #[test]
+    fn template_notices_are_listed_and_copier_runs_only_after_a_confirmed_u() {
+        let mut report = report(&[("zod", "3.22.0", "4.1.0", "major")]);
+        report.repositories[0].notices = serde_json::from_value(serde_json::json!([{
+            "manager":"copier","path":".copier-answers.yml","line":1,"name":"gh:acme/template",
+            "package":"acme/template","current":"v1.4.0","available":"v1.6.0"
+        }]))
+        .unwrap();
+        let mut remote = Model::new(&report, None);
+        assert!(snapshot(&remote).contains(
+            "notice  template gh:acme/template: v1.4.0 → v1.6.0 available (.copier-answers.yml)"
+        ));
+        press(&mut remote, KeyCode::Char('4'));
+        assert_eq!(remote.tab, Tab::Templates);
+        let text = screen(&mut remote);
+        assert!(
+            text.contains("gh:acme/template") && text.contains("v1.6.0"),
+            "{text}"
+        );
+        press(&mut remote, KeyCode::Char(' '));
+        press(&mut remote, KeyCode::Char('a'));
+        assert!(remote.updates.iter().all(|u| !u.selected));
+        press(&mut remote, KeyCode::Char('u'));
+        assert!(remote.message.as_deref().unwrap().contains("working tree"));
+        assert_eq!((remote.confirming_template, remote.copier), (None, None));
+
+        let dir = tempfile::tempdir().unwrap();
+        let tree = dir.path().join("tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(tree.join(".copier-answers.yml"), "_commit: v1.4.0\n").unwrap();
+        std::fs::write(tree.join("patchula.pkl"), "amends \"PatchulaConfig.pkl\"\n").unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &["add", "."],
+            &["commit", "-qm", "init"],
+        ] {
+            let status = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args(args)
+                .current_dir(&tree)
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
+        let fake = dir.path().join("copier");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\nprintf '_commit: v1.6.0\\n' > .copier-answers.yml\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let config = patchula_config::load(&tree).unwrap();
+        let mut model = Model::new(&report, Some(local(&tree, Some(config)).unwrap()));
+        press(&mut model, KeyCode::Char('4'));
+        press(&mut model, KeyCode::Char('u'));
+        assert!(
+            model
+                .message
+                .as_deref()
+                .unwrap()
+                .contains("--vcs-ref v1.6.0")
+        );
+        press(&mut model, KeyCode::Char('n'));
+        assert_eq!(model.copier, None);
+        press(&mut model, KeyCode::Char('u'));
+        press(&mut model, KeyCode::Char('y'));
+        assert_eq!(model.copier, Some(0));
+        model.run_copier(&fake.to_string_lossy());
+        assert_eq!(model.copier, None);
+        assert!(model.templates[0].applied);
+        assert!(
+            model
+                .message
+                .as_deref()
+                .unwrap()
+                .contains("Copier moved gh:acme/template to v1.6.0: 1 file changed"),
+            "{:?}",
+            model.message
+        );
+        press(&mut model, KeyCode::Char('u'));
+        assert!(
+            model
+                .message
+                .as_deref()
+                .unwrap()
+                .contains("already updated")
+        );
     }
 }
