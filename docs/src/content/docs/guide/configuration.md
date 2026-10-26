@@ -159,11 +159,13 @@ lockfile is not an update type; it is configured under
 
 Windows are five-field cron expressions in an IANA timezone; weekdays count
 0 or 7 for Sunday and 1 for Monday. Each time an expression names opens a turn:
-the first run after it proposes and updates PRs, and later runs hold them until
-the next time comes round. A window of `"0 3 * * *"` therefore means once a day,
-after 03:00, however often the Count runs, whether from a server's sweeps, a
-webhook or a CI schedule. An expression that covers a range, such as every
-minute of a morning, lets every run in that range propose.
+
+- The first run after that time proposes and updates PRs.
+- Later runs hold them until the next time comes round, so `"0 3 * * *"` means
+  once a day, after 03:00, however often the Count runs (server sweeps,
+  webhooks or a CI schedule).
+- An expression that covers a range, such as every minute of a morning, lets
+  every run in that range propose.
 
 Windows decide when updates are proposed, not when they merge: a PR whose
 checks pass later still merges. A repository's first run, before the Count has

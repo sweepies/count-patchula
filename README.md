@@ -19,7 +19,7 @@ however many repositories use it.
 ## Get started
 
 ```sh
-mise use -g packslip:sweepies/count-patchula
+mise use -g --minimum-release-age 0 packslip:sweepies/count-patchula
 ```
 
 Other ways to install him are on the [installation page](https://count-patchula.sweepy.dev/installation/).
