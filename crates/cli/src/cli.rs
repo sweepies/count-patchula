@@ -2,6 +2,15 @@ use std::path::PathBuf;
 use usage_rs::help::Palette;
 use usage_rs::{Args, Cli, Subcommands, ValueEnum};
 
+/// The bat beside the root help page.
+const LOGO: &str = "
+⠂⣤⣄⣀     ⡄⢠     ⣀⣠⣤⠐
+ ⢹⣿⣿⣿⣷⣶⣤⣀⣿⣿⣀⣤⣶⣾⣿⣿⣿⡏
+  ⠋⠙⢿⠿⣿⣿⣿⣿⣿⣿⣿⣿⠿⡿⠋⠙
+      ⠘⠋⠹⢿⡿⠏⠙⠃
+         ⠈⠁
+";
+
 /// Help colours: teal headings, bold names, dim placeholders.
 pub const PALETTE: Palette = Palette::DEFAULT
     .heading("cyan+bold")
@@ -18,6 +27,8 @@ pub const PALETTE: Palette = Palette::DEFAULT
     bin = "patchula",
     version,
     unknown_flags = "error",
+    logo = LOGO,
+    logo_style = "cyan",
     help_template = "{$dim}{{about}}{/$}
 
 {{usage}}
