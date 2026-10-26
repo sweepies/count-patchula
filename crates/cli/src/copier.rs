@@ -1,8 +1,8 @@
 //! `copier update` for one template, in the user's own working tree, with
 //! the user's own `copier`, environment and permissions. Only the working-tree
-//! TUI calls this, after its own confirmation; lookups, runs, the server and
-//! `--remote` never reach it. Copier inherits the terminal so it can ask its own
-//! questions. The Count never passes `--trust` and never commits.
+//! TUI (after its own confirmation) and `patchula apply --copier` call this;
+//! lookups, runs, the server and `--remote` never reach it. Copier inherits
+//! the terminal so it can ask its own questions. The Count never passes `--trust` and never commits.
 use std::{path::Path, process::Command};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -45,8 +45,15 @@ fn changed(dir: &Path) -> Result<Vec<String>, String> {
 }
 
 /// Run `program update` for the answers file `answers` (relative to `dir`),
-/// moving its template to `tag`. The caller must hold a terminal.
-pub fn update(program: &str, dir: &Path, answers: &str, tag: &str) -> Result<Outcome, String> {
+/// moving its template to `tag`. Copier asks its questions on the terminal,
+/// or takes their defaults with `defaults`.
+pub fn update(
+    program: &str,
+    dir: &Path,
+    answers: &str,
+    tag: &str,
+    defaults: bool,
+) -> Result<Outcome, String> {
     if !changed(dir)?.is_empty() {
         return Err(
             "the working tree has uncommitted changes, and copier needs a clean tree; commit or stash them first".into(),
@@ -58,8 +65,12 @@ pub fn update(program: &str, dir: &Path, answers: &str, tag: &str) -> Result<Out
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let file = answers.file_name().ok_or("invalid answers file path")?;
-    let status = Command::new(program)
-        .arg("update")
+    let mut command = Command::new(program);
+    command.arg("update");
+    if defaults {
+        command.arg("--defaults");
+    }
+    let status = command
         .arg("--vcs-ref")
         .arg(tag)
         .arg("--skip-answered")
@@ -130,7 +141,7 @@ mod tests {
             "printf '_commit: v1.6.0\\n' > api/.copier-answers.yml\nprintf '<<<<<<< before updating\\nold\\n=======\\nnew\\n>>>>>>> after updating\\n' > README.md\necho rejected > api/ci.yml.rej\nexit 0",
         );
         let tree = dir.path().join("tree");
-        let outcome = update(&fake, &tree, "api/.copier-answers.yml", "v1.6.0").unwrap();
+        let outcome = update(&fake, &tree, "api/.copier-answers.yml", "v1.6.0", false).unwrap();
         assert_eq!(
             std::fs::read_to_string(dir.path().join("args")).unwrap(),
             format!(
@@ -156,7 +167,7 @@ mod tests {
         let (dir, fake) = checkout("exit 0");
         let tree = dir.path().join("tree");
         std::fs::write(tree.join("notes.txt"), "draft\n").unwrap();
-        let error = update(&fake, &tree, "api/.copier-answers.yml", "v1.6.0").unwrap_err();
+        let error = update(&fake, &tree, "api/.copier-answers.yml", "v1.6.0", false).unwrap_err();
         assert!(error.contains("uncommitted changes"), "{error}");
         assert!(!dir.path().join("args").exists());
     }
@@ -166,7 +177,7 @@ mod tests {
         let (dir, fake) =
             checkout("echo 'Template uses potentially unsafe feature: tasks.' >&2\nexit 1");
         let tree = dir.path().join("tree");
-        let error = update(&fake, &tree, "api/.copier-answers.yml", "v1.6.0").unwrap_err();
+        let error = update(&fake, &tree, "api/.copier-answers.yml", "v1.6.0", false).unwrap_err();
         assert!(error.contains("0 files changed"), "{error}");
         assert!(error.contains("copier update --trust yourself"), "{error}");
     }

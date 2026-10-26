@@ -55,6 +55,32 @@ Lockfiles are not regenerated. When an update's current version came from a
 lockfile, the summary reminds you to refresh it with your package manager
 (`aube install`, `cargo update -w`, `uv lock` and so on).
 
+## Copier templates
+
+A [Copier](/guide/managers/#copier) template's new tag is not an edit, so it
+is never written like the other updates. The summary lists each one, and the
+JSON result carries them as `notices`. Without `--copier` they never change the
+exit code.
+
+`--copier` asks the Count to run your own `copier update` for each template the
+filters select (`--manager` and `--dependency` apply; any `--type` leaves templates
+out), before he writes the other updates. It is the same run as the
+[TUI's](/guide/tui/#templates): your `copier` from `PATH`, as you, with
+`--vcs-ref <new tag> --skip-answered`, never `--trust`, and nothing committed.
+The template's code runs on this machine, so read its compare link first.
+
+- The tree must be clean, untracked files included. Copier leaves its changes
+  behind, so with two templates the second is refused: commit, then run again.
+- Copier asks new questions on the terminal. Without one, the template is
+  refused unless you pass `--copier-defaults`, which runs `copier --defaults`.
+- A template that needs `--trust` stops copier; review it and run
+  `copier update --trust` yourself.
+- The other updates are planned against the tree copier left, so a declaration
+  copier changed is left alone with a reason.
+
+A template copier did not update makes the command exit 3. `--copier` does not
+combine with `--dry-run`, `--check` or `--json`.
+
 ## Choosing updates
 
 | Flag | Selects |

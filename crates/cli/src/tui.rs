@@ -552,7 +552,8 @@ impl Model {
         };
         let notice = self.templates[index].notice.clone();
         self.message = Some(
-            match crate::copier::update(program, &local.dir, &notice.path, &notice.available) {
+            match crate::copier::update(program, &local.dir, &notice.path, &notice.available, false)
+            {
                 Ok(outcome) => {
                     self.templates[index].applied = true;
                     format!(

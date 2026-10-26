@@ -388,7 +388,7 @@ plugin first and another backend later uses the other backend. See
 ### Copier templates are reported, not regenerated {#copier-templates}
 
 - **Renovate:** Runs `copier update` to move a template to its new tag, with `--trust` when the self-hosted configuration allows scripts
-- **Count Patchula:** Reports the new tag and opens no pull request. Copier runs only in the working-tree TUI, with your own `copier`, after you confirm that template; never in a run, never with `--remote` and never on the server
+- **Count Patchula:** Reports the new tag and opens no pull request. Copier runs only on your own working tree, with your own `copier`, when you ask: a confirmed template in the TUI, or `patchula apply --copier`. Never in a run, never with `--remote` and never on the server
 - **Why:** Applying a template runs the template author's code, at the new and unreviewed version. With `--trust` that is tasks, migrations and Jinja extensions; without it, copier's "safe" mode has repeatedly let templates read and write outside the destination directory. On the server that code would run next to the installation token, other repositories' trees, the shared cache and the tool store
 
 The advisories against copier's safe mode:
@@ -407,8 +407,9 @@ The advisories against copier's safe mode:
 The Count never bumps `_commit` on its own either. Copier treats `_commit` as
 the version the project was last generated from, so the next `copier update`
 would diff from the wrong base and silently drop the template changes in
-between. When the TUI runs copier, the Count never passes `--trust`. See
-[Copier](/guide/managers/#copier) and the [TUI](/guide/tui/#templates).
+between. When he runs copier for you, the Count never passes `--trust`. See
+[Copier](/guide/managers/#copier), the [TUI](/guide/tui/#templates) and
+[`patchula apply`](/guide/apply/#copier-templates).
 
 ### Pins and lockfile refreshes {#update-types}
 

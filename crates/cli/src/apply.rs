@@ -4,7 +4,8 @@ use crate::{Services, cli, tui};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
-    io::{self, Write},
+    io::{self, IsTerminal, Write},
+    path::Path,
 };
 
 /// When several updates propose a change to one declaration, the earliest
@@ -39,6 +40,15 @@ pub async fn command(
                 "repository"
             }
         )));
+    }
+    if options.copier && (options.check || app.json) {
+        return Err(usage(format!(
+            "--copier cannot run with {}: copier writes the tree and talks on the terminal",
+            if options.check { "--check" } else { "--json" }
+        )));
+    }
+    if options.copier_defaults && !options.copier {
+        return Err(usage("--copier-defaults only goes with --copier".into()));
     }
     if options.remote {
         return Err(usage(
@@ -109,6 +119,29 @@ pub async fn command(
         })
         .collect();
     let filtered = all.len() - chosen.len();
+    let notices: Vec<&patchula_report::Notice> = report
+        .repositories
+        .iter()
+        .flat_map(|r| &r.notices)
+        .filter(|n| {
+            (options.manager.is_empty() || options.manager.contains(&n.manager))
+                && names.matches_any(&n.name, &n.package)
+                && types.is_empty()
+        })
+        .collect();
+    // Copier needs a clean tree, so it runs first, and the other edits are
+    // planned against what it left.
+    let (templates, moved) = if options.copier {
+        templates(
+            &notices,
+            &dir,
+            "copier",
+            options.copier_defaults,
+            io::stdin().is_terminal(),
+        )
+    } else {
+        (String::new(), true)
+    };
     chosen.sort_by_key(|u| RANK.iter().position(|k| *k == u.kind).unwrap_or(RANK.len()));
     let mut declarations = BTreeSet::new();
     chosen.retain(|u| declarations.insert((u.file.clone(), u.name.clone(), u.starts.clone())));
@@ -123,7 +156,7 @@ pub async fn command(
     } else {
         !chosen.is_empty()
     };
-    let code = if waiting { WAITING } else { 0 };
+    let code = if waiting || !moved { WAITING } else { 0 };
     let applied: Vec<&tui::Update> = plan.applied.iter().map(|&i| chosen[i]).collect();
     let skipped: Vec<(&tui::Update, &str)> = plan
         .skipped
@@ -155,6 +188,7 @@ pub async fn command(
             }).collect::<Vec<_>>(),
             "files": diffs.iter().map(|(path, diff)| json!({"path": path, "diff": diff})).collect::<Vec<Value>>(),
             "filtered": filtered,
+            "notices": notices,
             "warnings": warnings,
             "exitCode": code,
         });
@@ -168,6 +202,18 @@ pub async fn command(
     }
     for warning in &warnings {
         writeln!(err, "warning: {warning}").map_err(fail)?;
+    }
+    if options.copier {
+        write!(err, "{templates}").map_err(fail)?;
+    } else if !notices.is_empty() {
+        writeln!(
+            err,
+            "Template updates only copier applies; `patchula apply --copier` runs it for them:"
+        )
+        .map_err(fail)?;
+        for notice in &notices {
+            writeln!(err, "  {}  ({})", notice.text(), notice.path).map_err(fail)?;
+        }
     }
     write!(
         err,
@@ -183,6 +229,48 @@ pub async fn command(
     )
     .map_err(fail)?;
     Ok(code)
+}
+
+/// Run `program update` for each template in turn, and say what each did.
+/// Returns the summary and whether every template moved.
+fn templates(
+    notices: &[&patchula_report::Notice],
+    dir: &Path,
+    program: &str,
+    defaults: bool,
+    terminal: bool,
+) -> (String, bool) {
+    let mut out = String::new();
+    let mut moved = true;
+    for notice in notices {
+        let result = if terminal || defaults {
+            crate::copier::update(program, dir, &notice.path, &notice.available, defaults)
+        } else {
+            Err("copier needs a terminal to ask the template's questions; run it in one, or pass --copier-defaults".into())
+        };
+        match result {
+            Ok(outcome) => out.push_str(&format!(
+                "Copier moved {} to {}: {} file{} changed{}. Review and commit them yourself.\n",
+                notice.name,
+                notice.available,
+                outcome.touched.len(),
+                if outcome.touched.len() == 1 { "" } else { "s" },
+                if outcome.conflicts.is_empty() {
+                    String::new()
+                } else {
+                    format!(", conflicts in {}", outcome.conflicts.join(", "))
+                }
+            )),
+            Err(error) => {
+                moved = false;
+                out.push_str(&format!(
+                    "Copier did not update {} ({}): {error}\n",
+                    notice.name, notice.path
+                ));
+            }
+        }
+    }
+    (out, moved)
 }
 
 /// What the Count did, or would do, in his own words.
@@ -248,4 +336,75 @@ fn summary(
         out.push_str("Lockfiles are not regenerated, so refresh them with your package manager.\n");
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn notice(path: &str, name: &str) -> patchula_report::Notice {
+        serde_json::from_value(json!({
+            "manager": "copier", "path": path, "name": name, "package": name,
+            "current": "v1.0.0", "available": "v2.0.0"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn templates_run_in_turn_and_need_a_terminal_or_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let tree = dir.path().join("tree");
+        std::fs::create_dir_all(tree.join("b")).unwrap();
+        std::fs::write(tree.join(".copier-answers.yml"), "_commit: v1.0.0\n").unwrap();
+        std::fs::write(tree.join("b/.copier-answers.yml"), "_commit: v1.0.0\n").unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &["add", "."],
+            &["commit", "-qm", "init"],
+        ] {
+            let status = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args(args)
+                .current_dir(&tree)
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
+        let fake = dir.path().join("copier");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\necho \"$*\" >> ../args\nprintf '_commit: v2.0.0\\n' > .copier-answers.yml\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let fake = fake.to_string_lossy().into_owned();
+        let notices = [
+            notice(".copier-answers.yml", "gh:a/one"),
+            notice("b/.copier-answers.yml", "gh:a/two"),
+        ];
+        let notices: Vec<_> = notices.iter().collect();
+
+        let (text, moved) = templates(&notices, &tree, &fake, false, false);
+        assert!(!moved);
+        assert!(
+            text.contains(
+                "Copier did not update gh:a/one (.copier-answers.yml): copier needs a terminal"
+            ),
+            "{text}"
+        );
+        assert!(!dir.path().join("args").exists());
+
+        let (text, moved) = templates(&notices, &tree, &fake, true, false);
+        assert!(!moved);
+        assert!(
+            text.contains("Copier moved gh:a/one to v2.0.0: 1 file changed."),
+            "{text}"
+        );
+        assert!(text.contains("Copier did not update gh:a/two (b/.copier-answers.yml): the working tree has uncommitted changes"), "{text}");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("args")).unwrap(),
+            "update --defaults --vcs-ref v2.0.0 --skip-answered --answers-file .copier-answers.yml .\n"
+        );
+    }
 }

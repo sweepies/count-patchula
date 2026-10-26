@@ -175,7 +175,8 @@ and rules apply as usual, and the kind is `template`. The Count never opens a
 pull request for it and never edits `_commit`: only `copier update` applies a
 template's changes, and a bare `_commit` bump would make the next update start
 from the wrong version and drop them. He runs copier only where you ask him
-to, on your own machine; see the
+to, on your own machine: from the [TUI](/guide/tui/#templates) or with
+[`patchula apply --copier`](/guide/apply/#copier-templates). See the
 [departure](/renovate/departures/#copier-templates).
 
 ## Containers and Kubernetes

@@ -49,7 +49,7 @@ Managers the Count supports, under Renovate's names:
 | `pre-commit` | `pre-commit` | GitHub, GitLab, Codeberg, Gitea and Forgejo hooks |
 | `devcontainer` | `devcontainer` | |
 | `woodpecker` | `woodpecker` | anchored images are edited at the anchor |
-| `copier` | `copier` | partial: newer template tags are reported, never applied by a run or on the server, because applying one runs the template's code; the working-tree TUI can run your own copier on request ([departure](/renovate/departures/#copier-templates)). GitHub, GitLab, Gitea and Forgejo templates only |
+| `copier` | `copier` | partial: newer template tags are reported, never applied by a run or on the server, because applying one runs the template's code; the working-tree TUI and `patchula apply --copier` can run your own copier on request ([departure](/renovate/departures/#copier-templates)). GitHub, GitLab, Gitea and Forgejo templates only |
 | `maven` | `maven` | |
 | `gradle` | `gradle` | catalogs, scripts, variables, `gradle.properties`; `gradle.lockfile` not regenerated |
 | `gradle-wrapper` | `gradle` | the wrapper checksum is refreshed |

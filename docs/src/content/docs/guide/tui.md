@@ -113,8 +113,9 @@ version of the template, so read the compare link first.
   Count lists the files copier changed and the ones with conflicts, and
   commits nothing.
 
-Copier only runs here. `lookup`, `run`, `--remote` and the server
-[never run it](/renovate/departures/#copier-templates).
+Outside the TUI, [`patchula apply --copier`](/guide/apply/#copier-templates)
+does the same for every selected template. `lookup`, `run`, `--remote` and the
+server [never run copier](/renovate/departures/#copier-templates).
 
 To write updates without picking them, in a script or a pre-commit hook, use
 [`patchula apply`](/guide/apply/). It writes through the same edits, and

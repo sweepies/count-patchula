@@ -53,6 +53,8 @@ Exit codes: 0 = nothing selected is left to apply; 1 = runtime error; 2 = usage 
 | `--type <TYPE>` | Only updates of this type; repeat for more. One of `major`, `minor`, `patch`, `pin`, `digest`. |  |
 | `--dry-run` | Print the unified diff of what would be written, and write nothing. |  |
 | `--check` | Write nothing and exit 3 if any selected update is waiting, for hooks and CI. |  |
+| `--copier` | Also run your own `copier update` for each selected template, before the other updates.  The template's code runs on this machine as you. The tree must be clean, the Count never passes `--trust`, and copier asks its questions on the terminal. |  |
+| `--copier-defaults` | With `--copier`, take the defaults for questions copier would ask, for use without a terminal. |  |
 | `-h --help` | Print help |  |
 
 ## `patchula auth`
