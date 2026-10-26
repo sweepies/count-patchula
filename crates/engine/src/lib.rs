@@ -1772,47 +1772,19 @@ impl Engine {
         let scanner = Scanner::new(&config).map_err(Error::Invalid)?;
         let dir = dir.to_owned();
         let (paths, blobs, extraction) = tokio::task::spawn_blocking(move || {
-            let mut paths = BTreeSet::new();
-            let mut blobs = BTreeMap::new();
-            let mut pending = vec![dir.clone()];
-            while let Some(next) = pending.pop() {
-                for entry in std::fs::read_dir(&next)? {
-                    let entry = entry?;
-                    let kind = entry.file_type()?;
-                    let path = entry.path();
-                    if kind.is_dir() {
-                        if entry.file_name() != ".git" {
-                            pending.push(path);
-                        }
-                        continue;
-                    }
-                    if !kind.is_file() {
-                        continue;
-                    }
-                    let relative = path
-                        .strip_prefix(&dir)
-                        .expect("walked below the root")
-                        .to_string_lossy()
-                        .replace('\\', "/");
-                    if scanner.needs(&relative) {
-                        // Non-UTF-8 files cannot hold an editable declaration.
-                        if let Ok(content) = std::fs::read_to_string(&path) {
-                            blobs.insert(
-                                relative.clone(),
-                                patchula_update::Blob {
-                                    sha: patchula_update::blob_sha(&content),
-                                    mode: "100644".into(),
-                                    content,
-                                },
-                            );
-                        }
-                    }
-                    paths.insert(relative);
-                }
-            }
-            let files: Files = blobs
+            let (paths, files) = read_tree(&dir, &scanner)?;
+            let blobs: BTreeMap<String, patchula_update::Blob> = files
                 .iter()
-                .map(|(p, b): (&String, &patchula_update::Blob)| (p.clone(), b.content.clone()))
+                .map(|(path, content)| {
+                    (
+                        path.clone(),
+                        patchula_update::Blob {
+                            sha: patchula_update::blob_sha(content),
+                            mode: "100644".into(),
+                            content: content.clone(),
+                        },
+                    )
+                })
                 .collect();
             let extraction = scanner.extract(&files).map_err(std::io::Error::other)?;
             std::io::Result::Ok((paths, blobs, extraction))
@@ -2073,6 +2045,46 @@ fn validate_repo(repo: &str) -> Result<()> {
     Ok(())
 }
 /// A local directory reports as `local/<directory name>`.
+/// Every path in a working tree outside `.git`, and the contents of the
+/// files the scanner reads. Non-UTF-8 files cannot hold an editable
+/// declaration, so they are left out.
+pub fn read_tree(
+    dir: &std::path::Path,
+    scanner: &Scanner,
+) -> std::io::Result<(BTreeSet<String>, Files)> {
+    let mut paths = BTreeSet::new();
+    let mut files = Files::new();
+    let mut pending = vec![dir.to_owned()];
+    while let Some(next) = pending.pop() {
+        for entry in std::fs::read_dir(&next)? {
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            let path = entry.path();
+            if kind.is_dir() {
+                if entry.file_name() != ".git" {
+                    pending.push(path);
+                }
+                continue;
+            }
+            if !kind.is_file() {
+                continue;
+            }
+            let relative = path
+                .strip_prefix(dir)
+                .expect("walked below the root")
+                .to_string_lossy()
+                .replace('\\', "/");
+            if scanner.needs(&relative)
+                && let Ok(content) = std::fs::read_to_string(&path)
+            {
+                files.insert(relative.clone(), content);
+            }
+            paths.insert(relative);
+        }
+    }
+    Ok((paths, files))
+}
+
 fn local_name(dir: &std::path::Path) -> String {
     let name = dir
         .canonicalize()

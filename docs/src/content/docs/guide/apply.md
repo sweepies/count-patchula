@@ -47,6 +47,8 @@ writes the rest:
 
 - a package only a lockfile names, such as a vulnerable transitive crate in
   `Cargo.lock`, which only its package manager can update;
+- an update the file already allows, such as a new release inside a range
+  like `~> 6.0`, where only the lockfile would change;
 - a declaration that changed between the lookup and the write.
 
 Lockfiles are not regenerated. When an update's current version came from a

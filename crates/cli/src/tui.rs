@@ -515,9 +515,16 @@ impl Plan {
 /// its reason, and the first update to claim a declaration keeps it.
 pub fn plan(local: &Local, updates: &[&Update]) -> Result<Plan, String> {
     let scanner = patchula_manager::Scanner::new(&local.config)?;
+    // Declarations are found again from the tree as it is now, every file the
+    // lookup read included, so an edit can only land where the same
+    // dependency still is.
+    let (_, files) =
+        patchula_engine::read_tree(&local.dir, &scanner).map_err(|e| format!("{e}"))?;
+    let dependencies = scanner.extract(&files)?.dependencies;
     let mut skipped = Vec::new();
-    let mut files = patchula_manager::Files::new();
-    let mut unreadable = BTreeMap::new();
+    let mut claimed = BTreeMap::<(&str, usize), &Update>::new();
+    let mut edits = BTreeMap::<String, Vec<patchula_manager::Edit>>::new();
+    let mut applied = Vec::new();
     for (index, update) in updates.iter().enumerate() {
         if update.transitive {
             skipped.push((
@@ -527,29 +534,6 @@ pub fn plan(local: &Local, updates: &[&Update]) -> Result<Plan, String> {
                     update.name, update.file
                 ),
             ));
-        } else if !files.contains_key(&update.file) && !unreadable.contains_key(&update.file) {
-            match std::fs::read_to_string(local.dir.join(&update.file)) {
-                Ok(text) => {
-                    files.insert(update.file.clone(), text);
-                }
-                Err(e) => {
-                    unreadable.insert(update.file.clone(), format!("{}: {e}", update.file));
-                }
-            }
-        }
-    }
-    // Declarations are found again from the files as they are now, so an
-    // edit can only land where the same dependency still is.
-    let dependencies = scanner.extract(&files)?.dependencies;
-    let mut claimed = BTreeMap::<(&str, usize), &Update>::new();
-    let mut edits = BTreeMap::<String, Vec<patchula_manager::Edit>>::new();
-    let mut applied = Vec::new();
-    for (index, update) in updates.iter().enumerate() {
-        if update.transitive {
-            continue;
-        }
-        if let Some(reason) = unreadable.get(&update.file) {
-            skipped.push((index, reason.clone()));
             continue;
         }
         let targets: Vec<_> = dependencies
@@ -557,6 +541,8 @@ pub fn plan(local: &Local, updates: &[&Update]) -> Result<Plan, String> {
             .filter(|d| {
                 d.file == update.file
                     && d.name == update.name
+                    && d.package == update.package
+                    && d.current == update.current
                     && update.starts.contains(&d.location.start)
             })
             .collect();
@@ -598,6 +584,21 @@ pub fn plan(local: &Local, updates: &[&Update]) -> Result<Plan, String> {
         }
         if let Some(reason) = failed {
             skipped.push((index, reason));
+            continue;
+        }
+        if found
+            .iter()
+            .all(|e| text.get(e.start..e.end) == Some(e.replacement.as_str()))
+        {
+            skipped.push((
+                index,
+                format!(
+                    "{} in {} already allows {}; only its lockfile changes, so update it with your package manager",
+                    update.name,
+                    update.file,
+                    update.target()
+                ),
+            ));
             continue;
         }
         for dep in targets {
@@ -1241,7 +1242,8 @@ mod tests {
     #[test]
     fn plan_skips_what_cannot_be_written_in_place() {
         let dir = tempfile::tempdir().unwrap();
-        let manifest = "{\n  \"dependencies\": {\n    \"zod\": \"3.22.0\"\n  }\n}\n";
+        // hono was edited after the lookup, at the same place.
+        let manifest = "{\n  \"dependencies\": {\n    \"zod\": \"3.22.0\",\n    \"hono\": \"4.7.0\",\n    \"ms\": \"^2.1.0\"\n  }\n}\n";
         std::fs::write(dir.path().join("package.json"), manifest).unwrap();
         std::fs::write(
             dir.path().join("patchula.pkl"),
@@ -1252,10 +1254,15 @@ mod tests {
             ("zod", "3.22.0", "4.1.0", "major"),
             ("hono", "4.6.0", "4.7.2", "minor"),
             ("lodash", "4.17.20", "4.17.21", "patch"),
+            ("ms", "^2.1.0", "^2.1.0", "patch"),
         ]);
-        let start = manifest.find("\"3.22.0\"").unwrap();
         let deps = &mut report.repositories[0].package_files[0].dependencies;
-        deps[0].metadata.as_mut().unwrap().locations[0].start = start;
+        for (dep, value) in deps.iter_mut().zip(["3.22.0", "4.7.0", "", "^2.1.0"]) {
+            if let Some(start) = manifest.find(&format!("\"{value}\"")) {
+                dep.metadata.as_mut().unwrap().locations[0].start = start;
+            }
+        }
+        deps[3].updates[0].new_version = Some("2.1.3".into());
         let mut minor = deps[0].updates[0].clone();
         minor.new_value = Some("3.25.0".into());
         minor.update_type = "minor".into();
@@ -1275,6 +1282,7 @@ mod tests {
                 "zod in package.json already takes major 4.1.0",
                 "hono in package.json has changed since the lookup; run it again",
                 "lodash is only in package-lock.json; update it with your package manager",
+                "ms in package.json already allows ^2.1.0; only its lockfile changes, so update it with your package manager",
             ]
         );
         assert_eq!(
