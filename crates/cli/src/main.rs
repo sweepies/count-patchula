@@ -377,7 +377,20 @@ async fn tools_command(app: &App, tools: &cli::Tools) -> Result<u8, (u8, miette:
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let app = App::parse();
+    // The embedded entry is the derive's one way to pass a help palette; it
+    // returns help, version and parse failures for us to print.
+    let argv: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    let app = match App::embedded_outcome_paletted(&argv, cli::PALETTE) {
+        usage_rs::embedded::Outcome::Parsed(app) => app,
+        usage_rs::embedded::Outcome::Exit(exit) => {
+            let _ = if exit.stderr {
+                io::stderr().lock().write_all(exit.text.as_bytes())
+            } else {
+                io::stdout().lock().write_all(exit.text.as_bytes())
+            };
+            return ExitCode::from(u8::try_from(exit.code).unwrap_or(1));
+        }
+    };
     let serving = matches!(app.command, Some(Command::Serve(_)));
     // Only our explicitly sanitized events reach stderr. Dependency HTTP debug
     // logs can contain headers even when the user requests maximum verbosity.
