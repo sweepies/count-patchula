@@ -168,7 +168,11 @@ impl Client {
                     || realm.password().is_some()
                     || !(realm.host_str() == Some(host.split(':').next().unwrap_or(host))
                         || (host == "registry-1.docker.io"
-                            && realm.host_str() == Some("auth.docker.io")))
+                            && realm.host_str() == Some("auth.docker.io"))
+                        // GitLab registries take tokens from their GitLab
+                        // instance: registry.gitlab.com from gitlab.com.
+                        || (realm.host_str() == host.strip_prefix("registry.")
+                            && realm.path() == "/jwt/auth"))
                 {
                     return Err(Error::Invalid);
                 }

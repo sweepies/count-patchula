@@ -114,6 +114,8 @@ fn yaml(dep: &Dependency) -> bool {
             | Manager::PreCommit
             | Manager::Helm
             | Manager::Woodpecker
+            | Manager::Gitlabci
+            | Manager::GitlabciInclude
     ) || (matches!(dep.manager, Manager::Npm | Manager::Bun)
         && (dep.file.ends_with(".yaml") || dep.file.ends_with(".yml")))
 }
@@ -132,6 +134,11 @@ fn scalar(dep: &Dependency, raw: &str) -> Result<String, String> {
     } else if yaml(dep) {
         let value: serde_yaml_ng::Value =
             serde_yaml_ng::from_str(raw).map_err(|e| e.to_string())?;
+        // GitLab refs are tag names: a plain `1.0` is the text, not a float.
+        if value.is_number() && matches!(dep.manager, Manager::Gitlabci | Manager::GitlabciInclude)
+        {
+            return Ok(raw.trim().into());
+        }
         value
             .as_str()
             .map(str::to_owned)

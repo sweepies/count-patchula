@@ -255,7 +255,11 @@ impl Evaluator {
         {
             return false;
         }
-        if dep.tagged_action() {
+        // A branch ref has no version to compare; only tags are looked up.
+        if dep.tagged_action()
+            || matches!(dep.manager, Manager::Gitlabci | Manager::GitlabciInclude)
+                && dep.source == Source::ForgeTags
+        {
             return Ecosystem::Loose
                 .parse(dep.resolved.as_deref().unwrap_or(&dep.current))
                 .is_ok();
@@ -830,6 +834,11 @@ impl Evaluator {
                         &version.version
                     },
                 )
+            } else if matches!(dep.manager, Manager::Gitlabci | Manager::GitlabciInclude)
+                && dep.source == Source::ForgeTags
+            {
+                // GitLab loads a ref by its exact tag name.
+                version.version.clone()
             } else {
                 let value = if dep.manager == Manager::Npm
                     && dep.kind == DependencyKind::Peer

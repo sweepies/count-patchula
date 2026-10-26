@@ -585,6 +585,25 @@ github-actions	.github/workflows/e2e-tests.yml	actions/upload-artifact	v7.0.2	v7
 github-actions	.github/workflows/e2e-tests.yml	actions/upload-artifact	v7.0.2	v7.0.2
 github-actions	.github/workflows/e2e-tests.yml	node	24	24
 github-actions	.github/workflows/e2e-tests.yml	pnpm/action-setup	v6.1.0	v6.1.0
+gitlabci	ci/cli/.gitlab-ci.yml	docker	28-dind	28-dind
+gitlabci	ci/cli/.gitlab-ci.yml	ghcr.io/canonical/snapcraft	8_core24	8_core24
+gitlabci	ci/cli/.gitlab-ci.yml	ghcr.io/canonical/snapcraft	8_core24	8_core24
+gitlabci	ci/cli/.gitlab-ci.yml	ghcr.io/canonical/snapcraft	8_core24	8_core24
+gitlabci	ci/cli/.gitlab-ci.yml	registry.gitlab.com/gitlab-org/cli	latest	-
+gitlabci	ci/cli/.gitlab-ci.yml	registry.gitlab.com/gitlab-org/technical-writing/docs-gitlab-com/docs-gitlab-com-builder	hugo-0.154.5	hugo-0.154.5
+gitlabci	ci/cli/.gitlab-ci.yml	registry.gitlab.com/gitlab-org/technical-writing/docs-gitlab-com/lint-markdown	alpine-3.24-vale-3.21.0-markdownlint2-0.23.2-lychee-0.24.2-rumdl-0.2.69	alpine-3.24-vale-3.21.0-markdownlint2-0.23.2-lychee-0.24.2-rumdl-0.2.69
+gitlabci	ci/container-registry/.gitlab-ci.yml	gitlab.com/components/opentofu/apply	3.11.0	3.11.0
+gitlabci	ci/container-registry/.gitlab-ci.yml	gitlab.com/components/opentofu/destroy	3.11.0	3.11.0
+gitlabci	ci/container-registry/.gitlab-ci.yml	gitlab.com/components/opentofu/fmt	3.11.0	3.11.0
+gitlabci	ci/container-registry/.gitlab-ci.yml	gitlab.com/components/opentofu/plan	3.11.0	3.11.0
+gitlabci	ci/container-registry/.gitlab-ci.yml	gitlab.com/components/opentofu/validate	3.11.0	3.11.0
+gitlabci	ci/container-registry/.gitlab-ci.yml	gitlab.com/gitlab-org/components/danger-review/danger-review	2.1.0	2.1.0
+gitlabci	ci/gitaly/.gitlab-ci.yml	gcr.io/google.com/cloudsdktool/google-cloud-cli	debian_component_based	debian_component_based
+gitlabci	ci/gitaly/.gitlab-ci.yml	gitlab.com/gitlab-org/components/danger-review/danger-review	2.1.0	2.1.0
+gitlabci	ci/gitaly/.gitlab-ci.yml	google/cloud-sdk	slim	slim
+gitlabci	ci/gitaly/.gitlab-ci.yml	postgres	11.13-alpine	11.13-alpine
+gitlabci	ci/gitaly/.gitlab-ci.yml	registry.gitlab.com/gitlab-org/technical-writing/docs-gitlab-com/lint-markdown	alpine-3.24-vale-3.21.0-markdownlint2-0.23.2-lychee-0.24.2-rumdl-0.2.69	alpine-3.24-vale-3.21.0-markdownlint2-0.23.2-lychee-0.24.2-rumdl-0.2.69
+gitlabci-include	ci/cli/.gitlab-ci.yml	gitlab-com/gl-security/security-operations/infrastructure-security-public/oidc-modules	3.4.0	3.4.0
 go	go/prometheus/go.mod	cloud.google.com/go/auth	v0.23.3	v0.23.3
 go	go/prometheus/go.mod	cloud.google.com/go/auth/oauth2adapt	v0.2.8	v0.2.8
 go	go/prometheus/go.mod	cloud.google.com/go/compute/metadata	v0.9.1	v0.9.1
@@ -2797,3 +2816,26 @@ woodpecker	.woodpecker/test.yaml	docker.io/postgres	18	18
 woodpecker	.woodpecker/test.yaml	docker.io/woodpeckerci/plugin-codecov	2.3.3	2.3.3
 woodpecker	.woodpecker/test.yaml	golangci/golangci-lint	v2.15.0	v2.15.0
 woodpecker	.woodpecker/web.yaml	docker.io/node	24-alpine	24-alpine
+skipped	ci/cli/.gitlab-ci.yml:34	${CI_REGISTRY}/gitlab-com/gl-infra/common-ci-tasks-images/code-signer:1.3.0	the image contains a GitLab CI variable
+skipped	ci/cli/.gitlab-ci.yml:78	${GITLAB_DEPENDENCY_PROXY}golang:${GO_VERSION}	the image contains a GitLab CI variable
+skipped	ci/cli/.gitlab-ci.yml:262	${GITLAB_DEPENDENCY_PROXY}node:24-slim	the image contains a GitLab CI variable
+skipped	ci/cli/.gitlab-ci.yml:276	${GITLAB_DEPENDENCY_PROXY}alpine:3	the image contains a GitLab CI variable
+skipped	ci/cli/.gitlab-ci.yml:292	${GITLAB_DEPENDENCY_PROXY}alpine:3	the image contains a GitLab CI variable
+skipped	ci/cli/.gitlab-ci.yml:302	${GITLAB_DEPENDENCY_PROXY}alpine:3	the image contains a GitLab CI variable
+skipped	ci/cli/.gitlab-ci.yml:315	${GITLAB_DEPENDENCY_PROXY}golang:${GO_VERSION}	the image contains a GitLab CI variable
+skipped	ci/cli/.gitlab-ci.yml:339	${GITLAB_DEPENDENCY_PROXY}golang:${GO_VERSION}	the image contains a GitLab CI variable
+skipped	ci/cli/.gitlab-ci.yml:373	${GITLAB_DEPENDENCY_PROXY}golangci/golangci-lint:v2.14.0-alpine	the image contains a GitLab CI variable
+skipped	ci/cli/.gitlab-ci.yml:468	${GITLAB_DEPENDENCY_PROXY}docker:stable	the image contains a GitLab CI variable
+skipped	ci/cli/.gitlab-ci.yml:541	registry.gitlab.com/gitlab-org/cli:$TAG_RELEASE_IMAGE_VERSION	the image contains a GitLab CI variable
+skipped	ci/cli/.gitlab-ci.yml:600	${GITLAB_DEPENDENCY_PROXY}homebrew/brew:4.6.20	the image contains a GitLab CI variable
+skipped	ci/cli/.gitlab-ci.yml:615	${GITLAB_DEPENDENCY_PROXY}amake/innosetup:latest	the image contains a GitLab CI variable
+skipped	ci/container-registry/.gitlab-ci.yml:116	golang:$GO_VERSION	the image contains a GitLab CI variable
+skipped	ci/container-registry/.gitlab-ci.yml:184	docker:${DOCKER_VERSION}-cli	the image contains a GitLab CI variable
+skipped	ci/container-registry/.gitlab-ci.yml:186	docker:${DOCKER_VERSION}-dind	the image contains a GitLab CI variable
+skipped	ci/gitaly/.gitlab-ci.yml:10	registry.gitlab.com/gitlab-org/gitlab-build-images/debian-${DEBIAN_VERSION}-golang-${GO_VERSION}-rust-${RUST_VERSION}:git-${CI_GIT_VERSION}	the image contains a GitLab CI variable
+skipped	ci/gitaly/.gitlab-ci.yml:124	postgres:${POSTGRES_VERSION}	the image contains a GitLab CI variable
+skipped	ci/gitaly/.gitlab-ci.yml:286	postgres:${POSTGRES_VERSION}	the image contains a GitLab CI variable
+skipped	ci/gitaly/.gitlab-ci.yml:289	bitnamilegacy/pgbouncer:${PGBOUNCER_VERSION}	the image contains a GitLab CI variable
+skipped	ci/gitaly/.gitlab-ci.yml:359	registry.gitlab.com/gitlab-org/gitlab-build-images/ubi-${UBI_VERSION}-golang-${GO_VERSION}-rust-${RUST_VERSION}:git-${CI_GIT_VERSION}	the image contains a GitLab CI variable
+skipped	ci/gitaly/.gitlab-ci.yml:544	${GITLAB_DEPENDENCY_PROXY}ruby:${RUBY_VERSION}	the image contains a GitLab CI variable
+skipped	ci/gitaly/.gitlab-ci.yml:561	${GITLAB_DEPENDENCY_PROXY}ruby:${RUBY_VERSION}	the image contains a GitLab CI variable

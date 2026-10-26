@@ -63,6 +63,15 @@ fn corpus_extraction_matches_its_snapshot() {
     }
     lines.sort();
     lines.extend(extraction.warnings.iter().map(|w| format!("warning\t{w}")));
+    lines.extend(extraction.skipped.iter().map(|s| {
+        format!(
+            "skipped\t{}:{}\t{}\t{}",
+            s.file,
+            s.line.unwrap_or_default(),
+            s.value,
+            s.reason
+        )
+    }));
     let actual = lines.join("\n") + "\n";
     let snapshot = root.join("../corpus-extraction.tsv");
     if std::env::var_os("PATCHULA_UPDATE_SNAPSHOT").is_some() {

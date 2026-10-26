@@ -35,6 +35,8 @@ quoting, comments and formatting.
 | `nuget` | `*.csproj`, `*.fsproj`, `*.vbproj`, `Directory.Packages.props`, `Directory.Build.props`, `global.json`, `.config/dotnet-tools.json` | `packages.lock.json` |
 | `bundler` | `Gemfile`, `.ruby-version` | `Gemfile.lock` |
 | `composer` | `composer.json` | `composer.lock` |
+| `gitlabci` | `.gitlab-ci.yml`, `*.gitlab-ci.yml` (and `.yaml`) | |
+| `gitlabci-include` | `.gitlab-ci.yml`, `*.gitlab-ci.yml` (and `.yaml`) | |
 | `regex` | whatever your [extractors](/guide/configuration/#custom-extractors) select | |
 
 Lockfiles provide the current version where they exist. Their transitive
@@ -174,6 +176,40 @@ version specifier. URL requirements, unversioned names and Poetry `git`/`path`
 sources are skipped. Names are PEP 503 normalised and resolved from `uv.lock` or
 `poetry.lock`; `.python-version` pins CPython.
 
+## GitLab CI
+
+`gitlabci` reads the `image` and `services` of every job, `default` and hidden
+`.template` jobs, as a string or as a `name:` mapping. Images are pinned to
+digests by default, like images everywhere else, and GitLab's own registry,
+`registry.gitlab.com`, is read with the anonymous tokens gitlab.com issues. It
+also updates CI/CD component references
+(`include: - component: gitlab.com/components/sast/sast@3.4.0`) from the
+component project's tags. `~latest` and commit SHAs are left alone.
+
+`gitlabci-include` updates the `ref` of `include: project:` entries from that
+project's tags. Refs and component versions are written as the tag is named,
+since GitLab loads them by exact name. Entries without a `ref`, branch names and commit SHAs are left
+alone, and so are `local`, `remote` and `template` includes. A ref or
+component reference shared through a YAML anchor is skipped, since one tag may
+not exist in every project that uses it; an anchored image is edited once, at
+the anchor.
+
+Project includes resolve on `gitlab.host`, gitlab.com by default, and so does
+`$CI_SERVER_FQDN` (or `$CI_SERVER_HOST`) at the start of a component reference.
+A self-hosted instance works when it has a `gitlab` label in its host name,
+such as `gitlab.example.com`, whether it is named in the component reference or
+in config:
+
+```pkl
+gitlab { host = "gitlab.example.com" }
+```
+
+Other GitLab CI variables are not expanded. An image such as
+`$CI_REGISTRY_IMAGE:latest` or `${CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX}/node:22`
+is skipped, and listed with its line and the reason in the run summary and
+under `skipped` in the [JSON report](/reference/report/). Unlike a warning, a
+skipped reference leaves branch cleanup and auto-merge on.
+
 ## Helm, pre-commit and devcontainers
 
 `helm` reads `Chart.yaml` dependencies from HTTPS and `oci://` repositories.
@@ -228,7 +264,8 @@ describe where the app is deployed, not the runner.
 
 Every dependency has a kind, which rules can select: `production`,
 `development`, `peer`, `optional` and `build` for packages; `action`,
-`reusable-workflow` and `runner` for workflows; `container-image`; `tool` and
+`reusable-workflow` and `runner` for workflows, with GitLab CI includes and
+components as `reusable-workflow`; `container-image`; `tool` and
 `toolchain` for mise tools and pinned toolchains; `go-directive`; `provider`
 and `module` for Terraform; `chart` for Helm; and `transitive` for a
 [vulnerable lockfile-only package](/guide/security/#lockfile-only-packages).
