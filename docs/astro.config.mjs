@@ -3,6 +3,7 @@ import { defineConfig } from "astro/config";
 import { satteri } from "@astrojs/markdown-satteri";
 import sitemap from "@astrojs/sitemap";
 import starlight from "@astrojs/starlight";
+import starlightDocSearch from "@astrojs/starlight-docsearch";
 import starlightLinksValidator from "starlight-links-validator";
 
 const site = "https://count-patchula.sweepy.dev";
@@ -36,6 +37,26 @@ function agentLinks() {
       },
     },
   };
+}
+
+/**
+ * Search is Algolia DocSearch when all three values are set at build time, and
+ * Starlight's Pagefind index otherwise. The search-only API key is public by
+ * design. Setting only some of them is a mistake, so it fails the build.
+ */
+function docSearch() {
+  const env = {
+    appId: "PUBLIC_DOCSEARCH_APP_ID",
+    apiKey: "PUBLIC_DOCSEARCH_API_KEY",
+    indexName: "PUBLIC_DOCSEARCH_INDEX_NAME",
+  };
+  const options = Object.fromEntries(Object.entries(env).map(([key, name]) => [key, process.env[name]]));
+  const missing = Object.entries(env).filter(([key]) => !options[key]);
+  if (missing.length === 3) return [];
+  if (missing.length) {
+    throw new Error(`DocSearch needs all three variables; missing ${missing.map(([, name]) => name).join(", ")}`);
+  }
+  return [starlightDocSearch(options)];
 }
 
 export default defineConfig({
@@ -83,7 +104,7 @@ export default defineConfig({
         useStarlightUiThemeColors: true,
         styleOverrides: { borderRadius: "0.5rem" },
       },
-      plugins: [starlightLinksValidator()],
+      plugins: [starlightLinksValidator(), ...docSearch()],
       sidebar: [
         {
           label: "Start here",
@@ -158,6 +179,7 @@ export default defineConfig({
             { label: "GitHub client", slug: "internals/github-client" },
             { label: "HTTP fixtures", slug: "internals/http-testing" },
             { label: "CI cache", slug: "internals/ci-cache" },
+            { label: "Site search", slug: "internals/search" },
           ],
         },
       ],
