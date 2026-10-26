@@ -4,12 +4,10 @@ title: "How it works"
 
 import { Steps } from "@astrojs/starlight/components";
 
-The Count was built to replace a Renovate setup that took 6.7 minutes to get
-through twelve repositories. Most of that time went on work that did not need
-doing: one repository at a time, caches reset between them, full release
-histories fetched page by page, every changelog parsed again on every run.
-
-He does the same job differently. One process takes the whole batch.
+The Count was built to replace a Renovate setup that spent 6.7 minutes on
+twelve repositories, one at a time, with caches reset between them, full
+release histories fetched page by page and every changelog parsed again. He
+takes the whole batch in one process.
 
 ## A run, start to finish
 
@@ -48,7 +46,6 @@ the Count. Logs are for people and are never meant to be parsed.
 
 - Batch-native: repositories run concurrently (eight by default) behind one
   GitHub rate-limit governor.
-- Incremental: nothing paginates a full history after the first fetch.
 - Conditional everywhere: every GET sends a validator when it has one, and
   GitHub does not count 304 responses against the primary rate limit.
 - No clone unless a lockfile tool needs a working tree. Then a persistent
@@ -64,8 +61,9 @@ the Count. Logs are for people and are never meant to be parsed.
 `patchula run` and `patchula lookup` process one batch with a token you supply
 and exit. `patchula serve` is a long-running [GitHub App
 server](/guide/server/): it verifies webhooks, keeps a deduplicated queue, sweeps
-on a cron schedule and keeps every cache warm between batches. Both use the same
-engine, so a batch behaves the same however it started.
+on a cron schedule and keeps every cache warm between batches. It is the
+recommended way to run him for real. Both use the same engine, so a batch
+behaves the same however it started.
 
 ### Tokens
 
@@ -82,17 +80,16 @@ its default host is. If `gh` is not installed, is not signed in, fails, or
 does not answer within 10 seconds, he carries on without it and the error
 names all four sources. The token is never printed or logged.
 
-The server is the recommended way to run him for real: its caches never go
-cold, work from many repositories shares one batch, and webhooks mean a ticked
-checkbox is handled within seconds rather than at the next scheduled run.
+## Working tree or GitHub
 
-With no repository named, the CLI reads the working tree in the current
-directory, uncommitted changes included, with the same config discovery and
-file selection as a repository read from GitHub. To read another checkout,
-`cd` there first. Lookups still reach the registries. `lookup` and
-`run --dry-run` write nothing, and [`tui`](/guide/tui/) writes only the
-updates you select. A real `run` opens pull requests from what GitHub has, so
-with no repository named it reads the checkout's GitHub repository, and
-refuses a working tree with uncommitted changes or a HEAD other than the
-remote's default branch. The Count's own CI looks up a corpus of about 2,600
-real dependencies this way on every pull request.
+With no repository named, `lookup`, `run --dry-run` and [`tui`](/guide/tui/)
+read the working tree in the current directory, uncommitted changes included,
+with the same config discovery and file selection as a repository read from
+GitHub. To read another checkout, `cd` there first. Lookups still reach the
+registries. `lookup` and `run --dry-run` write nothing, and `tui` writes only
+the updates you select.
+
+A real `run` opens pull requests from what GitHub has, so with no repository
+named it runs the checkout's GitHub repository: its `origin` remote, or its
+only remote. It refuses a working tree with uncommitted or untracked files, or
+a HEAD other than the remote's default branch.

@@ -37,10 +37,11 @@ quoting, comments and formatting.
 | `composer` | `composer.json` | `composer.lock` |
 | `regex` | whatever your [extractors](/guide/configuration/#custom-extractors) select | |
 
-Lockfiles provide the current version where they exist, but their transitive
-entries never become dependencies of their own. A file that does not parse at
-all, such as an ERB-templated YAML file, is skipped with a warning and the rest
-of the repository carries on.
+Lockfiles provide the current version where they exist. Their transitive
+entries only become dependencies of their own, of kind `transitive`, when they
+have a [known vulnerability](/guide/security/#lockfile-only-packages). A file
+that does not parse at all, such as an ERB-templated YAML file, is skipped with
+a warning and the rest of the repository carries on.
 
 ## JavaScript
 
@@ -105,12 +106,8 @@ any backend that reads release metadata (`aqua`, `github`, `gitlab`,
 packslip source: `packslip:owner/repo`, `packslip:github.com/owner/repo`, a
 tool inside a monorepo (`packslip:github.com/owner/repo/tools/name`) and a
 tool on a publisher's domain. An existing `mise.lock` is regenerated with the
-update.
-
-mise runs in a sandbox: from an empty directory, with none of your mise
-configuration and no hooks, using the Count's pinned mise from his own tool
-store. It receives the GitHub token he runs with and nothing else from your
-environment. See [how lookups run](/guide/sources/#mise-lookups).
+update. mise runs in a [sandbox](/guide/sources/#mise-lookups), with the
+Count's own pinned mise and none of your configuration.
 
 Some tools are not looked up, each with a lookup warning:
 
@@ -189,16 +186,19 @@ feature key (`ghcr.io/devcontainers/features/node:1`).
 
 Maven reads `parent`, `dependencies`, `dependencyManagement`, build `plugins`,
 `pluginManagement` and `extensions`. A `${property}` version is edited where the
-property is defined. Gradle reads version catalogs, literal coordinates,
-`group:/name:/version:` notation and `id "…" version "…"` plugins in every
-Gradle script, and resolves versions kept in variables: `ext` blocks,
-`def`/`val` locals, `extra[...]`, map literals such as `versions += [jackson:
-"2.15.0"]`, and `gradle.properties`. Under a `src/` directory only `src/main/` is
-read, since test resources hold fixtures. A name defined twice, computed values
-and the project's own `version` are skipped, as are packages reached through
-several variables (deliberate parallel versions, such as Kafka's compatibility
-pins). The wrapper's `distributionUrl` upgrades, and a recorded
-`distributionSha256Sum` is replaced with Gradle's published checksum.
+property is defined.
+
+Gradle reads version catalogs, literal coordinates, `group:/name:/version:`
+notation and `id "…" version "…"` plugins in every Gradle script. It resolves
+versions kept in `ext` blocks, `def`/`val` locals, `extra[...]`, map literals
+such as `versions += [jackson: "2.15.0"]`, and `gradle.properties`.
+
+Gradle skips anything under `src/` except `src/main/`, since test resources
+hold fixtures; a name defined twice; computed values; the project's own
+`version`; and packages reached through several variables, which are
+deliberate parallel versions such as Kafka's compatibility pins. The wrapper's
+`distributionUrl` upgrades, and a recorded `distributionSha256Sum` is replaced
+with Gradle's published checksum.
 
 Versions keep their release variant: Guava's `33.4.8-android` never becomes
 `33.7.2-jre`.
@@ -230,4 +230,7 @@ Every dependency has a kind, which rules can select: `production`,
 `development`, `peer`, `optional` and `build` for packages; `action`,
 `reusable-workflow` and `runner` for workflows; `container-image`; `tool` and
 `toolchain` for mise tools and pinned toolchains; `go-directive`; `provider`
-and `module` for Terraform; and `chart` for Helm.
+and `module` for Terraform; `chart` for Helm; and `transitive` for a
+[vulnerable lockfile-only package](/guide/security/#lockfile-only-packages).
+[Reference data](/guide/configuration/#reference-data) also has the kind
+`reference-data`, on top of its own.

@@ -45,10 +45,9 @@ and API commits take milliseconds; the lockfile tool takes seconds.
 project with 265 locked packages, refreshing the lock after a manifest edit took
 0.11 s with aube on the pnpm lock and 0.12 s on the npm lock, against 2.48 s
 with pnpm 10 and 1.46 s with npm 11, all with warm metadata caches. So the Count
-uses aube for both, and we think npm projects should move to pnpm or aube
-anyway.
+uses aube for both.
 
-The trade-offs are honest ones. aube's npm lockfiles stay valid for `npm ci`,
+aube's npm lockfiles stay valid for `npm ci`,
 but a later `npm install` may rewrite a few lines (hoisting and `funding`
 metadata). On larger pnpm graphs aube may keep a second copy of a package pnpm
 would deduplicate. `lockfiles.npmEngine = "npm"` restores native npm for
@@ -98,7 +97,9 @@ toolchain and PHP's build dependencies.
 
 Tools install into the Count's own mise data directory, separate from yours:
 `PATCHULA_TOOLS_DIR`, or `<cache>.tools` beside the SQLite cache. It persists
-between runs, so keep it on a volume. Each successful tool run records its
+between runs, so keep it on a volume. The Count installs his own pinned mise
+there on first use and runs that for every tool and lookup; the mise on `PATH`
+only installs and starts it. Each successful tool run records its
 `tool@version` and a timestamp.
 
 - `patchula tools install` prewarms every pinned default, for example in an
@@ -106,20 +107,19 @@ between runs, so keep it on a volume. Each successful tool run records its
 - `patchula tools prune --days 30` uninstalls versions no run has used for 30
   days. Pinned defaults stay.
 - A version the store has never run successfully is reinstalled from scratch on
-  first use, with a 30-minute install allowance. An install cut short by a
-  timeout or crash can leave a directory mise treats as installed but which has
-  no binaries, and this is how the Count recovers from it.
+  first use, with a 30-minute install allowance. This recovers from an install
+  cut short by a timeout or crash, which can leave a directory mise treats as
+  installed but with no binaries.
 - Known versions keep a 180-second limit per command.
-- On a local run, a version you already have in your own mise is hard-linked
-  into the store instead of downloaded: Node, Go, Bun, aube, Yarn, uv and
-  Terraform. That takes no time and no extra disk, and the store's links are
-  its own, so pruning never touches your installs. Python, Ruby, PHP and .NET
-  are always installed fresh, because their installs depend on where they
-  live, and so is any install with a symlink leading outside its own
-  directory. Each version is borrowed once; if it fails, mise installs it
-  normally.
-  Your mise directory is `MISE_DATA_DIR`, or `~/.local/share/mise`, and it has
-  to be on the same filesystem as the store. The server never borrows.
+
+On a local run, Node, Go, Bun, aube, Yarn, uv and Terraform versions you
+already have in your own mise (`MISE_DATA_DIR`, or `~/.local/share/mise`, on
+the same filesystem as the store) are hard-linked into the store instead of
+downloaded. That takes no time or extra disk, and pruning never touches your
+installs. Each version is borrowed once; if that fails, mise installs it.
+Python, Ruby, PHP and .NET installs depend on where they live, so they are
+always installed fresh, as is any install with a symlink leading outside its
+own directory. The server never borrows.
 
 ## Isolation
 

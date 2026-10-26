@@ -65,24 +65,18 @@ The Count is one binary, `patchula`. Releases have static builds for Linux
 
 ## What the runner needs
 
-Lockfiles are regenerated with the real tools (aube, Yarn, Bun, Cargo, Go,
-Terraform, uv, Poetry, dotnet, Bundler, Composer), and the versions of every
-tool in a `mise.toml` or `.tool-versions` are listed by mise itself, so `mise`
-must be on the `PATH`. Without it, mise tools and lockfiles report an error and
-everything else works. The Count installs his own pinned mise into the tool
-store on first use and runs that; the mise on `PATH` only installs and starts it.
-Each tool goes into the Count's own tool store, never your personal
-mise installs: on a local run he borrows a version you already have by
-hard-linking it in, and otherwise mise installs it on first use (see [the tool
-store](/guide/lockfiles/#the-tool-store)). The store is `PATCHULA_TOOLS_DIR`, or
-`<cache>.tools` beside the SQLite cache. Put it on a persistent volume.
-
-`git` is needed for the partial clones a lockfile tool works in.
-
-The cache path must be writable. The default is `.patchula-cache.sqlite` in the
-working directory. It holds HTTP validators, catalogs, write receipts and the
-partial clones (`<cache>.worktrees`). A warm cache is most of the speed, so
-keep it between runs.
+- `mise` on the `PATH`. Lockfiles are regenerated with the real tools (aube,
+  Yarn, Bun, Cargo, Go, Terraform, uv, Poetry, dotnet, Bundler, Composer), and
+  `mise.toml` and `.tool-versions` tools are looked up with mise. Without it,
+  mise tools and lockfiles report an error and everything else works. The tools
+  go into the Count's own [tool store](/guide/lockfiles/#the-tool-store),
+  `PATCHULA_TOOLS_DIR` or `<cache>.tools` beside the SQLite cache. Put it on a
+  persistent volume.
+- `git`, for the partial clones a lockfile tool works in.
+- A writable cache path. The default is `.patchula-cache.sqlite` in the working
+  directory. It holds HTTP validators, catalogs, write receipts and the partial
+  clones (`<cache>.worktrees`). A warm cache is most of the speed, so keep it
+  between runs.
 
 Some tools download slowly. The static PHP build has been measured at about
 44 KB/s, so prewarm the store when you build an image:
@@ -91,9 +85,6 @@ Some tools download slowly. The static PHP build has been measured at about
 patchula tools install --cache /var/lib/patchula/cache.sqlite
 patchula tools prune --days 30 --cache /var/lib/patchula/cache.sqlite
 ```
-
-`tools install` installs every pinned default. `tools prune` removes versions
-no run has used for that many days. Pinned defaults are never pruned.
 
 ## Shell completions and man page
 
