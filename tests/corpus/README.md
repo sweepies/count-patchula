@@ -2,7 +2,7 @@
 
 Real manifests from permissively licensed projects, copied at fixed commits.
 They give the Count a large, varied dependency set to chew on in CI: about 2,800
-dependencies across 23 managers.
+dependencies across 24 managers.
 
 - `mise run test` extracts the whole corpus offline and compares it with
   `tests/corpus-extraction.tsv`. A change to extraction shows up as a diff
@@ -49,3 +49,4 @@ unmodified copies; their licences are those of the projects below.
 | [gitlab-org/gitaly](https://gitlab.com/gitlab-org/gitaly) | `42a4812bc672` | MIT | `ci/gitaly` |
 | [gitlab-org/container-registry](https://gitlab.com/gitlab-org/container-registry) | `672bd7536c95` | Apache-2.0 | `ci/container-registry` |
 | [gitlab-org/cli](https://gitlab.com/gitlab-org/cli) | `5419ed460090` | MIT | `ci/cli` |
+| [nix-community/nixvim](https://github.com/nix-community/nixvim) | `453dc9c5037e` | MIT | `nix/nixvim` (`flake.nix` and `flake.lock`, root and `flake/dev`) |

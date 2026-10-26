@@ -1595,3 +1595,125 @@ fn copier_answers_read_template_and_tag_and_skip_what_cannot_be_looked_up() {
         ]
     );
 }
+
+#[test]
+fn flake_inputs_come_from_the_lock_beside_flake_nix() {
+    let lock = r#"{
+  "nodes": {
+    "nixpkgs": {
+      "locked": {"lastModified": 1790000000, "narHash": "sha256-a", "owner": "NixOS", "repo": "nixpkgs", "rev": "1111111111111111111111111111111111111111", "type": "github"},
+      "original": {"owner": "NixOS", "ref": "nixos-unstable", "repo": "nixpkgs", "type": "github"}
+    },
+    "utils": {
+      "locked": {"lastModified": 1, "narHash": "sha256-b", "owner": "numtide", "repo": "flake-utils", "rev": "2222222222222222222222222222222222222222", "type": "github"},
+      "original": {"owner": "numtide", "ref": "v1.0.0", "repo": "flake-utils", "type": "github"}
+    },
+    "registry": {
+      "locked": {"lastModified": 2, "narHash": "sha256-c", "owner": "NixOS", "repo": "nixpkgs", "rev": "3333333333333333333333333333333333333333", "type": "github"},
+      "original": {"id": "nixpkgs", "type": "indirect"}
+    },
+    "lib": {
+      "locked": {"lastModified": 3, "narHash": "sha256-d", "ref": "refs/heads/main", "rev": "4444444444444444444444444444444444444444", "type": "git", "url": "https://example.com/lib.git"},
+      "original": {"ref": "main", "type": "git", "url": "https://example.com/lib.git"}
+    },
+    "archive": {
+      "locked": {"narHash": "sha256-e", "type": "tarball", "url": "https://example.com/a.tar.gz"},
+      "original": {"type": "tarball", "url": "https://example.com/a.tar.gz"}
+    },
+    "local": {
+      "locked": {"path": "./sub", "type": "path"},
+      "original": {"path": "./sub", "type": "path"},
+      "parent": []
+    },
+    "escape": {
+      "locked": {"lastModified": 4, "narHash": "sha256-f", "path": "/etc", "type": "path"},
+      "original": {"path": "/etc", "type": "path"}
+    },
+    "private": {
+      "locked": {"lastModified": 5, "narHash": "sha256-g", "rev": "5555555555555555555555555555555555555555", "type": "git", "url": "ssh://git@example.com/private.git"},
+      "original": {"type": "git", "url": "ssh://git@example.com/private.git"}
+    },
+    "root": {
+      "inputs": {"archive": "archive", "escape": "escape", "lib": "lib", "local": "local", "nixpkgs": "nixpkgs", "private": "private", "registry": "registry", "same": ["nixpkgs"], "utils": "utils"}
+    }
+  },
+  "root": "root",
+  "version": 7
+}
+"#;
+    let mut config = config();
+    config.managers.push(Manager::Nix);
+    let scanner = Scanner::new(&config).unwrap();
+    assert!(scanner.needs("dev/flake.lock") && scanner.needs("dev/flake.nix"));
+    // A lock without its flake.nix is not a flake.
+    let alone = scanner
+        .extract(&Files::from([("dev/flake.lock".into(), lock.into())]))
+        .unwrap();
+    assert!(alone.dependencies.is_empty());
+    let files = Files::from([
+        ("dev/flake.lock".into(), lock.to_string()),
+        (
+            "dev/flake.nix".into(),
+            "{ outputs = _: { }; }\n".to_string(),
+        ),
+    ]);
+    let extraction = scanner.extract(&files).unwrap();
+    let found: Vec<_> = extraction
+        .dependencies
+        .iter()
+        .map(|d| {
+            assert_eq!(d.manager, Manager::Nix);
+            assert_eq!(d.kind, DependencyKind::FlakeInput);
+            assert_eq!(
+                &files[&d.file][d.location.start..d.location.end],
+                d.digest.as_deref().unwrap()
+            );
+            (d.name.as_str(), d.package.as_str(), d.current.as_str())
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            (
+                "archive",
+                "https://example.com/a.tar.gz",
+                "tarball+https://example.com/a.tar.gz"
+            ),
+            (
+                "lib",
+                "https://example.com/lib.git",
+                "git+https://example.com/lib.git?ref=main"
+            ),
+            (
+                "nixpkgs",
+                "https://github.com/NixOS/nixpkgs",
+                "github:NixOS/nixpkgs/nixos-unstable"
+            ),
+            ("registry", "flake:nixpkgs", "flake:nixpkgs"),
+            (
+                "utils",
+                "https://github.com/numtide/flake-utils",
+                "github:numtide/flake-utils/v1.0.0"
+            ),
+        ]
+    );
+    let archive = &extraction.dependencies[0];
+    assert_eq!(archive.digest.as_deref(), Some("sha256-e"));
+    let skipped: Vec<_> = extraction
+        .skipped
+        .iter()
+        .map(|s| (s.value.as_str(), s.reason.as_str()))
+        .collect();
+    assert_eq!(
+        skipped,
+        [
+            ("path:/etc", "it resolves outside the repository"),
+            ("path:./sub", "a path input changes with the repository"),
+            (
+                "git+ssh://git@example.com/private.git",
+                "ssh is not allowed; only https"
+            ),
+        ]
+    );
+    assert!(extraction.skipped.iter().all(|s| s.line.is_some()));
+}

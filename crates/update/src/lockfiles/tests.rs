@@ -55,6 +55,14 @@ impl Executor for Fixture {
             }
             for (k, v) in &spec.env {
                 let key = k.to_string_lossy().to_ascii_lowercase();
+                // nix gets the token through its per-host access tokens alone.
+                let v = if key == "nix_config" {
+                    v.to_string_lossy()
+                        .replace("access-tokens = github.com=offline-installation", "")
+                        .into()
+                } else {
+                    v.clone()
+                };
                 assert!(
                     ![
                         "token",
@@ -2437,5 +2445,514 @@ async fn real_cargo_moves_a_locked_package_without_a_manifest_change() {
         p.contents["Cargo.lock"].contains("version = \"1.0.1\""),
         "{}",
         p.contents["Cargo.lock"]
+    );
+}
+
+/// One nix invocation: its arguments and environment.
+type NixCall = (Vec<String>, BTreeMap<String, String>);
+/// Stands in for nix: records each nix invocation with its environment and
+/// writes the given lock where nix would. Everything else goes to the fixture.
+struct NixFake {
+    inner: Arc<Fixture>,
+    lock: String,
+    output: Vec<u8>,
+    /// What restricted evaluation of flake.nix's inputs prints.
+    declared: String,
+    calls: Mutex<Vec<NixCall>>,
+}
+impl Executor for NixFake {
+    fn run(
+        &self,
+        spec: CommandSpec,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+        if !spec.args.iter().any(|a| a == "nix") {
+            return self.inner.run(spec);
+        }
+        Box::pin(async move {
+            let env = spec
+                .env
+                .iter()
+                .map(|(k, v)| (k.to_string_lossy().into(), v.to_string_lossy().into()))
+                .collect();
+            self.calls.lock().unwrap().push((spec.args.clone(), env));
+            if spec.args.iter().any(|a| a == "eval") {
+                return Ok(self.declared.clone().into_bytes());
+            }
+            if spec.args.iter().any(|a| a == "update") {
+                std::fs::write(spec.cwd.join("flake.lock"), &self.lock).unwrap();
+            }
+            Ok(self.output.clone())
+        })
+    }
+}
+const NIXPKGS: &str = "1111111111111111111111111111111111111111";
+const MOVED: &str = "9999999999999999999999999999999999999999";
+/// The inputs `flake.nix` declares for `flake_lock(true)`: `private` is the
+/// ssh input the lock already refuses.
+const DECLARED: &str = r#"{"nixpkgs":{"url":"github:NixOS/nixpkgs/nixos-unstable"},"private":{"url":"git+ssh://git@example.com/private.git"}}"#;
+fn flake_lock(private: bool) -> String {
+    let private_node = r#""private":{"locked":{"lastModified":5,"narHash":"sha256-g","rev":"5555555555555555555555555555555555555555","type":"git","url":"ssh://git@example.com/private.git"},"original":{"type":"git","url":"ssh://git@example.com/private.git"}},"#;
+    format!(
+        r#"{{"nodes":{{"nixpkgs":{{"locked":{{"lastModified":1,"narHash":"sha256-a","owner":"NixOS","repo":"nixpkgs","rev":"{NIXPKGS}","type":"github"}},"original":{{"owner":"NixOS","ref":"nixos-unstable","repo":"nixpkgs","type":"github"}}}},{}"root":{{"inputs":{{"nixpkgs":"nixpkgs"{}}}}}}},"root":"root","version":7}}
+"#,
+        if private { private_node } else { "" },
+        if private {
+            r#","private":"private""#
+        } else {
+            ""
+        },
+    )
+}
+fn flake(private: bool) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        (
+            "dev/flake.nix".to_string(),
+            "{ outputs = _: { }; }\n".to_string(),
+        ),
+        ("dev/flake.lock".to_string(), flake_lock(private)),
+    ])
+}
+fn nix_fake(files: &BTreeMap<String, String>, lock: String) -> Arc<NixFake> {
+    Arc::new(NixFake {
+        inner: fixture(files.clone(), false, false),
+        lock,
+        output: Vec::new(),
+        declared: if files.values().any(|f| f.contains("private.git")) {
+            DECLARED.into()
+        } else {
+            r#"{"nixpkgs":"github:NixOS/nixpkgs/nixos-unstable"}"#.into()
+        },
+        calls: Mutex::new(Vec::new()),
+    })
+}
+/// One flake input updated by name: a dependency, its digest update, the plan.
+async fn flake_update(
+    executor: Arc<NixFake>,
+    files: &BTreeMap<String, String>,
+) -> (Plan, tempfile::TempDir) {
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().into(), "offline-installation").with_executor(executor);
+    let mut snapshot = snapshot(files);
+    let config = config();
+    let extraction = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(files)
+        .unwrap();
+    let mut repository = repo();
+    repository.package_files = serde_json::from_value(serde_json::json!([{
+        "path": "dev/flake.lock",
+        "dependencies": [{
+            "manager": "nix", "name": "nixpkgs", "package": "https://github.com/NixOS/nixpkgs",
+            "current": {"value": "github:NixOS/nixpkgs/nixos-unstable", "version": null, "digest": NIXPKGS},
+            "updates": [{"newValue": null, "newVersion": null, "newDigest": MOVED,
+                "updateType": "digest", "group": null}]
+        }]
+    }]))
+    .unwrap();
+    let mut plans = crate::plan(
+        &repository,
+        &config,
+        &extraction.dependencies,
+        &snapshot,
+        false,
+        None,
+        monday(),
+    )
+    .unwrap();
+    let mut p = plans.remove(0);
+    runner.prepare(&mut p, &mut snapshot, &config).await;
+    (p, temp)
+}
+
+/// A flake input moves through `nix flake update <input>` with the pinned static
+/// nix, a private chroot store, its own configuration, and the token only in
+/// nix's per-host access tokens. The lock is the only file written.
+#[tokio::test]
+async fn flake_inputs_move_through_nix_with_a_private_store() {
+    let files = flake(true);
+    let executor = nix_fake(&files, flake_lock(true).replace(NIXPKGS, MOVED));
+    let (p, temp) = flake_update(executor.clone(), &files).await;
+    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert!(p.contents["dev/flake.lock"].contains(MOVED));
+    assert!(!p.contents.contains_key("dev/flake.nix"));
+    assert_eq!(p.action.branch, "patchula/nix-dev--nixpkgs");
+    let calls = executor.calls.lock().unwrap();
+    let [(eval, _), (args, env)] = calls.as_slice() else {
+        panic!("an eval and an update expected: {calls:?}");
+    };
+    let (_, eval) = invocation(eval).unwrap();
+    assert!(contains(
+        &eval,
+        &[
+            "eval",
+            "--json",
+            "--impure",
+            "--option",
+            "restrict-eval",
+            "true"
+        ]
+    ));
+    let (specs, command) = invocation(args).unwrap();
+    assert_eq!(
+        specs,
+        nix::tools()
+            .unwrap()
+            .iter()
+            .map(|(t, v)| format!("{t}@{v}"))
+            .collect::<Vec<_>>()
+    );
+    assert!(specs[0].starts_with("http:nix[url=https://hydra.nixos.org/build/"));
+    assert!(specs[0].contains(",checksum=sha256:"));
+    let store = temp.path().with_extension("tools").join("nix/root");
+    assert!(starts(
+        &command,
+        &[
+            "nix",
+            "--store",
+            &format!("local?root={}", store.display()),
+            "flake",
+            "update",
+            "--flake"
+        ]
+    ));
+    assert!(command[6].starts_with("path:") && command[6].ends_with("/tree/dev"));
+    assert_eq!(&command[7..], ["--", "nixpkgs"]);
+    let config = &env["NIX_CONFIG"];
+    for line in [
+        "experimental-features = nix-command flakes",
+        "accept-flake-config = false",
+        "max-jobs = 0",
+        "access-tokens = github.com=offline-installation",
+    ] {
+        assert!(config.lines().any(|l| l == line), "{line}");
+    }
+    for (key, value) in env {
+        assert!(
+            key == "NIX_CONFIG" || !value.contains("offline-installation"),
+            "{key}"
+        );
+    }
+    let home = Path::new(&env["HOME"]);
+    for key in ["NIX_CONF_DIR", "NIX_USER_CONF_FILES", "XDG_CONFIG_DIRS"] {
+        assert!(
+            Path::new(&env[key]).starts_with(home.parent().unwrap()),
+            "{key}"
+        );
+    }
+    assert!(!env.contains_key("NIX_REMOTE"));
+}
+
+/// Maintenance runs a bare `nix flake update`, unless an input is refused:
+/// then it names every other input, so nix never fetches the refused one.
+#[tokio::test]
+async fn flake_maintenance_skips_refused_inputs() {
+    for (private, expected) in [(false, None), (true, Some(vec!["--", "nixpkgs"]))] {
+        let files = flake(private);
+        let executor = nix_fake(&files, flake_lock(private).replace(NIXPKGS, MOVED));
+        let temp = tempfile::tempdir().unwrap();
+        let runner =
+            Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
+        let mut snapshot = snapshot(&files);
+        let config = config();
+        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            p.lock_jobs
+                .iter()
+                .map(|j| (j.ecosystem, j.directory.as_str()))
+                .collect::<Vec<_>>(),
+            [(Ecosystem::Nix, "dev")]
+        );
+        runner.prepare(&mut p, &mut snapshot, &config).await;
+        assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+        let calls = executor.calls.lock().unwrap();
+        let (_, command) = invocation(&calls[1].0).unwrap();
+        let tail: Vec<&str> = command[7..].iter().map(String::as_str).collect();
+        assert_eq!(expected.unwrap_or_default(), tail);
+    }
+}
+
+/// The new lock is checked before anything is published: a node nix fetched
+/// from outside the repository fails the branch, and so does a requested
+/// input that did not move.
+#[tokio::test]
+async fn flake_locks_that_escape_or_do_not_move_fail() {
+    let files = flake(false);
+    let escaped = flake_lock(false).replace(NIXPKGS, MOVED).replace(
+        r#""root":{"inputs""#,
+        r#""host":{"locked":{"lastModified":1,"narHash":"sha256-h","path":"/home","type":"path"},"original":{"path":"/home","type":"path"}},"root":{"inputs""#,
+    );
+    for (lock, reason) in [
+        (escaped, "node host: it resolves outside the repository"),
+        (flake_lock(false), "not the approved"),
+        (
+            flake_lock(false).replace(NIXPKGS, &"8".repeat(40)),
+            "it moved after the lookup",
+        ),
+    ] {
+        let (p, _temp) = flake_update(nix_fake(&files, lock), &files).await;
+        assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+        assert!(
+            p.action.reason.as_deref().unwrap().contains(reason),
+            "{:?}",
+            p.action
+        );
+    }
+}
+
+/// Lookups prefetch a flake reference with the same nix and store; local,
+/// ssh and flag-like references never reach it.
+#[tokio::test]
+async fn flake_prefetch_runs_nix_only_for_remote_references() {
+    use patchula_datasource::Flakes;
+    let files = flake(false);
+    let executor = Arc::new(NixFake {
+        inner: fixture(files.clone(), false, false),
+        lock: String::new(),
+        output: br#"{"hash":"sha256-x","locked":{"rev":"abc"}}"#.to_vec(),
+        declared: String::new(),
+        calls: Mutex::new(Vec::new()),
+    });
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().into(), "").with_executor(executor.clone());
+    let output = runner
+        .prefetch("github:NixOS/nixpkgs/nixos-unstable", Some("secret-token"))
+        .await
+        .unwrap();
+    assert!(output.starts_with(b"{\"hash\""));
+    for refused in [
+        "path:/etc",
+        "git+ssh://git@host/r",
+        "git+file:///srv/r",
+        "--impure",
+        "github:a/b c",
+    ] {
+        assert!(runner.prefetch(refused, None).await.is_err(), "{refused}");
+    }
+    let calls = executor.calls.lock().unwrap();
+    let [(args, env)] = calls.as_slice() else {
+        panic!("one nix call expected: {calls:?}");
+    };
+    let (_, command) = invocation(args).unwrap();
+    assert_eq!(
+        &command[3..],
+        [
+            "flake",
+            "prefetch",
+            "--json",
+            "--refresh",
+            "--",
+            "github:NixOS/nixpkgs/nixos-unstable"
+        ]
+    );
+    assert!(env["NIX_CONFIG"].contains("access-tokens = github.com=secret-token"));
+}
+
+/// Real nix relocks a flake offline: its one input is a sub-flake in the
+/// repository, which needs no network.
+#[tokio::test]
+async fn real_nix_relocks_a_flake_offline() {
+    let files = BTreeMap::from([
+        (
+            "flake.nix".to_string(),
+            "{\n  inputs.sub.url = \"path:./sub\";\n  inputs.parent.url = ./sub;\n  outputs = { self, sub, parent }: { };\n}\n"
+                .to_string(),
+        ),
+        (
+            "sub/flake.nix".to_string(),
+            "{ outputs = { self }: { }; }\n".to_string(),
+        ),
+        (
+            "flake.lock".to_string(),
+            "{\"nodes\":{\"root\":{}},\"root\":\"root\",\"version\":7}\n".to_string(),
+        ),
+    ]);
+    let executor = fixture(files.clone(), false, true);
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().into(), "offline-installation").with_executor(executor);
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        .unwrap()
+        .unwrap();
+    runner.prepare(&mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    let lock: serde_json::Value = serde_json::from_str(&p.contents["flake.lock"]).unwrap();
+    assert_eq!(lock["nodes"]["root"]["inputs"]["sub"], "sub");
+    assert_eq!(lock["nodes"]["sub"]["locked"]["path"], "./sub");
+    assert_eq!(lock["nodes"]["parent"]["locked"]["path"], "sub");
+    assert_eq!(p.action.files.len(), 1);
+}
+
+/// Pruning empties the private nix store with `nix store gc` and drops the
+/// fetcher cache; nothing in the store is a root.
+#[tokio::test]
+async fn prune_empties_the_nix_store() {
+    let files = flake(false);
+    let executor = nix_fake(&files, String::new());
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().into(), "").with_executor(executor.clone());
+    assert!(
+        !runner
+            .prune(30)
+            .await
+            .unwrap()
+            .contains(&"nix store".to_string())
+    );
+    let cache = runner.tools().join("nix/cache/nix");
+    std::fs::create_dir_all(&cache).unwrap();
+    runner.record_use(&nix::tools().unwrap());
+    assert!(
+        runner
+            .prune(30)
+            .await
+            .unwrap()
+            .contains(&"nix store".to_string())
+    );
+    assert!(!cache.exists());
+    let calls = executor.calls.lock().unwrap();
+    let [(args, _)] = calls.as_slice() else {
+        panic!("one nix call expected: {calls:?}");
+    };
+    assert_eq!(&invocation(args).unwrap().1[3..], ["store", "gc"]);
+}
+
+/// nix fetches what flake.nix declares, so inputs flake.nix adds or repoints
+/// to a refused place fail the branch before nix fetches anything; nested
+/// input overrides count too.
+#[tokio::test]
+async fn flake_nix_inputs_are_checked_before_nix_fetches() {
+    let files = flake(true);
+    for (declared, reason) in [
+        (
+            r#"{"nixpkgs":"github:NixOS/nixpkgs/nixos-unstable","evil":{"url":"tarball+http://127.0.0.1:8765/x","flake":false}}"#,
+            "input evil: only https URLs are fetched",
+        ),
+        (
+            r#"{"nixpkgs":{"url":"github:NixOS/nixpkgs","inputs":{"systems":{"url":"path:/etc"}}}}"#,
+            "input nixpkgs: systems: it resolves outside the repository",
+        ),
+        (
+            r#"{"private":{"url":"git+ssh://git@example.com/other.git"}}"#,
+            "input private: ssh is not allowed; only https",
+        ),
+    ] {
+        let executor = Arc::new(NixFake {
+            inner: fixture(files.clone(), false, false),
+            lock: flake_lock(true).replace(NIXPKGS, MOVED),
+            output: Vec::new(),
+            declared: declared.into(),
+            calls: Mutex::new(Vec::new()),
+        });
+        let (p, _temp) = flake_update(executor.clone(), &files).await;
+        assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+        assert!(
+            p.action.reason.as_deref().unwrap().contains(reason),
+            "{:?}",
+            p.action
+        );
+        let calls = executor.calls.lock().unwrap();
+        assert!(
+            !calls
+                .iter()
+                .any(|(args, _)| args.iter().any(|a| a == "update"))
+        );
+    }
+}
+
+/// Real nix reads flake.nix's inputs under restricted evaluation, and a plain
+/// http input is refused without a request.
+#[tokio::test]
+async fn real_nix_refuses_a_declared_http_input_before_fetching() {
+    let files = BTreeMap::from([
+        (
+            "flake.nix".to_string(),
+            "{\n  inputs.evil = { url = \"tarball+http://127.0.0.1:9/x\"; flake = false; };\n  outputs = _: { boom = builtins.fetchurl \"http://127.0.0.1:9/y\"; };\n}\n".to_string(),
+        ),
+        (
+            "flake.lock".to_string(),
+            "{\"nodes\":{\"root\":{}},\"root\":\"root\",\"version\":7}\n".to_string(),
+        ),
+    ]);
+    let executor = fixture(files.clone(), false, true);
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().into(), "offline-installation").with_executor(executor);
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        .unwrap()
+        .unwrap();
+    runner.prepare(&mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+    assert!(
+        p.action
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("flake.nix: input evil: only https URLs are fetched"),
+        "{:?}",
+        p.action
+    );
+}
+
+/// Inputs of different flakes never share a branch name, even when the root
+/// flake's input name spells out the other flake's directory.
+#[test]
+fn flake_branches_keep_the_directory_apart_from_the_input() {
+    let lock = |name: &str| {
+        flake_lock(false).replace(
+            "\"nixpkgs\":\"nixpkgs\"",
+            &format!("\"{name}\":\"nixpkgs\""),
+        )
+    };
+    let files = BTreeMap::from([
+        (
+            "flake.nix".to_string(),
+            "{ outputs = _: { }; }\n".to_string(),
+        ),
+        ("flake.lock".to_string(), lock("dev-nixpkgs")),
+        (
+            "dev/flake.nix".to_string(),
+            "{ outputs = _: { }; }\n".to_string(),
+        ),
+        ("dev/flake.lock".to_string(), lock("nixpkgs")),
+    ]);
+    let config = config();
+    let extraction = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap();
+    let entry = |path: &str, name: &str| {
+        serde_json::json!({
+            "path": path,
+            "dependencies": [{
+                "manager": "nix", "name": name, "package": "https://github.com/NixOS/nixpkgs",
+                "current": {"value": "github:NixOS/nixpkgs/nixos-unstable", "version": null, "digest": NIXPKGS},
+                "updates": [{"newValue": null, "newVersion": null, "newDigest": MOVED,
+                    "updateType": "digest", "group": null}]
+            }]
+        })
+    };
+    let mut repository = repo();
+    repository.package_files = serde_json::from_value(serde_json::json!([
+        entry("flake.lock", "dev-nixpkgs"),
+        entry("dev/flake.lock", "nixpkgs"),
+    ]))
+    .unwrap();
+    let plans = crate::plan(
+        &repository,
+        &config,
+        &extraction.dependencies,
+        &snapshot(&files),
+        false,
+        None,
+        monday(),
+    )
+    .unwrap();
+    let branches: BTreeSet<_> = plans.iter().map(|p| p.action.branch.as_str()).collect();
+    assert_eq!(
+        branches,
+        BTreeSet::from(["patchula/nix-dev--nixpkgs", "patchula/nix-dev-nixpkgs"])
     );
 }

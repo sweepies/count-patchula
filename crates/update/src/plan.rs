@@ -199,6 +199,13 @@ pub fn plan(
     Ok(plans)
 }
 
+/// A package recorded only in a lockfile, which its tool alone can move: a
+/// transitive package, or a flake input that nix relocks.
+fn lock_only(dep: &Dependency) -> bool {
+    dep.kind == patchula_config::DependencyKind::Transitive
+        || dep.manager == patchula_config::Manager::Nix
+}
+
 /// One branch plan from its items: edits, lock jobs, message and changes.
 #[allow(clippy::too_many_arguments)]
 fn build(
@@ -254,7 +261,7 @@ fn build(
                 .unwrap_or(value)
         ));
         // A lockfile-only package changes through its lockfile tool alone.
-        if dep.kind == patchula_config::DependencyKind::Transitive {
+        if lock_only(dep) {
             continue;
         }
         let Some(blob) = snapshot.files.get(&dep.file) else {
@@ -301,9 +308,7 @@ fn build(
             Err(error) => reason = Some(format!("{path}: {error}")),
         }
     }
-    let transitive = items
-        .iter()
-        .all(|item| item.dep.kind == patchula_config::DependencyKind::Transitive);
+    let transitive = items.iter().all(|item| lock_only(item.dep));
     if transitive && lock_jobs.iter().any(|job| job.target.is_none()) {
         reason = Some("no lockfile tool can move this package to an exact version".into());
     }
@@ -540,6 +545,20 @@ fn branch_identity(
         (
             serde_json::json!(["group", group, major]).to_string(),
             format!("{}{}", if major { "major-" } else { "" }, slug(group)),
+        )
+    } else if dep.manager == patchula_config::Manager::Nix {
+        // An input belongs to its own lock: the same name in two flakes moves
+        // on two branches, named after the input rather than its long URL. A
+        // slug never holds "--", so it keeps the directory apart from the name.
+        let directory = dep.file.strip_suffix("flake.lock").unwrap_or_default();
+        let name = if directory.is_empty() {
+            slug(&dep.name)
+        } else {
+            format!("{}--{}", slug(directory), slug(&dep.name))
+        };
+        (
+            serde_json::json!(["flake", dep.file, dep.name]).to_string(),
+            format!("nix-{name}"),
         )
     } else {
         let line = line(dep, reported, update);

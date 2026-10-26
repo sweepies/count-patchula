@@ -2,6 +2,7 @@
 mod checkout;
 mod dotnet;
 mod mise;
+mod nix;
 mod node;
 mod php;
 mod process;
@@ -37,6 +38,7 @@ pub enum Ecosystem {
     Dotnet,
     Ruby,
     Php,
+    Nix,
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Job {
@@ -136,6 +138,16 @@ pub(crate) fn job(
                 return Ok(None);
             };
             (Ecosystem::Php, root)
+        }
+        // Each flake input is moved by name; nix resolves its new revision.
+        Manager::Nix => {
+            return Ok(Some(Job {
+                ecosystem: Ecosystem::Nix,
+                directory: directory(&dep.file).into(),
+                package: Some(dep.name.clone()),
+                current: dep.digest.clone(),
+                target: update.new_digest.clone(),
+            }));
         }
         // NuGet locks sit beside each project; a manifest under a directory
         // with locks restores that directory's solution or project.
@@ -264,6 +276,14 @@ pub fn maintenance(
             "packages.lock.json" if config.managers.contains(&Manager::Nuget) => Ecosystem::Dotnet,
             "Gemfile.lock" if config.managers.contains(&Manager::Bundler) => Ecosystem::Ruby,
             "composer.lock" if config.managers.contains(&Manager::Composer) => Ecosystem::Php,
+            "flake.lock"
+                if config.managers.contains(&Manager::Nix)
+                    && snapshot
+                        .paths
+                        .contains(&node::join(directory(path), "flake.nix")) =>
+            {
+                Ecosystem::Nix
+            }
             "mise.lock" if config.managers.contains(&Manager::Mise) => Ecosystem::Mise,
             "go.mod" if config.managers.contains(&Manager::Go) => Ecosystem::Go,
             ".terraform.lock.hcl" if config.managers.contains(&Manager::Terraform) => {
@@ -401,6 +421,7 @@ pub async fn record_refresh(
     Ok(())
 }
 
+#[derive(Clone)]
 pub struct Runner {
     credentials: Option<Arc<dyn patchula_github::Credentials>>,
     cache: PathBuf,
@@ -416,6 +437,9 @@ pub struct Runner {
     usage: Arc<std::sync::Mutex<()>>,
     /// The user's mise data directory, whose installs seed the tool store.
     seed: Option<PathBuf>,
+    /// Held by the first nix call while it installs nix, so concurrent
+    /// lookups neither install it twice nor clear each other's install.
+    nix_install: Arc<tokio::sync::Mutex<()>>,
 }
 impl Runner {
     pub fn new(cache: PathBuf, token: &str) -> Self {
@@ -454,6 +478,7 @@ impl Runner {
             http: Arc::new(NetworkTransport),
             usage: Default::default(),
             seed: None,
+            nix_install: Default::default(),
         }
     }
     /// Borrow tool versions from this mise data directory, usually the user's
@@ -526,7 +551,7 @@ impl Runner {
             .map(|j| (j.ecosystem, j.directory.clone()))
             .collect();
         for (ecosystem, directory) in groups {
-            let versions = if ecosystem == Ecosystem::Mise {
+            let versions = if matches!(ecosystem, Ecosystem::Mise | Ecosystem::Nix) {
                 BTreeMap::new()
             } else {
                 versions(&baseline, &directory)?
@@ -597,6 +622,17 @@ impl Runner {
                             maintenance: plan.maintenance,
                         },
                         &jobs,
+                    )
+                    .await?;
+                }
+                Ecosystem::Nix => {
+                    self.flake_lock(
+                        &driver,
+                        &root,
+                        &baseline,
+                        &directory,
+                        &jobs,
+                        plan.maintenance,
                     )
                     .await?;
                 }
@@ -780,7 +816,7 @@ impl Runner {
         }
         Ok(())
     }
-    async fn tool(&self, driver: &Path, call: Invocation) -> Result<(), String> {
+    async fn tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, String> {
         let mut spec = self.command(driver);
         // A first use installs the tool inside this call, from scratch.
         if !self.installed(&call.tools) {
@@ -790,6 +826,11 @@ impl Runner {
         }
         if let Some(cwd) = &call.cwd {
             spec.cwd = cwd.clone();
+        }
+        // nix answers in JSON, which is read whole.
+        if call.bin == "nix" {
+            spec.output_limit = 1 << 20;
+            spec.complete_output = true;
         }
         for (key, value) in &call.env {
             spec.env.insert(key.into(), value.into());
@@ -834,12 +875,13 @@ impl Runner {
         }
         spec.args.extend(call.args);
         let bin = call.bin;
-        self.executor
+        let output = self
+            .executor
             .run(spec)
             .await
             .map_err(|e| format!("{bin}: {e}"))?;
         self.record_use(&call.tools);
-        Ok(())
+        Ok(output)
     }
 }
 
@@ -1066,6 +1108,7 @@ fn writable(path: &str) -> bool {
             | "poetry.lock"
             | "composer.json"
             | "composer.lock"
+            | "flake.lock"
     ) || path.ends_with(".tf")
 }
 fn materialized(path: &str) -> bool {
@@ -1082,6 +1125,7 @@ fn materialized(path: &str) -> bool {
                 | ".python-version"
                 | "uv.toml"
                 | "poetry.toml"
+                | "flake.nix"
         )
         || path.ends_with(".go")
         || path.ends_with(".rs")

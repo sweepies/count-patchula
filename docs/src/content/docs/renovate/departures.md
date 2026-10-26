@@ -383,6 +383,16 @@ plugin first and another backend later uses the other backend. See
 - **Count Patchula:** Looks them up on `gitlab.host`, gitlab.com by default, which must be gitlab.com or have a `gitlab` label in its name
 - **Why:** The Count runs on GitHub, so there is no GitLab platform to ask; recognising a GitLab instance by its name keeps lookups unauthenticated without probing unknown hosts
 
+### Nix flake inputs {#nix-flake-inputs}
+
+- **Renovate:** The `nix` manager is beta and off by default; it matches `flake.nix` and looks inputs up with `git-refs`
+- **Count Patchula:** `nix` is on by default; it reads `flake.lock` beside a `flake.nix`, and asks nix itself what each input's reference points at, with `nix flake prefetch`
+- **Why:** nix resolves every input type a lock can hold (tarballs, channels and the flake registry included) the way `nix flake update` will, and gives the commit date for the release-age wait. Locking runs no repository code, so there is no reason to keep it opt-in
+
+Inputs that resolve outside the repository, ssh URLs and plain http are
+skipped, and branches are named after the input: `patchula/nix-nixpkgs`. See
+[Nix](/guide/managers/#nix).
+
 ## Which updates are proposed
 
 ### Copier templates are reported, not regenerated {#copier-templates}

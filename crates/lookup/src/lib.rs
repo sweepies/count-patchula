@@ -248,6 +248,9 @@ impl Evaluator {
         {
             return false;
         }
+        if dep.source == Source::Nix {
+            return !self.ignored(dep) && self.effective(dep, Update::Digest).policy.active;
+        }
         if self.ignored(dep)
             || ![Update::Major, Update::Minor, Update::Patch, Update::Pin]
                 .into_iter()
@@ -513,6 +516,33 @@ impl Evaluator {
             });
             Ok(false)
         };
+        // A flake input follows whatever its reference resolves to now, so its
+        // only update is a new locked revision, dated by that commit.
+        if dep.source == Source::Nix {
+            let effective = self.effective(dep, Update::Digest);
+            let Some((version, digest)) = catalog
+                .versions
+                .first()
+                .and_then(|v| Some((v, v.digest.clone()?)))
+                .filter(|(_, digest)| {
+                    effective.policy.active && dep.digest.as_deref() != Some(digest)
+                })
+            else {
+                return Ok(Evaluation::default());
+            };
+            if !eligible(version, &digest, Update::Digest, &effective)? {
+                return Ok(Evaluation {
+                    updates: Vec::new(),
+                    held_back,
+                });
+            }
+            let mut update = proposal(None, None, Some(digest), Update::Digest, &effective.policy);
+            update.release_age = release_age(version, now);
+            return Ok(Evaluation {
+                updates: vec![update],
+                held_back,
+            });
+        }
         let scheme = scheme(dep)?;
         let extractor = dep
             .extract

@@ -1180,3 +1180,57 @@ fn pre_commit_revs_update_to_the_exact_tag_name() {
     values.sort();
     assert_eq!(values, [("major", Some("2.0")), ("minor", Some("v1.1"))]);
 }
+
+/// A flake input's only update is the new revision its reference resolves to,
+/// held back until that commit is as old as the release-age wait.
+#[test]
+fn flake_inputs_get_digest_updates_after_the_release_age_wait() {
+    let mut cfg = config("benchmark-public");
+    cfg.defaults.wait_hours = 24;
+    let eval = Evaluator::new(&cfg).unwrap();
+    let mut dep = dependency("nixpkgs");
+    dep.manager = Manager::Nix;
+    dep.kind = DependencyKind::FlakeInput;
+    dep.source = Source::Nix;
+    dep.scheme = Scheme::Loose;
+    dep.package = "https://github.com/NixOS/nixpkgs".into();
+    dep.current = "github:NixOS/nixpkgs/nixos-unstable".into();
+    dep.resolved = None;
+    dep.digest = Some("1".repeat(40));
+    assert!(eval.needs_lookup(&dep));
+    let resolved = |digest: String| Catalog {
+        versions: vec![Version {
+            version: digest.clone(),
+            published_at: Some("2026-10-20T00:00:00Z".into()),
+            digest: Some(digest),
+            deprecated: false,
+            yanked: false,
+        }],
+        dist_tags: Default::default(),
+    };
+    let moved = resolved("2".repeat(40));
+    let early = eval
+        .evaluate_at(&dep, &moved, "2026-10-20T12:00:00Z".parse().unwrap())
+        .unwrap();
+    assert!(early.updates.is_empty());
+    assert_eq!(early.held_back[0].update_type, "digest");
+    assert_eq!(early.held_back[0].eligible_at, "2026-10-21T00:00:00Z");
+    let later = eval
+        .evaluate_at(&dep, &moved, "2026-10-22T00:00:00Z".parse().unwrap())
+        .unwrap();
+    let [update] = later.updates.as_slice() else {
+        panic!("one update expected: {:?}", later.updates);
+    };
+    assert_eq!(update.update_type, "digest");
+    assert_eq!(update.new_digest.as_deref(), Some("2".repeat(40).as_str()));
+    assert_eq!(update.new_value, None);
+    assert!(update.release_age.is_some());
+    let unchanged = eval
+        .evaluate_at(
+            &dep,
+            &resolved("1".repeat(40)),
+            "2026-10-22T00:00:00Z".parse().unwrap(),
+        )
+        .unwrap();
+    assert!(unchanged.updates.is_empty() && unchanged.held_back.is_empty());
+}

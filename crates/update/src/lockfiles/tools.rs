@@ -55,6 +55,10 @@ pub(super) fn defaults() -> Result<Vec<(String, String)>, String> {
             }
         }
     }
+    // Static nix exists for Linux only; elsewhere flake locks fail clearly.
+    if let Ok(nix) = super::nix::tools() {
+        tools.extend(nix);
+    }
     if let Some(berry) = doc["yarn"]["berry"].as_str() {
         tools.push(("yarn".into(), berry.into()));
     }
@@ -256,6 +260,7 @@ impl Runner {
         Ok(specs)
     }
     /// Uninstall tool versions no run has used for `days`; pinned defaults stay.
+    /// The nix store holds only fetched flake inputs and is emptied every time.
     pub async fn prune(&self, days: i64) -> Result<Vec<String>, String> {
         let cutoff = chrono::Utc::now().timestamp() - days * 86_400;
         let keep: BTreeSet<String> = defaults()?
@@ -279,6 +284,11 @@ impl Runner {
             usage.remove(spec);
         }
         write_usage(&self.mise_data, &usage)?;
-        Ok(stale)
+        drop(_guard);
+        let mut pruned = stale;
+        if self.prune_nix().await? {
+            pruned.push("nix store".into());
+        }
+        Ok(pruned)
     }
 }

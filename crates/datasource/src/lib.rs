@@ -8,6 +8,8 @@ mod forge;
 mod github;
 mod maven;
 mod mise;
+mod nix;
+pub use nix::Flakes;
 pub mod notes;
 mod nuget;
 mod packagist;
@@ -38,6 +40,10 @@ pub enum Error {
     Mise(#[from] patchula_mise::Error),
     #[error("mise lookups need the Count's tool store, which this cache does not have")]
     NoMise,
+    #[error("flake input lookups need the Count's tool store, which this cache does not have")]
+    NoNix,
+    #[error("nix failed: {0}")]
+    Nix(String),
     #[error("invalid package identity or upstream payload")]
     Invalid,
     #[error("release-note read failed: {0}")]
@@ -133,6 +139,7 @@ pub struct Client {
     release_bodies: notes::BodyCache,
     use_versions_host: bool,
     mise: Option<std::sync::Arc<patchula_mise::Lookup>>,
+    nix: Option<std::sync::Arc<dyn Flakes>>,
     stale_registry: std::sync::Arc<tokio::sync::Mutex<BTreeMap<String, BTreeMap<String, i64>>>>,
 }
 impl Client {
@@ -153,6 +160,7 @@ impl Client {
             release_bodies: Default::default(),
             use_versions_host: true,
             mise: None,
+            nix: None,
             stale_registry: Default::default(),
         }
     }
@@ -176,9 +184,11 @@ impl Client {
             .unwrap_or_default()
     }
     pub async fn lookup(&self, source: Source, package: &str) -> Result<Catalog> {
-        if package.is_empty()
-            || package.contains(['?', '#', '\\'])
-            || package.split('/').any(|s| s == ".." || s == ".")
+        // A flake reference is a URL with a query; the runner checks its scheme.
+        if source != Source::Nix
+            && (package.is_empty()
+                || package.contains(['?', '#', '\\'])
+                || package.split('/').any(|s| s == ".." || s == "."))
         {
             return Err(Error::Invalid);
         }
@@ -208,6 +218,7 @@ impl Client {
             Source::Nuget => self.nuget(package).await,
             Source::Rubygems => self.rubygems(package).await,
             Source::Packagist => self.packagist(package).await,
+            Source::Nix => self.nix(package).await,
         }
     }
     async fn npm(&self, package: &str) -> Result<Catalog> {

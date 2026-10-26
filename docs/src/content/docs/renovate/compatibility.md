@@ -59,6 +59,7 @@ Managers the Count supports, under Renovate's names:
 | `composer` | `composer` | |
 | `gitlabci` | `gitlabci` | GitLab CI variables in images are skipped, not aliased |
 | `gitlabci-include` | `gitlabci-include` | |
+| `nix` | `nix` | on by default; inputs resolved by nix itself, not `git-refs` |
 | `regex` | `regex` | Pkl extractors |
 
 Renovate managers with no Count equivalent yet:
@@ -71,7 +72,7 @@ Renovate managers with no Count equivalent yet:
 `fleet`, `fvm`, `git-submodules`, `glasskube`, `gleam`, `haskell-cabal`, `helm-requirements`, `helmfile`, `helmsman`,
 `hermit`, `homeassistant-manifest`, `homebrew`, `html`, `jenkins`, `jsonata`,
 `jsonnet-bundler`, `kotlin-script`, `leiningen`, `maven-wrapper`, `meteor`,
-`mint`, `mix`, `nix`, `ocb`, `osgi`, `pep723`, `pip_setup`, `pipenv`, `pixi`,
+`mint`, `mix`, `ocb`, `osgi`, `pep723`, `pip_setup`, `pipenv`, `pixi`,
 `proto`, `pub`, `puppet`, `quadlet`, `runtime-version`, `sbt`, `scalafmt`,
 `setup-cfg`, `smithy`, `sveltos`, `swift`, `tekton`, `terragrunt`,
 `terragrunt-version`, `tflint-plugin`, `travis`, `typst`, `unity3d`, `vendir`,
@@ -99,6 +100,7 @@ he does not read Renovate presets.
 | `rubygems`, `ruby-version` | `rubygems`, and Ruby through `mise` |
 | `packagist` | `packagist` |
 | `node-version`, `golang-version`, `python-version`, `rust-version` | `mise` |
+| `git-refs`, for Nix flake inputs | `nix`, through `nix flake prefetch` |
 
 The rest of Renovate's 82 datasources (`git-refs`, `git-tags`, the GitLab and
 Gitea release sources, `artifactory`, `conda`, `hex`, `dart`, `pod`, `cdnjs`,
