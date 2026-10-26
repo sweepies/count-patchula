@@ -101,7 +101,9 @@ impl Style {
     }
 
     /// Rows in aligned columns. On a terminal the flex column is cut to fit
-    /// the width; plain rows are never cut.
+    /// the width, down to 8 characters; the other columns are never cut, so a
+    /// row whose fixed columns are wider than the terminal overflows rather
+    /// than losing a version. Plain rows are never cut.
     pub fn table(
         &self,
         out: &mut String,
@@ -153,13 +155,7 @@ impl Style {
                     line.push_str(&" ".repeat(pad + 2));
                 }
             }
-            let line = line.trim_end();
-            lines.push(match self.width {
-                Some(width) if console::measure_text_width(line) > width => {
-                    console::truncate_str(line, width, "…").into_owned()
-                }
-                _ => line.to_owned(),
-            });
+            lines.push(line.trim_end().to_owned());
         }
         lines
     }
@@ -548,11 +544,16 @@ fn details(out: &mut String, style: &Style, indent: usize, repo: &Repository) {
                             .map_or("no fix yet".into(), |v| format!("fixed in {v}")),
                         Paint::Plain,
                     ),
-                    (advisory.summary.clone().unwrap_or_default(), Paint::Dim),
                 ]
             })
             .collect();
-        style.table(out, indent + 2, &rows, 4);
+        let lines = style.lines(indent + 2, &rows, usize::MAX);
+        for (line, (_, advisory)) in lines.iter().zip(&advisories) {
+            let _ = writeln!(out, "{line}");
+            if let Some(summary) = &advisory.summary {
+                style.wrap(out, indent + 4, summary, Paint::Dim);
+            }
+        }
     }
     failures(
         out,

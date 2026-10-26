@@ -418,6 +418,7 @@ async fn main() -> ExitCode {
         .with(layer.with_filter(Targets::new().with_target("patchula", level)))
         .try_init();
     let color = output::colored(app.color, io::stderr().is_terminal());
+    console::set_colors_enabled_stderr(color);
     let _ = miette::set_hook(Box::new(move |_| {
         Box::new(
             miette::MietteHandlerOpts::new()

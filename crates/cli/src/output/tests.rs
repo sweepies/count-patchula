@@ -143,14 +143,23 @@ fn a_terminal_fits_rows_to_its_width_but_leaves_links_whole() {
     };
     let text = super::report(&report, &style);
     assert!(text.starts_with("🦇 The Count visited"), "{text}");
+    // Paths are cut to fit, and messages and the headline wrap.
+    assert!(
+        text.contains("  major  actions/checkout  v4.1.0 → v5.0.0    .github/workf…\n"),
+        "{text}"
+    );
     for line in text
         .lines()
-        .filter(|line| !line.trim_start().starts_with("https://"))
+        .filter(|line| !line.contains("GHSA-") && !line.contains("https://"))
     {
         let width = console::measure_text_width(line);
-        // The headline is wrapped by the terminal itself.
-        assert!(width <= 60 || line.starts_with("🦇"), "{width}: {line}");
+        assert!(width <= 60, "{width}: {line}");
     }
+    // A row too wide even with its flexible column cut keeps every version.
+    assert!(
+        text.contains("lodash 4.17.20  GHSA-35jh-r3h4-6jhm (CVE-2021-23337)  fixed in 4.17.21\n"),
+        "{text}"
+    );
     assert!(
         text.contains("    https://github.com/acme/template/compare/v0.16.0...v0.23.0\n"),
         "{text}"
