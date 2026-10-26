@@ -127,7 +127,7 @@ OR. An empty list means "any".
 | `files` | paths in the repository |
 | `updates` | `major`, `minor`, `patch`, `digest` or `pin` |
 | `sources` | sources, such as `npm` or `docker` |
-| `kinds` | dependency roles: `production`, `development`, `peer`, `optional`, `build`, `action`, `reusable-workflow`, `runner`, `container-image`, `tool`, `go-directive`, `toolchain`, `provider`, `module`, `chart`, and `reference-data` on top of a dependency's own kind |
+| `kinds` | dependency [kinds](/guide/managers/#kinds), such as `production`, `action` or `tool` |
 | `current` | the current version, through `semver:` or `regex:` |
 
 Patterns are case-sensitive, path-aware globs (`/` is a separator), optionally

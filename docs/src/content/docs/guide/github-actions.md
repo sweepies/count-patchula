@@ -47,7 +47,7 @@ jobs:
         with:
           client-id: ${{ vars.PATCHULA_CLIENT_ID }}
           private-key: ${{ secrets.PATCHULA_APP_PRIVATE_KEY }}
-      - uses: sweepies/count-patchula@v0.2.0
+      - uses: sweepies/count-patchula@v0.3.0
         with:
           token: ${{ steps.app.outputs.token }}
 ```
@@ -91,7 +91,7 @@ jobs:
           private-key: ${{ secrets.PATCHULA_APP_PRIVATE_KEY }}
           # Every repository the App is installed on in this organization.
           owner: ${{ github.repository_owner }}
-      - uses: sweepies/count-patchula@v0.2.0
+      - uses: sweepies/count-patchula@v0.3.0
         with:
           token: ${{ steps.app.outputs.token }}
           all-repos: "true"
@@ -117,8 +117,7 @@ Policy files amend `PatchulaConfig.pkl` like any config, and the Count supplies 
 build these files on one organization module.
 
 A batch across many repositories shares lookups and caches, so one scheduled
-run is much cheaper than one per repository. For many runs a day, the [GitHub
-App server](/guide/server/) keeps everything warm in one process instead.
+run is much cheaper than one per repository.
 
 ## Inputs
 

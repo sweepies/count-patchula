@@ -4,19 +4,16 @@ title: "GitHub App server"
 
 import { Steps } from "@astrojs/starlight/components";
 
-`patchula serve` keeps the Count up all night. It runs the same engine as
-`patchula run`, but as a long-lived process: it takes GitHub webhooks, keeps one
-deduplicated queue, sweeps every installed repository on a schedule, mints its
-own installation tokens, and keeps every cache warm between batches.
-
-This is the recommended way to run the Count. Caches that stay warm make every
-batch after the first cheap, webhooks batch together work from many
-repositories, and a ticked checkbox on a PR or the dashboard is acted on within
-seconds instead of at the next scheduled run. Between batches the server sits
-idle with little memory in use.
+`patchula serve` is the recommended way to run the Count: the same engine as
+`patchula run`, as a long-lived process. It takes GitHub webhooks into one
+deduplicated queue, sweeps every installed repository on a schedule and mints
+its own installation tokens. Its caches stay warm, so every batch after the
+first is cheap; work from many repositories is batched together; and a ticked
+checkbox on a PR or the dashboard is acted on within seconds, not at the next
+scheduled run. Between batches it sits idle with little memory in use.
 
 :::note[No web UI]
-There is no web UI. The routes are `POST /webhook`, `GET /healthz`,
+The routes are `POST /webhook`, `GET /healthz`,
 `GET /readyz`, the small `/api/v1` API behind [`--remote`](#run-from-your-machine)
 and the read-only [repository API](#repository-api).
 It listens on `127.0.0.1:8080` by default, so put an HTTPS reverse proxy in
@@ -106,8 +103,8 @@ disallowed repositories and unrelated events are acknowledged and ignored.
 ## Webhook handling
 
 Signatures (`X-Hub-Signature-256`) are verified over the raw bytes before any
-JSON is parsed. Bodies are limited to 2 MiB. A bad signature gets 401, a signed
-but malformed delivery 400, and a durably queued one 202. If SQLite is busy or
+JSON is parsed. A bad signature gets 401, a body over 2 MiB 413, a signed but
+malformed delivery 400, and a durably queued one 202. If SQLite is busy or
 the server is draining, the answer is 503 so GitHub redelivers. Delivery IDs are
 deduplicated for seven days. Every rejection carries a JSON `error_kind`, such as
 `bad-signature` or `draining`.
@@ -146,18 +143,17 @@ fails. The URL must use HTTPS, except for a server on `localhost` or a
 loopback address.
 
 With no repository named, `--remote` runs the checkout's GitHub repository, so
-the server reads what is pushed, not the working tree. A real `run` there
-needs the working tree to be clean and at the remote's default branch, the
-same as one on this machine.
+the server reads what is pushed, not the working tree. A real `run` there has
+the same [clean-checkout rule](/guide/how-it-works/#working-tree-or-github) as
+one on this machine.
 
 On first use the CLI asks you to sign in: it prints a code to enter at
 `github.com/login/device`, and you authorise the server's App. The token is
 stored in `~/.config/patchula/servers.json` (or under `XDG_CONFIG_HOME`) and
-refreshed as it expires, so this happens once. `patchula auth login` and
-`patchula auth logout` sign in and out explicitly, with `--server <URL>` or
-`PATCHULA_SERVER`; to revoke the App's access,
-use GitHub's Settings → Applications. Only a token from this sign-in works:
-the server refuses personal access tokens and other Apps' tokens.
+refreshed as it expires. `patchula auth login` and `patchula auth logout` sign
+in and out explicitly, with `--server <URL>` or `PATCHULA_SERVER`; GitHub's
+Settings → Applications revokes the App's access. The server refuses any other
+token, including personal access tokens and other Apps' tokens.
 
 Each repository in the request must:
 
@@ -168,31 +164,29 @@ Each repository in the request must:
 
 A server runs one request per user at a time, and a real run shares the queue's
 engine, so it never races a webhook batch. The repository's own `patchula.pkl`
-applies; `--config`, `--config-dir`, `--all-repos`,
+applies; `--config`, `--config-dir`, `--default-config`, `--all-repos`,
 `--allow-lockfile-pending` and `--recheck` only work locally, and the cache and
-HTTP flags are ignored. A run in progress when the server shuts down finishes
-before it exits, within the shutdown deadline.
+HTTP flags are ignored. A run in progress at shutdown finishes within the
+shutdown deadline.
 
 ### Found from a checkout
 
 The server hides its URL in an HTML comment in each PR and dashboard it writes.
 `patchula lookup`, `run` or `tui` in a checkout, with no repository named and
-neither `--remote` nor `--here`, looks for that comment in the newest 500
-open issues and PRs.
-The comment counts only if its author is the bot that the server names at
-`/api/v1/auth`, so a comment pasted by someone else, or written by another
-App, is ignored. If it finds a server, it asks once whether to run there, and
-remembers your answer for that repository in
-`~/.config/patchula/repositories.json`. Answer yes and plain commands in that
-checkout run on the server from then on; answer no and they read the working
-tree, as they do anywhere else.
+neither `--remote` nor `--here`, looks for that comment in the 500 most
+recently updated open issues and PRs. The comment counts only if its author is
+the bot that the server names at `/api/v1/auth`, so a comment pasted by someone
+else, or written by another App, is ignored. If it finds a server, it asks once
+whether to run there, and remembers your answer for that repository in
+`~/.config/patchula/repositories.json` until you sign out of that server with
+`patchula auth logout`:
 
-The answer, yes or no, holds until you sign out of that server with
-`patchula auth logout`.
-`--here` runs one command on this machine anyway, and `--remote` uses the
-remembered server even after a no. Without a terminal nothing is looked up or
-asked, and the command reads the working tree. Local-only flags such as
-`--config` always run locally.
+- yes: plain commands in that checkout run on the server;
+- no: they read the working tree;
+- `--here` runs one command locally anyway, and `--remote` uses the
+  remembered server even after a no;
+- without a terminal nothing is looked up or asked;
+- local-only flags always run locally.
 
 The advertised URL is `publicUrl`, or the App's webhook URL with `/webhook`
 removed. A webhook relay such as smee.io gives no server URL, so set
@@ -252,19 +246,24 @@ Each open PR has `number`, `url`, `branch`, `title`, `body`, `draft`, `labels`,
 `null` if the run left it alone. GitHub works out `mergeable` and
 `mergeableState` in the background, so either can be `null`.
 
-The API is read-only. A dashboard that merges sends GitHub's
+A dashboard that merges sends GitHub's
 `PUT /repos/{owner}/{repo}/pulls/{number}/merge` with its own token, passing
 `headSha` as `sha` so that GitHub refuses if the PR changed since the run.
 
-Discovery and installation events decide which repositories are listed: a
-sweep replaces each installation's list, repositories added to or removed from
-an installation, and renamed ones, come and go straight away, and an uninstalled installation's
-repositories go within a minute. A run of a repository the server
-has not listed yet adds it once GitHub confirms it is in the installation.
-Settings that no longer allow a repository hide it at once. Every webhook
-about a repository updates its visibility, and a run can hide it but never
-show it, since a webhook may have changed it during the run. A private repository is never shown, and neither is one
-whose visibility the server could not read.
+Discovery and installation events decide which repositories are listed:
+
+- a sweep replaces each installation's list;
+- repositories added to or removed from an installation, and renamed ones,
+  come and go straight away;
+- an uninstalled installation's repositories go within a minute;
+- a run of a repository the server has not listed yet adds it once GitHub
+  confirms it is in the installation;
+- settings that no longer allow a repository hide it at once;
+- every webhook about a repository updates its visibility, and a run can hide
+  it but never show it, since a webhook may have changed it during the run.
+
+A private repository is never shown, and neither is one whose visibility the
+server could not read.
 
 The server records a repository after each run that writes: queued batches and
 `--remote` runs, but not lookups or dry runs. A run never replaces one that
@@ -293,15 +292,15 @@ Container Registry:
 ghcr.io/sweepies/count-patchula:X.Y.Z
 ```
 
-The tags are a release's version without the `v`, in place of `X.Y.Z`, and
-`latest`. A prerelease does not move `latest`. There are no minor, major or
-edge tags, so pin the version and upgrade on purpose. Every image carries an
-SBOM and a provenance attestation from BuildKit.
+The tags are each release's version without the `v`, and `latest`, which a
+prerelease does not move. There are no minor, major or edge tags, so pin the
+version and upgrade on purpose. Every image carries an SBOM and a provenance
+attestation from BuildKit.
 
-It is Debian slim with `patchula`, [mise](https://mise.jdx.dev) and `git` (see
-[what the runner needs](/installation/#what-the-runner-needs)), and starts
-`patchula serve` as user and group 10001. Lockfile tools are not in the image:
-mise installs each one into the volume the first time a repository needs it.
+It is Debian slim with `patchula`, mise and `git` (see [what the runner
+needs](/installation/#what-the-runner-needs)), and starts `patchula serve` as
+user and group 10001. Lockfile tools are not in the image: mise installs each
+one into the volume the first time a repository needs it.
 
 `/var/lib/patchula` is a volume. It holds the server cache and queue, the
 partial clones, and the tool store, so a new container picks up where the last
@@ -346,9 +345,8 @@ writable `/tmp`.
 
 ## Hosting on Railway
 
-[Railway](https://railway.com) suits the server well. It bills for the CPU and
-memory a service actually uses, by the minute, and the Count spends most of his
-time idle between batches with little memory in use.
+[Railway](https://railway.com) bills by the minute for the CPU and memory a
+service uses, which suits a server that idles between batches.
 
 <Steps>
 
@@ -370,16 +368,14 @@ time idle between batches with little memory in use.
 
 :::caution[Leave Serverless off]
 Leave Railway's Serverless setting (formerly App Sleeping) off, under the
-service's Settings, Deploy. Serverless sleeps a service after a few minutes
-without outbound traffic, but the server checks its App with GitHub every 30
-seconds, so it would never sleep anyway, and a server that did would miss its
-scheduled sweeps.
+service's Settings, Deploy. The server checks its App with GitHub every 30
+seconds, so it would never sleep, and one that did would miss its sweeps.
 :::
 
 ## systemd
 
-The lockfile runner and the lookups for `mise.toml` tools still call mise, so
-install mise and the tool store for the service user.
+Install mise for the service user; the server needs it like any
+[runner](/installation/#what-the-runner-needs).
 
 ```ini
 [Unit]

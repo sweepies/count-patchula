@@ -31,8 +31,7 @@ lists and validator-free OCI tag pages get a one-hour local freshness floor
 (`--go-freshness-secs`, `--registry-freshness-secs`; `0` restores upstream
 behaviour), because those endpoints would otherwise be read on every run.
 
-GitHub histories are where Renovate spent most of its time. The Count reads
-them in pieces:
+GitHub histories, where Renovate spent most of its time, are read in pieces:
 
 - A cold release history is fetched through batched GraphQL queries, sixteen
   sources at a time.
@@ -50,26 +49,23 @@ unchanged head. Webhook invalidation or periodic reconciliation covers that.
 ## mise lookups
 
 A `mise` dependency's versions are what `mise ls-remote --json --prerelease
-<tool>` prints, so every backend mise reads release metadata from works, and the Count keeps
-no copy of mise's registry or backend rules for it. mise lists a version, its
-date, whether it is a prerelease and, for GitHub-hosted tools, a release URL.
-Backends leave out what they do not know: Node lists a date only, and some
-`go:` versions have no date and so no release-age wait. The listing includes
-the prereleases a backend reports (npm, for one) and the Count leaves the
-choice to his [prerelease rules](/guide/lookup-policy/): a pin on a stable
-version is not offered one, and a pin on a prerelease is offered later ones. mise's
-`prerelease` flag is kept in the listing but does not filter.
+<tool>` prints, so every backend mise reads release metadata from works, and
+the Count keeps no copy of mise's registry or backend rules. mise lists a
+version, its date, whether it is a prerelease and, for GitHub-hosted tools, a
+release URL. Backends leave out what they do not know: Node lists a date only,
+and some `go:` versions have no date and so no release-age wait. Prereleases
+are listed, and the Count's [prerelease rules](/guide/lookup-policy/) decide
+whether to offer them; mise's `prerelease` flag does not filter.
 
 The Count runs mise the way he runs the lockfile tools, and more strictly:
 
-- With his own pinned mise, installed once into the [tool
-  store](/guide/lockfiles/#the-tool-store), apart from yours. The mise on `PATH` only
-  installs and starts it.
-- From a new, empty directory for each lookup, with a scratch `HOME`. mise
-  loads no configuration (`MISE_NO_CONFIG`), env templates (`MISE_NO_ENV`) or
-  hooks (`MISE_NO_HOOKS`), so there is nothing to trust and neither your
-  global configuration nor a repository's `mise.toml` can apply. Nothing is
-  inherited from the environment the Count runs in.
+- With his own pinned mise from the [tool
+  store](/guide/lockfiles/#the-tool-store), not yours.
+- From a new, empty directory for each lookup, with a scratch `HOME` and
+  nothing inherited from the Count's environment. mise loads no configuration
+  (`MISE_NO_CONFIG`), env templates (`MISE_NO_ENV`) or hooks
+  (`MISE_NO_HOOKS`), so neither your global configuration nor a repository's
+  `mise.toml` can apply.
 - With tool names checked first: no leading `-`, no brackets (tool options can
   redirect a backend), and no `@version` selector. `@` is allowed only to open an
   npm scope right after the backend, as in `npm:@types/node`; `prettier@3` is
@@ -78,24 +74,25 @@ The Count runs mise the way he runs the lockfile tools, and more strictly:
   names for them refused before mise starts. A backend prefix mise does not
   know fails in mise, which runs no plugin for it. Nothing installs during a lookup
   (`MISE_AUTO_INSTALL=0`).
-- With the GitHub token he runs with, as `MISE_GITHUB_TOKEN`, and no other
-  credential: mise's `gh` login, credential command and Git credential helper
-  lookups are off, and the home directory it sees is empty. The token is only
-  given to mise when the Count talks to github.com.
+- With the GitHub token he runs with, as `MISE_GITHUB_TOKEN`, only when he
+  talks to github.com, and no other credential: mise's `gh` login, credential
+  command and Git credential helper lookups are off.
 - With a three-minute limit per lookup and at most four running at once.
 
-A listing is stored in the cache and reused for an hour, per tool, token scope
-and mirror setting; a manual retry, or a failed lookup, asks mise again. The
-Node LTS line comes from `mise ls-remote node lts`, which lists the newest LTS
-line; when that listing fails or is empty the catalog stays whole without LTS
-evidence, so only a dependency on the LTS channel reports it. A tool installed
-from a Git ref (`cargo:` with a Git URL) lists only `HEAD`, which the Count
-reports as having no release versions. Any other listing is kept: versions that
-do not order are never proposed, and a pin that does not order is reported as
-one the Count cannot classify. Where there is no release URL, release notes
-find a tool's repository from the backend mise picks for it when that is npm,
-PyPI or crates.io. A tool whose listing and backend name no repository has no
-release notes.
+What happens to a listing:
+
+- It is cached for an hour, per tool, token scope and mirror setting. A manual
+  retry, or a failed lookup, asks mise again.
+- The Node LTS line comes from `mise ls-remote node lts`. When that listing
+  fails or is empty, the catalog stays whole without LTS evidence, so only a
+  dependency on the LTS channel reports it.
+- A tool installed from a Git ref (`cargo:` with a Git URL) lists only `HEAD`,
+  which the Count reports as having no release versions.
+- Any other listing is kept. Versions that do not order are never proposed, and
+  a pin that does not order is reported as one the Count cannot classify.
+- Where there is no release URL, release notes find a tool's repository from
+  the backend mise picks for it when that is npm, PyPI or crates.io. A tool
+  whose listing and backend name no repository has no release notes.
 
 ## mise-versions host
 
@@ -132,15 +129,11 @@ lookup, since a module can list hundreds and older releases are outside any
 wait; versions the proxy lists but cannot describe are dropped. npm, crates,
 PyPI, RubyGems, NuGet and Packagist report them directly. Maven Central's search
 API lags by months, so Maven uses each POM's `Last-Modified` header, for the ten
-newest versions only. GitHub tags use the release date, then the annotated tag
-date. mise tools use the date mise lists, which is a backend's own release or
-publication date. Lightweight tags, Gitea tags
-and hosted runner labels are undated and have no wait.
+newest versions only. GitHub tags are dated [as the release-age
+wait describes](/guide/lookup-policy/#the-release-age-wait). mise tools use the
+date mise lists, which is a backend's own release or publication date. GitLab
+tags use the annotated tag's date. Lightweight GitLab tags, Gitea and Forgejo
+tags, and hosted runner labels are undated and have no wait.
 
-## Where the upstream lives
-
-For release notes, each dependency's source repository comes from its
-ecosystem's own metadata: npm's `repository` or `homepage`, crates.io's
-`repository`, PyPI's project URLs, Go module paths (with `?go-get=1` for vanity
-paths), and Docker's `org.opencontainers.image.source` label. See [release
-notes](/guide/release-notes/).
+Where release notes look for each dependency's repository is under [finding
+the upstream](/guide/release-notes/#finding-the-upstream).
