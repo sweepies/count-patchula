@@ -215,6 +215,8 @@ skipped reference leaves branch cleanup and auto-merge on.
 `helm` reads `Chart.yaml` dependencies from HTTPS and `oci://` repositories.
 `pre-commit` updates each hook repository's `rev` on GitHub, GitLab, Codeberg
 and Gitea/Forgejo hosts, skipping `local` and `meta` hooks and bare commit pins.
+A `rev` is written as the tag is named (`v1.0` becomes `v1.1`, not `v1.1.0`),
+since pre-commit checks it out by that name.
 `devcontainer` reads the `image` and OCI `features`, whose version lives in the
 feature key (`ghcr.io/devcontainers/features/node:1`).
 
