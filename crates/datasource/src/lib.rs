@@ -56,7 +56,7 @@ impl Error {
                 LookupErrorKind::Network
             }
             Error::Http(CacheError::Document)
-            | Error::Github(GithubError::Json | GithubError::Graphql)
+            | Error::Github(GithubError::Json)
             | Error::Json(_)
             | Error::Mise(patchula_mise::Error::Unreadable(_)) => LookupErrorKind::Parse,
             Error::Github(GithubError::RateLimit) | Error::RateLimit(_) => {
