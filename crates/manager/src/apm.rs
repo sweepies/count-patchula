@@ -177,7 +177,7 @@ fn dependency(
 /// before it ends in a space: where the edit splits a scalar from its comment.
 fn trailing_comment(text: &str, location: &Location) -> Option<std::ops::Range<usize>> {
     let rest = &text[location.end..];
-    let rest = rest.split('\n').next().unwrap_or_default().trim_end();
+    let rest = rest.lines().next().unwrap_or_default().trim_end();
     let hash = rest.find('#')?;
     (hash > 0 && rest[..hash].trim().is_empty() && rest[..hash].ends_with(' '))
         .then(|| location.end + hash..location.end + rest.len())
