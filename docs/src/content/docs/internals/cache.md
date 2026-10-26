@@ -1,229 +1,167 @@
 ---
 title: "SQLite cache"
 ---
-`patchula-cache` uses rusqlite 0.40 with bundled SQLite. rusqlite is a mature,
-actively maintained synchronous wrapper with transactions and explicit error
-codes; bundling avoids system SQLite version/feature drift. Zstd level 3 stores
-HTTP bodies with a small CPU cost and reuses the HTTP stack's compression
-dependency. The pinned Zig mise tasks build the native dependencies.
+`patchula-cache` uses rusqlite 0.40 with bundled SQLite, so the system
+SQLite's version and features never matter. HTTP bodies are stored with Zstd
+level 3. The pinned Zig mise tasks build the native dependencies.
 
-Open one Cache per batch and clone its handle. One dedicated OS thread owns
-writes, migrations and corruption recovery, using a bounded queue of 128 jobs.
-Four additional OS threads each own a read-only WAL connection and a bounded
-32-job queue. Round-robin dispatch runs SQLite reads and Zstd decoding in parallel,
-without blocking async workers. Release and extraction reads use the same pool.
-The in-memory/rebuild fallback uses the writer connection. Reader corruption
-disables the pool for that handle and retries through the recovery coordinator.
-Each reader keeps a short SQLite statement lifetime, so decoding holds no WAL
-read transaction. Canceled callers may still complete submitted writes. Dropping
-the last handle closes the queues; worker threads drain and close asynchronously.
+## Threads and transactions
 
-Read access updates are coalesced and flushed together in a transaction before
-writer jobs, including budget eviction, and on worker shutdown. Reads therefore
-do not acquire SQLite's write lock. Access within one coalesced group has
-approximate recency. Body inserts and release merges are also transactional.
+Open one `Cache` per batch and clone its handle. One OS thread owns writes,
+migrations and corruption recovery, with a queue of 128 jobs. Four more each
+own a read-only WAL connection and a 32-job queue; round-robin dispatch runs
+SQLite reads and Zstd decoding in parallel without blocking async workers.
+Readers keep statements short, so decoding never holds a WAL read transaction.
+Reader corruption disables the pool for that handle and retries through the
+recovery coordinator.
 
-The database uses WAL, a five-second busy timeout and synchronous=NORMAL (cache
-data is reproducible). The usual WAL sidecars are transient; all tables live
-in one database file. One batch should own a cache path during corruption
-recovery; coordinating quarantine across independent OS processes is outside
-this API's contract.
+Read access updates are coalesced and flushed in one transaction before writer
+jobs and on shutdown, so reads never take SQLite's write lock. Body inserts and
+release merges are transactional. The database uses WAL, a five-second busy
+timeout and `synchronous=NORMAL`, since cache data is reproducible. Only one
+batch should own a cache path during corruption recovery: quarantine is not
+coordinated across processes.
 
-HTTP keys normalize method case, URL authority/default ports/path/fragment and
-header names/outer whitespace. Query order is retained because repeated query
-parameters may be order-sensitive. Callers select vary-relevant headers; include
-a credential namespace digest for authenticated data, never a raw token.
-HTTP entries store status, validators, response headers (e.g. pagination Link),
-compressed body, fetched-at, expiry and Cache-Control hints. Expiry does not
-discard validators. Invalid compressed bodies are misses and are replaced by
-the next successful fetch; their validators are never sent.
+## HTTP entries
 
-Large registry bodies use an explicit, versioned local `representation` in the
-HTTP key, independent of upstream Accept/Vary. npm, Cargo sparse indexes, PyPI
-and GitHub REST release heads store derived documents, never the raw response.
-npm retains every version's publication time/deprecation flag, dist-tags and
-modified time; unused integrity/shasum and other package metadata are discarded.
-GitHub release heads omit assets/counters; complete GraphQL release/tag histories
-already use release rows/derived extraction records. Node's small index and
-repository/ref/Go metadata still use raw bodies under the same size budget.
+Keys normalise method case, the URL (authority, default port, path, fragment)
+and header names. Query order is kept, because repeated parameters can be
+order-sensitive. Callers choose the vary-relevant headers; for authenticated
+data they include a digest of the credential namespace, never a raw token.
+An entry stores the status, validators, selected response headers such as
+`Link`, the compressed body, fetch time, expiry and Cache-Control hints.
+Expiry keeps validators. An invalid compressed body is a miss, and its
+validators are never sent.
 
-On a 200, typed serde deserialization skips unused fields without materializing
-the complete JSON tree. Registry derivation runs on `spawn_blocking` with a
-four-job limit; HTTP transfer remains independently concurrent. The transport
-still buffers one decoded response, so this is bounded parallel derivation,
-not streaming network ingestion. A 304 updates only HTTP metadata and reuses the
-compact body. Fresh hits neither hash nor parse the original packument. Uncacheable
-responses remove both compact bodies and validators. A format change requires a
-new representation version; raw and derived namespaces cannot share validators.
+Large registry bodies use a versioned local `representation` in the key. npm,
+Cargo sparse indexes, PyPI and GitHub REST release heads store a derived
+document with only the fields the Count reads, never the raw response.
+Derivation runs on `spawn_blocking` with a four-job limit. A 304 updates only
+metadata and reuses the compact body. A format change needs a new
+representation version, so raw and derived namespaces never share validators.
 
-The default 256 MiB budget counts compressed HTTP body bytes. A monotonic access
-clock approximates LRU and evicts entire HTTP rows until within budget, including
-on open after a budget reduction. Removing validators along with evicted bodies
-prevents unusable 304 responses. Release lists and extraction data are retained.
-This is not a hard cap on database/WAL filesystem size: SQLite reuses freed
-pages, and release/extraction tables are outside this budget.
+The default 256 MiB budget counts compressed HTTP body bytes. An access clock
+approximates LRU and evicts whole HTTP rows, validators included, until the
+cache fits, also on open after the budget is lowered. Release lists and
+extraction data are outside the budget, so it does not cap the file size.
 
-Release order is upstream newest-first, never inferred from semver or dates.
-`merge_releases` starts at the head; it returns true and stops processing at the
-first item that was already stored. The known item's date/digest can refresh.
-For subsequent pages of the same scan, `merge_release_page` takes the preceding
-page's last inserted version as `after`. This explicit anchor distinguishes a
-disjoint refresh prefix from initial history pagination, which cannot be inferred
-from a page alone. The newest item is stored separately in `release_heads`.
-Merges are transactional. Extraction keys include repo, default-branch commit,
-and resolved config hash, and store caller-serialized bytes.
+## Releases and extractions
 
-Schema migrations are transactional, using SQLite user_version: v1 contains the
-three cache domains; v2 adds the HTTP access clock/LRU index; v3 introduces the
-versioned compact representation keys and retires raw registry/release-head
-bodies, obsolete npm content-hashed extractions, and duplicate npm/Cargo release
-rows. Repository extractions and other HTTP/release data survive. Migrated
-registries need one unconditional fetch; SQLite reuses freed pages without an
-automatic VACUUM. Tests cover populated v1/v2 upgrades, version namespace isolation,
-concurrent decoding, conditional compact refreshes and cache-control behavior.
-A future schema is rejected without modifying or quarantining its database.
+Release order is the upstream's newest-first order, never inferred from semver
+or dates. `merge_releases` starts at the head and stops at the first item
+already stored. Later pages of the same scan pass the previous page's last
+inserted version to `merge_release_page` as `after`, which tells a refresh
+prefix apart from initial pagination. The newest item is also kept in
+`release_heads`. Extraction keys include the repository, the default-branch
+commit and the resolved config hash.
 
-Opening runs quick_check. SQLITE_CORRUPT/NOTADB and failed integrity checks close
-the connection, quarantine the file and any remaining WAL/SHM sidecars under a
-unique `.corrupt-<timestamp>` name, warn through tracing, and rebuild. Operational
-corruption is handled on the worker too: rebuild and retry the operation once.
-If quarantine/rebuild fails, warn and use an in-memory cache to keep the batch
-running. Permission, busy and future-schema errors are not misclassified as
-corruption. The application must initialize tracing to display the warnings.
+## Schema and corruption
 
-API references read:
-[rusqlite](https://docs.rs/rusqlite/0.40.2/rusqlite/),
-[rusqlite build features](https://github.com/rusqlite/rusqlite#optional-features),
-[Connection](https://docs.rs/rusqlite/0.40.2/rusqlite/struct.Connection.html),
-[zstd README](https://github.com/gyscos/zstd-rs#usage),
-[Tokio mpsc](https://docs.rs/tokio/latest/tokio/sync/mpsc/),
-[oneshot](https://docs.rs/tokio/latest/tokio/sync/oneshot/),
-[tracing](https://docs.rs/tracing/latest/tracing/),
-[url](https://docs.rs/url/latest/url/),
-[SQLite WAL](https://www.sqlite.org/wal.html).
+Migrations are transactional and tracked with SQLite's `user_version`. A
+migration that retires a representation costs one unconditional fetch per
+affected registry. A database from a future schema is rejected untouched.
 
-## Local freshness and host limits
+Opening runs `quick_check`. `SQLITE_CORRUPT`, `SQLITE_NOTADB` or a failed
+check closes the connection, moves the file and its WAL and SHM sidecars to a
+unique `.corrupt-<timestamp>` name, warns through tracing and rebuilds.
+Corruption during an operation rebuilds and retries it once. If that fails, the
+cache warns and falls back to memory so the batch keeps running. Permission,
+busy and future-schema errors are not treated as corruption. The application
+must initialise tracing for the warnings to show.
 
-`--concurrency` controls repository scan parallelism (default eight). Registry
-HTTP requests use separate per-host semaphores, default 16 each, independent of
-repository work. GitHub REST and GraphQL share their existing governor with a
-CLI default of 16; primary limits, secondary cooldowns, Retry-After and bounded
-retries remain enforced. This is below GitHub's documented 100 simultaneous
-REST/GraphQL requests, but concurrency alone does not guarantee avoiding its
-point/CPU secondary limits. `--host-concurrency api.github.com=8` overrides one
-host; repeat the flag for others. Limits must be 1–100. Catalog and digest work
-can start across hosts without waiting for a repository slot. The shared
-reqwest pool retains up to 32 idle connections per host. Registry 429s publish
-a shared host cooldown and retry at most three times. Numeric/date Retry-After
-is honored; absent headers use 1/2/4-second backoff. Waits above 60 seconds and
-exhausted retries fail explicitly, and queued callers do not bypass long
-cooldowns. Other hosts remain available. Docker Hub pull-quota errors are returned immediately, rather than retried on
-a short backoff. Only successful responses enter the
-cache, so a rate-limited pagination attempt cannot become a complete catalog.
+## Host limits
 
-Two explicit freshness departures avoid redownloading validator-free catalogs:
+- `--concurrency` sets repository scan parallelism (default 8).
+- Registry requests use per-host semaphores, 16 each by default, independent of
+  repository work. `--host-concurrency api.github.com=8` overrides one host;
+  repeat it for others. Limits must be 1–100.
+- GitHub REST and GraphQL share one governor, sized by the `api.github.com`
+  host limit. That is below GitHub's 100 simultaneous requests, but does not
+  by itself avoid its point and CPU
+  [secondary limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#about-secondary-rate-limits).
+- The shared reqwest pool keeps up to 32 idle connections per host.
+- A registry 429 sets a cooldown for that host and is retried at most three
+  times, honouring `Retry-After` or backing off 1, 2 and 4 seconds. Waits over
+  60 seconds and exhausted retries fail, and queued callers wait out the
+  cooldown. Docker Hub pull-quota errors are returned at once.
+- Only successful responses are cached, so a rate-limited pagination attempt
+  never becomes a complete catalog.
 
-- `--registry-freshness-secs 3600`: minimum freshness for OCI `tags/list` pages
-  only when both ETag and Last-Modified are absent. Compact `oci-tags-v1` bodies
-  contain only tags; pagination Link headers survive. After expiry, every lexical
-  page is fetched again, detecting additions, deletions and retargeting anywhere.
-  Manifest/tag digests keep their upstream policy and revalidate independently.
-- `--go-freshness-secs 3600`: minimum freshness for public `proxy.golang.org`
-  `@v/list` and `@latest`, even when their upstream max-age is shorter. Version
-  `.info` documents retain upstream policy.
+## Freshness floors
 
-Both flags accept zero to restore upstream freshness immediately, including on
-an existing cache. Floors are computed from original fetched-at, never extended
-by reads. `no-cache` still requires revalidation and `no-store` still removes
-entries. npm, Cargo, PyPI and other sources receive no freshness floor. New
-versions and deleted tags can remain unseen for up to the configured window.
-No release dates are invented for OCI tags, so their age evidence stays unknown.
+Two flags keep validator-free catalogs from being downloaded on every run. The
+user-facing summary is in [sources](/guide/sources/) and the reason in
+[departures](/renovate/departures/#source-refresh).
 
-Anonymous registry pull tokens are keyed by registry and image in a separate
-`anonymous-registry-pull-token-v1` representation under the HTTP body budget.
-Only the bearer is persisted; the key includes neither credentials nor challenge
-query data. Expiry respects `issued_at`, `expires_in`, HTTP Age and a ten-second
-margin, capped at one hour; missing expires_in uses 60 seconds. `no-store`
-responses are memory-only. A 401 evicts the token and permits a single refresh;
-concurrent callers share a refresh. Token values never enter tracing, errors or
-fixtures. These are public, anonymous, pull-only credentials obtained without
-GitHub/private registry authentication. SQLite stores them unencrypted, so keep
-the cache under the same access controls as other batch cache data. Disk cache
-reopen avoids both the token request and the initial registry 401 until expiry.
+- `--registry-freshness-secs 3600` applies to OCI `tags/list` pages with
+  neither ETag nor Last-Modified. After expiry every page is fetched again, so
+  additions, deletions and retargeting anywhere are seen. Manifest and tag
+  digests keep their upstream policy.
+- `--go-freshness-secs 3600` applies to public `proxy.golang.org` `@v/list`
+  and `@latest`, even when the upstream max-age is shorter. `.info` documents
+  keep the upstream policy.
 
-Protocol references: [GitHub secondary limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#about-secondary-rate-limits),
-[Go version queries](https://go.dev/ref/mod#version-queries),
-[registry authentication](https://docs.docker.com/reference/api/registry/auth/).
+Zero restores upstream freshness at once, also on an existing cache. Floors
+count from the original fetch time and are never extended by reads. `no-cache`
+and `no-store` still apply. No other source gets a floor. New versions and
+deleted tags can go unseen for up to the window.
 
+## Registry pull tokens
 
-Manifest digest checks use HEAD with the same Accept negotiation as GET and an
-independent method-aware cache key. The top-level Docker-Content-Digest header
-identifies the multi-architecture index. A missing digest header or unsupported
-HEAD (405/501) falls back to GET and, if necessary, hashing its body. Conditional
-HEAD 304s preserve the previous digest header. This avoids downloading unused
-manifest bodies and Docker Hub documents that HEAD version checks do not consume
-pull quota. It does not cache mutable tags beyond upstream freshness.
+Anonymous registry pull tokens are keyed by registry and image, under the HTTP
+body budget. Only the bearer is stored. Expiry follows `issued_at`,
+`expires_in` and HTTP `Age`, less a ten-second margin and capped at one hour;
+a missing `expires_in` means 60 seconds. A 401 evicts the token and allows one
+shared refresh.
 
-Successful branch and PR reconciliation stores a verified-write receipt per
-branch in the extraction cache. It contains the commit/tree OIDs, base, planned
-update identity and canonical PR state (including a CRLF/LF-normalised body hash,
-labels and native auto-merge flag), never credentials. Warm runs read a fresh paginated GraphQL
-inventory of heads and associated open PRs. An exact head/intent/PR match skips
-history, tree and PR reads; any mismatch falls back to normal reconciliation.
-Behind-mode base moves invalidate the receipt; conflicts mode retains the
-existing behavior when planned file contents are unchanged. Unknown, obsolete
-or incomplete inventory data never authorizes a write. Remaining Git Data
-reads use conditional GETs and publication retains atomic head/base leases.
-GraphQL PR authors are converted to REST bot logins only when their Actor type
-is `Bot`; ordinary users with the same name remain distinct. Receipts are saved
-per verified branch even when unrelated actions fail or are skipped. At `-vv`,
-receipt diagnostics report save/restore counts and the first failed condition
-for each branch requiring verification, without PR bodies or credentials.
+:::caution
+These tokens are public, anonymous and pull-only, and never enter tracing,
+errors or fixtures, but SQLite stores them unencrypted. Keep the cache under
+the same access controls as other batch cache data.
+:::
 
-# Catalog views and release-age policy (departure 50)
+## Manifest digests
 
-Successful catalog views are stored separately from HTTP bodies, scoped to the
-credential identity and source mode. A dependency with
-positive effective `waitHours` reuses a catalog younger than
-`clamp(waitHours - 1, 1, 24)` hours: 23 hours for the default 24-hour wait.
-Zero keeps the existing HTTP/validator freshness rules. The shortest active
-update-class wait is used; dependencies sharing a catalog use the shortest wait
-among them. Expiry is strict, and timestamps from the future are revalidated.
+Digest checks send HEAD with the same `Accept` negotiation as GET and their
+own cache key. The top-level `Docker-Content-Digest` identifies the
+multi-architecture index. A missing header or an unsupported HEAD (405 or 501)
+falls back to GET, hashing the body if needed. Docker Hub does not count HEAD
+checks against the pull quota.
 
-Only the catalog is cached. Policy evaluation always uses the current run time,
-so an already known held-back release can become eligible during the reuse
-window. The versioned report records `metadata.lookup.catalog.fetchedAt` and
-`reused` next to the current `evaluatedAt` and held-back evidence. This describes
-the cached snapshot, not unseen upstream releases. Fetch time is the client's
-successful retrieval/validation time; publication times remain source evidence.
-Held-back dashboard rows also show the fetch time, retained across reuse.
-Aggregate cache-hit statistics include catalog-view hits.
+## Write receipts
 
+A successful branch and PR reconciliation stores a receipt per branch in the
+extraction cache: the commit and tree OIDs, the base, the planned update and
+the canonical PR state (a line-ending-normalised body hash, labels and the
+auto-merge flag), never credentials. Warm runs read a fresh GraphQL inventory
+of heads and open PRs, and an exact match skips history, tree and PR reads.
+Any mismatch, or unknown or incomplete inventory data, falls back to full
+reconciliation. In behind mode a base move invalidates the receipt. At `-vv`,
+diagnostics report save and restore counts and the first failed condition per
+branch.
+
+## Catalog views and release age
+
+Successful catalog views are stored apart from HTTP bodies, scoped to the
+credential and source mode. A dependency with a positive effective `waitHours`
+reuses a catalog younger than `clamp(waitHours - 1, 1, 24)` hours, 23 hours
+for the default 24-hour wait. Zero keeps the usual HTTP freshness. Dependencies
+sharing a catalog use the shortest wait among them. The reason is in
+[departures](/renovate/departures/#catalog-reuse).
+
+Only the catalog is cached; policy always uses the current time, so a known
+held-back release can become eligible during reuse. The report records
+`metadata.lookup.catalog.fetchedAt` and `reused` next to `evaluatedAt`.
 Repository rechecks, checked PR boxes and selected dashboard controls bypass
-reuse. Saved control-to-dependency identities let a checked PR refresh its own
-catalogs while unrelated dependencies retain their views. Missing control
-history conservatively revalidates the repository's catalogs. Failed lookups are
-not cached as views, and registry quota fallbacks do not reset an older
-snapshot's age. Catalog prefetch waits for current policy and checkbox state;
-speculative digest reads may still overlap extraction.
-
-Mutable Git tags and image digests keep their independent freshness. Reused tag
-catalogs never freeze target commits: bounded GraphQL reads resolve only the
-currently needed refs, including annotated tags, without revalidating version
-lists. Missing objects fall back to the existing per-ref lookup.
+reuse for the dependencies they name. Failed lookups are never cached as
+views. Mutable Git tags and image digests keep their own freshness: bounded
+GraphQL reads resolve the refs currently needed without revalidating the lists.
 
 ## mise listings
 
-What `mise ls-remote --json` printed for a tool is stored in the extraction
-table, not the HTTP table, because it has no validators. The key holds the tool
-(and a version prefix, such as `lts`), the credential scope, whether mise may
-read the mise-versions mirror, and the pinned mise version; the value holds the
-parsed releases and the fetch time. A listing younger than an hour is reused
-without starting mise. A manual retry skips the stored listing and replaces it,
-and only successful lookups are stored. Catalog views above this are still
-bounded by `waitHours`.
-
-Offline regressions cover reopen, expiry/clamping, zero-age rules, credential
-isolation, eligibility transitions, targeted PR/dashboard controls, failed
-refreshes, and mutable lightweight/annotated tags. Legacy conditional catalog
-replay explicitly uses `waitHours = 0`.
+What `mise ls-remote --json` printed is stored in the extraction table, since
+it has no validators. The key holds the tool (and a version prefix such as
+`lts`), the credential scope, whether mise may read the mise-versions mirror
+and the pinned mise version. A listing younger than an hour is reused without
+starting mise. A manual retry replaces it, and only successful lookups are
+stored.
