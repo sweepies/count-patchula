@@ -348,6 +348,40 @@ composer	php/laravel/composer.json	web-token/jwt-library	^4.1	-
 devcontainer	editors/vscode/.devcontainer/devcontainer.json	ghcr.io/devcontainers/features/sshd	1	1
 dockerfile	go/prometheus/Dockerfile	quay.io/prometheus/busybox-linux-amd64	latest	-
 edit-error	go/prometheus/Dockerfile	quay.io/prometheus/busybox-linux-amd64	image location contains an expression or expanded ARG; no safe literal edit
+github-actions	.forgejo/workflows/cascade-end-to-end.yml	data.forgejo.org/actions/cascading-pr	v2.3.2	v2.3.2
+github-actions	.forgejo/workflows/integration-action.yml	data.forgejo.org/actions/checkout	v6.1.0	v6.1.0
+github-actions	.forgejo/workflows/integration-scripts.yml	data.forgejo.org/actions/checkout	v6.1.0	v6.1.0
+github-actions	.forgejo/workflows/integration-scripts.yml	data.forgejo.org/actions/checkout	v6.1.0	v6.1.0
+github-actions	.forgejo/workflows/integration.yml	actions/checkout	v6.0.3	v6.0.3
+github-actions	.forgejo/workflows/integration.yml	code.forgejo.org/actions/setup-forgejo	v3.2.0	v3.2.0
+github-actions	.forgejo/workflows/release.yml	data.forgejo.org/actions/checkout	v6.0.3	v6.0.3
+github-actions	.forgejo/workflows/tests.yml	actions/checkout	v6.0.3	v6.0.3
+github-actions	.forgejo/workflows/tests.yml	data.forgejo.org/oci/node	24-trixie	-
+github-actions	.gitea/workflows/release-nightly.yml	actions/checkout	v7	v7
+github-actions	.gitea/workflows/release-nightly.yml	actions/checkout	v7	v7
+github-actions	.gitea/workflows/release-nightly.yml	actions/setup-go	v7	v7
+github-actions	.gitea/workflows/release-nightly.yml	crazy-max/ghaction-import-gpg	v7	v7
+github-actions	.gitea/workflows/release-nightly.yml	docker/build-push-action	v7	v7
+github-actions	.gitea/workflows/release-nightly.yml	docker/login-action	v4	v4
+github-actions	.gitea/workflows/release-nightly.yml	docker/setup-buildx-action	v4	v4
+github-actions	.gitea/workflows/release-nightly.yml	docker/setup-qemu-action	v4	v4
+github-actions	.gitea/workflows/release-nightly.yml	goreleaser/goreleaser	~> v2	~> v2
+github-actions	.gitea/workflows/release-nightly.yml	goreleaser/goreleaser-action	v7	v7
+github-actions	.gitea/workflows/release-tag.yml	actions/checkout	v7	v7
+github-actions	.gitea/workflows/release-tag.yml	actions/checkout	v7	v7
+github-actions	.gitea/workflows/release-tag.yml	actions/setup-go	v7	v7
+github-actions	.gitea/workflows/release-tag.yml	crazy-max/ghaction-import-gpg	v7	v7
+github-actions	.gitea/workflows/release-tag.yml	docker/build-push-action	v7	v7
+github-actions	.gitea/workflows/release-tag.yml	docker/login-action	v4	v4
+github-actions	.gitea/workflows/release-tag.yml	docker/setup-buildx-action	v4	v4
+github-actions	.gitea/workflows/release-tag.yml	docker/setup-qemu-action	v4	v4
+github-actions	.gitea/workflows/release-tag.yml	goreleaser/goreleaser	~> v2	~> v2
+github-actions	.gitea/workflows/release-tag.yml	goreleaser/goreleaser-action	v7	v7
+github-actions	.gitea/workflows/test-pr.yml	actions/checkout	v7	v7
+github-actions	.gitea/workflows/test-pr.yml	actions/checkout	v7	v7
+github-actions	.gitea/workflows/test-pr.yml	actions/setup-go	v7	v7
+github-actions	.gitea/workflows/test-pr.yml	actions/setup-go	v7	v7
+github-actions	.gitea/workflows/test-pr.yml	docker.gitea.com/gitea	1.27.0	-
 github-actions	.github/workflows/builder.yml	actions/attest	v4.2.2	v4.2.2
 github-actions	.github/workflows/builder.yml	actions/checkout	v7.0.1	v7.0.1
 github-actions	.github/workflows/builder.yml	actions/checkout	v7.0.1	v7.0.1

@@ -1,0 +1,33 @@
+on:
+  push:
+    branches:
+      - 'main'
+      - 'v*'
+  pull_request:
+
+#
+# Testing that action.yml works as intended, the other tests do not do hat.
+#
+jobs:
+  integration-action:
+    runs-on: lxc-bookworm
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: forgejo.sh & forgejo-runner.sh
+        run: |
+          LXC_IP_PREFIX=10.0.9 ./forgejo-dependencies.sh
+          export PATH=$(pwd):$PATH
+          forgejo.sh setup root admin1234 code.forgejo.org/forgejo/forgejo 15.0
+          forgejo-runner.sh setup
+          echo "============================ upload setup-forgejo ==================="
+          forgejo-test-helper.sh push_self_action $(cat forgejo-auth-url) root setup-forgejo vTest
+      - name: lxc-run-forgejo-binary
+        run: |
+          export PATH=$(pwd):$PATH
+          export FORGEJO_RUNNER_LOGS=forgejo-runner.log
+          forgejo-test-helper.sh run_workflow testdata/lxc-run-forgejo-binary $(cat forgejo-auth-url) root lxc-run-forgejo-binary setup-forgejo $(cat forgejo-token)
+      - name: lxc-run-forgejo-oci
+        run: |
+          export PATH=$(pwd):$PATH
+          export FORGEJO_RUNNER_LOGS=forgejo-runner.log
+          forgejo-test-helper.sh run_workflow testdata/lxc-run-forgejo-oci $(cat forgejo-auth-url) root lxc-run-forgejo-oci setup-forgejo $(cat forgejo-token)

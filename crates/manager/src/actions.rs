@@ -9,14 +9,21 @@ fn version_comment(value: &str) -> bool {
     VERSION.is_match(value)
 }
 
+/// Forgejo's documented default `DEFAULT_ACTIONS_URL`. Gitea defaults to
+/// GitHub, so only files under `.forgejo/` resolve bare refs here.
+const FORGEJO_ACTIONS: &str = "data.forgejo.org";
+
 pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
+    let bare = path.starts_with(".forgejo/").then_some(FORGEJO_ACTIONS);
+    let forge = path.starts_with(".forgejo/") || path.starts_with(".gitea/");
     let root: Value = serde_yaml_ng::from_str(text).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     let mut used = std::collections::BTreeSet::new();
     if let Some(jobs) = root.get("jobs").and_then(Value::as_mapping) {
         for (job, value) in jobs {
             let job = job.as_str().unwrap_or("?");
-            if let Some(runs_on) = value.get("runs-on") {
+            // Forgejo and Gitea runner labels name the instance's own runners.
+            if let Some(runs_on) = value.get("runs-on").filter(|_| !forge) {
                 let scope = runner_scope(text, job)?;
                 runners(
                     path,
@@ -36,6 +43,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
                     "uses",
                     &format!("/jobs/{job}/uses"),
                     DependencyKind::ReusableWorkflow,
+                    bare,
                     &mut used,
                     &mut out,
                 )?;
@@ -46,6 +54,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
                     text,
                     steps,
                     &format!("/jobs/{job}/steps"),
+                    bare,
                     &mut used,
                     &mut out,
                 )?;
@@ -66,6 +75,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
                     },
                     &format!("/jobs/{job}/container"),
                     DependencyKind::ContainerImage,
+                    bare,
                     &mut used,
                     &mut out,
                 )?;
@@ -83,6 +93,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
                                 name.as_str().unwrap_or("?")
                             ),
                             DependencyKind::ContainerImage,
+                            bare,
                             &mut used,
                             &mut out,
                         )?;
@@ -97,7 +108,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
         .and_then(|runs| runs.get("steps"))
         .and_then(Value::as_sequence)
     {
-        steps_extract(path, text, steps, "/runs/steps", &mut used, &mut out)?;
+        steps_extract(path, text, steps, "/runs/steps", bare, &mut used, &mut out)?;
     }
     Ok(out)
 }
@@ -106,6 +117,7 @@ fn steps_extract(
     text: &str,
     steps: &[Value],
     pointer: &str,
+    bare: Option<&str>,
     used: &mut std::collections::BTreeSet<usize>,
     out: &mut Vec<Dependency>,
 ) -> Result<(), String> {
@@ -118,6 +130,7 @@ fn steps_extract(
                 "uses",
                 &format!("{pointer}/{i}/uses"),
                 DependencyKind::Action,
+                bare,
                 used,
                 out,
             )?;
@@ -136,6 +149,11 @@ fn setup_input(
     out: &mut Vec<Dependency>,
 ) -> Result<(), String> {
     let action = reference.split('@').next().unwrap_or(reference);
+    let action = action
+        .strip_prefix("https://")
+        .or_else(|| action.strip_prefix("http://"))
+        .and_then(|rest| rest.split_once('/'))
+        .map_or(action, |(_, path)| path);
     let (key, name, package, extract) = match action {
         "oven-sh/setup-bun" => ("bun-version", "bun", "bun", None),
         "actions/setup-node" => (
@@ -212,6 +230,7 @@ fn add(
     key: &str,
     pointer: &str,
     kind: DependencyKind,
+    bare: Option<&str>,
     used: &mut std::collections::BTreeSet<usize>,
     out: &mut Vec<Dependency>,
 ) -> Result<(), String> {
@@ -240,7 +259,7 @@ fn add(
         })?;
     used.insert(located.0);
     let image = kind == DependencyKind::ContainerImage || reference.starts_with("docker://");
-    let (name, package, current, digest, resolved) = if image {
+    let (name, package, source, current, digest, resolved) = if image {
         let value = reference.strip_prefix("docker://").unwrap_or(reference);
         let (value, digest) = value
             .split_once('@')
@@ -249,15 +268,21 @@ fn add(
             .rsplit_once(':')
             .filter(|(_, tag)| !tag.contains('/'))
             .unwrap_or((value, "latest"));
-        (package.into(), package.into(), current.into(), digest, None)
+        (
+            package.into(),
+            package.into(),
+            Source::Docker,
+            current.into(),
+            digest,
+            None,
+        )
     } else {
         let Some((name, reference)) = reference.rsplit_once('@') else {
             return Ok(());
         };
-        let parts: Vec<_> = name.split('/').collect();
-        if parts.len() < 2 {
+        let Some((name, package, source)) = repository(name, bare) else {
             return Ok(());
-        }
+        };
         let digest = (reference.len() == 40 && reference.bytes().all(|b| b.is_ascii_hexdigit()))
             .then(|| reference.to_owned());
         let comment = located
@@ -271,8 +296,9 @@ fn add(
             Some(reference)
         };
         (
-            format!("{}/{}", parts[0], parts[1]),
-            format!("{}/{}", parts[0], parts[1]),
+            name,
+            package,
+            source,
             version.unwrap_or(reference).into(),
             digest,
             version.map(str::to_owned),
@@ -292,15 +318,42 @@ fn add(
         current,
         resolved,
         digest,
-        source: if image {
-            Source::Docker
-        } else {
-            Source::GithubTags
-        },
+        source,
         scheme: if image { Scheme::Docker } else { Scheme::Loose },
         extract: None,
     });
     Ok(())
+}
+
+/// The name, lookup package and source of an action repository. A URL names
+/// its host; a bare `owner/repo` resolves on GitHub, or on `bare` where the
+/// runner's documented default action host is another forge. Hosts without a
+/// supported tag API are skipped.
+fn repository(name: &str, bare: Option<&str>) -> Option<(String, String, Source)> {
+    let (host, path) = match name
+        .strip_prefix("https://")
+        .or_else(|| name.strip_prefix("http://"))
+    {
+        Some(rest) => {
+            let (host, path) = rest.split_once('/')?;
+            (Some(host.to_ascii_lowercase()), path)
+        }
+        None => (None, name),
+    };
+    let mut parts = path.split('/');
+    let repo = format!(
+        "{}/{}",
+        parts.next().filter(|p| !p.is_empty())?,
+        parts.next().filter(|p| !p.is_empty())?
+    );
+    match (host.as_deref(), bare) {
+        (Some("github.com"), _) | (None, None) => Some((repo.clone(), repo, Source::GithubTags)),
+        (None, Some(bare)) => Some((repo.clone(), format!("{bare}/{repo}"), Source::ForgeTags)),
+        (Some(host), _) => crate::gitea_host(host).then(|| {
+            let package = format!("{host}/{repo}");
+            (package.clone(), package, Source::ForgeTags)
+        }),
+    }
 }
 
 fn runners(

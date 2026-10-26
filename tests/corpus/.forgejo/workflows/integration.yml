@@ -1,0 +1,112 @@
+on:
+  pull_request:
+  push:
+    branches:
+      - "**"
+    branches-ignore:
+      - renovate/** # they are build via PR
+
+env:
+  FORGEJO_VERSION: 11.0.16 # renovate: datasource=docker depName=data.forgejo.org/forgejo/forgejo
+
+jobs:
+  integration:
+    runs-on: lxc-trixie
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - id: forgejo
+        uses: https://code.forgejo.org/actions/setup-forgejo@0191c04814b526caf141138a5567000ab08ddae0 # v3.2.0
+        with:
+          user: testuser
+          password: admin1234
+          image-version: ${{ env.FORGEJO_VERSION }}
+
+      - name: push self
+        run: |
+          forgejo-test-helper.sh push_self_action http://testuser:admin1234@${{ steps.forgejo.outputs.host-port }} testuser forgejo-release vTest
+
+      - name: testdata/upload-download
+        run: |
+          export LOOP_DELAY=30
+          export FORGEJO_RUNNER_LOGS="${{ steps.forgejo.outputs.runner-logs }}"
+          forgejo-test-helper.sh run_workflow testdata/upload-download http://testuser:admin1234@${{ steps.forgejo.outputs.host-port }} testuser upload-download forgejo-release "${{ steps.forgejo.outputs.token }}"
+
+          set -ex
+          export FORGEJO="${{ steps.forgejo.outputs.url }}"
+          curl --fail -sS $FORGEJO/api/v1/repos/testuser/upload-download/releases/tags/v2.0 > /tmp/v2.json
+          EXPECTED='No shell expansion should on these notes:
+          - $(some_command)
+          - `other_commend`
+          - "double quoted" and '\''single quoted'\'' strings
+          - \backslash escape
+          - !exclamation_mark'
+          test "$EXPECTED" = "$(jq -r .body < /tmp/v2.json)"
+
+          test $(cat /tmp/v2.json | jq -r .hide_archive_links) = false
+
+          curl --fail -sS $FORGEJO/api/v1/repos/testuser/upload-download/releases/tags/v1.0 > /tmp/v1.json
+          cat /tmp/v1.json | jq -r .body | grep '<!--start release-notes-assistant-->'
+
+          test $(cat /tmp/v1.json | jq -r .hide_archive_links) = true
+
+      - name: testdata/release-notes-file
+        run: |
+          export LOOP_DELAY=30
+          export FORGEJO_RUNNER_LOGS="${{ steps.forgejo.outputs.runner-logs }}"
+          forgejo-test-helper.sh run_workflow testdata/release-notes-file http://testuser:admin1234@${{ steps.forgejo.outputs.host-port }} testuser release-notes-file forgejo-release "${{ steps.forgejo.outputs.token }}"
+
+          set -ex
+          export FORGEJO="${{ steps.forgejo.outputs.url }}"
+          curl --fail -sS $FORGEJO/api/v1/repos/testuser/release-notes-file/releases/tags/v1.0 > /tmp/v1.json
+          curl --fail -sS $FORGEJO/api/v1/repos/testuser/release-notes-file/releases/tags/v2.0 > /tmp/v2.json
+          curl --fail -sS $FORGEJO/api/v1/repos/testuser/release-notes-file/releases/tags/v3.0 > /tmp/v3.json
+
+          EXPECTED='# This is a Release Note
+
+          Some *formatted*,
+
+          multiline
+
+          Markdown content.
+
+          ```bash
+          echo "Even a code block"
+          ```'
+          test "$EXPECTED" = "$(jq -r .body < /tmp/v1.json)"
+
+          test "$EXPECTED" = "$(jq -r .body < /tmp/v2.json)"
+          test "I wont be there" != "$(jq -r .body < /tmp/v2.json)"
+
+          test "$EXPECTED" != "$(jq -r .body < /tmp/v3.json)"
+          test "I will be there" = "$(jq -r .body < /tmp/v3.json)"
+
+      - name: testdata/upload-download-private
+        run: |
+          export LOOP_DELAY=30
+          export FORGEJO_RUNNER_LOGS="${{ steps.forgejo.outputs.runner-logs }}"
+          curl -X 'POST' 'http://testuser:admin1234@${{ steps.forgejo.outputs.host-port }}/api/v1/user/repos' -H 'accept: application/json' -H 'Content-Type: application/json' -d '{"name": "upload-download-private","private": true}'
+          forgejo-test-helper.sh run_workflow testdata/upload-download http://testuser:admin1234@${{ steps.forgejo.outputs.host-port }} testuser upload-download-private forgejo-release "${{ steps.forgejo.outputs.token }}"
+
+      - name: testdata/nested-upload-download
+        run: |
+          export LOOP_DELAY=30
+          export FORGEJO_RUNNER_LOGS="${{ steps.forgejo.outputs.runner-logs }}"
+          forgejo-test-helper.sh run_workflow testdata/nested-upload-download http://testuser:admin1234@${{ steps.forgejo.outputs.host-port }} testuser nested-upload-download forgejo-release "${{ steps.forgejo.outputs.token }}"
+
+      - name: test forgejo-release.sh
+        run: |
+          set -ex
+          export FORGEJO="${{ steps.forgejo.outputs.url }}"
+          export TOKEN="${{ steps.forgejo.outputs.token }}"
+          export VERBOSE=true
+          testdata/forgejo-release-test.sh test_run testuser otherrepo
+
+      - if: always()
+        name: "[RUNNER] and [FORGEJO] logs"
+        run: |
+          runner_logs="${{ steps.forgejo.outputs.runner-logs }}"
+          if test -f "$runner_logs"; then
+            sed -e 's/^/[RUNNER] /' < $runner_logs
+          fi
+          docker logs forgejo | sed -e 's/^/[FORGEJO] /'

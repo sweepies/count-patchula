@@ -25,7 +25,7 @@ pub fn edits(
     if dep.location.pointer == "/flux-version" {
         return Err("generated Flux bundles require regeneration".into());
     }
-    let replacement = if dep.manager == Manager::GithubActions && dep.source == Source::GithubTags {
+    let replacement = if dep.tagged_action() {
         if value.is_empty()
             || value.contains([' ', '\t', '\r', '\n', '\0', '\'', '"', '#', '@', '\\'])
             || digest.is_some_and(|d| d.len() != 40 || !d.bytes().all(|b| b.is_ascii_hexdigit()))
