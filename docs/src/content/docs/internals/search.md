@@ -35,7 +35,10 @@ crawler has run again.
 Algolia publishes an
 [Astro Starlight template](https://docsearch.algolia.com/docs/templates/#astro-starlight-template)
 for the crawler. This site uses it with its own URL. The top level of a
-result's hierarchy is the sidebar group that holds the page:
+result's hierarchy is the sidebar group that holds the page. Starlight writes
+each group's label into two nested spans and nests subgroups inside their
+parent's `<details>`, so the extractor reads only the `.large` span of the
+outermost group, which `.first()` picks because matches come in document order:
 
 ```js
 new Crawler({
@@ -53,8 +56,13 @@ new Crawler({
       pathsToMatch: ["https://count-patchula.sweepy.dev/**"],
       recordExtractor: ({ $, helpers }) => {
         const lvl0 =
-          $('details:has(a[aria-current="page"])').find("summary").find("span").text() ||
-          "Documentation";
+          $('details:has(a[aria-current="page"])')
+            .first()
+            .children("summary")
+            .find(".large")
+            .first()
+            .text()
+            .trim() || "Documentation";
         return helpers.docsearch({
           recordProps: {
             lvl0: { selectors: "", defaultValue: lvl0 },
