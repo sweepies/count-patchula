@@ -71,8 +71,11 @@ impl Runner {
             .truncate(false)
             .open(clones.join(format!("{name}.lock")))
             .map_err(|e| e.to_string())?;
-        lock.try_lock()
-            .map_err(|_| "repository clone is in use; rerun".to_owned())?;
+        // Commands in other checkouts share the clone; wait for theirs to finish.
+        let _lock = tokio::task::spawn_blocking(move || lock.lock().map(|()| lock))
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| format!("cannot lock the repository clone: {e}"))?;
         if !clone.join("HEAD").is_file() {
             self.git(
                 driver,
