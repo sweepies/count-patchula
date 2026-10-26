@@ -5,6 +5,20 @@ title: "SQLite cache"
 SQLite's version and features never matter. HTTP bodies are stored with Zstd
 level 3. The pinned Zig mise tasks build the native dependencies.
 
+## Layout
+
+A cache is a directory. `Cache::open_dir` creates it and opens
+`cache.sqlite` (with SQLite's `-wal` and `-shm` files) inside it. The partial
+clones for lockfile tools go in `worktrees/` and the tool store in `tools/`,
+unless `PATCHULA_TOOLS_DIR` moves it. The server also keeps `server.lock`
+there. The CLI's default directory is shared by every checkout on the machine,
+so concurrent local runs use one database through WAL and the busy timeout.
+Opening takes an exclusive lock on `cache.lock` while it checks and migrates
+the database, and migrations read the schema version inside an immediate
+transaction. In the tool store, each tool run holds `patchula-store.lock`
+shared, and removing versions (clearing an unproven install, `tools prune`)
+holds it exclusive, so no run loses a tool it is using.
+
 ## Threads and transactions
 
 Open one `Cache` per batch and clone its handle. One OS thread owns writes,

@@ -177,7 +177,7 @@ impl Cache {
             } else {
                 std::env::current_dir().unwrap_or_default().join(&path)
             };
-            absolute.with_extension("worktrees")
+            absolute.with_file_name("worktrees")
         });
         let reader_path = path.clone();
         let touches = Arc::new(Mutex::new(HashSet::new()));
@@ -257,7 +257,25 @@ impl Cache {
         })
     }
 
-    /// Persistent tool checkouts sit beside the SQLite cache, never in a repo.
+    /// Opens a cache directory, creating it: `cache.sqlite` with `worktrees/`
+    /// and the lockfile tool store, `tools/`, beside it, and `cache.lock`.
+    pub async fn open_dir(dir: impl AsRef<Path>, options: Options) -> Result<Self> {
+        let dir = dir.as_ref();
+        std::fs::create_dir_all(dir)?;
+        // Commands in other checkouts share the directory; opening checks and
+        // migrates the database, so one process opens it at a time.
+        let lock = std::fs::File::options()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(dir.join("cache.lock"))?;
+        let _lock = tokio::task::spawn_blocking(move || lock.lock().map(|()| lock))
+            .await
+            .map_err(|_| Error::Worker)??;
+        Self::open(dir.join("cache.sqlite"), options).await
+    }
+
+    /// Persistent tool checkouts: `worktrees/` beside the SQLite file.
     pub fn workspace_dir(&self) -> Option<&Path> {
         self.workspace_dir.as_deref()
     }
@@ -437,6 +455,22 @@ impl Cache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn commands_opening_a_new_cache_together_all_succeed() {
+        for _ in 0..10 {
+            let directory = tempfile::tempdir().unwrap();
+            let opens: Vec<_> = (0..8)
+                .map(|_| {
+                    let dir = directory.path().to_owned();
+                    tokio::spawn(async move { Cache::open_dir(dir, Options::default()).await })
+                })
+                .collect();
+            for open in opens {
+                open.await.unwrap().unwrap();
+            }
+        }
+    }
 
     #[tokio::test]
     async fn read_decoders_run_concurrently_while_writer_stays_available() {

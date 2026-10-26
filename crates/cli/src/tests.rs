@@ -244,7 +244,7 @@ async fn cli_run_reopens_disk_receipts_with_bot_authors_and_mixed_pr_inventory()
         foreign,
     ];
     let directory = tempfile::tempdir().unwrap();
-    let cache_path = directory.path().join("nested/cache.sqlite");
+    let cache_path = directory.path().join("nested/cache");
     let args: Vec<_> = [
         OsStr::new("run"),
         OsStr::new("-vv"),
@@ -269,7 +269,9 @@ async fn cli_run_reopens_disk_receipts_with_bot_authors_and_mixed_pr_inventory()
             ..Services::default()
         };
         assert_eq!(run(&app, &services).await.unwrap(), 0);
-        let cache = Cache::open(&cache_path, Default::default()).await.unwrap();
+        let cache = Cache::open_dir(&cache_path, Default::default())
+            .await
+            .unwrap();
         let bytes = cache
             .extraction_get(&patchula_cache::ExtractionKey {
                 repo: "demo/sandbox".into(),
@@ -570,7 +572,7 @@ async fn apply_writes_the_working_tree_and_exits_by_what_is_left() {
     .unwrap();
     let tree = apply_tree();
     let cache = tempfile::tempdir().unwrap();
-    let cache = cache.path().join("cache.sqlite");
+    let cache = cache.path().join("cache");
     let services = Services {
         token: Some("offline".into()),
         transport: Some(transport),
@@ -698,7 +700,7 @@ async fn failed_lookups_fail_apply_and_lookup_with_their_own_code() {
         std::fs::write(tree.path().join(path), content).unwrap();
     }
     let cache = tempfile::tempdir().unwrap();
-    let cache = cache.path().join("cache.sqlite");
+    let cache = cache.path().join("cache");
     let services = Services {
         token: Some("offline".into()),
         transport: Some(transport),
@@ -884,7 +886,7 @@ async fn apply_without_a_config_asks_or_takes_default_config() {
     })
     .unwrap();
     let cache = tempfile::tempdir().unwrap();
-    let cache = cache.path().join("cache.sqlite");
+    let cache = cache.path().join("cache");
     let services = Services {
         token: Some("offline".into()),
         transport: Some(transport),
@@ -918,5 +920,41 @@ async fn apply_without_a_config_asks_or_takes_default_config() {
     assert_eq!(
         std::fs::read_to_string(tree.path().join("Dockerfile")).unwrap(),
         "FROM alpine:3.19.0\n"
+    );
+}
+
+#[test]
+#[cfg(not(target_os = "macos"))]
+fn user_cache_dir_follows_xdg_then_home() {
+    use std::{collections::HashMap, ffi::OsString, path::PathBuf};
+    let lookup = |vars: &[(&str, &str)]| {
+        let vars: HashMap<String, OsString> = vars
+            .iter()
+            .map(|(k, v)| (k.to_string(), OsString::from(v)))
+            .collect();
+        super::user_cache_dir(|name| vars.get(name).cloned())
+    };
+    assert_eq!(
+        lookup(&[("XDG_CACHE_HOME", "/xdg"), ("HOME", "/home/count")]),
+        Some(PathBuf::from("/xdg"))
+    );
+    assert_eq!(
+        lookup(&[("XDG_CACHE_HOME", "relative"), ("HOME", "/home/count")]),
+        Some(PathBuf::from("/home/count/.cache"))
+    );
+    assert_eq!(lookup(&[("HOME", "")]), None);
+    assert_eq!(lookup(&[]), None);
+}
+
+#[test]
+fn cache_flag_names_a_directory() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("cache.sqlite");
+    std::fs::write(&file, "").unwrap();
+    let error = super::cache_dir(Some(&file)).unwrap_err();
+    assert!(error.to_string().contains("takes a directory"), "{error}");
+    assert_eq!(
+        super::cache_dir(Some(directory.path())).unwrap(),
+        directory.path()
     );
 }

@@ -27,8 +27,10 @@ run, `w` writes a starter `patchula.pkl` and carries on, and `q` quits.
 Scripts and hooks have no terminal to ask on, so they pass `--default-config`
 to use the defaults, or the command stops with exit 2 and says so.
 
-The default cache, `.patchula-cache.sqlite`, is created in the current
-directory. Ignore it in Git, or pass `--cache` with a path outside the tree.
+Nothing is written to the checkout except the updates. The cache lives in your
+user cache directory, shared by every checkout; see
+[Installation](/installation/#what-the-runner-needs) for where, and `--cache DIR` to
+move it.
 
 ## What gets written
 

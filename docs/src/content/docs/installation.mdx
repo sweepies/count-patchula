@@ -72,20 +72,25 @@ The Count is one binary, `patchula`. Releases have static builds for Linux
   `mise.toml` and `.tool-versions` tools are looked up with mise. Without it,
   mise tools and lockfiles report an error and everything else works. The tools
   go into the Count's own [tool store](/guide/lockfiles/#the-tool-store),
-  `PATCHULA_TOOLS_DIR` or `<cache>.tools` beside the SQLite cache. Put it on a
+  `PATCHULA_TOOLS_DIR` or `tools/` in the cache directory. Put it on a
   persistent volume.
 - `git`, for the partial clones a lockfile tool works in.
-- A writable cache path. The default is `.patchula-cache.sqlite` in the working
-  directory. It holds HTTP validators, catalogs, write receipts and the partial
-  clones (`<cache>.worktrees`). A warm cache is most of the speed, so keep it
-  between runs.
+- A writable cache directory. By default it is `patchula/` in your user cache
+  directory: `$XDG_CACHE_HOME/patchula` or `~/.cache/patchula` on Linux, and
+  `~/Library/Caches/patchula` on macOS. Every checkout shares it, so lookups
+  from one are reused in the next, and nothing is written into the repository.
+  Pass `--cache DIR` to use another directory. It holds `cache.sqlite` (HTTP
+  validators, catalogs and write receipts), the partial clones in
+  `worktrees/` and the tool store in `tools/`. A warm cache is most of the
+  speed, so keep it between runs. With neither `HOME` nor `XDG_CACHE_HOME` set,
+  local commands stop and ask for `--cache`.
 
 Some tools download slowly. The static PHP build has been measured at about
 44 KB/s, so prewarm the store when you build an image:
 
 ```sh
-patchula tools install --cache /var/lib/patchula/cache.sqlite
-patchula tools prune --days 30 --cache /var/lib/patchula/cache.sqlite
+patchula tools install --cache /var/lib/patchula
+patchula tools prune --days 30 --cache /var/lib/patchula
 ```
 
 ## Shell completions and man page

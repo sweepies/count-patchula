@@ -186,7 +186,7 @@ fn server_startup_errors_are_json_and_never_echo_secret_values() {
         ])
         .arg(settings)
         .arg("--cache")
-        .arg(dir.path().join("cache.sqlite"))
+        .arg(dir.path().join("cache"))
         .env(
             "PATCHULA_APP_PRIVATE_KEY",
             "test-private-key-must-not-appear",
@@ -369,7 +369,7 @@ fn lookup_config_dir_validates_all_matches_before_repository_reads() {
             "--config-dir",
             dir.path().to_str().unwrap(),
             "--cache",
-            dir.path().join("cache.sqlite").to_str().unwrap(),
+            dir.path().join("cache").to_str().unwrap(),
             "--json",
             "demo/first",
             "demo/second",

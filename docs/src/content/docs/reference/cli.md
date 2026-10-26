@@ -79,7 +79,7 @@ Exit codes: 0 = nothing selected is left to apply; 1 = runtime error; 2 = usage 
 
 | Flag | Description | Default |
 | --- | --- | --- |
-| `--cache <PATH>` | Shared SQLite cache path. | `.patchula-cache.sqlite` |
+| `--cache <DIR>` | Cache directory, shared by every checkout. Default: `patchula` in the user cache directory (`~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or `~/.cache`). |  |
 | `--concurrency <N>` | Maximum concurrent repository scans (1–100); HTTP limits are per host. | `8` |
 | `--host-concurrency <HOST=LIMIT>` | Override a host's HTTP limit (1–100); repeat per host. Default: 16. |  |
 | `--registry-freshness-secs <SECS>` | Freshness seconds for OCI tag lists without validators; 0 uses upstream policy. | `3600` |
@@ -288,7 +288,7 @@ Report available updates without writing; with no repository, reads the working 
 | Flag | Description | Default |
 | --- | --- | --- |
 | `--all-repos` | Process every repository the token can reach instead of naming them. |  |
-| `--cache <PATH>` | Shared SQLite cache path. | `.patchula-cache.sqlite` |
+| `--cache <DIR>` | Cache directory, shared by every checkout. Default: `patchula` in the user cache directory (`~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or `~/.cache`). |  |
 | `--concurrency <N>` | Maximum concurrent repository scans (1–100); HTTP limits are per host. | `8` |
 | `--host-concurrency <HOST=LIMIT>` | Override a host's HTTP limit (1–100); repeat per host. Default: 16. |  |
 | `--registry-freshness-secs <SECS>` | Freshness seconds for OCI tag lists without validators; 0 uses upstream policy. | `3600` |
@@ -345,7 +345,7 @@ With no repository, `--dry-run` plans from the working tree, uncommitted changes
 | Flag | Description | Default |
 | --- | --- | --- |
 | `--all-repos` | Process every repository the token can reach instead of naming them. |  |
-| `--cache <PATH>` | Shared SQLite cache path. | `.patchula-cache.sqlite` |
+| `--cache <DIR>` | Cache directory, shared by every checkout. Default: `patchula` in the user cache directory (`~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or `~/.cache`). |  |
 | `--concurrency <N>` | Maximum concurrent repository scans (1–100); HTTP limits are per host. | `8` |
 | `--host-concurrency <HOST=LIMIT>` | Override a host's HTTP limit (1–100); repeat per host. Default: 16. |  |
 | `--registry-freshness-secs <SECS>` | Freshness seconds for OCI tag lists without validators; 0 uses upstream policy. | `3600` |
@@ -391,7 +391,7 @@ Run the API-only GitHub App webhook server.
 | --- | --- | --- |
 | `--settings <FILE>` | Operator Pkl settings file; also PATCHULA_SERVER_SETTINGS. |  |
 | `--listen <ADDR>` | Server bind address; also PATCHULA_LISTEN (default 127.0.0.1:8080). |  |
-| `--cache <PATH>` | Persistent server cache and queue; also PATCHULA_SERVER_CACHE. |  |
+| `--cache <DIR>` | Server cache and queue directory; also PATCHULA_SERVER_CACHE. Default: `patchula/server` in the user cache directory. |  |
 | `--app-id <ID>` | GitHub App ID; also PATCHULA_APP_ID. |  |
 | `--private-key-file <FILE>` | PEM private key file; also PATCHULA_APP_PRIVATE_KEY_FILE. |  |
 | `--webhook-secret-file <FILE>` | Webhook secret file; also PATCHULA_WEBHOOK_SECRET_FILE. |  |
@@ -416,7 +416,7 @@ patchula serve --settings server.pkl --listen 0.0.0.0:8080
 
 - **Usage:** `patchula tools <SUBCOMMAND>`
 
-Manage the lockfile runner's tool store (`PATCHULA_TOOLS_DIR`, or `<cache>.tools`).
+Manage the lockfile runner's tool store (`PATCHULA_TOOLS_DIR`, or `tools/` in the cache directory).
 
 ### Flags
 
@@ -440,7 +440,7 @@ patchula tools prune --days 14
 
 ## `patchula tools install`
 
-- **Usage:** `patchula tools install [--cache <PATH>]`
+- **Usage:** `patchula tools install [--cache <DIR>]`
 
 Install the pinned lockfile toolchains ahead of time, e.g. in an image build.
 
@@ -448,12 +448,12 @@ Install the pinned lockfile toolchains ahead of time, e.g. in an image build.
 
 | Flag | Description | Default |
 | --- | --- | --- |
-| `--cache <PATH>` | Shared SQLite cache path; the tool store sits beside it. | `.patchula-cache.sqlite` |
+| `--cache <DIR>` | Cache directory, holding the tool store. Default: `patchula` in the user cache directory. |  |
 | `-h --help` | Print help |  |
 
 ## `patchula tools prune`
 
-- **Usage:** `patchula tools prune [--cache <PATH>] [--days <DAYS>]`
+- **Usage:** `patchula tools prune [--cache <DIR>] [--days <DAYS>]`
 
 Uninstall tool versions no run has used recently; pinned defaults stay.
 
@@ -461,7 +461,7 @@ Uninstall tool versions no run has used recently; pinned defaults stay.
 
 | Flag | Description | Default |
 | --- | --- | --- |
-| `--cache <PATH>` | Shared SQLite cache path; the tool store sits beside it. | `.patchula-cache.sqlite` |
+| `--cache <DIR>` | Cache directory, holding the tool store. Default: `patchula` in the user cache directory. |  |
 | `--days <DAYS>` | Remove versions unused for at least this many days. | `30` |
 | `-h --help` | Print help |  |
 
@@ -482,7 +482,7 @@ Browse dependencies and updates in the terminal; with no repository, apply selec
 | Flag | Description | Default |
 | --- | --- | --- |
 | `--all-repos` | Process every repository the token can reach instead of naming them. |  |
-| `--cache <PATH>` | Shared SQLite cache path. | `.patchula-cache.sqlite` |
+| `--cache <DIR>` | Cache directory, shared by every checkout. Default: `patchula` in the user cache directory (`~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or `~/.cache`). |  |
 | `--concurrency <N>` | Maximum concurrent repository scans (1–100); HTTP limits are per host. | `8` |
 | `--host-concurrency <HOST=LIMIT>` | Override a host's HTTP limit (1–100); repeat per host. Default: 16. |  |
 | `--registry-freshness-secs <SECS>` | Freshness seconds for OCI tag lists without validators; 0 uses upstream policy. | `3600` |

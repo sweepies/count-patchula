@@ -127,7 +127,7 @@ its own local cache. APM reads only `apm.yml`, so a manifest named
 ## The tool store
 
 Tools install into the Count's own mise data directory, separate from yours:
-`PATCHULA_TOOLS_DIR`, or `<cache>.tools` beside the SQLite cache. It persists
+`PATCHULA_TOOLS_DIR`, or `tools/` in the cache directory. It persists
 between runs, so keep it on a volume. The Count installs his own pinned mise
 there on first use and runs that for every tool and lookup; the mise on `PATH`
 only installs and starts it. Each successful tool run records its

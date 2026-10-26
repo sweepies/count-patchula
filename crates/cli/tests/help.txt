@@ -21,7 +21,8 @@ Commands:
           requests with verified API commits.
   serve   Run the API-only GitHub App webhook server.
   tools   Manage the lockfile runner's tool store
-          (`PATCHULA_TOOLS_DIR`, or `<cache>.tools`).
+          (`PATCHULA_TOOLS_DIR`, or `tools/` in the cache
+          directory).
   tui     Browse dependencies and updates in the terminal;
           with no repository, apply selected updates to
           the working tree.
@@ -79,8 +80,10 @@ or configuration error; 3 = selected updates are still waiting: `--check` or
 Usage: patchula apply [FLAGS]
 
 Flags:
-      --cache <PATH>              Shared SQLite cache path.
-                                  (default: .patchula-cache.sqlite)
+      --cache <DIR>               Cache directory, shared by every checkout.
+                                  Default: `patchula` in the user cache
+                                  directory (`~/Library/Caches` on macOS, else
+                                  `XDG_CACHE_HOME` or `~/.cache`).
       --concurrency <N>           Maximum concurrent repository scans (1–100);
                                   HTTP limits are per host.
                                   (default: 8)
@@ -389,8 +392,10 @@ Arguments:
 Flags:
       --all-repos                 Process every repository the token can reach
                                   instead of naming them.
-      --cache <PATH>              Shared SQLite cache path.
-                                  (default: .patchula-cache.sqlite)
+      --cache <DIR>               Cache directory, shared by every checkout.
+                                  Default: `patchula` in the user cache
+                                  directory (`~/Library/Caches` on macOS, else
+                                  `XDG_CACHE_HOME` or `~/.cache`).
       --concurrency <N>           Maximum concurrent repository scans (1–100);
                                   HTTP limits are per host.
                                   (default: 8)
@@ -467,8 +472,10 @@ Arguments:
 Flags:
       --all-repos                 Process every repository the token can reach
                                   instead of naming them.
-      --cache <PATH>              Shared SQLite cache path.
-                                  (default: .patchula-cache.sqlite)
+      --cache <DIR>               Cache directory, shared by every checkout.
+                                  Default: `patchula` in the user cache
+                                  directory (`~/Library/Caches` on macOS, else
+                                  `XDG_CACHE_HOME` or `~/.cache`).
       --concurrency <N>           Maximum concurrent repository scans (1–100);
                                   HTTP limits are per host.
                                   (default: 8)
@@ -540,8 +547,9 @@ Flags:
                                   PATCHULA_SERVER_SETTINGS.
       --listen <ADDR>             Server bind address; also PATCHULA_LISTEN
                                   (default 127.0.0.1:8080).
-      --cache <PATH>              Persistent server cache and queue; also
-                                  PATCHULA_SERVER_CACHE.
+      --cache <DIR>               Server cache and queue directory; also
+                                  PATCHULA_SERVER_CACHE. Default:
+                                  `patchula/server` in the user cache directory.
       --app-id <ID>               GitHub App ID; also PATCHULA_APP_ID.
       --private-key-file <FILE>   PEM private key file; also
                                   PATCHULA_APP_PRIVATE_KEY_FILE.
@@ -575,8 +583,8 @@ Examples:
 Run 'patchula <command> --help' for more information on a command.
 
 ==> patchula tools --help
-Manage the lockfile runner's tool store (`PATCHULA_TOOLS_DIR`, or
-`<cache>.tools`).
+Manage the lockfile runner's tool store (`PATCHULA_TOOLS_DIR`, or `tools/` in
+the cache directory).
 
 Usage: patchula tools <SUBCOMMAND>
 
@@ -615,11 +623,11 @@ Run 'patchula <command> --help' for more information on a command.
 ==> patchula tools install --help
 Install the pinned lockfile toolchains ahead of time, e.g. in an image build.
 
-Usage: patchula tools install [--cache <PATH>]
+Usage: patchula tools install [--cache <DIR>]
 
 Flags:
-      --cache <PATH>    Shared SQLite cache path; the tool store sits beside it.
-                        (default: .patchula-cache.sqlite)
+      --cache <DIR>     Cache directory, holding the tool store. Default:
+                        `patchula` in the user cache directory.
   -h, --help            Print help
 
 Global flags:
@@ -640,11 +648,11 @@ Run 'patchula <command> --help' for more information on a command.
 ==> patchula tools prune --help
 Uninstall tool versions no run has used recently; pinned defaults stay.
 
-Usage: patchula tools prune [--cache <PATH>] [--days <DAYS>]
+Usage: patchula tools prune [--cache <DIR>] [--days <DAYS>]
 
 Flags:
-      --cache <PATH>    Shared SQLite cache path; the tool store sits beside it.
-                        (default: .patchula-cache.sqlite)
+      --cache <DIR>     Cache directory, holding the tool store. Default:
+                        `patchula` in the user cache directory.
       --days <DAYS>     Remove versions unused for at least this many days.
                         (default: 30)
   -h, --help            Print help
@@ -677,8 +685,10 @@ Arguments:
 Flags:
       --all-repos                 Process every repository the token can reach
                                   instead of naming them.
-      --cache <PATH>              Shared SQLite cache path.
-                                  (default: .patchula-cache.sqlite)
+      --cache <DIR>               Cache directory, shared by every checkout.
+                                  Default: `patchula` in the user cache
+                                  directory (`~/Library/Caches` on macOS, else
+                                  `XDG_CACHE_HOME` or `~/.cache`).
       --concurrency <N>           Maximum concurrent repository scans (1–100);
                                   HTTP limits are per host.
                                   (default: 8)

@@ -155,8 +155,8 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/corpus-cache
-          key: corpus-${{ github.run_id }}
-          restore-keys: corpus-
+          key: corpus-v2-${{ github.run_id }}
+          restore-keys: corpus-v2-
       # A dry run looks every dependency up and plans every branch, editing
       # each manifest in memory, without writing anything.
       - name: Look up and plan every corpus dependency
@@ -165,7 +165,7 @@ jobs:
           CACHE_DIR: ${{ runner.temp }}/corpus-cache
         run: |
           mkdir -p "$CACHE_DIR"
-          mise run corpus:check --cache "$CACHE_DIR/cache.sqlite" > corpus-report.json 2> corpus.log || { grep -v '^[-+@ ]' corpus.log | tail -40; exit 1; }
+          mise run corpus:check --cache "$CACHE_DIR" > corpus-report.json 2> corpus.log || { grep -v '^[-+@ ]' corpus.log | tail -40; exit 1; }
           jq='mise exec jq@1.8.2 -- jq'
           {
             echo '### Corpus'

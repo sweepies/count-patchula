@@ -78,7 +78,9 @@ pub async fn run(app: &App, serve: &Serve) -> Result<u8> {
             .cache
             .clone()
             .or(env("PATCHULA_SERVER_CACHE")?.map(PathBuf::from))
-            .unwrap_or_else(|| ".patchula-server.sqlite".into()),
+            .map(|dir| crate::cache_dir(Some(&dir)))
+            .unwrap_or_else(|| crate::cache_dir(None).map(|dir| dir.join("server")))
+            .map_err(|e| (2, e))?,
         listen,
         app_id,
         private_key: secret(

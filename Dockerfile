@@ -51,7 +51,7 @@ EOF
 ENV HOME=/home/patchula \
     PATCHULA_LISTEN=0.0.0.0:8080 \
     PATCHULA_SERVER_SETTINGS=/etc/patchula/server.pkl \
-    PATCHULA_SERVER_CACHE=/var/lib/patchula/cache.sqlite \
+    PATCHULA_SERVER_CACHE=/var/lib/patchula \
     PATCHULA_TOOLS_DIR=/var/lib/patchula/tools \
     RUSTUP_HOME=/var/lib/patchula/rustup
 
