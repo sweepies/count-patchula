@@ -34,6 +34,79 @@ fn help_version_and_bundled_schema() {
     );
 }
 
+/// Every command's plain `--help`, as a pipe at 80 columns gets it.
+#[test]
+fn help_pages_match_the_snapshot() {
+    const SNAPSHOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/help.txt");
+    let routes: [&[&str]; 17] = [
+        &[],
+        &["apply"],
+        &["auth"],
+        &["auth", "login"],
+        &["auth", "logout"],
+        &["config"],
+        &["config", "check"],
+        &["config", "schema"],
+        &["config", "server-schema"],
+        &["config", "check-server"],
+        &["lookup"],
+        &["run"],
+        &["serve"],
+        &["tools"],
+        &["tools", "install"],
+        &["tools", "prune"],
+        &["tui"],
+    ];
+    let mut pages = String::new();
+    for route in routes {
+        let output = Command::new(env!("CARGO_BIN_EXE_patchula"))
+            .args(route)
+            .arg("--help")
+            .env("COLUMNS", "80")
+            .env("NO_COLOR", "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{route:?} {output:?}");
+        pages.push_str(&format!("==> patchula {} --help\n", route.join(" ")));
+        pages.push_str(&String::from_utf8(output.stdout).unwrap());
+        pages.push('\n');
+    }
+    if std::env::var_os("PATCHULA_UPDATE_SNAPSHOT").is_some() {
+        std::fs::write(SNAPSHOT, &pages).unwrap();
+    }
+    let expected = std::fs::read_to_string(SNAPSHOT).unwrap_or_default();
+    assert!(
+        expected == pages,
+        "plain help changed; review it and run `mise run help:snapshot`"
+    );
+}
+
+#[test]
+fn help_is_plain_when_piped_or_refused_colour_and_styled_when_forced() {
+    let help = |args: &[&str], env: &[(&str, &str)]| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_patchula"));
+        command
+            .args(args)
+            .env_remove("NO_COLOR")
+            .env_remove("CLICOLOR_FORCE")
+            .env("COLUMNS", "80");
+        command.envs(env.iter().copied());
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let plain = help(&["lookup", "--help"], &[]);
+    assert!(!plain.contains('\x1b'), "{plain}");
+    assert!(plain.contains("\nExamples:\n"), "{plain}");
+    assert!(
+        plain.ends_with("Run 'patchula <command> --help' for more information on a command.\n")
+    );
+    let refused = [("NO_COLOR", "1"), ("CLICOLOR_FORCE", "1")];
+    assert_eq!(help(&["lookup", "--help"], &refused), plain);
+    let styled = help(&["lookup", "--help"], &[("CLICOLOR_FORCE", "1")]);
+    assert!(styled.contains("\x1b[1;36mUsage:\x1b[0m"), "{styled}");
+}
+
 #[test]
 fn operator_settings_are_checked_offline_and_secret_diagnostics_are_sanitized() {
     let dir = tempfile::tempdir().unwrap();

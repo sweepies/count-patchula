@@ -142,7 +142,7 @@
 {{ example.help }}
 {%- endif %}
 
-```{{ example.lang }}
+```{% if example.lang %}{{ example.lang }}{% else %}sh{% endif %}
 {{ example.code }}
 ```
 {%- endfor %}

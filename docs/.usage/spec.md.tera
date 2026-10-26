@@ -39,7 +39,7 @@ description: Every patchula command, argument and flag, generated from the CLI's
 {{ example.help }}
 {%- endif %}
 
-```{{ example.lang }}
+```{% if example.lang %}{{ example.lang }}{% else %}sh{% endif %}
 {{ example.code }}
 ```
 {%- endfor %}

@@ -1,12 +1,55 @@
 use std::path::PathBuf;
+use usage_rs::help::Palette;
 use usage_rs::{Args, Cli, Subcommands, ValueEnum};
+
+/// Help colours: teal headings, bold names, dim placeholders.
+pub const PALETTE: Palette = Palette::DEFAULT
+    .heading("cyan+bold")
+    .option("bold")
+    .metavar("dim")
+    .command("bold");
 
 /// Count Patchula vants to update your deps. A modern dependency updater with strong defaults.
 ///
 /// Exit codes: 0 = success; 1 = runtime error; 2 = usage or configuration error;
 /// `apply` adds 3 = updates still waiting.
 #[derive(Cli)]
-#[usage(bin = "patchula", version, unknown_flags = "error")]
+#[usage(
+    bin = "patchula",
+    version,
+    unknown_flags = "error",
+    help_template = "{$dim}{{about}}{/$}
+
+{{usage}}
+
+{{commands}}
+
+{{args}}
+
+{{flags}}
+
+{{after_help}}
+
+{$dim+italic}Run 'patchula <command> --help' for more information on a command.{/$}",
+    example("patchula lookup", help = "Report updates for the checkout here"),
+    example(
+        "patchula run --dry-run",
+        help = "Plan branches and diffs, writing nothing"
+    ),
+    example("patchula tui", help = "Browse updates and apply the ones you pick"),
+    example(
+        "patchula apply --check",
+        help = "Exit 3 in CI while updates are waiting"
+    ),
+    example(
+        "patchula apply --manager github-actions",
+        help = "Write only GitHub Actions updates"
+    ),
+    example(
+        "patchula serve --settings server.pkl",
+        help = "Run the GitHub App webhook server"
+    )
+)]
 pub struct App {
     /// When a ticked checkbox says it takes effect; also PATCHULA_RECHECK. Default: now in the server, next-run in the CLI.
     #[usage(long, value_enum, value_name = "WHEN", global)]
@@ -38,24 +81,115 @@ pub enum Command {
     /// Exit codes: 0 = nothing selected is left to apply; 1 = runtime error; 2 = usage or
     /// configuration error; 3 = selected updates are still waiting: `--check` or `--dry-run`
     /// found some, or some could not be written in place.
+    #[usage(
+        example("patchula apply", help = "Write every available update here"),
+        example(
+            "patchula apply --check",
+            help = "Write nothing; exit 3 if updates are waiting"
+        ),
+        example(
+            "patchula apply --dry-run --type patch",
+            help = "Show the patch updates as a diff"
+        ),
+        example(
+            "patchula apply --manager github-actions --dependency 'glob:actions/*'",
+            help = "Write only the actions/* updates"
+        )
+    )]
     Apply(Apply),
     /// Sign in to or out of a Count Patchula server for `--remote`.
+    #[usage(
+        example(
+            "patchula auth login --server https://patchula.example.com",
+            help = "Sign in through the server's GitHub App"
+        ),
+        example("patchula auth logout", help = "Forget the token for PATCHULA_SERVER")
+    )]
     Auth(Auth),
     /// Inspect and validate Pkl configuration.
+    #[usage(
+        example(
+            "patchula config check .",
+            help = "Find and check this repository's config"
+        ),
+        example("patchula config check patchula.pkl", help = "Check one config file"),
+        example(
+            "patchula config schema > PatchulaConfig.pkl",
+            help = "Save the schema for your editor"
+        ),
+        example(
+            "patchula config check-server server.pkl",
+            help = "Check operator settings"
+        )
+    )]
     Config(Config),
     /// Report available updates without writing; with no repository, reads the working tree here.
+    #[usage(
+        example("patchula lookup", help = "Report updates for the checkout here"),
+        example(
+            "patchula lookup acme/app acme/api",
+            help = "Read two repositories through the API"
+        ),
+        example("patchula lookup --json", help = "The same report, as JSON"),
+        example(
+            "patchula lookup --remote",
+            help = "Look up on your Count Patchula server"
+        )
+    )]
     Lookup(Lookup),
     /// Create or update dependency branches and pull requests with verified API commits.
     ///
     /// With no repository, `--dry-run` plans from the working tree, uncommitted changes
     /// included. A real run with no repository opens pull requests for this checkout's GitHub
     /// repository and requires a clean tree at the remote's default branch.
+    #[usage(
+        example(
+            "patchula run --dry-run",
+            help = "Plan branches and diffs from this tree"
+        ),
+        example(
+            "patchula run acme/app",
+            help = "Open or update pull requests for acme/app"
+        ),
+        example(
+            "patchula run --all-repos --config-dir overrides",
+            help = "Every repository the token reaches"
+        )
+    )]
     Run(Run),
     /// Run the API-only GitHub App webhook server.
+    #[usage(
+        example(
+            "patchula serve --settings server.pkl",
+            help = "Serve with operator settings"
+        ),
+        example(
+            "patchula serve --settings server.pkl --listen 0.0.0.0:8080",
+            help = "Listen on every interface"
+        )
+    )]
     Serve(Serve),
     /// Manage the lockfile runner's tool store (`PATCHULA_TOOLS_DIR`, or `<cache>.tools`).
+    #[usage(
+        example(
+            "patchula tools install",
+            help = "Install the pinned toolchains, e.g. in an image"
+        ),
+        example(
+            "patchula tools prune --days 14",
+            help = "Drop versions unused for two weeks"
+        )
+    )]
     Tools(Tools),
     /// Browse dependencies and updates in the terminal; with no repository, apply selected updates to the working tree.
+    #[usage(
+        example("patchula tui", help = "Pick updates and apply them here"),
+        example("patchula tui acme/app", help = "Browse a repository through the API"),
+        example(
+            "patchula tui --once",
+            help = "Print a plain snapshot, for pipes and CI logs"
+        )
+    )]
     Tui(Tui),
 }
 
@@ -290,6 +424,29 @@ pub struct CheckServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use usage_rs::help::{Style, render_at_styled};
+
+    fn pages<'a>(route: &mut Vec<&'a usage_rs::Command<'a>>, style: Style, out: &mut String) {
+        out.push_str(&render_at_styled(App::spec(), route, true, style).unwrap());
+        let Some(command) = route.last() else { return };
+        for sub in command.subcommands {
+            route.push(sub);
+            pages(route, style, out);
+            route.pop();
+        }
+    }
+
+    #[test]
+    fn coloured_help_uses_the_palette_and_template() {
+        let mut pages = String::new();
+        let style = Style::COLOURED.palette(PALETTE);
+        self::pages(&mut vec![App::command()], style, &mut pages);
+        assert!(pages.contains("\x1b[1;36mUsage:\x1b[0m"));
+        assert!(pages.contains("\x1b[1;36mExamples:\x1b[0m"));
+        assert!(pages.contains("\x1b[1m--dry-run\x1b[0m"));
+        assert!(pages.contains("\x1b[2m<MANAGER>\x1b[0m"));
+        assert!(pages.contains("\x1b[2;3mRun 'patchula <command> --help'"));
+    }
 
     #[test]
     fn serve_takes_its_flags_and_global_recheck_still_works_for_run() {
