@@ -116,7 +116,7 @@ before then.
 
 ## Limits and cost
 
-A CI run starts two sandboxes and a snapshot build three. Starts count against the
+A CI run starts two sandboxes and a snapshot build two. Starts count against the
 boat plan's limits (12 a minute on the $20 plan). A `large` sandbox costs
 $0.072 an hour while it runs. Each saved snapshot above the plan's included
 count costs $0.056 a day, which is why the task keeps one.
