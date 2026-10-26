@@ -77,7 +77,7 @@ fn a_lookup_reads_plain_with_counts_first() {
     .unwrap();
     let text = report_text(&report);
     assert!(!text.contains('\x1b'), "{text}");
-    assert!(text.lines().next().unwrap().starts_with(
+    assert!(summary(&text).starts_with(
         "The Count visited local/web-chat and found 4 dependencies, 5 updates, 1 vulnerability"
     ));
     check("lookup.txt", &text);
@@ -85,6 +85,17 @@ fn a_lookup_reads_plain_with_counts_first() {
 
 fn report_text(report: &Report) -> String {
     super::report(report, &Style::PLAIN)
+}
+
+/// The summary paragraph on one line, after checking that a pipe gets it
+/// wrapped at word boundaries to 80 columns.
+fn summary(text: &str) -> String {
+    let paragraph = text.split("\n\n").next().unwrap();
+    for line in paragraph.lines() {
+        assert!(line.chars().count() <= 80, "{line}");
+        assert_eq!(line, line.trim(), "{line}");
+    }
+    paragraph.replace('\n', " ")
 }
 
 #[test]
@@ -121,11 +132,15 @@ fn a_run_lists_branches_and_pull_requests_per_repository() {
     }))
     .unwrap();
     let text = report_text(&report);
+    let summary = summary(&text);
     assert!(
-        text.starts_with("The Count visited 2 repositories and found 4 dependencies"),
+        summary.starts_with("The Count visited 2 repositories and found 4 dependencies"),
         "{text}"
     );
-    assert!(text.contains("1 repository could not be read."), "{text}");
+    assert!(
+        summary.contains("1 repository could not be read."),
+        "{text}"
+    );
     assert!(!text.contains("\nUpdates"), "{text}");
     check("run.txt", &text);
 }

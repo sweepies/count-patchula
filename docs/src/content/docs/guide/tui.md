@@ -26,16 +26,16 @@ up front, and is required when there is no terminal to ask on.
  Count Patchula   1 repository · 2576 dependencies · 131 updates · 2 selected
  1 Updates │ 2 Held back │ 3 Dependencies │ 4 Templates │ 5 Warnings │ 6 Stats
  Updates (131 of 131, type: all) ───────────────────────────────────────────────────────────────────
-     Dependency                  Current        Target               Type   Age   File
-[x]  cloud.google.com/go/auth    v0.23.3        v0.24.1              minor  12d   go/prometheus/go.m
-[x]  cloud.google.com/go/auth/oa v0.2.8         v0.3.0               minor  26d   go/prometheus/go.m
-[ ]  cloud.google.com/go/compute v0.9.1         v0.10.0              minor  26d   go/prometheus/go.m
-[ ]  github.com/Azure/azure-sdk- v1.14.1        v1.15.0              minor  6d    go/prometheus/go.m
-[ ]  github.com/AzureAD/microsof v1.8.0         v1.10.1              minor  21d   go/prometheus/go.m
-[ ]  github.com/KimMachineGun/au v0.7.5         v1.0.0               major  60d   go/prometheus/go.m
-[ ]  github.com/Microsoft/go-win v0.6.2         v0.6.4               patch  7d    go/prometheus/go.m
-[ ]  github.com/armon/go-metrics v0.4.1         v0.4.2               patch  1230d go/prometheus/go.m
-[ ]  github.com/armon/go-metrics v0.4.1         v0.7.0               minor  34d   go/prometheus/go.m
+      Dependency                               Current  Target   Type   Age    File
+[x]   cloud.google.com/go/auth                 v0.23.3  v0.24.1  minor  12d    go/prometheus/go.mod
+[x]   cloud.google.com/go/auth/oauth2adapt     v0.2.8   v0.3.0   minor  26d    go/prometheus/go.mod
+[ ]   cloud.google.com/go/compute/metadata     v0.9.1   v0.10.0  minor  26d    go/prometheus/go.mod
+[ ]   github.com/Azure/az…k-for-go/sdk/azcore  v1.14.1  v1.15.0  minor  6d     go/prometheus/go.mod
+[ ]   github.com/AzureAD/…tion-library-for-go  v1.8.0   v1.10.1  minor  21d    go/prometheus/go.mod
+[ ]   github.com/KimMachineGun/automemlimit    v0.7.5   v1.0.0   major  60d    go/prometheus/go.mod
+[ ]   github.com/Microsoft/go-winio            v0.6.2   v0.6.4   patch  7d     go/prometheus/go.mod
+[ ]   github.com/armon/go-metrics              v0.4.1   v0.4.2   patch  1230d  go/prometheus/go.mod
+[ ]   github.com/armon/go-metrics              v0.4.1   v0.7.0   minor  34d    go/prometheus/go.mod
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 cloud.google.com/go/auth/oauth2adapt  go · go/prometheus/go.mod
 v0.2.8 → v0.3.0  (minor)
@@ -63,7 +63,7 @@ published 2026-09-24T19:36:54Z
 | `q`, `Esc`, `Ctrl-C` | quit |
 | `?` | show the keys |
 | `Tab`, `→`, `Shift-Tab`, `←` | next and previous tab |
-| `1` to `6` | jump to a tab |
+| `1` to `6` | jump to a tab; each tab keeps its cursor while you are away |
 | `j`, `k`, `↓`, `↑` | move; on the Warnings tab, scroll a line |
 | `PgDn`, `PgUp`, `g`, `Home`, `G`, `End` | page down, page up, top, bottom |
 | `/` | search names, packages and files; `Enter` or `Esc` to finish |
@@ -79,9 +79,18 @@ bar says why next to the key: the lookup ran on a server, the repositories come
 from GitHub, nothing is selected yet, or, for copier, the tree has uncommitted
 changes. A message from the last key appears above the bar until the next key.
 
-Warnings wrap to the width of the terminal. When they fill more than the pane,
-the title shows which lines are on screen, and `j`, `k`, `PgDn` and `PgUp`
-scroll through them.
+Warnings are laid out like the end of a `lookup` report: grouped by
+repository when there are several, failed lookups one row each with the
+message under it, then the other warnings. They wrap to the width of the
+terminal. When they fill more than the pane, the title shows which lines are
+on screen, and `j`, `k`, `PgDn` and `PgUp` scroll through them, as the bar
+says.
+
+The Updates table sizes its columns by what is in them. The current version
+takes up to 32 columns and the target up to 48, enough for a version with a
+short digest; on a narrow terminal they give way last, after the dependency
+name and the file. A long dependency name is cut in the middle, keeping its
+start and its last segment.
 
 ## Applying updates
 

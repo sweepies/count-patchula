@@ -1,4 +1,6 @@
-The Count visited 2 repositories and found 4 dependencies, 5 updates, 1 vulnerability, 1 failed lookup, 1 notice, 1 skipped value and 1 warning. 1 repository could not be read.
+The Count visited 2 repositories and found 4 dependencies, 5 updates, 1
+vulnerability, 1 failed lookup, 1 notice, 1 skipped value and 1 warning. 1
+repository could not be read.
 
 acme/api  error: no patchula.pkl on the default branch
 

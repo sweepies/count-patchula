@@ -24,6 +24,8 @@ title: "Environment variables"
 | `NO_COLOR` | all | turns colour off: any value for `--help`, which prints as when it is piped; any non-empty value for reports, the spinner and errors, unless `--color always` forces it |
 | `CLICOLOR_FORCE` | `--help` | any value but `0` colours help that is piped; `NO_COLOR` still wins |
 | `COLUMNS` | `--help` | the width help wraps to; default the terminal's, else 80 |
+| `COLORTERM` | all | `truecolor` or `24bit` draws the Count's colours exactly |
+| `TERM` | all | without `COLORTERM`, a value containing `256color` uses the nearest of 256 colours, and anything else the 16 ANSI colours; `dumb` hides the spinner |
 
 Flags override their environment variables. For each secret, set either the
 file or the value, not both.

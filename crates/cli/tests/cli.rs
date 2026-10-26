@@ -103,8 +103,26 @@ fn help_is_plain_when_piped_or_refused_colour_and_styled_when_forced() {
     );
     let refused = [("NO_COLOR", "1"), ("CLICOLOR_FORCE", "1")];
     assert_eq!(help(&["lookup", "--help"], &refused), plain);
-    let styled = help(&["lookup", "--help"], &[("CLICOLOR_FORCE", "1")]);
-    assert!(styled.contains("\x1b[1;36mUsage:\x1b[0m"), "{styled}");
+    let styled = help(
+        &["lookup", "--help"],
+        &[("CLICOLOR_FORCE", "1"), ("COLORTERM", "truecolor")],
+    );
+    assert!(
+        styled.contains("\x1b[1;38;2;232;90;79mUsage:\x1b[0m"),
+        "{styled}"
+    );
+    let indexed = help(
+        &["lookup", "--help"],
+        &[
+            ("CLICOLOR_FORCE", "1"),
+            ("COLORTERM", ""),
+            ("TERM", "xterm-256color"),
+        ],
+    );
+    assert!(
+        indexed.contains("\x1b[1;38;5;203mUsage:\x1b[0m"),
+        "{indexed}"
+    );
 }
 
 #[test]

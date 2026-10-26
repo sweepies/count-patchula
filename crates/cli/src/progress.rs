@@ -1,5 +1,6 @@
 //! A spinner on stderr while a batch runs, so a long lookup says what it is
 //! doing. Only on a terminal: pipes and logs never see it.
+use crate::{cli, output, palette};
 use patchula_engine::{Progress, Stage};
 use std::sync::{Arc, Mutex};
 
@@ -11,15 +12,27 @@ pub struct Spinner {
 }
 
 impl Spinner {
-    /// A spinner when stderr is a terminal that can draw one.
-    pub fn start() -> Option<Arc<Self>> {
+    /// A spinner when stderr is a terminal that can draw one: a bold braille
+    /// wheel and the Count's name in the accent, then what he is doing.
+    pub fn start(color: cli::Color) -> Option<Arc<Self>> {
         let terminal = console::Term::stderr().is_term()
             && std::env::var_os("TERM").is_none_or(|term| term != "dumb");
         if !terminal {
             return None;
         }
+        let style = output::Style::stderr(color);
+        // clx paints its spinner blue when stderr is coloured; the frame is
+        // repainted in the accent, or left plain when we may not colour.
+        let wheel = if output::colored(color, true) {
+            format!("\x1b[1;{}m", palette::ACCENT.sgr(palette::depth()))
+        } else {
+            String::new()
+        };
+        let label = style.paint(output::Paint::Accent, &style.bold("the Count"));
         let job = ProgressJobBuilder::new()
-            .body("{{ spinner() }} {{ message | flex }}")
+            .body(format!(
+                "{{{{ spinner(name=\"dot\") | replace(from=\"\x1b[34m\", to=\"{wheel}\") }}}} {label}  {{{{ message | flex }}}}"
+            ))
             .prop("message", "the Count is getting ready…")
             .on_done(ProgressJobDoneBehavior::Hide)
             .start();

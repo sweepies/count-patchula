@@ -5,6 +5,7 @@ mod apply;
 mod cli;
 mod copier;
 mod output;
+mod palette;
 mod progress;
 mod remote;
 mod server;
@@ -391,10 +392,11 @@ async fn main() -> ExitCode {
     let app = match App::embedded_outcome_paletted(&argv, cli::PALETTE) {
         usage_rs::embedded::Outcome::Parsed(app) => app,
         usage_rs::embedded::Outcome::Exit(exit) => {
+            let text = palette::help(&exit.text, palette::depth());
             let _ = if exit.stderr {
-                io::stderr().lock().write_all(exit.text.as_bytes())
+                io::stderr().lock().write_all(text.as_bytes())
             } else {
-                io::stdout().lock().write_all(exit.text.as_bytes())
+                io::stdout().lock().write_all(text.as_bytes())
             };
             return ExitCode::from(u8::try_from(exit.code).unwrap_or(1));
         }
@@ -1101,7 +1103,7 @@ async fn report(
     };
     let http_options = http_options(scan)?;
     let recheck = recheck(app, run.is_some())?;
-    let spinner = progress::Spinner::start();
+    let spinner = progress::Spinner::start(app.color);
     let token = services
         .token()
         .await
