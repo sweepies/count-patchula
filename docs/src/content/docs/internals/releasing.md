@@ -28,14 +28,16 @@ uses only the built-in `GITHUB_TOKEN`.
 3. **Build.** The static archives are built from that commit for Linux and
    macOS, each is run on its own platform, and the server image is built
    from the Linux archives and run.
-4. **Land.** Only when all of that passes, the image is pushed to GHCR, the
-   commit is pushed to `main` and tagged `vX.Y.Z`, and the GitHub release
-   is published with its signed packslip manifest. communique then rewrites
+4. **Land.** Only when all of that passes, the image is pushed to GHCR by
+   digest, the commit is pushed to `main` and tagged `vX.Y.Z`, the image
+   gets its `X.Y.Z` and `latest` tags, and the GitHub release is published
+   with its signed packslip manifest. communique then rewrites
    the notes (`mise run release:notes vX.Y.Z`).
 
 A failed build pushes nothing, so fix the problem on `main` and run the
-workflow again. If `main` moves while the run builds, the run stops before
-pushing the image; run it again from the new `main`.
+workflow again. If `main` moves while the run builds, the push to `main` is
+refused and nothing is tagged, leaving only an untagged image; run the
+workflow again from the new `main`.
 
 ## Dry run
 
