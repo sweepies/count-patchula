@@ -1710,35 +1710,22 @@ fn warning_lines(model: &Model, width: usize) -> Vec<Line<'static>> {
                 palette::ERROR,
                 indent,
             ));
-            let name = failures
-                .iter()
-                .map(|f| f.name.chars().count())
-                .max()
-                .unwrap_or(0);
-            let path = failures
-                .iter()
-                .map(|f| f.path.chars().count())
-                .max()
-                .unwrap_or(0);
+            let columns = |s: &str| Span::raw(s).width();
+            let padded = |s: &str, to: usize| format!("{s}{}  ", " ".repeat(to - columns(s)));
+            let name = failures.iter().map(|f| columns(&f.name)).max().unwrap_or(0);
+            let path = failures.iter().map(|f| columns(&f.path)).max().unwrap_or(0);
             for failure in failures {
                 let mut source = failure.datasource.clone();
                 if failure.package != failure.name {
                     source = format!("{source} {}", failure.package);
                 }
                 let source = format!("{source}, {}", failure.kind.as_str());
-                let row = format!(
-                    "{:pad$}{:<name$}  {:<path$}  {source}",
-                    "",
-                    failure.name,
-                    failure.path,
-                    pad = indent + 2
-                );
-                if Span::raw(row.as_str()).width() <= width {
+                if indent + 2 + name + 2 + path + 2 + columns(&source) <= width {
                     lines.push(Line::from(vec![
                         Span::raw(" ".repeat(indent + 2)),
-                        Span::styled(format!("{:<name$}  ", failure.name), Style::new().bold()),
+                        Span::styled(padded(&failure.name, name), Style::new().bold()),
                         Span::styled(
-                            format!("{:<path$}  ", failure.path),
+                            padded(&failure.path, path),
                             Style::new().fg(palette::MUTED.tui()),
                         ),
                         Span::raw(source),

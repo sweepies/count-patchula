@@ -86,9 +86,11 @@ terminal. When they fill more than the pane, the title shows which lines are
 on screen, and `j`, `k`, `PgDn` and `PgUp` scroll through them, as the bar
 says.
 
-The Updates table sizes its columns by what is in them. Versions and targets
-are shown whole, digests included; a long dependency name is cut in the
-middle, keeping its start and its last segment.
+The Updates table sizes its columns by what is in them. The current version
+takes up to 32 columns and the target up to 48, enough for a version with a
+short digest; on a narrow terminal they give way last, after the dependency
+name and the file. A long dependency name is cut in the middle, keeping its
+start and its last segment.
 
 ## Applying updates
 
