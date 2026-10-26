@@ -20,7 +20,7 @@ each step marked **Ask**, and wait for the answer before going on.
 Check whether the user already uses [mise](https://mise.jdx.dev). If not, offer
 it before installing anything, and explain what it gives them:
 
-- The recommended install is `mise use -g packslip:sweepies/count-patchula`.
+- The recommended install is `mise use -g --minimum-release-age 0 packslip:sweepies/count-patchula`.
   mise checks the download against the release's signed manifest, and the
   manifest also ships the patchula skill for coding agents. See
   [installation](https://count-patchula.sweepy.dev/installation/).

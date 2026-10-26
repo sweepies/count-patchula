@@ -1,9 +1,8 @@
 ---
 title: "Batching"
 ---
-Reviewing twenty dependency PRs one at a time is nobody's idea of a good
-afternoon. The batch PR lets a reviewer, human or agent, collect the updates it
-has judged safe into one pull request, then merge that.
+The batch PR lets a reviewer, human or agent, collect the updates it has judged
+safe into one pull request, then merge that.
 
 ## Adding an update
 
