@@ -1,0 +1,962 @@
+stages:
+  - build
+  - test
+  - analyze
+  - publish
+  - qa
+
+default:
+  # This image is generated here: https://gitlab.com/gitlab-org/gitlab-build-images/-/blob/master/.gitlab/ci/gitaly.images.yml
+  image: registry.gitlab.com/gitlab-org/gitlab-build-images/debian-${DEBIAN_VERSION}-golang-${GO_VERSION}-rust-${RUST_VERSION}:git-${CI_GIT_VERSION}
+  tags:
+    - saas-linux-large-amd64
+  interruptible: true
+
+.versions:
+  debian: "trixie"
+  git_default: "default"
+  go_default: "1.26"
+  # Follow the following process to upgrade Go version:
+  # - https://gitlab.com/gitlab-org/gitlab-build-images/-/tree/master#note-regarding-golang-and-fips
+  # - https://docs.gitlab.com/development/go_guide/go_upgrade/#supporting-multiple-go-versions
+  # - https://gitlab.com/gitlab-org/gitaly/-/blob/master/doc/go_upgrade_gitaly.md
+  go_supported: ["1.26", "1.27"]
+  macos: "macos-26-xcode-26"
+  pgbouncer: "1.24.0"
+  postgres_default: "17-alpine"
+  postgres_minimum: "14-alpine"
+  ruby: "3.4"
+  rust: "1.73"
+  ubi: "9.7"
+
+variables:
+  FF_USE_FASTZIP: "true"
+  FF_NETWORK_PER_BUILD: "true"
+  DEBIAN_VERSION: !reference [.versions, debian]
+  UBI_VERSION: !reference [.versions, ubi]
+  CACHE_PREFIX: "debian-${DEBIAN_VERSION}"
+  CI_GIT_VERSION: "2.51"
+  # We use Gitaly's Git version by default.
+  GIT_VERSION: !reference [.versions, git_default]
+  GO_VERSION: !reference [.versions, go_default]
+  RUBY_VERSION: !reference [.versions, ruby]
+  RUST_VERSION: !reference [.versions, rust]
+  POSTGRES_VERSION: !reference [.versions, postgres_default]
+  PGBOUNCER_VERSION: !reference [.versions, pgbouncer]
+  GOCACHE: "${CI_PROJECT_DIR}/_build/cache/go-build"
+  GOMODCACHE: "${CI_PROJECT_DIR}/_build/cache/go-mod"
+  SAST_EXCLUDED_PATHS: "spec,test,tests,tmp,_build/**"
+  # We run the build as an untrusted user in a source directory owned by
+  # "root". Running Git commands in that repository will thus fail due to
+  # Git's `safe.directory` protections, and that in turns breaks the Go
+  # build. We work around this by telling Go to not embed VCS information in
+  # the binaries.
+  GOFLAGS: "-buildvcs=false -modcacherw"
+  # Run tests with an intercepted home directory so that we detect cases where
+  # Gitaly picks up the gitconfig even though it ought not to.
+  GITALY_TESTING_INTERCEPT_HOME: "YesPlease"
+  # TEST_UID is the user ID we use to run tests in an unprivileged way. 9999 is
+  # chosen as a semi-random value so as to not interfer with any preexisting
+  # users.
+  TEST_UID: 9999
+  RAILS_BRANCH_FOR_JOB: "gitaly-ci-jobs-$CI_PIPELINE_IID"
+  GITLAB_ADVANCED_SAST_ENABLED: "true"
+
+  # Native clone needs Git >=2.49 and GIT_STRATEGY=clone, and falls back to
+  # `git init` + `git fetch` when either is missing.
+  FF_USE_GIT_NATIVE_CLONE: "true"
+  GIT_STRATEGY: "clone"
+
+  # Packhorse only caches a fetch it can build a key for, which takes a deepen
+  # between 1 and 30 and no bundle in the way, and the runner turns
+  # transfer.bundleURI on by default.
+  GIT_DEPTH: "20"
+  FF_USE_GIT_BUNDLE_URIS: "false"
+
+include:
+  - template: Jobs/SAST.latest.gitlab-ci.yml
+  - template: Security/Dependency-Scanning.gitlab-ci.yml
+  - template: Security/Secret-Detection.gitlab-ci.yml
+  - component: ${CI_SERVER_FQDN}/gitlab-org/components/danger-review/danger-review@2.1.0
+    inputs:
+      job_stage: "build"
+      job_allow_failure: true
+
+workflow:
+  rules:
+    - if: $CI_MERGE_REQUEST_IID
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: '$CI_COMMIT_BRANCH =~ /^[\d-]+-stable$/'
+    - if: $FORCE_GITALY_CI
+
+.cache_deps:
+  cache: &cache_deps_configuration
+    key:
+      files:
+        - .gitlab-ci.yml
+        - Makefile
+      prefix: ${CACHE_PREFIX}-git-${GIT_VERSION}
+    paths:
+      - _build/deps
+      - _build/tools
+    policy: pull
+
+.cache_go:
+  cache: &cache_go_configuration
+    key:
+      files:
+        - .gitlab-ci.yml
+        - go.sum
+      prefix: ${CACHE_PREFIX}-go-${GO_VERSION}
+    paths:
+      - ${GOCACHE}
+      - ${GOMODCACHE}
+    policy: pull
+
+.test_template: &test_definition
+  needs: []
+  stage: test
+  cache:
+    - *cache_deps_configuration
+    - *cache_go_configuration
+  services:
+    - name: postgres:${POSTGRES_VERSION}
+      alias: postgres
+      command: ["postgres", "-c", "max_connections=1000", "-c", "shared_buffers=1GB"]
+  variables: &test_variables
+    PGHOST: postgres
+    PGPORT: 5432
+    PGUSER: postgres
+    POSTGRES_DB: praefect_test
+    POSTGRES_HOST_AUTH_METHOD: trust
+    TEST_JUNIT_REPORT: "${CI_PROJECT_DIR}/_build/reports/tests-junit.xml"
+    TEST_COVERAGE_DIR: "${CI_PROJECT_DIR}/_build/reports/coverage"
+    TEST_COVERAGE_LIST: "${CI_PROJECT_DIR}/_build/reports/coverage-list.txt"
+    TEST_COVERAGE_REPORT: "${CI_PROJECT_DIR}/_build/reports/coverage-report.html"
+    TEST_JSON_REPORT: "${CI_PROJECT_DIR}/_build/reports/test-report.json"
+    TEST_LOG_DIR: "${CI_PROJECT_DIR}/_build/reports/test-logs"
+    TEST_OPTIONS: "-count=1 -timeout=20m" # a number of tests may exceed the default 10m
+    TEST_TMP_DIR: "/tmp"
+    TEST_WITH_COVERAGE: YesPlease
+  before_script: &test_before_script
+    # Speed up test execution by writing test data into tmpfs instead of onto
+    # the underlying disk.
+    - chmod 1777 "${TEST_TMP_DIR}"
+    - mount none -t tmpfs -o size=10G "${TEST_TMP_DIR}"
+    - go version
+  script:
+    # Create the build directory for the unprivileged user that we're running
+    # tests as. This is required because the source directory itself is owned
+    # by `root`.
+    - mkdir -p _build
+    - go mod download -modcacherw
+    - chown -R ${TEST_UID}:${TEST_UID} _build
+    # But the actual tests should run unprivileged. This assures that we pay
+    # proper attention to permission bits and that we don't modify the source
+    # directory.
+    - setpriv --reuid=${TEST_UID} --regid=${TEST_UID} --clear-groups --no-new-privs env HOME=/tmp/home make ${TEST_TARGET}
+    # Run tool tests under a privileged user. These tests sometimes trigger
+    # a Go toolchain to be downloaded, and that seems to cause permissions issues
+    # when it's executed under `setpriv` below.
+    - make test-gitaly-linters
+    - make test-mod-validator
+  coverage: /^total:\t+\(statements\)\t+\d+\.\d+%$/
+  after_script: &test_after_script
+    - go run "${CI_PROJECT_DIR}/tools/panic-parser"
+    - |
+      echo -e "section_start:$(date +%s):coverage[collapsed=true]\r\e[0KCode Coverage"
+      go tool cover -html "${TEST_COVERAGE_DIR}/all.merged" -o "${TEST_COVERAGE_REPORT}"
+      go tool cover -func "${TEST_COVERAGE_DIR}/all.merged" -o "${TEST_COVERAGE_LIST}"
+      echo "Code coverage reports are available at:"
+      echo "- ${TEST_COVERAGE_REPORT}"
+      echo "- ${TEST_COVERAGE_LIST}"
+      echo -e "section_end:$(date +%s):coverage\r\e[0K"
+
+  artifacts: &test_artifacts
+    paths:
+      - ${TEST_LOG_DIR}
+      - ${TEST_JSON_REPORT}
+      - ${TEST_COVERAGE_REPORT}
+      - ${TEST_COVERAGE_LIST}
+    reports:
+      junit: ${TEST_JUNIT_REPORT}
+      coverage_report:
+        coverage_format: cobertura
+        path: ${TEST_COVERAGE_DIR}/cobertura.xml
+    when: always
+    expire_in: 1 week
+
+.rules_run_on_merge: &rules_run_on_merge
+  # We only execute these rules in the main Gitaly repository. This is
+  # because jobs which run conditionally when being merged may depend on
+  # specific runners that aren't available in any other repository.
+  - if: $CI_PROJECT_PATH != "gitlab-org/gitaly"
+    when: manual
+    allow_failure: true
+  # Automatically run the job when the default branch is changing, e.g. due
+  # to a direct push.
+  - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  # Automatically run the job when a merge request gets queued for merge.
+  - if: $CI_MERGE_REQUEST_EVENT_TYPE == "merge_train"
+  # Otherwise, allow for manually scheduling the job in the context of a
+  # merge request.
+  - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    when: manual
+    allow_failure: true
+  # Manual pipeline run outside of merge requests, such as when setting
+  # custom CI variables via the Pipelines page.
+  - if: $FORCE_GITALY_CI
+
+.rules_run_strictly_on_default_branch: &rules_run_strictly_on_default_branch
+  - if: $CI_PROJECT_PATH != "gitlab-org/gitaly"
+    when: manual
+    allow_failure: true
+  - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    when: manual
+    allow_failure: true
+  - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  - if: $FORCE_GITALY_CI
+
+build:
+  needs: []
+  stage: build
+  cache:
+    - <<: *cache_deps_configuration
+      policy: pull-push
+    - <<: *cache_go_configuration
+      policy: pull-push
+  script:
+    - go version
+    # Build the binaries as unprivileged user so that we can reuse the cache
+    # for our "test" targets, which also run unprivileged.
+    - mkdir -p _build
+    - go mod download -modcacherw
+    - chown -R ${TEST_UID}:${TEST_UID} _build
+    - setpriv --reuid=${TEST_UID} --regid=${TEST_UID} --clear-groups --no-new-privs env HOME=/tmp/home make build $(test "${GIT_VERSION}" = default && echo build-bundled-git || echo build-git)
+    - go run ./tools/test-boot ${TEST_BOOT_ARGS}
+    - go run ./tools/binary-size-checker ${BINARY_SIZE_CHECKER_ARGS}
+  parallel:
+    matrix:
+      - GO_VERSION: !reference [.versions, go_supported]
+        TEST_BOOT_ARGS: "--bundled-git"
+        BINARY_SIZE_CHECKER_ARGS: "--binary-size-threshold 375"
+build:binaries:
+  needs: []
+  stage: build
+  cache:
+    - *cache_deps_configuration
+    - *cache_go_configuration
+  script:
+    # Just in case we start running CI builds on other architectures in future
+    - go version
+    - make -j$(nproc) build
+    - cd _build && sha256sum bin/* | tee checksums.sha256.txt
+  artifacts:
+    paths:
+      - _build/checksums.sha256.txt
+      - _build/bin/
+    name: "${CI_JOB_NAME}:go-${GO_VERSION}-git-${GIT_VERSION}"
+    expire_in: 6 months
+  parallel:
+    matrix:
+      - GO_VERSION: !reference [.versions, go_supported]
+  rules:
+    - if: $CI_COMMIT_TAG
+
+test:
+  <<: *test_definition
+  parallel:
+    matrix:
+      # The following jobs all test with our default Git version, which is
+      # using bundled Git binaries.
+      - GO_VERSION: !reference [.versions, go_supported]
+        TEST_TARGET: test
+      - TEST_TARGET: [test-with-praefect, race-go, test-with-git-master, test-with-git-prev]
+      # Execute tests with our minimum required Postgres version, as well. If
+      # the minimum version changes, please change this to the new minimum
+      # version. Furthermore, please make sure to update the minimum required
+      # version in `datastore.CheckPostgresVersion()`.
+      - POSTGRES_VERSION: !reference [.versions, postgres_minimum]
+        TEST_TARGET: [test, test-with-praefect]
+
+test:pgbouncer:
+  <<: *test_definition
+  services:
+    - name: postgres:${POSTGRES_VERSION}
+      alias: postgres
+      command: ["postgres", "-c", "max_connections=500", "-c", "shared_buffers=1GB"]
+    - name: bitnamilegacy/pgbouncer:${PGBOUNCER_VERSION}
+      alias: pgbouncer
+  variables:
+    <<: *test_variables
+    # The following variables are used by PgBouncer to connect to Postgres.
+    POSTGRESQL_HOST: "${PGHOST}"
+    POSTGRESQL_PORT: "${PGPORT}"
+    POSTGRESQL_USERNAME: "${PGUSER}"
+    # These variables define how PgBouncer itself is configured
+    PGBOUNCER_AUTH_TYPE: trust
+    PGBOUNCER_AUTH_USER: "${PGUSER}"
+    PGBOUNCER_DATABASE: "*"
+    PGBOUNCER_IGNORE_STARTUP_PARAMETERS: extra_float_digits
+    PGBOUNCER_POOL_MODE: transaction
+    PGBOUNCER_MAX_CLIENT_CONN: 500
+    PGBOUNCER_MAX_DB_CONNECTIONS: 100
+    # And these are finally used by Gitaly's tests.
+    PGHOST_PGBOUNCER: pgbouncer
+    PGPORT_PGBOUNCER: 6432
+    # We need to enable per-build networking such that the PgBouncer service
+    # can reach Postgres.
+    TEST_TARGET: "test-with-praefect"
+
+test:reftable:
+  <<: *test_definition
+  parallel:
+    matrix:
+      - TEST_TARGET: [test]
+        GITALY_TEST_REF_FORMAT: "reftable"
+
+test:mvcc:
+  <<: *test_definition
+  parallel:
+    matrix:
+      - TEST_TARGET: [test]
+        GITALY_TEST_REF_FORMAT: "mvcc"
+
+test:nightly:
+  <<: *test_definition
+  allow_failure: true
+  variables:
+    <<: *test_variables
+    OVERRIDE_GIT_VERSION: "v99.99.99"
+  parallel:
+    matrix:
+      - GIT_VERSION: ["master", "next"]
+        TEST_TARGET: [test, test-with-praefect, test-with-reftable, test-with-sha256]
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      allow_failure: false
+    - when: manual
+
+test:praefect_smoke:
+  <<: *test_definition
+  script:
+    - make -j$(nproc)
+    - envsubst < _support/config.praefect.toml.ci-sql-test > config.praefect.toml
+    - ./_build/bin/praefect -config config.praefect.toml sql-ping
+    - ./_build/bin/praefect -config config.praefect.toml sql-migrate
+
+test:sha256:
+  <<: *test_definition
+  parallel:
+    matrix:
+      - TEST_TARGET: [test, test-with-praefect, test-with-reftable]
+        TEST_WITH_SHA256: "YesPlease"
+
+test:fips:
+  <<: *test_definition
+  # This image is generated here: https://gitlab.com/gitlab-org/gitlab-build-images/-/blob/master/.gitlab/ci/gitaly.images.yml
+  image: registry.gitlab.com/gitlab-org/gitlab-build-images/ubi-${UBI_VERSION}-golang-${GO_VERSION}-rust-${RUST_VERSION}:git-${CI_GIT_VERSION}
+  tags:
+    - fips
+  retry:
+    max: 1
+    when: always
+  cache:
+    - <<: *cache_deps_configuration
+      policy: pull-push
+    - <<: *cache_go_configuration
+      policy: pull-push
+  variables:
+    <<: *test_variables
+    CACHE_PREFIX: ubi-${UBI_VERSION}
+    # `-p` caps how many packages' test binaries run at once. It defaults to GOMAXPROCS, which is 32 on the
+    # FIPS runners. Every concurrent package materializes its own set of Gitaly binaries in ${TEST_TMP_DIR},
+    # which is a 10GB tmpfs, so 32 of them exhaust it and the tests fail with ENOSPC. 8 matches what the
+    # non-FIPS runners do implicitly and keeps the peak at roughly 3.3GB.
+    TEST_OPTIONS: "-count=1 -timeout=30m -p=8" # https://gitlab.com/gitlab-org/gitaly/-/issues/6296
+    GOTESTSUM_OPTIONS: "--rerun-fails-max-failures=24 --rerun-fails=3"
+  before_script:
+    - *test_before_script
+    # Install minimal pyenv build dependencies
+    - dnf install -y gcc make patch zlib-devel bzip2-devel openssl-devel libffi-devel
+    # Install pyenv
+    - curl https://pyenv.run | bash
+    - export PYENV_ROOT="$HOME/.pyenv"
+    - export PATH="$PYENV_ROOT/bin:$PATH"
+    - eval "$(pyenv init -)"
+    # Install Python 3.12.13
+    - pyenv install 3.12.13
+    - pyenv global 3.12.13
+    - python3 --version
+    - test "$(cat /proc/sys/crypto/fips_enabled)" = "1" || (echo "System is not running in FIPS mode" && exit 1)
+  parallel:
+    matrix:
+      - TEST_TARGET: [test, test-with-praefect]
+        FIPS_MODE: "YesPlease"
+        GO_VERSION: !reference [.versions, go_supported]
+  rules:
+    # Automatically run the job when the FIPS label is set.
+    - if: $CI_MERGE_REQUEST_LABELS =~ /FIPS/
+    - *rules_run_on_merge
+
+test:macos:
+  image: !reference [.versions, macos]
+  tags:
+    - saas-macos-large-m2pro
+  needs: []
+  stage: test
+  cache:
+    - <<: *cache_deps_configuration
+      policy: pull-push
+    - <<: *cache_go_configuration
+      policy: pull-push
+  variables:
+    <<: *test_variables
+    CACHE_PREFIX: !reference [.versions, macos]
+    PGDATA: /Volumes/RAMDisk/postgres
+    PGHOST: localhost
+    PGUSER: gitlab
+    TEST_TMP_DIR: /Volumes/RAMDisk
+    # Disable code coverage generation as it is too slow on macOS.
+    TEST_WITH_COVERAGE: ""
+    # Homebrew tries to clean up old packages during installation of new packages. The
+    # runner is ephemeral so we don't need this.
+    HOMEBREW_NO_INSTALL_CLEANUP: 1
+  before_script:
+    # Create a 2GB RAM disk to speed up our tests.
+    - sudo diskutil apfs create $(hdiutil attach -nomount ram://4194304) RAMDisk
+    - brew uninstall asdf --force
+    - rm -rf $HOME/.asdf
+    - brew install pyenv go@${GO_VERSION} cmake postgresql meson rust
+    - pyenv install 3.12.13
+    - pyenv global 3.12.13
+    - export PATH="$HOME/.pyenv/versions/3.12.13/bin:$PATH"
+    # Older Go versions may be keg-only and thus aren't linked into `PATH` by
+    # default. We need to override this mechanism to force this specific Go
+    # version to become active.
+    - brew link --force go@${GO_VERSION}
+    - go version
+    - python3 --version
+    - sw_vers
+    - pg_ctl --version
+    - ulimit -n 4096 # The default of 256 can lead to 'too many open files' errors when running parallel tests
+    - pg_ctl init
+    - pg_ctl start
+    - pg_ctl status
+    - createdb -U $PGUSER $POSTGRES_DB
+    - make -j$(nproc) build prepare-tests
+  script:
+    - make test-go ; EXIT_CODE=$? ; pg_ctl stop ; exit $EXIT_CODE
+  after_script:
+    - *test_after_script
+  rules:
+    - *rules_run_on_merge
+  artifacts:
+    <<: *test_artifacts
+
+logging-field-validator:
+  needs: []
+  stage: test
+  cache:
+    - *cache_go_configuration
+  script:
+    - make validate-log-fields
+  rules:
+    - if: $CI_MERGE_REQUEST_PROJECT_PATH == 'gitlab-org/gitaly' && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE != "merge_train"
+
+verify:docs:
+  image: registry.gitlab.com/gitlab-org/technical-writing/docs-gitlab-com/lint-markdown:alpine-3.24-vale-3.21.0-markdownlint2-0.23.2-lychee-0.24.2-rumdl-0.2.69
+  needs: []
+  stage: analyze
+  script:
+    - make lint-docs
+
+verify:
+  needs: []
+  stage: analyze
+  cache:
+    - *cache_deps_configuration
+    - *cache_go_configuration
+  script:
+    # Download the dependencies in case there was no cache hit, otherwise
+    # golang-ci lint will timeout downloading them.
+    - go mod download
+    - make -j$(nproc) verify
+  artifacts:
+    paths:
+      - _build/proto.diff
+      - proto/go/gitalypb/*
+    when: on_failure
+
+vulnerability:
+  needs: []
+  stage: analyze
+  cache:
+    - *cache_deps_configuration
+    - *cache_go_configuration
+  script:
+    - make govulncheck
+  rules:
+    - *rules_run_strictly_on_default_branch
+
+dbschema:
+  needs: []
+  stage: analyze
+  cache:
+    - *cache_deps_configuration
+    - *cache_go_configuration
+  services:
+    # The database version we use must match the version of `pg_dump` we have
+    # available in the build image.
+    - postgres:11.13-alpine
+  variables:
+    <<: *test_variables
+  script:
+    - make dump-database-schema no-changes
+  artifacts:
+    paths:
+      - _support/praefect-schema.sql
+    when: on_failure
+
+semgrep-sast:
+  needs: []
+  stage: analyze
+  cache:
+    - *cache_go_configuration
+
+gitlab-advanced-sast:
+  timeout: 20 minutes
+  needs: []
+  stage: analyze
+  cache:
+    - *cache_go_configuration
+
+secret_detection:
+  needs: []
+  stage: analyze
+  rules:
+    - if: $SECRET_DETECTION_DISABLED
+      when: never
+
+build-proto-gem:
+  needs: []
+  image: ${GITLAB_DEPENDENCY_PROXY}ruby:${RUBY_VERSION}
+  stage: publish
+  before_script: []
+  variables:
+    BUILD_GEM_OPTIONS: --skip-verify-tag
+  script:
+    - make build-proto-gem
+  rules:
+    - when: manual
+      allow_failure: true
+  artifacts:
+    paths:
+      - _build/gitaly.gem
+    expire_in: 1 month
+
+publish-proto-gem:
+  needs: []
+  image: ${GITLAB_DEPENDENCY_PROXY}ruby:${RUBY_VERSION}
+  stage: publish
+  before_script: []
+  script:
+    - make publish-proto-gem
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com" && $CI_PROJECT_NAMESPACE == "gitlab-org" && $CI_COMMIT_TAG'
+
+pages:
+  needs: []
+  stage: publish
+  allow_failure: true
+  script:
+    - make build-proto-docs
+    - mv _build/proto-docs public
+  artifacts:
+    paths:
+      - public
+  rules:
+    - *rules_run_on_merge
+
+start-rails-specs:
+  needs: []
+  stage: qa
+  script:
+    - GITLAB_PROJECT_ID="$([ "$CI_MERGE_REQUEST_PROJECT_PATH" == 'gitlab-org/security/gitaly' ] && echo 15642544 || echo 278964)"
+    - |
+      curl --fail --request POST --header "PRIVATE-TOKEN: $GITLAB_PROJECT_TOKEN" \
+      "https://gitlab.com/api/v4/projects/$GITLAB_PROJECT_ID/repository/branches?ref=master&branch=$RAILS_BRANCH_FOR_JOB"
+    - |
+      curl --fail --request PUT --header "PRIVATE-TOKEN: $GITLAB_PROJECT_TOKEN" \
+      --data "branch=$RAILS_BRANCH_FOR_JOB" \
+      --data "content=$CI_COMMIT_SHA" \
+      --data "commit_message=Updating GITALY_SERVER_VERSION to $CI_COMMIT_SHA" \
+      "https://gitlab.com/api/v4/projects/$GITLAB_PROJECT_ID/repository/files/GITALY_SERVER_VERSION"
+  environment:
+    name: merge-requests/$RAILS_BRANCH_FOR_JOB
+    on_stop: rails-specs-cleanup
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE != "merge_train"
+      changes:
+        - .tool-versions
+    - if: $CI_MERGE_REQUEST_LABELS =~ /run-rails-specs/ && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE != "merge_train"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE != "merge_train"
+      when: manual
+      allow_failure: true
+
+.rails-specs-common: &rails-specs-common
+  stage: qa
+  needs: ["start-rails-specs"]
+  trigger: &rails-specs-trigger
+    branch: "gitaly-ci-jobs-$CI_PIPELINE_IID" # Using $RAILS_BRANCH_FOR_JOB directly fails
+    strategy: depend
+  inherit:
+    variables: false # Otherwise variables will be messed up
+  variables: &rails-specs-vars
+    GITALY_TEST: "true"
+    ENABLE_RSPEC: "true"
+    ENABLE_RSPEC_UNIT: "true"
+    ENABLE_RSPEC_INTEGRATION: "true"
+    ENABLE_RSPEC_SYSTEM: "true"
+
+rails-specs:
+  <<: *rails-specs-common
+  trigger:
+    <<: *rails-specs-trigger
+    project: gitlab-org/gitlab
+  variables:
+    <<: *rails-specs-vars
+  rules:
+    # pipeline:run-gitaly-mvcc also runs the gitaly-mvcc variants downstream
+    - if: $CI_MERGE_REQUEST_PROJECT_PATH == 'gitlab-org/gitaly' && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE != "merge_train" && $CI_MERGE_REQUEST_LABELS =~ /pipeline:run-gitaly-mvcc/
+      variables:
+        ENABLE_RSPEC_GITALY_MVCC: "true"
+    - if: $CI_MERGE_REQUEST_PROJECT_PATH == 'gitlab-org/gitaly' && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE != "merge_train"
+
+rails-specs-security:
+  <<: *rails-specs-common
+  trigger:
+    <<: *rails-specs-trigger
+    project: gitlab-org/security/gitlab
+  variables:
+    <<: *rails-specs-vars
+    GITALY_REPO_URL: "https://gitlab-bot:$GITALY_REPO_DEPLOY_TOKEN@gitlab.com/gitlab-org/security/gitaly.git"
+  rules:
+    - if: $CI_MERGE_REQUEST_PROJECT_PATH == 'gitlab-org/security/gitaly' && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE != "merge_train"
+
+.rails-specs-cleanup-common: &rails-specs-cleanup-common
+  stage: qa
+  script:
+    - GITLAB_PROJECT_ID="$([ "$CI_MERGE_REQUEST_PROJECT_PATH" == 'gitlab-org/security/gitaly' ] && echo 15642544 || echo 278964)"
+    - |
+      curl --fail --request DELETE --header "PRIVATE-TOKEN: $GITLAB_PROJECT_TOKEN" \
+      "https://gitlab.com/api/v4/projects/$GITLAB_PROJECT_ID/repository/branches/$RAILS_BRANCH_FOR_JOB"
+  environment:
+    name: merge-requests/$RAILS_BRANCH_FOR_JOB
+    action: stop
+
+rails-specs-cleanup:
+  <<: *rails-specs-cleanup-common
+  needs: ["rails-specs"]
+  rules:
+    - if: $CI_MERGE_REQUEST_PROJECT_PATH == 'gitlab-org/gitaly' && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE != "merge_train"
+      when: manual
+      allow_failure: true
+
+rails-specs-security-cleanup:
+  <<: *rails-specs-cleanup-common
+  needs: ["rails-specs-security"]
+  rules:
+    - if: $CI_MERGE_REQUEST_PROJECT_PATH == 'gitlab-org/security/gitaly' && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE != "merge_train"
+      when: manual
+      allow_failure: true
+
+.cleanup-rails-spec-test-env-common: &cleanup-rails-spec-test-env-common
+  stage: qa
+  before_script:
+    - apt update
+    - apt install -y jq
+  script:
+    - GITLAB_PROJECT_ID="$([ "$CI_MERGE_REQUEST_PROJECT_PATH" == 'gitlab-org/security/gitaly' ] && echo 15642544 || echo 278964)"
+    - |
+      ENV_ID=$(curl -s --request GET --header "PRIVATE-TOKEN: $GITALY_PROJECT_TOKEN" "https://gitlab.com/api/v4/projects/$GITLAB_PROJECT_ID/environments" --data-urlencode "name=merge-requests/$RAILS_BRANCH_FOR_JOB" | jq '.[0].id')
+      curl --fail -s --request DELETE --header "PRIVATE-TOKEN: $GITALY_PROJECT_TOKEN" "https://gitlab.com/api/v4/projects/$GITLAB_PROJECT_ID/environments/$ENV_ID"
+
+cleanup-rails-spec-test-env:
+  <<: *cleanup-rails-spec-test-env-common
+  needs: ["rails-specs-cleanup"]
+  rules:
+    - if: $CI_MERGE_REQUEST_PROJECT_PATH == 'gitlab-org/gitaly' && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE != "merge_train"
+      allow_failure: true
+
+cleanup-rails-spec-security-test-env:
+  <<: *cleanup-rails-spec-test-env-common
+  needs: ["rails-specs-security-cleanup"]
+  rules:
+    - if: $CI_MERGE_REQUEST_PROJECT_PATH == 'gitlab-org/security/gitaly' && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_EVENT_TYPE != "merge_train"
+      allow_failure: true
+
+build-package-and-qa:
+  needs: []
+  stage: qa
+  trigger:
+    project: gitlab-org/build/omnibus-gitlab-mirror
+    strategy: depend
+  inherit:
+    variables: false
+  variables:
+    ALTERNATIVE_SOURCES: "true"
+    GITALY_SERVER_VERSION: $CI_COMMIT_SHA
+    GITALY_SERVER_ALTERNATIVE_REPO: $CI_PROJECT_URL
+    ee: "true"
+  rules:
+    - if: $CI_MERGE_REQUEST_IID
+      changes:
+        - go.sum
+      variables:
+        BUILD_ON_ALL_OS: "true"
+        MANUAL_QA_TEST: "true"
+      allow_failure: false
+    - when: manual
+      allow_failure: true
+
+build-cng-image:
+  needs: []
+  stage: qa
+  trigger:
+    project: gitlab-org/build/CNG-mirror
+    strategy: depend
+  inherit:
+    variables: false
+  variables:
+    GITALY_SERVER_VERSION: $CI_COMMIT_SHA
+    GITLAB_NAMESPACE: $CI_PROJECT_NAMESPACE
+    ee: "true"
+  rules:
+    - if: $CI_MERGE_REQUEST_IID
+      when: manual
+      allow_failure: true
+
+qa:nightly-praefect-migration-test:
+  needs: []
+  stage: qa
+  trigger:
+    project: gitlab-org/quality/praefect-migration-testing
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+
+qa:benchmark:performance:
+  stage: qa
+  image: google/cloud-sdk:slim
+  needs: []
+  environment:
+    name: benchmark
+    action: prepare
+  variables:
+    BENCHMARK_INSTANCE_NAME: "ci-${CI_PIPELINE_ID}"
+    BENCHMARK_DURATION: "2m"
+    GCP_SSH_KEY_NAME: "gitaly-bench"
+    EXPERIMENT: $CI_COMMIT_REF_SLUG
+  before_script:
+    # download secure files to default location .secure_files
+    - curl --silent "https://gitlab.com/gitlab-org/incubation-engineering/mobile-devops/download-secure-files/-/raw/main/installer" | bash
+    # auth with gcp project
+    - export CI_SSH_PRIVATE_KEY_FILE="$CI_PROJECT_DIR/.secure_files/$GCP_SSH_KEY_NAME"
+    - export CI_SSH_PUBKEY_FILE="$CI_PROJECT_DIR/.secure_files/$GCP_SSH_KEY_NAME.pub"
+    - gcloud auth activate-service-account --key-file=".secure_files/$GCP_BENCHMARKING_SA_KEY_FILE" --quiet
+    - gcloud config set project $GCP_BENCHMARKING_PROJECT_NAME --quiet
+    # Install Terraform from HashiCorp repository
+    # Download the key
+    - curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+    # Add the repository with signed-by option
+    - echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/hashicorp.list
+    - apt-get update && apt-get install -y python3 python3-pip ansible unzip openssh-client terraform
+    - terraform version
+    # Setup SSH agent and add the key
+    - eval $(ssh-agent -s)
+    - chmod 600 "$CI_SSH_PRIVATE_KEY_FILE"
+    - ssh-add "$CI_SSH_PRIVATE_KEY_FILE"
+    - mkdir -p ~/.ssh
+    - echo "StrictHostKeyChecking no" >> ~/.ssh/config
+  script:
+    - cd _support/benchmarking
+    - export EXPERIMENT="${EXPERIMENT}"
+    - ./create-benchmark-instance
+    - ./configure-benchmark-instance
+    - ./run-benchmarks --extra-vars "duration=${BENCHMARK_DURATION}"
+  after_script:
+    - cd _support/benchmarking
+    - ./destroy-benchmark-instance
+    - cd ../..
+    - rm -rf .secure_files
+  artifacts:
+    paths:
+      - "_support/benchmarking/experiments/${EXPERIMENT}/results/"
+    expire_in: 4 week
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+      allow_failure: true
+    - if: $CI_MERGE_REQUEST_IID
+      when: manual
+      allow_failure: true
+
+qa:benchmark:performance:incluster:
+  stage: qa
+  image: gcr.io/google.com/cloudsdktool/google-cloud-cli:debian_component_based
+  needs: []
+  resource_group: gitaly-benchmark-cluster
+  interruptible: false
+  environment:
+    name: benchmark
+    action: prepare
+  variables:
+    # EXPERIMENT can be overridden at job-trigger time via the manual job
+    # variable form. If unset, the before_script auto-detects from changed
+    # files under _support/benchmarking/experiments/, falling back to
+    # incluster-master when nothing experiment-specific changed.
+    EXPERIMENT: ""
+    DEFAULT_EXPERIMENT: "incluster-master"
+    CLEAR_GITALY_CACHE: "true"
+    CLEAR_PAGE_CACHE: "true"
+    # Pinned static-binary version installed in before_script.
+    GLAB_VERSION: "1.75.0"
+  before_script:
+    # kubectl and the GKE auth plugin are pre-installed in this image; this is
+    # a fast no-op that guards against them dropping out of the base image
+    # gke-gcloud-auth-plugin is required to use USE_GKE_GCLOUD_AUTH_PLUGIN
+    - gcloud components install kubectl gke-gcloud-auth-plugin --quiet
+    # PyYAML for run-benchmarks-incluster's manifest rendering (report.py is
+    # stdlib-only).
+    - apt-get update && apt-get install -y --no-install-recommends python3-yaml
+    # glab is a single static Go binary; drop it in from its pinned release
+    # tarball.
+    - curl -fsSL "https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_amd64.tar.gz" | tar -xz -C /tmp bin/glab && install /tmp/bin/glab /usr/local/bin/glab
+    - glab --version
+    # 1. Pull the GCP service-account key from secure files (same key the VM
+    #    benchmark job uses). The SA needs container.developer on the cluster
+    #    in addition to its existing Compute / Storage permissions.
+    - curl --silent "https://gitlab.com/gitlab-org/incubation-engineering/mobile-devops/download-secure-files/-/raw/main/installer" | bash
+    - gcloud auth activate-service-account --key-file=".secure_files/$GCP_BENCHMARKING_SA_KEY_FILE" --quiet
+    - gcloud config set project "$GCP_BENCHMARKING_PROJECT_NAME" --quiet
+    # 2. Fetch GKE credentials so `kubectl` in run-benchmarks-incluster points
+    #    at the right cluster. Uses Application Default Credentials, not the
+    #    deprecated gcloud auth plugin.
+    - export USE_GKE_GCLOUD_AUTH_PLUGIN=True
+    - gcloud container clusters get-credentials "$GKE_CLUSTER_NAME" --region "$GKE_CLUSTER_REGION" --project "$GCP_BENCHMARKING_PROJECT_NAME"
+    - kubectl version --client
+    # 3. Resolve EXPERIMENT (explicit override > auto-detect > default experiment).
+    - |
+      set -eu
+      if [ -n "$EXPERIMENT" ]; then
+        echo "[ci] EXPERIMENT explicitly set to '$EXPERIMENT' (override)"
+      else
+        # Auto-detect from changed files. In MR pipelines GitLab exposes the
+        # merge-base SHA directly (CI_MERGE_REQUEST_DIFF_BASE_SHA); use it
+        # rather than a remote-tracking ref like origin/<branch>, which a
+        # shallow CI clone does not populate. Outside MRs, fall back to the
+        # previous commit. Detection is best-effort: any git failure (e.g. the
+        # base commit is outside the shallow history) degrades to
+        # DEFAULT_EXPERIMENT instead of aborting the job.
+        if [ -n "${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}" ]; then
+          BASE="$CI_MERGE_REQUEST_DIFF_BASE_SHA"
+          git fetch --depth=1 origin "$BASE" 2>/dev/null || true
+        else
+          BASE="HEAD~1"
+        fi
+
+        CHANGED_EXPS=$(git diff --name-only "$BASE" HEAD -- \
+          '_support/benchmarking/experiments/' 2>/dev/null \
+          | awk -F/ 'NF>=4 {print $4}' | sort -u || true)
+
+        COUNT=$(echo -n "$CHANGED_EXPS" | grep -c '^' || true)
+
+        if [ "$COUNT" -eq 0 ]; then
+          echo "[ci] No experiment dir changes (or base unavailable); using default: $DEFAULT_EXPERIMENT"
+          EXPERIMENT="$DEFAULT_EXPERIMENT"
+        elif [ "$COUNT" -eq 1 ]; then
+          EXPERIMENT="$CHANGED_EXPS"
+          echo "[ci] Auto-selected EXPERIMENT='$EXPERIMENT' from changed files"
+        else
+          echo "[ci] ERROR: multiple experiments changed:"
+          echo "$CHANGED_EXPS" | sed 's/^/  - /'
+          echo ""
+          echo "Only one experiment can run per job. Re-trigger this manual"
+          echo "job with EXPERIMENT=<name> set in the variables form to pick one."
+          exit 1
+        fi
+      fi
+      export EXPERIMENT
+      echo "EXPERIMENT=$EXPERIMENT" > experiment.env
+  script:
+    - . ./experiment.env
+    - _support/benchmarking/run-benchmarks-incluster
+    # Render the run's k6 summary into a Markdown report. Picks the most recent
+    # results subdirectory (run-benchmarks-incluster creates one per invocation).
+    # Non-fatal: a report failure shouldn't fail the whole benchmark job.
+    - |
+      set -eu
+      RESULTS_DIR="_support/benchmarking/experiments/${EXPERIMENT}/results"
+      RUN_DIR=$(ls -1dt "$RESULTS_DIR"/*/ 2>/dev/null | head -n1 || true)
+      if [ -z "$RUN_DIR" ] || [ ! -f "${RUN_DIR}k6-summary.json" ]; then
+        echo "[ci] WARN: no k6-summary.json found under $RESULTS_DIR; skipping report"
+      else
+        RUN_NAME=$(basename "$RUN_DIR")
+        ARTIFACT_BASE="${CI_JOB_URL}/artifacts/raw/${RUN_DIR%/}"
+        python3 _support/benchmarking/report.py "${RUN_DIR}k6-summary.json" \
+          --output "${RUN_DIR}summary.md" \
+          --metrics-output _support/benchmarking/metrics.txt \
+          --artifact-base-url "$ARTIFACT_BASE" \
+          --experiment "$EXPERIMENT" \
+          --run-name "$RUN_NAME" \
+          || echo "[ci] WARN: report.py failed (non-fatal)"
+      fi
+    # Post the rendered report as an MR note via glab. Append-only: every
+    # benchmark run leaves a new comment so the discussion preserves history
+    # across re-runs. Non-fatal: failure to post shouldn't fail the benchmark
+    # job itself - the rendered summary.md is still in artifacts.
+    - |
+      set -eu
+      if [ -z "${CI_MERGE_REQUEST_IID:-}" ]; then
+        echo "[ci] not an MR pipeline; skipping MR note"
+      elif [ ! -f "${RUN_DIR}summary.md" ]; then
+        echo "[ci] no summary.md to post; skipping MR note"
+      elif [ -z "${GLAB_BENCHMARKING:-}" ]; then
+        echo "[ci] WARN: GLAB_BENCHMARKING unset; skipping MR note (non-fatal)."
+        echo "[ci]       Set an api-scoped project access token to enable it."
+      else
+        if GITLAB_TOKEN="$GLAB_BENCHMARKING" glab mr note "$CI_MERGE_REQUEST_IID" \
+            --repo "$CI_PROJECT_PATH" \
+            --message "$(cat "${RUN_DIR}summary.md")"; then
+          echo "[ci] posted benchmark report as MR note"
+        else
+          echo "[ci] WARN: glab mr note failed (non-fatal)."
+          echo "[ci]       Check GLAB_BENCHMARKING is valid, unexpired, and"
+          echo "[ci]       has api scope with Developer+ role on this project."
+        fi
+      fi
+  after_script:
+    - rm -rf .secure_files
+  artifacts:
+    reports:
+      metrics: _support/benchmarking/metrics.txt
+    paths:
+      - "_support/benchmarking/experiments/*/results/"
+    exclude:
+      # run-benchmarks-incluster also tars up results/<run>/. Keep the unzipped
+      # tree (its plots/pprof are linked from the report) and drop the
+      # redundant tarball so the download isn't every file twice.
+      - "_support/benchmarking/experiments/*/results/*.tar.gz"
+    when: always
+    expire_in: 30 days
+  rules:
+    # Block fork pipelines outright
+    - if: $CI_PROJECT_PATH != "gitlab-org/gitaly"
+      when: never
+    - if: $CI_MERGE_REQUEST_IID
+      when: manual
+      allow_failure: true
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+      allow_failure: true

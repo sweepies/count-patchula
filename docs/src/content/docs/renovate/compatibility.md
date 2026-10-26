@@ -57,6 +57,8 @@ Managers the Count supports, under Renovate's names:
 | `bundler` | `bundler` | gems without a requirement are left to lockfile maintenance |
 | `ruby-version` | `bundler` | |
 | `composer` | `composer` | |
+| `gitlabci` | `gitlabci` | GitLab CI variables in images are skipped, not aliased |
+| `gitlabci-include` | `gitlabci-include` | |
 | `regex` | `regex` | Pkl extractors |
 
 Renovate managers with no Count equivalent yet:
@@ -66,8 +68,7 @@ Renovate managers with no Count equivalent yet:
 `bitbucket-pipelines`, `bitrise`, `buildkite`, `buildpacks`, `bun-version`,
 `cake`, `cdnurl`, `circleci`, `cloudbuild`, `cocoapods`, `conan`, `cpanfile`,
 `crossplane`, `crow`, `deno`, `deps-edn`, `devbox`, `droneci`,
-`fleet`, `fvm`, `git-submodules`, `gitlabci`, `gitlabci-include`, `glasskube`,
-`gleam`, `haskell-cabal`, `helm-requirements`, `helmfile`, `helmsman`,
+`fleet`, `fvm`, `git-submodules`, `glasskube`, `gleam`, `haskell-cabal`, `helm-requirements`, `helmfile`, `helmsman`,
 `hermit`, `homeassistant-manifest`, `homebrew`, `html`, `jenkins`, `jsonata`,
 `jsonnet-bundler`, `kotlin-script`, `leiningen`, `maven-wrapper`, `meteor`,
 `mint`, `mix`, `nix`, `ocb`, `osgi`, `pep723`, `pip_setup`, `pipenv`, `pixi`,

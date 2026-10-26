@@ -19,7 +19,7 @@ however many repositories use it.
 ## Get started
 
 ```sh
-mise use -g packslip:sweepies/count-patchula
+mise use -g --minimum-release-age 0 packslip:sweepies/count-patchula
 ```
 
 Other ways to install him are on the [installation page](https://count-patchula.sweepy.dev/installation/).
@@ -62,8 +62,8 @@ token or toolchain of your own.
   faster than npm and pnpm at it.
 - Managers for JavaScript, GitHub Actions, mise, Rust, Go, Docker, Compose,
   Kubernetes, Kustomize, Flux, Helm, Terraform, Python, Maven, Gradle, .NET,
-  Ruby, PHP, pre-commit, devcontainers, Woodpecker CI, and your own regexes,
-  plus notices for new Copier template versions.
+  Ruby, PHP, pre-commit, devcontainers, Woodpecker CI, GitLab CI, and your own
+  regexes, plus notices for new Copier template versions.
 - Typed configuration in [Pkl](https://pkl-lang.org). A typo is an error with a
   line number, not a silently ignored key.
 - Careful defaults: exact pins, digest-pinned actions and images, a 24-hour

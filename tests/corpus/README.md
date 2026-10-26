@@ -46,3 +46,6 @@ unmodified copies; their licences are those of the projects below.
 | [pawamoy/duty](https://github.com/pawamoy/duty) | `f843de3442b9` | ISC | `python/duty` (`.copier-answers.yml` only) |
 | [mkdocstrings/python](https://github.com/mkdocstrings/python) | `50d135aa5621` | ISC | `python/mkdocstrings-python` (`.copier-answers.yml` only) |
 | [jupyterlab/jupyterlab-git](https://github.com/jupyterlab/jupyterlab-git) | `e77defa11293` | BSD-3-Clause | `javascript/jupyterlab-git` (`.copier-answers.yml` only) |
+| [gitlab-org/gitaly](https://gitlab.com/gitlab-org/gitaly) | `42a4812bc672` | MIT | `ci/gitaly` |
+| [gitlab-org/container-registry](https://gitlab.com/gitlab-org/container-registry) | `672bd7536c95` | Apache-2.0 | `ci/container-registry` |
+| [gitlab-org/cli](https://gitlab.com/gitlab-org/cli) | `5419ed460090` | MIT | `ci/cli` |

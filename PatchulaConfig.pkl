@@ -3,7 +3,7 @@
 /// amend an organisation module that itself amends this one.
 module PatchulaConfig
 
-typealias Manager = "npm"|"bun"|"github-actions"|"mise"|"cargo"|"dockerfile"|"compose"|"go"|"terraform"|"kubernetes"|"kustomize"|"flux"|"helm-values"|"requirements"|"pyproject"|"pre-commit"|"helm"|"devcontainer"|"woodpecker"|"copier"|"maven"|"gradle"|"nuget"|"bundler"|"composer"|"regex"
+typealias Manager = "npm"|"bun"|"github-actions"|"mise"|"cargo"|"dockerfile"|"compose"|"go"|"terraform"|"kubernetes"|"kustomize"|"flux"|"helm-values"|"requirements"|"pyproject"|"pre-commit"|"helm"|"devcontainer"|"woodpecker"|"copier"|"maven"|"gradle"|"nuget"|"bundler"|"composer"|"gitlabci"|"gitlabci-include"|"regex"
 typealias Source = "npm"|"github-releases"|"github-tags"|"github-runners"|"docker"|"crates"|"go"|"terraform"|"pypi"|"helm"|"oci"|"mise"|"forge-tags"|"maven"|"nuget"|"rubygems"|"packagist"
 typealias Update = "major"|"minor"|"patch"|"digest"|"pin"
 typealias VersionPolicy = "exact"|"preserve"|"widen"
@@ -132,6 +132,15 @@ class Lockfiles {
   php: "static"|"compiled" = "static"
 }
 
+/// GitLab CI files.
+class Gitlab {
+  /// The GitLab instance whose projects `include: project:` names, and that
+  /// `$CI_SERVER_FQDN` means in a component reference. Its tags are read
+  /// unauthenticated, so the host must be gitlab.com or have a `gitlab` label
+  /// in its name, such as gitlab.example.com.
+  host: String = "gitlab.com"
+}
+
 /// Known vulnerabilities, from OSV.dev.
 class Security {
   /// Check each dependency's current version against OSV.dev, and mark updates
@@ -158,7 +167,8 @@ class Security {
 managers: Listing<Manager> = new {
   "npm"; "bun"; "github-actions"; "mise"; "cargo"; "dockerfile"; "compose"
   "go"; "terraform"; "kubernetes"; "kustomize"; "flux"; "helm-values"
-  "requirements"; "pyproject"; "pre-commit"; "helm"; "devcontainer"; "woodpecker"; "copier"; "maven"; "gradle"; "nuget"; "bundler"; "composer"; "regex"
+  "requirements"; "pyproject"; "pre-commit"; "helm"; "devcontainer"; "woodpecker"; "copier"; "maven"; "gradle"; "nuget"; "bundler"; "composer"
+  "gitlabci"; "gitlabci-include"; "regex"
 }
 defaults: Policy = new {}
 /// Rules apply in order after `defaults`. The first one is built in: reference
@@ -187,6 +197,7 @@ exclude: Listing<String> = new { "**/node_modules/**"; "**/vendor/**"; "**/.git/
 prs: PullRequests = new {}
 lockfiles: Lockfiles = new {}
 security: Security = new {}
+gitlab: Gitlab = new {}
 /// Prefer mise-versions for public catalogs; false uses the upstream sources.
 useVersionsHost: Boolean = true
 submodules: Boolean = false

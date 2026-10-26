@@ -1,155 +1,116 @@
 ---
 title: "Batch engine"
 ---
-`patchula-engine::Engine` accepts a token, shared SQLite cache, concurrency cap
-and transport. The CLI constructs one network pool; tests inject cassette replay.
-Its lookup method accepts repositories or discovers all accessible repositories,
-using user/repos or the installation repository endpoint for App tokens.
+`patchula-engine::Engine` takes a token, the shared SQLite cache, a
+concurrency cap and a transport. The CLI builds one network pool; tests inject
+cassette replay. A lookup takes named repositories or discovers every one the
+token can reach, through `user/repos` or, for App tokens, the installation
+repositories endpoint.
 
-Repositories run concurrently behind one GitHub governor. The default branch
-name, commit and tree identity come from one GraphQL snapshot on a cold scan.
-Only selected manager files and required local config modules are fetched as blobs. Truncated trees
-and invalid selected files produce per-repo errors. The config is
-patchula.pkl at the root; absence is skipped. Local --config
+## Reading a repository
+
+Repositories run concurrently behind one GitHub governor. On a cold scan, the
+default branch, commit and tree come from one GraphQL snapshot, and only the
+selected manager files and the config modules they need are fetched as blobs.
+A truncated tree or an invalid selected file is an error for that repository.
+A repository without `patchula.pkl` at its root is skipped. A local `--config`
 applies to every selected repository and is evaluated before network access.
 
-Repository configs evaluate with an isolated supplied-file capability. Local
-amends/import dependencies are fetched, with the bundled PatchulaConfig.pkl
-available when not vendored. Remote and escaping imports/resources are
-rejected. Literal imports are supported;
-dynamic import targets require future discovery support. `config check` and
-local overrides use the same supplied-module evaluator, and nested object
-amendments retain class defaults in either path (SWE-105).
-An unchanged commit/config fingerprint reuses extraction without tree/blob calls.
-The extraction fingerprint's namespace changes when extraction semantics change. Warm scans conditionally revalidate
-metadata and the hinted branch in parallel; if the default branch changed, they
-retry only the new branch. Both paths always check the current default branch.
-Catalog and digest/ref requests are deduplicated across the whole batch. Opaque
-action branches skip release history lookups, retaining their ref when pinned.
-Warm source and branch-ref reads overlap repository revalidation using persisted
-lookup hints. Hints only schedule work: the validated current extraction and
-policy determine the report, and removed dependencies' speculative results are
-discarded. Conditional tag namespaces already carry current and proposed tag
-digests, avoiding a subsequent commit lookup. Opaque branches still revalidate
-separately. `policy` measures CPU selection/report assembly;
-`digest` measures any remaining ref wave. `extraction` includes the repository
-metadata/head latency even on a warm extraction hit. `lookup` includes source prefetch
-and remaining catalog work; it overlaps `extraction`, so phase times must not be
-summed. Trace phase boundaries show that overlap. No Pkl evaluation,
-tree/blob fetch or scanner work occurs on an unchanged cached repository config.
+Configs evaluate in isolation over the supplied files. Local `amends` and
+`import` targets are fetched, and the bundled `PatchulaConfig.pkl` is used
+when the repository does not vendor it. Remote imports and imports that escape the
+repository are rejected, and only literal import targets are supported.
+`config check` and local overrides use the same evaluator.
 
-Report metadata includes branch/commit, warnings, source/kinds/locations, per-update
-policy and request/cache counters plus phase timings. Unavailable upstream
-identities produce warnings; API/config/extraction failures are errors. The CLI
-writes only the report to stdout with --json and always summarizes on stderr.
-It exits 1 for batch failures or any per-repo error, 2 for invalid config/options.
-`lookup` remains read-only. `run` adds guarded branch planning/publication,
-described below.
+An unchanged commit and config fingerprint reuses the previous extraction with
+no tree or blob calls, Pkl evaluation or scanning; the fingerprint's namespace
+changes whenever extraction semantics do. Warm scans revalidate the repository
+metadata and the hinted branch in parallel, and always check the current
+default branch. Catalog, digest and ref requests are deduplicated across the
+batch. Persisted lookup hints let warm source reads overlap revalidation, but
+hints only schedule work: the validated extraction and policy decide the
+report.
 
-Validation includes a public two-repo replay using jdx/usage and jdx/mr-boxington,
-plus independently simulated discovery/config-precedence/skips/errors tests.
-Public fixture file selection and ignore exceptions bound recording size while
-retaining all extracted dependencies. Source tests separately cover npm, Cargo,
-Go, GitHub releases and tags, moving refs and incremental pagination.
+## Report and exit codes
+
+The report carries the branch and commit, warnings, sources, kinds and
+locations, per-update policy, request and cache counters, and phase timings.
+`extraction` includes repository metadata latency even on a warm hit, `lookup`
+includes source prefetch and catalog work, `policy` is CPU selection and report
+assembly, and `digest` is any remaining ref wave. `lookup` overlaps
+`extraction`, so phase times must not be summed.
+
+An unavailable upstream is a warning; API, config and extraction failures are
+errors. With `--json` the CLI writes only the report to stdout, and it always
+prints a summary on stderr. It exits 1 for a batch failure or any
+per-repository error, and 2 for invalid config or options.
+
+## Tests and measurements
+
+Recorded tests replay a public two-repository batch (jdx/usage and
+jdx/mr-boxington) and the npm, Cargo, Go and GitHub sources. The benchmarks
+replay those recordings, so they say nothing about a live batch.
 
 ```sh
 mise run benchmarks:lookup
+mise run benchmarks:lookup-release
 GH_TOKEN=$(mise exec -- gh auth token) mise run fixtures:record-wave1
 mise run fixtures:check
-mise run ci
-```
-
-The default benchmarks use debug engine runs against recorded responses, not a claim
-about the twelve-repo production batch. Recording timings include network and
-cassette redaction/persistence overhead. Persistent cache rows include repository
-identities and selected manifest contents; keep private run caches/reports outside
-this source repository.
-
-Final wave-1 measurements (`mise run benchmarks:lookup`, debug, offline replay):
-source fixtures: 54.11 ms cold / 28.15 ms warm (20 / 5 requests); two-repo batch:
-227.42 ms cold / 42.56 ms warm (19 / 9 requests, three unique catalogs, two warm
-extraction hits). Every warm network response is 304. The source fixture also
-reuses two fresh validator-free Go responses without network access.
-Public recording runs measured 3.29 s / 1.36 s for sources and 7.94 s / 4.64 s
-for the batch, including recording overhead. These are individual observations,
-not statistical benchmarks or live twelve-repo/App-token measurements.
-
-Follow-up release replay on 2026-10-15 (single observations on this workspace):
-baseline `2606e71`: 109.20 ms cold / 52.59 ms warm; implementation `3029efd`:
-35.49 ms cold / 7.46 ms warm.
-The same two public repositories are replayed, with npm responses refreshed from
-abbreviated to full metadata to supply release dates. Warm requests fall from
-9 to 8 (all 304); extraction hits remain 2 and unique catalogs remain 3. After
-phases: extraction 3.17 ms, lookup 3.90 ms, CPU policy 0.37 ms. The historical
-policy counter included digest HTTP waits, so those phase timings are not
-directly comparable. Total time remains comparable. Reproduce with:
-
-```sh
-mise run benchmarks:lookup-release
-# With an existing GitHub token, run twice against the same private cache:
+# A live batch: run twice against the same private cache.
 mise run lookup:release --config examples/renovate-migration.pkl \
   --cache /tmp/patchula-runner.sqlite --concurrency 8 --json \
   owner/repo > /tmp/patchula-runner-report.json
 ```
 
-The `3029efd` follow-up had no GitHub recording credential and refreshed only
-public npm metadata. The subsequent live investigation refreshed both public
-source and engine cassettes for GraphQL head batches and matching-ref hydration.
-All ordinary tests remain offline.
-Registry max-age is honored rather than replaced with an arbitrary local TTL.
+:::caution
+Cache rows include repository identities and manifest contents. Keep private
+run caches and reports outside this repository.
+:::
 
 ## Branch write path
 
-`Engine::run` shares lookup, discovery, configuration and policy with `lookup`.
-The extraction cache now retains original file contents, Git blob SHAs, modes and
-the full path inventory, and the lockfile-only packages checked for advisories.
-Its v9 namespace invalidates older extraction rows.
-Files needed only for lockfile detection need not be downloaded.
+`Engine::run` shares discovery, configuration, lookup and policy with
+`lookup`. The extraction cache keeps each file's contents, Git blob SHA and
+mode, the full path inventory and the lockfile packages checked for advisories.
 
-The pure updater derives branches and scalar edits from proposals and extracted
-locations. npm aliases, Cargo inheritance, action refs/subpaths/comments, mise
-forms, container tags and Go directive prefixes have explicit renderers. Edits
-apply in descending byte order after overlap and UTF-8 boundary checks, preserving
-all surrounding text. Uneditable generated Flux bundles, expanded Docker ARG
-locations and missing separate YAML digest fields are reported as skipped rather
-than rewritten incorrectly. Required but unavailable target digests also skip.
+**Edits.** The updater derives branches and scalar edits from proposals and
+extracted locations, with explicit renderers for forms such as npm aliases,
+Cargo inheritance, action refs and comments, and Go directive prefixes. Edits
+apply in descending byte order after overlap and UTF-8 boundary checks, so all
+surrounding text is preserved. A location that cannot be edited safely, such
+as a generated Flux bundle or an expanded Docker `ARG`, is reported as skipped.
 
-Before creating objects, the writer revalidates reads of the default head
-and tree, comparing each extracted blob SHA and its actual content hash. A moved
-base or stale blob refuses publication and requires a rerun. Git Data trees
-include changed contents inline and create one replacement commit with the default commit as its
-sole parent. No custom author, committer or signature is supplied; GitHub must
-return `verification.verified = true` before a ref is published. See GitHub's
-[bot signing requirements](https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification#signature-verification-for-bots).
-The supplied wave-2 sandbox results confirmed verified App commits.
+**Commits.** Before creating objects, the writer re-reads the default head and
+tree and checks each extracted blob SHA and content hash; a moved base or stale
+blob refuses publication. One replacement commit has the default commit as its
+only parent. No author, committer or signature is supplied, and GitHub must
+return `verification.verified = true` before a ref is published (see
+[bot signing](https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification#signature-verification-for-bots)).
 
-Existing branches require authenticated-actor authorship, matching bot/GitHub
-committer, verified commits, and patchula's version/full-identity trailers on
-every exclusive commit. Incomplete histories and human commits are protected.
-Changes replace the branch commit in place; unchanged contents produce no writes.
-`rebase = "behind"` recreates on a moved base. `"conflicts"` keeps an identical
-manifest plan on its old base, recreating it when a touched file or proposal
-changes. Actual branch blob hashes also verify purported unchanged plans.
+**Existing branches.** Every commit on the branch that is not on the base must
+be authored by the authenticated actor, committed by the bot or GitHub,
+verified, and carry the Count's version and identity trailers. Otherwise the
+branch is left alone. Changes replace the branch commit in place; unchanged
+contents write nothing. `rebase = "behind"` recreates the branch when the base
+moves. `"conflicts"` keeps an identical plan on its old base until a touched
+file or proposal changes.
 
-Ref publication uses the Git Data GraphQL
+**Refs.** Refs are published with the GraphQL
 [`updateRefs` mutation](https://docs.github.com/en/graphql/reference/git#updaterefs)
-with `beforeOid` leases for both the branch and the default head. This is a
-deliberate choice over REST's unconditional force update: it atomically refuses
-concurrent human pushes and base movements. Object writes never enter the read
-cache. Transport/server failures are not blindly retried; a later run reconciles
-the current ref. Rate-limit refusals retain the existing governor behavior.
+and `beforeOid` leases on the branch and the default head. Unlike REST's
+unconditional force update, this atomically refuses a concurrent human push or
+a moved base. Writes never enter the read cache, and transport or server
+failures are not retried: the next run reconciles the ref.
 
-SWE-109 generates supported npm/Bun, pnpm, Yarn, Cargo, Go and Terraform
-lockfiles with real tools through mise, in disposable trees backed by a
-persistent partial clone.
-Tool success and target validation precede API commits; failures are reported per
-branch without publishing manifest-only work. Binary Bun locks
-retain the explicit `--allow-lockfile-pending` testing escape hatch. Scheduled
-lock maintenance is opt-in. See [lockfiles](/guide/lockfiles/).
+**Lockfiles.** Lockfiles are regenerated with the real tools through mise, in
+disposable trees backed by a persistent partial clone; see
+[lockfiles](/guide/lockfiles/). The tool must succeed before any commit, and a
+failure is reported for that branch without publishing manifest-only work.
+`--allow-lockfile-pending` permits manifest-only test branches for binary Bun
+locks.
 
-Warm runs validate cached successful writes against a fresh GraphQL head/PR
-inventory. Exact commit, update and PR matches bypass history/tree/PR reads and
-tool execution. Changed inputs fall back to the full safety checks; tool-generated
-branches also regenerate on base changes in conflicts mode. PR lifecycle,
-closed-target suppression, labels and native auto-merge are documented in
-[branches and PRs](/guide/pull-requests/) and [auto-merge](/guide/auto-merge/).
+**Warm writes.** Warm runs check [write receipts](/internals/cache/#write-receipts)
+against a fresh GraphQL inventory of heads and PRs, and an exact match skips
+history, tree and PR reads and tool runs. PR lifecycle, labels and auto-merge
+are in [branches and PRs](/guide/pull-requests/) and
+[auto-merge](/guide/auto-merge/).

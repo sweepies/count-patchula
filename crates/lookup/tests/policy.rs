@@ -1135,3 +1135,26 @@ fn a_prerelease_mise_pin_is_offered_a_newer_prerelease() {
     assert_eq!(proposals.len(), 1, "{proposals:?}");
     assert_eq!(proposals[0].new_version.as_deref(), Some("3.0.0-beta.1"));
 }
+
+#[test]
+fn gitlab_refs_update_to_the_exact_tag_name() {
+    let cfg = config("benchmark-public");
+    let eval = Evaluator::new(&cfg).unwrap();
+    let mut dep = dependency("grp/proj");
+    dep.manager = Manager::GitlabciInclude;
+    dep.package = "gitlab.com/grp/proj".into();
+    dep.kind = DependencyKind::ReusableWorkflow;
+    dep.source = Source::ForgeTags;
+    dep.scheme = Scheme::Loose;
+    dep.current = "1.0".into();
+    dep.resolved = Some("1.0".into());
+    let proposals = eval
+        .propose(&dep, &catalog(&["1.0", "1.1", "v2.0"]))
+        .unwrap();
+    let mut values: Vec<_> = proposals
+        .iter()
+        .map(|p| (p.update_type.as_str(), p.new_value.as_deref()))
+        .collect();
+    values.sort();
+    assert_eq!(values, [("major", Some("v2.0")), ("minor", Some("1.1"))]);
+}

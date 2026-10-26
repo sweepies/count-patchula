@@ -416,6 +416,55 @@ fn woodpecker_pins_anchored_images_once_at_the_anchor() {
     assert!(new.contains("woodpeckerci/plugin-git:1.22@"), "{new}");
     assert!(new.ends_with("# plugin\n"), "{new}");
 }
+#[test]
+fn gitlab_ci_pins_images_and_bumps_include_and_component_refs_in_place() {
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let old = "image: node:22-slim # runtime\ndefault:\n  services:\n    - name: 'postgres:16.3'\n      alias: db\n";
+    assert_eq!(
+        replace(
+            Manager::Gitlabci,
+            ".gitlab-ci.yml",
+            old,
+            "22-slim",
+            Some(&digest)
+        ),
+        old.replace("node:22-slim", &format!("node:22-slim@{digest}"))
+            .replace("postgres:16.3", &format!("postgres:22-slim@{digest}"))
+    );
+    let old = "include:\n  - component: \"gitlab.com/components/sast/sast@3.4.0\" # scan\n  - project: grp/proj\n    ref: 'v1.2.0'\n";
+    assert_eq!(
+        replace(Manager::Gitlabci, ".gitlab-ci.yml", old, "3.5.0", None),
+        old.replace("@3.4.0", "@3.5.0")
+    );
+    assert_eq!(
+        replace(
+            Manager::GitlabciInclude,
+            ".gitlab-ci.yml",
+            old,
+            "v1.3.0",
+            None
+        ),
+        old.replace("'v1.2.0'", "'v1.3.0'")
+    );
+}
+#[test]
+fn gitlab_numeric_refs_keep_their_text() {
+    let old = "include:\n  - component: gitlab.com/grp/proj/comp@1.0\n  - project: grp/proj\n    ref: 1.0\n";
+    assert_eq!(
+        replace(Manager::Gitlabci, ".gitlab-ci.yml", old, "1.10", None),
+        old.replace("comp@1.0", "comp@1.10")
+    );
+    assert_eq!(
+        replace(
+            Manager::GitlabciInclude,
+            ".gitlab-ci.yml",
+            old,
+            "1.10",
+            None
+        ),
+        old.replace("ref: 1.0", "ref: 1.10")
+    );
+}
 
 #[test]
 fn copier_commit_is_never_edited() {

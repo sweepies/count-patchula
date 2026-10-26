@@ -381,3 +381,21 @@ fn cron_weekdays_use_standard_numbering() {
     assert_eq!(days("0 12 * * 1/2", false), [1, 3, 5, 7]);
     assert_eq!(days("0 12 * * 7/2", false), [7]);
 }
+
+#[test]
+fn gitlab_host_is_gitlab_com_by_default_and_must_name_a_gitlab_instance() {
+    let (_directory, path) = fixture("");
+    assert_eq!(load(&path).unwrap().gitlab.host, "gitlab.com");
+    let (_directory, path) = fixture("gitlab { host = \"gitlab.example.com\" }");
+    assert_eq!(load(&path).unwrap().gitlab.host, "gitlab.example.com");
+    for host in [
+        "git.example.com",
+        "https://gitlab.example.com",
+        "GitLab.example.com",
+        "",
+    ] {
+        let (_directory, path) = fixture(&format!("gitlab {{ host = \"{host}\" }}"));
+        let error = format!("{:?}", load(&path).unwrap_err());
+        assert!(error.contains("gitlab.host"), "{host}: {error}");
+    }
+}

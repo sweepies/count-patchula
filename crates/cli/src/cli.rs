@@ -7,7 +7,7 @@ use usage_rs::{Args, Cli, Subcommands, ValueEnum};
 #[derive(Cli)]
 #[usage(bin = "patchula", version, unknown_flags = "error")]
 pub struct App {
-    /// Checkbox wording; also PATCHULA_RECHECK. Default: now in server, next-run in CLI.
+    /// When a ticked checkbox says it takes effect; also PATCHULA_RECHECK. Default: now in the server, next-run in the CLI.
     #[usage(long, value_enum, value_name = "WHEN", global)]
     pub recheck: Option<Recheck>,
     /// Increase diagnostic verbosity; repeat for more detail.
@@ -16,7 +16,7 @@ pub struct App {
     /// Control ANSI colors in diagnostics.
     #[usage(long, value_enum, value_name = "WHEN", default = "auto", global)]
     pub color: Color,
-    /// Emit machine-readable command results and errors (schema stays Pkl).
+    /// Emit command results and errors as JSON; configs stay Pkl.
     #[usage(long, global)]
     pub json: bool,
     #[usage(subcommand)]
@@ -40,10 +40,9 @@ pub enum Command {
     Lookup(Lookup),
     /// Create or update dependency branches and pull requests with verified API commits.
     ///
-    /// With no repository, `--dry-run` plans from the working tree in the current directory,
-    /// uncommitted changes included. A real run with no repository opens pull requests for
-    /// this checkout's GitHub repository, so it refuses a working tree with uncommitted
-    /// changes or a HEAD other than the remote's default branch.
+    /// With no repository, `--dry-run` plans from the working tree, uncommitted changes
+    /// included. A real run with no repository opens pull requests for this checkout's GitHub
+    /// repository and requires a clean tree at the remote's default branch.
     Run(Run),
     /// Run the API-only GitHub App webhook server.
     Serve(Serve),
@@ -145,7 +144,7 @@ pub struct Run {
     /// Print planned branches, files and unified diffs without writing to GitHub.
     #[usage(long)]
     pub dry_run: bool,
-    /// Permit manifest-only test branches for unsupported binary bun locks.
+    /// For testing: write manifest-only branches for binary `bun.lockb` lockfiles, which can't be regenerated.
     #[usage(long)]
     pub allow_lockfile_pending: bool,
 }
@@ -182,23 +181,16 @@ pub struct Lookup {
     /// Local Pkl override applied to every selected repository.
     #[usage(long, value_name = "FILE", conflicts = "--config-dir")]
     pub config: Option<PathBuf>,
-    /// Per-repository local overrides: `DIR/<owner>/<name>.pkl` wins over `DIR/<name>.pkl`.
-    /// Unmatched repositories use their own `patchula.pkl`, and are skipped without one.
-    /// All matched files are validated before repository scans. Mutually exclusive with `--config`.
+    /// Per-repository overrides: `DIR/<owner>/<name>.pkl`, then `DIR/<name>.pkl`; other
+    /// repositories use their own `patchula.pkl`, or are skipped without one. Conflicts with `--config`.
     #[usage(long, value_name = "DIR", conflicts = "--config")]
     pub config_dir: Option<PathBuf>,
     /// Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking.
-    ///
-    /// Only for the working tree: a named repository invites the Count with its own
-    /// `patchula.pkl`. Mutually exclusive with `--config` and `--config-dir`.
+    /// Conflicts with `--config` and `--config-dir`.
     #[usage(long)]
     pub default_config: bool,
-    /// Run on a Count Patchula server: PATCHULA_SERVER, or the one found for this checkout.
-    ///
-    /// The server uses its App's credentials and caches. You sign in with GitHub on first
-    /// use, and need push access to each repository. Local config, cache and HTTP flags do
-    /// not apply. In a checkout whose repository the Count serves, a run with no repository
-    /// offers the server once and remembers the answer.
+    /// Run on a Count Patchula server (PATCHULA_SERVER, or the one found for this checkout)
+    /// with its credentials and caches; local config, cache and HTTP flags don't apply.
     #[usage(long, conflicts = "--here")]
     pub remote: bool,
     /// Run on this machine, even if you chose to run this checkout on a server.
@@ -221,12 +213,18 @@ pub enum ConfigCommand {
     /// Print the bundled PatchulaServer.pkl operator schema.
     ServerSchema,
     /// Validate an operator Pkl server settings file without credentials or network.
-    CheckServer(Check),
+    CheckServer(CheckServer),
 }
 
 #[derive(Args)]
 pub struct Check {
     /// Pkl file or repository directory to check.
+    pub path: PathBuf,
+}
+
+#[derive(Args)]
+pub struct CheckServer {
+    /// Server settings file to check.
     pub path: PathBuf,
 }
 
