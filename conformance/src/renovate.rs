@@ -455,6 +455,7 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
                             | "pre-commit"
                             | "helm"
                             | "devcontainer"
+                            | "woodpecker"
                             | "maven"
                             | "gradle"
                             | "nuget"
@@ -634,6 +635,7 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
             reason: None,
             package_files,
             warnings: Vec::new(),
+            skipped: Vec::new(),
             default_branch: None,
             commit: None,
         });
@@ -645,6 +647,7 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
             reason: Some(reason),
             package_files: Vec::new(),
             warnings: Vec::new(),
+            skipped: Vec::new(),
             default_branch: None,
             commit: None,
         });

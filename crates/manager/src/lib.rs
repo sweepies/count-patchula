@@ -26,6 +26,7 @@ mod pyproject;
 mod requirements;
 mod terraform;
 mod toolchains;
+mod woodpecker;
 mod yaml;
 mod yaml_locations;
 
@@ -108,6 +109,18 @@ pub struct Extraction {
     /// Lockfile packages no manifest declares, checked only for advisories.
     #[serde(default)]
     pub locked: Vec<Locked>,
+    #[serde(default)]
+    pub skipped: Vec<Skipped>,
+}
+/// A declaration the Count found but cannot read as a version, such as an
+/// image built from a variable. Unlike a warning, it leaves branch cleanup on.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Skipped {
+    pub manager: Manager,
+    pub file: String,
+    pub line: Option<usize>,
+    pub value: String,
+    pub reason: String,
 }
 pub type Files = BTreeMap<String, String>;
 pub fn supported(manager: Manager) -> bool {
@@ -130,6 +143,7 @@ pub fn supported(manager: Manager) -> bool {
         | Manager::PreCommit
         | Manager::Helm
         | Manager::Devcontainer
+        | Manager::Woodpecker
         | Manager::Maven
         | Manager::Gradle
         | Manager::Nuget
@@ -238,6 +252,16 @@ impl Scanner {
             Manager::PreCommit => {
                 matches!(leaf, ".pre-commit-config.yaml" | ".pre-commit-config.yml")
             }
+            Manager::Woodpecker => {
+                let stem = path
+                    .strip_suffix(".yml")
+                    .or_else(|| path.strip_suffix(".yaml"))
+                    .unwrap_or_default();
+                stem == ".woodpecker"
+                    || stem
+                        .strip_prefix(".woodpecker/")
+                        .is_some_and(|name| !name.is_empty() && !name.contains('/'))
+            }
             Manager::Pyproject => matches!(
                 leaf,
                 "pyproject.toml" | "uv.lock" | "poetry.lock" | ".python-version"
@@ -338,6 +362,8 @@ impl Scanner {
                 maven::extract(path, text)
             } else if self.selected(Manager::Devcontainer, path) {
                 devcontainer::extract(path, text)
+            } else if self.selected(Manager::Woodpecker, path) {
+                woodpecker::extract(path, text, &mut result.skipped)
             } else if self.selected(Manager::Helm, path) {
                 helm::extract(path, text)
             } else if self.selected(Manager::PreCommit, path) {

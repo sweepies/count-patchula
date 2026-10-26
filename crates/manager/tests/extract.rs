@@ -913,3 +913,122 @@ fn lockfile_only_registry_packages_are_listed_apart_from_dependencies() {
     assert_eq!(dep.kind, DependencyKind::Transitive);
     assert_eq!(dep.file, "package-lock.json");
 }
+
+#[test]
+fn woodpecker_steps_services_clone_anchors_and_variables() {
+    let mut config = config();
+    config.managers = vec![Manager::Woodpecker];
+    let scanner = Scanner::new(&config).unwrap();
+    for (path, needed) in [
+        (".woodpecker.yml", true),
+        (".woodpecker.yaml", true),
+        (".woodpecker/test.yaml", true),
+        (".woodpecker/release.yml", true),
+        (".woodpecker/nested/deep.yml", false),
+        ("sub/.woodpecker.yml", false),
+        (".woodpecker/README.md", false),
+        (".woodpecker.json", false),
+    ] {
+        assert_eq!(scanner.needs(path), needed, "{path}");
+    }
+    let files = Files::from([
+        (
+            ".woodpecker.yml".into(),
+            "pipeline:\n  build:\n    image: golang:1.20\n  publish:\n    image: plugins/docker:20\nservices:\n  db:\n    image: postgres:15\n".into(),
+        ),
+        (
+            ".woodpecker/list.yaml".into(),
+            "clone:\n  git:\n    image: woodpeckerci/plugin-git:2.5.0\nmatrix:\n  GO: [\"1.21\", \"1.22\"]\nsteps:\n  - name: test\n    image: golang:${GO}\n  - name: env\n    image: ${REGISTRY}/tool:1.0\n  - name: pinned\n    image: alpine:3.19@sha256:6457d53fb065d6f250e1504b9bc42d5b6c65941d57532c072d929dd0628977d0\nservices:\n  - name: redis\n    image: redis:7\n".into(),
+        ),
+        (
+            ".woodpecker/map.yml".into(),
+            "variables:\n  - &golang 'docker.io/golang:1.22-alpine'\n  - &base\n    image: node:22\nsteps:\n  build:\n    image: *golang\n  vet:\n    image: *golang\n  web:\n    <<: *base\n    commands: [npm ci]\n  release:\n    image: woodpeckerci/plugin-release:0.2\n".into(),
+        ),
+    ]);
+    let extraction = scanner.extract(&files).unwrap();
+    let got: Vec<_> = extraction
+        .dependencies
+        .iter()
+        .map(|d| {
+            let text = &files[&d.file];
+            (
+                d.file.as_str(),
+                d.package.as_str(),
+                d.current.as_str(),
+                d.digest.is_some(),
+                &text[d.location.start..d.location.end],
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (".woodpecker.yml", "golang", "1.20", false, "golang:1.20"),
+            (
+                ".woodpecker.yml",
+                "plugins/docker",
+                "20",
+                false,
+                "plugins/docker:20"
+            ),
+            (".woodpecker.yml", "postgres", "15", false, "postgres:15"),
+            (
+                ".woodpecker/list.yaml",
+                "woodpeckerci/plugin-git",
+                "2.5.0",
+                false,
+                "woodpeckerci/plugin-git:2.5.0"
+            ),
+            (
+                ".woodpecker/list.yaml",
+                "alpine",
+                "3.19",
+                true,
+                "alpine:3.19@sha256:6457d53fb065d6f250e1504b9bc42d5b6c65941d57532c072d929dd0628977d0"
+            ),
+            (".woodpecker/list.yaml", "redis", "7", false, "redis:7"),
+            (
+                ".woodpecker/map.yml",
+                "docker.io/golang",
+                "1.22-alpine",
+                false,
+                "'docker.io/golang:1.22-alpine'"
+            ),
+            (".woodpecker/map.yml", "node", "22", false, "node:22"),
+            (
+                ".woodpecker/map.yml",
+                "woodpeckerci/plugin-release",
+                "0.2",
+                false,
+                "woodpeckerci/plugin-release:0.2"
+            ),
+        ]
+    );
+    assert!(
+        extraction
+            .dependencies
+            .iter()
+            .all(|d| d.kind == DependencyKind::ContainerImage)
+    );
+    assert!(extraction.warnings.is_empty(), "{:?}", extraction.warnings);
+    let skipped: Vec<_> = extraction
+        .skipped
+        .iter()
+        .map(|s| (s.line, s.value.as_str(), s.reason.as_str()))
+        .collect();
+    assert_eq!(
+        skipped,
+        [
+            (
+                Some(8),
+                "golang:${GO}",
+                "the image varies with the matrix variable GO"
+            ),
+            (
+                Some(10),
+                "${REGISTRY}/tool:1.0",
+                "the image contains a variable"
+            ),
+        ]
+    );
+}

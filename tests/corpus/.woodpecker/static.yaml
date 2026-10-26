@@ -1,0 +1,62 @@
+when:
+  - event: pull_request
+
+steps:
+  - name: lint-editorconfig
+    image: docker.io/woodpeckerci/plugin-editorconfig-checker:0.3.4
+    depends_on: []
+    when:
+      - event: pull_request
+
+  - name: spellcheck
+    image: docker.io/node:24-alpine
+    depends_on: []
+    commands:
+      - corepack enable
+      - pnpx cspell lint --no-progress --gitignore '{**,.*}/{*,.*}'
+      - apk add --no-cache -U tree # busybox tree don't understand "-I"
+      # cspell:disable-next-line
+      - tree --gitignore -I 012_columns_rename_procs_to_steps.go -I versioned_docs -I '*opensource.svg'| pnpx cspell lint --no-progress stdin
+
+  - name: prettier
+    image: docker.io/woodpeckerci/plugin-prettier:next
+    pull: true
+    depends_on: []
+    settings:
+      version: 3.6.2
+
+  - name: check-feature-docs
+    image: docker.io/alpine:3.24
+    depends_on: []
+    commands:
+      - apk add --no-cache -q jq && ./.woodpecker/check-feature-docs.sh
+    when:
+      - event: pull_request
+        evaluate: 'CI_COMMIT_PULL_REQUEST_LABELS contains "feature"'
+
+  - name: check-breaking-migrations
+    image: docker.io/alpine:3.24
+    depends_on: []
+    commands:
+      - apk add --no-cache -q jq && ./.woodpecker/check-breaking-migrations.sh
+    when:
+      - event: pull_request
+        evaluate: 'CI_COMMIT_PULL_REQUEST_LABELS contains "breaking"'
+
+  - name: agentscan
+    image: docker.io/woodpeckerci/plugin-agentscan:latest
+    pull: true
+    depends_on: []
+    settings:
+      github_token:
+        from_secret: GITHUB_TOKEN_SURGE
+      allowlist:
+        - woodpecker-bot
+        - 'renovate[bot]'
+        - 6543
+        - anbraten
+        - lafriks
+        - qwerty287
+        - xoxys
+    when:
+      - event: pull_request

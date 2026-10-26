@@ -1807,6 +1807,7 @@ impl Engine {
         .map_err(|e| Error::Invalid(e.to_string()))?;
         let mut report = repository(repo, Status::Complete, None);
         report.warnings = extraction.warnings;
+        report.skipped = skipped(&extraction.skipped);
         // Plans are based on a commit; a directory's stands in as a hash of
         // its selected files, stable until they change.
         report.commit = Some(hash(&serde_json::to_vec(
@@ -1953,6 +1954,7 @@ impl Engine {
             cached
         };
         report.warnings = cached.extraction.warnings;
+        report.skipped = skipped(&cached.extraction.skipped);
         Ok(Work {
             report,
             config: Some(config),
@@ -2071,7 +2073,20 @@ fn repository(repo: &str, status: Status, reason: Option<String>) -> Repository 
         reason,
         package_files: Vec::new(),
         warnings: Vec::new(),
+        skipped: Vec::new(),
         default_branch: None,
         commit: None,
     }
+}
+fn skipped(skipped: &[patchula_manager::Skipped]) -> Vec<patchula_report::Skipped> {
+    skipped
+        .iter()
+        .map(|s| patchula_report::Skipped {
+            manager: patchula_manager::word(&s.manager),
+            path: s.file.clone(),
+            line: s.line,
+            value: s.value.clone(),
+            reason: s.reason.clone(),
+        })
+        .collect()
 }

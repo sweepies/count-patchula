@@ -48,6 +48,7 @@ Managers the Count supports, under Renovate's names:
 | `pyenv` | `pyproject` | `.python-version` |
 | `pre-commit` | `pre-commit` | GitHub, GitLab, Codeberg, Gitea and Forgejo hooks |
 | `devcontainer` | `devcontainer` | |
+| `woodpecker` | `woodpecker` | anchored images are edited at the anchor |
 | `maven` | `maven` | |
 | `gradle` | `gradle` | catalogs, scripts, variables, `gradle.properties`; `gradle.lockfile` not regenerated |
 | `gradle-wrapper` | `gradle` | the wrapper checksum is refreshed |
@@ -72,7 +73,7 @@ Renovate managers with no Count equivalent yet:
 `proto`, `pub`, `puppet`, `quadlet`, `runtime-version`, `sbt`, `scalafmt`,
 `setup-cfg`, `smithy`, `sveltos`, `swift`, `tekton`, `terragrunt`,
 `terragrunt-version`, `tflint-plugin`, `travis`, `typst`, `unity3d`, `vendir`,
-`velaci`, `woodpecker`, `xcodegen`.
+`velaci`, `xcodegen`.
 
 `renovate-config` has no equivalent on purpose: the Count's config is Pkl, and
 he does not read Renovate presets.

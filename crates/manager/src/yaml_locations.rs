@@ -22,6 +22,8 @@ struct Receiver<'a> {
     doc: usize,
     stack: Vec<Frame>,
     locations: BTreeMap<String, Location>,
+    anchors: BTreeMap<usize, String>,
+    aliases: BTreeMap<String, String>,
 }
 impl Receiver<'_> {
     /// The byte offset of a 1-indexed line and 0-indexed character column.
@@ -89,8 +91,11 @@ impl MarkedEventReceiver for Receiver<'_> {
     fn on_event(&mut self, event: Event, mark: Marker) {
         match event {
             Event::DocumentEnd => self.doc += 1,
-            Event::MappingStart(..) | Event::SequenceStart(..) => {
+            Event::MappingStart(anchor, _) | Event::SequenceStart(anchor, _) => {
                 let pointer = self.next();
+                if anchor > 0 {
+                    self.anchors.insert(anchor, pointer.clone());
+                }
                 self.stack.push(Frame {
                     pointer,
                     mapping: matches!(event, Event::MappingStart(..)),
@@ -101,7 +106,7 @@ impl MarkedEventReceiver for Receiver<'_> {
             Event::MappingEnd | Event::SequenceEnd => {
                 self.stack.pop();
             }
-            Event::Scalar(value, style, ..) => {
+            Event::Scalar(value, style, anchor, _) => {
                 if let Some(frame) = self.stack.last_mut()
                     && frame.mapping
                     && frame.key.is_none()
@@ -110,6 +115,9 @@ impl MarkedEventReceiver for Receiver<'_> {
                     return;
                 }
                 let pointer = self.next();
+                if anchor > 0 {
+                    self.anchors.insert(anchor, pointer.clone());
+                }
                 if let Some(start) = self.offset(mark)
                     && let Some(end) = self.end(start, style, &value)
                 {
@@ -119,14 +127,23 @@ impl MarkedEventReceiver for Receiver<'_> {
                     );
                 }
             }
-            Event::Alias(_) => {
-                self.next();
+            Event::Alias(anchor) => {
+                let pointer = self.next();
+                if let Some(target) = self.anchors.get(&anchor) {
+                    self.aliases.insert(pointer, target.clone());
+                }
             }
             _ => {}
         }
     }
 }
 pub(super) fn parse(text: &str) -> Result<BTreeMap<String, Location>, String> {
+    Ok(parse_aliased(text)?.0)
+}
+/// Locations, and each alias's pointer mapped to the pointer of the node it
+/// refers to. Only managers that edit an anchor once for all its aliases
+/// resolve them; the rest leave aliased scalars unlocated.
+pub(super) fn parse_aliased(text: &str) -> Result<(BTreeMap<String, Location>, Aliases), String> {
     let mut receiver = Receiver {
         text,
         lines: std::iter::once(0)
@@ -135,11 +152,32 @@ pub(super) fn parse(text: &str) -> Result<BTreeMap<String, Location>, String> {
         doc: 0,
         stack: Vec::new(),
         locations: BTreeMap::new(),
+        anchors: BTreeMap::new(),
+        aliases: BTreeMap::new(),
     };
     Parser::new_from_str(text)
         .load(&mut receiver, true)
         .map_err(|e| e.to_string())?;
-    Ok(receiver.locations)
+    Ok((receiver.locations, Aliases(receiver.aliases)))
+}
+pub(super) struct Aliases(BTreeMap<String, String>);
+impl Aliases {
+    /// The pointer a value is defined at, following aliases anywhere along
+    /// its path: `/0/steps/a/image` under `a: *base` becomes `/0/base/image`.
+    pub(super) fn resolve(&self, pointer: &str) -> String {
+        let mut pointer = pointer.to_owned();
+        for _ in 0..16 {
+            let Some((alias, target)) = self.0.iter().rev().find(|(alias, _)| {
+                pointer
+                    .strip_prefix(alias.as_str())
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+            }) else {
+                break;
+            };
+            pointer = format!("{target}{}", &pointer[alias.len()..]);
+        }
+        pointer
+    }
 }
 #[cfg(test)]
 mod tests {

@@ -443,6 +443,7 @@ impl Batch for Engines {
                             reason: Some("batch engine failed; work will be retried".into()),
                             package_files: Vec::new(),
                             warnings: Vec::new(),
+                            skipped: Vec::new(),
                             default_branch: None,
                             commit: None,
                         })
