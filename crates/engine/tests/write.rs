@@ -1598,7 +1598,9 @@ async fn failed_lookup_click_retries_the_source_and_unticks_even_when_it_still_f
     tick_dashboard(&fake, "retry");
     fake.requests.lock().unwrap().clear();
     let report = checkbox_run(&engine, &config, now).await;
-    assert!(!report.repositories[0].warnings.is_empty());
+    let failures = &report.repositories[0].lookup_failures;
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert_eq!(failures[0].name, "fixture");
     assert_eq!(
         fake.requests
             .lock()

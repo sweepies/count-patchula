@@ -96,6 +96,7 @@ pub async fn command(
     })?;
     let local = tui::local(&dir, config).map_err(|e| (2, miette::miette!("{e}")))?;
     let mut warnings = Vec::new();
+    let mut failures = Vec::new();
     for repo in &report.repositories {
         if repo.status == patchula_report::Status::Error {
             return Err((
@@ -108,6 +109,7 @@ pub async fn command(
             ));
         }
         warnings.extend(repo.reason.iter().chain(&repo.warnings).cloned());
+        failures.extend(&repo.lookup_failures);
     }
     let all = tui::updates(&report);
     let mut chosen: Vec<&tui::Update> = all
@@ -156,7 +158,13 @@ pub async fn command(
     } else {
         !chosen.is_empty()
     };
-    let code = if waiting || !moved { WAITING } else { 0 };
+    let code = if !failures.is_empty() {
+        crate::LOOKUP_FAILED
+    } else if waiting || !moved {
+        WAITING
+    } else {
+        0
+    };
     let applied: Vec<&tui::Update> = plan.applied.iter().map(|&i| chosen[i]).collect();
     let skipped: Vec<(&tui::Update, &str)> = plan
         .skipped
@@ -190,6 +198,7 @@ pub async fn command(
             "filtered": filtered,
             "notices": notices,
             "warnings": warnings,
+            "lookupFailures": failures,
             "exitCode": code,
         });
         writeln!(out, "{result}").map_err(fail)?;
@@ -215,6 +224,9 @@ pub async fn command(
             writeln!(err, "  {}  ({})", notice.text(), notice.path).map_err(fail)?;
         }
     }
+    for failure in &failures {
+        writeln!(err, "lookup failed: {failure}").map_err(fail)?;
+    }
     write!(
         err,
         "{}",
@@ -224,7 +236,8 @@ pub async fn command(
             &skipped,
             diffs.len(),
             filtered,
-            !warnings.is_empty()
+            !warnings.is_empty(),
+            failures.len()
         )
     )
     .map_err(fail)?;
@@ -277,6 +290,7 @@ fn summary(
     files: usize,
     filtered: usize,
     warned: bool,
+    failed: usize,
 ) -> String {
     let line = |u: &tui::Update| {
         format!(
@@ -290,7 +304,9 @@ fn summary(
     };
     let count = |n: usize, what: &str| format!("{n} {what}{}", if n == 1 { "" } else { "s" });
     let mut out = String::new();
-    if applied.is_empty() && skipped.is_empty() {
+    if applied.is_empty() && skipped.is_empty() && failed > 0 {
+        out.push_str("The Count found nothing to apply, but only because some lookups failed.\n");
+    } else if applied.is_empty() && skipped.is_empty() {
         out.push_str(if warned {
             "The Count found nothing to apply, but read the warnings first: a failed lookup finds nothing either.\n"
         } else {
@@ -326,6 +342,12 @@ fn summary(
         out.push_str(&format!(
             "{} stayed out of it, by your filters.\n",
             count(filtered, "more update")
+        ));
+    }
+    if failed > 0 {
+        out.push_str(&format!(
+            "{} failed, so those dependencies may have updates the Count cannot see.\n",
+            count(failed, "lookup")
         ));
     }
     if applied.iter().any(|u| u.locked) {

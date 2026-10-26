@@ -471,6 +471,7 @@ fn setup(
         warnings: vec![],
         skipped: vec![],
         notices: vec![],
+        lookup_failures: vec![],
         default_branch: Some("main".into()),
         commit: Some("base".into()),
         package_files: vec![PackageFile {

@@ -17,7 +17,9 @@ use patchula_cache::{
     repositories::{Row, Run},
 };
 use patchula_github::Client;
-use patchula_report::{ActionStatus, PackageFile, PullRequestAction, Report, Status};
+use patchula_report::{
+    ActionStatus, LookupFailure, PackageFile, PullRequestAction, Report, Status,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -54,6 +56,7 @@ struct Snapshot<'a> {
     status: Status,
     reason: Option<&'a str>,
     warnings: &'a [String],
+    lookup_failures: &'a [LookupFailure],
     default_branch: Option<&'a str>,
     commit: Option<&'a str>,
     package_files: &'a [PackageFile],
@@ -250,6 +253,7 @@ pub(crate) async fn record(
             status: repo.status,
             reason: repo.reason.as_deref(),
             warnings: &repo.warnings,
+            lookup_failures: &repo.lookup_failures,
             default_branch: repo.default_branch.as_deref(),
             commit: repo.commit.as_deref(),
             package_files: &repo.package_files,

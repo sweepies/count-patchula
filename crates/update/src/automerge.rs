@@ -142,7 +142,7 @@ pub(crate) fn requested(plan: &Plan, config: &Config) -> bool {
         }
 }
 fn policy_allows(repo: &Repository, plan: &Plan, now: DateTime<Utc>) -> bool {
-    if !repo.warnings.is_empty() {
+    if repo.degraded() {
         return false;
     }
     // Windows decide when updates are proposed, not when they merge: a PR whose

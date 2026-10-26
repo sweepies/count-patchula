@@ -7,14 +7,14 @@ pub use patchula_update::Recheck;
 use futures_util::{StreamExt, stream};
 use patchula_cache::{Cache, ExtractionKey};
 use patchula_config::{Config, Manager, Source};
-use patchula_datasource::Client as Sources;
+use patchula_datasource::{Client as Sources, Failure, LookupErrorKind};
 use patchula_github::{Client as Github, Options as GithubOptions};
 use patchula_http::{Cached, PhaseTrace, Transport};
 use patchula_lookup::{Evaluation, Evaluator};
 use patchula_manager::{Dependency, Extraction, Files, Scanner, word};
 use patchula_report::{
-    Current, Dependency as ReportDependency, PackageFile, Report, Repository, SCHEMA_VERSION,
-    Status,
+    Current, Dependency as ReportDependency, LookupFailure, PackageFile, Report, Repository,
+    SCHEMA_VERSION, Status,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -97,7 +97,7 @@ fn file_mode() -> String {
 }
 
 type LookupKey = (String, String);
-type Catalogs = BTreeMap<LookupKey, std::result::Result<patchula_datasource::Catalog, String>>;
+type Catalogs = BTreeMap<LookupKey, std::result::Result<patchula_datasource::Catalog, Failure>>;
 pub const REPOSITORY_HEAD_QUERY: &str = "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){isPrivate defaultBranchRef{name target{... on Commit{oid tree{oid}}}}}}";
 #[derive(Default, Serialize, Deserialize)]
 struct LookupHint {
@@ -241,15 +241,16 @@ impl Engine {
     async fn lookup_key(
         sources: &Sources,
         key: &LookupKey,
-    ) -> std::result::Result<patchula_datasource::Catalog, String> {
-        let (enabled, source) = key.0.split_once(':').ok_or("invalid catalog key")?;
+    ) -> std::result::Result<patchula_datasource::Catalog, Failure> {
+        let invalid = || Failure {
+            kind: LookupErrorKind::Other,
+            message: "invalid catalog key".into(),
+        };
+        let (enabled, source) = key.0.split_once(':').ok_or_else(invalid)?;
         let sources = sources.clone().with_versions_host(enabled == "true");
         let source: Source =
-            serde_json::from_value(Value::String(source.into())).map_err(|e| e.to_string())?;
-        sources
-            .lookup(source, &key.1)
-            .await
-            .map_err(|e| e.to_string())
+            serde_json::from_value(Value::String(source.into())).map_err(|_| invalid())?;
+        sources.lookup(source, &key.1).await.map_err(Failure::from)
     }
     pub async fn lookup(&self, options: Options) -> Result<Report> {
         self.lookup_at(options, chrono::Utc::now()).await
@@ -508,7 +509,7 @@ impl Engine {
                     }
                 }
             }
-            let cleanup = if repo.warnings.is_empty() {
+            let cleanup = if !repo.degraded() {
                 patchula_update::cleanup(
                     &self.github,
                     &repo.repository,
@@ -1082,10 +1083,11 @@ impl Engine {
                                 Err(e) => repo.report.warnings.push(format!("{}: {e}", dep.name)),
                             }
                         }
-                        Some(Err(error)) => repo
-                            .report
-                            .warnings
-                            .push(format!("{} ({}): {error}", dep.name, dep.package)),
+                        Some(Err(error)) => repo.report.lookup_failures.push(lookup_failure(
+                            dep,
+                            error,
+                            error.message.clone(),
+                        )),
                         None => {}
                     }
                     if matches!(dep.source, Source::Docker | Source::Oci) {
@@ -1178,7 +1180,10 @@ impl Engine {
             if result.is_ok() {
                 digests.insert(
                     (package.clone(), reference.clone()),
-                    Err(format!("tag {reference} not found")),
+                    Err(Failure {
+                        kind: LookupErrorKind::NotFound,
+                        message: format!("tag {reference} not found"),
+                    }),
                 );
             }
             false
@@ -1212,7 +1217,7 @@ impl Engine {
                 let result = sources
                     .registry_digest(&package, &tag)
                     .await
-                    .map_err(|e| e.to_string());
+                    .map_err(Failure::from);
                 ((package, tag), result)
             })
             .buffer_unordered(100)
@@ -1236,10 +1241,11 @@ impl Engine {
                         {
                             match image_digests.get(&(dep.package.clone(), tag.clone())) {
                                 Some(Ok(digest)) => proposal.new_digest = Some(digest.clone()),
-                                Some(Err(e)) => repo
-                                    .report
-                                    .warnings
-                                    .push(format!("{}@{tag}: {e}", dep.name)),
+                                Some(Err(e)) => repo.report.lookup_failures.push(lookup_failure(
+                                    dep,
+                                    e,
+                                    format!("digest of {tag}: {e}"),
+                                )),
                                 None => {}
                             }
                         }
@@ -1253,7 +1259,11 @@ impl Engine {
                                     proposals.push(p);
                                 }
                             }
-                            Err(e) => repo.report.warnings.push(format!("{}: {e}", dep.name)),
+                            Err(e) => repo.report.lookup_failures.push(lookup_failure(
+                                dep,
+                                e,
+                                format!("digest of {}: {e}", dep.current),
+                            )),
                         }
                     }
                 }
@@ -1272,9 +1282,10 @@ impl Engine {
                                 Some(Ok(sha)) => proposal.new_digest = Some(sha.clone()),
                                 Some(Err(e)) => {
                                     proposal.new_digest = None;
-                                    repo.report.warnings.push(format!(
-                                        "{}@{reference}: cannot pin target digest: {e}",
-                                        dep.name
+                                    repo.report.lookup_failures.push(lookup_failure(
+                                        dep,
+                                        e,
+                                        format!("cannot pin {reference} to a digest: {e}"),
                                     ));
                                 }
                                 None => {}
@@ -1296,9 +1307,10 @@ impl Engine {
                                     proposals.push(proposal);
                                 }
                             }
-                            Err(e) => repo.report.warnings.push(format!(
-                                "{}@{reference}: cannot resolve digest: {e}",
-                                dep.name
+                            Err(e) => repo.report.lookup_failures.push(lookup_failure(
+                                dep,
+                                e,
+                                format!("cannot resolve the digest of {reference}: {e}"),
                             )),
                         }
                     }
@@ -1519,6 +1531,8 @@ impl Engine {
                 .collect();
             repo.report.warnings.sort();
             repo.report.warnings.dedup();
+            repo.report.lookup_failures.sort();
+            repo.report.lookup_failures.dedup();
         }
         self.save_catalog_controls(&work, now).await?;
         let policy_time = proposal_cpu_time + micros(started);
@@ -1556,14 +1570,14 @@ impl Engine {
     async fn digests(
         &self,
         keys: BTreeSet<(String, String)>,
-    ) -> BTreeMap<(String, String), std::result::Result<String, String>> {
+    ) -> BTreeMap<(String, String), std::result::Result<String, Failure>> {
         stream::iter(keys)
             .map(|(package, reference)| async move {
                 let result = self
                     .sources
                     .digest(&package, &reference)
                     .await
-                    .map_err(|e| e.to_string());
+                    .map_err(Failure::from);
                 ((package, reference), result)
             })
             .buffer_unordered(100)
@@ -1593,7 +1607,7 @@ impl Engine {
                         .map(|(package, result)| {
                             (
                                 (format!("{enabled}:github-releases"), package),
-                                result.map_err(|e| e.to_string()),
+                                result.map_err(Failure::from),
                             )
                         })
                         .collect::<Catalogs>(),
@@ -2127,6 +2141,17 @@ fn local_name(dir: &std::path::Path) -> String {
         .unwrap_or_else(|| "directory".into());
     format!("local/{name}")
 }
+fn lookup_failure(dep: &Dependency, failure: &Failure, message: String) -> LookupFailure {
+    LookupFailure {
+        manager: word(&dep.manager),
+        path: dep.file.clone(),
+        name: dep.name.clone(),
+        package: dep.package.clone(),
+        datasource: word(&dep.source),
+        kind: failure.kind,
+        message,
+    }
+}
 fn repository(repo: &str, status: Status, reason: Option<String>) -> Repository {
     Repository {
         repository: repo.into(),
@@ -2136,6 +2161,7 @@ fn repository(repo: &str, status: Status, reason: Option<String>) -> Repository 
         warnings: Vec::new(),
         skipped: Vec::new(),
         notices: Vec::new(),
+        lookup_failures: Vec::new(),
         default_branch: None,
         commit: None,
     }

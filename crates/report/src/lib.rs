@@ -113,6 +113,9 @@ pub struct Repository {
     /// template's tags: only regenerating the project applies them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notices: Vec<Notice>,
+    /// Dependencies whose registry lookup failed, so their updates are unknown.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lookup_failures: Vec<LookupFailure>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_branch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -128,6 +131,69 @@ pub struct Skipped {
     pub line: Option<usize>,
     pub value: String,
     pub reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LookupFailure {
+    pub manager: String,
+    pub path: String,
+    pub name: String,
+    pub package: String,
+    /// The datasource that failed, such as npm, docker or github-tags.
+    pub datasource: String,
+    pub kind: LookupErrorKind,
+    pub message: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LookupErrorKind {
+    /// The registry could not be reached, or answered with a server error.
+    Network,
+    /// The registry refused the credentials, or asked for some.
+    Auth,
+    NotFound,
+    RateLimit,
+    /// The registry answered with something the Count could not read.
+    Parse,
+    Other,
+}
+
+impl LookupErrorKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Network => "network",
+            Self::Auth => "auth",
+            Self::NotFound => "not-found",
+            Self::RateLimit => "rate-limit",
+            Self::Parse => "parse",
+            Self::Other => "other",
+        }
+    }
+}
+
+impl std::fmt::Display for LookupFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} in {} ({} {}, {}): {}",
+            self.name,
+            self.path,
+            self.datasource,
+            self.package,
+            self.kind.as_str(),
+            self.message
+        )
+    }
+}
+
+impl Repository {
+    /// Whether anything in this repository's report is uncertain: a warning
+    /// or a failed lookup.
+    pub fn degraded(&self) -> bool {
+        !self.warnings.is_empty() || !self.lookup_failures.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

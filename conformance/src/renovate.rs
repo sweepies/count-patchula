@@ -640,6 +640,7 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
             warnings: Vec::new(),
             skipped: Vec::new(),
             notices: Vec::new(),
+            lookup_failures: Vec::new(),
             default_branch: None,
             commit: None,
         });
@@ -653,6 +654,7 @@ pub fn parse_logs_with_diagnostics(logs: &str) -> Result<ParsedLogs> {
             warnings: Vec::new(),
             skipped: Vec::new(),
             notices: Vec::new(),
+            lookup_failures: Vec::new(),
             default_branch: None,
             commit: None,
         });

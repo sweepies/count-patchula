@@ -266,6 +266,9 @@ impl Model {
                     applied: false,
                 });
             }
+            for failure in &repo.lookup_failures {
+                warnings.push((repo.repository.clone(), format!("lookup failed: {failure}")));
+            }
             if let Some(reason) = &repo.reason {
                 warnings.push((
                     repo.repository.clone(),

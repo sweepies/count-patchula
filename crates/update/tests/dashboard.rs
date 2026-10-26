@@ -34,6 +34,24 @@ fn held_back_dashboard_reports_the_reused_catalog_timestamp() {
     );
 }
 #[test]
+fn a_failed_lookup_is_listed_once_under_its_dependency() {
+    let mut repo = repository();
+    repo.warnings.clear();
+    repo.lookup_failures = serde_json::from_value(json!([{
+        "manager":"npm","path":"package.json","name":"fixture","package":"fixture",
+        "datasource":"npm","kind":"network","message":"registry HTTP 503"
+    }]))
+    .unwrap();
+    let text = dashboard::render(&repo, &[], &[], Recheck::NextRun, None);
+    assert_eq!(
+        text.matches("Lookup failed (npm, network): registry HTTP 503")
+            .count(),
+        1,
+        "{text}"
+    );
+    assert!(!text.contains("## Report warnings"), "{text}");
+}
+#[test]
 fn dashboard_snapshot_and_identity_do_not_depend_on_wording() {
     let repo = repository();
     let dep = &repo.package_files[0].dependencies[0];

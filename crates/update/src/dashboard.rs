@@ -566,7 +566,14 @@ pub fn render(
                             || w.starts_with(&format!("{}@", dep.name))
                     })
                     .collect();
-                if !metadata.stale.is_empty() || !warnings.is_empty() {
+                let failures: Vec<_> = repo
+                    .lookup_failures
+                    .iter()
+                    .filter(|f| {
+                        f.path == file.path && f.manager == dep.manager && f.name == dep.name
+                    })
+                    .collect();
+                if !metadata.stale.is_empty() || !warnings.is_empty() || !failures.is_empty() {
                     let mut row = checkbox(
                         &format!(
                             "Try that lookup again: {} ({}, {})",
@@ -585,6 +592,14 @@ pub fn render(
                     }
                     for warning in warnings {
                         row.push_str(&format!("  - {}\n", safe(warning)));
+                    }
+                    for failure in failures {
+                        row.push_str(&format!(
+                            "  - Lookup failed ({}, {}): {}\n",
+                            safe(&failure.datasource),
+                            failure.kind.as_str(),
+                            safe(&failure.message)
+                        ));
                     }
                     sections
                         .entry("Lookup warnings and errors".into())

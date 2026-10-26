@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 
 const RELEASES: &str = "query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){releases(first:100,after:$cursor,orderBy:{field:CREATED_AT,direction:DESC}){nodes{tagName publishedAt isDraft isPrerelease}pageInfo{hasNextPage endCursor}}}}";
 const GIT_OBJECT_FIELDS: &str = "oid __typename ... on Tag{tagger{date} target{__typename ... on Commit{oid} ... on Tag{target{__typename ... on Commit{oid}}}}}";
-pub type TagDigests = BTreeMap<(String, String), std::result::Result<String, String>>;
+pub type TagDigests = BTreeMap<(String, String), std::result::Result<String, Failure>>;
 
 #[derive(Serialize, Deserialize)]
 struct ReleaseHead {
@@ -414,9 +414,7 @@ impl Client {
                 let result = if let Some(sha) = sha {
                     Ok(sha.into())
                 } else {
-                    self.digest(package, reference)
-                        .await
-                        .map_err(|error| error.to_string())
+                    self.digest(package, reference).await.map_err(Failure::from)
                 };
                 results.insert((package.clone(), reference.clone()), result);
             }
