@@ -1,0 +1,29 @@
+on:
+  pull_request:
+  push:
+    branches:
+      - '**'
+    branches-ignore:
+      - renovate/** # they are build via PR
+
+jobs:
+  tests:
+    runs-on: docker
+    container:
+      image: data.forgejo.org/oci/node:24-trixie
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: lint action-docs
+        run: |
+          npx --yes action-docs -u
+          git diff --quiet || {
+            echo "[ERROR] Please apply the changes action-docs suggests:"
+            git diff --color=always
+            exit 1
+          }
+
+      - name: Unit tests of the supporting script forgejo-release.sh
+        run: |
+          testdata/forgejo-release-test.sh test_maybe_sign_release

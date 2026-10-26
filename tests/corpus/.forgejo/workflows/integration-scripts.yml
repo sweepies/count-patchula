@@ -1,0 +1,75 @@
+on:
+  push:
+    branches:
+      - 'main'
+      - 'v*'
+  pull_request:
+
+jobs:
+  integration:
+    runs-on: lxc-bookworm
+    name: integration (${{ matrix.info.image }}:${{ matrix.info.version }})
+    strategy:
+      matrix:
+        info:
+          - version: "11.0"
+            image: code.forgejo.org/forgejo/forgejo
+          - version: "15.0"
+            image: code.forgejo.org/forgejo/forgejo
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - shell: bash
+        run: |
+          LXC_IP_PREFIX=10.0.10 ./forgejo-dependencies.sh
+          export PATH=$(pwd):$PATH
+          forgejo.sh setup root admin1234 ${{ matrix.info.image }} ${{ matrix.info.version }}
+          forgejo-runner.sh setup
+          export FORGEJO_RUNNER_LOGS=forgejo-runner.log
+          url=http://root:admin1234@$(cat forgejo-ip):3000
+          token=$(cat forgejo-token)
+
+          echo "============================ demo ==================="
+          forgejo-test-helper.sh run_workflow testdata/demo $url root demo setup-forgejo $token
+          echo "============================ IPv6 ==================="
+          forgejo-test-helper.sh run_workflow testdata/ipv6 $url root ipv6 setup-forgejo $token
+
+  binary:
+    runs-on: lxc-bookworm
+    name: binary (${{ matrix.binary.version }})
+    strategy:
+      matrix:
+        binary:
+        - version: 15.0.2
+          file: https://code.forgejo.org/forgejo/forgejo/releases/download/v15.0.2/forgejo-15.0.2-linux-amd64
+        - version: 11.0.14
+          file: https://code.forgejo.org/forgejo/forgejo/releases/download/v11.0.14/forgejo-11.0.14-linux-amd64
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - shell: bash
+        run: |
+          set -x
+          export DIR=$(mktemp -d)
+          export PATH=$(pwd):$PATH
+          LXC_IP_PREFIX=10.0.10 forgejo-dependencies.sh
+
+          forgejo-binary.sh ensure_user forgejo
+          chown forgejo $DIR
+          su -c "DIR=$DIR bash -x forgejo-binary.sh setup root admin1234 ${{ matrix.binary.file }}" forgejo
+
+          su -c "DIR=$DIR bash -x forgejo-runner.sh setup" forgejo
+          export FORGEJO_RUNNER_LOGS=$DIR/forgejo-runner.log
+          url=$(cat $DIR/forgejo-auth-url)
+          token=$(cat $DIR/forgejo-token)
+
+          echo "============================ demo ==================="
+          FORGEJO_RUNNER_DIR=$DIR forgejo-test-helper.sh run_workflow testdata/demo $url root demo setup-forgejo $token
+
+          su -c "DIR=$DIR forgejo-binary.sh teardown" forgejo
+
+          echo "============================ verify zip downloading ==================="
+          export DEBIAN_FRONTEND=noninteractive
+          apt -q install -qq -y zip
+          mv $DIR/forgejo /tmp/forgejo
+          ( cd /tmp ; zip forgejo.zip forgejo )
+          forgejo-binary.sh download file:///tmp/forgejo.zip
+          cmp --quiet /tmp/forgejo $DIR/forgejo

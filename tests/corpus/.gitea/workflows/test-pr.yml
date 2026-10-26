@@ -1,0 +1,88 @@
+name: check-and-test
+
+on:
+  - pull_request
+
+jobs:
+  #govulncheck_job:
+  #  runs-on: ubuntu-latest
+  #  name: Run govulncheck
+  #  steps:
+  #    - id: govulncheck
+  #      uses: golang/govulncheck-action@v1
+  #      with:
+  #        go-version-file: 'go.mod'
+  check-and-unit:
+    name: Lint Build And Unit Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: 'go.mod'
+          check-latest: true
+      - name: lint and build
+        run: |
+          make clean
+          make vet
+          make lint
+          make fmt-check
+          make docs-check
+          make build
+      - name: unit test and coverage
+        run: |
+          make unit-test-coverage
+
+  integration-test:
+    name: Integration Test
+    runs-on: ubuntu-latest
+    env:
+      HTTP_PROXY: ""
+      GITEA_TEA_TEST_URL: "http://gitea:3000"
+      GITEA_TEA_TEST_USERNAME: "test01"
+      GITEA_TEA_TEST_PASSWORD: "test01"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: 'go.mod'
+          check-latest: true
+      - name: wait for the gitea instance to be ready
+        run: |
+          for i in $(seq 1 30); do
+            if curl --noproxy "*" -sf http://gitea:3000/api/v1/version; then
+              echo "gitea is ready after ${i} attempt(s)"
+              exit 0
+            fi
+            echo "waiting for gitea, attempt ${i}/30"
+            sleep 2
+          done
+          echo "::error::gitea did not become ready within 60s"
+          exit 1
+      - name: integration test
+        run: |
+          make integration-test
+    services:
+      gitea:
+        image: docker.gitea.com/gitea:1.27.0
+        cmd:
+          - bash
+          - -c
+          - >-
+            mkdir -p /tmp/conf/
+            && mkdir -p /tmp/data/
+            && echo "I_AM_BEING_UNSAFE_RUNNING_AS_ROOT = true" > /tmp/conf/app.ini
+            && echo "[security]" >> /tmp/conf/app.ini
+            && echo "INTERNAL_TOKEN = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJuYmYiOjE1NTg4MzY4ODB9.LoKQyK5TN_0kMJFVHWUW0uDAyoGjDP6Mkup4ps2VJN4" >> /tmp/conf/app.ini
+            && echo "INSTALL_LOCK   = true" >> /tmp/conf/app.ini
+            && echo "SECRET_KEY     = 2crAW4UANgvLipDS6U5obRcFosjSJHQANll6MNfX7P0G3se3fKcCwwK3szPyGcbo" >> /tmp/conf/app.ini
+            && echo "PASSWORD_COMPLEXITY = off" >> /tmp/conf/app.ini
+            && echo "[database]" >> /tmp/conf/app.ini
+            && echo "DB_TYPE = sqlite3" >> /tmp/conf/app.ini
+            && echo "[repository]" >> /tmp/conf/app.ini
+            && echo "ROOT = /tmp/data/" >> /tmp/conf/app.ini
+            && echo "[server]" >> /tmp/conf/app.ini
+            && echo "ROOT_URL = http://gitea:3000" >> /tmp/conf/app.ini
+            && gitea migrate -c /tmp/conf/app.ini
+            && gitea admin user create --username=test01 --password=test01 --email=test01@gitea.io --admin=true --must-change-password=false --access-token -c /tmp/conf/app.ini
+            && gitea web -c /tmp/conf/app.ini

@@ -13,7 +13,7 @@ quoting, comments and formatting.
 |---|---|---|
 | `npm` | `package.json`, `pnpm-workspace.yaml` and `.yarnrc.yml` catalogs, `.nvmrc`, `.node-version` | `package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock` |
 | `bun` | `package.json` when `npm` is off | `bun.lock` |
-| `github-actions` | `.github/workflows/*.yml`, `action.yml` | |
+| `github-actions` | `.github/workflows/*.yml`, `.forgejo/workflows/*.yml`, `.gitea/workflows/*.yml`, `action.yml` | |
 | `mise` | `mise.toml`, `.mise.toml`, `.tool-versions` | `mise.lock` |
 | `cargo` | `Cargo.toml`, `rust-toolchain`, `rust-toolchain.toml` | `Cargo.lock` |
 | `go` | `go.mod` | `go.sum` |
@@ -65,6 +65,34 @@ comment. Setup actions' version inputs (`node-version`, `go-version`,
 right. Hosted runner labels in `runs-on` upgrade within their OS and
 architecture family. Flow-style YAML and YAML aliases at a version location are
 not editable yet and report an error.
+
+### Forgejo and Gitea Actions
+
+Workflows in `.forgejo/workflows/` and `.gitea/workflows/` at the repository
+root are read the same way, by the same `github-actions` manager, and pinned
+and updated the same way. An action can be named by URL there, such as
+`https://code.forgejo.org/actions/setup-forgejo@v3`. A URL on `github.com` is
+looked up as GitHub tags; a URL on a Gitea or Forgejo host is looked up as
+`forge-tags` on that host, and the Count keeps the URL when he rewrites the
+ref. Hosts are recognised by name: `codeberg.org`, `gitea.com`, and hosts
+with a `gitea` or `forgejo` label such as `code.forgejo.org` or
+`git.forgejo.example.com`. Actions on other hosts are skipped.
+
+A bare `owner/repo` ref is resolved by the runner against the instance's
+default action host, which only the instance's `app.ini` knows. The Count
+uses each project's documented default:
+
+| File | Bare `owner/repo` looked up on |
+|---|---|
+| `.github/workflows/`, `.gitea/workflows/`, `action.yml` | GitHub, Gitea's default (`DEFAULT_ACTIONS_URL = github`) |
+| `.forgejo/workflows/`, `.forgejo/**/action.yml` | `data.forgejo.org`, Forgejo's default |
+
+If your instance changes `DEFAULT_ACTIONS_URL`, write the actions it should
+not resolve this way as URLs. That is what Forgejo recommends anyway. Forge
+digests come from the host's tag list, so only tag refs are pinned there:
+a branch ref such as `@main` on a forge is left alone. Runner labels in
+`.forgejo/` and `.gitea/` workflows name the instance's own runners, so they
+are not updated.
 
 ## mise
 

@@ -1032,3 +1032,163 @@ fn woodpecker_steps_services_clone_anchors_and_variables() {
         ]
     );
 }
+#[test]
+fn forgejo_and_gitea_workflows_resolve_bare_refs_on_their_default_action_host() {
+    use patchula_config::Source;
+    let mut config = config();
+    config.managers = vec![Manager::GithubActions];
+    let scanner = Scanner::new(&config).unwrap();
+    for path in [
+        ".forgejo/workflows/ci.yml",
+        ".gitea/workflows/ci.yaml",
+        ".forgejo/actions/x/action.yml",
+    ] {
+        assert!(scanner.needs(path), "{path}");
+    }
+    assert!(!scanner.needs("sub/.forgejo/workflows/ci.yml"));
+    let text = r#"jobs:
+  test:
+    runs-on: ubuntu-22.04
+    container: data.forgejo.org/oci/node:24-trixie
+    steps:
+      - uses: actions/checkout@v6.0.3
+      - uses: https://code.forgejo.org/actions/setup-forgejo@0191c04814b526caf141138a5567000ab08ddae0 # v3.2.0
+      - uses: https://github.com/actions/cache@v4
+      - uses: https://data.forgejo.org/actions/setup-go@v6
+        with:
+          go-version: 1.25.1
+      - uses: https://git.example.com/owner/action@v1
+"#;
+    let files = Files::from([
+        (".forgejo/workflows/ci.yml".into(), text.into()),
+        (".gitea/workflows/ci.yml".into(), text.into()),
+    ]);
+    let deps = scanner.extract(&files).unwrap().dependencies;
+    let got: Vec<_> = deps
+        .iter()
+        .map(|d| {
+            (
+                d.file.as_str(),
+                d.source,
+                d.name.as_str(),
+                d.package.as_str(),
+                d.current.as_str(),
+                d.digest.is_some(),
+            )
+        })
+        .collect();
+    let forgejo = ".forgejo/workflows/ci.yml";
+    let gitea = ".gitea/workflows/ci.yml";
+    assert_eq!(
+        got,
+        [
+            (
+                forgejo,
+                Source::ForgeTags,
+                "actions/checkout",
+                "data.forgejo.org/actions/checkout",
+                "v6.0.3",
+                false
+            ),
+            (
+                forgejo,
+                Source::ForgeTags,
+                "code.forgejo.org/actions/setup-forgejo",
+                "code.forgejo.org/actions/setup-forgejo",
+                "v3.2.0",
+                true
+            ),
+            (
+                forgejo,
+                Source::GithubTags,
+                "actions/cache",
+                "actions/cache",
+                "v4",
+                false
+            ),
+            (
+                forgejo,
+                Source::ForgeTags,
+                "data.forgejo.org/actions/setup-go",
+                "data.forgejo.org/actions/setup-go",
+                "v6",
+                false
+            ),
+            (
+                forgejo,
+                Source::GithubReleases,
+                "go",
+                "actions/go-versions",
+                "1.25.1",
+                false
+            ),
+            (
+                forgejo,
+                Source::Docker,
+                "data.forgejo.org/oci/node",
+                "data.forgejo.org/oci/node",
+                "24-trixie",
+                false
+            ),
+            (
+                gitea,
+                Source::GithubTags,
+                "actions/checkout",
+                "actions/checkout",
+                "v6.0.3",
+                false
+            ),
+            (
+                gitea,
+                Source::ForgeTags,
+                "code.forgejo.org/actions/setup-forgejo",
+                "code.forgejo.org/actions/setup-forgejo",
+                "v3.2.0",
+                true
+            ),
+            (
+                gitea,
+                Source::GithubTags,
+                "actions/cache",
+                "actions/cache",
+                "v4",
+                false
+            ),
+            (
+                gitea,
+                Source::ForgeTags,
+                "data.forgejo.org/actions/setup-go",
+                "data.forgejo.org/actions/setup-go",
+                "v6",
+                false
+            ),
+            (
+                gitea,
+                Source::GithubReleases,
+                "go",
+                "actions/go-versions",
+                "1.25.1",
+                false
+            ),
+            (
+                gitea,
+                Source::Docker,
+                "data.forgejo.org/oci/node",
+                "data.forgejo.org/oci/node",
+                "24-trixie",
+                false
+            ),
+        ]
+    );
+    for dep in &deps {
+        patchula_manager::edits(dep, &files[&dep.file], &dep.current, dep.digest.as_deref())
+            .unwrap();
+    }
+    let pin = deps.iter().find(|d| d.name == "actions/checkout").unwrap();
+    let edit =
+        patchula_manager::action_replacement(pin, text, "v6.1.0", Some(&"d".repeat(40))).unwrap();
+    assert_eq!(
+        edit,
+        format!("actions/checkout@{} # v6.1.0", "d".repeat(40))
+    );
+}

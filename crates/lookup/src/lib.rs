@@ -255,12 +255,23 @@ impl Evaluator {
         {
             return false;
         }
-        if dep.manager == Manager::GithubActions && dep.source == Source::GithubTags {
+        if dep.tagged_action() {
             return Ecosystem::Loose
                 .parse(dep.resolved.as_deref().unwrap_or(&dep.current))
                 .is_ok();
         }
         true
+    }
+    /// A forge action's digest comes only from its tag catalog, so the catalog
+    /// is needed whenever its tag pin can change, even with version updates off.
+    pub fn needs_forge_catalog(&self, dep: &Dependency) -> bool {
+        dep.tagged_action()
+            && dep.source == Source::ForgeTags
+            && !(dep.digest.is_some() && dep.resolved.is_none())
+            && Ecosystem::Loose
+                .parse(dep.resolved.as_deref().unwrap_or(&dep.current))
+                .is_ok()
+            && self.digest_proposal(dep, "probe").is_some()
     }
     fn effective(&self, dep: &Dependency, update: Update) -> Effective<'_> {
         let mut effective = Effective {
@@ -354,7 +365,7 @@ impl Evaluator {
         catalog: Option<&Catalog>,
     ) -> Option<Proposal> {
         let mut proposal = self.digest_proposal(dep, new_digest)?;
-        if dep.manager == Manager::GithubActions && dep.source == Source::GithubTags {
+        if dep.tagged_action() {
             let mut target = dep.clone();
             target.digest = Some(new_digest.into());
             if let Some(version) = catalog.and_then(|c| resolved_current_version(&target, c)) {
@@ -691,8 +702,7 @@ impl Evaluator {
             if scheme.order(&parsed, &baseline) != Ordering::Greater {
                 continue;
             }
-            if dep.manager == Manager::GithubActions
-                && dep.source == Source::GithubTags
+            if dep.tagged_action()
                 && numeric_fields(&dep.current).is_some_and(|n| n < 3)
                 && numeric_prefix(&dep.current, &normalized)
             {
@@ -1189,7 +1199,7 @@ pub fn resolved_current_version(dep: &Dependency, catalog: &Catalog) -> Option<S
     if dep.manager == Manager::Mise || dep.kind == DependencyKind::Tool {
         return resolved_tool_version(dep, catalog);
     }
-    if dep.manager != Manager::GithubActions || dep.source != Source::GithubTags {
+    if !dep.tagged_action() {
         return None;
     }
     let current = dep.resolved.as_deref().unwrap_or(&dep.current);

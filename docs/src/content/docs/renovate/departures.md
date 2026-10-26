@@ -247,6 +247,26 @@ a local `file:`/`./`/`../` reference or a GitHub expression are excluded and aud
 Concrete versions, opaque selectors such as `latest`, and all proposals remain
 visible. This does not excuse missing versioned setup-action inputs.
 
+### Forgejo action refs {#forgejo-action-refs}
+
+- **Renovate:** Its `github-actions` docs list `github-tags` for repository
+  refs and `gitea-tags` for URL refs, and say nothing of bare refs in Forgejo
+  workflows
+- **Count Patchula:** A bare `owner/repo` in `.forgejo/` is looked up on
+  `data.forgejo.org`; in `.gitea/` and `.github/` it is looked up on GitHub.
+  Runner labels in `.forgejo/` and `.gitea/` workflows are not extracted
+- **Why:** Those are the hosts each runner resolves bare refs against by
+  default, according to Forgejo's and Gitea's docs, so the pinned commit is the
+  one the runner fetches. Forgejo and Gitea runner labels name self-hosted
+  runners, not GitHub's images
+
+The instance's `DEFAULT_ACTIONS_URL` can change the host and is not visible
+from the repository. Writing the action as a URL removes the guess. Only tags
+are pinned on forges; Renovate's docs also limit branch refs to GitHub-hosted
+actions. Renovate's patterns also match `workflow-templates/` and
+`.github/actions/`; the Count reads root workflow directories and
+`action.yml` files only.
+
 ### Installed versions {#current-versions}
 
 - **Renovate:** currentVersion can mean newest satisfying release or floating tag

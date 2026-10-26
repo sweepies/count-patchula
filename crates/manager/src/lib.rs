@@ -122,6 +122,21 @@ pub struct Skipped {
     pub value: String,
     pub reason: String,
 }
+impl Dependency {
+    /// An action or reusable workflow looked up by its repository's tags,
+    /// on GitHub or on a Gitea/Forgejo host.
+    pub fn tagged_action(&self) -> bool {
+        self.manager == Manager::GithubActions
+            && matches!(self.source, Source::GithubTags | Source::ForgeTags)
+    }
+}
+/// Gitea and Forgejo hosts the `forge-tags` source recognises by name.
+pub(crate) fn gitea_host(host: &str) -> bool {
+    let labels = || host.split('.');
+    !labels().any(|l| l == "gitlab")
+        && (matches!(host, "codeberg.org" | "gitea.com")
+            || labels().any(|l| matches!(l, "gitea" | "forgejo")))
+}
 pub type Files = BTreeMap<String, String>;
 pub fn supported(manager: Manager) -> bool {
     match manager {
@@ -198,7 +213,13 @@ impl Scanner {
                 )
             }
             Manager::GithubActions => {
-                (path.starts_with(".github/workflows/")
+                ([
+                    ".github/workflows/",
+                    ".gitea/workflows/",
+                    ".forgejo/workflows/",
+                ]
+                .iter()
+                .any(|dir| path.starts_with(dir))
                     && matches!(leaf.rsplit('.').next(), Some("yml" | "yaml")))
                     || matches!(leaf, "action.yml" | "action.yaml")
             }

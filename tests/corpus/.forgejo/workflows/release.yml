@@ -1,0 +1,28 @@
+on:
+  push:
+    tags:
+      - v*
+
+jobs:
+  publish:
+    runs-on: docker
+
+    steps:
+      # needs to be in a different dir, so binary and rna cache don't conflict
+      - uses: https://data.forgejo.org/actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          path: forgejo-release
+
+      - name: publish release
+        uses: ./forgejo-release
+        with:
+          direction: upload
+          override: ${{ vars.OVERRIDE || 'false' }}
+          verbose: ${{ vars.VERBOSE || 'false' }}
+          release-notes-assistant: true
+          skip-assets: true
+
+      # extract short version from tag and push as branch
+      - run: git push -f origin $FORGEJO_REF_NAME:${FORGEJO_REF_NAME%%.*}
+        shell: bash
+        working-directory: ./forgejo-release

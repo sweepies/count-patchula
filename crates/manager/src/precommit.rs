@@ -27,11 +27,8 @@ fn identity(url: &str) -> Option<(Source, String)> {
         let repo = format!("{}/{}", parts.next()?, parts.next()?);
         return Some((Source::GithubTags, repo));
     }
-    let forge = host == "gitlab.com"
-        || matches!(host.as_str(), "codeberg.org" | "gitea.com")
-        || host
-            .split('.')
-            .any(|l| matches!(l, "gitlab" | "gitea" | "forgejo"));
+    let forge =
+        host == "gitlab.com" || host.split('.').any(|l| l == "gitlab") || crate::gitea_host(&host);
     forge.then(|| (Source::ForgeTags, format!("{host}/{path}")))
 }
 

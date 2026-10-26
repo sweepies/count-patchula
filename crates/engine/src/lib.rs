@@ -850,7 +850,7 @@ impl Engine {
         for (repo, eval) in work.iter().zip(&evaluators) {
             if let Some(eval) = eval {
                 for dep in &repo.dependencies {
-                    if eval.needs_lookup(dep) {
+                    if eval.needs_lookup(dep) || eval.needs_forge_catalog(dep) {
                         let key = self.catalog_key(dep, repo.config.as_ref());
                         keys.insert(key.clone());
                         let hours = eval.catalog_wait_hours(dep);
@@ -890,7 +890,7 @@ impl Engine {
                 let catalogs = repo
                     .dependencies
                     .iter()
-                    .filter(|dep| eval.needs_lookup(dep))
+                    .filter(|dep| eval.needs_lookup(dep) || eval.needs_forge_catalog(dep))
                     .map(|dep| self.catalog_key(dep, repo.config.as_ref()))
                     .collect();
                 let digests = current_refs
@@ -980,17 +980,20 @@ impl Engine {
             }
         }
         // A vulnerable dependency's fix may be newer than a catalog reused
-        // under its release-age wait, so those catalogs are read again.
+        // under its release-age wait, so those catalogs are read again. So is a
+        // forge action's: its tags may have moved, and their commits are its pins.
         let mut vulnerable = BTreeSet::new();
         for (repo, eval) in work.iter().zip(&evaluators) {
             if let Some(eval) = eval {
                 for dep in &repo.dependencies {
                     let key = self.catalog_key(dep, repo.config.as_ref());
-                    if eval.needs_lookup(dep)
-                        && catalog_evidence.get(&key).is_some_and(|e| e.reused)
-                        && patchula_lookup::advisory_query(dep)
-                            .and_then(|q| advisories.get(&q))
-                            .is_some_and(|found| !found.is_empty())
+                    let reused = catalog_evidence.get(&key).is_some_and(|e| e.reused);
+                    if reused
+                        && (eval.needs_forge_catalog(dep)
+                            || (eval.needs_lookup(dep)
+                                && patchula_lookup::advisory_query(dep)
+                                    .and_then(|q| advisories.get(&q))
+                                    .is_some_and(|found| !found.is_empty())))
                     {
                         vulnerable.insert(key);
                     }
@@ -1097,7 +1100,7 @@ impl Engine {
                             image_keys.insert((dep.package.clone(), dep.current.clone()));
                         }
                     }
-                    if dep.manager == Manager::GithubActions && dep.source == Source::GithubTags {
+                    if dep.tagged_action() {
                         for proposal in &evaluation.updates {
                             if eval.needs_digest(dep, proposal)
                                 && let Some(reference) = proposal
@@ -1113,7 +1116,10 @@ impl Engine {
                                 "{}: SHA pin has no version comment; replacement tag is unknown",
                                 dep.name
                             ));
-                        } else {
+                        } else if dep.source == Source::GithubTags || eval.needs_forge_catalog(dep)
+                        {
+                            // A forge resolves only tags, which its catalog
+                            // already carries; branch refs stay unpinned.
                             let reference = dep.resolved.as_deref().unwrap_or(&dep.current);
                             if eval.digest_proposal(dep, "probe").is_some() {
                                 digest_keys.insert((dep.package.clone(), reference.to_owned()));
@@ -1144,11 +1150,12 @@ impl Engine {
         // of adding a serial /commits/{tag} round trip after policy evaluation.
         for (package, reference) in &digest_keys {
             if let Some(Ok(catalog)) = catalogs.iter().find_map(|((source, pkg), result)| {
-                (source.ends_with(":github-tags")
-                    && pkg == package
-                    && catalog_evidence
-                        .get(&(source.clone(), pkg.clone()))
-                        .is_none_or(|e| !e.reused))
+                (pkg == package
+                    && (source.ends_with(":forge-tags")
+                        || (source.ends_with(":github-tags")
+                            && catalog_evidence
+                                .get(&(source.clone(), pkg.clone()))
+                                .is_none_or(|e| !e.reused))))
                 .then_some(result)
             }) && let Some(digest) = catalog
                 .versions
@@ -1160,6 +1167,22 @@ impl Engine {
             }
         }
         digest_keys.retain(|key| !digests.contains_key(key));
+        // Forge refs resolve only through their tag catalog. A ref missing
+        // from it is not sent to GitHub.
+        digest_keys.retain(|(package, reference)| {
+            let Some(result) = catalogs.iter().find_map(|((source, pkg), result)| {
+                (source.ends_with(":forge-tags") && pkg == package).then_some(result)
+            }) else {
+                return true;
+            };
+            if result.is_ok() {
+                digests.insert(
+                    (package.clone(), reference.clone()),
+                    Err(format!("tag {reference} not found")),
+                );
+            }
+            false
+        });
         let started = Instant::now();
         let phase = PhaseTrace::new("digest");
         let mutable_tags: Vec<_> = digest_keys
@@ -1235,8 +1258,7 @@ impl Engine {
                     }
                 }
                 if let Some(eval) = eval
-                    && dep.manager == Manager::GithubActions
-                    && dep.source == Source::GithubTags
+                    && dep.tagged_action()
                     && !eval.ignored(dep)
                 {
                     for proposal in &mut proposals {
@@ -1342,10 +1364,7 @@ impl Engine {
                 let catalog = catalogs
                     .get(&self.catalog_key(dep, repo.config.as_ref()))
                     .and_then(|c| c.as_ref().ok());
-                if dep.manager == Manager::GithubActions
-                    && dep.source == Source::GithubTags
-                    && catalog.is_some_and(|c| c.versions.is_empty())
-                {
+                if dep.tagged_action() && catalog.is_some_and(|c| c.versions.is_empty()) {
                     repo.report.warnings.push(format!(
                         "{}: registry returned an empty tag catalog; version lookup is unavailable",
                         dep.name
@@ -1354,9 +1373,7 @@ impl Engine {
                 let resolved =
                     catalog.and_then(|c| patchula_lookup::resolved_current_version(dep, c));
                 let resolution = resolved.as_ref().or(dep.resolved.as_ref()).map(|version| {
-                    let kind = if dep.manager == Manager::GithubActions
-                        && dep.source == Source::GithubTags
-                    {
+                    let kind = if dep.tagged_action() {
                         if dep.digest.is_some() {
                             "pinned-commit"
                         } else {
@@ -1417,9 +1434,7 @@ impl Engine {
                     },
                     updates: proposals,
                     metadata: Some(patchula_report::DependencyMetadata {
-                        tag_digests: if dep.manager == Manager::GithubActions
-                            && dep.source == Source::GithubTags
-                        {
+                        tag_digests: if dep.tagged_action() {
                             catalog
                                 .into_iter()
                                 .flat_map(|c| &c.versions)
@@ -1895,7 +1910,7 @@ impl Engine {
         let key = ExtractionKey {
             repo: repo.into(),
             default_branch_commit: commit,
-            config_hash: format!("extract-v9:{}", hash(&serde_json::to_vec(&config)?)),
+            config_hash: format!("extract-v10:{}", hash(&serde_json::to_vec(&config)?)),
         };
         let cached: CachedExtraction = if let Some(bytes) = self.cache.extraction_get(&key).await? {
             self.extraction_hits.fetch_add(1, Ordering::Relaxed);

@@ -28,7 +28,7 @@ Managers the Count supports, under Renovate's names:
 | `npm` | `npm` | npm, pnpm, Yarn and Bun lockfiles, catalogs, overrides, `packageManager` |
 | `bun` | `bun`, or `npm` | text `bun.lock` only, not `bun.lockb` |
 | `nvm`, `nodenv` | `npm` | `.nvmrc`, `.node-version` |
-| `github-actions` | `github-actions` | includes runner labels and setup-action version inputs |
+| `github-actions` | `github-actions` | includes runner labels and setup-action version inputs; Forgejo and Gitea workflows too, with no manager of their own |
 | `mise`, `asdf` | `mise` | `mise.toml`, `.tool-versions`, `mise.lock` |
 | `cargo` | `cargo` | |
 | `rust-toolchain` | `cargo` | |
