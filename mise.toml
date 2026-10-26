@@ -231,6 +231,35 @@ usage = 'arg "<tag>" help="Release tag, such as v0.1.0"'
 tools = { communique = "1.6.1" }
 run = 'communique generate "${usage_tag?}" --github-release'
 
+[tasks."release:bump"]
+description = "Set the release version: Cargo manifests, Cargo.lock, the docs' version pins, the CLI reference and the help snapshot"
+usage = 'arg "<version>" help="The new version, such as 0.5.1, without a leading v"'
+tools = { jq = "1.8.2" }
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+new="${usage_version?}"
+if ! [[ "$new" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+  echo "$new is not a version such as 0.5.1" >&2
+  exit 1
+fi
+old=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "patchula-cli") | .version')
+if [ "$old" = "$new" ]; then
+  echo "The workspace is already at $new" >&2
+  exit 1
+fi
+export OLD="$old" NEW="$new"
+perl -pi -e 's/^version = "\Q$ENV{OLD}\E"/version = "$ENV{NEW}"/ if /^\[workspace\.package\]/ .. /^\[(?!workspace\.package)/' Cargo.toml
+perl -pi -e 's/^(patchula-[a-z-]+ = \{ version = ")\Q$ENV{OLD}\E"/$1$ENV{NEW}"/' crates/*/Cargo.toml conformance/Cargo.toml
+# Only the workspace's own entries change.
+cargo update --workspace
+# The action pin (@vX.Y.Z) and the packslip pin (@X.Y.Z).
+git ls-files -z README.md docs/src/content/docs | xargs -0 perl -pi -e 's/(sweepies\/count-patchula\@v?)\Q$ENV{OLD}\E(?![0-9A-Za-z.-]*[0-9A-Za-z])/$1$ENV{NEW}/g'
+mise run docs:cli
+mise run help:snapshot
+echo "$old -> $new"
+'''
+
 # The documentation site. Node and aube are task-scoped, like the test-only
 # lockfile engines, so a development `mise install` does not fetch them.
 [tasks."docs:install"]
