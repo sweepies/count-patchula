@@ -2574,7 +2574,7 @@ async fn flake_inputs_move_through_nix_with_a_private_store() {
     assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
     assert!(p.contents["dev/flake.lock"].contains(MOVED));
     assert!(!p.contents.contains_key("dev/flake.nix"));
-    assert_eq!(p.action.branch, "patchula/nix-dev-nixpkgs");
+    assert_eq!(p.action.branch, "patchula/nix-dev--nixpkgs");
     let calls = executor.calls.lock().unwrap();
     let [(eval, _), (args, env)] = calls.as_slice() else {
         panic!("an eval and an update expected: {calls:?}");
@@ -2755,7 +2755,7 @@ async fn real_nix_relocks_a_flake_offline() {
     let files = BTreeMap::from([
         (
             "flake.nix".to_string(),
-            "{\n  inputs.sub.url = \"path:./sub\";\n  outputs = { self, sub }: { };\n}\n"
+            "{\n  inputs.sub.url = \"path:./sub\";\n  inputs.parent.url = ./sub;\n  outputs = { self, sub, parent }: { };\n}\n"
                 .to_string(),
         ),
         (
@@ -2780,6 +2780,7 @@ async fn real_nix_relocks_a_flake_offline() {
     let lock: serde_json::Value = serde_json::from_str(&p.contents["flake.lock"]).unwrap();
     assert_eq!(lock["nodes"]["root"]["inputs"]["sub"], "sub");
     assert_eq!(lock["nodes"]["sub"]["locked"]["path"], "./sub");
+    assert_eq!(lock["nodes"]["parent"]["locked"]["path"], "sub");
     assert_eq!(p.action.files.len(), 1);
 }
 
@@ -2891,5 +2892,66 @@ async fn real_nix_refuses_a_declared_http_input_before_fetching() {
             .contains("flake.nix: input evil: only https URLs are fetched"),
         "{:?}",
         p.action
+    );
+}
+
+/// Inputs of different flakes never share a branch name, even when the root
+/// flake's input name spells out the other flake's directory.
+#[test]
+fn flake_branches_keep_the_directory_apart_from_the_input() {
+    let lock = |name: &str| {
+        flake_lock(false).replace(
+            "\"nixpkgs\":\"nixpkgs\"",
+            &format!("\"{name}\":\"nixpkgs\""),
+        )
+    };
+    let files = BTreeMap::from([
+        (
+            "flake.nix".to_string(),
+            "{ outputs = _: { }; }\n".to_string(),
+        ),
+        ("flake.lock".to_string(), lock("dev-nixpkgs")),
+        (
+            "dev/flake.nix".to_string(),
+            "{ outputs = _: { }; }\n".to_string(),
+        ),
+        ("dev/flake.lock".to_string(), lock("nixpkgs")),
+    ]);
+    let config = config();
+    let extraction = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap();
+    let entry = |path: &str, name: &str| {
+        serde_json::json!({
+            "path": path,
+            "dependencies": [{
+                "manager": "nix", "name": name, "package": "https://github.com/NixOS/nixpkgs",
+                "current": {"value": "github:NixOS/nixpkgs/nixos-unstable", "version": null, "digest": NIXPKGS},
+                "updates": [{"newValue": null, "newVersion": null, "newDigest": MOVED,
+                    "updateType": "digest", "group": null}]
+            }]
+        })
+    };
+    let mut repository = repo();
+    repository.package_files = serde_json::from_value(serde_json::json!([
+        entry("flake.lock", "dev-nixpkgs"),
+        entry("dev/flake.lock", "nixpkgs"),
+    ]))
+    .unwrap();
+    let plans = crate::plan(
+        &repository,
+        &config,
+        &extraction.dependencies,
+        &snapshot(&files),
+        false,
+        None,
+        monday(),
+    )
+    .unwrap();
+    let branches: BTreeSet<_> = plans.iter().map(|p| p.action.branch.as_str()).collect();
+    assert_eq!(
+        branches,
+        BTreeSet::from(["patchula/nix-dev--nixpkgs", "patchula/nix-dev-nixpkgs"])
     );
 }

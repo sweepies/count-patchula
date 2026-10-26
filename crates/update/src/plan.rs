@@ -548,11 +548,17 @@ fn branch_identity(
         )
     } else if dep.manager == patchula_config::Manager::Nix {
         // An input belongs to its own lock: the same name in two flakes moves
-        // on two branches, named after the input rather than its long URL.
+        // on two branches, named after the input rather than its long URL. A
+        // slug never holds "--", so it keeps the directory apart from the name.
         let directory = dep.file.strip_suffix("flake.lock").unwrap_or_default();
+        let name = if directory.is_empty() {
+            slug(&dep.name)
+        } else {
+            format!("{}--{}", slug(directory), slug(&dep.name))
+        };
         (
             serde_json::json!(["flake", dep.file, dep.name]).to_string(),
-            format!("nix-{}", slug(&format!("{directory}{}", dep.name))),
+            format!("nix-{name}"),
         )
     } else {
         let line = line(dep, reported, update);

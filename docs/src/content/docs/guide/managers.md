@@ -300,7 +300,7 @@ the input that brings them in.
 The Count asks nix what each reference points at now, with
 `nix flake prefetch`, and proposes the new revision as a `digest` update dated
 by the commit's `lastModified`, so the release-age wait applies. The branch,
-`patchula/nix-nixpkgs`, runs `nix flake update nixpkgs`, and the lock nix
+`patchula/nix-nixpkgs` (`patchula/nix-dev--nixpkgs` for a flake in `dev/`), runs `nix flake update nixpkgs`, and the lock nix
 writes is the whole change; `flake.nix` is never edited. An input pinned to a
 tag or commit in its URL, such as `github:numtide/flake-utils/v1.0.0`, does not
 move, the same as with nix itself.

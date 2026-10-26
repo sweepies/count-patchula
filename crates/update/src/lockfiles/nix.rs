@@ -52,15 +52,23 @@ pub(super) fn tools() -> Result<Vec<(String, String)>, String> {
 
 /// The direct inputs of a lock: input name to its node.
 /// Why an input `flake.nix` declares, or any input override nested in it, is
-/// refused.
-fn declared_refusal(input: &Value, directory: &str) -> Option<String> {
+/// refused. A path value arrives as an absolute `path:` reference, which is
+/// allowed while it stays inside `root`, the checked-out repository.
+fn declared_refusal(input: &Value, directory: &str, root: &Path) -> Option<String> {
     let dir = Some(directory);
+    let check = |reference: &str| {
+        let path = reference.strip_prefix("path:").unwrap_or(reference);
+        if path.starts_with('/') && Path::new(path).starts_with(root) {
+            return None;
+        }
+        patchula_manager::flake_reference_refusal(reference, dir)
+    };
     match input {
-        Value::String(reference) => patchula_manager::flake_reference_refusal(reference, dir),
+        Value::String(reference) => check(reference),
         Value::Object(attrs) => attrs
             .get("url")
             .and_then(Value::as_str)
-            .and_then(|url| patchula_manager::flake_reference_refusal(url, dir))
+            .and_then(check)
             .or_else(|| {
                 attrs
                     .contains_key("type")
@@ -73,7 +81,7 @@ fn declared_refusal(input: &Value, directory: &str) -> Option<String> {
                     .as_object()?
                     .iter()
                     .find_map(|(name, nested)| {
-                        declared_refusal(nested, directory)
+                        declared_refusal(nested, directory, root)
                             .map(|reason| format!("{name}: {reason}"))
                     })
             }),
@@ -222,7 +230,9 @@ impl Runner {
                     "-I".into(),
                     format!("flake={}", flake.display()),
                     "--expr".into(),
-                    "(import <flake/flake.nix>).inputs or { }".into(),
+                    // Path values become absolute path: references without
+                    // being copied into the store.
+                    "let f = v: if builtins.isPath v then \"path:\" + toString v else if builtins.isAttrs v then builtins.mapAttrs (_: f) v else v; in f ((import <flake/flake.nix>).inputs or { })".into(),
                 ],
                 None,
             )
@@ -240,7 +250,7 @@ impl Runner {
                     .is_some_and(|reference| {
                         input.as_str().or_else(|| input["url"].as_str()) == Some(reference.as_str())
                     });
-            if !unchanged && let Some(reason) = declared_refusal(input, directory) {
+            if !unchanged && let Some(reason) = declared_refusal(input, directory, root) {
                 return Err(format!(
                     "{}: input {name}: {reason}",
                     node::join(directory, "flake.nix")
