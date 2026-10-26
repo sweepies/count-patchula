@@ -177,7 +177,7 @@ impl Cache {
             } else {
                 std::env::current_dir().unwrap_or_default().join(&path)
             };
-            absolute.with_extension("worktrees")
+            absolute.with_file_name("worktrees")
         });
         let reader_path = path.clone();
         let touches = Arc::new(Mutex::new(HashSet::new()));
@@ -257,7 +257,15 @@ impl Cache {
         })
     }
 
-    /// Persistent tool checkouts sit beside the SQLite cache, never in a repo.
+    /// Opens a cache directory, creating it: `cache.sqlite` with `worktrees/`
+    /// and the lockfile tool store, `tools/`, beside it.
+    pub async fn open_dir(dir: impl AsRef<Path>, options: Options) -> Result<Self> {
+        let dir = dir.as_ref();
+        std::fs::create_dir_all(dir)?;
+        Self::open(dir.join("cache.sqlite"), options).await
+    }
+
+    /// Persistent tool checkouts: `worktrees/` beside the SQLite file.
     pub fn workspace_dir(&self) -> Option<&Path> {
         self.workspace_dir.as_deref()
     }

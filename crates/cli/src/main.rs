@@ -31,6 +31,7 @@ const DOCKERHUB_TOKEN_VAR: &str = "PATCHULA_DOCKERHUB_TOKEN";
 const MISE_DATA_VAR: &str = "MISE_DATA_DIR";
 const XDG_DATA_VAR: &str = "XDG_DATA_HOME";
 const HOME_VAR: &str = "HOME";
+const XDG_CACHE_VAR: &str = "XDG_CACHE_HOME";
 
 // Only the token and transport are replaced in offline CLI tests. Dispatch,
 // configuration, disk-cache opening and engine construction stay on this path.
@@ -357,14 +358,8 @@ async fn tools_command(app: &App, tools: &cli::Tools) -> Result<u8, (u8, miette:
     if days.is_some_and(|d| d < 1) {
         return Err((2, miette::miette!("--days must be at least 1")));
     }
-    let path = if store.cache.is_absolute() {
-        store.cache.clone()
-    } else {
-        std::env::current_dir()
-            .unwrap_or_default()
-            .join(&store.cache)
-    };
-    let mut runner = patchula_update::lockfiles::Runner::new(path.with_extension("worktrees"), "");
+    let dir = cache_dir(store.cache.as_deref()).map_err(|e| (1, e))?;
+    let mut runner = patchula_update::lockfiles::Runner::new(dir.join("worktrees"), "");
     if let Some(mise_data) = user_mise_data() {
         runner = runner.with_seed(mise_data);
     }
@@ -611,6 +606,44 @@ fn dockerhub_credentials() -> Result<Option<(String, String)>, (u8, miette::Repo
             ),
         )),
     }
+}
+
+/// The local cache directory: `--cache`, or `patchula/` in the user cache directory.
+fn cache_dir(flag: Option<&std::path::Path>) -> Result<std::path::PathBuf, miette::Report> {
+    let dir = match flag {
+        Some(dir) => std::path::absolute(dir)
+            .map_err(|e| miette::miette!("cannot resolve --cache {}: {e}", dir.display()))?,
+        None => user_cache_dir(|name| std::env::var_os(name))
+            .ok_or_else(|| {
+                miette::miette!(
+                    "cannot find a cache directory; set HOME or XDG_CACHE_HOME, or pass --cache DIR"
+                )
+            })?
+            .join("patchula"),
+    };
+    if dir.is_file() {
+        return Err(miette::miette!(
+            "--cache takes a directory, but {} is a file",
+            dir.display()
+        ));
+    }
+    Ok(dir)
+}
+
+/// The platform's user cache directory: `~/Library/Caches` on macOS, else
+/// `XDG_CACHE_HOME` when it is absolute, or `~/.cache`.
+fn user_cache_dir(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+    let home = var(HOME_VAR)
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from);
+    if cfg!(target_os = "macos") {
+        return home.map(|home| home.join("Library/Caches"));
+    }
+    var(XDG_CACHE_VAR)
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+        .or_else(|| home.map(|home| home.join(".cache")))
 }
 
 /// The invoking user's mise data directory, when it has installs. Local runs
@@ -1073,13 +1106,15 @@ async fn report(
         .token()
         .await
         .ok_or_else(|| (1, miette::miette!("{TOKEN_HELP}")))?;
-    if let Some(parent) = scan.cache.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| (1, miette::miette!("cannot create cache directory: {e}")))?;
-    }
-    let cache = patchula_cache::Cache::open(&scan.cache, Default::default())
+    let dir = cache_dir(scan.cache.as_deref()).map_err(|e| (1, e))?;
+    let cache = patchula_cache::Cache::open_dir(&dir, Default::default())
         .await
-        .map_err(|e| (1, miette::miette!("{e}")))?;
+        .map_err(|e| {
+            (
+                1,
+                miette::miette!("cannot open the cache in {}: {e}", dir.display()),
+            )
+        })?;
     let transport = services
         .transport()
         .map_err(|e| (1, miette::miette!("{e}")))?;

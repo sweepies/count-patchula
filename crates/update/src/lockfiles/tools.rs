@@ -16,11 +16,11 @@ const SEEDABLE: &[&str] = &["node", "go", "bun", "aube", "yarn", "uv", "terrafor
 /// served about 44 KB/s when measured.
 pub(super) const INSTALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1800);
 
-/// `PATCHULA_TOOLS_DIR`, or `<cache>.tools` beside the SQLite cache.
+/// `PATCHULA_TOOLS_DIR`, or `tools/` beside the worktrees in the cache directory.
 pub fn tools_dir(workspace: &Path) -> PathBuf {
     std::env::var_os("PATCHULA_TOOLS_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| workspace.with_extension("tools"))
+        .unwrap_or_else(|| workspace.with_file_name("tools"))
 }
 
 fn read_usage(dir: &Path) -> BTreeMap<String, i64> {

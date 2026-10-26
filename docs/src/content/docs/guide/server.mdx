@@ -70,7 +70,7 @@ export PATCHULA_APP_ID=12345
 export PATCHULA_APP_PRIVATE_KEY_FILE=/etc/patchula/app.pem
 export PATCHULA_WEBHOOK_SECRET_FILE=/etc/patchula/webhook-secret
 export PATCHULA_SERVER_SETTINGS=/etc/patchula/server.pkl
-export PATCHULA_SERVER_CACHE=/var/lib/patchula/cache.sqlite
+export PATCHULA_SERVER_CACHE=/var/lib/patchula
 patchula serve
 ```
 
@@ -312,7 +312,7 @@ be writable by user 10001.
 |---|---|
 | `PATCHULA_LISTEN` | `0.0.0.0:8080` |
 | `PATCHULA_SERVER_SETTINGS` | `/etc/patchula/server.pkl`, which only amends `PatchulaServer.pkl` |
-| `PATCHULA_SERVER_CACHE` | `/var/lib/patchula/cache.sqlite` |
+| `PATCHULA_SERVER_CACHE` | `/var/lib/patchula` |
 | `PATCHULA_TOOLS_DIR` | `/var/lib/patchula/tools` |
 | `RUSTUP_HOME` | `/var/lib/patchula/rustup` |
 
@@ -393,7 +393,7 @@ WorkingDirectory=/var/lib/patchula
 EnvironmentFile=/etc/patchula/environment
 LoadCredential=app.pem:/etc/patchula/app.pem
 LoadCredential=webhook-secret:/etc/patchula/webhook-secret
-ExecStart=/usr/local/bin/patchula serve --settings /etc/patchula/server.pkl --cache /var/lib/patchula/cache.sqlite --private-key-file %d/app.pem --webhook-secret-file %d/webhook-secret --shutdown-timeout-secs 60
+ExecStart=/usr/local/bin/patchula serve --settings /etc/patchula/server.pkl --cache /var/lib/patchula --private-key-file %d/app.pem --webhook-secret-file %d/webhook-secret --shutdown-timeout-secs 60
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=75

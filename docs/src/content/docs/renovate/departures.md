@@ -139,6 +139,12 @@ compared. The rule is independent of `conformance/departures.json`.
 - **Count Patchula:** One process per batch, concurrent repos, batch-wide lookups
 - **Why:** Speed
 
+### Persistent user cache directory {#cache-directory}
+
+- **Renovate:** `cacheDir` defaults to a directory under the OS temporary directory
+- **Count Patchula:** Local commands default to `patchula/` in the user cache directory (`XDG_CACHE_HOME` or `~/.cache`, `~/Library/Caches` on macOS), shared by every checkout; `--cache DIR` overrides it
+- **Why:** Lookups made for one checkout are reused in the next, the cache survives reboots that clear temporary files, and nothing is written into the repository
+
 ### Incremental release history {#incremental-release-history}
 
 - **Renovate:** Fetches full release and tag lists

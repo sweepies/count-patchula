@@ -179,7 +179,7 @@ pub enum Command {
         )
     )]
     Serve(Serve),
-    /// Manage the lockfile runner's tool store (`PATCHULA_TOOLS_DIR`, or `<cache>.tools`).
+    /// Manage the lockfile runner's tool store (`PATCHULA_TOOLS_DIR`, or `tools/` in the cache directory).
     #[usage(
         example(
             "patchula tools install",
@@ -232,8 +232,9 @@ pub struct Serve {
     /// Server bind address; also PATCHULA_LISTEN (default 127.0.0.1:8080).
     #[usage(long, value_name = "ADDR")]
     pub listen: Option<std::net::SocketAddr>,
-    /// Persistent server cache and queue; also PATCHULA_SERVER_CACHE.
-    #[usage(long, value_name = "PATH")]
+    /// Server cache and queue directory; also PATCHULA_SERVER_CACHE. Default: `patchula/server`
+    /// in the user cache directory.
+    #[usage(long, value_name = "DIR")]
     pub cache: Option<PathBuf>,
     /// GitHub App ID; also PATCHULA_APP_ID.
     #[usage(long, value_name = "ID")]
@@ -274,9 +275,9 @@ pub enum ToolsCommand {
 
 #[derive(Args)]
 pub struct ToolStore {
-    /// Shared SQLite cache path; the tool store sits beside it.
-    #[usage(long, value_name = "PATH", default = ".patchula-cache.sqlite")]
-    pub cache: PathBuf,
+    /// Cache directory, holding the tool store. Default: `patchula` in the user cache directory.
+    #[usage(long, value_name = "DIR")]
+    pub cache: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -332,9 +333,10 @@ pub struct Lookup {
 /// How the Count reads and looks up, for every command that runs on this machine.
 #[derive(Args, Clone)]
 pub struct Scan {
-    /// Shared SQLite cache path.
-    #[usage(long, value_name = "PATH", default = ".patchula-cache.sqlite")]
-    pub cache: PathBuf,
+    /// Cache directory, shared by every checkout. Default: `patchula` in the user cache directory
+    /// (`~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or `~/.cache`).
+    #[usage(long, value_name = "DIR")]
+    pub cache: Option<PathBuf>,
     /// Maximum concurrent repository scans (1–100); HTTP limits are per host.
     #[usage(long, value_name = "N", default = "8")]
     pub concurrency: usize,
@@ -503,7 +505,7 @@ mod tests {
             "--config",
             "examples/renovate-migration.pkl",
             "--cache",
-            "tmp/cache.sqlite",
+            "tmp/cache",
             "--concurrency",
             "4",
             "--json",

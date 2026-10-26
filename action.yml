@@ -43,8 +43,8 @@ runs:
     - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/patchula
-        key: patchula-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
-        restore-keys: patchula-${{ runner.os }}-${{ runner.arch }}-
+        key: patchula-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: patchula-v2-${{ runner.os }}-${{ runner.arch }}-
     - name: Run Count Patchula
       shell: bash
       env:
@@ -69,7 +69,7 @@ runs:
             version=latest
           fi
         fi
-        args=(run --cache "$CACHE_DIR/cache.sqlite")
+        args=(run --cache "$CACHE_DIR")
         if [ "$INPUT_DRY_RUN" = true ]; then
           args+=(--dry-run)
         fi

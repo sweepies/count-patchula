@@ -70,11 +70,9 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
     {
         return Err(Error("recheck must be now or next-run"));
     }
-    if let Some(parent) = options.cache.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent).map_err(|_| Error("cannot create cache directory"))?;
-    }
-    // One queue owner per SQLite database. The OS releases this advisory lock on crash.
-    let lock_path = options.cache.with_extension("server.lock");
+    std::fs::create_dir_all(&options.cache).map_err(|_| Error("cannot create cache directory"))?;
+    // One queue owner per cache directory. The OS releases this advisory lock on crash.
+    let lock_path = options.cache.join("server.lock");
     let lock = std::fs::File::options()
         .create(true)
         .truncate(false)
@@ -83,7 +81,7 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
         .map_err(|_| Error("cannot open server lock"))?;
     lock.try_lock()
         .map_err(|_| Error("another server owns this cache"))?;
-    let cache = Cache::open(&options.cache, Default::default())
+    let cache = Cache::open_dir(&options.cache, Default::default())
         .await
         .map_err(|_| Error("cannot open server cache"))?;
     cache

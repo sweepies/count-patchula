@@ -6,7 +6,8 @@ title: "Environment variables"
 | `PATCHULA_TOKEN` | `lookup`, `run` | GitHub token; falls back to `GITHUB_TOKEN`, then `GH_TOKEN`, then `gh auth token --hostname github.com` |
 | `PATCHULA_LOG` | all | log level: `error`, `warn` (the CLI default), `info` (the server default), `debug` or `trace`; `-vv` means `debug` |
 | `PATCHULA_RECHECK` | `run`, server | `now` or `next-run`: when a ticked checkbox says it takes effect |
-| `PATCHULA_TOOLS_DIR` | `run`, `tools` | the tool store, holding the lockfile tools and the pinned mise that lists `mise` tools; default `<cache>.tools` |
+| `PATCHULA_TOOLS_DIR` | `run`, `tools` | the tool store, holding the lockfile tools and the pinned mise that lists `mise` tools; default `tools/` in the cache directory |
+| `XDG_CACHE_HOME` | local commands, server | the user cache directory on Linux and other non-macOS systems, holding `patchula/` (the server's default is `patchula/server`); default `~/.cache`. macOS uses `~/Library/Caches` |
 | `PATCHULA_SERVER` | `lookup`, `run`, `tui`, `auth` | the [server](/guide/server/#run-from-your-machine) URL for `--remote`, and for `auth` without `--server` |
 | `XDG_CONFIG_HOME` | `lookup`, `run`, `tui`, `auth` | where the server sign-ins (`patchula/servers.json`) and per-repository server choices (`patchula/repositories.json`) are stored; default `~/.config` |
 | `PATCHULA_DOCKERHUB_USERNAME` | lookups | Docker Hub user for authenticated pulls; set with the token |
@@ -17,7 +18,7 @@ title: "Environment variables"
 | `PATCHULA_WEBHOOK_SECRET_FILE` | server | path to the webhook secret |
 | `PATCHULA_WEBHOOK_SECRET` | server | the webhook secret itself, instead of a file |
 | `PATCHULA_SERVER_SETTINGS` | server | the operator settings file |
-| `PATCHULA_SERVER_CACHE` | server | the server's SQLite cache |
+| `PATCHULA_SERVER_CACHE` | server | the server's cache and queue directory |
 | `PATCHULA_LISTEN` | server | bind address; default `127.0.0.1:8080` |
 | `PATCHULA_SHUTDOWN_TIMEOUT_SECS` | server | drain deadline on SIGTERM, 1 to 3600; default 60 |
 | `NO_COLOR` | all | turns colour off: any value for `--help`, which prints as when it is piped; any non-empty value for reports, the spinner and errors, unless `--color always` forces it |

@@ -2008,9 +2008,8 @@ impl Executor for Recorder {
 async fn tool_store_prunes_unused_versions_and_prewarms_defaults() {
     let temp = tempfile::tempdir().unwrap();
     let recorder = Arc::new(Recorder(Mutex::new(Vec::new())));
-    let runner =
-        Runner::new(temp.path().join("cache.worktrees"), "x").with_executor(recorder.clone());
-    assert_eq!(runner.tools(), temp.path().join("cache.tools"));
+    let runner = Runner::new(temp.path().join("worktrees"), "x").with_executor(recorder.clone());
+    assert_eq!(runner.tools(), temp.path().join("tools"));
     runner.record_use(&[
         ("node".into(), "20.0.0".into()),
         ("uv".into(), "0.13.1".into()),
@@ -2083,12 +2082,12 @@ fn tool_store_seeds_relocatable_tools_from_the_users_mise_once() {
     std::fs::write(user.join("installs/bun/shared/bun"), "binary").unwrap();
     std::os::unix::fs::symlink("../../shared/bun", bun.join("bun")).unwrap();
     // Another run already published go; this run leaves it as it was.
-    let racing = temp.path().join("cache.tools/installs/go/1.27.2");
+    let racing = temp.path().join("tools/installs/go/1.27.2");
     std::fs::create_dir_all(user.join("installs/go/1.27.2/bin")).unwrap();
     std::fs::write(user.join("installs/go/1.27.2/bin/go"), "binary").unwrap();
     std::fs::create_dir_all(&racing).unwrap();
     std::fs::write(racing.join("other-run"), "complete").unwrap();
-    let runner = Runner::new(temp.path().join("cache.worktrees"), "x").with_seed(user.clone());
+    let runner = Runner::new(temp.path().join("worktrees"), "x").with_seed(user.clone());
     let tools = [
         ("node".to_string(), "24.21.0".to_string()),
         ("python".to_string(), "3.14.8".to_string()),

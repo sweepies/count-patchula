@@ -58,7 +58,7 @@ GH_TOKEN=$(mise exec -- gh auth token) mise run fixtures:record-wave1
 mise run fixtures:check
 # A live batch: run twice against the same private cache.
 mise run lookup:release --config examples/renovate-migration.pkl \
-  --cache /tmp/patchula-runner.sqlite --concurrency 8 --json \
+  --cache /tmp/patchula-runner --concurrency 8 --json \
   owner/repo > /tmp/patchula-runner-report.json
 ```
 
