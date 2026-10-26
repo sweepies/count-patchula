@@ -73,7 +73,8 @@ token or toolchain of your own.
 - A dependency dashboard, schedule windows, PR limits, grouping, auto-merge
   behind check gates, and a GitHub App server mode driven by webhooks.
 - A terminal UI (`patchula tui`) to browse updates, and in a checkout, pick
-  some and write them into your files.
+  some and write them into your files. `patchula apply` writes them without
+  asking, for scripts and pre-commit hooks.
 
 ## How fast
 

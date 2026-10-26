@@ -2181,6 +2181,7 @@ dependencies = [
  "patchula-process",
  "patchula-report",
  "patchula-server",
+ "patchula-testkit",
  "patchula-update",
  "ratatui",
  "reqwest",

@@ -3,7 +3,8 @@ use usage_rs::{Args, Cli, Subcommands, ValueEnum};
 
 /// Count Patchula vants to update your deps. A modern dependency updater with strong defaults.
 ///
-/// Exit codes: 0 = success; 1 = runtime error; 2 = usage or configuration error.
+/// Exit codes: 0 = success; 1 = runtime error; 2 = usage or configuration error;
+/// `apply` adds 3 = updates still waiting.
 #[derive(Cli)]
 #[usage(bin = "patchula", version, unknown_flags = "error")]
 pub struct App {
@@ -32,6 +33,12 @@ pub enum Color {
 
 #[derive(Subcommands)]
 pub enum Command {
+    /// Write available updates into the working tree here, without branches or pull requests.
+    ///
+    /// Exit codes: 0 = nothing selected is left to apply; 1 = runtime error; 2 = usage or
+    /// configuration error; 3 = selected updates are still waiting: `--check` or `--dry-run`
+    /// found some, or some could not be written in place.
+    Apply(Apply),
     /// Sign in to or out of a Count Patchula server for `--remote`.
     Auth(Auth),
     /// Inspect and validate Pkl configuration.
@@ -163,6 +170,24 @@ pub struct Lookup {
     /// Process every repository the token can reach instead of naming them.
     #[usage(long)]
     pub all_repos: bool,
+    #[usage(flatten)]
+    pub scan: Scan,
+    /// Per-repository overrides: `DIR/<owner>/<name>.pkl`, then `DIR/<name>.pkl`; other
+    /// repositories use their own `patchula.pkl`, or are skipped without one. Conflicts with `--config`.
+    #[usage(long, value_name = "DIR", conflicts = "--config")]
+    pub config_dir: Option<PathBuf>,
+    /// Run on a Count Patchula server (PATCHULA_SERVER, or the one found for this checkout)
+    /// with its credentials and caches; local config, cache and HTTP flags don't apply.
+    #[usage(long, conflicts = "--here")]
+    pub remote: bool,
+    /// Run on this machine, even if you chose to run this checkout on a server.
+    #[usage(long)]
+    pub here: bool,
+}
+
+/// How the Count reads and looks up, for every command that runs on this machine.
+#[derive(Args, Clone)]
+pub struct Scan {
     /// Shared SQLite cache path.
     #[usage(long, value_name = "PATH", default = ".patchula-cache.sqlite")]
     pub cache: PathBuf,
@@ -179,23 +204,48 @@ pub struct Lookup {
     #[usage(long, value_name = "SECS", default = "3600")]
     pub go_freshness_secs: u64,
     /// Local Pkl override applied to every selected repository.
-    #[usage(long, value_name = "FILE", conflicts = "--config-dir")]
+    #[usage(long, value_name = "FILE")]
     pub config: Option<PathBuf>,
-    /// Per-repository overrides: `DIR/<owner>/<name>.pkl`, then `DIR/<name>.pkl`; other
-    /// repositories use their own `patchula.pkl`, or are skipped without one. Conflicts with `--config`.
-    #[usage(long, value_name = "DIR", conflicts = "--config")]
-    pub config_dir: Option<PathBuf>,
     /// Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking.
     /// Conflicts with `--config` and `--config-dir`.
     #[usage(long)]
     pub default_config: bool,
-    /// Run on a Count Patchula server (PATCHULA_SERVER, or the one found for this checkout)
-    /// with its credentials and caches; local config, cache and HTTP flags don't apply.
-    #[usage(long, conflicts = "--here")]
-    pub remote: bool,
-    /// Run on this machine, even if you chose to run this checkout on a server.
+}
+
+#[derive(Args)]
+pub struct Apply {
+    #[usage(flatten)]
+    pub scan: Scan,
+    /// Only updates from this manager, such as github-actions; repeat for more.
+    #[usage(long, value_name = "MANAGER")]
+    pub manager: Vec<String>,
+    /// Only dependencies matching this name or package, with config's `glob:`, `regex:` and `!`; repeat for more.
+    #[usage(long, value_name = "PATTERN")]
+    pub dependency: Vec<String>,
+    /// Only updates of this type; repeat for more.
+    #[usage(long = "type", value_enum, value_name = "TYPE")]
+    pub update_type: Vec<UpdateType>,
+    /// Print the unified diff of what would be written, and write nothing.
+    #[usage(long, conflicts = "--check")]
+    pub dry_run: bool,
+    /// Write nothing and exit 3 if any selected update is waiting, for hooks and CI.
     #[usage(long)]
-    pub here: bool,
+    pub check: bool,
+    #[usage(hide)]
+    pub repositories: Vec<String>,
+    #[usage(long, hide)]
+    pub all_repos: bool,
+    #[usage(long, hide)]
+    pub remote: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum UpdateType {
+    Major,
+    Minor,
+    Patch,
+    Pin,
+    Digest,
 }
 
 #[derive(Args)]
@@ -290,7 +340,7 @@ mod tests {
             panic!("lookup")
         };
         assert_eq!(options.repositories, vec!["acme/runner"]);
-        assert_eq!(options.concurrency, 4);
+        assert_eq!(options.scan.concurrency, 4);
         let app = App::parse_from(&[std::ffi::OsStr::new("lookup")]).unwrap();
         let Some(Command::Lookup(options)) = app.command else {
             panic!("lookup")
@@ -316,8 +366,36 @@ mod tests {
             panic!("lookup")
         };
         assert_eq!(options.repositories, ["owner/repo"]);
-        assert_eq!(options.host_concurrency, ["api.github.com=32", "ghcr.io=8"]);
-        assert_eq!(options.go_freshness_secs, 0);
+        assert_eq!(
+            options.scan.host_concurrency,
+            ["api.github.com=32", "ghcr.io=8"]
+        );
+        assert_eq!(options.scan.go_freshness_secs, 0);
+    }
+
+    #[test]
+    fn apply_filters_repeat() {
+        let words = [
+            "apply",
+            "--type",
+            "pin",
+            "--type",
+            "digest",
+            "--manager",
+            "github-actions",
+            "--dependency",
+            "glob:actions/*",
+            "--check",
+        ]
+        .map(std::ffi::OsStr::new);
+        let app = App::parse_from(&words).unwrap();
+        let Some(Command::Apply(apply)) = app.command else {
+            panic!("apply")
+        };
+        assert_eq!(apply.update_type, [UpdateType::Pin, UpdateType::Digest]);
+        assert_eq!(apply.manager, ["github-actions"]);
+        assert_eq!(apply.dependency, ["glob:actions/*"]);
+        assert!(apply.check && !apply.dry_run);
     }
 
     #[test]

@@ -120,6 +120,7 @@ export default defineConfig({
           items: [
             { label: "GitHub Actions", slug: "guide/github-actions" },
             { label: "Terminal UI", slug: "guide/tui" },
+            { label: "Applying updates locally", slug: "guide/apply" },
             {
               label: "GitHub App server",
               slug: "guide/server",

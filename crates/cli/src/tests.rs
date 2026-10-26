@@ -511,3 +511,238 @@ fn a_working_tree_without_config_asks_once_and_never_without_a_terminal() {
     assert_eq!(Missing::from_key('n'), Some(Missing::Quit));
     assert_eq!(Missing::from_key('x'), None);
 }
+
+/// A working tree with a Dockerfile image to pin and npm packages to update.
+fn apply_tree() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    for (path, content) in [
+        (
+            "patchula.pkl",
+            "amends \"PatchulaConfig.pkl\"\ndefaults { waitHours = 0 }\n",
+        ),
+        ("Dockerfile", "FROM alpine:3.19.0\n"),
+        (
+            "package.json",
+            "{\n  \"dependencies\": {\"is-number\": \"6.0.0\", \"ms\": \"2.1.2\"}\n}\n",
+        ),
+    ] {
+        std::fs::write(dir.path().join(path), content).unwrap();
+    }
+    dir
+}
+
+#[tokio::test]
+async fn apply_writes_the_working_tree_and_exits_by_what_is_left() {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/cli/apply.json");
+    let transport = patchula_testkit::from_env(&path, Default::default(), || {
+        Ok(Arc::new(patchula_http::Network::new()?))
+    })
+    .unwrap();
+    let tree = apply_tree();
+    let cache = tempfile::tempdir().unwrap();
+    let cache = cache.path().join("cache.sqlite");
+    let services = Services {
+        token: Some("offline".into()),
+        transport: Some(transport),
+        dir: Some(tree.path().to_owned()),
+        ..Services::default()
+    };
+    let apply = async |args: &[&str]| {
+        let mut words = vec![
+            OsStr::new("apply"),
+            OsStr::new("--cache"),
+            cache.as_os_str(),
+        ];
+        words.extend(args.iter().map(OsStr::new));
+        let app = App::parse_from(&words).unwrap();
+        let Some(super::Command::Apply(options)) = &app.command else {
+            panic!("apply")
+        };
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = super::apply::command(&app, options, &services, &mut out, &mut err)
+            .await
+            .unwrap();
+        (
+            code,
+            String::from_utf8(out).unwrap(),
+            String::from_utf8(err).unwrap(),
+        )
+    };
+    let read = |file: &str| std::fs::read_to_string(tree.path().join(file)).unwrap();
+    let dockerfile = read("Dockerfile");
+    let manifest = read("package.json");
+    let pinned = "FROM alpine:3.19.0@sha256:51b67269f354137895d43f3b3d810bfacd3945438e94dc5ac55fdac340352f48\n";
+    let updated = "FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a\n";
+
+    // Checks and dry runs write nothing and exit 3 while updates wait.
+    let (code, out, err) = apply(&["--check"]).await;
+    assert_eq!(code, 3, "{err}");
+    assert!(out.is_empty());
+    assert!(err.contains("3 updates await in 2 files"), "{err}");
+    assert!(
+        err.contains("minor  alpine 3.19.0 -> 3.24.3@be2656061b53  (Dockerfile)"),
+        "{err}"
+    );
+    let (code, out, err) = apply(&["--dry-run"]).await;
+    assert_eq!(code, 3, "{err}");
+    assert!(
+        out.contains("--- a/Dockerfile\n+++ b/Dockerfile\n"),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!("-FROM alpine:3.19.0\n+{updated}")),
+        "{out}"
+    );
+    assert!(
+        out.contains("+  \"dependencies\": {\"is-number\": \"7.0.0\", \"ms\": \"2.1.3\"}"),
+        "{out}"
+    );
+    assert!(err.contains("would apply 3 updates to 2 files"), "{err}");
+    assert_eq!(
+        (read("Dockerfile"), read("package.json")),
+        (dockerfile, manifest.clone())
+    );
+
+    // Filters choose a subset; a digest pin is just another type.
+    let (code, out, err) = apply(&["--manager", "dockerfile", "--type", "pin"]).await;
+    assert_eq!(code, 0, "{err}");
+    assert!(out.is_empty());
+    assert!(err.contains("applied 1 update to 1 file"), "{err}");
+    assert!(err.contains("4 more updates stayed out of it"), "{err}");
+    assert_eq!(read("Dockerfile"), pinned);
+    assert_eq!(read("package.json"), manifest);
+    let (code, out, _) = apply(&["--dependency", "glob:m*", "--json"]).await;
+    assert_eq!(code, 0);
+    let result: Value = serde_json::from_str(&out).unwrap();
+    assert!(result["written"].as_bool().unwrap());
+    assert_eq!(result["updates"].as_array().unwrap().len(), 1);
+    assert_eq!(result["updates"][0]["name"], "ms");
+    assert_eq!(result["files"][0]["path"], "package.json");
+    assert_eq!(result["exitCode"], 0);
+    assert_eq!(read("package.json"), manifest.replace("2.1.2", "2.1.3"));
+
+    // The largest update for each declaration is applied, and then nothing waits.
+    let (code, _, err) = apply(&[]).await;
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("applied 2 updates to 2 files"), "{err}");
+    assert_eq!(read("Dockerfile"), updated);
+    assert_eq!(
+        read("package.json"),
+        manifest.replace("2.1.2", "2.1.3").replace("6.0.0", "7.0.0")
+    );
+    let (code, _, err) = apply(&["--check"]).await;
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("nothing to apply"), "{err}");
+}
+
+#[tokio::test]
+async fn apply_is_always_local_and_validates_its_filters() {
+    let tree = apply_tree();
+    let services = Services {
+        dir: Some(tree.path().to_owned()),
+        ..Services::default()
+    };
+    for (args, message) in [
+        (&["acme/app"][..], "takes no repository"),
+        (&["--all-repos"], "takes no --all-repos"),
+        (&["--remote"], "drop --remote"),
+        (&["--manager", "npn"], "--manager npn is not a manager"),
+        (&["--dependency", "regex:("], "--dependency"),
+    ] {
+        let mut words = vec!["apply"];
+        words.extend(args);
+        let app = App::parse_from(&words.iter().map(OsStr::new).collect::<Vec<_>>()).unwrap();
+        let (code, error) = run(&app, &services).await.unwrap_err();
+        assert_eq!(code, 2, "{args:?}");
+        assert!(format!("{error}").contains(message), "{args:?}: {error}");
+    }
+    for args in [
+        &["apply", "--here"][..],
+        &["apply", "--check", "--dry-run"],
+        &["apply", "--type", "huge"],
+    ] {
+        assert!(
+            App::parse_from(&args.iter().map(OsStr::new).collect::<Vec<_>>()).is_err(),
+            "{args:?}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(tree.path().join("Dockerfile")).unwrap(),
+        "FROM alpine:3.19.0\n"
+    );
+}
+
+#[tokio::test]
+async fn apply_without_a_config_asks_or_takes_default_config() {
+    let tree = apply_tree();
+    std::fs::remove_file(tree.path().join("patchula.pkl")).unwrap();
+    let apply = |args: &[&str]| {
+        let mut words = vec!["apply"];
+        words.extend(args);
+        App::parse_from(&words.iter().map(OsStr::new).collect::<Vec<_>>()).unwrap()
+    };
+    // Without a terminal it never asks, and names the flag.
+    let services = Services {
+        dir: Some(tree.path().to_owned()),
+        ..Services::default()
+    };
+    let (code, error) = run(&apply(&[]), &services).await.unwrap_err();
+    assert_eq!(code, 2);
+    assert!(
+        error
+            .help()
+            .unwrap()
+            .to_string()
+            .contains("--default-config")
+    );
+    // At a terminal, q leaves the tree alone.
+    let services = Services {
+        key: Some('q'),
+        ..services
+    };
+    let (code, error) = run(&apply(&["--check"]), &services).await.unwrap_err();
+    assert_eq!(code, 2);
+    assert!(
+        error.to_string().contains("the Count stays outside"),
+        "{error}"
+    );
+    assert!(!tree.path().join("patchula.pkl").exists());
+
+    // --default-config looks up with the Count's defaults and writes no config.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/cli/apply-defaults.json");
+    let transport = patchula_testkit::from_env(&path, Default::default(), || {
+        Ok(Arc::new(patchula_http::Network::new()?))
+    })
+    .unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let cache = cache.path().join("cache.sqlite");
+    let services = Services {
+        token: Some("offline".into()),
+        transport: Some(transport),
+        dir: Some(tree.path().to_owned()),
+        ..Services::default()
+    };
+    let app = apply(&[
+        "--default-config",
+        "--check",
+        "--cache",
+        cache.to_str().unwrap(),
+    ]);
+    let Some(super::Command::Apply(options)) = &app.command else {
+        panic!("apply")
+    };
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let code = super::apply::command(&app, options, &services, &mut out, &mut err)
+        .await
+        .unwrap();
+    let err = String::from_utf8(err).unwrap();
+    assert_eq!(code, 3, "{err}");
+    assert!(err.contains("major  is-number 6.0.0 -> 7.0.0"), "{err}");
+    assert!(!tree.path().join("patchula.pkl").exists());
+    assert_eq!(
+        std::fs::read_to_string(tree.path().join("Dockerfile")).unwrap(),
+        "FROM alpine:3.19.0\n"
+    );
+}

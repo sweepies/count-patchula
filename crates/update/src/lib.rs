@@ -13,7 +13,7 @@ pub use receipts::{
 pub mod lockfiles;
 mod plan;
 mod write;
-pub use plan::{Blob, Change, Plan, Snapshot, blob_sha, branch_name, plan};
+pub use plan::{Blob, Change, Plan, Snapshot, blob_sha, branch_name, plan, unified};
 pub use write::{REF_UPDATE, apply, apply_all, needs_requeue};
 
 pub mod pull_requests;
