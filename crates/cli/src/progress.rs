@@ -49,7 +49,7 @@ impl Spinner {
             Stage::Extraction => format!("reading {total} repositories…"),
             Stage::Lookup => format!(
                 "looking up {}…",
-                crate::output::count(total, "dependency", "dependencies")
+                crate::output::count(total, "package", "packages")
             ),
             Stage::Digests => format!(
                 "resolving {}…",

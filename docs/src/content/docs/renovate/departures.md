@@ -44,6 +44,12 @@ keep the current value and version, add a digest to an unpinned dependency, and
 have no group.
 </details>
 
+### Default excluded paths {#default-exclude}
+
+- **Renovate:** `ignorePaths` defaults to `node_modules` and `bower_components`; `vendor`, test and example directories are ignored only by the `config:recommended` preset, and `fixtures` by neither. A repository's `ignorePaths` replaces the list
+- **Count Patchula:** `exclude` defaults to `node_modules`, `bower_components`, `vendor`, `.git`, `test`, `tests`, `__tests__`, `__fixtures__`, `fixtures` and `examples` at any depth. Amending adds to the defaults and a `!` entry re-includes a path; assigning a new Listing replaces them
+- **Why:** With no preset layer, the defaults carry what a recommended setup ignores; test data and examples hold manifests nobody deploys, so updating them is noise
+
 ### Limits {#limits}
 
 - **Renovate:** Zero can represent unlimited limits

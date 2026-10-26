@@ -85,7 +85,11 @@ names all four sources. The token is never printed or logged.
 With no repository named, `lookup`, `run --dry-run` and [`tui`](/guide/tui/)
 read the working tree in the current directory, uncommitted changes included,
 with the same config discovery and file selection as a repository read from
-GitHub. To read another checkout, `cd` there first. Lookups still reach the
+GitHub. Like a push, it carries tracked files and untracked ones Git does not
+ignore, so anything `.gitignore`, `.git/info/exclude` or the global excludes
+file ignores, such as `node_modules/`, is skipped. A directory that is not a
+Git checkout is read whole, except `.git`, and the config's `exclude` applies
+either way. To read another checkout, `cd` there first. Lookups still reach the
 registries. `lookup` and `run --dry-run` write nothing, and `tui` writes only
 the updates you select.
 

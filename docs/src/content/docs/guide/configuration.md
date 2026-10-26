@@ -88,7 +88,10 @@ starts out cautious:
 - there is no limit on open PRs or PRs per hour, no schedule window and no
   dashboard;
 - branches start with `patchula/` and are rebased only when they conflict;
-- `node_modules`, `vendor` and `.git` directories are excluded.
+- installed and vendored dependencies (`node_modules`, `bower_components`,
+  `vendor`), `.git`, and test and example directories (`test`, `tests`,
+  `__tests__`, `__fixtures__`, `fixtures`, `examples`) are excluded, at any
+  depth.
 
 ## Rules
 
@@ -261,7 +264,7 @@ pattern syntax.
 
 ```pkl
 managers = new Listing { "npm"; "github-actions"; "mise" }
-exclude = new Listing { "**/node_modules/**"; "fixtures/**" }
+exclude { "generated/**" }
 files {
   new FileSet {
     manager = "dockerfile"
@@ -270,6 +273,17 @@ files {
 }
 ignore { "glob:@internal/*" }
 ```
+
+To read a directory the defaults exclude, such as a real app under
+`examples/`, amend `exclude` with a `!` entry. It keeps every default and
+re-includes only the paths it matches:
+
+```pkl
+exclude { "!examples/app/**" }
+```
+
+Assigning `exclude = new Listing { ... }` drops the defaults, so list any you
+still want.
 
 `useVersionsHost = false` skips the public
 [mise-versions](/guide/sources/#mise-versions-host) mirror, for GitHub releases and

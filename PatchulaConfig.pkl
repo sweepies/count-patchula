@@ -192,8 +192,21 @@ files: Listing<FileSet> = new {}
 extractors: Listing<Extractor> = new {}
 /// Dependency identifiers to leave untouched, using the same pattern syntax.
 ignore: Listing<String> = new {}
-/// Generated and vendored directories are excluded; repos can replace the list.
-exclude: Listing<String> = new { "**/node_modules/**"; "**/vendor/**"; "**/.git/**" }
+/// Installed, vendored and test-data directories are excluded. Amending adds
+/// to the list and a `!` entry re-includes a path; assigning a new Listing
+/// replaces it.
+exclude: Listing<String> = new {
+  "**/node_modules/**"
+  "**/bower_components/**"
+  "**/vendor/**"
+  "**/.git/**"
+  "**/test/**"
+  "**/tests/**"
+  "**/__tests__/**"
+  "**/__fixtures__/**"
+  "**/fixtures/**"
+  "**/examples/**"
+}
 prs: PullRequests = new {}
 lockfiles: Lockfiles = new {}
 security: Security = new {}
