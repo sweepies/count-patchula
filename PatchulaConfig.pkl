@@ -3,7 +3,7 @@
 /// amend an organisation module that itself amends this one.
 module PatchulaConfig
 
-typealias Manager = "npm"|"bun"|"github-actions"|"mise"|"cargo"|"dockerfile"|"compose"|"go"|"terraform"|"kubernetes"|"kustomize"|"flux"|"helm-values"|"requirements"|"pyproject"|"pre-commit"|"helm"|"devcontainer"|"woodpecker"|"maven"|"gradle"|"nuget"|"bundler"|"composer"|"gitlabci"|"gitlabci-include"|"regex"
+typealias Manager = "npm"|"bun"|"github-actions"|"mise"|"cargo"|"dockerfile"|"compose"|"go"|"terraform"|"kubernetes"|"kustomize"|"flux"|"helm-values"|"requirements"|"pyproject"|"pre-commit"|"helm"|"devcontainer"|"woodpecker"|"copier"|"maven"|"gradle"|"nuget"|"bundler"|"composer"|"gitlabci"|"gitlabci-include"|"regex"
 typealias Source = "npm"|"github-releases"|"github-tags"|"github-runners"|"docker"|"crates"|"go"|"terraform"|"pypi"|"helm"|"oci"|"mise"|"forge-tags"|"maven"|"nuget"|"rubygems"|"packagist"
 typealias Update = "major"|"minor"|"patch"|"digest"|"pin"
 typealias VersionPolicy = "exact"|"preserve"|"widen"
@@ -16,7 +16,7 @@ typealias Scheme = "semver"|"docker"|"pep440"|"poetry"|"maven"|"nuget"|"rubygems
 /// charts have explicit roles. A `transitive` package is one only a lockfile
 /// records; it gets an update only to fix an advisory. These are exact values,
 /// not match patterns.
-typealias DependencyKind = "production"|"development"|"peer"|"optional"|"build"|"action"|"reusable-workflow"|"runner"|"container-image"|"tool"|"go-directive"|"toolchain"|"provider"|"module"|"chart"|"reference-data"|"transitive"
+typealias DependencyKind = "production"|"development"|"peer"|"optional"|"build"|"action"|"reusable-workflow"|"runner"|"container-image"|"tool"|"go-directive"|"toolchain"|"provider"|"module"|"chart"|"template"|"reference-data"|"transitive"
 
 /// Match lists are OR; populated selector fields are AND. Empty means any.
 /// Patterns are path-aware globs, or `regex:...`; prefix `!` excludes a match.
@@ -167,7 +167,7 @@ class Security {
 managers: Listing<Manager> = new {
   "npm"; "bun"; "github-actions"; "mise"; "cargo"; "dockerfile"; "compose"
   "go"; "terraform"; "kubernetes"; "kustomize"; "flux"; "helm-values"
-  "requirements"; "pyproject"; "pre-commit"; "helm"; "devcontainer"; "woodpecker"; "maven"; "gradle"; "nuget"; "bundler"; "composer"
+  "requirements"; "pyproject"; "pre-commit"; "helm"; "devcontainer"; "woodpecker"; "copier"; "maven"; "gradle"; "nuget"; "bundler"; "composer"
   "gitlabci"; "gitlabci-include"; "regex"
 }
 defaults: Policy = new {}

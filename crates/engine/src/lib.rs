@@ -1337,6 +1337,40 @@ impl Engine {
                 }
                 proposals.sort();
                 proposals.dedup();
+                let mut held_back = evaluation.held_back;
+                if dep.manager == Manager::Copier {
+                    // Only copier update applies a template: report the
+                    // newest eligible tag and propose nothing to edit.
+                    let rank = |kind: &str| match kind {
+                        "major" => 0,
+                        "minor" => 1,
+                        "patch" => 2,
+                        _ => 3,
+                    };
+                    if let Some(available) = proposals
+                        .iter()
+                        .min_by_key(|p| rank(&p.update_type))
+                        .and_then(|p| p.new_version.clone())
+                    {
+                        repo.report.notices.push(patchula_report::Notice {
+                            manager: word(&dep.manager),
+                            path: dep.file.clone(),
+                            line: Some(dep.location.line),
+                            name: dep.name.clone(),
+                            package: dep.package.clone(),
+                            current: dep.current.clone(),
+                            compare_url: patchula_datasource::notes::compare_url(
+                                dep.source,
+                                &dep.package,
+                                &dep.current,
+                                &available,
+                            ),
+                            available,
+                        });
+                    }
+                    proposals.clear();
+                    held_back.clear();
+                }
                 let stale = if matches!(dep.source, Source::Docker | Source::Oci) {
                     let mut stale = self.sources.registry_stale(&dep.package).await;
                     stale.retain(|key, _| {
@@ -1457,7 +1491,7 @@ impl Engine {
                             column: dep.location.column,
                             pointer: dep.location.pointer.clone(),
                         }],
-                        held_back: evaluation.held_back,
+                        held_back,
                         stale,
                         lookup: eval.as_ref().map(|eval| {
                             let mut evidence = eval.lookup_evidence(dep, catalog, now);
@@ -2101,6 +2135,7 @@ fn repository(repo: &str, status: Status, reason: Option<String>) -> Repository 
         package_files: Vec::new(),
         warnings: Vec::new(),
         skipped: Vec::new(),
+        notices: Vec::new(),
         default_branch: None,
         commit: None,
     }

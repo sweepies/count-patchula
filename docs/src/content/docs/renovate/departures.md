@@ -385,6 +385,32 @@ plugin first and another backend later uses the other backend. See
 
 ## Which updates are proposed
 
+### Copier templates are reported, not regenerated {#copier-templates}
+
+- **Renovate:** Runs `copier update` to move a template to its new tag, with `--trust` when the self-hosted configuration allows scripts
+- **Count Patchula:** Reports the new tag and opens no pull request. Copier runs only on your own working tree, with your own `copier`, when you ask: a confirmed template in the TUI, or `patchula apply --copier`. Never in a run, never with `--remote` and never on the server
+- **Why:** Applying a template runs the template author's code, at the new and unreviewed version. With `--trust` that is tasks, migrations and Jinja extensions; without it, copier's "safe" mode has repeatedly let templates read and write outside the destination directory. On the server that code would run next to the installation token, other repositories' trees, the shared cache and the tool store
+
+The advisories against copier's safe mode:
+
+- [GHSA-3xw7-v6cj-5q8h](https://github.com/advisories/GHSA-3xw7-v6cj-5q8h):
+  arbitrary filesystem reads and writes, fixed in 9.9.1
+- [GHSA-p7q8-grrj-3m8w](https://github.com/advisories/GHSA-p7q8-grrj-3m8w):
+  writes outside the destination path, fixed in 9.9.1
+- [GHSA-xjhm-gp88-8pfx](https://github.com/advisories/GHSA-xjhm-gp88-8pfx):
+  arbitrary reads through symlinks, fixed in 9.11.2
+- [GHSA-4fqp-r85r-hxqh](https://github.com/advisories/GHSA-4fqp-r85r-hxqh):
+  arbitrary writes through directory symlinks, fixed in 9.11.2
+- [GHSA-9gmc-jqmh-3rvm](https://github.com/advisories/GHSA-9gmc-jqmh-3rvm):
+  a trust-prefix bypass that runs tasks unprompted, fixed in 9.15.2
+
+The Count never bumps `_commit` on its own either. Copier treats `_commit` as
+the version the project was last generated from, so the next `copier update`
+would diff from the wrong base and silently drop the template changes in
+between. When he runs copier for you, the Count never passes `--trust`. See
+[Copier](/guide/managers/#copier), the [TUI](/guide/tui/#templates) and
+[`patchula apply`](/guide/apply/#copier-templates).
+
 ### Pins and lockfile refreshes {#update-types}
 
 - **Renovate:** Distinguishes pinDigest and lockFileMaintenance

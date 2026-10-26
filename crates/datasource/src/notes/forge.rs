@@ -64,7 +64,7 @@ fn release_link(forge: &Forge, tag: &str) -> String {
     };
     segment_url(&base, tag)
 }
-fn compare_link(forge: &Forge, old: &str, new: &str) -> String {
+pub(super) fn compare_link(forge: &Forge, old: &str, new: &str) -> String {
     let base = match forge.kind {
         ForgeKind::Gitlab => format!("{}/-/compare/", forge.web()),
         ForgeKind::Gitea => format!("{}/compare/", forge.web()),

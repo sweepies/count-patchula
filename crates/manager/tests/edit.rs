@@ -465,3 +465,16 @@ fn gitlab_numeric_refs_keep_their_text() {
         old.replace("ref: 1.0", "ref: 1.10")
     );
 }
+
+#[test]
+fn copier_commit_is_never_edited() {
+    let text = "_commit: v1.4.0\n_src_path: gh:acme/template\n";
+    let dependencies = Scanner::new(&config(Manager::Copier))
+        .unwrap()
+        .extract(&Files::from([(".copier-answers.yml".into(), text.into())]))
+        .unwrap()
+        .dependencies;
+    assert_eq!(dependencies.len(), 1);
+    let error = edits(&dependencies[0], text, "v1.6.0", None).unwrap_err();
+    assert!(error.contains("copier update"), "{error}");
+}

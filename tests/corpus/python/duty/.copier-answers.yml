@@ -1,0 +1,19 @@
+# Changes here will be overwritten by Copier.
+_commit: 1.15.7
+_src_path: gh:pawamoy/copier-uv
+author_email: dev@pawamoy.fr
+author_fullname: Timothée Mazzucotelli
+author_username: pawamoy
+copyright_date: '2020'
+copyright_holder: Timothée Mazzucotelli
+copyright_holder_email: dev@pawamoy.fr
+copyright_license: ISC
+project_description: A simple task runner.
+project_name: duty
+python_package_command_line_name: duty
+python_package_distribution_name: duty
+python_package_import_name: duty
+repository_name: duty
+repository_namespace: pawamoy
+repository_provider: github.com
+

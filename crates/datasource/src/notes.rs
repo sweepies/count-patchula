@@ -8,7 +8,7 @@ mod source;
 use super::*;
 pub use adapters::{parse_go_history, parse_release_sgml};
 pub use changelog::{Section, parse_changelog};
-use forge::releases_url;
+use forge::{compare_link, releases_url};
 pub use markdown::{Links, sanitise};
 use patchula_cache::ExtractionKey;
 use patchula_versioning::Parsed;
@@ -135,6 +135,17 @@ fn compare(repo: &str, old: &str, new: &str) -> String {
         &format!("https://github.com/{repo}/compare/"),
         &format!("{old}...{new}"),
     )
+}
+/// The compare page between two tags of a repository looked up through
+/// \`github-tags\` or \`forge-tags\`; \`None\` for other sources.
+pub fn compare_url(source: Source, package: &str, old: &str, new: &str) -> Option<String> {
+    match source {
+        Source::GithubTags => Some(compare(package, old, new)),
+        Source::ForgeTags => Repository::from_url(&format!("https://{package}"))?
+            .forge
+            .map(|forge| compare_link(&forge, old, new)),
+        _ => None,
+    }
 }
 fn inferred_tag(
     template: &str,

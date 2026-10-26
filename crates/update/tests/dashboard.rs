@@ -331,3 +331,24 @@ fn known_vulnerabilities_lead_the_dashboard_with_their_fix() {
     assert!(text.contains("- fixture 1.0.0 (package.json): [GHSA-fixed](https://osv.dev/vulnerability/GHSA-fixed) (CVE-2026-0001), high; fixed by the update to 1.0.5. Prototype pollution\n"), "{text}");
     assert!(text.contains("- fixture 1.0.0 (package.json): [GHSA-open](https://osv.dev/vulnerability/GHSA-open), unrated; no fixed release yet\n"), "{text}");
 }
+
+#[test]
+fn template_notices_are_listed_without_a_branch_or_a_checkbox() {
+    let mut repo = repository();
+    repo.notices = serde_json::from_value(json!([{
+        "manager":"copier","path":".copier-answers.yml","line":2,"name":"gh:acme/template",
+        "package":"acme/template","current":"v1.4.0","available":"v1.6.0",
+        "compareUrl":"https://github.com/acme/template/compare/v1.4.0...v1.6.0"
+    }]))
+    .unwrap();
+    let text = dashboard::render(&repo, &[], &[], Recheck::NextRun, None);
+    let section = text.find("## Template updates").unwrap();
+    assert!(section > text.find("## Pending updates").unwrap());
+    let row = "- template gh:acme/template: v1.4.0 → v1.6.0 available in .copier-answers.yml; run copier update to apply it ([compare](https://github.com/acme/template/compare/v1.4.0...v1.6.0))\n";
+    assert!(text[section..].contains(row), "{text}");
+    assert!(
+        !text
+            .lines()
+            .any(|l| l.contains("acme/template") && l.contains("patchula-action"))
+    );
+}

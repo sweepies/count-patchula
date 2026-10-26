@@ -609,6 +609,24 @@ pub fn render(
                 ));
         }
     }
+    for notice in &repo.notices {
+        sections
+            .entry("Template updates".into())
+            .or_default()
+            .insert((
+                None,
+                format!(
+                    "- {} in {}; run copier update to apply it{}\n",
+                    safe(&notice.text()),
+                    safe(&notice.path),
+                    notice
+                        .compare_url
+                        .as_ref()
+                        .map(|url| format!(" ([compare]({}))", safe(url)))
+                        .unwrap_or_default()
+                ),
+            ));
+    }
     for warning in &repo.warnings {
         sections
             .entry("Report warnings".into())
@@ -639,10 +657,11 @@ pub fn render(
             1 + match section.as_str() {
                 "Merged by the Count" => 1,
                 "Pending updates" => 2,
-                "Updates you closed" => 3,
-                "Lookup warnings and errors" => 4,
-                "Report warnings" => 5,
-                _ => 6,
+                "Template updates" => 3,
+                "Updates you closed" => 4,
+                "Lookup warnings and errors" => 5,
+                "Report warnings" => 6,
+                _ => 7,
             }
         };
         (rank, section.clone())

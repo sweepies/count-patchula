@@ -104,6 +104,7 @@ impl Runner for Recorder {
                         package_files: Vec::new(),
                         warnings: Vec::new(),
                         skipped: Vec::new(),
+                        notices: Vec::new(),
                         default_branch: None,
                         commit: None,
                     })

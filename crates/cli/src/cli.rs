@@ -231,6 +231,15 @@ pub struct Apply {
     /// Write nothing and exit 3 if any selected update is waiting, for hooks and CI.
     #[usage(long)]
     pub check: bool,
+    /// Also run your own `copier update` for each selected template, before the other updates.
+    ///
+    /// The template's code runs on this machine as you. The tree must be clean, the Count
+    /// never passes `--trust`, and copier asks its questions on the terminal.
+    #[usage(long, conflicts = "--dry-run")]
+    pub copier: bool,
+    /// With `--copier`, take the defaults for questions copier would ask, for use without a terminal.
+    #[usage(long)]
+    pub copier_defaults: bool,
     #[usage(hide)]
     pub repositories: Vec<String>,
     #[usage(long, hide)]

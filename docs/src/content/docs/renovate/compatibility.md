@@ -49,6 +49,7 @@ Managers the Count supports, under Renovate's names:
 | `pre-commit` | `pre-commit` | GitHub, GitLab, Codeberg, Gitea and Forgejo hooks |
 | `devcontainer` | `devcontainer` | |
 | `woodpecker` | `woodpecker` | anchored images are edited at the anchor |
+| `copier` | `copier` | partial: newer template tags are reported, never applied by a run or on the server, because applying one runs the template's code; the working-tree TUI and `patchula apply --copier` can run your own copier on request ([departure](/renovate/departures/#copier-templates)). GitHub, GitLab, Gitea and Forgejo templates only |
 | `maven` | `maven` | |
 | `gradle` | `gradle` | catalogs, scripts, variables, `gradle.properties`; `gradle.lockfile` not regenerated |
 | `gradle-wrapper` | `gradle` | the wrapper checksum is refreshed |
@@ -65,8 +66,8 @@ Renovate managers with no Count equivalent yet:
 `ansible`, `ansible-galaxy`, `ant`, `apm`, `argocd`, `azure-pipelines`, `batect`,
 `batect-wrapper`, `bazel`, `bazel-module`, `bazelisk`, `bicep`,
 `bitbucket-pipelines`, `bitrise`, `buildkite`, `buildpacks`, `bun-version`,
-`cake`, `cdnurl`, `circleci`, `cloudbuild`, `cocoapods`, `conan`, `copier`,
-`cpanfile`, `crossplane`, `crow`, `deno`, `deps-edn`, `devbox`, `droneci`,
+`cake`, `cdnurl`, `circleci`, `cloudbuild`, `cocoapods`, `conan`, `cpanfile`,
+`crossplane`, `crow`, `deno`, `deps-edn`, `devbox`, `droneci`,
 `fleet`, `fvm`, `git-submodules`, `glasskube`, `gleam`, `haskell-cabal`, `helm-requirements`, `helmfile`, `helmsman`,
 `hermit`, `homeassistant-manifest`, `homebrew`, `html`, `jenkins`, `jsonata`,
 `jsonnet-bundler`, `kotlin-script`, `leiningen`, `maven-wrapper`, `meteor`,

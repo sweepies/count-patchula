@@ -3,6 +3,7 @@
 
 mod apply;
 mod cli;
+mod copier;
 mod remote;
 mod server;
 mod tui;
@@ -536,6 +537,17 @@ async fn batch(
                 skipped.line.map_or(String::new(), |l| format!(":{l}")),
                 skipped.value,
                 skipped.reason
+            );
+        }
+        for notice in &repo.notices {
+            eprintln!(
+                "  notice: {}: {}{}",
+                notice.path,
+                notice.text(),
+                notice
+                    .compare_url
+                    .as_ref()
+                    .map_or(String::new(), |url| format!(" ({url})"))
             );
         }
         if repo.status == Status::Error {

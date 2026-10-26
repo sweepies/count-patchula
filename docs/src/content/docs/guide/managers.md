@@ -30,6 +30,7 @@ quoting, comments and formatting.
 | `pre-commit` | `.pre-commit-config.yaml` | |
 | `devcontainer` | `devcontainer.json`, `.devcontainer.json` | |
 | `woodpecker` | `.woodpecker.yml`, `.woodpecker.yaml`, `.woodpecker/*.yml` and `*.yaml` | |
+| `copier` | `.copier-answers.yml`, `.copier-answers.yaml`, `.copier-answers.*.yml` and `*.yaml` | none: newer template versions are [reported, not applied](#copier) |
 | `maven` | `pom.xml` | |
 | `gradle` | `*.gradle`, `*.gradle.kts`, `gradle.properties`, `gradle/*.versions.toml`, the wrapper | the wrapper checksum; `gradle.lockfile` holds the update |
 | `nuget` | `*.csproj`, `*.fsproj`, `*.vbproj`, `Directory.Packages.props`, `Directory.Build.props`, `global.json`, `.config/dotnet-tools.json` | `packages.lock.json` |
@@ -155,6 +156,29 @@ listed with its line and the reason, in the run summary and under `skipped` in
 the [JSON report](/reference/report/). Unlike a warning, a skipped image
 doesn't stop the Count from closing obsolete branches.
 
+## Copier
+
+`copier` reads the template a project was generated from: `_src_path` and the
+tag in `_commit` of each answers file. Templates on GitHub (`gh:` included)
+are looked up as `github-tags`, and templates on GitLab (`gl:` included),
+Gitea and Forgejo as `forge-tags`, compared as `pep440` versions. SSH URLs
+are looked up over the same host's API. A template on any other host, a local
+template, or a `_commit` that is not a release tag (such as
+`v1.4.0-5-g1a2b3c4`) is skipped, and listed with the reason in the run summary
+and the [JSON report](/reference/report/).
+
+A newer tag is reported, never proposed: the run summary, the JSON report
+under `notices`, the [dashboard](/guide/dashboard/) and the
+[TUI](/guide/tui/#templates) show "template gh:acme/template: v1.4.0 → v1.6.0
+available", with a compare link where the host has one. The release-age wait
+and rules apply as usual, and the kind is `template`. The Count never opens a
+pull request for it and never edits `_commit`: only `copier update` applies a
+template's changes, and a bare `_commit` bump would make the next update start
+from the wrong version and drop them. He runs copier only where you ask him
+to, on your own machine: from the [TUI](/guide/tui/#templates) or with
+[`patchula apply --copier`](/guide/apply/#copier-templates). See the
+[departure](/renovate/departures/#copier-templates).
+
 ## Containers and Kubernetes
 
 Dockerfiles support global `ARG` substitution, continuations, `--platform` and
@@ -269,7 +293,8 @@ Every dependency has a kind, which rules can select: `production`,
 `reusable-workflow` and `runner` for workflows, with GitLab CI includes and
 components as `reusable-workflow`; `container-image`; `tool` and
 `toolchain` for mise tools and pinned toolchains; `go-directive`; `provider`
-and `module` for Terraform; `chart` for Helm; and `transitive` for a
+and `module` for Terraform; `chart` for Helm; `template` for Copier; and
+`transitive` for a
 [vulnerable lockfile-only package](/guide/security/#lockfile-only-packages).
 [Reference data](/guide/configuration/#reference-data) also has the kind
 `reference-data`, on top of its own.

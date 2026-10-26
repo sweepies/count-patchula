@@ -11,25 +11,7 @@ fn identity(url: &str) -> Option<(Source, String)> {
         .or_else(|| url.trim().strip_prefix("http://"))?;
     let rest = rest.trim_end_matches('/').trim_end_matches(".git");
     let (host, path) = rest.split_once('/')?;
-    let host = host.to_ascii_lowercase();
-    let valid = path.split('/').count() >= 2
-        && path.split('/').all(|p| {
-            !p.is_empty()
-                && !matches!(p, "." | "..")
-                && p.bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
-        });
-    if !valid {
-        return None;
-    }
-    if host == "github.com" {
-        let mut parts = path.split('/');
-        let repo = format!("{}/{}", parts.next()?, parts.next()?);
-        return Some((Source::GithubTags, repo));
-    }
-    let forge =
-        host == "gitlab.com" || host.split('.').any(|l| l == "gitlab") || crate::gitea_host(&host);
-    forge.then(|| (Source::ForgeTags, format!("{host}/{path}")))
+    crate::tag_source(&host.to_ascii_lowercase(), path)
 }
 
 pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String> {

@@ -62,7 +62,8 @@ token or toolchain of your own.
   faster than npm and pnpm at it.
 - Managers for JavaScript, GitHub Actions, mise, Rust, Go, Docker, Compose,
   Kubernetes, Kustomize, Flux, Helm, Terraform, Python, Maven, Gradle, .NET,
-  Ruby, PHP, pre-commit, devcontainers, Woodpecker CI, GitLab CI, and your own regexes.
+  Ruby, PHP, pre-commit, devcontainers, Woodpecker CI, GitLab CI, and your own
+  regexes, plus notices for new Copier template versions.
 - Typed configuration in [Pkl](https://pkl-lang.org). A typo is an error with a
   line number, not a silently ignored key.
 - Careful defaults: exact pins, digest-pinned actions and images, a 24-hour

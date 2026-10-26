@@ -345,9 +345,15 @@ composer	php/laravel/composer.json	tijsverkoyen/css-to-inline-styles	^2.2.5	-
 composer	php/laravel/composer.json	vlucas/phpdotenv	^5.6.1	-
 composer	php/laravel/composer.json	voku/portable-ascii	^2.0.2	-
 composer	php/laravel/composer.json	web-token/jwt-library	^4.1	-
+copier	javascript/jupyterlab-git/.copier-answers.yml	https://github.com/jupyterlab/extension-template	v4.2.1	-
+copier	python/duty/.copier-answers.yml	gh:pawamoy/copier-uv	1.15.7	-
+copier	python/mkdocstrings-python/.copier-answers.yml	gh:mkdocstrings/handler-template	1.6.1	-
 devcontainer	editors/vscode/.devcontainer/devcontainer.json	ghcr.io/devcontainers/features/sshd	1	1
 dockerfile	go/prometheus/Dockerfile	quay.io/prometheus/busybox-linux-amd64	latest	-
 edit-error	go/prometheus/Dockerfile	quay.io/prometheus/busybox-linux-amd64	image location contains an expression or expanded ARG; no safe literal edit
+edit-error	javascript/jupyterlab-git/.copier-answers.yml	https://github.com/jupyterlab/extension-template	a copier template moves only with copier update; a bare _commit bump would drop the template's changes
+edit-error	python/duty/.copier-answers.yml	gh:pawamoy/copier-uv	a copier template moves only with copier update; a bare _commit bump would drop the template's changes
+edit-error	python/mkdocstrings-python/.copier-answers.yml	gh:mkdocstrings/handler-template	a copier template moves only with copier update; a bare _commit bump would drop the template's changes
 github-actions	.forgejo/workflows/cascade-end-to-end.yml	data.forgejo.org/actions/cascading-pr	v2.3.2	v2.3.2
 github-actions	.forgejo/workflows/integration-action.yml	data.forgejo.org/actions/checkout	v6.1.0	v6.1.0
 github-actions	.forgejo/workflows/integration-scripts.yml	data.forgejo.org/actions/checkout	v6.1.0	v6.1.0
