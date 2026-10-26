@@ -52,7 +52,9 @@ pub enum Stage {
     Discovery,
     /// Reading each repository's manifests; counts repositories.
     Extraction,
-    /// Reading each dependency's releases and current digests; counts unique lookups.
+    /// Reading releases and current digests; counts unique lookups, one per
+    /// package and one per action ref whose digest is read, however many
+    /// dependencies share them.
     Lookup,
     /// Resolving the digests updates pin to; counts digests.
     Digests,
@@ -2166,47 +2168,113 @@ fn validate_repo(repo: &str) -> Result<()> {
     }
     Ok(())
 }
-/// A local directory reports as `local/<directory name>`.
-/// Every path in a working tree outside `.git`, and the contents of the
-/// files the scanner reads. Non-UTF-8 files cannot hold an editable
-/// declaration, so they are left out.
+/// Every file a push of this working tree would carry, and the contents of
+/// the files the scanner reads: what `git ls-files` lists as tracked or
+/// untracked but not ignored, so `.gitignore`, `.git/info/exclude` and the
+/// global excludes apply. A directory outside Git is walked whole, skipping
+/// `.git`. Non-UTF-8 files cannot hold an editable declaration, so they are
+/// left out.
 pub fn read_tree(
     dir: &std::path::Path,
     scanner: &Scanner,
 ) -> std::io::Result<(BTreeSet<String>, Files)> {
+    let listed = match git_files(dir)? {
+        Some(listed) => listed,
+        None => walk(dir)?,
+    };
     let mut paths = BTreeSet::new();
     let mut files = Files::new();
+    for relative in listed {
+        let path = dir.join(&relative);
+        // Deleted tracked files, symlinks and submodules are not files here,
+        // and a file below a symlinked directory would be read, and written,
+        // outside the tree.
+        let below_symlink = std::path::Path::new(&relative)
+            .ancestors()
+            .skip(1)
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .any(|parent| {
+                std::fs::symlink_metadata(dir.join(parent)).is_ok_and(|meta| meta.is_symlink())
+            });
+        if below_symlink || !std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file()) {
+            continue;
+        }
+        if scanner.needs(&relative)
+            && let Ok(content) = std::fs::read_to_string(&path)
+        {
+            files.insert(relative.clone(), content);
+        }
+        paths.insert(relative);
+    }
+    Ok((paths, files))
+}
+
+/// The files Git would carry from this directory, relative to it, or none
+/// when it is not in a Git work tree or Git is not installed.
+fn git_files(dir: &std::path::Path) -> std::io::Result<Option<Vec<String>>> {
+    let output = match std::process::Command::new("git")
+        .env("LC_ALL", "C")
+        .arg("-C")
+        .arg(dir)
+        .args([
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("not a git repository") {
+            return Ok(None);
+        }
+        return Err(std::io::Error::other(format!(
+            "git ls-files failed: {}",
+            stderr.trim()
+        )));
+    }
+    Ok(Some(
+        output
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|path| !path.is_empty())
+            .map(|path| String::from_utf8_lossy(path).into_owned())
+            .collect(),
+    ))
+}
+
+/// Every file below a directory outside Git, skipping `.git`.
+fn walk(dir: &std::path::Path) -> std::io::Result<Vec<String>> {
+    let mut listed = Vec::new();
     let mut pending = vec![dir.to_owned()];
     while let Some(next) = pending.pop() {
         for entry in std::fs::read_dir(&next)? {
             let entry = entry?;
-            let kind = entry.file_type()?;
             let path = entry.path();
-            if kind.is_dir() {
+            if entry.file_type()?.is_dir() {
                 if entry.file_name() != ".git" {
                     pending.push(path);
                 }
                 continue;
             }
-            if !kind.is_file() {
-                continue;
-            }
-            let relative = path
-                .strip_prefix(dir)
-                .expect("walked below the root")
-                .to_string_lossy()
-                .replace('\\', "/");
-            if scanner.needs(&relative)
-                && let Ok(content) = std::fs::read_to_string(&path)
-            {
-                files.insert(relative.clone(), content);
-            }
-            paths.insert(relative);
+            listed.push(
+                path.strip_prefix(dir)
+                    .expect("walked below the root")
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+            );
         }
     }
-    Ok((paths, files))
+    Ok(listed)
 }
 
+/// A local directory reports as `local/<directory name>`.
 fn local_name(dir: &std::path::Path) -> String {
     let name = dir
         .canonicalize()

@@ -48,8 +48,8 @@ impl Spinner {
             Stage::Extraction if total == 1 => "reading the manifests…".to_owned(),
             Stage::Extraction => format!("reading {total} repositories…"),
             Stage::Lookup => format!(
-                "looking up {}…",
-                crate::output::count(total, "dependency", "dependencies")
+                "running {}…",
+                crate::output::count(total, "lookup", "lookups")
             ),
             Stage::Digests => format!(
                 "resolving {}…",
