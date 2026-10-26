@@ -91,6 +91,7 @@ export default defineConfig({
           },
         },
         { tag: "meta", attrs: { name: "twitter:image", content: `${site}/og.png` } },
+        { tag: "meta", attrs: { name: "algolia-site-verification", content: "00975EB341369C04" } },
       ],
       social: [{ icon: "github", label: "GitHub", href: repo }],
       editLink: { baseUrl: `${repo}/edit/main/docs/` },
