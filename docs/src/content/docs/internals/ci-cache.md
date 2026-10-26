@@ -1,10 +1,6 @@
 ---
 title: "CI cache"
 ---
-This page covers CI on GitHub runners: the Benchmarks workflow, and the Rust
-jobs when they cannot run on boat. On boat, the CI snapshot holds the build
-cache instead; see [CI on boat](/internals/boat/).
-
 CI builds through mr-boxington (`mbx`) with the pinned
 `jdx/mr-boxington-action`, configured with `github-cache-mode: objects` and
 `isolate-objects-cache: true`. Before the build, the action imports portable
