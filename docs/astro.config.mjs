@@ -180,6 +180,7 @@ export default defineConfig({
             { label: "GitHub client", slug: "internals/github-client" },
             { label: "HTTP fixtures", slug: "internals/http-testing" },
             { label: "CI cache", slug: "internals/ci-cache" },
+            { label: "Releasing", slug: "internals/releasing" },
             { label: "Site search", slug: "internals/search" },
           ],
         },
