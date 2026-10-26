@@ -309,28 +309,31 @@ impl Runner {
             .iter()
             .map(|(t, v)| format!("{t}@{v}"))
             .collect();
-        let store = lock_store(&self.mise_data, true).await?;
-        let stale: Vec<String> = read_usage(&self.mise_data)
-            .into_iter()
-            .filter(|(spec, used)| *used < cutoff && !keep.contains(spec))
-            .map(|(spec, _)| spec)
-            .collect();
-        for spec in &stale {
-            self.mise(vec!["uninstall".into(), spec.clone()]).await?;
-        }
-        let _guard = self
-            .usage
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let file = lock_file(&self.mise_data, USAGE_LOCK)?;
-        file.lock().map_err(|e| e.to_string())?;
-        let mut usage = read_usage(&self.mise_data);
-        for spec in &stale {
-            usage.remove(spec);
-        }
-        write_usage(&self.mise_data, &usage)?;
-        drop((file, _guard, store));
-        // nix store gc runs as a tool and leaves paths a running nix holds.
+        let stale = {
+            let _store = lock_store(&self.mise_data, true).await?;
+            let stale: Vec<String> = read_usage(&self.mise_data)
+                .into_iter()
+                .filter(|(spec, used)| *used < cutoff && !keep.contains(spec))
+                .map(|(spec, _)| spec)
+                .collect();
+            for spec in &stale {
+                self.mise(vec!["uninstall".into(), spec.clone()]).await?;
+            }
+            let _guard = self
+                .usage
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let file = lock_file(&self.mise_data, USAGE_LOCK)?;
+            file.lock().map_err(|e| e.to_string())?;
+            let mut usage = read_usage(&self.mise_data);
+            for spec in &stale {
+                usage.remove(spec);
+            }
+            write_usage(&self.mise_data, &usage)?;
+            stale
+        };
+        // nix store gc runs as a tool, after the store lock is released, and
+        // leaves paths a running nix holds.
         let mut pruned = stale;
         if self.prune_nix().await? {
             pruned.push("nix store".into());
