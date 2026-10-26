@@ -42,6 +42,9 @@ struct Services {
     /// Stands in for PATCHULA_SERVER.
     #[cfg(test)]
     server: Option<String>,
+    /// The key pressed at a one-key question; tests are interactive when it is set.
+    #[cfg(test)]
+    key: Option<char>,
 }
 impl Services {
     async fn token(&self) -> Option<String> {
@@ -71,7 +74,7 @@ impl Services {
     fn interactive(&self) -> bool {
         #[cfg(test)]
         {
-            self.answer.is_some()
+            self.answer.is_some() || self.key.is_some()
         }
         #[cfg(not(test))]
         {
@@ -92,6 +95,42 @@ impl Services {
             line.trim().to_ascii_lowercase().as_str(),
             "n" | "no"
         ))
+    }
+    /// A one-key question on stderr, asked until a key `pick` accepts. Enter
+    /// is `'\n'`; Esc and Ctrl-C are `'q'`.
+    fn pick<T>(&self, question: &str, pick: impl Fn(char) -> Option<T>) -> io::Result<T> {
+        eprint!("{question}");
+        #[cfg(test)]
+        if let Some(key) = self.key {
+            eprintln!();
+            return pick(key).ok_or_else(|| io::Error::other(format!("unexpected key {key:?}")));
+        }
+        use ratatui::crossterm::{
+            event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+            terminal,
+        };
+        io::stderr().flush()?;
+        terminal::enable_raw_mode()?;
+        let answer = loop {
+            let key = match event::read() {
+                Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => key,
+                Ok(_) => continue,
+                Err(error) => break Err(error),
+            };
+            let key = match key.code {
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => 'q',
+                KeyCode::Esc => 'q',
+                KeyCode::Enter => '\n',
+                KeyCode::Char(key) => key,
+                _ => continue,
+            };
+            if let Some(answer) = pick(key) {
+                break Ok(answer);
+            }
+        };
+        terminal::disable_raw_mode()?;
+        eprintln!();
+        answer
     }
     /// For `--remote`, which may reach a `patchula serve` on loopback without TLS.
     fn remote_transport(
@@ -259,20 +298,11 @@ async fn tui_command(
             miette::miette!("patchula tui needs a terminal; use --once for a plain snapshot"),
         ));
     }
-    let (report, dir) = report(app, &tui.lookup, None, services).await?;
-    let local = match dir {
-        Some(dir) => {
-            let config = tui
-                .lookup
-                .config
-                .as_ref()
-                .map(|path| patchula_config::load(path))
-                .transpose()
-                .map_err(|e| (2, e))?;
-            Some(tui::local(&dir, config).map_err(|e| (2, miette::miette!("{e}")))?)
-        }
-        None => None,
-    };
+    let (report, checkout) = report(app, &tui.lookup, None, services).await?;
+    let local = checkout
+        .map(|(dir, config)| tui::local(&dir, config))
+        .transpose()
+        .map_err(|e| (2, miette::miette!("{e}")))?;
     let model = tui::Model::new(&report, local);
     if tui.once {
         write!(io::stdout().lock(), "{}", tui::snapshot(&model))
@@ -640,8 +670,9 @@ fn repositories(options: &cli::Lookup) -> Result<Vec<String>, miette::Report> {
 
 /// Where a lookup, run or tui batch reads from.
 enum Source {
-    /// The working tree in the current directory, uncommitted changes included.
-    Local(std::path::PathBuf),
+    /// The working tree in the current directory, uncommitted changes included,
+    /// with the config to apply when it is not the tree's own `patchula.pkl`.
+    Local(std::path::PathBuf, Option<Box<patchula_config::Config>>),
     /// Repositories read through the GitHub API.
     GitHub(Vec<String>),
     /// A Count Patchula server.
@@ -667,6 +698,7 @@ async fn source(
     let local_only = [
         (options.config.is_some(), "--config"),
         (options.config_dir.is_some(), "--config-dir"),
+        (options.default_config, "--default-config"),
         (options.all_repos, "--all-repos"),
         (
             run.is_some_and(|r| r.allow_lockfile_pending),
@@ -715,6 +747,18 @@ async fn source(
             repositories: vec![repository],
         });
     }
+    if options.default_config {
+        if options.config.is_some() || options.config_dir.is_some() {
+            return Err(usage(
+                "--default-config cannot be combined with --config or --config-dir".into(),
+            ));
+        }
+        if named || writes {
+            return Err(usage(
+                "--default-config is for the working tree; a repository on GitHub invites the Count with its own patchula.pkl".into(),
+            ));
+        }
+    }
     if named {
         return repositories(options)
             .map(Source::GitHub)
@@ -743,29 +787,104 @@ async fn source(
             "--config-dir picks config per repository; name repositories, or use --config for the working tree".into(),
         ));
     }
-    working_tree(options).map(Source::Local)
-}
-
-/// The current directory, for a batch with no repository: it needs a
-/// `patchula.pkl`, unless `--config` supplies the config.
-fn working_tree(options: &cli::Lookup) -> Result<std::path::PathBuf, (u8, miette::Report)> {
     let dir = std::env::current_dir()
         .map_err(|e| (2, miette::miette!("cannot read the current directory: {e}")))?;
-    if options.config.is_none() {
-        let found = patchula_config::discover(&dir)
-            .map_err(|e| (2, miette::miette!("cannot read {}: {e}", dir.display())))?;
-        if found.is_none() {
-            return Err((
-                2,
-                miette::miette!(
-                    help = "run it in a repository checkout, pass --config, or name a repository as owner/repo",
-                    "no repository named, and {} has no patchula.pkl to read",
-                    dir.display()
-                ),
-            ));
+    let config = match &options.config {
+        Some(path) => Some(patchula_config::load(path).map_err(|e| (2, e))?),
+        None => missing_config(&dir, options.default_config, services)?,
+    };
+    Ok(Source::Local(dir, config.map(Box::new)))
+}
+
+/// What to do when the working tree has no `patchula.pkl`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Missing {
+    /// Use the Count's defaults for this run only.
+    Defaults,
+    /// Write the starter `patchula.pkl` and read it.
+    Write,
+    Quit,
+}
+
+impl Missing {
+    /// The answer a key gives; Enter takes the defaults.
+    fn from_key(key: char) -> Option<Self> {
+        match key.to_ascii_lowercase() {
+            'd' | '\n' => Some(Self::Defaults),
+            'w' => Some(Self::Write),
+            'q' | 'n' => Some(Self::Quit),
+            _ => None,
         }
     }
-    Ok(dir)
+}
+
+/// The config for a working tree with no `--config`: none when it has a
+/// `patchula.pkl` for the engine to read, else the defaults if
+/// `--default-config` or the person at the terminal asks for them. Asked, the
+/// person may instead have the starter file written. Without a terminal, it
+/// says how to choose.
+fn missing_config(
+    dir: &std::path::Path,
+    default_config: bool,
+    services: &Services,
+) -> Result<Option<patchula_config::Config>, (u8, miette::Report)> {
+    let found = patchula_config::discover(dir)
+        .map_err(|e| (2, miette::miette!("cannot read {}: {e}", dir.display())))?;
+    if found.is_some() {
+        return Ok(None);
+    }
+    let defaults = || patchula_config::defaults().map(Some).map_err(|e| (2, e));
+    if default_config {
+        return defaults();
+    }
+    let path = dir.join(patchula_config::CONFIG_PATH);
+    if !services.interactive() {
+        return Err((
+            2,
+            miette::miette!(
+                help = format!(
+                    "pass --default-config to use the Count's defaults for this run, or create {} containing `amends \"PatchulaConfig.pkl\"` to invite him for good",
+                    path.display()
+                ),
+                "no repository named, and {} has no patchula.pkl to read",
+                dir.display()
+            ),
+        ));
+    }
+    let answer = services
+        .pick(
+            &format!(
+                "patchula: the Count finds no patchula.pkl in {}, so he has not been invited in.\n  [d] use his defaults for this run\n  [w] write a starter patchula.pkl and continue\n  [q] quit\nChoose [D/w/q]: ",
+                dir.display()
+            ),
+            Missing::from_key,
+        )
+        .map_err(|e| (1, miette::miette!("cannot read the answer: {e}")))?;
+    match answer {
+        Missing::Defaults => {
+            eprintln!(
+                "patchula: using the Count's defaults for this run; --default-config skips this question"
+            );
+            defaults()
+        }
+        Missing::Write => {
+            std::fs::write(&path, patchula_config::STARTER)
+                .map_err(|e| (1, miette::miette!("cannot write {}: {e}", path.display())))?;
+            eprintln!(
+                "patchula: wrote {}; the Count is invited, and the file is yours to edit",
+                path.display()
+            );
+            Ok(None)
+        }
+        Missing::Quit => Err((
+            2,
+            miette::miette!(
+                help = "pass --default-config to use the Count's defaults, or add a patchula.pkl",
+                "the Count stays outside: {} has no patchula.pkl",
+                dir.display()
+            ),
+        )),
+    }
 }
 
 /// A real run with no repository opens pull requests from what GitHub has, so
@@ -894,19 +1013,23 @@ fn github_repository(url: &str) -> Option<String> {
 #[cfg(test)]
 mod tests;
 
-/// Build the engine from lookup flags and run one lookup or run batch. The
-/// directory is the working tree it read, if it read one.
+/// The working tree a batch read, and the config it applied when that was not
+/// the tree's own `patchula.pkl`.
+type Checkout = (std::path::PathBuf, Option<patchula_config::Config>);
+
+/// Build the engine from lookup flags and run one lookup or run batch, with the
+/// working tree it read, if it read one.
 async fn report(
     app: &App,
     options: &cli::Lookup,
     run: Option<&cli::Run>,
     services: &Services,
-) -> Result<(patchula_report::Report, Option<std::path::PathBuf>), (u8, miette::Report)> {
+) -> Result<(patchula_report::Report, Option<Checkout>), (u8, miette::Report)> {
     use patchula_engine::{Engine, Options};
     if options.concurrency == 0 || options.concurrency > 100 {
         return Err((2, miette::miette!("concurrency must be 1..100")));
     }
-    let (repositories, local) = match source(app, options, run, services).await? {
+    let (repositories, local, config) = match source(app, options, run, services).await? {
         Source::Remote {
             server,
             repositories,
@@ -914,17 +1037,19 @@ async fn report(
             let report = remote_report(services, &server, repositories, run).await?;
             return Ok((report, None));
         }
-        Source::GitHub(repositories) => (repositories, None),
-        Source::Local(dir) => (Vec::new(), Some(dir)),
+        Source::GitHub(repositories) => {
+            let config = options
+                .config
+                .as_ref()
+                .map(|path| patchula_config::load(path))
+                .transpose()
+                .map_err(|e| (2, e))?;
+            (repositories, None, config)
+        }
+        Source::Local(dir, config) => (Vec::new(), Some(dir), config.map(|config| *config)),
     };
     let http_options = http_options(options)?;
     let recheck = recheck(app, run.is_some())?;
-    let config = options
-        .config
-        .as_ref()
-        .map(|path| patchula_config::load(path))
-        .transpose()
-        .map_err(|e| (2, e))?;
     let token = services
         .token()
         .await
@@ -952,7 +1077,7 @@ async fn report(
     }
     let options = Options {
         repositories,
-        config,
+        config: config.clone(),
         config_dir: options.config_dir.clone(),
         local: local.clone(),
     };
@@ -971,5 +1096,5 @@ async fn report(
         };
         (code, miette::miette!("{e}"))
     })?;
-    Ok((report, local))
+    Ok((report, local.map(|dir| (dir, config))))
 }

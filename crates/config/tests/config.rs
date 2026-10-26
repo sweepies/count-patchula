@@ -49,6 +49,19 @@ fn the_npm_lockfile_engine_is_aube_by_default_and_can_stay_native() {
 }
 
 #[test]
+fn the_starter_config_is_the_schema_defaults_on_disk_or_off() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("patchula.pkl");
+    std::fs::write(&path, patchula_config::STARTER).unwrap();
+    let on_disk = serde_json::to_value(load(&path).unwrap()).unwrap();
+    let (_directory, path) = fixture("");
+    let schema = serde_json::to_value(load(&path).unwrap()).unwrap();
+    let built_in = serde_json::to_value(patchula_config::defaults().unwrap()).unwrap();
+    assert_eq!(on_disk, schema);
+    assert_eq!(built_in, schema);
+}
+
+#[test]
 fn defaults_are_explicit_safe_and_unlimited() {
     let (_directory, path) = fixture("");
     let config = load(&path).unwrap();

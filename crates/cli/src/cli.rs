@@ -187,6 +187,12 @@ pub struct Lookup {
     /// All matched files are validated before repository scans. Mutually exclusive with `--config`.
     #[usage(long, value_name = "DIR", conflicts = "--config")]
     pub config_dir: Option<PathBuf>,
+    /// Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking.
+    ///
+    /// Only for the working tree: a named repository invites the Count with its own
+    /// `patchula.pkl`. Mutually exclusive with `--config` and `--config-dir`.
+    #[usage(long)]
+    pub default_config: bool,
     /// Run on a Count Patchula server: PATCHULA_SERVER, or the one found for this checkout.
     ///
     /// The server uses its App's credentials and caches. You sign in with GitHub on first

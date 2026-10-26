@@ -15,6 +15,22 @@ pub const SCHEMA: &str = include_str!("../../../PatchulaConfig.pkl");
 /// when the repository has no copy of its own.
 pub const SCHEMA_NAME: &str = "PatchulaConfig.pkl";
 
+/// The starter `patchula.pkl`: the schema's defaults and nothing else. The CLI
+/// writes it when a working tree has none.
+pub const STARTER: &str = include_str!("../../../examples/defaults.pkl");
+
+/// The config a repository gets from `STARTER`, evaluated without touching disk.
+pub fn defaults() -> miette::Result<Config> {
+    let path = format!("/repo/{CONFIG_PATH}");
+    load_files(
+        &path,
+        std::collections::BTreeMap::from([
+            (path.clone(), STARTER.to_owned()),
+            (format!("/repo/{SCHEMA_NAME}"), SCHEMA.to_owned()),
+        ]),
+    )
+}
+
 /// Parse a cron expression whose day-of-week field uses standard numbering, where
 /// 0 and 7 are Sunday and 1 is Monday. The underlying parser counts from 1 for
 /// Sunday, so numbers there are rewritten as day names first. `seconds` says the

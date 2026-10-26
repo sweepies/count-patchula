@@ -1741,7 +1741,7 @@ impl Engine {
                             report: repository(
                                 repo,
                                 Status::Skipped,
-                                Some("the Count was not invited: no patchula.pkl".into()),
+                                Some("no patchula.pkl: the Count visits only repositories that invite him; add one to opt in".into()),
                             ),
                             config: None,
                             dependencies: Vec::new(),
@@ -1881,7 +1881,7 @@ impl Engine {
         };
         let Some(config) = config else {
             report.status = Status::Skipped;
-            report.reason = Some("the Count was not invited: no patchula.pkl".into());
+            report.reason = Some("no patchula.pkl: the Count visits only repositories that invite him; add one to opt in".into());
             return Ok(Work {
                 report,
                 config: None,
