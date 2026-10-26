@@ -28,7 +28,6 @@ pub const PALETTE: Palette = Palette::DEFAULT
     version,
     unknown_flags = "error",
     logo = LOGO,
-    logo_style = "cyan",
     help_template = "{$dim}{{about}}{/$}
 
 {{usage}}
