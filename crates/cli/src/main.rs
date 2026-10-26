@@ -868,7 +868,11 @@ fn missing_config(
             defaults()
         }
         Missing::Write => {
-            std::fs::write(&path, patchula_config::STARTER)
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .and_then(|mut file| file.write_all(patchula_config::STARTER.as_bytes()))
                 .map_err(|e| (1, miette::miette!("cannot write {}: {e}", path.display())))?;
             eprintln!(
                 "patchula: wrote {}; the Count is invited, and the file is yours to edit",
