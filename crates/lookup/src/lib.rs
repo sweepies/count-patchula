@@ -737,7 +737,10 @@ impl Evaluator {
             if scheme.order(&parsed, &baseline) != Ordering::Greater {
                 continue;
             }
-            if dep.tagged_action()
+            // Only Actions float a short tag such as v4 along its release line;
+            // an APM tag names one release.
+            if dep.manager == Manager::GithubActions
+                && dep.tagged_action()
                 && numeric_fields(&dep.current).is_some_and(|n| n < 3)
                 && numeric_prefix(&dep.current, &normalized)
             {
@@ -1238,7 +1241,7 @@ pub fn resolved_current_version(dep: &Dependency, catalog: &Catalog) -> Option<S
     if dep.manager == Manager::Mise || dep.kind == DependencyKind::Tool {
         return resolved_tool_version(dep, catalog);
     }
-    if !dep.tagged_action() {
+    if dep.manager != Manager::GithubActions || !dep.tagged_action() {
         return None;
     }
     let current = dep.resolved.as_deref().unwrap_or(&dep.current);

@@ -1234,3 +1234,22 @@ fn flake_inputs_get_digest_updates_after_the_release_age_wait() {
         .unwrap();
     assert!(unchanged.updates.is_empty() && unchanged.held_back.is_empty());
 }
+
+#[test]
+fn apm_short_tags_are_fixed_tags_not_floating_aliases() {
+    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let mut dep = dependency("example/package");
+    dep.manager = Manager::Apm;
+    dep.file = "apm.yml".into();
+    dep.source = Source::GithubTags;
+    dep.scheme = Scheme::Loose;
+    dep.current = "v1.0".into();
+    dep.resolved = Some("v1.0".into());
+    let versions = catalog(&["v1.0", "v1.0.1", "v1.1"]);
+    assert!(patchula_lookup::resolved_current_version(&dep, &versions).is_none());
+    let proposals = eval.propose(&dep, &versions).unwrap();
+    let patch = proposals.iter().find(|p| p.update_type == "patch").unwrap();
+    assert_eq!(patch.new_value.as_deref(), Some("v1.0.1"));
+    let minor = proposals.iter().find(|p| p.update_type == "minor").unwrap();
+    assert_eq!(minor.new_value.as_deref(), Some("v1.1"));
+}
