@@ -308,7 +308,7 @@ impl Lifecycle {
         };
         let desired: BTreeSet<_> = plans.iter().map(|p| p.action.branch.as_str()).collect();
         for pr in &mut state.prs {
-            if !repository.warnings.is_empty()
+            if repository.degraded()
                 || pr["state"] != "open"
                 || !owned_pr(pr, actor, repo)
                 || desired.contains(branch(pr))

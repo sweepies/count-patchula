@@ -9,7 +9,7 @@ images and packages, then review and commit the change yourself.
 ```sh
 patchula apply                                  # write every update
 patchula apply --dry-run                        # print the diff instead
-patchula apply --check                          # exit 3 if anything is waiting
+patchula apply --check                          # exit 3 if anything is waiting, 4 if a lookup failed
 patchula apply --manager github-actions --type pin --type digest
 ```
 
@@ -102,23 +102,33 @@ and how many updates the filters left out. `--dry-run` prints a unified diff
 of every file to stdout, so `patchula apply --dry-run > pin.patch` gives a
 patch for `git apply`. With `--json`, stdout is one JSON object instead:
 `updates`, `skipped` with each `reason`, `files` with each `diff`,
-`written`, `filtered`, `warnings` and `exitCode`.
+`written`, `filtered`, `warnings`, `lookupFailures` and `exitCode`.
+`lookupFailures` lists each failed lookup as the
+[report](/reference/report/#lookup-failures) does.
 
 | Code | Meaning |
 |---|---|
 | 0 | nothing selected is left: everything was written, or there was nothing to write |
-| 1 | runtime error, such as a failed lookup or an unwritable file |
+| 1 | runtime error, such as an unreadable working tree or an unwritable file |
 | 2 | usage or configuration error |
 | 3 | selected updates are still waiting: `--check` or `--dry-run` found some, or some could not be written in place |
+| 4 | a dependency's lookup failed, so its updates are unknown |
 
 `--check` and `--dry-run` never write. A real run that leaves something alone
 also exits 3, so a script can tell "done" from "done, but look at the
 summary".
 
-A dependency whose lookup failed, for example on a registry error, has no
-updates, so it cannot make the command exit 3. The failure is printed as a
-warning, as `lookup` prints it, and `warnings` carries it in the JSON
-result; a strict CI job can fail when that list is not empty.
+A dependency whose lookup failed, for example because its registry is down or
+refused the token, has no updates the Count can see, so the command exits 4.
+Exit 4 takes precedence over 3: `--check` with updates waiting and a failed
+lookup exits 4, since what is waiting may not be everything. Without
+`--check` or `--dry-run`, the updates that could be looked up are still
+written first. Each failure is printed to stderr as `lookup failed:` with the
+dependency, its datasource and the kind of error.
+
+`patchula lookup` exits 4 for the same reason. `patchula run` reports failed
+lookups but still exits 0, since it keeps the pull requests it could plan, and
+it holds off automerge and closing pull requests for that repository.
 
 ## In hooks and scripts
 

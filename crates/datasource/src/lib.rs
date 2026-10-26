@@ -15,7 +15,9 @@ mod registries;
 mod rubygems;
 use patchula_cache::{Cache, Release};
 use patchula_config::Source;
+use patchula_github::Error as GithubError;
 use patchula_http::Cached;
+pub use patchula_report::LookupErrorKind;
 use patchula_versioning::{Ecosystem, Versioning};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -44,6 +46,55 @@ pub enum Error {
     RateLimit(u64),
 }
 pub type Result<T> = std::result::Result<T, Error>;
+impl Error {
+    pub fn kind(&self) -> LookupErrorKind {
+        use patchula_http::CacheError;
+        match self {
+            Error::Http(CacheError::Status(status))
+            | Error::Github(GithubError::Status(status)) => status_kind(*status),
+            Error::Http(CacheError::Transport(_)) | Error::Github(GithubError::Transport) => {
+                LookupErrorKind::Network
+            }
+            Error::Http(CacheError::Document)
+            | Error::Github(GithubError::Json | GithubError::Graphql)
+            | Error::Json(_)
+            | Error::Mise(patchula_mise::Error::Unreadable(_)) => LookupErrorKind::Parse,
+            Error::Github(GithubError::RateLimit) | Error::RateLimit(_) => {
+                LookupErrorKind::RateLimit
+            }
+            Error::Mise(patchula_mise::Error::Empty(_)) => LookupErrorKind::NotFound,
+            _ => LookupErrorKind::Other,
+        }
+    }
+}
+fn status_kind(status: u16) -> LookupErrorKind {
+    match status {
+        401 | 403 | 407 => LookupErrorKind::Auth,
+        404 | 410 => LookupErrorKind::NotFound,
+        429 => LookupErrorKind::RateLimit,
+        500.. => LookupErrorKind::Network,
+        _ => LookupErrorKind::Other,
+    }
+}
+/// A lookup error kept for the report, which several dependencies may share.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Failure {
+    pub kind: LookupErrorKind,
+    pub message: String,
+}
+impl From<Error> for Failure {
+    fn from(error: Error) -> Self {
+        Self {
+            kind: error.kind(),
+            message: error.to_string(),
+        }
+    }
+}
+impl std::fmt::Display for Failure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
 /// Go releases dated through `.info` on a cold lookup, newest first.
 const GO_DATED_RELEASES: usize = 20;
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

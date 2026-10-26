@@ -43,9 +43,40 @@ too, so a new field means a new version.
 | `warnings` | Optional. Files skipped, stale registry data and similar |
 | `skipped` | Optional. Declarations that are not read as versions, such as images built from variables: `manager`, `path`, `line`, `value` and `reason` |
 | `notices` | Optional. Newer versions that are reported and never proposed, such as a [Copier template](/guide/managers/#copier)'s tags: `manager`, `path`, `line`, `name`, `package`, `current`, `available`, and `compareUrl` when the host has a compare page |
+| `lookupFailures` | Optional. Dependencies whose lookup failed; see [below](#lookup-failures) |
 | `defaultBranch`, `commit` | Optional. The branch and commit that were read |
 
 A `complete` repository with no package files had nothing the Count supports.
+
+## Lookup failures
+
+Each entry in `lookupFailures` is a dependency whose registry lookup failed,
+so its updates are unknown. A repository with lookup failures is still
+`complete`, and the failure is not repeated in `warnings`.
+
+```json
+"lookupFailures": [{
+  "manager": "npm",
+  "path": "package.json",
+  "name": "is-number",
+  "package": "is-number",
+  "datasource": "npm",
+  "kind": "network",
+  "message": "registry HTTP 503"
+}]
+```
+
+| Field | |
+|---|---|
+| `manager`, `path`, `name`, `package` | The dependency, as in `packageFiles` |
+| `datasource` | Where it was looked up, such as `npm`, `docker` or `github-tags` |
+| `kind` | `network` (unreachable, or a 5xx answer), `auth` (401, 403 or 407), `not-found`, `rate-limit`, `parse` (an answer the Count could not read) or `other` |
+| `message` | The error in words |
+
+A failed digest lookup, such as an image tag whose digest could not be read,
+is a lookup failure too. Declarations in `skipped` and dependencies a rule
+ignores are never looked up, so they never fail. `lookup` and `apply` exit 4
+when this list is not empty.
 
 ## Dependencies
 

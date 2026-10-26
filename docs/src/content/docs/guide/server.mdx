@@ -235,6 +235,7 @@ work for the repository is waiting or in a batch.
 | `repository`, `ranAt`, `queued`, `status`, `reason`, `defaultBranch`, `dashboard` | as in the list |
 | `commit` | the default branch commit the run read |
 | `warnings` | the run's warnings |
+| `lookupFailures` | dependencies whose lookup failed, as in the [report](/reference/report/#lookup-failures) |
 | `packageFiles` | each package file's dependencies and their updates, as in the [report](/reference/report/) |
 | `branches` | each update branch the run planned: `branch`, `status`, `reason`, `message`, `baseCommit`, `commit`, `lockfilePending`, and the `files` it changes, without diffs |
 | `pullRequests` | the Count's open PRs, read from GitHub after the run; `null` if GitHub would not list them |

@@ -225,6 +225,7 @@ fn repo() -> Repository {
         warnings: Vec::new(),
         skipped: Vec::new(),
         notices: Vec::new(),
+        lookup_failures: Vec::new(),
         package_files: Vec::new(),
     }
 }

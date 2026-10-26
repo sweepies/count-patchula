@@ -637,6 +637,130 @@ async fn apply_writes_the_working_tree_and_exits_by_what_is_left() {
 }
 
 #[tokio::test]
+async fn failed_lookups_fail_apply_and_lookup_with_their_own_code() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/cli/apply-lookup-failure.json");
+    let transport = patchula_testkit::from_env(&path, Default::default(), || {
+        Ok(Arc::new(patchula_http::Network::new()?))
+    })
+    .unwrap();
+    let tree = tempfile::tempdir().unwrap();
+    for (path, content) in [
+        (
+            "patchula.pkl",
+            "amends \"PatchulaConfig.pkl\"\ndefaults { waitHours = 0 }\n",
+        ),
+        (
+            "package.json",
+            "{\n  \"dependencies\": {\"is-number\": \"6.0.0\", \"ms\": \"2.1.2\"}\n}\n",
+        ),
+        (
+            ".woodpecker.yaml",
+            "steps:\n  build:\n    image: ${IMAGE}\n",
+        ),
+    ] {
+        std::fs::write(tree.path().join(path), content).unwrap();
+    }
+    let cache = tempfile::tempdir().unwrap();
+    let cache = cache.path().join("cache.sqlite");
+    let services = Services {
+        token: Some("offline".into()),
+        transport: Some(transport),
+        dir: Some(tree.path().to_owned()),
+        ..Services::default()
+    };
+    let apply = async |args: &[&str]| {
+        let mut words = vec![
+            OsStr::new("apply"),
+            OsStr::new("--cache"),
+            cache.as_os_str(),
+        ];
+        words.extend(args.iter().map(OsStr::new));
+        let app = App::parse_from(&words).unwrap();
+        let Some(super::Command::Apply(options)) = &app.command else {
+            panic!("apply")
+        };
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = super::apply::command(&app, options, &services, &mut out, &mut err)
+            .await
+            .unwrap();
+        (
+            code,
+            String::from_utf8(out).unwrap(),
+            String::from_utf8(err).unwrap(),
+        )
+    };
+    let manifest = std::fs::read_to_string(tree.path().join("package.json")).unwrap();
+
+    // A failed lookup outranks pending updates, and the failure is typed.
+    let (code, out, err) = apply(&["--check", "--json"]).await;
+    assert_eq!(code, 4, "{err}");
+    let result: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(result["exitCode"], 4);
+    assert_eq!(result["updates"][0]["name"], "ms");
+    assert_eq!(
+        result["lookupFailures"],
+        serde_json::json!([{
+            "manager": "npm",
+            "path": "package.json",
+            "name": "is-number",
+            "package": "is-number",
+            "datasource": "npm",
+            "kind": "network",
+            "message": "registry HTTP 503",
+        }])
+    );
+    assert!(
+        !result["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("is-number")),
+        "{result}"
+    );
+    let (code, _, err) = apply(&["--check"]).await;
+    assert_eq!(code, 4, "{err}");
+    assert!(
+        err.contains("lookup failed: is-number in package.json (npm is-number, network)"),
+        "{err}"
+    );
+    assert!(err.contains("1 lookup failed"), "{err}");
+
+    // A plain apply still writes what it could look up.
+    let (code, _, err) = apply(&[]).await;
+    assert_eq!(code, 4, "{err}");
+    assert!(err.contains("applied 1 update to 1 file"), "{err}");
+    assert_eq!(
+        std::fs::read_to_string(tree.path().join("package.json")).unwrap(),
+        manifest.replace("2.1.2", "2.1.3")
+    );
+
+    // lookup exits with the same code, and the skipped image is no failure.
+    let app = App::parse_from(&[
+        OsStr::new("lookup"),
+        OsStr::new("--cache"),
+        cache.as_os_str(),
+    ])
+    .unwrap();
+    let (report, _) = crate::report(
+        &app,
+        match &app.command {
+            Some(super::Command::Lookup(options)) => options,
+            _ => panic!("lookup"),
+        },
+        None,
+        &services,
+    )
+    .await
+    .unwrap();
+    let repo = &report.repositories[0];
+    assert_eq!(repo.skipped.len(), 1, "{repo:?}");
+    assert_eq!(repo.lookup_failures.len(), 1, "{repo:?}");
+    assert_eq!(repo.lookup_failures[0].name, "is-number");
+    assert_eq!(run(&app, &services).await.unwrap(), 4);
+}
+
+#[tokio::test]
 async fn apply_is_always_local_and_validates_its_filters() {
     let tree = apply_tree();
     let services = Services {

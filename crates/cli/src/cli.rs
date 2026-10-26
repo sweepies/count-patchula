@@ -228,7 +228,7 @@ pub struct Apply {
     /// Print the unified diff of what would be written, and write nothing.
     #[usage(long, conflicts = "--check")]
     pub dry_run: bool,
-    /// Write nothing and exit 3 if any selected update is waiting, for hooks and CI.
+    /// Write nothing; exit 3 if any selected update is waiting, or 4 if a lookup failed.
     #[usage(long)]
     pub check: bool,
     /// Also run your own `copier update` for each selected template, before the other updates.

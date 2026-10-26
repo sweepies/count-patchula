@@ -21,6 +21,8 @@ const GH_HOST: &str = "github.com";
 const GH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const TOKEN_HELP: &str = "lookup/run requires PATCHULA_TOKEN, GITHUB_TOKEN or GH_TOKEN, or a GitHub CLI signed in with `gh auth login`";
 const LOG_VAR: &str = "PATCHULA_LOG";
+/// A lookup or apply finished, but some dependencies' lookups failed.
+const LOOKUP_FAILED: u8 = 4;
 const RECHECK_VAR: &str = "PATCHULA_RECHECK";
 const DOCKERHUB_USERNAME_VAR: &str = "PATCHULA_DOCKERHUB_USERNAME";
 const DOCKERHUB_TOKEN_VAR: &str = "PATCHULA_DOCKERHUB_TOKEN";
@@ -493,6 +495,7 @@ async fn batch(
         }
     }
     let mut errors = 0;
+    let mut failures = 0;
     let mut updates = 0;
     for repo in &report.repositories {
         let deps: usize = repo
@@ -530,6 +533,9 @@ async fn batch(
         for warning in &repo.warnings {
             eprintln!("  warning: {warning}");
         }
+        for failure in &repo.lookup_failures {
+            eprintln!("  lookup failed: {failure}");
+        }
         for skipped in &repo.skipped {
             eprintln!(
                 "  skipped: {}{}: {} ({})",
@@ -553,6 +559,7 @@ async fn batch(
         if repo.status == Status::Error {
             errors += 1;
         }
+        failures += repo.lookup_failures.len();
     }
     if let Some(stats) = &report.stats {
         eprintln!(
@@ -580,7 +587,13 @@ async fn batch(
                 .join(", ")
         );
     }
-    Ok(if errors == 0 { 0 } else { 1 })
+    Ok(if errors > 0 {
+        1
+    } else if failures > 0 && run.is_none() {
+        LOOKUP_FAILED
+    } else {
+        0
+    })
 }
 
 /// A lookup or run on a server. Only the repositories and the mode travel;
