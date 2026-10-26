@@ -175,6 +175,7 @@ Renovate's other schemes, including `regex` versioning, `node`, `debian`,
 | Batch PR by checkbox | no | [yes](/guide/batch/) |
 | Machine-readable output | logs | a [versioned JSON report](/reference/report/) |
 | Self-hosted server | Renovate CE, the Mend app | [`patchula serve`](/guide/server/) |
+| Write updates into a local checkout | no; the local platform is dry-run only | [`patchula apply`](/guide/apply/) and the [terminal UI](/guide/tui/) |
 
 ## Performance
 

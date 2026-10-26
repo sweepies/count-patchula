@@ -8,7 +8,7 @@ description: Every patchula command, argument and flag, generated from the CLI's
 
 Count Patchula vants to update your deps. A modern dependency updater with strong defaults.
 
-Exit codes: 0 = success; 1 = runtime error; 2 = usage or configuration error.
+Exit codes: 0 = success; 1 = runtime error; 2 = usage or configuration error; `apply` adds 3 = updates still waiting.
 
 
 - **Usage:** `patchula [FLAGS] [SUBCOMMAND]`
@@ -28,6 +28,32 @@ Exit codes: 0 = success; 1 = runtime error; 2 = usage or configuration error.
 | --- | --- | --- |
 | `-h --help` | Print help |  |
 | `-V --version` | Print version |  |
+
+## `patchula apply`
+
+- **Usage:** `patchula apply [FLAGS]`
+
+Write available updates into the working tree here, without branches or pull requests.
+
+Exit codes: 0 = nothing selected is left to apply; 1 = runtime error; 2 = usage or configuration error; 3 = selected updates are still waiting: `--check` or `--dry-run` found some, or some could not be written in place.
+
+### Flags
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--cache <PATH>` | Shared SQLite cache path. | `.patchula-cache.sqlite` |
+| `--concurrency <N>` | Maximum concurrent repository scans (1–100); HTTP limits are per host. | `8` |
+| `--host-concurrency <HOST=LIMIT>` | Override a host's HTTP limit (1–100); repeat per host. Default: 16. |  |
+| `--registry-freshness-secs <SECS>` | Freshness seconds for OCI tag lists without validators; 0 uses upstream policy. | `3600` |
+| `--go-freshness-secs <SECS>` | Minimum freshness seconds for Go proxy lists/latest; 0 uses upstream policy. | `3600` |
+| `--config <FILE>` | Local Pkl override applied to every selected repository. |  |
+| `--default-config` | Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking. Conflicts with `--config` and `--config-dir`. |  |
+| `--manager <MANAGER>` | Only updates from this manager, such as github-actions; repeat for more. |  |
+| `--dependency <PATTERN>` | Only dependencies matching this name or package, with config's `glob:`, `regex:` and `!`; repeat for more. |  |
+| `--type <TYPE>` | Only updates of this type; repeat for more. One of `major`, `minor`, `patch`, `pin`, `digest`. |  |
+| `--dry-run` | Print the unified diff of what would be written, and write nothing. |  |
+| `--check` | Write nothing and exit 3 if any selected update is waiting, for hooks and CI. |  |
+| `-h --help` | Print help |  |
 
 ## `patchula auth`
 
@@ -162,8 +188,8 @@ Report available updates without writing; with no repository, reads the working 
 | `--registry-freshness-secs <SECS>` | Freshness seconds for OCI tag lists without validators; 0 uses upstream policy. | `3600` |
 | `--go-freshness-secs <SECS>` | Minimum freshness seconds for Go proxy lists/latest; 0 uses upstream policy. | `3600` |
 | `--config <FILE>` | Local Pkl override applied to every selected repository. |  |
-| `--config-dir <DIR>` | Per-repository overrides: `DIR/<owner>/<name>.pkl`, then `DIR/<name>.pkl`; other repositories use their own `patchula.pkl`, or are skipped without one. Conflicts with `--config`. |  |
 | `--default-config` | Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking. Conflicts with `--config` and `--config-dir`. |  |
+| `--config-dir <DIR>` | Per-repository overrides: `DIR/<owner>/<name>.pkl`, then `DIR/<name>.pkl`; other repositories use their own `patchula.pkl`, or are skipped without one. Conflicts with `--config`. |  |
 | `--remote` | Run on a Count Patchula server (PATCHULA_SERVER, or the one found for this checkout) with its credentials and caches; local config, cache and HTTP flags don't apply. |  |
 | `--here` | Run on this machine, even if you chose to run this checkout on a server. |  |
 | `-h --help` | Print help |  |
@@ -193,8 +219,8 @@ With no repository, `--dry-run` plans from the working tree, uncommitted changes
 | `--registry-freshness-secs <SECS>` | Freshness seconds for OCI tag lists without validators; 0 uses upstream policy. | `3600` |
 | `--go-freshness-secs <SECS>` | Minimum freshness seconds for Go proxy lists/latest; 0 uses upstream policy. | `3600` |
 | `--config <FILE>` | Local Pkl override applied to every selected repository. |  |
-| `--config-dir <DIR>` | Per-repository overrides: `DIR/<owner>/<name>.pkl`, then `DIR/<name>.pkl`; other repositories use their own `patchula.pkl`, or are skipped without one. Conflicts with `--config`. |  |
 | `--default-config` | Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking. Conflicts with `--config` and `--config-dir`. |  |
+| `--config-dir <DIR>` | Per-repository overrides: `DIR/<owner>/<name>.pkl`, then `DIR/<name>.pkl`; other repositories use their own `patchula.pkl`, or are skipped without one. Conflicts with `--config`. |  |
 | `--remote` | Run on a Count Patchula server (PATCHULA_SERVER, or the one found for this checkout) with its credentials and caches; local config, cache and HTTP flags don't apply. |  |
 | `--here` | Run on this machine, even if you chose to run this checkout on a server. |  |
 | `--dry-run` | Print planned branches, files and unified diffs without writing to GitHub. |  |
@@ -282,8 +308,8 @@ Browse dependencies and updates in the terminal; with no repository, apply selec
 | `--registry-freshness-secs <SECS>` | Freshness seconds for OCI tag lists without validators; 0 uses upstream policy. | `3600` |
 | `--go-freshness-secs <SECS>` | Minimum freshness seconds for Go proxy lists/latest; 0 uses upstream policy. | `3600` |
 | `--config <FILE>` | Local Pkl override applied to every selected repository. |  |
-| `--config-dir <DIR>` | Per-repository overrides: `DIR/<owner>/<name>.pkl`, then `DIR/<name>.pkl`; other repositories use their own `patchula.pkl`, or are skipped without one. Conflicts with `--config`. |  |
 | `--default-config` | Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking. Conflicts with `--config` and `--config-dir`. |  |
+| `--config-dir <DIR>` | Per-repository overrides: `DIR/<owner>/<name>.pkl`, then `DIR/<name>.pkl`; other repositories use their own `patchula.pkl`, or are skipped without one. Conflicts with `--config`. |  |
 | `--remote` | Run on a Count Patchula server (PATCHULA_SERVER, or the one found for this checkout) with its credentials and caches; local config, cache and HTTP flags don't apply. |  |
 | `--here` | Run on this machine, even if you chose to run this checkout on a server. |  |
 | `--once` | Print a plain-text snapshot of the updates and exit, for pipes and CI logs. |  |

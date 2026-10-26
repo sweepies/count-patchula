@@ -65,7 +65,11 @@ GitHub API. `--remote` runs on a Count server (`PATCHULA_SERVER`, or the one
 found for the checkout), and `--here` keeps a command on this machine
 when the checkout was set to run remotely.
 
-`patchula tui` browses the same results interactively.
+`patchula tui` browses the same results interactively. `patchula apply`
+writes the working tree's updates into its files without PRs; filter with
+`--manager`, `--dependency` and `--type`, preview with `--dry-run`, and use
+`--check` in hooks and CI (exit 3 while updates wait). See
+https://count-patchula.sweepy.dev/guide/apply/.
 
 ## Read the results
 

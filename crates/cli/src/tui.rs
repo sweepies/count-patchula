@@ -40,11 +40,15 @@ pub struct Update {
     pub fixes: Vec<String>,
     /// Byte offsets of every occurrence, used to apply the edit locally.
     pub starts: Vec<usize>,
+    /// A package only its lockfile names, which only its package manager can update.
+    pub transitive: bool,
+    /// The current version came from a lockfile, which an edit here leaves stale.
+    pub locked: bool,
     pub selected: bool,
     pub applied: bool,
 }
 impl Update {
-    fn target(&self) -> String {
+    pub fn target(&self) -> String {
         match (&self.value, &self.version, &self.digest) {
             (Some(value), _, Some(digest)) => format!("{value}@{}", short(digest)),
             (Some(value), _, None) => value.clone(),
@@ -62,6 +66,70 @@ fn short(digest: &str) -> String {
         .chars()
         .take(12)
         .collect()
+}
+
+/// Every proposed update in the report, one per dependency and target.
+pub fn updates(report: &Report) -> Vec<Update> {
+    let mut updates = Vec::new();
+    for repo in &report.repositories {
+        for file in &repo.package_files {
+            for dep in &file.dependencies {
+                let current = dep
+                    .current
+                    .value
+                    .clone()
+                    .or_else(|| dep.current.version.clone())
+                    .unwrap_or_default();
+                let metadata = dep.metadata.as_ref();
+                let starts: Vec<usize> = metadata
+                    .map(|m| m.locations.iter().map(|l| l.start).collect())
+                    .unwrap_or_default();
+                for update in &dep.updates {
+                    updates.push(Update {
+                        repository: repo.repository.clone(),
+                        file: file.path.clone(),
+                        manager: dep.manager.clone(),
+                        name: dep.name.clone(),
+                        package: dep.package.clone(),
+                        current: current.clone(),
+                        value: update.new_value.clone(),
+                        version: update.new_version.clone(),
+                        digest: update.new_digest.clone(),
+                        kind: update.update_type.clone(),
+                        published_at: update.release_age.as_ref().map(|a| a.published_at.clone()),
+                        fixes: update
+                            .fixes
+                            .iter()
+                            .map(|id| {
+                                let cves: Vec<_> = metadata
+                                    .into_iter()
+                                    .flat_map(|m| &m.advisories)
+                                    .filter(|a| &a.id == id)
+                                    .flat_map(|a| &a.aliases)
+                                    .filter(|alias| alias.starts_with("CVE-"))
+                                    .cloned()
+                                    .collect();
+                                if cves.is_empty() {
+                                    id.clone()
+                                } else {
+                                    format!("{id} ({})", cves.join(", "))
+                                }
+                            })
+                            .collect(),
+                        starts: starts.clone(),
+                        transitive: metadata
+                            .is_some_and(|m| m.kinds.iter().any(|k| k == "transitive")),
+                        locked: metadata
+                            .and_then(|m| m.resolution.as_ref())
+                            .is_some_and(|r| r.kind == "lockfile"),
+                        selected: false,
+                        applied: false,
+                    });
+                }
+            }
+        }
+    }
+    updates
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -165,7 +233,7 @@ pub struct Model {
 
 impl Model {
     pub fn new(report: &Report, local: Option<Local>) -> Self {
-        let mut updates = Vec::new();
+        let updates = updates(report);
         let mut held = Vec::new();
         let mut found = Vec::new();
         let mut warnings = Vec::new();
@@ -194,55 +262,16 @@ impl Model {
                         file: file.path.clone(),
                         manager: dep.manager.clone(),
                         name: dep.name.clone(),
-                        current: current.clone(),
+                        current,
                         resolved: dep.current.version.clone(),
                         updates: dep.updates.len(),
                     });
-                    let metadata = dep.metadata.as_ref();
-                    let starts: Vec<usize> = metadata
-                        .map(|m| m.locations.iter().map(|l| l.start).collect())
-                        .unwrap_or_default();
-                    for update in &dep.updates {
-                        updates.push(Update {
-                            repository: repo.repository.clone(),
-                            file: file.path.clone(),
-                            manager: dep.manager.clone(),
-                            name: dep.name.clone(),
-                            package: dep.package.clone(),
-                            current: current.clone(),
-                            value: update.new_value.clone(),
-                            version: update.new_version.clone(),
-                            digest: update.new_digest.clone(),
-                            kind: update.update_type.clone(),
-                            published_at: update
-                                .release_age
-                                .as_ref()
-                                .map(|a| a.published_at.clone()),
-                            fixes: update
-                                .fixes
-                                .iter()
-                                .map(|id| {
-                                    let cves: Vec<_> = metadata
-                                        .into_iter()
-                                        .flat_map(|m| &m.advisories)
-                                        .filter(|a| &a.id == id)
-                                        .flat_map(|a| &a.aliases)
-                                        .filter(|alias| alias.starts_with("CVE-"))
-                                        .cloned()
-                                        .collect();
-                                    if cves.is_empty() {
-                                        id.clone()
-                                    } else {
-                                        format!("{id} ({})", cves.join(", "))
-                                    }
-                                })
-                                .collect(),
-                            starts: starts.clone(),
-                            selected: false,
-                            applied: false,
-                        });
-                    }
-                    for hold in metadata.map(|m| m.held_back.as_slice()).unwrap_or_default() {
+                    for hold in dep
+                        .metadata
+                        .as_ref()
+                        .map(|m| m.held_back.as_slice())
+                        .unwrap_or_default()
+                    {
                         held.push(Held {
                             repository: repo.repository.clone(),
                             name: dep.name.clone(),
@@ -438,66 +467,159 @@ impl Model {
         self.cursor = 0;
     }
 
-    /// Write the selected updates into the local directory's files.
+    /// Write the selected updates into the local directory's files, all or none.
     fn apply(&mut self) -> Result<(usize, usize), String> {
         let local = self.local.as_ref().ok_or("not a local directory")?;
-        let scanner = patchula_manager::Scanner::new(&local.config)?;
-        let mut files = patchula_manager::Files::new();
-        for update in self.updates.iter().filter(|u| u.selected) {
-            if !files.contains_key(&update.file) {
-                let text = std::fs::read_to_string(local.dir.join(&update.file))
-                    .map_err(|e| format!("{}: {e}", update.file))?;
-                files.insert(update.file.clone(), text);
-            }
-        }
-        // Declarations are found again from the files as they are now, so an
-        // edit can only land where the same dependency still is.
-        let dependencies = scanner.extract(&files)?.dependencies;
-        let mut edits = BTreeMap::<String, Vec<patchula_manager::Edit>>::new();
-        let mut applied = Vec::new();
-        for (index, update) in self.updates.iter().enumerate().filter(|(_, u)| u.selected) {
-            let targets: Vec<_> = dependencies
+        let selected: Vec<usize> = (0..self.updates.len())
+            .filter(|&i| self.updates[i].selected)
+            .collect();
+        let plan = plan(
+            local,
+            &selected
                 .iter()
-                .filter(|d| {
-                    d.file == update.file
-                        && d.name == update.name
-                        && update.starts.contains(&d.location.start)
-                })
-                .collect();
-            if targets.is_empty() {
-                return Err(format!(
-                    "{} in {} has changed since the lookup; run the TUI again",
-                    update.name, update.file
-                ));
-            }
-            let value = update.value.as_deref().unwrap_or(&update.current);
-            for dep in targets {
-                let text = &files[&update.file];
-                edits
-                    .entry(update.file.clone())
-                    .or_default()
-                    .extend(patchula_manager::edits(
-                        dep,
-                        text,
-                        value,
-                        update.digest.as_deref(),
-                    )?);
-            }
-            applied.push(index);
+                .map(|&i| &self.updates[i])
+                .collect::<Vec<_>>(),
+        )?;
+        if let Some((_, reason)) = plan.skipped.first() {
+            return Err(reason.clone());
         }
-        let mut written = BTreeMap::new();
-        for (file, edits) in edits {
-            written.insert(file.clone(), patchula_manager::apply(&files[&file], edits)?);
-        }
-        for (file, content) in &written {
-            std::fs::write(local.dir.join(file), content).map_err(|e| format!("{file}: {e}"))?;
-        }
-        for &index in &applied {
+        plan.write(&local.dir)?;
+        for &index in &selected {
             self.updates[index].selected = false;
             self.updates[index].applied = true;
         }
-        Ok((applied.len(), written.len()))
+        Ok((selected.len(), plan.files.len()))
     }
+}
+
+/// What writing a set of updates into a working tree changes.
+pub struct Plan {
+    /// Each changed file's text before and after.
+    pub files: BTreeMap<String, (String, String)>,
+    /// Positions, in the updates planned, of those the new files carry.
+    pub applied: Vec<usize>,
+    /// Positions of the updates that cannot be written in place, with why.
+    pub skipped: Vec<(usize, String)>,
+}
+impl Plan {
+    pub fn write(&self, dir: &Path) -> Result<(), String> {
+        for (file, (_, content)) in &self.files {
+            std::fs::write(dir.join(file), content).map_err(|e| format!("{file}: {e}"))?;
+        }
+        Ok(())
+    }
+}
+
+/// Plan the edits for these updates in the working tree, the way the Count
+/// edits a branch. An update that cannot be written in place is skipped with
+/// its reason, and the first update to claim a declaration keeps it.
+pub fn plan(local: &Local, updates: &[&Update]) -> Result<Plan, String> {
+    let scanner = patchula_manager::Scanner::new(&local.config)?;
+    let mut skipped = Vec::new();
+    let mut files = patchula_manager::Files::new();
+    let mut unreadable = BTreeMap::new();
+    for (index, update) in updates.iter().enumerate() {
+        if update.transitive {
+            skipped.push((
+                index,
+                format!(
+                    "{} is only in {}; update it with your package manager",
+                    update.name, update.file
+                ),
+            ));
+        } else if !files.contains_key(&update.file) && !unreadable.contains_key(&update.file) {
+            match std::fs::read_to_string(local.dir.join(&update.file)) {
+                Ok(text) => {
+                    files.insert(update.file.clone(), text);
+                }
+                Err(e) => {
+                    unreadable.insert(update.file.clone(), format!("{}: {e}", update.file));
+                }
+            }
+        }
+    }
+    // Declarations are found again from the files as they are now, so an
+    // edit can only land where the same dependency still is.
+    let dependencies = scanner.extract(&files)?.dependencies;
+    let mut claimed = BTreeMap::<(&str, usize), &Update>::new();
+    let mut edits = BTreeMap::<String, Vec<patchula_manager::Edit>>::new();
+    let mut applied = Vec::new();
+    for (index, update) in updates.iter().enumerate() {
+        if update.transitive {
+            continue;
+        }
+        if let Some(reason) = unreadable.get(&update.file) {
+            skipped.push((index, reason.clone()));
+            continue;
+        }
+        let targets: Vec<_> = dependencies
+            .iter()
+            .filter(|d| {
+                d.file == update.file
+                    && d.name == update.name
+                    && update.starts.contains(&d.location.start)
+            })
+            .collect();
+        if targets.is_empty() {
+            skipped.push((
+                index,
+                format!(
+                    "{} in {} has changed since the lookup; run it again",
+                    update.name, update.file
+                ),
+            ));
+            continue;
+        }
+        if let Some(other) = targets
+            .iter()
+            .find_map(|d| claimed.get(&(d.file.as_str(), d.location.start)))
+        {
+            skipped.push((
+                index,
+                format!(
+                    "{} in {} already takes {} {}",
+                    update.name,
+                    update.file,
+                    other.kind,
+                    other.target()
+                ),
+            ));
+            continue;
+        }
+        let value = update.value.as_deref().unwrap_or(&update.current);
+        let text = &files[&update.file];
+        let mut found = Vec::new();
+        let mut failed = None;
+        for dep in &targets {
+            match patchula_manager::edits(dep, text, value, update.digest.as_deref()) {
+                Ok(more) => found.extend(more),
+                Err(error) => failed = Some(format!("{}: {error}", update.file)),
+            }
+        }
+        if let Some(reason) = failed {
+            skipped.push((index, reason));
+            continue;
+        }
+        for dep in targets {
+            claimed.insert((&dep.file, dep.location.start), update);
+        }
+        edits.entry(update.file.clone()).or_default().extend(found);
+        applied.push(index);
+    }
+    let mut changed = BTreeMap::new();
+    for (file, edits) in edits {
+        let old = &files[&file];
+        let new = patchula_manager::apply(old, edits)?;
+        if &new != old {
+            changed.insert(file, (old.clone(), new));
+        }
+    }
+    skipped.sort();
+    Ok(Plan {
+        files: changed,
+        applied,
+        skipped,
+    })
 }
 fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
@@ -1114,5 +1236,55 @@ mod tests {
         let written = std::fs::read_to_string(dir.path().join("package.json")).unwrap();
         assert_eq!(written, manifest.replace("3.22.0", "4.1.0"));
         assert!(model.updates[0].applied && !model.updates[0].selected);
+    }
+
+    #[test]
+    fn plan_skips_what_cannot_be_written_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = "{\n  \"dependencies\": {\n    \"zod\": \"3.22.0\"\n  }\n}\n";
+        std::fs::write(dir.path().join("package.json"), manifest).unwrap();
+        std::fs::write(
+            dir.path().join("patchula.pkl"),
+            "amends \"PatchulaConfig.pkl\"\n",
+        )
+        .unwrap();
+        let mut report = report(&[
+            ("zod", "3.22.0", "4.1.0", "major"),
+            ("hono", "4.6.0", "4.7.2", "minor"),
+            ("lodash", "4.17.20", "4.17.21", "patch"),
+        ]);
+        let start = manifest.find("\"3.22.0\"").unwrap();
+        let deps = &mut report.repositories[0].package_files[0].dependencies;
+        deps[0].metadata.as_mut().unwrap().locations[0].start = start;
+        let mut minor = deps[0].updates[0].clone();
+        minor.new_value = Some("3.25.0".into());
+        minor.update_type = "minor".into();
+        deps[0].updates.push(minor);
+        let mut updates = updates(&report);
+        let lodash = updates.iter_mut().find(|u| u.name == "lodash").unwrap();
+        lodash.transitive = true;
+        lodash.file = "package-lock.json".into();
+        let local = local(dir.path(), None).unwrap();
+        let plan = plan(&local, &updates.iter().collect::<Vec<_>>()).unwrap();
+        let targets: Vec<_> = plan.applied.iter().map(|&i| updates[i].target()).collect();
+        assert_eq!(targets, ["4.1.0"]);
+        let reasons: Vec<_> = plan.skipped.iter().map(|(_, r)| r.as_str()).collect();
+        assert_eq!(
+            reasons,
+            [
+                "zod in package.json already takes major 4.1.0",
+                "hono in package.json has changed since the lookup; run it again",
+                "lodash is only in package-lock.json; update it with your package manager",
+            ]
+        );
+        assert_eq!(
+            plan.files["package.json"].1,
+            manifest.replace("3.22.0", "4.1.0")
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("package.json")).unwrap(),
+            manifest,
+            "planning writes nothing"
+        );
     }
 }

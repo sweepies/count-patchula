@@ -35,6 +35,7 @@ ratatui = "0.30.2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [dev-dependencies]
+patchula-testkit = { path = "../testkit" }
 tempfile = "3"
 base64 = "0.22"
 sha2 = "0.11.1"

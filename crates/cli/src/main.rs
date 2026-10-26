@@ -1,6 +1,7 @@
 //! Command-line entry point for patchula.
 #![forbid(unsafe_code)]
 
+mod apply;
 mod cli;
 mod remote;
 mod server;
@@ -45,8 +46,18 @@ struct Services {
     /// The key pressed at a one-key question; tests are interactive when it is set.
     #[cfg(test)]
     key: Option<char>,
+    /// Stands in for the current directory.
+    #[cfg(test)]
+    dir: Option<std::path::PathBuf>,
 }
 impl Services {
+    fn current_dir(&self) -> io::Result<std::path::PathBuf> {
+        #[cfg(test)]
+        if let Some(dir) = &self.dir {
+            return Ok(dir.clone());
+        }
+        std::env::current_dir()
+    }
     async fn token(&self) -> Option<String> {
         #[cfg(test)]
         {
@@ -184,6 +195,9 @@ async fn run(app: &App, services: &Services) -> Result<u8, (u8, miette::Report)>
         .as_ref()
         .ok_or_else(|| (2, miette::miette!("choose a subcommand; see --help")))?;
     match command {
+        Command::Apply(options) => {
+            apply::command(app, options, services, &mut io::stdout(), &mut io::stderr()).await
+        }
         Command::Auth(auth) => auth_command(app, auth, services).await,
         Command::Config(config) => config_command(app, config),
         Command::Lookup(options) => batch(app, options, None, services).await,
@@ -574,7 +588,7 @@ async fn remote_report(
 }
 
 /// HTTP settings from the lookup flags.
-fn http_options(options: &cli::Lookup) -> Result<patchula_http::Options, (u8, miette::Report)> {
+fn http_options(options: &cli::Scan) -> Result<patchula_http::Options, (u8, miette::Report)> {
     let mut http_options = patchula_http::Options {
         registry_freshness_secs: options.registry_freshness_secs,
         go_freshness_secs: options.go_freshness_secs,
@@ -696,9 +710,9 @@ async fn source(
     let named = !options.repositories.is_empty() || options.all_repos;
     let writes = run.is_some_and(|run| !run.dry_run);
     let local_only = [
-        (options.config.is_some(), "--config"),
+        (options.scan.config.is_some(), "--config"),
         (options.config_dir.is_some(), "--config-dir"),
-        (options.default_config, "--default-config"),
+        (options.scan.default_config, "--default-config"),
         (options.all_repos, "--all-repos"),
         (
             run.is_some_and(|r| r.allow_lockfile_pending),
@@ -747,8 +761,8 @@ async fn source(
             repositories: vec![repository],
         });
     }
-    if options.default_config {
-        if options.config.is_some() || options.config_dir.is_some() {
+    if options.scan.default_config {
+        if options.scan.config.is_some() || options.config_dir.is_some() {
             return Err(usage(
                 "--default-config cannot be combined with --config or --config-dir".into(),
             ));
@@ -787,11 +801,12 @@ async fn source(
             "--config-dir picks config per repository; name repositories, or use --config for the working tree".into(),
         ));
     }
-    let dir = std::env::current_dir()
+    let dir = services
+        .current_dir()
         .map_err(|e| (2, miette::miette!("cannot read the current directory: {e}")))?;
-    let config = match &options.config {
+    let config = match &options.scan.config {
         Some(path) => Some(patchula_config::load(path).map_err(|e| (2, e))?),
-        None => missing_config(&dir, options.default_config, services)?,
+        None => missing_config(&dir, options.scan.default_config, services)?,
     };
     Ok(Source::Local(dir, config.map(Box::new)))
 }
@@ -1030,7 +1045,8 @@ async fn report(
     services: &Services,
 ) -> Result<(patchula_report::Report, Option<Checkout>), (u8, miette::Report)> {
     use patchula_engine::{Engine, Options};
-    if options.concurrency == 0 || options.concurrency > 100 {
+    let scan = &options.scan;
+    if scan.concurrency == 0 || scan.concurrency > 100 {
         return Err((2, miette::miette!("concurrency must be 1..100")));
     }
     let (repositories, local, config) = match source(app, options, run, services).await? {
@@ -1043,6 +1059,7 @@ async fn report(
         }
         Source::GitHub(repositories) => {
             let config = options
+                .scan
                 .config
                 .as_ref()
                 .map(|path| patchula_config::load(path))
@@ -1052,24 +1069,24 @@ async fn report(
         }
         Source::Local(dir, config) => (Vec::new(), Some(dir), config.map(|config| *config)),
     };
-    let http_options = http_options(options)?;
+    let http_options = http_options(scan)?;
     let recheck = recheck(app, run.is_some())?;
     let token = services
         .token()
         .await
         .ok_or_else(|| (1, miette::miette!("{TOKEN_HELP}")))?;
-    if let Some(parent) = options.cache.parent().filter(|p| !p.as_os_str().is_empty()) {
+    if let Some(parent) = scan.cache.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)
             .map_err(|e| (1, miette::miette!("cannot create cache directory: {e}")))?;
     }
-    let cache = patchula_cache::Cache::open(&options.cache, Default::default())
+    let cache = patchula_cache::Cache::open(&scan.cache, Default::default())
         .await
         .map_err(|e| (1, miette::miette!("{e}")))?;
     let transport = services
         .transport()
         .map_err(|e| (1, miette::miette!("{e}")))?;
     let mut engine =
-        Engine::with_http_options(&token, cache, options.concurrency, transport, http_options)
+        Engine::with_http_options(&token, cache, scan.concurrency, transport, http_options)
             .map_err(|e| (1, miette::miette!("{e}")))?
             .with_recheck(recheck)
             .with_advisories();

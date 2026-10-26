@@ -424,7 +424,8 @@ pub(crate) fn in_window(
             })
         })
 }
-pub(crate) fn unified(path: &str, old: &str, new: &str) -> String {
+/// A one-hunk unified diff of a file's change, as dry runs print it.
+pub fn unified(path: &str, old: &str, new: &str) -> String {
     let a: Vec<_> = old.split_inclusive('\n').collect();
     let b: Vec<_> = new.split_inclusive('\n').collect();
     let prefix = a.iter().zip(&b).take_while(|(a, b)| a == b).count();

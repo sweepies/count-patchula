@@ -76,10 +76,16 @@ published 2026-09-24T19:36:54Z
 Applying only works on the working tree in the current directory, with no
 repository named and not on a server. The Count reads each selected file again,
 finds the same declaration at the same place, and rewrites just the version,
-the way he edits a branch. If a file changed since the lookup he refuses
-rather than guess, and nothing is written. Lockfiles are not regenerated, so
+the way he edits a branch. If a selected update cannot be written in place,
+because its declaration changed since the lookup, the package is only in a
+lockfile, or another selected update takes the same declaration, he refuses
+with the reason rather than guess, and nothing is written. Lockfiles are not regenerated, so
 run your package manager afterwards (`aube install`, `cargo update -w`,
 `uv lock` and so on).
+
+To write updates without picking them, in a script or a pre-commit hook, use
+[`patchula apply`](/guide/apply/). It writes through the same edits, and
+leaves alone, with a reason, what it cannot write in place.
 
 For GitHub repositories the TUI is for looking. Let [`patchula run`](/guide/pull-requests/)
 open the pull requests.
