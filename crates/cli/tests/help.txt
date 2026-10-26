@@ -34,8 +34,9 @@ Flags:
                         PATCHULA_RECHECK. Default: now in
                         the server, next-run in the CLI.
                         [possible values: now, next-run]
-  -v, --verbose         Increase diagnostic verbosity;
-                        repeat for more detail.
+  -v, --verbose         Show request counts and phase
+                        timings after a batch; repeat for
+                        debug logs.
       --color <WHEN>    Control ANSI colors in
                         diagnostics.
                         [possible values: auto, always,
@@ -126,8 +127,8 @@ Global flags:
                                   also PATCHULA_RECHECK. Default: now in the
                                   server, next-run in the CLI.
                                   [possible values: now, next-run]
-  -v, --verbose                   Increase diagnostic verbosity; repeat for more
-                                  detail.
+  -v, --verbose                   Show request counts and phase timings after a
+                                  batch; repeat for debug logs.
       --color <WHEN>              Control ANSI colors in diagnostics.
                                   [possible values: auto, always, never]
                                   (default: auto)
@@ -167,7 +168,8 @@ Global flags:
                         PATCHULA_RECHECK. Default: now in the server, next-run
                         in the CLI.
                         [possible values: now, next-run]
-  -v, --verbose         Increase diagnostic verbosity; repeat for more detail.
+  -v, --verbose         Show request counts and phase timings after a batch;
+                        repeat for debug logs.
       --color <WHEN>    Control ANSI colors in diagnostics.
                         [possible values: auto, always, never]
                         (default: auto)
@@ -197,7 +199,8 @@ Global flags:
                         PATCHULA_RECHECK. Default: now in the server, next-run
                         in the CLI.
                         [possible values: now, next-run]
-  -v, --verbose         Increase diagnostic verbosity; repeat for more detail.
+  -v, --verbose         Show request counts and phase timings after a batch;
+                        repeat for debug logs.
       --color <WHEN>    Control ANSI colors in diagnostics.
                         [possible values: auto, always, never]
                         (default: auto)
@@ -220,7 +223,8 @@ Global flags:
                         PATCHULA_RECHECK. Default: now in the server, next-run
                         in the CLI.
                         [possible values: now, next-run]
-  -v, --verbose         Increase diagnostic verbosity; repeat for more detail.
+  -v, --verbose         Show request counts and phase timings after a batch;
+                        repeat for debug logs.
       --color <WHEN>    Control ANSI colors in diagnostics.
                         [possible values: auto, always, never]
                         (default: auto)
@@ -251,7 +255,8 @@ Global flags:
                         PATCHULA_RECHECK. Default: now in the server, next-run
                         in the CLI.
                         [possible values: now, next-run]
-  -v, --verbose         Increase diagnostic verbosity; repeat for more detail.
+  -v, --verbose         Show request counts and phase timings after a batch;
+                        repeat for debug logs.
       --color <WHEN>    Control ANSI colors in diagnostics.
                         [possible values: auto, always, never]
                         (default: auto)
@@ -289,7 +294,8 @@ Global flags:
                         PATCHULA_RECHECK. Default: now in the server, next-run
                         in the CLI.
                         [possible values: now, next-run]
-  -v, --verbose         Increase diagnostic verbosity; repeat for more detail.
+  -v, --verbose         Show request counts and phase timings after a batch;
+                        repeat for debug logs.
       --color <WHEN>    Control ANSI colors in diagnostics.
                         [possible values: auto, always, never]
                         (default: auto)
@@ -311,7 +317,8 @@ Global flags:
                         PATCHULA_RECHECK. Default: now in the server, next-run
                         in the CLI.
                         [possible values: now, next-run]
-  -v, --verbose         Increase diagnostic verbosity; repeat for more detail.
+  -v, --verbose         Show request counts and phase timings after a batch;
+                        repeat for debug logs.
       --color <WHEN>    Control ANSI colors in diagnostics.
                         [possible values: auto, always, never]
                         (default: auto)
@@ -333,7 +340,8 @@ Global flags:
                         PATCHULA_RECHECK. Default: now in the server, next-run
                         in the CLI.
                         [possible values: now, next-run]
-  -v, --verbose         Increase diagnostic verbosity; repeat for more detail.
+  -v, --verbose         Show request counts and phase timings after a batch;
+                        repeat for debug logs.
       --color <WHEN>    Control ANSI colors in diagnostics.
                         [possible values: auto, always, never]
                         (default: auto)
@@ -358,7 +366,8 @@ Global flags:
                         PATCHULA_RECHECK. Default: now in the server, next-run
                         in the CLI.
                         [possible values: now, next-run]
-  -v, --verbose         Increase diagnostic verbosity; repeat for more detail.
+  -v, --verbose         Show request counts and phase timings after a batch;
+                        repeat for debug logs.
       --color <WHEN>    Control ANSI colors in diagnostics.
                         [possible values: auto, always, never]
                         (default: auto)
@@ -418,8 +427,8 @@ Global flags:
                                   also PATCHULA_RECHECK. Default: now in the
                                   server, next-run in the CLI.
                                   [possible values: now, next-run]
-  -v, --verbose                   Increase diagnostic verbosity; repeat for more
-                                  detail.
+  -v, --verbose                   Show request counts and phase timings after a
+                                  batch; repeat for debug logs.
       --color <WHEN>              Control ANSI colors in diagnostics.
                                   [possible values: auto, always, never]
                                   (default: auto)
@@ -501,8 +510,8 @@ Global flags:
                                   also PATCHULA_RECHECK. Default: now in the
                                   server, next-run in the CLI.
                                   [possible values: now, next-run]
-  -v, --verbose                   Increase diagnostic verbosity; repeat for more
-                                  detail.
+  -v, --verbose                   Show request counts and phase timings after a
+                                  batch; repeat for debug logs.
       --color <WHEN>              Control ANSI colors in diagnostics.
                                   [possible values: auto, always, never]
                                   (default: auto)
@@ -548,8 +557,8 @@ Global flags:
                                   also PATCHULA_RECHECK. Default: now in the
                                   server, next-run in the CLI.
                                   [possible values: now, next-run]
-  -v, --verbose                   Increase diagnostic verbosity; repeat for more
-                                  detail.
+  -v, --verbose                   Show request counts and phase timings after a
+                                  batch; repeat for debug logs.
       --color <WHEN>              Control ANSI colors in diagnostics.
                                   [possible values: auto, always, never]
                                   (default: auto)
@@ -586,7 +595,8 @@ Global flags:
                         PATCHULA_RECHECK. Default: now in the server, next-run
                         in the CLI.
                         [possible values: now, next-run]
-  -v, --verbose         Increase diagnostic verbosity; repeat for more detail.
+  -v, --verbose         Show request counts and phase timings after a batch;
+                        repeat for debug logs.
       --color <WHEN>    Control ANSI colors in diagnostics.
                         [possible values: auto, always, never]
                         (default: auto)
@@ -617,7 +627,8 @@ Global flags:
                         PATCHULA_RECHECK. Default: now in the server, next-run
                         in the CLI.
                         [possible values: now, next-run]
-  -v, --verbose         Increase diagnostic verbosity; repeat for more detail.
+  -v, --verbose         Show request counts and phase timings after a batch;
+                        repeat for debug logs.
       --color <WHEN>    Control ANSI colors in diagnostics.
                         [possible values: auto, always, never]
                         (default: auto)
@@ -643,7 +654,8 @@ Global flags:
                         PATCHULA_RECHECK. Default: now in the server, next-run
                         in the CLI.
                         [possible values: now, next-run]
-  -v, --verbose         Increase diagnostic verbosity; repeat for more detail.
+  -v, --verbose         Show request counts and phase timings after a batch;
+                        repeat for debug logs.
       --color <WHEN>    Control ANSI colors in diagnostics.
                         [possible values: auto, always, never]
                         (default: auto)
@@ -705,8 +717,8 @@ Global flags:
                                   also PATCHULA_RECHECK. Default: now in the
                                   server, next-run in the CLI.
                                   [possible values: now, next-run]
-  -v, --verbose                   Increase diagnostic verbosity; repeat for more
-                                  detail.
+  -v, --verbose                   Show request counts and phase timings after a
+                                  batch; repeat for debug logs.
       --color <WHEN>              Control ANSI colors in diagnostics.
                                   [possible values: auto, always, never]
                                   (default: auto)

@@ -281,7 +281,7 @@ run = "cargo test --locked -p patchula-cli --test cli help_pages_match_the_snaps
 description = "Look up every corpus dependency against live registries and plan its branches without writing; needs a GitHub token; forwards run flags"
 raw_args = true
 dir = "{{config_root}}/tests/corpus"
-run = "cargo run --release --locked --manifest-path ../../Cargo.toml -p patchula-cli -- run --dry-run --json"
+run = "cargo run --release --locked --manifest-path ../../Cargo.toml -p patchula-cli -- run --dry-run --json -v"
 
 [tasks.lookup]
 description = "Run read-only lookup; forwards repository and lookup flags"

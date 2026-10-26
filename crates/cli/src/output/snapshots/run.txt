@@ -1,0 +1,37 @@
+The Count visited 2 repositories and found 4 dependencies, 5 updates, 1 vulnerability, 1 failed lookup, 1 notice, 1 skipped value and 1 warning. 1 repository could not be read.
+
+acme/api  error: no patchula.pkl on the default branch
+
+acme/web  4 dependencies, 5 updates, 1 vulnerability, 1 failed lookup, 1 notice, 1 skipped value and 1 warning
+
+  Branches (2)
+    planned  patchula/npm-lodash-4.x        1 file, lockfile pending
+--- a/package.json
++++ b/package.json
+@@ -1 +1 @@
+-"lodash": "4.17.20"
++"lodash": "4.17.21"
+    skipped  patchula/actions-checkout-5.x
+      the branch was edited by someone else, so the Count leaves it
+
+  Pull requests (1)
+    updated  #12  patchula/npm-lodash-4.x
+      https://github.com/acme/web/pull/12
+
+  Vulnerabilities (1)
+    high  lodash 4.17.20  GHSA-35jh-r3h4-6jhm (CVE-2021-23337)  fixed in 4.17.21
+      Command Injection in lodash
+
+  Lookup failures (1)
+    pipx:acme/tidy  mise.toml  mise, not-found
+      mise lists no versions of pipx:acme/tidy
+
+  Notices (1)
+    template gh:acme/template: v0.16.0 → v0.23.0 available  .copier-answers.yml
+      https://github.com/acme/template/compare/v0.16.0...v0.23.0
+
+  Skipped (1)
+    Dockerfile:3  node:${NODE}  the image tag is a build argument
+
+  Warnings (1)
+    advisory lookup on OSV.dev failed: the service answered 503

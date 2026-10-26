@@ -33,6 +33,9 @@ patchula-update = { path = "../update" }
 patchula-manager = { path = "../manager" }
 ratatui = "0.30.2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+clx = "3.0.5"
+console = "0.16.6"
+textwrap = "0.16.4"
 
 [dev-dependencies]
 patchula-testkit = { path = "../testkit" }

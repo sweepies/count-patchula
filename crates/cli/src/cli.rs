@@ -64,7 +64,7 @@ pub struct App {
     /// When a ticked checkbox says it takes effect; also PATCHULA_RECHECK. Default: now in the server, next-run in the CLI.
     #[usage(long, value_enum, value_name = "WHEN", global)]
     pub recheck: Option<Recheck>,
-    /// Increase diagnostic verbosity; repeat for more detail.
+    /// Show request counts and phase timings after a batch; repeat for debug logs.
     #[usage(short = 'v', long, count, global)]
     pub verbose: u8,
     /// Control ANSI colors in diagnostics.

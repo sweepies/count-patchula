@@ -67,6 +67,7 @@ impl Engine {
             }) {
                 let fetched_at = DateTime::from_timestamp_millis(saved.fetched_at)
                     .ok_or_else(|| Error::Invalid("invalid catalog timestamp".into()))?;
+                self.progress.advance(1);
                 results.insert(key.clone(), Ok(saved.catalog));
                 evidence.insert(
                     key,

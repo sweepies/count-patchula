@@ -20,7 +20,7 @@ title: "Environment variables"
 | `PATCHULA_SERVER_CACHE` | server | the server's SQLite cache |
 | `PATCHULA_LISTEN` | server | bind address; default `127.0.0.1:8080` |
 | `PATCHULA_SHUTDOWN_TIMEOUT_SECS` | server | drain deadline on SIGTERM, 1 to 3600; default 60 |
-| `NO_COLOR` | `--help` | any value prints help without colour, as when it is piped |
+| `NO_COLOR` | all | turns colour off: any value for `--help`, which prints as when it is piped; any non-empty value for reports, the spinner and errors, unless `--color always` forces it |
 | `CLICOLOR_FORCE` | `--help` | any value but `0` colours help that is piped; `NO_COLOR` still wins |
 | `COLUMNS` | `--help` | the width help wraps to; default the terminal's, else 80 |
 

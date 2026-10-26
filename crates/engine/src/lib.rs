@@ -44,6 +44,38 @@ pub enum Error {
     Report(#[from] patchula_report::Error),
 }
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// The stages of a batch that take long enough to show.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+    /// Listing the repositories the token can reach.
+    Discovery,
+    /// Reading each repository's manifests; counts repositories.
+    Extraction,
+    /// Reading each dependency's releases and current digests; counts unique lookups.
+    Lookup,
+    /// Resolving the digests updates pin to; counts digests.
+    Digests,
+    /// Regenerating lockfiles for planned branches; counts branches.
+    Lockfiles,
+    /// Writing one repository's branches and pull requests; the total is its
+    /// branch count, and nothing advances.
+    Writing,
+}
+
+/// Told what a batch is doing as it goes, for a progress display. Calls come
+/// from concurrent tasks and must be cheap.
+pub trait Progress: Send + Sync {
+    /// A stage starts with this many items, or zero when the count is unknown.
+    fn stage(&self, stage: Stage, total: usize);
+    /// This many more items of the current stage are done.
+    fn advance(&self, done: usize);
+}
+
+impl Progress for () {
+    fn stage(&self, _: Stage, _: usize) {}
+    fn advance(&self, _: usize) {}
+}
 #[derive(Default)]
 pub struct Options {
     pub repositories: Vec<String>,
@@ -67,6 +99,7 @@ pub struct Engine {
     advisories: bool,
     /// The server URL hidden in PRs and the dashboard for the CLI to find.
     advertised_server: Option<String>,
+    progress: Arc<dyn Progress>,
 }
 struct Work {
     report: Repository,
@@ -198,6 +231,7 @@ impl Engine {
             versions_host_override: None,
             advisories: false,
             advertised_server: None,
+            progress: Arc::new(()),
         };
         engine.look_up_mise_tools_with_runner();
         Ok(engine)
@@ -221,6 +255,11 @@ impl Engine {
     /// Seed the lockfile tool store from this mise data directory's installs.
     pub fn with_tool_seed(mut self, mise_data: std::path::PathBuf) -> Self {
         self.lockfiles = self.lockfiles.map(|runner| runner.with_seed(mise_data));
+        self
+    }
+    /// Report each stage of a batch as it runs.
+    pub fn with_progress(mut self, progress: Arc<dyn Progress>) -> Self {
+        self.progress = progress;
         self
     }
     pub fn with_versions_host(mut self, enabled: bool) -> Self {
@@ -503,9 +542,13 @@ impl Engine {
                 }
             };
             if !dry_run {
+                if self.lockfiles.is_some() {
+                    self.progress.stage(Stage::Lockfiles, plans.len());
+                }
                 for plan in &mut plans {
                     if let Some(runner) = &self.lockfiles {
                         runner.prepare(plan, &mut work.snapshot, &config).await;
+                        self.progress.advance(1);
                     } else if plan.action.status == patchula_report::ActionStatus::Planned
                         && !plan.lockfiles_ready
                     {
@@ -537,6 +580,9 @@ impl Engine {
                     repo.reason = Some(error);
                     continue;
                 }
+            }
+            if !dry_run {
+                self.progress.stage(Stage::Writing, plans.len());
             }
             patchula_update::apply_all(
                 &self.github,
@@ -711,6 +757,7 @@ impl Engine {
         let repos = if let Some(dir) = &local {
             vec![local_name(dir)]
         } else if options.repositories.is_empty() {
+            self.progress.stage(Stage::Discovery, 0);
             self.repositories().await?
         } else {
             options.repositories
@@ -748,6 +795,7 @@ impl Engine {
                 hint.digests.extend(known.digests);
             }
         }
+        self.progress.stage(Stage::Extraction, repos.len());
         let scans = async {
             let started = Instant::now();
             let _phase = PhaseTrace::new("extraction");
@@ -817,6 +865,7 @@ impl Engine {
                             }
                         }
                     }
+                    self.progress.advance(1);
                     Ok::<_, Error>(work)
                 })
                 .buffer_unordered(self.concurrency)
@@ -830,7 +879,7 @@ impl Engine {
         let prefetch = async {
             let started = Instant::now();
             let _phase = PhaseTrace::new("lookup.prefetch");
-            let result = tokio::join!(async { Catalogs::new() }, self.digests(hint.digests));
+            let result = tokio::join!(async { Catalogs::new() }, self.digests(hint.digests, false));
             (result, micros(started))
         };
         let ((work, extraction_time), ((mut catalogs, mut digests), prefetch_time)) =
@@ -944,9 +993,11 @@ impl Engine {
                 );
             }
         }
+        self.progress
+            .stage(Stage::Lookup, keys.len() + current_refs.len());
         let (remaining, refs, advisories) = tokio::join!(
             self.age_catalogs(keys, &waits, &retry_keys, &sources, now),
-            self.digests(current_refs),
+            self.digests(current_refs, true),
             async {
                 if advisory_queries.is_empty() {
                     Ok(BTreeMap::new())
@@ -1010,6 +1061,7 @@ impl Engine {
             }
         }
         if !vulnerable.is_empty() {
+            self.progress.stage(Stage::Lookup, vulnerable.len());
             let (fresh, evidence) = self
                 .age_catalogs(
                     vulnerable,
@@ -1198,6 +1250,8 @@ impl Engine {
         });
         let started = Instant::now();
         let phase = PhaseTrace::new("digest");
+        self.progress
+            .stage(Stage::Digests, digest_keys.len() + image_keys.len());
         let mutable_tags: Vec<_> = digest_keys
             .iter()
             .filter(|(package, _)| {
@@ -1208,8 +1262,10 @@ impl Engine {
             .cloned()
             .collect();
         digests.extend(self.sources.fresh_tag_digests(&mutable_tags).await);
+        let pending = digest_keys.len();
         digest_keys.retain(|key| !digests.contains_key(key));
-        digests.extend(self.digests(digest_keys).await);
+        self.progress.advance(pending - digest_keys.len());
+        digests.extend(self.digests(digest_keys, true).await);
         let retry_keys = &retry_keys;
         let fresh_sources = &fresh_sources;
         let image_digests: BTreeMap<_, _> = stream::iter(image_keys)
@@ -1226,6 +1282,7 @@ impl Engine {
                     .registry_digest(&package, &tag)
                     .await
                     .map_err(Failure::from);
+                self.progress.advance(1);
                 ((package, tag), result)
             })
             .buffer_unordered(100)
@@ -1575,9 +1632,11 @@ impl Engine {
         report.validate()?;
         Ok((report, work))
     }
+    /// Each key's digest; `counted` advances the current progress stage per key.
     async fn digests(
         &self,
         keys: BTreeSet<(String, String)>,
+        counted: bool,
     ) -> BTreeMap<(String, String), std::result::Result<String, Failure>> {
         stream::iter(keys)
             .map(|(package, reference)| async move {
@@ -1586,6 +1645,9 @@ impl Engine {
                     .digest(&package, &reference)
                     .await
                     .map_err(Failure::from);
+                if counted {
+                    self.progress.advance(1);
+                }
                 ((package, reference), result)
             })
             .buffer_unordered(100)
@@ -1609,7 +1671,8 @@ impl Engine {
         let batched = stream::iter(groups)
             .map(|(enabled, packages)| async move {
                 let client = sources.clone().with_versions_host(enabled);
-                match client.release_catalogs(&packages).await {
+                let count = packages.len();
+                let catalogs = match client.release_catalogs(&packages).await {
                     Ok(results) => results
                         .into_iter()
                         .map(|(package, result)| {
@@ -1630,13 +1693,16 @@ impl Engine {
                             .collect()
                             .await
                     }
-                }
+                };
+                self.progress.advance(count);
+                catalogs
             })
             .buffer_unordered(16)
             .collect::<Vec<_>>();
         let others = stream::iter(others)
             .map(|key| async move {
                 let result = Self::lookup_key(sources, &key).await;
+                self.progress.advance(1);
                 (key, result)
             })
             .buffer_unordered(100)

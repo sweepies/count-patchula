@@ -97,8 +97,9 @@ written.
 
 ## Output and exit codes
 
-The summary goes to stderr: what was written, what was left alone and why,
-and how many updates the filters left out. `--dry-run` prints a unified diff
+The summary goes to stderr. It opens with what was written, or would be, and
+lists those updates; then what was left alone and why, template updates,
+failed lookups and warnings; and last how many updates the filters left out. `--dry-run` prints a unified diff
 of every file to stdout, so `patchula apply --dry-run > pin.patch` gives a
 patch for `git apply`. With `--json`, stdout is one JSON object instead:
 `updates`, `skipped` with each `reason`, `files` with each `diff`,
@@ -123,8 +124,9 @@ refused the token, has no updates the Count can see, so the command exits 4.
 Exit 4 takes precedence over 3: `--check` with updates waiting and a failed
 lookup exits 4, since what is waiting may not be everything. Without
 `--check` or `--dry-run`, the updates that could be looked up are still
-written first. Each failure is printed to stderr as `lookup failed:` with the
-dependency, its datasource and the kind of error.
+written first. Each failure is listed under "Lookup failures" with the
+dependency, its file, its datasource, the kind of error and the registry's
+message.
 
 `patchula lookup` exits 4 for the same reason. `patchula run` reports failed
 lookups but still exits 0, since it keeps the pull requests it could plan, and
