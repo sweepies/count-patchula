@@ -80,9 +80,15 @@ secrets. The steps below do the same by hand.
    patchula run --dry-run acme/my-app
    ```
 
-   `lookup` writes the [JSON report](/reference/report/) of dependencies and
-   proposed updates. `run --dry-run` prints the branches and diffs it would
-   publish, without touching GitHub.
+   `lookup` lists each repository's updates, known vulnerabilities, failed
+   lookups and notices, with the counts first; `--json` writes the
+   [JSON report](/reference/report/) instead. `run --dry-run` prints the
+   branches and diffs it would publish, without touching GitHub.
+
+   On a terminal, a spinner shows what the Count is doing, and the output is
+   coloured and fitted to the window. Piped or redirected, it is plain text
+   with one item per line, and `NO_COLOR` or `--color never` turns colour off
+   anywhere. `-v` adds request counts and phase timings on stderr.
 
 5. ### Run it
 

@@ -18,7 +18,7 @@ Exit codes: 0 = success; 1 = runtime error; 2 = usage or configuration error; `a
 | Flag | Description | Default |
 | --- | --- | --- |
 | `--recheck <WHEN>` | When a ticked checkbox says it takes effect; also PATCHULA_RECHECK. Default: now in the server, next-run in the CLI. One of `now`, `next-run`. |  |
-| `-v --verbose` | Increase diagnostic verbosity; repeat for more detail. |  |
+| `-v --verbose` | Show request counts and phase timings after a batch; repeat for debug logs. |  |
 | `--color <WHEN>` | Control ANSI colors in diagnostics. One of `auto`, `always`, `never`. | `auto` |
 | `--json` | Emit command results and errors as JSON; configs stay Pkl. |  |
 

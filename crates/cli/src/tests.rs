@@ -459,7 +459,13 @@ fn a_working_tree_without_config_asks_once_and_never_without_a_terminal() {
     // d and Enter use the defaults for this run and write nothing.
     for key in ['d', 'D', '\n'] {
         let dir = tempfile::tempdir().unwrap();
-        let config = missing_config(dir.path(), false, &pressing(Some(key))).unwrap();
+        let config = missing_config(
+            dir.path(),
+            false,
+            &pressing(Some(key)),
+            &super::output::Style::PLAIN,
+        )
+        .unwrap();
         assert_eq!(as_json(config), defaults, "{key:?}");
         assert!(!dir.path().join("patchula.pkl").exists());
     }
@@ -467,22 +473,38 @@ fn a_working_tree_without_config_asks_once_and_never_without_a_terminal() {
     // w writes the starter file and leaves the engine to read it.
     let dir = tempfile::tempdir().unwrap();
     assert!(
-        missing_config(dir.path(), false, &pressing(Some('w')))
-            .unwrap()
-            .is_none()
+        missing_config(
+            dir.path(),
+            false,
+            &pressing(Some('w')),
+            &super::output::Style::PLAIN
+        )
+        .unwrap()
+        .is_none()
     );
     let written = std::fs::read_to_string(dir.path().join("patchula.pkl")).unwrap();
     assert_eq!(written, patchula_config::STARTER);
     // With the file there, nobody is asked again.
     assert!(
-        missing_config(dir.path(), false, &pressing(Some('q')))
-            .unwrap()
-            .is_none()
+        missing_config(
+            dir.path(),
+            false,
+            &pressing(Some('q')),
+            &super::output::Style::PLAIN
+        )
+        .unwrap()
+        .is_none()
     );
 
     // q quits without writing.
     let dir = tempfile::tempdir().unwrap();
-    let (code, error) = missing_config(dir.path(), false, &pressing(Some('q'))).unwrap_err();
+    let (code, error) = missing_config(
+        dir.path(),
+        false,
+        &pressing(Some('q')),
+        &super::output::Style::PLAIN,
+    )
+    .unwrap_err();
     assert_eq!(code, 2);
     assert!(
         error.to_string().contains("the Count stays outside"),
@@ -491,7 +513,13 @@ fn a_working_tree_without_config_asks_once_and_never_without_a_terminal() {
     assert!(!dir.path().join("patchula.pkl").exists());
 
     // Without a terminal it never asks, and says how to go on.
-    let (code, error) = missing_config(dir.path(), false, &pressing(None)).unwrap_err();
+    let (code, error) = missing_config(
+        dir.path(),
+        false,
+        &pressing(None),
+        &super::output::Style::PLAIN,
+    )
+    .unwrap_err();
     assert_eq!(code, 2);
     assert!(error.to_string().contains("has no patchula.pkl"), "{error}");
     let help = error.help().unwrap().to_string();
@@ -502,7 +530,8 @@ fn a_working_tree_without_config_asks_once_and_never_without_a_terminal() {
 
     // --default-config answers for it, at a terminal or not.
     for services in [pressing(None), pressing(Some('q'))] {
-        let config = missing_config(dir.path(), true, &services).unwrap();
+        let config =
+            missing_config(dir.path(), true, &services, &super::output::Style::PLAIN).unwrap();
         assert_eq!(as_json(config), defaults);
     }
     assert!(!dir.path().join("patchula.pkl").exists());
@@ -560,9 +589,16 @@ async fn apply_writes_the_working_tree_and_exits_by_what_is_left() {
             panic!("apply")
         };
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        let code = super::apply::command(&app, options, &services, &mut out, &mut err)
-            .await
-            .unwrap();
+        let code = super::apply::command(
+            &app,
+            options,
+            &services,
+            &mut out,
+            &mut err,
+            &super::output::Style::PLAIN,
+        )
+        .await
+        .unwrap();
         (
             code,
             String::from_utf8(out).unwrap(),
@@ -581,7 +617,7 @@ async fn apply_writes_the_working_tree_and_exits_by_what_is_left() {
     assert!(out.is_empty());
     assert!(err.contains("3 updates await in 2 files"), "{err}");
     assert!(
-        err.contains("minor  alpine 3.19.0 -> 3.24.3@be2656061b53  (Dockerfile)"),
+        err.contains("  minor  alpine     3.19.0 → 3.24.3@be2656061b53  Dockerfile\n"),
         "{err}"
     );
     let (code, out, err) = apply(&["--dry-run"]).await;
@@ -681,9 +717,16 @@ async fn failed_lookups_fail_apply_and_lookup_with_their_own_code() {
             panic!("apply")
         };
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        let code = super::apply::command(&app, options, &services, &mut out, &mut err)
-            .await
-            .unwrap();
+        let code = super::apply::command(
+            &app,
+            options,
+            &services,
+            &mut out,
+            &mut err,
+            &super::output::Style::PLAIN,
+        )
+        .await
+        .unwrap();
         (
             code,
             String::from_utf8(out).unwrap(),
@@ -721,7 +764,7 @@ async fn failed_lookups_fail_apply_and_lookup_with_their_own_code() {
     let (code, _, err) = apply(&["--check"]).await;
     assert_eq!(code, 4, "{err}");
     assert!(
-        err.contains("lookup failed: is-number in package.json (npm is-number, network)"),
+        err.contains("Lookup failures (1)\n  is-number  package.json  npm, network\n"),
         "{err}"
     );
     assert!(err.contains("1 lookup failed"), "{err}");
@@ -858,12 +901,19 @@ async fn apply_without_a_config_asks_or_takes_default_config() {
         panic!("apply")
     };
     let (mut out, mut err) = (Vec::new(), Vec::new());
-    let code = super::apply::command(&app, options, &services, &mut out, &mut err)
-        .await
-        .unwrap();
+    let code = super::apply::command(
+        &app,
+        options,
+        &services,
+        &mut out,
+        &mut err,
+        &super::output::Style::PLAIN,
+    )
+    .await
+    .unwrap();
     let err = String::from_utf8(err).unwrap();
     assert_eq!(code, 3, "{err}");
-    assert!(err.contains("major  is-number 6.0.0 -> 7.0.0"), "{err}");
+    assert!(err.contains("major  is-number  6.0.0 → 7.0.0"), "{err}");
     assert!(!tree.path().join("patchula.pkl").exists());
     assert_eq!(
         std::fs::read_to_string(tree.path().join("Dockerfile")).unwrap(),

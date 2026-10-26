@@ -170,7 +170,8 @@ jobs:
           {
             echo '### Corpus'
             echo '```'
-            grep -E 'dependencies,|visited|timings|^  warning' corpus.log
+            grep -E '^patchula' corpus.log
+            $jq -r '.repositories[] | "\(.repository): \([.packageFiles[].dependencies[]] | length) dependencies, \([.packageFiles[].dependencies[].updates[]] | length) updates", ((.warnings // [])[] | "  warning: \(.)")' corpus-report.json
             $jq -r '.actions.branches | group_by(.status) | map("\(.[0].status): \(length) branches") | .[]' corpus-report.json
             $jq -r '.actions.branches[] | select(.status == "skipped" or .status == "error") | "\(.status) \(.branch): \(.reason)"' corpus-report.json
             echo '```'

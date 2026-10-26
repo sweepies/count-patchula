@@ -41,8 +41,8 @@ assembly, and `digest` is any remaining ref wave. `lookup` overlaps
 `extraction`, so phase times must not be summed.
 
 An unavailable upstream is a warning; API, config and extraction failures are
-errors. With `--json` the CLI writes only the report to stdout, and it always
-prints a summary on stderr. It exits 1 for a batch failure or any
+errors. The CLI writes the report to stdout, as text or with `--json` as
+JSON, and `-v` adds the counters and phase timings on stderr. It exits 1 for a batch failure or any
 per-repository error, and 2 for invalid config or options.
 
 ## Tests and measurements

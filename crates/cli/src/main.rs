@@ -4,6 +4,8 @@
 mod apply;
 mod cli;
 mod copier;
+mod output;
+mod progress;
 mod remote;
 mod server;
 mod tui;
@@ -139,6 +141,9 @@ impl Services {
                 _ => continue,
             };
             if let Some(answer) = pick(key) {
+                if key.is_ascii_graphic() {
+                    eprint!("{key}");
+                }
                 break Ok(answer);
             }
         };
@@ -199,7 +204,15 @@ async fn run(app: &App, services: &Services) -> Result<u8, (u8, miette::Report)>
         .ok_or_else(|| (2, miette::miette!("choose a subcommand; see --help")))?;
     match command {
         Command::Apply(options) => {
-            apply::command(app, options, services, &mut io::stdout(), &mut io::stderr()).await
+            apply::command(
+                app,
+                options,
+                services,
+                &mut io::stdout(),
+                &mut io::stderr(),
+                &output::Style::stderr(app.color),
+            )
+            .await
         }
         Command::Auth(auth) => auth_command(app, auth, services).await,
         Command::Config(config) => config_command(app, config),
@@ -404,8 +417,7 @@ async fn main() -> ExitCode {
     let _ = tracing_subscriber::registry()
         .with(layer.with_filter(Targets::new().with_target("patchula", level)))
         .try_init();
-    let color = app.color == cli::Color::Always
-        || (app.color == cli::Color::Auto && io::stderr().is_terminal());
+    let color = output::colored(app.color, io::stderr().is_terminal());
     let _ = miette::set_hook(Box::new(move |_| {
         Box::new(
             miette::MietteHandlerOpts::new()
@@ -448,129 +460,23 @@ async fn batch(
 ) -> Result<u8, (u8, miette::Report)> {
     use patchula_report::Status;
     let (report, _) = report(app, options, run, services).await?;
+    let write = |text: &str| -> Result<(), (u8, miette::Report)> {
+        write!(io::stdout().lock(), "{text}").map_err(|e| (1, miette::miette!("{e}")))
+    };
     if app.json {
-        serde_json::to_writer(io::stdout().lock(), &report)
-            .map_err(|e| (1, miette::miette!("cannot write report: {e}")))?;
-        println!();
-    } else if let Some(actions) = &report.actions {
-        let mut out = io::stdout().lock();
-        for branch in &actions.branches {
-            writeln!(
-                out,
-                "{} {}: {:?}{}",
-                branch.repository,
-                branch.branch,
-                branch.status,
-                if branch.lockfile_pending {
-                    " [lockfile pending]"
-                } else {
-                    ""
-                }
-            )
-            .map_err(|e| (1, miette::miette!("{e}")))?;
-            if let Some(reason) = &branch.reason {
-                writeln!(out, "  {reason}").map_err(|e| (1, miette::miette!("{e}")))?;
-            }
-            for file in &branch.files {
-                writeln!(out, "  {} (extracted blob {})", file.path, file.blob_sha)
-                    .map_err(|e| (1, miette::miette!("{e}")))?;
-                if actions.dry_run {
-                    write!(out, "{}", file.diff).map_err(|e| (1, miette::miette!("{e}")))?;
-                }
-            }
-        }
-        for pr in &actions.pull_requests {
-            writeln!(
-                out,
-                "{} {} PR: {:?}{}",
-                pr.repository,
-                pr.branch,
-                pr.status,
-                pr.url.as_ref().map(|u| format!(" {u}")).unwrap_or_default()
-            )
-            .map_err(|e| (1, miette::miette!("{e}")))?;
-            if let Some(reason) = &pr.reason {
-                writeln!(out, "  {reason}").map_err(|e| (1, miette::miette!("{e}")))?;
-            }
-        }
+        write(&format!(
+            "{}\n",
+            serde_json::to_string(&report)
+                .map_err(|e| (1, miette::miette!("cannot write report: {e}")))?
+        ))?;
+    } else {
+        write(&output::report(&report, &output::Style::stdout(app.color)))?;
     }
-    let mut errors = 0;
-    let mut failures = 0;
-    let mut updates = 0;
-    for repo in &report.repositories {
-        let deps: usize = repo
-            .package_files
-            .iter()
-            .map(|f| f.dependencies.len())
-            .sum();
-        let proposals: usize = repo
-            .package_files
-            .iter()
-            .flat_map(|f| &f.dependencies)
-            .map(|d| d.updates.len())
-            .sum();
-        updates += proposals;
-        let advisories: usize = repo
-            .package_files
-            .iter()
-            .flat_map(|f| &f.dependencies)
-            .filter_map(|d| d.metadata.as_ref())
-            .map(|m| m.advisories.len())
-            .sum();
+    if app.verbose > 0
+        && let Some(stats) = &report.stats
+    {
         eprintln!(
-            "{}: {:?}, {deps} dependencies, {proposals} proposals{}{}",
-            repo.repository,
-            repo.status,
-            match advisories {
-                0 => String::new(),
-                1 => ", 1 known vulnerability".into(),
-                n => format!(", {n} known vulnerabilities"),
-            },
-            repo.reason
-                .as_ref()
-                .map_or(String::new(), |r| format!(" ({r})"))
-        );
-        for warning in &repo.warnings {
-            eprintln!("  warning: {warning}");
-        }
-        for failure in &repo.lookup_failures {
-            eprintln!("  lookup failed: {failure}");
-        }
-        for skipped in &repo.skipped {
-            eprintln!(
-                "  skipped: {}{}: {} ({})",
-                skipped.path,
-                skipped.line.map_or(String::new(), |l| format!(":{l}")),
-                skipped.value,
-                skipped.reason
-            );
-        }
-        for notice in &repo.notices {
-            eprintln!(
-                "  notice: {}: {}{}",
-                notice.path,
-                notice.text(),
-                notice
-                    .compare_url
-                    .as_ref()
-                    .map_or(String::new(), |url| format!(" ({url})"))
-            );
-        }
-        if repo.status == Status::Error {
-            errors += 1;
-        }
-        failures += repo.lookup_failures.len();
-    }
-    if let Some(stats) = &report.stats {
-        eprintln!(
-            "patchula: the Count visited {} repositor{} and found {updates} update{}; {} requests, {} 304s, {} cache hits, {} extraction hits, {} unique lookups",
-            report.repositories.len(),
-            if report.repositories.len() == 1 {
-                "y"
-            } else {
-                "ies"
-            },
-            if updates == 1 { "" } else { "s" },
+            "patchula: {} requests, {} 304s, {} cache hits, {} extraction hits, {} unique lookups",
             stats.requests,
             stats.not_modified,
             stats.cache_hits,
@@ -587,6 +493,16 @@ async fn batch(
                 .join(", ")
         );
     }
+    let errors = report
+        .repositories
+        .iter()
+        .filter(|repo| repo.status == Status::Error)
+        .count();
+    let failures: usize = report
+        .repositories
+        .iter()
+        .map(|repo| repo.lookup_failures.len())
+        .sum();
     Ok(if errors > 0 {
         1
     } else if failures > 0 && run.is_none() {
@@ -831,7 +747,12 @@ async fn source(
         .map_err(|e| (2, miette::miette!("cannot read the current directory: {e}")))?;
     let config = match &options.scan.config {
         Some(path) => Some(patchula_config::load(path).map_err(|e| (2, e))?),
-        None => missing_config(&dir, options.scan.default_config, services)?,
+        None => missing_config(
+            &dir,
+            options.scan.default_config,
+            services,
+            &output::Style::stderr(app.color),
+        )?,
     };
     Ok(Source::Local(dir, config.map(Box::new)))
 }
@@ -867,6 +788,7 @@ fn missing_config(
     dir: &std::path::Path,
     default_config: bool,
     services: &Services,
+    style: &output::Style,
 ) -> Result<Option<patchula_config::Config>, (u8, miette::Report)> {
     let found = patchula_config::discover(dir)
         .map_err(|e| (2, miette::miette!("cannot read {}: {e}", dir.display())))?;
@@ -891,19 +813,42 @@ fn missing_config(
             ),
         ));
     }
+    let shown = std::env::var_os(HOME_VAR)
+        .and_then(|home| dir.strip_prefix(home).ok())
+        .map_or_else(
+            || dir.display().to_string(),
+            |rest| format!("~/{}", rest.display()),
+        );
+    let choice = |key: &str, text: &str| format!("    {}  {text}\n", style.bold(key));
+    let mut question = String::new();
+    style.wrap(
+        &mut question,
+        0,
+        &format!(
+            "{}The Count finds no patchula.pkl in {shown}, so he has not been invited in.",
+            style.bat()
+        ),
+        output::Paint::Bold,
+    );
+    question.push_str(&format!(
+        "{}\n{}{}{}  {} ",
+        style.dim("  He waits at the door. Press a key:"),
+        choice(
+            "d",
+            &format!("use his defaults for this run {}", style.dim("(Enter)"))
+        ),
+        choice("w", "write a starter patchula.pkl and come in"),
+        choice("q", "quit"),
+        style.dim("›"),
+    ));
     let answer = services
-        .pick(
-            &format!(
-                "patchula: the Count finds no patchula.pkl in {}, so he has not been invited in.\n  [d] use his defaults for this run\n  [w] write a starter patchula.pkl and continue\n  [q] quit\nChoose [D/w/q]: ",
-                dir.display()
-            ),
-            Missing::from_key,
-        )
+        .pick(&question, Missing::from_key)
         .map_err(|e| (1, miette::miette!("cannot read the answer: {e}")))?;
     match answer {
         Missing::Defaults => {
             eprintln!(
-                "patchula: using the Count's defaults for this run; --default-config skips this question"
+                "{}",
+                style.dim("  Using the Count's defaults for this run; --default-config skips this question.\n")
             );
             defaults()
         }
@@ -915,8 +860,11 @@ fn missing_config(
                 .and_then(|mut file| file.write_all(patchula_config::STARTER.as_bytes()))
                 .map_err(|e| (1, miette::miette!("cannot write {}: {e}", path.display())))?;
             eprintln!(
-                "patchula: wrote {}; the Count is invited, and the file is yours to edit",
-                path.display()
+                "{}",
+                style.dim(&format!(
+                    "  Wrote {}; the Count is invited, and the file is yours to edit.\n",
+                    path.display()
+                ))
             );
             Ok(None)
         }
@@ -1096,6 +1044,7 @@ async fn report(
     };
     let http_options = http_options(scan)?;
     let recheck = recheck(app, run.is_some())?;
+    let spinner = progress::Spinner::start();
     let token = services
         .token()
         .await
@@ -1115,6 +1064,9 @@ async fn report(
             .map_err(|e| (1, miette::miette!("{e}")))?
             .with_recheck(recheck)
             .with_advisories();
+    if let Some(spinner) = &spinner {
+        engine = engine.with_progress(spinner.clone());
+    }
     if let Some(mise_data) = user_mise_data() {
         engine = engine.with_tool_seed(mise_data);
     }

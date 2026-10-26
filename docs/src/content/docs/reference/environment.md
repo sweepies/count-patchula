@@ -4,6 +4,7 @@ title: "Environment variables"
 | Variable | Used by | Meaning |
 |---|---|---|
 | `PATCHULA_TOKEN` | `lookup`, `run` | GitHub token; falls back to `GITHUB_TOKEN`, then `GH_TOKEN`, then `gh auth token --hostname github.com` |
+| `NO_COLOR` | all | set to anything but empty, turns colour off; `--color always` still forces it |
 | `PATCHULA_LOG` | all | log level: `error`, `warn` (the CLI default), `info` (the server default), `debug` or `trace`; `-vv` means `debug` |
 | `PATCHULA_RECHECK` | `run`, server | `now` or `next-run`: when a ticked checkbox says it takes effect |
 | `PATCHULA_TOOLS_DIR` | `run`, `tools` | the tool store, holding the lockfile tools and the pinned mise that lists `mise` tools; default `<cache>.tools` |

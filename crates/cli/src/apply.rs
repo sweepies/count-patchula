@@ -1,5 +1,6 @@
 //! `patchula apply`: look up the working tree here and write its updates into
 //! the files, through the same engine as the TUI's apply.
+use crate::output::{Paint, Style, count, kind_paint};
 use crate::{Services, cli, tui};
 use serde_json::{Value, json};
 use std::{
@@ -14,13 +15,15 @@ const RANK: [&str; 5] = ["major", "minor", "patch", "pin", "digest"];
 /// Some selected updates are still waiting after the command.
 const WAITING: u8 = 3;
 
-/// Diffs go to `out` and the summary to `err`, so a dry run's output is a patch.
+/// Diffs go to `out` and the summary to `err`, drawn in `style`, so a dry
+/// run's output is a patch.
 pub async fn command(
     app: &cli::App,
     options: &cli::Apply,
     services: &Services,
     out: &mut dyn Write,
     err: &mut dyn Write,
+    style: &Style,
 ) -> Result<u8, (u8, miette::Report)> {
     let usage = |message: String| {
         (
@@ -209,38 +212,58 @@ pub async fn command(
             write!(out, "{diff}").map_err(fail)?;
         }
     }
-    for warning in &warnings {
-        writeln!(err, "warning: {warning}").map_err(fail)?;
-    }
+    let mut text = summary(
+        style,
+        options,
+        &applied,
+        &skipped,
+        diffs.len(),
+        !warnings.is_empty(),
+        failures.len(),
+    );
     if options.copier {
-        write!(err, "{templates}").map_err(fail)?;
-    } else if !notices.is_empty() {
-        writeln!(
-            err,
-            "Template updates only copier applies; `patchula apply --copier` runs it for them:"
-        )
-        .map_err(fail)?;
-        for notice in &notices {
-            writeln!(err, "  {}  ({})", notice.text(), notice.path).map_err(fail)?;
+        if !templates.is_empty() {
+            style.heading(&mut text, 0, "Copier", notices.len(), Paint::Plain);
+            for line in templates.lines() {
+                style.wrap(&mut text, 2, line, Paint::Plain);
+            }
+        }
+    } else {
+        crate::output::notices(&mut text, style, 0, "Template updates", &notices);
+    }
+    crate::output::failures(&mut text, style, 0, &failures);
+    crate::output::warnings(&mut text, style, 0, &warnings);
+    let mut notes = Vec::new();
+    if !options.copier && !notices.is_empty() {
+        notes.push(
+            "Only copier applies template updates; patchula apply --copier runs it for them."
+                .to_owned(),
+        );
+    }
+    if filtered > 0 {
+        notes.push(format!(
+            "{} stayed out of it, by your filters.",
+            count(filtered, "more update", "more updates")
+        ));
+    }
+    if !failures.is_empty() {
+        notes.push(format!(
+            "{} failed, so those dependencies may have updates the Count cannot see.",
+            count(failures.len(), "lookup", "lookups")
+        ));
+    }
+    if applied.iter().any(|u| u.locked) {
+        notes.push(
+            "Lockfiles are not regenerated, so refresh them with your package manager.".into(),
+        );
+    }
+    if !notes.is_empty() {
+        text.push('\n');
+        for note in notes {
+            style.wrap(&mut text, 0, &note, Paint::Dim);
         }
     }
-    for failure in &failures {
-        writeln!(err, "lookup failed: {failure}").map_err(fail)?;
-    }
-    write!(
-        err,
-        "{}",
-        summary(
-            options,
-            &applied,
-            &skipped,
-            diffs.len(),
-            filtered,
-            !warnings.is_empty(),
-            failures.len()
-        )
-    )
-    .map_err(fail)?;
+    write!(err, "{text}").map_err(fail)?;
     Ok(code)
 }
 
@@ -282,76 +305,76 @@ fn templates(
     (out, moved)
 }
 
-/// What the Count did, or would do, in his own words.
+/// What the Count did, or would do, in his own words: the headline with its
+/// counts, then the updates applied and those left alone.
 fn summary(
+    style: &Style,
     options: &cli::Apply,
     applied: &[&tui::Update],
     skipped: &[(&tui::Update, &str)],
     files: usize,
-    filtered: usize,
     warned: bool,
     failed: usize,
 ) -> String {
-    let line = |u: &tui::Update| {
-        format!(
-            "  {:<6} {} {} -> {}  ({})\n",
-            u.kind,
-            u.name,
-            u.current,
-            u.target(),
-            u.file
-        )
+    let updates = |n: usize| count(n, "update", "updates");
+    let row = |u: &tui::Update| {
+        vec![
+            (u.kind.clone(), kind_paint(&u.kind)),
+            (u.name.clone(), Paint::Bold),
+            (format!("{} → {}", u.current, u.target()), Paint::Plain),
+            (u.file.clone(), Paint::Dim),
+        ]
     };
-    let count = |n: usize, what: &str| format!("{n} {what}{}", if n == 1 { "" } else { "s" });
-    let mut out = String::new();
-    if applied.is_empty() && skipped.is_empty() && failed > 0 {
-        out.push_str("The Count found nothing to apply, but only because some lookups failed.\n");
+    let writes = !options.check && !options.dry_run;
+    let headline = if applied.is_empty() && skipped.is_empty() && failed > 0 {
+        "The Count found nothing to apply, but only because some lookups failed.".to_owned()
+    } else if applied.is_empty() && skipped.is_empty() && warned {
+        "The Count found nothing to apply, but read the warnings first: a failed lookup finds nothing either.".to_owned()
     } else if applied.is_empty() && skipped.is_empty() {
-        out.push_str(if warned {
-            "The Count found nothing to apply, but read the warnings first: a failed lookup finds nothing either.\n"
-        } else {
-            "The Count found nothing to apply. Rest easy.\n"
-        });
-    } else if !applied.is_empty() {
-        let updates = count(applied.len(), "update");
-        let files = count(files, "file");
-        out.push_str(&if options.check {
-            format!("{updates} await in {files}. The Count wrote nothing:\n")
+        "The Count found nothing to apply. Rest easy.".to_owned()
+    } else if applied.is_empty() {
+        format!(
+            "The Count {} {} in place.",
+            if writes {
+                "could not write"
+            } else {
+                "would not write"
+            },
+            updates(skipped.len())
+        )
+    } else {
+        let files = count(files, "file", "files");
+        let n = updates(applied.len());
+        if options.check {
+            let verb = if applied.len() == 1 {
+                "awaits"
+            } else {
+                "await"
+            };
+            format!("{n} {verb} in {files}. The Count wrote nothing.")
         } else if options.dry_run {
-            format!("The Count would apply {updates} to {files}, but wrote nothing:\n")
+            format!("The Count would apply {n} to {files}, but wrote nothing.")
         } else {
-            format!("The Count applied {updates} to {files}:\n")
-        });
-        for u in applied {
-            out.push_str(&line(u));
+            format!("The Count applied {n} to {files}.")
         }
-    }
+    };
+    let mut out = String::new();
+    style.wrap(
+        &mut out,
+        0,
+        &format!("{}{headline}", style.bat()),
+        Paint::Bold,
+    );
+    let rows: Vec<_> = applied.iter().map(|u| row(u)).collect();
+    style.table(&mut out, 2, &rows, 3);
     if !skipped.is_empty() {
-        let what = count(skipped.len(), "update");
-        out.push_str(&if options.check || options.dry_run {
-            format!("He would leave {what} alone:\n")
-        } else {
-            format!("He left {what} alone:\n")
-        });
-        for (u, reason) in skipped {
-            out.push_str(&line(u));
-            out.push_str(&format!("         {reason}\n"));
+        style.heading(&mut out, 0, "Left alone", skipped.len(), Paint::Yellow);
+        let rows: Vec<_> = skipped.iter().map(|(u, _)| row(u)).collect();
+        for (line, (_, reason)) in style.lines(2, &rows, 3).iter().zip(skipped) {
+            out.push_str(line);
+            out.push('\n');
+            style.wrap(&mut out, 4, reason, Paint::Dim);
         }
-    }
-    if filtered > 0 {
-        out.push_str(&format!(
-            "{} stayed out of it, by your filters.\n",
-            count(filtered, "more update")
-        ));
-    }
-    if failed > 0 {
-        out.push_str(&format!(
-            "{} failed, so those dependencies may have updates the Count cannot see.\n",
-            count(failed, "lookup")
-        ));
-    }
-    if applied.iter().any(|u| u.locked) {
-        out.push_str("Lockfiles are not regenerated, so refresh them with your package manager.\n");
     }
     out
 }
