@@ -293,9 +293,8 @@ Container Registry:
 ghcr.io/sweepies/count-patchula:X.Y.Z
 ```
 
-The tags are each release's version without the `v`, and `latest`, which a
-prerelease does not move. There are no minor, major or edge tags, so pin the
-version and upgrade on purpose. Every image carries an SBOM and a provenance
+The tags are each release's version without the `v`, and `latest`. There are
+no minor, major or edge tags, so pin the version and upgrade on purpose. Every image carries an SBOM and a provenance
 attestation from BuildKit.
 
 It is Debian slim with `patchula`, mise and `git` (see [what the runner

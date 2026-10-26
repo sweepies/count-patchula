@@ -274,10 +274,9 @@ jobs:
         with:
           images: ${{ env.IMAGE }}
           # A release is X.Y.Z and latest, with no floating minor or major tags.
-          # A dry run builds the same
-          # labels, which the smoke test checks, and pushes nothing. GHCR reads
-          # a multi-platform image's description from its index annotations, so
-          # the annotations repeat the labels.
+          # A dry run builds the same labels, which the smoke test checks, and
+          # pushes nothing. GHCR reads a multi-platform image's description from
+          # its index annotations, so the annotations repeat the labels.
           tags: |
             type=raw,value=${{ steps.version.outputs.version }}
             type=raw,value=latest
