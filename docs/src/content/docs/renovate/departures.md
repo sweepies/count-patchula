@@ -151,6 +151,12 @@ compared. The rule is independent of `conformance/departures.json`.
 - **Count Patchula:** Reads files through the API; clones only for lockfile tools
 - **Why:** Speed
 
+### Writing the working tree {#local-apply}
+
+- **Renovate:** The local platform only does dry runs; it writes no files
+- **Count Patchula:** `patchula apply` and the terminal UI write updates into the working tree, with no branches or PRs
+- **Why:** Pinning and updating a checkout from scripts and pre-commit hooks, with the change left for you to review and commit
+
 ### A JSON report {#json-report}
 
 - **Renovate:** Log lines
