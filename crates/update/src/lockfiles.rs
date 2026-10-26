@@ -852,10 +852,15 @@ impl Runner {
         let mut spec = self.command(driver);
         // A first use installs the tool inside this call, from scratch.
         if !self.installed(&call.tools) {
-            self.clear_unproven(&call.tools).await;
-            self.seed(&call.tools);
+            let store = tools::lock_store(&self.mise_data, true).await?;
+            if !self.installed(&call.tools) {
+                self.clear_unproven(&call.tools).await;
+                self.seed(&call.tools);
+            }
+            drop(store);
             spec.timeout = tools::INSTALL_TIMEOUT;
         }
+        let _store = tools::lock_store(&self.mise_data, false).await?;
         if let Some(cwd) = &call.cwd {
             spec.cwd = cwd.clone();
         }

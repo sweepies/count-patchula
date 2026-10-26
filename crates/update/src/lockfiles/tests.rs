@@ -3064,3 +3064,21 @@ fn flake_branches_keep_the_directory_apart_from_the_input() {
         BTreeSet::from(["patchula/nix-dev--nixpkgs", "patchula/nix-dev-nixpkgs"])
     );
 }
+
+/// A run using the store holds it shared; removing versions waits for it,
+/// whichever process the run is in.
+#[tokio::test]
+async fn removals_wait_for_runs_using_the_tool_store() {
+    let temp = tempfile::tempdir().unwrap();
+    let run = tools::lock_store(temp.path(), false).await.unwrap();
+    let other = tools::lock_store(temp.path(), false).await.unwrap();
+    let dir = temp.path().to_owned();
+    let removal = tokio::spawn(async move { tools::lock_store(&dir, true).await });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(!removal.is_finished());
+    drop(run);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(!removal.is_finished());
+    drop(other);
+    removal.await.unwrap().unwrap();
+}

@@ -8,6 +8,11 @@ const USAGE: &str = "patchula-usage.json";
 /// `tool@version`s already seeded from the user's mise installs. Each is seeded
 /// at most once, so a copy that fails falls back to a normal install.
 const SEEDED: &str = "patchula-seeded.json";
+/// Held shared while a tool runs and exclusive while versions are removed, by
+/// every process using the store, so no run loses a tool it is using.
+const STORE_LOCK: &str = "patchula-store.lock";
+/// Held exclusive while the usage record is rewritten.
+const USAGE_LOCK: &str = "patchula-usage.lock";
 /// Tools whose mise installs are relocatable, so a hard-linked copy works from
 /// the Count's store. Python, Ruby and PHP builds embed their install path,
 /// .NET versions share one SDK root, and Rust goes through rustup.
@@ -21,6 +26,33 @@ pub fn tools_dir(workspace: &Path) -> PathBuf {
     std::env::var_os("PATCHULA_TOOLS_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace.with_file_name("tools"))
+}
+
+fn lock_file(dir: &Path, name: &str) -> Result<std::fs::File, String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    std::fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(name))
+        .map_err(|e| e.to_string())
+}
+
+/// Lock the store for a tool run (shared) or a removal (exclusive), waiting
+/// off the async runtime while another process holds it.
+pub(super) async fn lock_store(dir: &Path, exclusive: bool) -> Result<std::fs::File, String> {
+    let file = lock_file(dir, STORE_LOCK)?;
+    tokio::task::spawn_blocking(move || {
+        if exclusive {
+            file.lock()
+        } else {
+            file.lock_shared()
+        }
+        .map(|()| file)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("cannot lock the tool store: {e}"))
 }
 
 fn read_usage(dir: &Path) -> BTreeMap<String, i64> {
@@ -223,6 +255,15 @@ impl Runner {
             .usage
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _file = match lock_file(&self.mise_data, USAGE_LOCK)
+            .and_then(|file| file.lock().map(|()| file).map_err(|e| e.to_string()))
+        {
+            Ok(file) => file,
+            Err(error) => {
+                tracing::warn!(%error, "tool usage was not recorded");
+                return;
+            }
+        };
         let mut usage = read_usage(&self.mise_data);
         let now = chrono::Utc::now().timestamp();
         for (tool, version) in tools {
@@ -250,6 +291,7 @@ impl Runner {
     /// Install the pinned default toolchains, e.g. while building an image.
     pub async fn prewarm(&self) -> Result<Vec<String>, String> {
         let tools = defaults()?;
+        let _store = lock_store(&self.mise_data, true).await?;
         self.clear_unproven(&tools).await;
         self.seed(&tools);
         let specs: Vec<String> = tools.iter().map(|(t, v)| format!("{t}@{v}")).collect();
@@ -267,6 +309,7 @@ impl Runner {
             .iter()
             .map(|(t, v)| format!("{t}@{v}"))
             .collect();
+        let store = lock_store(&self.mise_data, true).await?;
         let stale: Vec<String> = read_usage(&self.mise_data)
             .into_iter()
             .filter(|(spec, used)| *used < cutoff && !keep.contains(spec))
@@ -279,12 +322,15 @@ impl Runner {
             .usage
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let file = lock_file(&self.mise_data, USAGE_LOCK)?;
+        file.lock().map_err(|e| e.to_string())?;
         let mut usage = read_usage(&self.mise_data);
         for spec in &stale {
             usage.remove(spec);
         }
         write_usage(&self.mise_data, &usage)?;
-        drop(_guard);
+        drop((file, _guard, store));
+        // nix store gc runs as a tool and leaves paths a running nix holds.
         let mut pruned = stale;
         if self.prune_nix().await? {
             pruned.push("nix store".into());

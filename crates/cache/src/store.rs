@@ -29,14 +29,16 @@ fn initialize(mut conn: Connection) -> Result<Connection> {
     if integrity != "ok" {
         return Err(Error::Corrupt);
     }
-    let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if version > 8 {
-        return Err(Error::FutureSchema(version));
-    }
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "journal_size_limit", 16 * 1024 * 1024)?;
-    let transaction = conn.transaction()?;
+    // The version is read under the write lock, so processes opening a new
+    // cache together migrate it once.
+    let transaction = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let version: i64 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version > 8 {
+        return Err(Error::FutureSchema(version));
+    }
     if version < 1 {
         transaction.execute_batch(include_str!("migrations/001.sql"))?;
     }
