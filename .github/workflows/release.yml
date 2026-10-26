@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version to release, such as 0.5.1, without the v
+        description: Version to release, such as 0.5.2, without the v
         required: true
         type: string
       dry_run:
@@ -52,7 +52,7 @@ jobs:
           # X.Y.Z, without leading zeros. Prereleases are not supported.
           semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
           if ! [[ "$VERSION" =~ $semver ]]; then
-            echo "::error::$VERSION is not a version such as 0.5.1"
+            echo "::error::$VERSION is not a version such as 0.5.2"
             exit 1
           fi
           if [ "$DRY_RUN" != true ] && [ "$GITHUB_REF" != refs/heads/main ]; then

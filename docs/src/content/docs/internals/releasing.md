@@ -7,7 +7,7 @@ A release is one run of the **Release** workflow
 (`.github/workflows/release.yml`). Run it from the Actions tab, or:
 
 ```sh
-gh workflow run release.yml -f version=0.5.1
+gh workflow run release.yml -f version=0.5.2
 ```
 
 Nobody bumps versions in a pull request or pushes a tag by hand. The workflow
@@ -49,7 +49,7 @@ and skips every push, the tag and the release. A dry run may start from any
 branch whose head passed CI, which is how a change to the workflow is tested:
 
 ```sh
-gh workflow run release.yml --ref my-branch -f version=0.5.1 -f dry_run=true
+gh workflow run release.yml --ref my-branch -f version=0.5.2 -f dry_run=true
 ```
 
 ## No CI on the bump commit

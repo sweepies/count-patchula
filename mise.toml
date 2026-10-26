@@ -233,7 +233,7 @@ run = 'communique generate "${usage_tag?}" --github-release'
 
 [tasks."release:bump"]
 description = "Set the release version: Cargo manifests, Cargo.lock, the docs' version pins, the CLI reference and the help snapshot"
-usage = 'arg "<version>" help="The new version, such as 0.5.1, without a leading v"'
+usage = 'arg "<version>" help="The new version, such as 0.5.2, without a leading v"'
 tools = { jq = "1.8.2" }
 run = '''
 #!/usr/bin/env bash
@@ -243,7 +243,7 @@ new="${usage_version?}"
 # are not supported.
 semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
 if ! [[ "$new" =~ $semver ]]; then
-  echo "$new is not a version such as 0.5.1" >&2
+  echo "$new is not a version such as 0.5.2" >&2
   exit 1
 fi
 old=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "patchula-cli") | .version')
