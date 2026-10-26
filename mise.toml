@@ -216,7 +216,7 @@ set -e
 # recursive scp cannot stat. A failed copy leaves the local copies unchanged and
 # does not fail the run; each path replaces its local copy only once the
 # archive has arrived whole.
-if [ "${#fetch[@]}" -gt 0 ]; then
+if [ -n "${usage_fetch:-}" ]; then
   work=$(mktemp -d)
   if timeout -k 10 300 boat exec "$id" --timeout 240 -- bash -c 'cd count-patchula && for path; do if [ -e "$path" ] || [ -L "$path" ]; then printf "%s\0" "$path"; fi; done | tar -czf ~/fetch.tgz --null -T -' bash "${fetch[@]}" > /dev/null &&
     timeout -k 10 300 boat scp "$id:/home/user/fetch.tgz" "$work/fetch.tgz" &&
