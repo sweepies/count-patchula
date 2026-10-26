@@ -955,6 +955,16 @@ mise	tools/mise/mise.toml	tak	latest	-
 mise	tools/mise/mise.toml	taplo	latest	-
 mise	tools/mise/mise.toml	usage	latest	-
 mise	tools/mise/mise.toml	wait-for-gh-rate-limit	latest	-
+nix	nix/nixvim/flake.lock	flake-parts	github:hercules-ci/flake-parts	-
+nix	nix/nixvim/flake.lock	nixpkgs	github:NixOS/nixpkgs/nixpkgs-unstable	-
+nix	nix/nixvim/flake.lock	systems	github:nix-systems/default/future-26.11	-
+nix	nix/nixvim/flake/dev/flake.lock	devshell	github:numtide/devshell	-
+nix	nix/nixvim/flake/dev/flake.lock	flake-compat	github:NixOS/flake-compat	-
+nix	nix/nixvim/flake/dev/flake.lock	git-hooks	github:cachix/git-hooks.nix	-
+nix	nix/nixvim/flake/dev/flake.lock	home-manager	github:nix-community/home-manager	-
+nix	nix/nixvim/flake/dev/flake.lock	nix-darwin	github:nix-darwin/nix-darwin	-
+nix	nix/nixvim/flake/dev/flake.lock	nuschtosSearch	github:NuschtOS/search	-
+nix	nix/nixvim/flake/dev/flake.lock	treefmt-nix	github:numtide/treefmt-nix	-
 npm	javascript/next.js/package.json	@actions/core	1.10.1	-
 npm	javascript/next.js/package.json	@ast-grep/cli	0.42.0	-
 npm	javascript/next.js/package.json	@babel/core	7.26.10	-
@@ -2845,3 +2855,4 @@ skipped	ci/gitaly/.gitlab-ci.yml:289	bitnamilegacy/pgbouncer:${PGBOUNCER_VERSION
 skipped	ci/gitaly/.gitlab-ci.yml:359	registry.gitlab.com/gitlab-org/gitlab-build-images/ubi-${UBI_VERSION}-golang-${GO_VERSION}-rust-${RUST_VERSION}:git-${CI_GIT_VERSION}	the image contains a GitLab CI variable
 skipped	ci/gitaly/.gitlab-ci.yml:544	${GITLAB_DEPENDENCY_PROXY}ruby:${RUBY_VERSION}	the image contains a GitLab CI variable
 skipped	ci/gitaly/.gitlab-ci.yml:561	${GITLAB_DEPENDENCY_PROXY}ruby:${RUBY_VERSION}	the image contains a GitLab CI variable
+skipped	nix/nixvim/flake/dev/flake.lock:258	path:../..	a path input changes with the repository

@@ -23,6 +23,7 @@ commit. If the tool fails, nothing is published.
 | `Gemfile.lock` | Bundler | `bundle lock --update <gems>` |
 | `composer.lock` | Composer | `composer update <packages> --with-all-dependencies --minimal-changes --no-install --no-scripts --no-plugins` |
 | `mise.lock` | mise | `mise lock` with the lockfile's recorded platforms |
+| `flake.lock` | nix | `nix flake update <input>`, or `nix flake update` for maintenance |
 
 Lifecycle scripts never run. A lockfile that does not change after an edit that
 changed recorded dependencies fails the branch, so a tool that says "up to date"
@@ -93,6 +94,23 @@ compiler or system libraries, but it needs an exact `x.y.z` version. `"compiled"
 uses mise's `php` tool, which builds PHP from source on first use and needs a C
 toolchain and PHP's build dependencies.
 
+### Nix
+
+nix is not in mise's registry, so the Count installs a pinned static build of
+nix 2.35.5 (Hydra's `buildStatic` binary for x86-64 and ARM64 Linux) through
+mise's http backend, checked against its SHA-256. It needs no `/nix`, daemon
+or root. There is no static nix for macOS, so on a Mac a `flake.lock` update
+fails with a clear reason.
+
+nix runs with a private chroot store (`--store local?root=…`) in the tool
+store, its own HOME and configuration directory, and only these settings:
+`experimental-features = nix-command flakes`, `accept-flake-config = false`
+(a flake's `nixConfig` is ignored) and `max-jobs = 0` (nothing is built). The
+system and user `nix.conf` are not read. The GitHub token reaches nix only as
+`access-tokens = github.com=…`, for its GitHub API calls. Locking reads
+`flake.nix` but does not evaluate the flake's outputs, so no repository code
+runs.
+
 ## The tool store
 
 Tools install into the Count's own mise data directory, separate from yours:
@@ -105,7 +123,11 @@ only installs and starts it. Each successful tool run records its
 - `patchula tools install` prewarms every pinned default, for example in an
   image build.
 - `patchula tools prune --days 30` uninstalls versions no run has used for 30
-  days. Pinned defaults stay.
+  days. Pinned defaults stay. It also empties the private nix store and nix's
+  fetcher cache, whatever `--days` says: they hold only downloaded flake
+  inputs, and a `nixpkgs` input alone takes several hundred MB. The next nix
+  run downloads what it needs again, so run prune on a schedule if you update
+  flakes.
 - A version the store has never run successfully is reinstalled from scratch on
   first use, with a 30-minute install allowance. This recovers from an install
   cut short by a timeout or crash, which can leave a directory mise treats as

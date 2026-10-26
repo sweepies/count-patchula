@@ -25,6 +25,10 @@ pub fn edits(
         // workspace=true is inventory; the root declaration owns its version.
         return Ok(Vec::new());
     }
+    if dep.manager == Manager::Nix {
+        // A flake input is locked, never declared: nix rewrites the lock.
+        return Ok(Vec::new());
+    }
     if dep.location.pointer == "/flux-version" {
         return Err("generated Flux bundles require regeneration".into());
     }

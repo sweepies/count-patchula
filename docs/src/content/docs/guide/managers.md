@@ -38,6 +38,7 @@ quoting, comments and formatting.
 | `composer` | `composer.json` | `composer.lock` |
 | `gitlabci` | `.gitlab-ci.yml`, `*.gitlab-ci.yml` (and `.yaml`) | |
 | `gitlabci-include` | `.gitlab-ci.yml`, `*.gitlab-ci.yml` (and `.yaml`) | |
+| `nix` | `flake.lock` beside a `flake.nix` | `flake.lock` |
 | `regex` | whatever your [extractors](/guide/configuration/#custom-extractors) select | |
 
 Lockfiles provide the current version where they exist. Their transitive
@@ -286,6 +287,32 @@ environment that ignores any repository `.bundle/config`.
 version constrains resolution; extension requirements do not, since they
 describe where the app is deployed, not the runner.
 
+## Nix
+
+`nix` reads the `flake.lock` next to each `flake.nix`. Every direct input of
+the root flake is a dependency named after the input, such as `nixpkgs`, with
+its fully qualified root URL as the package (`https://github.com/NixOS/nixpkgs`)
+and the reference it was written with as the current value
+(`github:NixOS/nixpkgs/nixos-unstable`). Inputs that only `follows` another one
+have no lock of their own and are not dependencies. Transitive inputs move with
+the input that brings them in.
+
+The Count asks nix what each reference points at now, with
+`nix flake prefetch`, and proposes the new revision as a `digest` update dated
+by the commit's `lastModified`, so the release-age wait applies. The branch,
+`patchula/nix-nixpkgs`, runs `nix flake update nixpkgs`, and the lock nix
+writes is the whole change; `flake.nix` is never edited. An input pinned to a
+tag or commit in its URL, such as `github:numtide/flake-utils/v1.0.0`, does not
+move, the same as with nix itself.
+
+Inputs nix would fetch from outside the repository are skipped with a reason:
+`path:` and `git+file:` inputs that leave the repository, ssh URLs, plain
+`http`, and Mercurial. A `path:` input inside the repository changes with the
+repository, so it is skipped too. After nix runs, every node it added or changed
+in the lock is checked the same way, and the branch fails rather than publish
+a lock that reaches outside. How nix runs is under
+[Lockfiles](/guide/lockfiles/#nix).
+
 ## Kinds
 
 Every dependency has a kind, which rules can select: `production`,
@@ -293,7 +320,8 @@ Every dependency has a kind, which rules can select: `production`,
 `reusable-workflow` and `runner` for workflows, with GitLab CI includes and
 components as `reusable-workflow`; `container-image`; `tool` and
 `toolchain` for mise tools and pinned toolchains; `go-directive`; `provider`
-and `module` for Terraform; `chart` for Helm; `template` for Copier; and
+and `module` for Terraform; `chart` for Helm; `template` for Copier;
+`flake-input` for Nix; and
 `transitive` for a
 [vulnerable lockfile-only package](/guide/security/#lockfile-only-packages).
 [Reference data](/guide/configuration/#reference-data) also has the kind

@@ -206,7 +206,11 @@ impl Engine {
     /// store, through its executor. An in-memory cache has neither.
     fn look_up_mise_tools_with_runner(&mut self) {
         if let Some(runner) = &self.lockfiles {
-            self.sources = self.sources.clone().with_mise(runner.mise_lookup());
+            self.sources = self
+                .sources
+                .clone()
+                .with_mise(runner.mise_lookup())
+                .with_nix(std::sync::Arc::new(runner.clone()));
         }
     }
     pub fn with_lockfile_runner(mut self, runner: patchula_update::lockfiles::Runner) -> Self {
@@ -233,10 +237,14 @@ impl Engine {
         let enabled = self
             .versions_host_override
             .unwrap_or(config.is_none_or(|config| config.use_versions_host));
-        (
-            format!("{enabled}:{}", word(&dep.source)),
-            dep.package.clone(),
-        )
+        // A flake input is looked up by the reference it was written with: the
+        // same repository can be followed on different branches.
+        let package = if dep.source == Source::Nix {
+            &dep.current
+        } else {
+            &dep.package
+        };
+        (format!("{enabled}:{}", word(&dep.source)), package.clone())
     }
     async fn lookup_key(
         sources: &Sources,

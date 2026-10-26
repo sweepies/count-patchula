@@ -112,6 +112,24 @@ impl Executor for SystemExecutor {
                         {
                             message = message.replace(token, "[redacted]");
                         }
+                        // nix reads its per-host tokens from NIX_CONFIG.
+                        if let Some(config) = spec
+                            .env
+                            .get(std::ffi::OsStr::new("NIX_CONFIG"))
+                            .and_then(|s| s.to_str())
+                        {
+                            for token in config
+                                .lines()
+                                .filter_map(|line| line.trim().strip_prefix("access-tokens"))
+                                .flat_map(|tokens| {
+                                    tokens.trim_start_matches([' ', '=']).split_whitespace()
+                                })
+                                .filter_map(|entry| entry.split_once('=').map(|(_, token)| token))
+                                .filter(|token| !token.is_empty())
+                            {
+                                message = message.replace(token, "[redacted]");
+                            }
+                        }
                         if let Some(value) = spec
                             .env
                             .get(std::ffi::OsStr::new("GIT_CONFIG_VALUE_0"))

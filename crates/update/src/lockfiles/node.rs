@@ -262,6 +262,7 @@ impl Runner {
             },
         )
         .await
+        .map(drop)
     }
     async fn npm(
         &self,
@@ -290,6 +291,7 @@ impl Runner {
             },
         )
         .await
+        .map(drop)
     }
     async fn aube(
         &self,
@@ -332,6 +334,7 @@ impl Runner {
             },
         )
         .await
+        .map(drop)
     }
     async fn yarn(
         &self,

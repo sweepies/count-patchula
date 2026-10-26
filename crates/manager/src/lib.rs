@@ -21,6 +21,8 @@ mod locked;
 pub use locked::Locked;
 mod maven;
 mod mise;
+mod nix;
+pub use nix::refusal as flake_input_refusal;
 mod npm;
 mod nuget;
 mod precommit;
@@ -200,6 +202,7 @@ pub fn supported(manager: Manager) -> bool {
         | Manager::Composer
         | Manager::Gitlabci
         | Manager::GitlabciInclude
+        | Manager::Nix
         | Manager::Regex => true,
     }
 }
@@ -306,6 +309,7 @@ impl Scanner {
             Manager::Gitlabci | Manager::GitlabciInclude => {
                 leaf.ends_with(".gitlab-ci.yml") || leaf.ends_with(".gitlab-ci.yaml")
             }
+            Manager::Nix => matches!(leaf, "flake.nix" | "flake.lock"),
             Manager::Devcontainer => {
                 matches!(leaf, "devcontainer.json" | ".devcontainer.json")
             }
@@ -413,6 +417,8 @@ impl Scanner {
                 terraform::extract(path, text, &terraform)
             } else if self.selected(Manager::Composer, path) {
                 composer::extract(path, text, files)
+            } else if self.selected(Manager::Nix, path) {
+                nix::extract(path, text, files, &mut result.skipped)
             } else if self.selected(Manager::Bundler, path) {
                 bundler::extract(path, text, files)
             } else if self.selected(Manager::Nuget, path) {

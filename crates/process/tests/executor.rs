@@ -61,3 +61,20 @@ async fn output_past_the_limit_is_an_error_when_it_must_be_complete() {
     let error = SystemExecutor.run(command).await.unwrap_err();
     assert!(error.contains("size limit"), "{error}");
 }
+
+#[tokio::test]
+async fn a_nix_access_token_never_appears_in_an_error() {
+    let token = "nix-token-for-the-test";
+    let config =
+        format!("experimental-features = nix-command flakes\naccess-tokens = github.com={token}\n");
+    let error = SystemExecutor
+        .run(spec(
+            "/bin/sh",
+            &["-c", "echo \"failed with $NIX_CONFIG\" >&2; exit 1"],
+            &[("NIX_CONFIG", &config)],
+        ))
+        .await
+        .unwrap_err();
+    assert!(error.contains("github.com=[redacted]"), "{error}");
+    assert!(!error.contains(token), "{error}");
+}
