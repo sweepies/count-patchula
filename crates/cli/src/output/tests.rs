@@ -148,13 +148,17 @@ fn a_terminal_fits_rows_to_its_width_but_leaves_links_whole() {
         text.contains("  major  actions/checkout  v4.1.0 → v5.0.0    .github/workf…\n"),
         "{text}"
     );
-    for line in text
-        .lines()
-        .filter(|line| !line.contains("GHSA-") && !line.contains("https://"))
-    {
+    for line in text.lines().filter(|line| {
+        !line.contains("GHSA-") && !line.contains("https://") && !line.contains("template ")
+    }) {
         let width = console::measure_text_width(line);
         assert!(width <= 60, "{width}: {line}");
     }
+    // A notice keeps its template and versions; its path gives way.
+    assert!(
+        text.contains("  template gh:acme/template: v0.16.0 → v0.23.0 available  .copier…\n"),
+        "{text}"
+    );
     // A row too wide even with its flexible column cut keeps every version.
     assert!(
         text.contains("lodash 4.17.20  GHSA-35jh-r3h4-6jhm (CVE-2021-23337)  fixed in 4.17.21\n"),

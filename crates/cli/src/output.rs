@@ -643,7 +643,7 @@ pub fn notices(
                 ]
             })
             .collect();
-        for (line, notice) in style.lines(indent + 2, &rows, 0).iter().zip(notices) {
+        for (line, notice) in style.lines(indent + 2, &rows, 1).iter().zip(notices) {
             let _ = writeln!(out, "{line}");
             if let Some(url) = &notice.compare_url {
                 style.url(out, indent + 4, url);
