@@ -10,7 +10,16 @@ config](/renovate/migrating/).
 ## Where the config lives
 
 The Count reads `patchula.pkl` at the repository root. A repository without
-one is skipped, so nothing happens to a repository that did not ask.
+one is skipped, so nothing happens to a repository that did not ask. That holds
+for `run` and `lookup` on named repositories, `--all-repos` and the server.
+
+The working tree is different, because the person running the command is the
+one asking. `lookup`, `tui` and `run --dry-run` with no repository named, in a
+checkout with no `patchula.pkl`, ask at a terminal whether to use the defaults
+for this run, write a starter `patchula.pkl`, or quit. The starter file is
+only `amends "PatchulaConfig.pkl"` and a comment. Without a terminal they fail
+and name the two ways on: `--default-config` for the defaults this run, or a
+committed `patchula.pkl`.
 
 ```pkl
 // patchula.pkl

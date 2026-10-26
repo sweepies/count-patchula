@@ -1,3 +1,4 @@
 amends "PatchulaConfig.pkl"
 
-// The repository adds no policy beyond the explicit patchula defaults.
+// The Count's defaults, with no policy of your own yet. `patchula config schema`
+// prints every field with its default; set the ones you want to change here.

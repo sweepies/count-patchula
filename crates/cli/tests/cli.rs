@@ -393,8 +393,34 @@ fn no_repository_reads_the_working_tree_and_a_real_run_needs_it_pushed() {
     let dir = tempfile::tempdir().unwrap();
     let dir = dir.path();
     // The working tree needs a config to read.
+    // Without a terminal, a working tree with no config is refused, not asked
+    // about, and --default-config reads it with the Count's defaults.
     refused(dir, &["lookup"], "has no patchula.pkl");
     refused(dir, &["run", "--dry-run"], "has no patchula.pkl");
+    refused(dir, &["tui", "--once"], "has no patchula.pkl");
+    needs_token(dir, &["lookup", "--default-config"]);
+    needs_token(dir, &["run", "--dry-run", "--default-config"]);
+    assert!(!dir.join("patchula.pkl").exists());
+    refused(
+        dir,
+        &["lookup", "--default-config", "demo/app"],
+        "--default-config is for the working tree",
+    );
+    refused(
+        dir,
+        &["run", "--default-config"],
+        "--default-config is for the working tree",
+    );
+    refused(
+        dir,
+        &["lookup", "--default-config", "--config", "policy.pkl"],
+        "cannot be combined with --config",
+    );
+    refused(
+        dir,
+        &["lookup", "--default-config", "--remote", "demo/app"],
+        "--default-config only works on this machine",
+    );
     refused(
         dir,
         &["lookup", "--config-dir", "policy"],

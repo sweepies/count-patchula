@@ -443,3 +443,71 @@ async fn a_missing_signed_out_or_hung_github_cli_gives_no_token() {
         assert_eq!(gh.calls.lock().unwrap().len(), 1);
     }
 }
+
+#[test]
+fn a_working_tree_without_config_asks_once_and_never_without_a_terminal() {
+    use super::{Missing, missing_config};
+    let pressing = |key: Option<char>| Services {
+        key,
+        ..Default::default()
+    };
+    let defaults = serde_json::to_value(patchula_config::defaults().unwrap()).unwrap();
+    let as_json = |config: Option<patchula_config::Config>| {
+        serde_json::to_value(config.expect("a config for this run")).unwrap()
+    };
+
+    // d and Enter use the defaults for this run and write nothing.
+    for key in ['d', 'D', '\n'] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = missing_config(dir.path(), false, &pressing(Some(key))).unwrap();
+        assert_eq!(as_json(config), defaults, "{key:?}");
+        assert!(!dir.path().join("patchula.pkl").exists());
+    }
+
+    // w writes the starter file and leaves the engine to read it.
+    let dir = tempfile::tempdir().unwrap();
+    assert!(
+        missing_config(dir.path(), false, &pressing(Some('w')))
+            .unwrap()
+            .is_none()
+    );
+    let written = std::fs::read_to_string(dir.path().join("patchula.pkl")).unwrap();
+    assert_eq!(written, patchula_config::STARTER);
+    // With the file there, nobody is asked again.
+    assert!(
+        missing_config(dir.path(), false, &pressing(Some('q')))
+            .unwrap()
+            .is_none()
+    );
+
+    // q quits without writing.
+    let dir = tempfile::tempdir().unwrap();
+    let (code, error) = missing_config(dir.path(), false, &pressing(Some('q'))).unwrap_err();
+    assert_eq!(code, 2);
+    assert!(
+        error.to_string().contains("the Count stays outside"),
+        "{error}"
+    );
+    assert!(!dir.path().join("patchula.pkl").exists());
+
+    // Without a terminal it never asks, and says how to go on.
+    let (code, error) = missing_config(dir.path(), false, &pressing(None)).unwrap_err();
+    assert_eq!(code, 2);
+    assert!(error.to_string().contains("has no patchula.pkl"), "{error}");
+    let help = error.help().unwrap().to_string();
+    assert!(
+        help.contains("--default-config") && help.contains("amends \"PatchulaConfig.pkl\""),
+        "{help}"
+    );
+
+    // --default-config answers for it, at a terminal or not.
+    for services in [pressing(None), pressing(Some('q'))] {
+        let config = missing_config(dir.path(), true, &services).unwrap();
+        assert_eq!(as_json(config), defaults);
+    }
+    assert!(!dir.path().join("patchula.pkl").exists());
+
+    assert_eq!(Missing::from_key('W'), Some(Missing::Write));
+    assert_eq!(Missing::from_key('n'), Some(Missing::Quit));
+    assert_eq!(Missing::from_key('x'), None);
+}

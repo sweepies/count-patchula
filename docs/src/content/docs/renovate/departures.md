@@ -97,8 +97,8 @@ of the optional update classification rules in `conformance/departures.json`.
 ### No onboarding pull requests {#no-onboarding}
 
 - **Renovate:** Opens an onboarding PR in repos without config
-- **Count Patchula:** Repos without config are skipped
-- **Why:** Configs are added deliberately
+- **Count Patchula:** Repos without config are skipped. In a local working tree with no config, the CLI offers its defaults or a starter `patchula.pkl` at a terminal, and `--default-config` uses the defaults without asking
+- **Why:** Configs are added deliberately; a person running the CLI in their own checkout is the one deciding
 
 ### Token from the GitHub CLI {#gh-token}
 

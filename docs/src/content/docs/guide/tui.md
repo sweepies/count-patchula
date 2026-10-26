@@ -17,6 +17,11 @@ It takes the same flags as [`lookup`](/reference/cli/#patchula-lookup): `--cache
 stdout; `--once` prints a snapshot of the updates and exits, for pipes and CI
 logs.
 
+In a checkout with no `patchula.pkl`, the Count asks before he starts, with one
+keypress: `d` (or Enter) uses his defaults for this run, `w` writes a starter
+`patchula.pkl` and carries on, and `q` quits. `--default-config` answers `d`
+up front, and is required when there is no terminal to ask on.
+
 ```text
  Count Patchula   1 repository · 2576 dependencies · 131 updates · 2 selected
  1 Updates │ 2 Held back │ 3 Dependencies │ 4 Warnings │ 5 Stats

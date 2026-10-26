@@ -163,6 +163,7 @@ Report available updates without writing; with no repository, reads the working 
 | `--go-freshness-secs <SECS>` | Minimum freshness seconds for Go proxy lists/latest; 0 uses upstream policy. | `3600` |
 | `--config <FILE>` | Local Pkl override applied to every selected repository. |  |
 | `--config-dir <DIR>` | Per-repository local overrides: `DIR/<owner>/<name>.pkl` wins over `DIR/<name>.pkl`. Unmatched repositories use their own `patchula.pkl`, and are skipped without one. All matched files are validated before repository scans. Mutually exclusive with `--config`. |  |
+| `--default-config` | Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking.  Only for the working tree: a named repository invites the Count with its own `patchula.pkl`. Mutually exclusive with `--config` and `--config-dir`. |  |
 | `--remote` | Run on a Count Patchula server: PATCHULA_SERVER, or the one found for this checkout.  The server uses its App's credentials and caches. You sign in with GitHub on first use, and need push access to each repository. Local config, cache and HTTP flags do not apply. In a checkout whose repository the Count serves, a run with no repository offers the server once and remembers the answer. |  |
 | `--here` | Run on this machine, even if you chose to run this checkout on a server. |  |
 | `-h --help` | Print help |  |
@@ -193,6 +194,7 @@ With no repository, `--dry-run` plans from the working tree in the current direc
 | `--go-freshness-secs <SECS>` | Minimum freshness seconds for Go proxy lists/latest; 0 uses upstream policy. | `3600` |
 | `--config <FILE>` | Local Pkl override applied to every selected repository. |  |
 | `--config-dir <DIR>` | Per-repository local overrides: `DIR/<owner>/<name>.pkl` wins over `DIR/<name>.pkl`. Unmatched repositories use their own `patchula.pkl`, and are skipped without one. All matched files are validated before repository scans. Mutually exclusive with `--config`. |  |
+| `--default-config` | Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking.  Only for the working tree: a named repository invites the Count with its own `patchula.pkl`. Mutually exclusive with `--config` and `--config-dir`. |  |
 | `--remote` | Run on a Count Patchula server: PATCHULA_SERVER, or the one found for this checkout.  The server uses its App's credentials and caches. You sign in with GitHub on first use, and need push access to each repository. Local config, cache and HTTP flags do not apply. In a checkout whose repository the Count serves, a run with no repository offers the server once and remembers the answer. |  |
 | `--here` | Run on this machine, even if you chose to run this checkout on a server. |  |
 | `--dry-run` | Print planned branches, files and unified diffs without writing to GitHub. |  |
@@ -281,6 +283,7 @@ Browse dependencies and updates in the terminal; with no repository, apply selec
 | `--go-freshness-secs <SECS>` | Minimum freshness seconds for Go proxy lists/latest; 0 uses upstream policy. | `3600` |
 | `--config <FILE>` | Local Pkl override applied to every selected repository. |  |
 | `--config-dir <DIR>` | Per-repository local overrides: `DIR/<owner>/<name>.pkl` wins over `DIR/<name>.pkl`. Unmatched repositories use their own `patchula.pkl`, and are skipped without one. All matched files are validated before repository scans. Mutually exclusive with `--config`. |  |
+| `--default-config` | Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking.  Only for the working tree: a named repository invites the Count with its own `patchula.pkl`. Mutually exclusive with `--config` and `--config-dir`. |  |
 | `--remote` | Run on a Count Patchula server: PATCHULA_SERVER, or the one found for this checkout.  The server uses its App's credentials and caches. You sign in with GitHub on first use, and need push access to each repository. Local config, cache and HTTP flags do not apply. In a checkout whose repository the Count serves, a run with no repository offers the server once and remembers the answer. |  |
 | `--here` | Run on this machine, even if you chose to run this checkout on a server. |  |
 | `--once` | Print a plain-text snapshot of the updates and exit, for pipes and CI logs. |  |
