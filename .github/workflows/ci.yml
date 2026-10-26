@@ -54,7 +54,7 @@ jobs:
               # The conformance tests read the departures page.
               docs/src/content/docs/renovate/departures.md) rust=true ;;
               docs/* | assets/* | skills/* | .claude/* | conformance/README.md | README.md | AGENTS.md | CLAUDE.md | LICENSE | .gitignore | .deepsource.toml | socket.yml | communique.toml | tak.toml) ;;
-              action.yml | .github/workflows/action.yml | .github/workflows/release.yml | .github/workflows/benchmarks.yml) actions=true ;;
+              action.yml | .github/workflows/action.yml | .github/workflows/release.yml | .github/workflows/benchmarks.yml | .github/workflows/boat-snapshot.yml) actions=true ;;
               # Anything else, including "unknown", may change what the Rust jobs check.
               *) rust=true ;;
             esac
@@ -68,23 +68,103 @@ jobs:
             echo "Workflow lint only: $([ "$rust" = false ] && echo "$actions" || echo false)"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  ci:
+  # The Rust jobs run in boat sandboxes started from the CI snapshot when this
+  # job finds the boat key and a ready snapshot. Otherwise (a fork pull
+  # request, which gets no OIDC token, no Infisical binding, or no snapshot
+  # yet) they run on GitHub runners with the mbx cache. The key lives in
+  # Infisical as boat-api-key and is read through GitHub OIDC. See
+  # docs/src/content/docs/internals/boat.md.
+  boat:
+    name: Boat snapshot
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      snapshot: ${{ steps.current.outputs.snapshot }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Cache mise installs, including the task-scoped lockfile toolchains the
-      # real-tool tests install (Python, Ruby, .NET, PHP), keyed on mise.toml.
+      - if: vars.INFISICAL_PROJECT_ID != '' && (vars.INFISICAL_BOAT_IDENTITY_ID || vars.INFISICAL_IDENTITY_ID) != ''
+        # A refused token means the runners; it never fails CI.
+        continue-on-error: true
+        uses: Infisical/secrets-action@d2e351f16c6ca20d17c85e6c992e04bdeb64e87d # v1.0.18
+        with:
+          method: oidc
+          identity-id: ${{ vars.INFISICAL_BOAT_IDENTITY_ID || vars.INFISICAL_IDENTITY_ID }}
+          project-id: ${{ vars.INFISICAL_PROJECT_ID }}
+          env-slug: prod
+          secret-name: boat-api-key
+      - if: env['boat-api-key'] != ''
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          install: false
+          cache: false
+      - id: current
+        env:
+          BOAT_API_KEY: ${{ env['boat-api-key'] }}
+          MISE_ENABLE_TOOLS: jq
+        run: |
+          snapshot=""
+          if [ -z "$BOAT_API_KEY" ]; then
+            reason="no boat key from Infisical"
+          elif ! snapshot=$(mise run boat:current); then
+            reason="the boat API did not list the snapshots"
+            snapshot=""
+          elif [ -z "$snapshot" ]; then
+            reason="no ready snapshot; run the Boat snapshot workflow"
+          fi
+          if [ -n "$snapshot" ]; then
+            echo "snapshot=$snapshot" >> "$GITHUB_OUTPUT"
+            echo "Rust jobs: boat, from $snapshot" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::notice::Rust jobs run on GitHub runners: $reason"
+            echo "Rust jobs: GitHub runners ($reason)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  ci:
+    needs: [changes, boat]
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: needs.boat.outputs.snapshot != ''
+        uses: Infisical/secrets-action@d2e351f16c6ca20d17c85e6c992e04bdeb64e87d # v1.0.18
+        with:
+          method: oidc
+          identity-id: ${{ vars.INFISICAL_BOAT_IDENTITY_ID || vars.INFISICAL_IDENTITY_ID }}
+          project-id: ${{ vars.INFISICAL_PROJECT_ID }}
+          env-slug: prod
+          secret-name: boat-api-key
+      # On a runner, cache mise installs, including the task-scoped lockfile
+      # toolchains the real-tool tests install (Python, Ruby, .NET, PHP), keyed
+      # on mise.toml. On boat the snapshot holds them, so mise only runs tasks.
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
-          cache: true
+          install: ${{ needs.boat.outputs.snapshot == '' }}
+          cache: ${{ needs.boat.outputs.snapshot == '' }}
+      - name: Run the checks on boat
+        if: needs.boat.outputs.snapshot != ''
+        env:
+          BOAT_API_KEY: ${{ env['boat-api-key'] }}
+          SNAPSHOT: ${{ needs.boat.outputs.snapshot }}
+          # Only the boat tasks' tools on the runner, not the workspace toolchains.
+          MISE_ENABLE_TOOLS: jq,http:boat
+        run: mise run boat:run --from "$SNAPSHOT" -- mise run ci
       # Transport mbx objects, predictions and build-script state between runners.
       # Default-branch pushes publish in the post step; PRs only restore.
       - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
+        if: needs.boat.outputs.snapshot == ''
         id: mbx
         # The pinned action has no nonfatal-cache input. This also covers its post step.
         continue-on-error: true
@@ -97,6 +177,7 @@ jobs:
           cache-generation: v3-ci-objects
           save-on-pull-request: false
       - name: Inspect cache configuration
+        if: needs.boat.outputs.snapshot == ''
         continue-on-error: true
         env:
           CACHE_KEY: ${{ steps.mbx.outputs.cache-primary-key }}
@@ -106,8 +187,10 @@ jobs:
         run: |
           printf 'mbx key=%s exact-hit=%s save=%s (%s)\n' "$CACHE_KEY" "$CACHE_HIT" "$CACHE_SAVE_ELIGIBLE" "$CACHE_SAVE_REASON"
           mise run cache:doctor
-      - run: mise run ci
+      - if: needs.boat.outputs.snapshot == ''
+        run: mise run ci
       - name: Measure build storage before cache export
+        if: needs.boat.outputs.snapshot == ''
         run: |
           du -sh target/.
           df -h . "${RUNNER_TEMP}"
@@ -130,18 +213,31 @@ jobs:
 
   corpus:
     name: Corpus lookup
-    needs: changes
+    needs: [changes, boat]
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - if: needs.boat.outputs.snapshot != ''
+        uses: Infisical/secrets-action@d2e351f16c6ca20d17c85e6c992e04bdeb64e87d # v1.0.18
+        with:
+          method: oidc
+          identity-id: ${{ vars.INFISICAL_BOAT_IDENTITY_ID || vars.INFISICAL_IDENTITY_ID }}
+          project-id: ${{ vars.INFISICAL_PROJECT_ID }}
+          env-slug: prod
+          secret-name: boat-api-key
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
-          cache: true
+          install: ${{ needs.boat.outputs.snapshot == '' }}
+          cache: ${{ needs.boat.outputs.snapshot == '' }}
       - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
+        if: needs.boat.outputs.snapshot == ''
         continue-on-error: true
         with:
           backend: github
@@ -151,21 +247,40 @@ jobs:
           cache-generation: v3-corpus-objects
           save-on-pull-request: false
       # Registry validators and catalogs carry over between runs, like a real
-      # deployment's cache; a cold run still works, just slower.
+      # deployment's cache; a cold run still works, just slower. The cache sits
+      # in the checkout so that boat:run copies it into the sandbox and back.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ runner.temp }}/corpus-cache
+          path: .corpus-cache
           key: corpus-v2-${{ github.run_id }}
           restore-keys: corpus-v2-
       # A dry run looks every dependency up and plans every branch, editing
       # each manifest in memory, without writing anything.
-      - name: Look up and plan every corpus dependency
+      - name: Look up and plan every corpus dependency on boat
+        if: needs.boat.outputs.snapshot != ''
+        env:
+          # The read-only job token is the one secret the sandbox receives.
+          PATCHULA_TOKEN: ${{ github.token }}
+          BOAT_API_KEY: ${{ env['boat-api-key'] }}
+          SNAPSHOT: ${{ needs.boat.outputs.snapshot }}
+          # Only the boat tasks' tools on the runner, not the workspace toolchains.
+          MISE_ENABLE_TOOLS: jq,http:boat
+        run: |
+          mkdir -p .corpus-cache
+          mise run boat:run --from "$SNAPSHOT" --pass PATCHULA_TOKEN --fetch .corpus-cache --fetch corpus-report.json --fetch corpus.log -- \
+            bash -c "mise run corpus:check --cache /home/user/count-patchula/.corpus-cache > corpus-report.json 2> corpus.log" ||
+            { grep -v '^[-+@ ]' corpus.log | tail -40; exit 1; }
+      - name: Look up and plan every corpus dependency on this runner
+        if: needs.boat.outputs.snapshot == ''
         env:
           PATCHULA_TOKEN: ${{ github.token }}
-          CACHE_DIR: ${{ runner.temp }}/corpus-cache
         run: |
-          mkdir -p "$CACHE_DIR"
-          mise run corpus:check --cache "$CACHE_DIR" > corpus-report.json 2> corpus.log || { grep -v '^[-+@ ]' corpus.log | tail -40; exit 1; }
+          mkdir -p .corpus-cache
+          mise run corpus:check --cache "$PWD/.corpus-cache" > corpus-report.json 2> corpus.log || { grep -v '^[-+@ ]' corpus.log | tail -40; exit 1; }
+      - name: Summarize the corpus
+        env:
+          MISE_ENABLE_TOOLS: jq
+        run: |
           jq='mise exec jq@1.8.2 -- jq'
           {
             echo '### Corpus'
@@ -194,7 +309,7 @@ jobs:
   # cancelled ones, or a failed path check, do not.
   result:
     name: CI result
-    needs: [changes, ci, actions, corpus]
+    needs: [changes, boat, ci, actions, corpus]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
