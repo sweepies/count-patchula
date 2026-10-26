@@ -1,8 +1,8 @@
 # Dependency corpus
 
 Real manifests from permissively licensed projects, copied at fixed commits.
-They give the Count a large, varied dependency set to chew on in CI: about 2,750
-dependencies across 21 managers.
+They give the Count a large, varied dependency set to chew on in CI: about 2,800
+dependencies across 23 managers.
 
 - `mise run test` extracts the whole corpus offline and compares it with
   `tests/corpus-extraction.tsv`. A change to extraction shows up as a diff
