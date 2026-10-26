@@ -21,11 +21,20 @@ Rust jobs run `mise run boat:run`, which:
    line. The corpus job passes its read-only `github.token`; nothing else
    leaves the runner;
 4. runs the command with no time limit and keeps its exit code;
-5. copies the `--fetch` paths back, also after a failure, and deletes the
-   sandbox.
+5. packs the `--fetch` paths into one archive inside the sandbox, also after a
+   failure, copies it back and deletes the sandbox. A recursive `scp` cannot
+   stat the dangling symlinks of a nix store, so the paths travel as a tarball.
+   A failed copy back leaves the local copies unchanged and does not fail the
+   run.
+
+Every copy has a hard time limit, so a stalled transfer fails the step instead
+of running into the job timeout.
 
 The corpus job keeps its registry cache with `actions/cache` on the runner and
-carries it into the sandbox and back in `.corpus-cache` at the repository root.
+carries it into the sandbox and back in `.corpus-cache` at the repository root,
+the lockfile tool store in `.corpus-cache/tools` included. If the copy back
+fails, the summary step fails on the missing report, but the next run still
+restores the previous cache.
 
 When the key or a snapshot is missing, the Rust jobs run on GitHub runners as
 before, and the **Boat snapshot** job's summary says why. This is how fork pull

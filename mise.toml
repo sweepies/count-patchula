@@ -202,26 +202,39 @@ chmod 600 "$work/env"
 for name in "${pass[@]}"; do
   printf 'export %s=%q\n' "$name" "${!name:?$name is not set}" >> "$work/env"
 done
-boat scp "$work/src.tgz" "$id:/home/user/src.tgz"
-boat scp "$work/env" "$id:/home/user/.boat-run-env"
+# Every copy has a hard limit, so a stalled transfer fails the step instead of
+# running into the job timeout.
+timeout -k 10 300 boat scp "$work/src.tgz" "$id:/home/user/src.tgz"
+timeout -k 10 60 boat scp "$work/env" "$id:/home/user/.boat-run-env"
 rm -rf "$work"
 set +e
 boat exec "$id" --timeout 0 -- bash -c '{{vars.boat_prelude}}; set -a; . ~/.boat-run-env; set +a; rm -f ~/.boat-run-env; mkdir -p count-patchula && tar -xzf src.tgz -C count-patchula && rm src.tgz && cd count-patchula && exec "$@"' bash "${command[@]}"
 code=$?
 set -e
-# Each path replaces the local copy only once it has arrived whole.
-work=$(mktemp -d)
-for path in "${fetch[@]}"; do
-  if boat scp --recursive "$id:/home/user/count-patchula/$path" "$work/copy"; then
-    rm -rf "./$path"
-    mkdir -p "$(dirname "./$path")"
-    mv "$work/copy" "./$path"
+# The --fetch paths come back as one archive packed in the sandbox. tar keeps
+# the symlinks and read-only directories of a tool store such as nix's, which a
+# recursive scp cannot stat. A failed copy leaves the local copies unchanged and
+# does not fail the run; each path replaces its local copy only once the
+# archive has arrived whole.
+if [ "${#fetch[@]}" -gt 0 ]; then
+  work=$(mktemp -d)
+  if timeout -k 10 300 boat exec "$id" --timeout 240 -- bash -c 'cd count-patchula && for path; do if [ -e "$path" ] || [ -L "$path" ]; then printf "%s\0" "$path"; fi; done | tar -czf ~/fetch.tgz --null -T -' bash "${fetch[@]}" > /dev/null &&
+    timeout -k 10 300 boat scp "$id:/home/user/fetch.tgz" "$work/fetch.tgz" &&
+    listed=$(tar -tzf "$work/fetch.tgz"); then
+    for path in "${fetch[@]}"; do
+      if grep -qxF -e "$path" -e "$path/" <<< "$listed"; then
+        if [ -d "./$path" ] && [ ! -L "./$path" ]; then chmod -R u+w "./$path"; fi
+        rm -rf "./$path"
+        tar -xzf "$work/fetch.tgz" -C . -- "$path"
+      else
+        echo "::warning::$path does not exist in the sandbox; the local copy is unchanged"
+      fi
+    done
   else
-    rm -rf "$work/copy"
-    echo "::warning::could not copy $path back from the sandbox; the local copy is unchanged"
+    echo "::warning::could not copy ${fetch[*]} back from the sandbox; the local copies are unchanged"
   fi
-done
-rm -rf "$work"
+  rm -rf "$work"
+fi
 exit "$code"
 '''
 
@@ -274,7 +287,7 @@ echo "Building $name in $builder"
 boat exec "$builder" --timeout 600 -- bash -c 'set -euo pipefail; mkdir -p ~/.local/bin; curl -fsSL -o ~/.local/bin/mise "https://github.com/jdx/mise/releases/download/v$1/mise-v$1-linux-x64"; echo "$2  $HOME/.local/bin/mise" | sha256sum -c -; chmod +x ~/.local/bin/mise' bash "$SANDBOX_MISE_VERSION" "$SANDBOX_MISE_SHA256"
 work=$(mktemp -d)
 tar -czf "$work/src.tgz" --exclude=./target -C . .
-boat scp "$work/src.tgz" "$builder:/home/user/src.tgz"
+timeout -k 10 300 boat scp "$work/src.tgz" "$builder:/home/user/src.tgz"
 rm -rf "$work"
 # The full CI run installs every toolchain, including the task-scoped
 # lockfile tools, and fills the mbx store; the release build warms the corpus
