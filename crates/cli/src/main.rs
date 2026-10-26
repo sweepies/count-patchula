@@ -316,11 +316,14 @@ async fn tui_command(
         ));
     }
     let (report, checkout) = report(app, &tui.lookup, None, services).await?;
-    let local = checkout
-        .map(|(dir, config)| tui::local(&dir, config))
-        .transpose()
-        .map_err(|e| (2, miette::miette!("{e}")))?;
-    let model = tui::Model::new(&report, local);
+    let origin = match checkout {
+        Some((dir, config)) => tui::Origin::Local(Box::new(
+            tui::local(&dir, config).map_err(|e| (2, miette::miette!("{e}")))?,
+        )),
+        None if tui.lookup.repositories.is_empty() && !tui.lookup.all_repos => tui::Origin::Server,
+        None => tui::Origin::GitHub,
+    };
+    let model = tui::Model::new(&report, origin);
     if tui.once {
         write!(io::stdout().lock(), "{}", tui::snapshot(&model))
             .map(|_| 0)
