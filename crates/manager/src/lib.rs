@@ -1,6 +1,7 @@
 //! Pure extraction and surgical manifest edits: no tools, network or filesystem access.
 #![forbid(unsafe_code)]
 mod actions;
+mod apm;
 mod bundler;
 mod copier;
 mod edit;
@@ -130,17 +131,18 @@ pub struct Skipped {
     pub reason: String,
 }
 impl Dependency {
-    /// An action or reusable workflow looked up by its repository's tags,
-    /// on GitHub or on a Gitea/Forgejo host.
+    /// An action, reusable workflow or APM package looked up by its
+    /// repository's tags, on GitHub or on a forge, whose ref can be pinned to
+    /// a commit with the tag kept in a comment.
     pub fn tagged_action(&self) -> bool {
-        self.manager == Manager::GithubActions
+        matches!(self.manager, Manager::GithubActions | Manager::Apm)
             && matches!(self.source, Source::GithubTags | Source::ForgeTags)
     }
     /// A git ref its tool checks out by name, so an update writes the upstream
     /// tag exactly as tagged rather than a normalized version.
     pub fn exact_tag_ref(&self) -> bool {
         match self.manager {
-            Manager::PreCommit => true,
+            Manager::PreCommit | Manager::Apm => true,
             Manager::Gitlabci | Manager::GitlabciInclude => self.source == Source::ForgeTags,
             _ => false,
         }
@@ -206,6 +208,7 @@ pub fn supported(manager: Manager) -> bool {
         | Manager::Gitlabci
         | Manager::GitlabciInclude
         | Manager::Nix
+        | Manager::Apm
         | Manager::Regex => true,
     }
 }
@@ -319,6 +322,7 @@ impl Scanner {
             Manager::PreCommit => {
                 matches!(leaf, ".pre-commit-config.yaml" | ".pre-commit-config.yml")
             }
+            Manager::Apm => matches!(leaf, "apm.yml" | "apm.yaml"),
             Manager::Woodpecker => {
                 let stem = path
                     .strip_suffix(".yml")
@@ -432,6 +436,8 @@ impl Scanner {
                 maven::extract(path, text)
             } else if self.selected(Manager::Devcontainer, path) {
                 devcontainer::extract(path, text)
+            } else if self.selected(Manager::Apm, path) {
+                apm::extract(path, text, &mut result.skipped)
             } else if self.selected(Manager::Woodpecker, path) {
                 woodpecker::extract(path, text, &mut result.skipped)
             } else if self.selected(Manager::Copier, path) {

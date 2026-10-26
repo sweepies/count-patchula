@@ -183,6 +183,10 @@ impl Executor for Fixture {
                 "go.sum".into()
             } else if spec.args.iter().any(|s| s == "terraform") {
                 ".terraform.lock.hcl".into()
+            } else if spec.args.iter().any(|s| s == "apm") {
+                // APM downloads packages beside the lock to hash them.
+                write(&root, "apm_modules/owner/repo/SKILL.md", "skill\n").unwrap();
+                "apm.lock.yaml".into()
             } else {
                 "bun.lock".into()
             };
@@ -191,6 +195,107 @@ impl Executor for Fixture {
         })
     }
 }
+/// Real APM runs its lock-only command offline under the tool store's pin.
+#[tokio::test]
+async fn real_apm_relocks_offline() {
+    let files = BTreeMap::from([
+        (
+            "apm.yml".to_string(),
+            "name: demo\nversion: 1.0.0\ndependencies:\n  apm: []\n".to_string(),
+        ),
+        (
+            "apm.lock.yaml".to_string(),
+            "lockfile_version: '1'\n".to_string(),
+        ),
+    ]);
+    let executor = fixture(files.clone(), false, true);
+    let temp = tempfile::tempdir().unwrap();
+    let runner =
+        Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        .unwrap()
+        .unwrap();
+    runner.prepare(&mut p, &mut snapshot, &config).await;
+    assert!(
+        matches!(
+            p.action.status,
+            ActionStatus::Planned | ActionStatus::Skipped
+        ),
+        "{:?}",
+        p.action
+    );
+}
+
+/// apm.lock.yaml is refreshed by APM's lock-only command, with APM from the
+/// tool store: `--update` only for maintenance. The downloaded apm_modules
+/// tree never enters the commit, and an edit that leaves the lock unchanged
+/// fails the branch.
+#[tokio::test]
+async fn apm_locks_use_the_lock_only_command() {
+    let manifest = "name: demo\nversion: 1.0.0\ndependencies:\n  apm:\n    - owner/repo#v1.0.0\n";
+    for (lock, refresh, error) in [
+        ("lockfile_version: '1'\n", true, false),
+        ("lockfile_version: '1'\n", false, false),
+        ("fixture deterministic lock\n", false, true),
+    ] {
+        let files = BTreeMap::from([
+            ("apm.yml".to_string(), manifest.to_string()),
+            ("apm.lock.yaml".to_string(), lock.to_string()),
+        ]);
+        let executor = fixture(files.clone(), false, false);
+        let temp = tempfile::tempdir().unwrap();
+        let runner =
+            Runner::new(temp.path().into(), "offline-installation").with_executor(executor.clone());
+        let mut snapshot = snapshot(&files);
+        let config = config();
+        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+            .unwrap()
+            .unwrap();
+        if !refresh {
+            p.maintenance = false;
+            p.contents
+                .insert("apm.yml".into(), manifest.replace("v1.0.0", "v1.1.0"));
+        }
+        runner.prepare(&mut p, &mut snapshot, &config).await;
+        let calls = executor.calls.lock().unwrap();
+        let expected: &[&str] = if refresh {
+            &["apm", "lock", "--update"]
+        } else {
+            &["apm", "lock"]
+        };
+        assert!(
+            recorded(&calls)
+                .iter()
+                .any(|(specs, args)| specs.iter().any(|s| s == "apm@0.35.0") && args == expected),
+            "{calls:?}"
+        );
+        if error {
+            assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+            assert!(
+                p.action
+                    .reason
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("apm.lock.yaml did not change"),
+                "{:?}",
+                p.action
+            );
+            continue;
+        }
+        assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+        assert_eq!(p.contents["apm.lock.yaml"], "fixture deterministic lock\n");
+        assert!(
+            p.contents
+                .keys()
+                .all(|path| !path.starts_with("apm_modules/")),
+            "{:?}",
+            p.contents.keys()
+        );
+    }
+}
+
 fn config() -> Config {
     config_with("")
 }
@@ -1448,7 +1553,7 @@ fn lockfile_engine_pins_match_the_repository_mise_config() {
             defaults["yarn"]["berry"].as_str(),
             "{task}"
         );
-        for tool in ["python", "uv", "poetry", "dotnet", "ruby"] {
+        for tool in ["python", "uv", "poetry", "dotnet", "ruby", "apm"] {
             assert_eq!(
                 tools[tool].as_str(),
                 defaults["tools"][tool].as_str(),

@@ -329,16 +329,17 @@ impl Evaluator {
     }
     pub fn needs_digest(&self, dep: &Dependency, proposal: &Proposal) -> bool {
         let update = parse_update(&proposal.update_type);
-        (dep.source == Source::Docker
-            || dep.source == Source::Oci
-            || dep.manager == Manager::GithubActions)
-            && matches!(
-                dep.kind,
-                DependencyKind::Action
-                    | DependencyKind::ReusableWorkflow
-                    | DependencyKind::ContainerImage
-                    | DependencyKind::Chart
-            )
+        (dep.manager == Manager::Apm
+            || (dep.source == Source::Docker
+                || dep.source == Source::Oci
+                || dep.manager == Manager::GithubActions)
+                && matches!(
+                    dep.kind,
+                    DependencyKind::Action
+                        | DependencyKind::ReusableWorkflow
+                        | DependencyKind::ContainerImage
+                        | DependencyKind::Chart
+                ))
             && self.effective(dep, update).digest
     }
     pub fn digest_proposal(&self, dep: &Dependency, new_digest: &str) -> Option<Proposal> {
@@ -924,7 +925,9 @@ impl Evaluator {
             let mut update = proposal(
                 Some(new_value),
                 Some(normalized),
-                if effective.digest && dep.manager == Manager::GithubActions {
+                if effective.digest
+                    && (dep.manager == Manager::GithubActions || dep.tagged_action())
+                {
                     version.digest.clone()
                 } else {
                     None

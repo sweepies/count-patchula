@@ -39,6 +39,7 @@ quoting, comments and formatting.
 | `gitlabci` | `.gitlab-ci.yml`, `*.gitlab-ci.yml` (and `.yaml`) | |
 | `gitlabci-include` | `.gitlab-ci.yml`, `*.gitlab-ci.yml` (and `.yaml`) | |
 | `nix` | `flake.lock` beside a `flake.nix` | `flake.lock` |
+| `apm` | `apm.yml`, `apm.yaml` | `apm.lock.yaml` |
 | `regex` | whatever your [extractors](/guide/configuration/#custom-extractors) select | |
 
 Lockfiles provide the current version where they exist. Their transitive
@@ -179,6 +180,41 @@ from the wrong version and drop them. He runs copier only where you ask him
 to, on your own machine: from the [TUI](/guide/tui/#templates) or with
 [`patchula apply --copier`](/guide/apply/#copier-templates). See the
 [departure](/renovate/departures/#copier-templates).
+
+## APM
+
+`apm` reads the Git packages listed under `dependencies.apm` and
+`devDependencies.apm` in an [APM](https://microsoft.github.io/apm/) manifest,
+written `[host/]owner/repo[/path]#ref`. Packages without a host are on
+GitHub and are looked up as GitHub tags; packages on GitLab, Codeberg, Gitea
+and Forgejo hosts are looked up as forge tags. A virtual package's path is kept,
+and the repository is the first two path segments.
+
+These packages are agent instructions, so the Count treats them like actions.
+By default a tag is pinned to its commit, with the tag kept in a comment
+(`owner/repo#<sha> # v1.2.0`), and a commit pin with a tag comment is kept
+current the same way. The release-age wait applies, and nothing merges by
+default. A new tag is written exactly as upstream tagged it, so `v2.0` stays
+`v2.0` and never becomes `2.0.0`. Set `defaults { actionDigests = false }`, or a rule with
+`digest = false` for `managers { "apm" }`, to keep plain tags.
+
+The Count skips these entries and lists each one, with its line and the reason,
+in the run summary and under `skipped` in the [JSON report](/reference/report/):
+
+- an entry with no `#ref`, which the lockfile pins;
+- a branch, or a tag that is not a version, such as `#main`;
+- a short commit, or a full commit with no tag comment;
+- an entry in a flow-style list (`apm: [owner/repo#v1]`), where a tag comment
+  would swallow the rest of the list;
+- a full URL (`https://`, `ssh://`, `git@`), an object entry (`git:`), a
+  registry or marketplace entry;
+- a host with no tag source the Count can read, such as Bitbucket or Azure
+  DevOps, or a host with a port.
+
+Local paths are not dependencies. MCP and LSP servers are not read.
+
+When `apm.lock.yaml` sits beside `apm.yml`, the Count refreshes it with
+`apm lock`; see [lockfiles](/guide/lockfiles/).
 
 ## Containers and Kubernetes
 

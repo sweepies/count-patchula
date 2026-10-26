@@ -1717,3 +1717,161 @@ fn flake_inputs_come_from_the_lock_beside_flake_nix() {
     );
     assert!(extraction.skipped.iter().all(|s| s.line.is_some()));
 }
+
+#[test]
+fn apm_git_tags_commit_pins_and_skipped_entries() {
+    let mut config = config();
+    config.managers = vec![Manager::Apm];
+    let scanner = Scanner::new(&config).unwrap();
+    for (path, needed) in [
+        ("apm.yml", true),
+        ("apm.yaml", true),
+        ("packages/skill/apm.yml", true),
+        ("apm.lock.yaml", false),
+        ("myapm.yml", false),
+    ] {
+        assert_eq!(scanner.needs(path), needed, "{path}");
+    }
+    let text = "name: demo\nversion: 1.0.0\ndependencies:\n  apm:\n    - microsoft/apm-sample-package#v1.0.0  # Design standards\n    - gitlab.com/team/project#v2.3.0\n    - owner/repo/skills/review#fb2851683d0b49ef9e1e0c6d0a9a3e6a1f0e2b3c # v1.2.3 keep\n    - 'codeberg.org/forge/pack#1.4'\n    - owner/unpinned\n    - owner/branch#main\n    - owner/short#abc1234\n    - owner/bare#fb2851683d0b49ef9e1e0c6d0a9a3e6a1f0e2b3c\n    - bitbucket.org/team/repo#v1.0.0\n    - https://github.com/owner/url.git\n    - ./packages/local\n    - git: https://gitlab.com/acme/repo.git\n      ref: v2.0\n    - path: ./local\n  mcp:\n    - owner/mcp#v1.0.0\ndevDependencies:\n  apm:\n    - owner/dev-tools#v0.3.0\n".to_string();
+    let files = Files::from([("apm.yml".into(), text.clone())]);
+    let extraction = scanner.extract(&files).unwrap();
+    let got: Vec<_> = extraction
+        .dependencies
+        .iter()
+        .map(|d| {
+            (
+                d.name.as_str(),
+                d.package.as_str(),
+                d.source,
+                d.kind,
+                d.current.as_str(),
+                d.digest.is_some(),
+                &text[d.location.start..d.location.end],
+            )
+        })
+        .collect();
+    use patchula_config::Source;
+    assert_eq!(
+        got,
+        [
+            (
+                "microsoft/apm-sample-package",
+                "microsoft/apm-sample-package",
+                Source::GithubTags,
+                DependencyKind::Production,
+                "v1.0.0",
+                false,
+                "microsoft/apm-sample-package#v1.0.0  # Design standards"
+            ),
+            (
+                "gitlab.com/team/project",
+                "gitlab.com/team/project",
+                Source::ForgeTags,
+                DependencyKind::Production,
+                "v2.3.0",
+                false,
+                "gitlab.com/team/project#v2.3.0"
+            ),
+            (
+                "owner/repo/skills/review",
+                "owner/repo",
+                Source::GithubTags,
+                DependencyKind::Production,
+                "v1.2.3",
+                true,
+                "owner/repo/skills/review#fb2851683d0b49ef9e1e0c6d0a9a3e6a1f0e2b3c # v1.2.3 keep"
+            ),
+            (
+                "codeberg.org/forge/pack",
+                "codeberg.org/forge/pack",
+                Source::ForgeTags,
+                DependencyKind::Production,
+                "1.4",
+                false,
+                "'codeberg.org/forge/pack#1.4'"
+            ),
+            (
+                "owner/dev-tools",
+                "owner/dev-tools",
+                Source::GithubTags,
+                DependencyKind::Development,
+                "v0.3.0",
+                false,
+                "owner/dev-tools#v0.3.0"
+            ),
+        ]
+    );
+    assert!(
+        extraction
+            .dependencies
+            .iter()
+            .all(|d| d.manager == Manager::Apm)
+    );
+    let skipped: Vec<_> = extraction
+        .skipped
+        .iter()
+        .map(|s| (s.line, s.value.as_str()))
+        .collect();
+    assert_eq!(
+        skipped,
+        [
+            (Some(9), "owner/unpinned"),
+            (Some(10), "owner/branch#main"),
+            (Some(11), "owner/short#abc1234"),
+            (
+                Some(12),
+                "owner/bare#fb2851683d0b49ef9e1e0c6d0a9a3e6a1f0e2b3c"
+            ),
+            (Some(13), "bitbucket.org/team/repo#v1.0.0"),
+            (Some(14), "https://github.com/owner/url.git"),
+            (Some(16), "https://gitlab.com/acme/repo.git"),
+        ]
+    );
+    assert!(extraction.skipped.iter().all(|s| !s.reason.is_empty()));
+}
+
+#[test]
+fn apm_tab_separated_comments_and_flow_lists_are_left_alone() {
+    let mut config = config();
+    config.managers = vec![Manager::Apm];
+    let text = "dependencies:\n  apm: [owner/flow#v1.0.0]\ndevDependencies:\n  apm:\n    - owner/tab#fb2851683d0b49ef9e1e0c6d0a9a3e6a1f0e2b3c\t# v1.0.0\n    - owner/tagged#v1.0.0\t# note\n";
+    let files = Files::from([("apm.yml".into(), text.to_string())]);
+    let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+    let got: Vec<_> = extraction
+        .dependencies
+        .iter()
+        .map(|d| &text[d.location.start..d.location.end])
+        .collect();
+    assert_eq!(got, ["owner/tagged#v1.0.0"]);
+    let skipped: Vec<_> = extraction
+        .skipped
+        .iter()
+        .map(|s| (s.line, s.value.as_str()))
+        .collect();
+    assert_eq!(
+        skipped,
+        [
+            (Some(2), "owner/flow#v1.0.0"),
+            (
+                Some(5),
+                "owner/tab#fb2851683d0b49ef9e1e0c6d0a9a3e6a1f0e2b3c"
+            )
+        ]
+    );
+}
+
+#[test]
+fn apm_block_entries_with_anchors_or_on_their_own_line_are_read() {
+    let mut config = config();
+    config.managers = vec![Manager::Apm];
+    let text = "dependencies:\n  apm:\n    - &pkg owner/anchored#v1.0.0\n    -\n      owner/next-line#v2.0.0\n    - !!str owner/tagged#v3.0.0\n";
+    let files = Files::from([("apm.yml".into(), text.to_string())]);
+    let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+    let got: Vec<_> = extraction
+        .dependencies
+        .iter()
+        .map(|d| d.name.as_str())
+        .collect();
+    assert_eq!(got, ["owner/anchored", "owner/next-line", "owner/tagged"]);
+    assert!(extraction.skipped.is_empty(), "{:?}", extraction.skipped);
+}

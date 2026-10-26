@@ -623,6 +623,24 @@ commit must equal the report's `metadata.tagDigests` entry for that tag. This
 covers Renovate pinning an older release's commit.
 </details>
 
+### APM commit pins {#apm-commit-pins}
+
+- **Renovate:** Keeps an APM commit pin and its tag comment current only with
+  `pinDigests`, which is off unless a preset such as `config:best-practices`
+  turns it on
+- **Count Patchula:** Pins APM tags to commits by default, through the same
+  `actionDigests` default as GitHub Actions, and writes the new tag exactly as
+  upstream tagged it
+- **Why:** APM packages are instructions an agent follows, so they get the
+  same supply-chain default as actions: a commit that cannot move, the
+  release-age wait, and no auto-merge
+
+Entries the Count cannot update, such as `owner/repo` with no ref, a branch
+or a SHA with no tag comment, are listed under `skipped` in the report rather
+than dropped silently. Renovate's docs list `git-tags` for any Git host; the
+Count has no generic Git tag source, so hosts other than GitHub, GitLab and
+Gitea/Forgejo are skipped.
+
 ### Cargo target resolution {#cargo-target-resolution}
 
 - **Renovate:** Observed pre-1.0 upgrades can select an older release in the proposed range
@@ -682,6 +700,18 @@ Ignores only the proposed `newDigest` of datasource `helm`. Helm registry URLs
 are joined to chart names so both sides use the same registry identity; a
 different registry is still a difference.
 </details>
+
+### APM lock-only refresh {#apm-lockfile}
+
+- **Renovate:** Refreshes `apm.lock.yaml` by running `apm install`
+- **Count Patchula:** Runs `apm lock`, APM's lock-only mode, and `apm lock
+  --update` for lockfile maintenance
+- **Why:** `apm install` deploys package content into agent directories.
+  `apm lock` resolves and hashes the same packages and writes the same lock
+  without deploying anything or running package content
+
+The Count keeps only `apm.lock.yaml` from the run; the downloaded
+`apm_modules/` tree is discarded. See [APM](/guide/lockfiles/#apm).
 
 ### aube for npm and pnpm {#node-lockfile-engine}
 

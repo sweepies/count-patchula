@@ -1,4 +1,5 @@
 //! Real ecosystem tools run before any Git Data mutation, in disposable trees.
+mod apm;
 mod checkout;
 mod dotnet;
 mod mise;
@@ -39,6 +40,7 @@ pub enum Ecosystem {
     Ruby,
     Php,
     Nix,
+    Apm,
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Job {
@@ -123,6 +125,16 @@ pub(crate) fn job(
                 return Err("unsupported lockfile format: Chart.lock".into());
             }
             return Ok(None);
+        }
+        // apm.lock.yaml sits beside its apm.yml; APM reads no other name.
+        Manager::Apm => {
+            let root = directory(&dep.file);
+            if !dep.file.ends_with("apm.yml")
+                || !snapshot.paths.contains(&node::join(root, "apm.lock.yaml"))
+            {
+                return Ok(None);
+            }
+            (Ecosystem::Apm, root)
         }
         Manager::Bundler if dep.kind == patchula_config::DependencyKind::Toolchain => {
             return Ok(None);
@@ -283,6 +295,14 @@ pub fn maintenance(
                         .contains(&node::join(directory(path), "flake.nix")) =>
             {
                 Ecosystem::Nix
+            }
+            "apm.lock.yaml"
+                if config.managers.contains(&Manager::Apm)
+                    && snapshot
+                        .paths
+                        .contains(&node::join(directory(path), "apm.yml")) =>
+            {
+                Ecosystem::Apm
             }
             "mise.lock" if config.managers.contains(&Manager::Mise) => Ecosystem::Mise,
             "go.mod" if config.managers.contains(&Manager::Go) => Ecosystem::Go,
@@ -591,6 +611,18 @@ impl Runner {
                         },
                         &jobs,
                     )
+                    .await?;
+                }
+                Ecosystem::Apm => {
+                    self.apm_lock(node::NodeContext {
+                        driver: &driver,
+                        root: &root,
+                        baseline: &baseline,
+                        directory: &directory,
+                        config,
+                        versions: &versions,
+                        maintenance: plan.maintenance,
+                    })
                     .await?;
                 }
                 Ecosystem::Dotnet => {
@@ -1009,6 +1041,7 @@ fn versions(
         "ruby",
         "php",
         "composer",
+        "apm",
     ] {
         versions.insert(
             tool.into(),
@@ -1109,6 +1142,7 @@ fn writable(path: &str) -> bool {
             | "composer.json"
             | "composer.lock"
             | "flake.lock"
+            | "apm.lock.yaml"
     ) || path.ends_with(".tf")
 }
 fn materialized(path: &str) -> bool {
@@ -1126,6 +1160,7 @@ fn materialized(path: &str) -> bool {
                 | "uv.toml"
                 | "poetry.toml"
                 | "flake.nix"
+                | "apm.yml"
         )
         || path.ends_with(".go")
         || path.ends_with(".rs")
@@ -1158,7 +1193,15 @@ fn collect(root: &Path) -> Result<BTreeMap<String, String>, String> {
             let path = entry.path();
             if matches!(
                 entry.file_name().to_str(),
-                Some("node_modules" | ".terraform" | "target" | ".git" | ".yarn" | ".aube")
+                Some(
+                    "node_modules"
+                        | ".terraform"
+                        | "target"
+                        | ".git"
+                        | ".yarn"
+                        | ".aube"
+                        | "apm_modules"
+                )
             ) {
                 continue;
             }

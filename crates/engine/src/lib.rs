@@ -877,7 +877,7 @@ impl Engine {
         for (repo, eval) in work.iter().zip(&evaluators) {
             if let Some(eval) = eval {
                 for dep in &repo.dependencies {
-                    if dep.manager == Manager::GithubActions
+                    if dep.tagged_action()
                         && dep.source == Source::GithubTags
                         && !(dep.digest.is_some() && dep.resolved.is_none())
                         && eval.digest_proposal(dep, "probe").is_some()
