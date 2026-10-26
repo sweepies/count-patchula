@@ -515,14 +515,22 @@ jobs:
       # annotations included.
       - name: Tag the image
         env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
           DIGEST: ${{ needs.image.outputs.digest }}
           TAGS: ${{ needs.image.outputs.tags }}
         run: |
+          # A re-run for an older release, after a newer one, keeps latest
+          # where it is.
+          tags=$(gh api "repos/$REPO/tags" --paginate --jq '.[].name | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | ltrimstr("v")')
+          newest=$(printf '%s\n' "$tags" | sort -V | tail -n 1)
           args=()
           while IFS= read -r tag; do
-            if [ -n "$tag" ]; then
-              args+=(--tag "$tag")
+            if [ -z "$tag" ] || { [ "${tag##*:}" = latest ] && [ "$newest" != "$VERSION" ]; }; then
+              continue
             fi
+            args+=(--tag "$tag")
           done <<< "$TAGS"
           docker buildx imagetools create "${args[@]}" "$IMAGE@$DIGEST"
           printf 'Tagged %s@%s as:\n%s\n' "$IMAGE" "$DIGEST" "$TAGS" >> "$GITHUB_STEP_SUMMARY"
