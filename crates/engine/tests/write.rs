@@ -1658,9 +1658,11 @@ async fn lockfile_failure_is_a_branch_error_and_publishes_no_manifest_only_branc
     fake.lock_name = "bun.lock";
     let fake = Arc::new(fake);
     let temp = tempfile::tempdir().unwrap();
-    let runner =
-        patchula_update::lockfiles::Runner::new(temp.path().into(), "offline-installation")
-            .with_executor(Arc::new(FailTools));
+    let runner = patchula_update::lockfiles::Runner::new(
+        temp.path().join("worktrees"),
+        "offline-installation",
+    )
+    .with_executor(Arc::new(FailTools));
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
         .unwrap()
