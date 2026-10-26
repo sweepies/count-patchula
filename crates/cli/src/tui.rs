@@ -222,6 +222,253 @@ pub struct Local {
     pub config: patchula_config::Config,
 }
 
+/// Where the lookup came from, which decides whether the TUI can write.
+pub enum Origin {
+    /// The working tree in the current directory.
+    Local(Box<Local>),
+    /// This checkout, looked up on a Count Patchula server.
+    Server,
+    /// Repositories read through the GitHub API.
+    GitHub,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Action {
+    Quit,
+    Help,
+    NextTab,
+    PreviousTab,
+    JumpTab,
+    Down,
+    Up,
+    PageDown,
+    PageUp,
+    Top,
+    Bottom,
+    Search,
+    Filter,
+    Select,
+    SelectAll,
+    Apply,
+    Copier,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Key {
+    pub code: KeyCode,
+    pub ctrl: bool,
+}
+const fn plain(code: KeyCode) -> Key {
+    Key { code, ctrl: false }
+}
+impl Key {
+    pub fn name(self) -> String {
+        let name = match self.code {
+            KeyCode::Char(' ') => "space".into(),
+            KeyCode::Char(c) if self.ctrl => c.to_ascii_uppercase().to_string(),
+            KeyCode::Char(c) => c.to_string(),
+            KeyCode::Tab => "Tab".into(),
+            KeyCode::BackTab => "Shift-Tab".into(),
+            KeyCode::Esc => "Esc".into(),
+            KeyCode::Enter => "Enter".into(),
+            KeyCode::Left => "←".into(),
+            KeyCode::Right => "→".into(),
+            KeyCode::Up => "↑".into(),
+            KeyCode::Down => "↓".into(),
+            KeyCode::PageUp => "PgUp".into(),
+            KeyCode::PageDown => "PgDn".into(),
+            KeyCode::Home => "Home".into(),
+            KeyCode::End => "End".into(),
+            other => format!("{other:?}"),
+        };
+        if self.ctrl {
+            format!("Ctrl-{name}")
+        } else {
+            name
+        }
+    }
+    fn matches(self, event: KeyEvent) -> bool {
+        self.code == event.code && self.ctrl == event.modifiers.contains(KeyModifiers::CONTROL)
+    }
+}
+
+/// One row of the key table. Dispatch, the key bar and the help all read
+/// [`KEYS`], so they cannot disagree.
+pub struct Binding {
+    pub action: Action,
+    pub keys: &'static [Key],
+    /// The tab the keys work on; `None` for every tab.
+    pub tab: Option<Tab>,
+    pub help: &'static str,
+    /// The key bar's label, shown after the first key; `None` keeps the
+    /// binding to the help.
+    pub bar: Option<&'static str>,
+}
+impl Binding {
+    pub fn keys(&self) -> String {
+        self.keys
+            .iter()
+            .map(|k| k.name())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+    fn on(&self, tab: Tab) -> bool {
+        self.tab.is_none_or(|t| t == tab)
+    }
+}
+
+pub const KEYS: &[Binding] = &[
+    Binding {
+        action: Action::Quit,
+        keys: &[
+            plain(KeyCode::Char('q')),
+            plain(KeyCode::Esc),
+            Key {
+                code: KeyCode::Char('c'),
+                ctrl: true,
+            },
+        ],
+        tab: None,
+        help: "quit",
+        bar: Some("quit"),
+    },
+    Binding {
+        action: Action::Help,
+        keys: &[plain(KeyCode::Char('?'))],
+        tab: None,
+        help: "show these keys",
+        bar: Some("help"),
+    },
+    Binding {
+        action: Action::NextTab,
+        keys: &[plain(KeyCode::Tab), plain(KeyCode::Right)],
+        tab: None,
+        help: "next tab",
+        bar: None,
+    },
+    Binding {
+        action: Action::PreviousTab,
+        keys: &[plain(KeyCode::BackTab), plain(KeyCode::Left)],
+        tab: None,
+        help: "previous tab",
+        bar: None,
+    },
+    Binding {
+        action: Action::JumpTab,
+        keys: &[
+            plain(KeyCode::Char('1')),
+            plain(KeyCode::Char('2')),
+            plain(KeyCode::Char('3')),
+            plain(KeyCode::Char('4')),
+            plain(KeyCode::Char('5')),
+            plain(KeyCode::Char('6')),
+        ],
+        tab: None,
+        help: "jump to a tab",
+        bar: None,
+    },
+    Binding {
+        action: Action::Down,
+        keys: &[plain(KeyCode::Char('j')), plain(KeyCode::Down)],
+        tab: None,
+        help: "move down",
+        bar: None,
+    },
+    Binding {
+        action: Action::Up,
+        keys: &[plain(KeyCode::Char('k')), plain(KeyCode::Up)],
+        tab: None,
+        help: "move up",
+        bar: None,
+    },
+    Binding {
+        action: Action::PageDown,
+        keys: &[plain(KeyCode::PageDown)],
+        tab: None,
+        help: "page down",
+        bar: None,
+    },
+    Binding {
+        action: Action::PageUp,
+        keys: &[plain(KeyCode::PageUp)],
+        tab: None,
+        help: "page up",
+        bar: None,
+    },
+    Binding {
+        action: Action::Top,
+        keys: &[plain(KeyCode::Char('g')), plain(KeyCode::Home)],
+        tab: None,
+        help: "top",
+        bar: None,
+    },
+    Binding {
+        action: Action::Bottom,
+        keys: &[plain(KeyCode::Char('G')), plain(KeyCode::End)],
+        tab: None,
+        help: "bottom",
+        bar: None,
+    },
+    Binding {
+        action: Action::Search,
+        keys: &[plain(KeyCode::Char('/'))],
+        tab: None,
+        help: "search; Enter or Esc to finish",
+        bar: Some("search"),
+    },
+    Binding {
+        action: Action::Filter,
+        keys: &[plain(KeyCode::Char('t'))],
+        tab: Some(Tab::Updates),
+        help: "cycle the update type filter",
+        bar: Some("type"),
+    },
+    Binding {
+        action: Action::Select,
+        keys: &[plain(KeyCode::Char(' '))],
+        tab: Some(Tab::Updates),
+        help: "select or clear the update under the cursor",
+        bar: Some("select"),
+    },
+    Binding {
+        action: Action::SelectAll,
+        keys: &[plain(KeyCode::Char('a'))],
+        tab: Some(Tab::Updates),
+        help: "select every visible update, or clear them",
+        bar: Some("all"),
+    },
+    Binding {
+        action: Action::Apply,
+        keys: &[plain(KeyCode::Char('w'))],
+        tab: Some(Tab::Updates),
+        help: "apply: write the selection to files, after y",
+        bar: Some("apply"),
+    },
+    Binding {
+        action: Action::Copier,
+        keys: &[plain(KeyCode::Char('u'))],
+        tab: Some(Tab::Templates),
+        help: "run copier update for a template, after y",
+        bar: Some("copier update"),
+    },
+];
+
+/// The binding a key press triggers on a tab. Shift with a lowercase letter
+/// counts as the uppercase letter, whichever way the terminal reports it.
+pub fn binding(event: KeyEvent, tab: Tab) -> Option<&'static Binding> {
+    let event = shifted(event);
+    KEYS.iter()
+        .find(|b| b.on(tab) && b.keys.iter().any(|k| k.matches(event)))
+}
+fn shifted(mut event: KeyEvent) -> KeyEvent {
+    if let KeyCode::Char(c) = event.code
+        && event.modifiers.contains(KeyModifiers::SHIFT)
+    {
+        event.code = KeyCode::Char(c.to_ascii_uppercase());
+    }
+    event
+}
+
 pub struct Model {
     pub tab: Tab,
     pub updates: Vec<Update>,
@@ -243,12 +490,16 @@ pub struct Model {
     pub copier: Option<usize>,
     pub help: bool,
     pub message: Option<String>,
-    pub local: Option<Local>,
+    pub origin: Origin,
+    /// The working tree has uncommitted changes, so copier would refuse.
+    pub uncommitted: bool,
+    /// Scroll positions on the Warnings tab, as of the last draw.
+    pub warning_rows: usize,
     pub quit: bool,
 }
 
 impl Model {
-    pub fn new(report: &Report, local: Option<Local>) -> Self {
+    pub fn new(report: &Report, origin: Origin) -> Self {
         let updates = updates(report);
         let mut held = Vec::new();
         let mut templates = Vec::new();
@@ -352,9 +603,94 @@ impl Model {
             copier: None,
             help: false,
             message: None,
-            local,
+            uncommitted: match &origin {
+                Origin::Local(local) => uncommitted(&local.dir),
+                _ => false,
+            },
+            origin,
+            warning_rows: 1,
             quit: false,
         }
+    }
+
+    /// Why the TUI cannot write to these files at all.
+    fn read_only(&self) -> Option<&'static str> {
+        match self.origin {
+            Origin::Local(_) => None,
+            Origin::Server => Some(
+                "this lookup ran on the server; pass --here to look up this working tree on this machine",
+            ),
+            Origin::GitHub => Some(
+                "these repositories come from GitHub; only a working tree, with no repository named, can be written",
+            ),
+        }
+    }
+    /// Why `w` cannot apply right now.
+    pub fn apply_blocked(&self) -> Option<String> {
+        if let Some(reason) = self.read_only() {
+            return Some(reason.into());
+        }
+        (self.selected() == 0).then(|| "select updates with space or a first".into())
+    }
+    /// Why `u` cannot run copier for the template under the cursor.
+    pub fn copier_blocked(&self) -> Option<String> {
+        if let Some(reason) = self.read_only() {
+            return Some(reason.into());
+        }
+        let template = self.templates.get(self.cursor)?;
+        if template.applied {
+            Some("copier already updated this template; review and commit its changes".into())
+        } else if self.uncommitted {
+            Some("the working tree has uncommitted changes, and copier needs a clean tree".into())
+        } else {
+            None
+        }
+    }
+    /// The question waiting for `y`, if any.
+    pub fn prompt(&self) -> Option<String> {
+        if self.confirming {
+            let n = self.selected();
+            return Some(format!(
+                "Write {n} selected update{} into the working tree? y writes, any other key cancels.",
+                plural(n)
+            ));
+        }
+        let template = self.templates.get(self.confirming_template?)?;
+        Some(format!(
+            "Run copier update --vcs-ref {} for {}? The template's code runs on this machine as you{}. y runs it, any other key cancels.",
+            template.notice.available,
+            template.notice.name,
+            template
+                .notice
+                .compare_url
+                .as_ref()
+                .map(|url| format!("; its changes: {url}"))
+                .unwrap_or_default()
+        ))
+    }
+    /// The key bar for the current tab, built from [`KEYS`].
+    pub fn bar(&self) -> String {
+        KEYS.iter()
+            .filter(|b| b.on(self.tab))
+            .filter_map(|b| {
+                let label = format!("{} {}", b.keys[0].name(), b.bar?);
+                let blocked = match b.action {
+                    Action::Apply => self.apply_blocked(),
+                    Action::Copier => self.copier_blocked(),
+                    _ => None,
+                };
+                Some(match (b.action, blocked) {
+                    (_, Some(reason)) => format!("{label} (off: {reason})"),
+                    (Action::Filter, _) => format!("{label}: {}", self.filter.label()),
+                    (Action::Search, _) if !self.search.is_empty() => {
+                        format!("{label} \"{}\"", self.search)
+                    }
+                    (Action::Apply, _) => format!("{label} {} selected", self.selected()),
+                    _ => label,
+                })
+            })
+            .collect::<Vec<_>>()
+            .join("  ")
     }
 
     fn query_matches(&self, text: &[&str]) -> bool {
@@ -383,7 +719,7 @@ impl Model {
                 .iter()
                 .filter(|f| self.query_matches(&[&f.name, &f.file, &f.manager]))
                 .count(),
-            Tab::Warnings => self.warnings.len(),
+            Tab::Warnings => self.warning_rows,
             Tab::Stats => self.stats.len(),
         }
     }
@@ -411,62 +747,68 @@ impl Model {
             self.cursor = 0;
             return;
         }
+        let yes = matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y'));
         if let Some(index) = self.confirming_template.take() {
-            if matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
+            self.message = Some(if yes {
                 self.copier = Some(index);
-                self.message = Some("Copier is running in your terminal.".into());
+                "Copier is running in your terminal.".into()
             } else {
-                self.message = Some("Copier was not run.".into());
-            }
+                "Copier was not run.".into()
+            });
             return;
         }
         if self.confirming {
             self.confirming = false;
-            if matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
-                self.message = Some(match self.apply() {
+            self.message = Some(if yes {
+                match self.apply() {
                     Ok((edits, files)) => format!(
-                        "The Count applied {edits} update{} to {files} file{}. Refresh lockfiles with your package manager.",
+                        "The Count wrote {edits} update{} into {files} file{}. Refresh lockfiles with your package manager.",
                         plural(edits),
                         plural(files)
                     ),
                     Err(error) => format!("Nothing was written: {error}"),
-                });
+                }
             } else {
-                self.message = Some("Apply cancelled.".into());
-            }
+                "Apply cancelled; nothing was written.".into()
+            });
             return;
         }
+        self.message = None;
         if self.help {
             self.help = false;
             return;
         }
+        let Some(binding) = binding(key, self.tab) else {
+            return;
+        };
         let rows = self.rows();
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
-            KeyCode::Char('?') => self.help = true,
-            KeyCode::Tab | KeyCode::Right => self.switch(1),
-            KeyCode::BackTab | KeyCode::Left => self.switch(TABS.len() - 1),
-            KeyCode::Char(c @ '1'..='6') => {
-                self.tab = TABS[(c as usize) - ('1' as usize)].0;
-                self.cursor = 0;
+        let tab = self.tab;
+        match binding.action {
+            Action::Quit => self.quit = true,
+            Action::Help => self.help = true,
+            Action::NextTab => self.switch(1),
+            Action::PreviousTab => self.switch(TABS.len() - 1),
+            Action::JumpTab => {
+                if let KeyCode::Char(c @ '1'..='6') = key.code {
+                    self.tab = TABS[(c as usize) - ('1' as usize)].0;
+                    self.cursor = 0;
+                }
             }
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.cursor = (self.cursor + 1).min(rows.saturating_sub(1))
-            }
-            KeyCode::Up | KeyCode::Char('k') => self.cursor = self.cursor.saturating_sub(1),
-            KeyCode::PageDown => self.cursor = (self.cursor + 10).min(rows.saturating_sub(1)),
-            KeyCode::PageUp => self.cursor = self.cursor.saturating_sub(10),
-            KeyCode::Home | KeyCode::Char('g') => self.cursor = 0,
-            KeyCode::End | KeyCode::Char('G') => self.cursor = rows.saturating_sub(1),
-            KeyCode::Char('/') => {
+            Action::Down => self.cursor = (self.cursor + 1).min(rows.saturating_sub(1)),
+            Action::Up => self.cursor = self.cursor.saturating_sub(1),
+            Action::PageDown => self.cursor = (self.cursor + 10).min(rows.saturating_sub(1)),
+            Action::PageUp => self.cursor = self.cursor.saturating_sub(10),
+            Action::Top => self.cursor = 0,
+            Action::Bottom => self.cursor = rows.saturating_sub(1),
+            Action::Search => {
                 self.searching = true;
                 self.search.clear();
             }
-            KeyCode::Char('t') if self.tab == Tab::Updates => {
+            Action::Filter => {
                 self.filter = self.filter.next();
                 self.cursor = 0;
             }
-            KeyCode::Char(' ') if self.tab == Tab::Updates => {
+            Action::Select => {
                 if let Some(&index) = self.visible().get(self.cursor) {
                     let update = &mut self.updates[index];
                     if !update.applied {
@@ -474,7 +816,7 @@ impl Model {
                     }
                 }
             }
-            KeyCode::Char('a') if self.tab == Tab::Updates => {
+            Action::SelectAll => {
                 let visible = self.visible();
                 let select = visible
                     .iter()
@@ -485,44 +827,32 @@ impl Model {
                     }
                 }
             }
-            KeyCode::Char('u') if self.tab == Tab::Templates => {
-                let Some(template) = self.templates.get(self.cursor) else {
+            Action::Apply => match self.apply_blocked() {
+                Some(reason) => self.message = Some(format!("The Count cannot apply: {reason}.")),
+                None => self.confirming = true,
+            },
+            Action::Copier => {
+                if self.templates.get(self.cursor).is_none() {
                     return;
-                };
-                self.message = Some(if self.local.is_none() {
-                    "Copier only runs on a working tree: run patchula tui in a checkout with no repository named.".into()
-                } else if template.applied {
-                    "Copier already updated this template. Review and commit its changes.".into()
-                } else {
-                    self.confirming_template = Some(self.cursor);
-                    format!(
-                        "Run copier update --vcs-ref {} for {}? The template's code runs on this machine as you{}. y/n",
-                        template.notice.available,
-                        template.notice.name,
-                        template
-                            .notice
-                            .compare_url
-                            .as_ref()
-                            .map(|url| format!("; its changes: {url}"))
-                            .unwrap_or_default()
-                    )
-                });
+                }
+                self.refresh();
+                match self.copier_blocked() {
+                    Some(reason) => {
+                        self.message = Some(format!("The Count cannot run copier: {reason}."))
+                    }
+                    None => self.confirming_template = Some(self.cursor),
+                }
             }
-            KeyCode::Char('A') if self.tab == Tab::Updates => {
-                self.message = Some(if self.local.is_none() {
-                    "Apply only works on a working tree: run patchula tui in a checkout with no repository named. For GitHub repositories, let `patchula run` open the PRs.".into()
-                } else if self.selected() == 0 {
-                    "Select updates with space first.".into()
-                } else {
-                    self.confirming = true;
-                    format!(
-                        "Apply {} selected update{}? y/n",
-                        self.selected(),
-                        plural(self.selected())
-                    )
-                });
-            }
-            _ => {}
+        }
+        if self.tab == Tab::Templates && tab != Tab::Templates {
+            self.refresh();
+        }
+    }
+    /// Read the working tree's Git state again; it may have changed outside
+    /// the TUI since the last look.
+    fn refresh(&mut self) {
+        if let Origin::Local(local) = &self.origin {
+            self.uncommitted = uncommitted(&local.dir);
         }
     }
     fn switch(&mut self, step: usize) {
@@ -533,7 +863,9 @@ impl Model {
 
     /// Write the selected updates into the local directory's files, all or none.
     fn apply(&mut self) -> Result<(usize, usize), String> {
-        let local = self.local.as_ref().ok_or("not a local directory")?;
+        let Origin::Local(local) = &self.origin else {
+            return Err("not a local directory".into());
+        };
         let selected: Vec<usize> = (0..self.updates.len())
             .filter(|&i| self.updates[i].selected)
             .collect();
@@ -548,6 +880,7 @@ impl Model {
             return Err(reason.clone());
         }
         plan.write(&local.dir)?;
+        self.uncommitted = uncommitted(&local.dir);
         for &index in &selected {
             self.updates[index].selected = false;
             self.updates[index].applied = true;
@@ -557,7 +890,7 @@ impl Model {
     /// Run copier for the confirmed template, with the terminal handed over
     /// to it, and say what it changed.
     pub fn run_copier(&mut self, program: &str) {
-        let (Some(index), Some(local)) = (self.copier.take(), self.local.as_ref()) else {
+        let (Some(index), Origin::Local(local)) = (self.copier.take(), &self.origin) else {
             return;
         };
         let notice = self.templates[index].notice.clone();
@@ -571,6 +904,7 @@ impl Model {
                 Err(error) => format!("Copier did not finish: {error}"),
             },
         );
+        self.uncommitted = uncommitted(&local.dir);
     }
 }
 
@@ -704,6 +1038,11 @@ pub fn plan(local: &Local, updates: &[&Update]) -> Result<Plan, String> {
         skipped,
     })
 }
+/// Whether the checkout holding `dir` has changes Git would commit; false
+/// when Git cannot tell, and copier then says why itself.
+fn uncommitted(dir: &Path) -> bool {
+    crate::copier::changed(dir).is_ok_and(|paths| !paths.is_empty())
+}
 fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
 }
@@ -733,13 +1072,44 @@ fn age(published: Option<&str>) -> String {
 }
 
 pub fn draw(frame: &mut Frame, model: &mut Model) {
+    let area = frame.area();
+    let width = usize::from(area.width).saturating_sub(1);
+    let mut footer_lines: Vec<Line> = Vec::new();
+    if let Some(message) = &model.message {
+        footer_lines.extend(
+            wrap(message, width)
+                .into_iter()
+                .map(|l| Line::styled(format!(" {l}"), Style::new().fg(GOLD))),
+        );
+    }
+    let (status, style) = if model.searching {
+        (
+            format!("search: {}_  Enter or Esc to finish", model.search),
+            Style::new(),
+        )
+    } else if let Some(prompt) = model.prompt() {
+        (prompt, Style::new().fg(CORAL).bold())
+    } else {
+        (model.bar(), Style::new().fg(DIM))
+    };
+    footer_lines.extend(
+        wrap(&status, width)
+            .into_iter()
+            .map(|l| Line::styled(format!(" {l}"), style)),
+    );
+    // The footer wraps rather than cuts, giving way only to keep three rows
+    // of the body.
+    let footer_height = u16::try_from(footer_lines.len())
+        .unwrap_or(u16::MAX)
+        .min(area.height.saturating_sub(5))
+        .max(1);
     let [header, tabs, body, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(3),
-        Constraint::Length(1),
+        Constraint::Length(footer_height),
     ])
-    .areas(frame.area());
+    .areas(area);
     let selected = model.selected();
     frame.render_widget(
         Paragraph::new(Line::from(vec![
@@ -763,7 +1133,11 @@ pub fn draw(frame: &mut Frame, model: &mut Model) {
                 Style::new().fg(GOLD),
             ),
             Span::styled(
-                if model.local.is_some() { "  local" } else { "" },
+                match model.origin {
+                    Origin::Local(_) => "  local",
+                    Origin::Server => "  server",
+                    Origin::GitHub => "",
+                },
                 Style::new().fg(PURPLE),
             ),
         ])),
@@ -786,17 +1160,7 @@ pub fn draw(frame: &mut Frame, model: &mut Model) {
         Tab::Held => draw_held(frame, model, body),
         Tab::Templates => draw_templates(frame, model, body),
         Tab::Dependencies => draw_found(frame, model, body),
-        Tab::Warnings => draw_list(
-            frame,
-            model,
-            body,
-            "Warnings",
-            model
-                .warnings
-                .iter()
-                .map(|(r, w)| format!("{r}: {w}"))
-                .collect(),
-        ),
+        Tab::Warnings => draw_warnings(frame, model, body),
         Tab::Stats => draw_list(
             frame,
             model,
@@ -809,27 +1173,7 @@ pub fn draw(frame: &mut Frame, model: &mut Model) {
                 .collect(),
         ),
     }
-    let hint = if model.searching {
-        format!(" search: {}_", model.search)
-    } else if let Some(message) = &model.message {
-        format!(" {message}")
-    } else {
-        format!(
-            " q quit · ? help · tab switch · j/k move · / search{} · t type: {}{}",
-            if model.search.is_empty() {
-                String::new()
-            } else {
-                format!(" \"{}\"", model.search)
-            },
-            model.filter.label(),
-            match (model.local.is_some(), model.tab) {
-                (true, Tab::Templates) => " · u copier update",
-                (true, _) => " · space select · A apply",
-                (false, _) => "",
-            }
-        )
-    };
-    frame.render_widget(Paragraph::new(hint).style(Style::new().fg(DIM)), footer);
+    frame.render_widget(Paragraph::new(footer_lines), footer);
     if model.help {
         draw_help(frame);
     }
@@ -1160,35 +1504,111 @@ fn draw_list(frame: &mut Frame, model: &mut Model, area: Rect, title: &str, line
     );
 }
 
+/// The Warnings tab is a pager: every warning wraps to the pane's width, and
+/// the cursor is the first line shown, so nothing is cut at any width.
+fn draw_warnings(frame: &mut Frame, model: &mut Model, area: Rect) {
+    let block = Block::new()
+        .borders(Borders::TOP)
+        .title_style(Style::new().fg(CORAL));
+    let inner = block.inner(area);
+    let width = usize::from(inner.width).saturating_sub(2).max(1);
+    let mut lines: Vec<Line> = model
+        .warnings
+        .iter()
+        .flat_map(|(repository, warning)| {
+            wrap(&format!("{repository}: {warning}"), width)
+                .into_iter()
+                .enumerate()
+                .map(|(i, line)| {
+                    Line::from(vec![
+                        Span::styled(if i == 0 { "• " } else { "  " }, Style::new().fg(GOLD)),
+                        Span::raw(line),
+                    ])
+                })
+        })
+        .collect();
+    if lines.is_empty() {
+        lines.push(Line::from("Nothing here. The night is quiet."));
+    }
+    let height = usize::from(inner.height).max(1);
+    let last = lines.len().saturating_sub(height);
+    model.warning_rows = last + 1;
+    model.cursor = model.cursor.min(last);
+    let count = model.warnings.len();
+    let title = if lines.len() > height {
+        format!(
+            " Warnings ({count}) · lines {}–{} of {}, j/k to scroll ",
+            model.cursor + 1,
+            (model.cursor + height).min(lines.len()),
+            lines.len()
+        )
+    } else {
+        format!(" Warnings ({count}) ")
+    };
+    let shown: Vec<Line> = lines.into_iter().skip(model.cursor).take(height).collect();
+    frame.render_widget(Paragraph::new(shown).block(block.title(title)), area);
+}
+
+/// Greedy word wrap to `width` columns. A word longer than a line is broken,
+/// so every character of `text` lands on some line.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let columns = |s: &str| Span::raw(s).width();
+    let mut lines = Vec::new();
+    for paragraph in text.lines() {
+        let mut line = String::new();
+        for word in paragraph.split(' ') {
+            let mut word = word;
+            loop {
+                let gap = usize::from(!line.is_empty());
+                if columns(&line) + gap + columns(word) <= width {
+                    if gap == 1 {
+                        line.push(' ');
+                    }
+                    line.push_str(word);
+                    break;
+                }
+                if !line.is_empty() {
+                    lines.push(std::mem::take(&mut line));
+                    continue;
+                }
+                let mut split = 0;
+                for (index, c) in word.char_indices() {
+                    let end = index + c.len_utf8();
+                    if split > 0 && columns(&word[..end]) > width {
+                        break;
+                    }
+                    split = end;
+                }
+                lines.push(word[..split].to_owned());
+                word = &word[split..];
+                if word.is_empty() {
+                    break;
+                }
+            }
+        }
+        lines.push(line);
+    }
+    lines
+}
+
 fn draw_help(frame: &mut Frame) {
     let area = frame.area();
-    let width = area.width.min(64);
-    let height = area.height.min(18);
-    let popup = Rect::new(
-        area.x + (area.width - width) / 2,
-        area.y + (area.height - height) / 2,
-        width,
-        height,
-    );
-    let lines = [
-        ("q, Esc, Ctrl-C", "quit"),
-        ("Tab, Shift-Tab, ←, →", "switch tabs"),
-        ("1 to 6", "jump to a tab"),
-        ("j, k, ↑, ↓", "move"),
-        ("PgUp, PgDn, g, G", "page, top, bottom"),
-        ("/", "search names, packages and files"),
-        ("t", "cycle the update type filter"),
-        ("space", "select an update"),
-        ("a", "select every visible update"),
-        ("A", "apply the selection to the working tree"),
-        ("u", "run copier update for a template, after y"),
-    ];
-    let text: Vec<Line> = lines
+    let column = KEYS
         .iter()
-        .map(|(key, what)| {
+        .map(|b| b.keys().chars().count())
+        .max()
+        .unwrap_or(0)
+        + 2;
+    let text: Vec<Line> = KEYS
+        .iter()
+        .map(|b| {
             Line::from(vec![
-                Span::styled(format!("{key:<22}"), Style::new().fg(GOLD)),
-                Span::raw(*what),
+                Span::styled(format!("{:<column$}", b.keys()), Style::new().fg(GOLD)),
+                Span::raw(match b.tab {
+                    Some(tab) => format!("{} ({})", b.help, tab_name(tab)),
+                    None => b.help.to_owned(),
+                }),
             ])
         })
         .chain([
@@ -1196,9 +1616,19 @@ fn draw_help(frame: &mut Frame) {
             Line::from("Any key closes this.").style(Style::new().fg(DIM)),
         ])
         .collect();
+    let width = area.width.min(80);
+    let height = area
+        .height
+        .min(u16::try_from(text.len() + 2).unwrap_or(u16::MAX));
+    let popup = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    );
     frame.render_widget(Clear, popup);
     frame.render_widget(
-        Paragraph::new(text).block(
+        Paragraph::new(text).wrap(Wrap { trim: false }).block(
             Block::bordered()
                 .title(" The Count's keys ")
                 .title_style(Style::new().fg(CORAL))
@@ -1206,6 +1636,11 @@ fn draw_help(frame: &mut Frame) {
         ),
         popup,
     );
+}
+fn tab_name(tab: Tab) -> &'static str {
+    TABS.iter()
+        .find(|(t, _)| *t == tab)
+        .map_or("", |(_, name)| name)
 }
 
 /// A plain-text snapshot of the updates, for pipes and CI logs.
@@ -1319,7 +1754,10 @@ mod tests {
         model.key(KeyEvent::from(code));
     }
     fn screen(model: &mut Model) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(110, 24)).unwrap();
+        sized(model, 110, 24)
+    }
+    fn sized(model: &mut Model, width: u16, height: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|frame| draw(frame, model)).unwrap();
         let buffer = terminal.backend().buffer();
         (0..buffer.area.height)
@@ -1339,7 +1777,7 @@ mod tests {
                 ("zod", "3.22.0", "4.1.0", "major"),
                 ("hono", "4.6.0", "4.7.2", "minor"),
             ]),
-            None,
+            Origin::GitHub,
         );
         let text = screen(&mut model);
         assert!(text.contains("Count Patchula"), "{text}");
@@ -1356,8 +1794,9 @@ mod tests {
         assert_eq!(model.visible().len(), 1);
         let text = screen(&mut model);
         assert!(text.contains("hono") && !text.contains("zod "), "{text}");
-        press(&mut model, KeyCode::Char('A'));
+        press(&mut model, KeyCode::Char('w'));
         assert!(model.message.as_deref().unwrap().contains("working tree"));
+        assert!(!model.confirming);
         press(&mut model, KeyCode::Char('3'));
         assert_eq!(model.tab, Tab::Dependencies);
         press(&mut model, KeyCode::Char('?'));
@@ -1391,11 +1830,14 @@ mod tests {
                 .unwrap();
             dep.metadata.as_mut().unwrap().locations[0].start = start;
         }
-        let mut model = Model::new(&report, Some(local(dir.path(), Some(config)).unwrap()));
-        press(&mut model, KeyCode::Char('A'));
-        assert!(model.message.as_deref().unwrap().contains("Select updates"));
+        let mut model = Model::new(
+            &report,
+            Origin::Local(Box::new(local(dir.path(), Some(config)).unwrap())),
+        );
+        press(&mut model, KeyCode::Char('w'));
+        assert!(model.message.as_deref().unwrap().contains("select updates"));
         press(&mut model, KeyCode::Char(' '));
-        press(&mut model, KeyCode::Char('A'));
+        press(&mut model, KeyCode::Char('w'));
         assert!(model.confirming);
         press(&mut model, KeyCode::Char('y'));
         assert!(
@@ -1403,7 +1845,7 @@ mod tests {
                 .message
                 .as_deref()
                 .unwrap()
-                .contains("applied 1 update to 1 file"),
+                .contains("wrote 1 update into 1 file"),
             "{:?}",
             model.message
         );
@@ -1421,7 +1863,7 @@ mod tests {
             "compareUrl":"https://github.com/acme/template/compare/v1.4.0...v1.6.0"
         }]))
         .unwrap();
-        let mut remote = Model::new(&report, None);
+        let mut remote = Model::new(&report, Origin::GitHub);
         assert!(snapshot(&remote).contains(
             "notice  template gh:acme/template: v1.4.0 → v1.6.0 available (.copier-answers.yml)"
         ));
@@ -1470,15 +1912,17 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
         let config = patchula_config::load(&tree).unwrap();
-        let mut model = Model::new(&report, Some(local(&tree, Some(config)).unwrap()));
+        let mut model = Model::new(
+            &report,
+            Origin::Local(Box::new(local(&tree, Some(config)).unwrap())),
+        );
         press(&mut model, KeyCode::Char('4'));
         press(&mut model, KeyCode::Char('u'));
         assert!(
             model
-                .message
-                .as_deref()
+                .prompt()
                 .unwrap()
-                .contains("--vcs-ref v1.6.0 for gh:acme/template? The template's code runs on this machine as you; its changes: https://github.com/acme/template/compare/v1.4.0...v1.6.0. y/n")
+                .contains("--vcs-ref v1.6.0 for gh:acme/template? The template's code runs on this machine as you; its changes: https://github.com/acme/template/compare/v1.4.0...v1.6.0. y runs it")
         );
         press(&mut model, KeyCode::Char('n'));
         assert_eq!(model.copier, None);
@@ -1560,5 +2004,232 @@ mod tests {
             manifest,
             "planning writes nothing"
         );
+    }
+
+    fn local_model(manifest: &str) -> (tempfile::TempDir, Model) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), manifest).unwrap();
+        std::fs::write(
+            dir.path().join("patchula.pkl"),
+            "amends \"PatchulaConfig.pkl\"\n",
+        )
+        .unwrap();
+        let mut report = report(&[
+            ("zod", "3.22.0", "4.1.0", "major"),
+            ("hono", "4.6.0", "4.7.2", "minor"),
+        ]);
+        for dep in &mut report.repositories[0].package_files[0].dependencies {
+            let start = manifest
+                .find(&format!("\"{}\"", dep.current.value.as_ref().unwrap()))
+                .unwrap();
+            dep.metadata.as_mut().unwrap().locations[0].start = start;
+        }
+        let local = local(dir.path(), None).unwrap();
+        (dir, Model::new(&report, Origin::Local(Box::new(local))))
+    }
+    const MANIFEST: &str =
+        "{\n  \"dependencies\": {\n    \"zod\": \"3.22.0\",\n    \"hono\": \"4.6.0\"\n  }\n}\n";
+    /// The screen with line breaks and runs of spaces collapsed, so text the
+    /// footer wraps can be matched whole.
+    fn flat(text: &str) -> String {
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    #[test]
+    fn every_key_in_the_table_does_what_the_bar_and_help_say() {
+        for binding in KEYS {
+            let tabs: Vec<Tab> = match binding.tab {
+                Some(tab) => vec![tab],
+                None => TABS.iter().map(|(t, _)| *t).collect(),
+            };
+            for tab in tabs {
+                for key in binding.keys {
+                    let modifiers = if key.ctrl {
+                        KeyModifiers::CONTROL
+                    } else {
+                        KeyModifiers::NONE
+                    };
+                    let event = KeyEvent::new(key.code, modifiers);
+                    assert_eq!(
+                        super::binding(event, tab).map(|b| b.action),
+                        Some(binding.action),
+                        "{} on {tab:?}",
+                        key.name()
+                    );
+                }
+            }
+        }
+        // A terminal that reports Shift-g as a lowercase g with Shift.
+        let shifted = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::SHIFT);
+        assert_eq!(
+            super::binding(shifted, Tab::Updates).map(|b| b.action),
+            Some(Action::Bottom)
+        );
+        assert_eq!(
+            super::binding(KeyEvent::from(KeyCode::Char('A')), Tab::Updates).map(|b| b.action),
+            None,
+            "only lowercase a selects; apply is w"
+        );
+        assert_eq!(
+            super::binding(KeyEvent::from(KeyCode::Char('w')), Tab::Stats).map(|b| b.action),
+            None
+        );
+        let (_dir, mut model) = local_model(MANIFEST);
+        for (width, height) in [(80, 24), (120, 40)] {
+            model.help = true;
+            let help = sized(&mut model, width, height);
+            for binding in KEYS {
+                assert!(help.contains(&binding.keys()), "{help}");
+                assert!(help.contains(binding.help), "{help}");
+            }
+            press(&mut model, KeyCode::Char('x'));
+            for (tab, _) in TABS {
+                model.tab = tab;
+                let bar = flat(&sized(&mut model, width, height));
+                for binding in KEYS.iter().filter(|b| b.bar.is_some()) {
+                    let label = format!("{} {}", binding.keys[0].name(), binding.bar.unwrap());
+                    assert_eq!(
+                        bar.contains(&label),
+                        binding.on(tab),
+                        "{label} on {tab:?} at {width}x{height}: {bar}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_bar_says_why_apply_is_off() {
+        let report = report(&[("zod", "3.22.0", "4.1.0", "major")]);
+        let mut server = Model::new(&report, Origin::Server);
+        let text = flat(&sized(&mut server, 80, 24));
+        assert!(
+            text.contains("w apply (off: this lookup ran on the server; pass --here"),
+            "{text}"
+        );
+        let mut github = Model::new(&report, Origin::GitHub);
+        let text = flat(&sized(&mut github, 80, 24));
+        assert!(
+            text.contains("w apply (off: these repositories come from GitHub"),
+            "{text}"
+        );
+        let (_dir, mut model) = local_model(MANIFEST);
+        let text = flat(&sized(&mut model, 80, 24));
+        assert!(
+            text.contains("w apply (off: select updates with space or a first)"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn apply_confirm_and_write_through_the_screen() {
+        for (width, height) in [(80, 24), (120, 40)] {
+            let (dir, mut model) = local_model(MANIFEST);
+            press(&mut model, KeyCode::Char(' '));
+            let text = flat(&sized(&mut model, width, height));
+            assert!(text.contains("w apply 1 selected"), "{text}");
+            press(&mut model, KeyCode::Char('w'));
+            let text = flat(&sized(&mut model, width, height));
+            assert!(
+                text.contains(
+                    "Write 1 selected update into the working tree? y writes, any other key cancels."
+                ),
+                "{text}"
+            );
+            press(&mut model, KeyCode::Char('n'));
+            let text = flat(&sized(&mut model, width, height));
+            assert!(
+                text.contains("Apply cancelled; nothing was written."),
+                "{text}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(dir.path().join("package.json")).unwrap(),
+                MANIFEST
+            );
+            press(&mut model, KeyCode::Char('w'));
+            press(&mut model, KeyCode::Char('y'));
+            let text = flat(&sized(&mut model, width, height));
+            assert!(
+                text.contains("The Count wrote 1 update into 1 file."),
+                "{text}"
+            );
+            assert!(text.contains("done"), "{text}");
+            assert_eq!(
+                std::fs::read_to_string(dir.path().join("package.json")).unwrap(),
+                MANIFEST.replace("3.22.0", "4.1.0")
+            );
+            press(&mut model, KeyCode::Char('j'));
+            assert_eq!(model.message, None, "a key press clears the message");
+            let text = flat(&sized(&mut model, width, height));
+            assert!(text.contains("w apply (off: select updates"), "{text}");
+        }
+    }
+
+    #[test]
+    fn long_warnings_wrap_and_scroll_at_any_width() {
+        let url = format!("https://registry.example.com/{}", "x".repeat(150));
+        let long = format!(
+            "lookup failed for a-very-long-package-name-that-keeps-going because the registry said no at {url} and then some more words until END-OF-WARNING"
+        );
+        let mut report = report(&[("zod", "3.22.0", "4.1.0", "major")]);
+        report.repositories[0].warnings = (0..12).map(|i| format!("warning {i}: {long}")).collect();
+        for (width, height) in [(30, 12), (80, 24), (120, 40)] {
+            let mut model = Model::new(&report, Origin::GitHub);
+            press(&mut model, KeyCode::Char('5'));
+            let mut seen = String::new();
+            let mut last = usize::MAX;
+            loop {
+                let text = sized(&mut model, width, height);
+                for line in text.lines().skip(3) {
+                    assert!(line.chars().count() <= usize::from(width));
+                }
+                seen.push_str(&text);
+                seen.push('\n');
+                if model.cursor == last {
+                    break;
+                }
+                last = model.cursor;
+                press(&mut model, KeyCode::Char('j'));
+            }
+            let joined: String = seen.split_whitespace().collect();
+            for i in 0..12 {
+                assert!(seen.contains(&format!("warning {i}:")), "{width}x{height}");
+            }
+            assert!(
+                seen.matches("END-OF-WARNING").count() >= 12,
+                "{width}x{height}"
+            );
+            assert!(joined.contains(&"x".repeat(20)));
+            assert!(joined.contains("a-very-long-package-name-that-keeps-going") || width < 50);
+        }
+    }
+
+    #[test]
+    fn wrap_keeps_every_character_within_the_width() {
+        let text = "short words then averyveryverylongunbrokentoken and é wide 日本語テキスト end";
+        for width in [1, 3, 7, 12, 40] {
+            let lines = wrap(text, width);
+            for line in &lines {
+                assert!(
+                    Span::raw(line.as_str()).width() <= width.max(2),
+                    "{line:?} at {width}"
+                );
+            }
+            let joined: String = lines.concat().split_whitespace().collect();
+            let original: String = text.split_whitespace().collect();
+            assert_eq!(joined, original, "at {width}");
+        }
+    }
+
+    #[test]
+    fn long_messages_wrap_in_the_footer() {
+        let report = report(&[("zod", "3.22.0", "4.1.0", "major")]);
+        let mut model = Model::new(&report, Origin::Server);
+        press(&mut model, KeyCode::Char('w'));
+        let message = model.message.clone().unwrap();
+        for (width, height) in [(40, 16), (80, 24)] {
+            let text = flat(&sized(&mut model, width, height));
+            assert!(text.contains(&flat(&message)), "{text}");
+        }
     }
 }
