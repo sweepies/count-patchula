@@ -36,6 +36,8 @@ pub struct Update {
     pub digest: Option<String>,
     pub kind: String,
     pub published_at: Option<String>,
+    /// Advisories this update leaves behind, with their CVE aliases.
+    pub fixes: Vec<String>,
     /// Byte offsets of every occurrence, used to apply the edit locally.
     pub starts: Vec<usize>,
     pub selected: bool,
@@ -216,6 +218,25 @@ impl Model {
                                 .release_age
                                 .as_ref()
                                 .map(|a| a.published_at.clone()),
+                            fixes: update
+                                .fixes
+                                .iter()
+                                .map(|id| {
+                                    let cves: Vec<_> = metadata
+                                        .into_iter()
+                                        .flat_map(|m| &m.advisories)
+                                        .filter(|a| &a.id == id)
+                                        .flat_map(|a| &a.aliases)
+                                        .filter(|alias| alias.starts_with("CVE-"))
+                                        .cloned()
+                                        .collect();
+                                    if cves.is_empty() {
+                                        id.clone()
+                                    } else {
+                                        format!("{id} ({})", cves.join(", "))
+                                    }
+                                })
+                                .collect(),
                             starts: starts.clone(),
                             selected: false,
                             applied: false,
@@ -642,7 +663,11 @@ fn draw_updates(frame: &mut Frame, model: &mut Model, area: Rect) {
                 } else {
                     GOLD
                 })),
-                Cell::from(u.name.clone()),
+                if u.fixes.is_empty() {
+                    Cell::from(u.name.clone())
+                } else {
+                    Cell::from(format!("{} (security)", u.name)).style(Style::new().fg(Color::Red))
+                },
                 Cell::from(u.current.clone()).style(Style::new().fg(DIM)),
                 Cell::from(u.target()),
                 Cell::from(u.kind.clone()).style(kind_style(&u.kind)),
@@ -708,11 +733,16 @@ fn draw_updates(frame: &mut Frame, model: &mut Model, area: Rect) {
                     .map(|d| format!(" · digest {d}"))
                     .unwrap_or_default()
             )),
-            Line::from(match &u.published_at {
-                Some(p) => format!("published {p}"),
-                None => "no publication date".into(),
-            })
-            .style(Style::new().fg(DIM)),
+            if u.fixes.is_empty() {
+                Line::from(match &u.published_at {
+                    Some(p) => format!("published {p}"),
+                    None => "no publication date".into(),
+                })
+                .style(Style::new().fg(DIM))
+            } else {
+                Line::from(format!("fixes {}", u.fixes.join(", ")))
+                    .style(Style::new().fg(Color::Red))
+            },
         ],
         None => vec![Line::from(if model.updates.is_empty() {
             "The Count found nothing to update. Rest easy."

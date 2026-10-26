@@ -68,17 +68,19 @@ A `complete` repository with no package files had nothing the Count supports.
 | `group` | The group name from configuration, or null |
 | `policy` | Optional. The policy that applies: versions, wait, windows, merge, labels |
 | `releaseAge` | Optional. `publishedAt` and the `evaluatedAt` it was judged against |
+| `fixes` | Optional. IDs of the current version's advisories that the target no longer has |
 
 ## Dependency metadata
 
 | Field | |
 |---|---|
-| `source`, `kinds` | Where the dependency came from and its kinds, such as `devDependencies` |
+| `source`, `kinds` | Where the dependency came from and its kinds, such as `devDependencies`, or `transitive` for a vulnerable package only a lockfile records |
 | `locations` | Byte offsets, line, column and a pointer into the file |
 | `resolution` | How `current.version` was found: `declared`, `lockfile`, `pinned-commit`, `floating-ref`, `release-line` or `supported-range` |
 | `heldBack` | Updates waiting on release age, per update type, with when they become eligible |
 | `lookup` | When the lookup ran, disabled update types, and versions rejected as deprecated or yanked |
 | `tagDigests` | For GitHub Actions, the commit each proposed tag points at |
+| `advisories` | Optional. OSV advisories affecting the current version: `id`, `aliases` (CVE IDs among them), `severity`, `summary`, `url` and `fixedIn`, the lowest fixed release above the current one |
 | `stale` | Registry data used past its freshness because the registry was rate-limited, with the time it was fetched |
 
 ## Actions

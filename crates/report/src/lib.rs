@@ -153,6 +153,28 @@ pub struct DependencyMetadata {
     pub lookup: Option<LookupEvidence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolution: Option<Resolution>,
+    /// Published advisories that affect the current version.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub advisories: Vec<Advisory>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Advisory {
+    /// OSV identifier, such as a GHSA or RUSTSEC ID.
+    pub id: String,
+    /// Other identifiers for the same advisory, CVE IDs among them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    /// low, moderate, high or critical, when the advisory database rates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    pub url: String,
+    /// The lowest release above the current version that the advisory lists as fixed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed_in: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -251,6 +273,9 @@ pub struct Update {
     pub policy: Option<UpdatePolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release_age: Option<ReleaseAge>,
+    /// IDs of the current version's advisories that the target no longer has.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fixes: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -468,6 +493,9 @@ pub fn normalize_dependencies(dependencies: Vec<Dependency>) -> Vec<Dependency> 
                 a.held_back.dedup();
                 a.stale.append(&mut b.stale);
                 a.tag_digests.append(&mut b.tag_digests);
+                a.advisories.append(&mut b.advisories);
+                a.advisories.sort();
+                a.advisories.dedup();
                 if let (Some(a), Some(b)) = (&mut a.lookup, b.lookup) {
                     a.disabled_updates
                         .retain(|kind| b.disabled_updates.contains(kind));

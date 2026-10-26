@@ -16,7 +16,7 @@ words!(Scheme { Semver => "semver", Docker => "docker", Pep440 => "pep440", Poet
 words!(Rebase { Conflicts => "conflicts", Behind => "behind" });
 words!(NpmEngine { Aube => "aube", Npm => "npm" });
 words!(PhpBuild { Static => "static", Compiled => "compiled" });
-words!(DependencyKind { Production => "production", Development => "development", Peer => "peer", Optional => "optional", Build => "build", Action => "action", ReusableWorkflow => "reusable-workflow", Runner => "runner", ContainerImage => "container-image", Tool => "tool", GoDirective => "go-directive", Toolchain => "toolchain", Provider => "provider", Module => "module", Chart => "chart", ReferenceData => "reference-data" });
+words!(DependencyKind { Production => "production", Development => "development", Peer => "peer", Optional => "optional", Build => "build", Action => "action", ReusableWorkflow => "reusable-workflow", Runner => "runner", ContainerImage => "container-image", Tool => "tool", GoDirective => "go-directive", Toolchain => "toolchain", Provider => "provider", Module => "module", Chart => "chart", ReferenceData => "reference-data", Transitive => "transitive" });
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -30,6 +30,7 @@ pub struct Config {
     pub exclude: Vec<String>,
     pub prs: PullRequests,
     pub lockfiles: Lockfiles,
+    pub security: Security,
     pub use_versions_host: bool,
     pub submodules: bool,
     pub ignore_authors: Vec<String>,
@@ -129,6 +130,15 @@ pub struct PullRequests {
 pub struct Window {
     pub cron: Vec<String>,
     pub zone: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct Security {
+    pub advisories: bool,
+    pub label: String,
+    pub apply: Overrides,
+    pub lowest_fix: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

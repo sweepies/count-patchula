@@ -1,5 +1,7 @@
 //! Ordered repository policy evaluated over looked-up, batch-shared catalogs.
 #![forbid(unsafe_code)]
+mod advisories;
+pub use advisories::{advisory_query, affects, fixes, report_advisories};
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use patchula_config::{
     Config, DependencyKind, Manager, Patterns, Policy, Rule, Scheme, Source, Update, VersionPolicy,
@@ -61,12 +63,46 @@ pub struct Evaluator {
     ignore: Patterns,
     exclude: Patterns,
     permitted: Option<Filter>,
+    security_permitted: Option<Filter>,
 }
+/// The advisories affecting a dependency's current version, with the query
+/// that found them.
+pub type Advisories<'a> = (
+    &'a patchula_datasource::AdvisoryQuery,
+    &'a [std::sync::Arc<patchula_datasource::Advisory>],
+);
 #[derive(Clone)]
 struct Effective<'a> {
     policy: Policy,
     digest: bool,
     permitted: Option<&'a Filter>,
+}
+impl<'a> Effective<'a> {
+    fn apply(&mut self, o: &patchula_config::Overrides, permitted: Option<&'a Filter>) {
+        let p = &mut self.policy;
+        macro_rules! replace {($($field:ident),*)=>{$(if let Some(v)=&o.$field {p.$field=v.clone();})*};}
+        replace!(
+            active,
+            versions,
+            channel,
+            merge,
+            labels,
+            commit_prefix,
+            release_notes,
+            body_notes,
+            wait_hours,
+            windows
+        );
+        if let Some(group) = &o.group {
+            p.group = (!group.is_empty()).then(|| group.clone());
+        }
+        if let Some(digest) = o.digest {
+            self.digest = digest;
+        }
+        if o.permitted.is_some() {
+            self.permitted = permitted;
+        }
+    }
 }
 impl Evaluator {
     /// Shared catalogs use the shortest active update-class wait. A zero-age
@@ -193,6 +229,13 @@ impl Evaluator {
                 .as_deref()
                 .map(Filter::compile)
                 .transpose()?,
+            security_permitted: config
+                .security
+                .apply
+                .permitted
+                .as_deref()
+                .map(Filter::compile)
+                .transpose()?,
         })
     }
     pub fn ignored(&self, dep: &Dependency) -> bool {
@@ -200,7 +243,9 @@ impl Evaluator {
             || (!self.config.exclude.is_empty() && self.exclude.matches(&dep.file))
     }
     pub fn needs_lookup(&self, dep: &Dependency) -> bool {
-        if dep.kind == DependencyKind::Runner && dep.current == "latest" {
+        if (dep.kind == DependencyKind::Runner && dep.current == "latest")
+            || dep.kind == DependencyKind::Transitive
+        {
             return false;
         }
         if self.ignored(dep)
@@ -251,30 +296,7 @@ impl Evaluator {
             {
                 continue;
             }
-            let o = &compiled.rule.apply;
-            let p = &mut effective.policy;
-            macro_rules! replace {($($field:ident),*)=>{$(if let Some(v)=&o.$field {p.$field=v.clone();})*};}
-            replace!(
-                active,
-                versions,
-                channel,
-                merge,
-                labels,
-                commit_prefix,
-                release_notes,
-                body_notes,
-                wait_hours,
-                windows
-            );
-            if let Some(group) = &o.group {
-                p.group = (!group.is_empty()).then(|| group.clone());
-            }
-            if let Some(digest) = o.digest {
-                effective.digest = digest;
-            }
-            if o.permitted.is_some() {
-                effective.permitted = compiled.permitted.as_ref();
-            }
+            effective.apply(&compiled.rule.apply, compiled.permitted.as_ref());
         }
         // Peers express consumer compatibility, even when installed packages
         // use exact versions. Exact peer declarations still bump in place.
@@ -341,6 +363,50 @@ impl Evaluator {
         }
         Some(proposal)
     }
+    /// A lockfile-only package's one update: the lowest fixed release that
+    /// fixes the most of its advisories without a breaking change, under
+    /// `security.apply`. Only Cargo locks can be moved to an exact version of
+    /// one package.
+    pub fn transitive_fix(&self, dep: &Dependency, advisories: Advisories<'_>) -> Option<Proposal> {
+        let (query, found) = advisories;
+        if dep.kind != DependencyKind::Transitive
+            || dep.source != Source::Crates
+            || self.ignored(dep)
+        {
+            return None;
+        }
+        let scheme = scheme(dep).ok()?;
+        let current = scheme.parse(&dep.current).ok()?;
+        let (target, fixes) = found
+            .iter()
+            .filter_map(|a| crate::advisories::fixed_in(a, query, scheme, &current))
+            .filter_map(|v| Some((scheme.parse(&v).ok()?, v)))
+            // The lock can only move within what the dependents already allow.
+            .filter(|(parsed, _)| scheme.classify(&current, parsed) != Update::Major)
+            .map(|(parsed, v)| {
+                let fixes = crate::fixes(dep, query, found, &v);
+                (parsed, v, fixes)
+            })
+            .filter(|(_, _, fixes)| !fixes.is_empty())
+            .max_by(|a, b| {
+                a.2.len()
+                    .cmp(&b.2.len())
+                    .then_with(|| scheme.order(&b.0, &a.0))
+            })
+            .map(|(_, v, fixes)| (v, fixes))?;
+        let kind = scheme.classify(&current, &scheme.parse(&target).ok()?);
+        let mut effective = self.effective(dep, kind);
+        effective.apply(
+            &self.config.security.apply,
+            self.security_permitted.as_ref(),
+        );
+        if !effective.policy.active {
+            return None;
+        }
+        let mut update = proposal(None, Some(target), None, kind, &effective.policy);
+        update.fixes = fixes;
+        Some(update)
+    }
     pub fn propose(&self, dep: &Dependency, catalog: &Catalog) -> Result<Vec<Proposal>> {
         Ok(self.evaluate_at(dep, catalog, Utc::now())?.updates)
     }
@@ -361,6 +427,23 @@ impl Evaluator {
         now: DateTime<Utc>,
         overrides: &std::collections::BTreeSet<(String, String)>,
     ) -> Result<Evaluation> {
+        self.evaluate_with(dep, catalog, now, overrides, None)
+    }
+    /// `security.apply` governs every candidate that fixes one of the current
+    /// version's advisories, so a fix can skip the wait the rules would impose.
+    pub fn evaluate_with(
+        &self,
+        dep: &Dependency,
+        catalog: &Catalog,
+        now: DateTime<Utc>,
+        overrides: &std::collections::BTreeSet<(String, String)>,
+        advisories: Option<Advisories<'_>>,
+    ) -> Result<Evaluation> {
+        let fixes = |version: &str| {
+            advisories
+                .map(|(query, found)| crate::fixes(dep, query, found, version))
+                .unwrap_or_default()
+        };
         if self.ignored(dep) {
             return Ok(Evaluation::default());
         }
@@ -579,6 +662,20 @@ impl Evaluator {
             })?;
         let policies = [Update::Major, Update::Minor, Update::Patch, Update::Pin]
             .map(|kind| (kind, self.effective(dep, kind)));
+        let secured = policies.clone().map(|(kind, mut effective)| {
+            effective.apply(
+                &self.config.security.apply,
+                self.security_permitted.as_ref(),
+            );
+            (kind, effective)
+        });
+        // The lowest fix answers to neither `permitted` nor `channel`.
+        let unfiltered = secured.clone().map(|(kind, mut effective)| {
+            effective.permitted = None;
+            effective.policy.channel = patchula_config::ReleaseChannel::Stable;
+            (kind, effective)
+        });
+        let mut fix_candidates: Vec<(Parsed, &Version, String, Update, usize)> = Vec::new();
         let mut best: Vec<(Parsed, &Version, String, Update, &Effective<'_>)> =
             Vec::with_capacity(3);
         for version in &catalog.versions {
@@ -632,7 +729,11 @@ impl Evaluator {
             } else {
                 scheme.classify(&baseline, &parsed)
             };
-            let effective = &policies
+            let fixed = fixes(&normalized).len();
+            if fixed > 0 && self.config.security.lowest_fix {
+                fix_candidates.push((parsed.clone(), version, normalized.clone(), kind, fixed));
+            }
+            let effective = &if fixed == 0 { &policies } else { &secured }
                 .iter()
                 .find(|(update, _)| *update == kind)
                 .expect("version classification")
@@ -677,6 +778,35 @@ impl Evaluator {
                 }
             } else {
                 best.push((parsed, version, normalized, kind, effective));
+            }
+        }
+        // When no proposal fixes as much as some release could, also propose
+        // the lowest release that fixes the most.
+        let covered = best
+            .iter()
+            .map(|(_, _, normalized, _, _)| fixes(normalized).len())
+            .max()
+            .unwrap_or(0);
+        if fix_candidates.iter().any(|c| c.4 > covered) {
+            fix_candidates.sort_by(|a, b| b.4.cmp(&a.4).then_with(|| scheme.order(&a.0, &b.0)));
+            for (parsed, version, normalized, kind, _) in fix_candidates {
+                let effective = &unfiltered
+                    .iter()
+                    .find(|(update, _)| *update == kind)
+                    .expect("version classification")
+                    .1;
+                if !effective.policy.active
+                    || (!parsed.0.pre.is_empty() && baseline.0.pre.is_empty())
+                    || (matches!(dep.manager, Manager::Npm | Manager::Terraform)
+                        && dep.kind == DependencyKind::Toolchain
+                        && effective.policy.versions == VersionPolicy::Preserve)
+                {
+                    continue;
+                }
+                if eligible(version, &normalized, kind, effective)? {
+                    best.push((parsed, version, normalized, kind, effective));
+                    break;
+                }
             }
         }
         let mut result = Vec::with_capacity(best.len() + 1);
@@ -757,6 +887,7 @@ impl Evaluator {
                 &effective.policy,
             );
             update.release_age = release_age(version, now);
+            update.fixes = fixes(update.new_version.as_deref().unwrap_or_default());
             result.push(update);
         }
         if scheme == Ecosystem::Npm
@@ -764,10 +895,20 @@ impl Evaluator {
             && scheme.parse(&dep.current).is_err()
         {
             // Pin a range even when its highest satisfying release is unchanged.
-            let effective = self.effective(dep, Update::Pin);
+            let plain = self.effective(dep, Update::Pin);
+            let mut secure = plain.clone();
+            secure.apply(
+                &self.config.security.apply,
+                self.security_permitted.as_ref(),
+            );
             let range = nodejs_semver::Range::parse(&dep.current).map_err(|e| e.to_string())?;
-            let mut selected: Option<(&Version, Parsed)> = None;
+            let mut selected: Option<(&Version, Parsed, &Effective<'_>)> = None;
             for v in &catalog.versions {
+                let effective = if fixes(&v.version).is_empty() {
+                    &plain
+                } else {
+                    &secure
+                };
                 if !effective.policy.active
                     || v.deprecated
                     || v.yanked
@@ -785,17 +926,17 @@ impl Evaluator {
                     continue;
                 }
                 if dep.resolved.as_deref() != Some(v.version.as_str())
-                    && !eligible(v, &v.version, Update::Pin, &effective)?
+                    && !eligible(v, &v.version, Update::Pin, effective)?
                 {
                     continue;
                 }
-                if selected.as_ref().is_none_or(|(previous, p)| {
+                if selected.as_ref().is_none_or(|(previous, p, _)| {
                     candidate_order(scheme, &parsed, v, p, previous).is_gt()
                 }) {
-                    selected = Some((v, parsed));
+                    selected = Some((v, parsed, effective));
                 }
             }
-            if let Some((v, _)) = selected {
+            if let Some((v, _, effective)) = selected {
                 let value = scheme
                     .new_range(&dep.current, &v.version, VersionPolicy::Exact)
                     .map_err(|e| e.to_string())?;
@@ -811,6 +952,7 @@ impl Evaluator {
                         &effective.policy,
                     );
                     update.release_age = release_age(v, now);
+                    update.fixes = fixes(&v.version);
                     result.push(update);
                 }
             }
@@ -909,6 +1051,7 @@ fn proposal(
             body_notes: policy.body_notes.clone(),
         }),
         release_age: None,
+        fixes: Vec::new(),
     }
 }
 fn timestamp(value: DateTime<Utc>) -> String {

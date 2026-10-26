@@ -437,7 +437,10 @@ impl Lifecycle {
                 plan.retry |= checked(pr);
                 continue;
             }
-            let bypass = controls.create.contains(&key) || controls.recreate.contains(&key);
+            // Security updates never queue behind ordinary ones.
+            let bypass = controls.create.contains(&key)
+                || controls.recreate.contains(&key)
+                || plan.changes.iter().any(|c| !c.advisories.is_empty());
             if !bypass && config.prs.concurrent.is_some_and(|n| active >= n) {
                 limit(plan, "prs.concurrent limit reached");
                 continue;
@@ -845,8 +848,8 @@ impl Lifecycle {
     }
 
     fn body_intent(&self, plan: &Plan) -> (String, String) {
-        let mut text =
-            String::from("| Package | Change | Type | File |\n| --- | --- | --- | --- |\n");
+        let mut text = security_section(&plan.changes);
+        text.push_str("| Package | Change | Type | File |\n| --- | --- | --- | --- |\n");
         if plan.maintenance {
             text.push_str(&format!(
                 "\nScheduled {} using the repository's mise tool versions.\n",
@@ -1039,6 +1042,46 @@ impl Lifecycle {
         text
     }
 }
+/// Advisories the changes leave behind, ahead of everything else in the body.
+fn security_section(changes: &[crate::Change]) -> String {
+    let mut rows = BTreeSet::new();
+    for change in changes {
+        for advisory in &change.advisories {
+            let cves: Vec<_> = advisory
+                .aliases
+                .iter()
+                .filter(|a| a.starts_with("CVE-"))
+                .map(|a| safe(a))
+                .collect();
+            rows.insert(format!(
+                "| [{}]({}){} | {} | {} | {} |\n",
+                cell(&advisory.id),
+                safe(&advisory.url),
+                if cves.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", cves.join(", "))
+                },
+                cell(advisory.severity.as_deref().unwrap_or("unrated")),
+                cell(&change.package),
+                cell(advisory.summary.as_deref().unwrap_or("")),
+            ));
+        }
+    }
+    if rows.is_empty() {
+        return String::new();
+    }
+    let mut text = format!(
+        "> [!IMPORTANT]\n> This update fixes {} known vulnerabilit{}. The Count does not care for anyone else drawing blood.\n\n| Advisory | Severity | Package | Summary |\n| --- | --- | --- | --- |\n",
+        rows.len(),
+        if rows.len() == 1 { "y" } else { "ies" }
+    );
+    for row in rows {
+        append(&mut text, &row, 6_000);
+    }
+    text.push('\n');
+    text
+}
 fn truncate(text: &str, limit: usize) -> String {
     let mut end = text.len().min(limit);
     while !text.is_char_boundary(end) {
@@ -1059,5 +1102,44 @@ fn append(text: &mut String, addition: &str, limit: usize) {
     let remaining = limit.saturating_sub(text.len());
     if remaining > 0 {
         text.push_str(&truncate(addition, remaining));
+    }
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::security_section;
+
+    #[test]
+    fn fixed_advisories_lead_the_body_once_each() {
+        let advisory: patchula_report::Advisory = serde_json::from_value(serde_json::json!({
+            "id":"GHSA-jf85-cpcp-j695","aliases":["CVE-2019-10744","SNYK-JS-LODASH-450202"],
+            "severity":"critical","summary":"Prototype | pollution",
+            "url":"https://osv.dev/vulnerability/GHSA-jf85-cpcp-j695"
+        }))
+        .unwrap();
+        let change = crate::Change {
+            source: "npm".into(),
+            package: "lodash".into(),
+            file: "package.json".into(),
+            current: "4.17.11".into(),
+            current_version: None,
+            value: Some("4.17.21".into()),
+            version: Some("4.17.21".into()),
+            digest: None,
+            kind: "patch".into(),
+            merge: false,
+            labels: Vec::new(),
+            release_notes: true,
+            body_notes: Vec::new(),
+            advisories: vec![advisory],
+        };
+        let mut other = change.clone();
+        other.file = "web/package.json".into();
+        let text = security_section(&[change.clone(), other]);
+        assert!(text.starts_with("> [!IMPORTANT]\n> This update fixes 1 known vulnerability."));
+        assert!(text.contains("| [GHSA-jf85-cpcp-j695](https://osv.dev/vulnerability/GHSA-jf85-cpcp-j695) (CVE-2019-10744) | critical | lodash | Prototype \\| pollution |\n"), "{text}");
+        let mut plain = change;
+        plain.advisories.clear();
+        assert!(security_section(&[plain]).is_empty());
     }
 }

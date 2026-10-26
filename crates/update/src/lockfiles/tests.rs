@@ -75,17 +75,30 @@ impl Executor for Fixture {
             assert_eq!(spec.env[std::ffi::OsStr::new("MISE_NO_ENV")], "1");
             assert_eq!(spec.env[std::ffi::OsStr::new("MISE_NO_HOOKS")], "1");
             if self.real {
-                if spec.args.iter().any(|a| a == "cargo")
-                    && self
-                        .files
+                let crates: Vec<_> = [
+                    ("offline-registry-fixture", ["1.0.0", "2.0.0"]),
+                    ("offline-patch-fixture", ["1.0.0", "1.0.1"]),
+                ]
+                .into_iter()
+                .filter(|(name, _)| {
+                    self.files
                         .get("Cargo.toml")
-                        .is_some_and(|s| s.contains("offline-registry-fixture"))
-                {
+                        .is_some_and(|s| s.contains(name))
+                })
+                .flat_map(|(name, versions)| versions.map(|v| (name, v)))
+                .collect();
+                if spec.args.iter().any(|a| a == "cargo") && !crates.is_empty() {
                     let vendor = spec.cwd.join("vendor");
-                    for version in ["1.0.0", "2.0.0"] {
-                        let package = vendor.join(format!("fixture-{version}"));
+                    for (name, version) in crates {
+                        let package = vendor.join(format!("{name}-{version}"));
                         std::fs::create_dir_all(package.join("src")).unwrap();
-                        std::fs::write(package.join("Cargo.toml"),format!("[package]\nname='offline-registry-fixture'\nversion='{version}'\nedition='2024'\n")).unwrap();
+                        std::fs::write(
+                            package.join("Cargo.toml"),
+                            format!(
+                                "[package]\nname='{name}'\nversion='{version}'\nedition='2024'\n"
+                            ),
+                        )
+                        .unwrap();
                         std::fs::write(package.join("src/lib.rs"), "// vendored fixture\n")
                             .unwrap();
                         std::fs::write(
@@ -1111,6 +1124,7 @@ async fn real_cargo_and_go_targeted_updates_retain_the_selected_manifest_and_loc
             labels: Vec::new(),
             release_notes: false,
             body_notes: Vec::new(),
+            advisories: Vec::new(),
         });
         runner.prepare(&mut p, &mut snapshot, &config).await;
         assert_eq!(
@@ -1151,6 +1165,7 @@ fn provider_lock_drift_is_rejected_before_publication() {
         labels: Vec::new(),
         release_notes: false,
         body_notes: Vec::new(),
+        advisories: Vec::new(),
     });
     assert!(
         validate_targets(&p, &config, &files)
@@ -1347,6 +1362,7 @@ fn npm_change(value: &str) -> crate::plan::Change {
         labels: Vec::new(),
         release_notes: false,
         body_notes: Vec::new(),
+        advisories: Vec::new(),
     }
 }
 
@@ -1750,6 +1766,7 @@ fn chart_updates_with_a_committed_chart_lock_are_pending() {
         group: None,
         policy: None,
         release_age: None,
+        fixes: Vec::new(),
     };
     let unlocked = snapshot(&BTreeMap::from([("Chart.yaml".into(), chart.into())]));
     assert!(matches!(job(&deps[0], &update, &unlocked), Ok(None)));
@@ -2277,5 +2294,145 @@ async fn first_tool_use_allows_for_the_install() {
     assert_eq!(
         *timeouts.0.lock().unwrap(),
         [tools::INSTALL_TIMEOUT, normal]
+    );
+}
+
+#[test]
+fn a_vulnerable_transitive_crate_moves_through_its_lockfile_alone() {
+    let lock = |version: &str| {
+        format!(
+            "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\n\n[[package]]\nname = \"time\"\nversion = \"{version}\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n"
+        )
+    };
+    let mut files = BTreeMap::from([
+        (
+            "Cargo.toml".into(),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n".into(),
+        ),
+        ("Cargo.lock".into(), lock("0.3.20")),
+    ]);
+    let config = config();
+    let extraction = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap();
+    assert!(extraction.dependencies.is_empty());
+    let dependencies: Vec<_> = extraction.locked.iter().map(|l| l.dependency()).collect();
+    assert_eq!(dependencies.len(), 1);
+    let mut repository = repo();
+    repository.package_files = serde_json::from_value(serde_json::json!([{
+        "path": "Cargo.lock",
+        "dependencies": [{
+            "manager": "cargo", "name": "time", "package": "time",
+            "current": {"value": "0.3.20", "version": "0.3.20", "digest": null},
+            "updates": [{"newValue": null, "newVersion": "0.3.23", "newDigest": null,
+                "updateType": "patch", "group": null, "fixes": ["RUSTSEC-2023-0071"]}],
+            "metadata": {"source": "crates", "kinds": ["transitive"], "locations": [],
+                "advisories": [{"id": "RUSTSEC-2023-0071", "url": "https://osv.dev/vulnerability/RUSTSEC-2023-0071"}]}
+        }]
+    }]))
+    .unwrap();
+    let plans = crate::plan(
+        &repository,
+        &config,
+        &dependencies,
+        &snapshot(&files),
+        false,
+        None,
+        monday(),
+    )
+    .unwrap();
+    assert_eq!(plans.len(), 1);
+    let plan = &plans[0];
+    assert_eq!(
+        plan.action.status,
+        ActionStatus::Planned,
+        "{:?}",
+        plan.action
+    );
+    assert!(plan.contents.is_empty());
+    assert!(
+        plan.action
+            .message
+            .ends_with("update time to 0.3.23 [security]")
+    );
+    assert_eq!(
+        plan.lock_jobs,
+        [Job {
+            ecosystem: Ecosystem::Cargo,
+            directory: String::new(),
+            package: Some("time".into()),
+            current: Some("0.3.20".into()),
+            target: Some("0.3.23".into()),
+        }]
+    );
+    assert_eq!(plan.changes[0].advisories[0].id, "RUSTSEC-2023-0071");
+    assert!(
+        validate_targets(plan, &config, &files)
+            .unwrap_err()
+            .contains("did not resolve time")
+    );
+    files.insert("Cargo.lock".into(), lock("0.3.23"));
+    validate_targets(plan, &config, &files).unwrap();
+}
+
+#[tokio::test]
+async fn real_cargo_moves_a_locked_package_without_a_manifest_change() {
+    let manifest = "[package]\nname='fixture'\nversion='1.0.0'\nedition='2024'\n[dependencies]\noffline-patch-fixture='1'\n";
+    let files = BTreeMap::from([
+        ("Cargo.toml".into(), manifest.into()),
+        ("src/lib.rs".into(), "// fixture\n".into()),
+        ("Cargo.lock".into(), "version = 4\n[[package]]\nname='fixture'\nversion='1.0.0'\ndependencies=['offline-patch-fixture']\n[[package]]\nname='offline-patch-fixture'\nversion='1.0.0'\nsource='registry+https://github.com/rust-lang/crates.io-index'\n".into()),
+    ]);
+    let executor = fixture(files.clone(), false, true);
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().into(), "offline-installation").with_executor(executor);
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut dep = patchula_manager::Locked {
+        manager: Manager::Cargo,
+        file: "Cargo.lock".into(),
+        package: "offline-patch-fixture".into(),
+        version: "1.0.0".into(),
+        location: patchula_manager::Location {
+            start: 0,
+            end: 1,
+            line: 1,
+            column: 1,
+            pointer: String::new(),
+        },
+    }
+    .dependency();
+    dep.location.start = files["Cargo.lock"].rfind("'1.0.0'").unwrap();
+    dep.location.end = dep.location.start + 7;
+    let mut repository = repo();
+    repository.package_files = serde_json::from_value(serde_json::json!([{
+        "path": "Cargo.lock",
+        "dependencies": [{
+            "manager": "cargo", "name": "offline-patch-fixture", "package": "offline-patch-fixture",
+            "current": {"value": "1.0.0", "version": "1.0.0", "digest": null},
+            "updates": [{"newValue": null, "newVersion": "1.0.1", "newDigest": null,
+                "updateType": "patch", "group": null, "fixes": ["RUSTSEC-test"]}]
+        }]
+    }]))
+    .unwrap();
+    let mut plans = crate::plan(
+        &repository,
+        &config,
+        &[dep],
+        &snapshot,
+        false,
+        None,
+        monday(),
+    )
+    .unwrap();
+    let p = &mut plans[0];
+    runner.prepare(p, &mut snapshot, &config).await;
+    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert!(!p.contents.contains_key("Cargo.toml"));
+    assert!(
+        p.contents["Cargo.lock"].contains("version = \"1.0.1\""),
+        "{}",
+        p.contents["Cargo.lock"]
     );
 }

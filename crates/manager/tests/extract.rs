@@ -878,3 +878,38 @@ dependencies {
         );
     }
 }
+
+#[test]
+fn lockfile_only_registry_packages_are_listed_apart_from_dependencies() {
+    let files = Files::from([
+        (
+            "package.json".into(),
+            r#"{"dependencies":{"foo":"^1.0.0"}}"#.into(),
+        ),
+        (
+            "package-lock.json".into(),
+            r#"{"lockfileVersion":3,"packages":{
+                "":{"dependencies":{"foo":"^1.0.0"}},
+                "node_modules/foo":{"version":"1.2.0","resolved":"https://registry.npmjs.org/foo/-/foo-1.2.0.tgz"},
+                "node_modules/foo/node_modules/bar":{"version":"2.0.0","resolved":"https://registry.npmjs.org/bar/-/bar-2.0.0.tgz"},
+                "node_modules/linked":{"resolved":"packages/linked","link":true},
+                "node_modules/local":{"version":"3.0.0","resolved":"file:../local"}
+            }}"#
+            .into(),
+        ),
+    ]);
+    let extraction = Scanner::new(&config()).unwrap().extract(&files).unwrap();
+    assert_eq!(extraction.dependencies.len(), 1);
+    let locked: Vec<_> = extraction
+        .locked
+        .iter()
+        .map(|l| (l.manager, l.package.as_str(), l.version.as_str()))
+        .collect();
+    assert_eq!(locked, [(Manager::Npm, "bar", "2.0.0")]);
+    let bar = &extraction.locked[0];
+    let text = &files["package-lock.json"];
+    assert_eq!(&text[bar.location.start..bar.location.end], "\"2.0.0\"");
+    let dep = bar.dependency();
+    assert_eq!(dep.kind, DependencyKind::Transitive);
+    assert_eq!(dep.file, "package-lock.json");
+}

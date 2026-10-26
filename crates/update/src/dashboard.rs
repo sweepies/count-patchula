@@ -468,6 +468,60 @@ pub fn render(
     for file in &repo.package_files {
         for dep in &file.dependencies {
             if let Some(metadata) = &dep.metadata {
+                for advisory in &metadata.advisories {
+                    let cves: Vec<_> = advisory
+                        .aliases
+                        .iter()
+                        .filter(|a| a.starts_with("CVE-"))
+                        .map(|a| safe(a))
+                        .collect();
+                    let fix = dep
+                        .updates
+                        .iter()
+                        .filter(|u| u.fixes.contains(&advisory.id))
+                        .filter_map(|u| u.new_version.as_ref().or(u.new_value.as_ref()))
+                        .map(|v| format!("fixed by the update to {}", safe(v)))
+                        .next()
+                        .or_else(|| {
+                            advisory
+                                .fixed_in
+                                .as_ref()
+                                .map(|v| format!("fixed in {}, not proposed", safe(v)))
+                        })
+                        .unwrap_or_else(|| "no fixed release yet".into());
+                    sections
+                        .entry("Known vulnerabilities".into())
+                        .or_default()
+                        .insert((
+                            None,
+                            format!(
+                                "- {} {} ({}): [{}]({}){}, {}; {}{}\n",
+                                safe(&dep.name),
+                                safe(
+                                    dep.current
+                                        .version
+                                        .as_deref()
+                                        .or(dep.current.value.as_deref())
+                                        .unwrap_or("unknown")
+                                ),
+                                safe(&file.path),
+                                safe(&advisory.id),
+                                safe(&advisory.url),
+                                if cves.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(" ({})", cves.join(", "))
+                                },
+                                safe(advisory.severity.as_deref().unwrap_or("unrated")),
+                                fix,
+                                advisory
+                                    .summary
+                                    .as_ref()
+                                    .map(|s| format!(". {}", safe(s).replace(['\n', '\r'], " ")))
+                                    .unwrap_or_default(),
+                            ),
+                        ));
+                }
                 let catalog_age = metadata
                     .lookup
                     .as_ref()
@@ -577,10 +631,12 @@ pub fn render(
     ));
     let mut sections: Vec<_> = sections.into_iter().collect();
     sections.sort_by_key(|(section, _)| {
-        let rank = if section.starts_with("Open PRs: ") {
+        let rank = if section == "Known vulnerabilities" {
             0
+        } else if section.starts_with("Open PRs: ") {
+            1
         } else {
-            match section.as_str() {
+            1 + match section.as_str() {
                 "Merged by the Count" => 1,
                 "Pending updates" => 2,
                 "Updates you closed" => 3,

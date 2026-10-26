@@ -98,6 +98,7 @@ export default defineConfig({
           items: [
             { label: "Configuration", slug: "guide/configuration" },
             { label: "Release age and channels", slug: "guide/lookup-policy" },
+            { label: "Security advisories", slug: "guide/security" },
             { label: "Managers", slug: "guide/managers" },
             { label: "Sources", slug: "guide/sources" },
             { label: "Versioning", slug: "guide/versioning" },

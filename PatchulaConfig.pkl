@@ -13,8 +13,10 @@ typealias Scheme = "semver"|"docker"|"pep440"|"poetry"|"maven"|"nuget"|"rubygems
 /// four roles; Cargo also uses build. Ordinary Go/Python/regex packages use
 /// production. Actions distinguish steps from reusable workflows; containers,
 /// mise tools, Go language directives, Terraform providers/modules and Helm
-/// charts have explicit roles. These are exact values, not match patterns.
-typealias DependencyKind = "production"|"development"|"peer"|"optional"|"build"|"action"|"reusable-workflow"|"runner"|"container-image"|"tool"|"go-directive"|"toolchain"|"provider"|"module"|"chart"|"reference-data"
+/// charts have explicit roles. A `transitive` package is one only a lockfile
+/// records; it gets an update only to fix an advisory. These are exact values,
+/// not match patterns.
+typealias DependencyKind = "production"|"development"|"peer"|"optional"|"build"|"action"|"reusable-workflow"|"runner"|"container-image"|"tool"|"go-directive"|"toolchain"|"provider"|"module"|"chart"|"reference-data"|"transitive"
 
 /// Match lists are OR; populated selector fields are AND. Empty means any.
 /// Patterns are path-aware globs, or `regex:...`; prefix `!` excludes a match.
@@ -130,6 +132,28 @@ class Lockfiles {
   php: "static"|"compiled" = "static"
 }
 
+/// Known vulnerabilities, from OSV.dev.
+class Security {
+  /// Check each dependency's current version against OSV.dev, and mark updates
+  /// that leave an advisory behind. Only package names and versions are sent.
+  advisories: Boolean = true
+  /// Added to PRs with an update that fixes an advisory. Empty adds none.
+  label: String = "security"
+  /// Applied after `rules` to updates that fix an advisory. By default they
+  /// skip the release-age wait and schedule windows and get a PR of their own.
+  /// Their PRs never wait for `prs.concurrent` or `prs.perHour` either.
+  apply: Overrides = new {
+    waitHours = 0
+    windows = new Listing {}
+    group = ""
+  }
+  /// When no proposal fixes as many advisories as some release could, also
+  /// propose the lowest release that fixes the most, even if `permitted` or
+  /// `channel` would hold it back. `active` and the release-age wait from
+  /// `apply` still count.
+  lowestFix: Boolean = true
+}
+
 /// All first-release managers are selected unless a repository replaces this list.
 managers: Listing<Manager> = new {
   "npm"; "bun"; "github-actions"; "mise"; "cargo"; "dockerfile"; "compose"
@@ -162,6 +186,7 @@ ignore: Listing<String> = new {}
 exclude: Listing<String> = new { "**/node_modules/**"; "**/vendor/**"; "**/.git/**" }
 prs: PullRequests = new {}
 lockfiles: Lockfiles = new {}
+security: Security = new {}
 /// Prefer mise-versions for public catalogs; false uses the upstream sources.
 useVersionsHost: Boolean = true
 submodules: Boolean = false

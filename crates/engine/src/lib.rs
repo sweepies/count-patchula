@@ -63,6 +63,8 @@ pub struct Engine {
     extraction_hits: AtomicU64,
     recheck: Recheck,
     versions_host_override: Option<bool>,
+    /// Whether repositories' `security.advisories` setting may query OSV.dev.
+    advisories: bool,
     /// The server URL hidden in PRs and the dashboard for the CLI to find.
     advertised_server: Option<String>,
 }
@@ -70,6 +72,8 @@ struct Work {
     report: Repository,
     config: Option<Config>,
     dependencies: Vec<Dependency>,
+    /// Lockfile packages no manifest declares, for advisory checks.
+    locked: Vec<patchula_manager::Locked>,
     snapshot: patchula_update::Snapshot,
     inventory: Option<patchula_update::Inventory>,
     controls: patchula_update::dashboard::Controls,
@@ -192,6 +196,7 @@ impl Engine {
             extraction_hits: AtomicU64::new(0),
             recheck: Recheck::default(),
             versions_host_override: None,
+            advisories: false,
             advertised_server: None,
         };
         engine.look_up_mise_tools_with_runner();
@@ -216,6 +221,12 @@ impl Engine {
     }
     pub fn with_versions_host(mut self, enabled: bool) -> Self {
         self.versions_host_override = Some(enabled);
+        self
+    }
+    /// Check dependencies against OSV.dev where a repository's config allows
+    /// it. Off by default, so offline callers never reach the advisory API.
+    pub fn with_advisories(mut self) -> Self {
+        self.advisories = true;
         self
     }
     fn catalog_key(&self, dep: &Dependency, config: Option<&Config>) -> LookupKey {
@@ -748,6 +759,7 @@ impl Engine {
                             report: repository(&repo, Status::Error, Some(error.to_string())),
                             config: None,
                             dependencies: Vec::new(),
+                            locked: Vec::new(),
                             snapshot: patchula_update::Snapshot::default(),
                             inventory: None,
                             controls: patchula_update::dashboard::Controls::default(),
@@ -907,11 +919,97 @@ impl Engine {
         current_refs.retain(|key| !digests.contains_key(key));
         // Revalidate current action refs alongside source heads. These network
         // reads used to serialize behind all catalogs inside the policy phase.
-        let (remaining, refs) = tokio::join!(
+        let mut advisory_queries = BTreeSet::new();
+        for (repo, eval) in work.iter().zip(&evaluators) {
+            if let (Some(eval), Some(config)) = (eval, &repo.config)
+                && self.advisories
+                && config.security.advisories
+            {
+                advisory_queries.extend(
+                    repo.dependencies
+                        .iter()
+                        .cloned()
+                        .chain(repo.locked.iter().map(patchula_manager::Locked::dependency))
+                        .filter(|dep| !eval.ignored(dep))
+                        .filter_map(|dep| patchula_lookup::advisory_query(&dep)),
+                );
+            }
+        }
+        let (remaining, refs, advisories) = tokio::join!(
             self.age_catalogs(keys, &waits, &retry_keys, &sources, now),
-            self.digests(current_refs)
+            self.digests(current_refs),
+            async {
+                if advisory_queries.is_empty() {
+                    Ok(BTreeMap::new())
+                } else {
+                    self.sources.advisories(&advisory_queries).await
+                }
+            }
         );
-        let (remaining, catalog_evidence) = remaining?;
+        let advisories = advisories.unwrap_or_else(|error| {
+            for (repo, eval) in work.iter_mut().zip(&evaluators) {
+                if eval.as_ref().is_some_and(|eval| {
+                    repo.dependencies.iter().any(|dep| {
+                        !eval.ignored(dep)
+                            && patchula_lookup::advisory_query(dep)
+                                .is_some_and(|q| advisory_queries.contains(&q))
+                    })
+                }) {
+                    repo.report
+                        .warnings
+                        .push(format!("advisory lookup on OSV.dev failed: {error}"));
+                }
+            }
+            BTreeMap::new()
+        });
+        let (mut remaining, mut catalog_evidence) = remaining?;
+        // A lockfile-only package joins the dependencies once it is vulnerable.
+        for (repo, eval) in work.iter_mut().zip(&evaluators) {
+            if eval.is_some() {
+                let vulnerable: Vec<_> = repo
+                    .locked
+                    .iter()
+                    .map(patchula_manager::Locked::dependency)
+                    .filter(|dep| {
+                        patchula_lookup::advisory_query(dep)
+                            .and_then(|q| advisories.get(&q))
+                            .is_some_and(|found| !found.is_empty())
+                    })
+                    .collect();
+                repo.dependencies.extend(vulnerable);
+            }
+        }
+        // A vulnerable dependency's fix may be newer than a catalog reused
+        // under its release-age wait, so those catalogs are read again.
+        let mut vulnerable = BTreeSet::new();
+        for (repo, eval) in work.iter().zip(&evaluators) {
+            if let Some(eval) = eval {
+                for dep in &repo.dependencies {
+                    let key = self.catalog_key(dep, repo.config.as_ref());
+                    if eval.needs_lookup(dep)
+                        && catalog_evidence.get(&key).is_some_and(|e| e.reused)
+                        && patchula_lookup::advisory_query(dep)
+                            .and_then(|q| advisories.get(&q))
+                            .is_some_and(|found| !found.is_empty())
+                    {
+                        vulnerable.insert(key);
+                    }
+                }
+            }
+        }
+        if !vulnerable.is_empty() {
+            let (fresh, evidence) = self
+                .age_catalogs(
+                    vulnerable,
+                    &BTreeMap::new(),
+                    &BTreeSet::new(),
+                    &sources,
+                    now,
+                )
+                .await?;
+            remaining.extend(fresh);
+            catalog_evidence.extend(evidence);
+        }
         catalogs.extend(remaining);
         digests.extend(refs);
         let lookup_time = prefetch_time + micros(started);
@@ -928,50 +1026,59 @@ impl Engine {
                 if let Some(eval) = eval
                     && !eval.ignored(dep)
                 {
+                    let found = patchula_lookup::advisory_query(dep)
+                        .and_then(|query| advisories.get(&query).map(|found| (query, found)));
+                    let found = found
+                        .as_ref()
+                        .map(|(query, found)| (query, found.as_slice()));
                     match catalogs.get(&self.catalog_key(dep, repo.config.as_ref())) {
-                        Some(Ok(catalog)) => match eval.evaluate_at(dep, catalog, now) {
-                            Ok(p) => {
-                                let dep_key = patchula_update::dashboard::extracted_key(dep);
-                                let overrides: BTreeSet<_> = p
-                                    .held_back
-                                    .iter()
-                                    .flat_map(|h| {
-                                        h.versions
-                                            .iter()
-                                            .chain(std::iter::once(&h.version))
-                                            .map(|v| (v.clone(), h.update_type.clone()))
-                                    })
-                                    .filter(|(v, k)| {
-                                        let target =
-                                            patchula_update::dashboard::held_target(&dep_key, v, k);
-                                        repo.controls.create.contains(&target)
-                                            || repo.controls.age_permits.contains(&target)
-                                    })
-                                    .collect();
-                                if overrides.is_empty() {
-                                    evaluation = p;
-                                } else {
-                                    match eval
-                                        .evaluate_with_age_overrides(dep, catalog, now, &overrides)
-                                    {
-                                        Ok(p) => {
-                                            for (v, k) in overrides {
-                                                repo.controls.age_permits.insert(
-                                                    patchula_update::dashboard::held_target(
-                                                        &dep_key, &v, &k,
-                                                    ),
-                                                );
+                        Some(Ok(catalog)) => {
+                            match eval.evaluate_with(dep, catalog, now, &BTreeSet::new(), found) {
+                                Ok(p) => {
+                                    let dep_key = patchula_update::dashboard::extracted_key(dep);
+                                    let overrides: BTreeSet<_> = p
+                                        .held_back
+                                        .iter()
+                                        .flat_map(|h| {
+                                            h.versions
+                                                .iter()
+                                                .chain(std::iter::once(&h.version))
+                                                .map(|v| (v.clone(), h.update_type.clone()))
+                                        })
+                                        .filter(|(v, k)| {
+                                            let target = patchula_update::dashboard::held_target(
+                                                &dep_key, v, k,
+                                            );
+                                            repo.controls.create.contains(&target)
+                                                || repo.controls.age_permits.contains(&target)
+                                        })
+                                        .collect();
+                                    if overrides.is_empty() {
+                                        evaluation = p;
+                                    } else {
+                                        match eval
+                                            .evaluate_with(dep, catalog, now, &overrides, found)
+                                        {
+                                            Ok(p) => {
+                                                for (v, k) in overrides {
+                                                    repo.controls.age_permits.insert(
+                                                        patchula_update::dashboard::held_target(
+                                                            &dep_key, &v, &k,
+                                                        ),
+                                                    );
+                                                }
+                                                evaluation = p;
                                             }
-                                            evaluation = p;
-                                        }
-                                        Err(e) => {
-                                            repo.report.warnings.push(format!("{}: {e}", dep.name))
+                                            Err(e) => repo
+                                                .report
+                                                .warnings
+                                                .push(format!("{}: {e}", dep.name)),
                                         }
                                     }
                                 }
+                                Err(e) => repo.report.warnings.push(format!("{}: {e}", dep.name)),
                             }
-                            Err(e) => repo.report.warnings.push(format!("{}: {e}", dep.name)),
-                        },
+                        }
                         Some(Err(error)) => repo
                             .report
                             .warnings
@@ -1174,6 +1281,38 @@ impl Engine {
                         }
                     }
                 }
+                let advisory = patchula_lookup::advisory_query(dep)
+                    .and_then(|query| advisories.get(&query).map(|found| (query, found)))
+                    .filter(|(_, found)| !found.is_empty());
+                if let (Some(eval), Some((query, found))) = (eval, &advisory)
+                    && let Some(fix) = eval.transitive_fix(dep, (query, found))
+                {
+                    proposals.push(fix);
+                }
+                if let Some((query, found)) = &advisory {
+                    let label = repo
+                        .config
+                        .as_ref()
+                        .map(|c| c.security.label.as_str())
+                        .unwrap_or_default();
+                    for proposal in &mut proposals {
+                        let Some(target) = proposal
+                            .new_version
+                            .as_ref()
+                            .or(proposal.new_value.as_ref())
+                        else {
+                            continue;
+                        };
+                        proposal.fixes = patchula_lookup::fixes(dep, query, found, target);
+                        if let Some(policy) = &mut proposal.policy
+                            && !proposal.fixes.is_empty()
+                            && !label.is_empty()
+                            && !policy.labels.iter().any(|l| l == label)
+                        {
+                            policy.labels.push(label.into());
+                        }
+                    }
+                }
                 proposals.sort();
                 proposals.dedup();
                 let stale = if matches!(dep.source, Source::Docker | Source::Oci) {
@@ -1313,6 +1452,11 @@ impl Engine {
                             evidence
                         }),
                         resolution,
+                        advisories: advisory
+                            .map(|(query, found)| {
+                                patchula_lookup::report_advisories(dep, &query, found)
+                            })
+                            .unwrap_or_default(),
                     }),
                 };
                 files.entry(dep.file.clone()).or_default().push(value);
@@ -1601,6 +1745,7 @@ impl Engine {
                             ),
                             config: None,
                             dependencies: Vec::new(),
+                            locked: Vec::new(),
                             snapshot: patchula_update::Snapshot::default(),
                             inventory: None,
                             controls: patchula_update::dashboard::Controls::default(),
@@ -1675,6 +1820,7 @@ impl Engine {
             report,
             config: Some(config),
             dependencies: extraction.dependencies,
+            locked: extraction.locked,
             snapshot: patchula_update::Snapshot {
                 paths,
                 files: blobs,
@@ -1739,6 +1885,7 @@ impl Engine {
                 report,
                 config: None,
                 dependencies: Vec::new(),
+                locked: Vec::new(),
                 snapshot: patchula_update::Snapshot::default(),
                 inventory: None,
                 controls: patchula_update::dashboard::Controls::default(),
@@ -1747,7 +1894,7 @@ impl Engine {
         let key = ExtractionKey {
             repo: repo.into(),
             default_branch_commit: commit,
-            config_hash: format!("extract-v8:{}", hash(&serde_json::to_vec(&config)?)),
+            config_hash: format!("extract-v9:{}", hash(&serde_json::to_vec(&config)?)),
         };
         let cached: CachedExtraction = if let Some(bytes) = self.cache.extraction_get(&key).await? {
             self.extraction_hits.fetch_add(1, Ordering::Relaxed);
@@ -1810,6 +1957,7 @@ impl Engine {
             report,
             config: Some(config),
             dependencies: cached.extraction.dependencies,
+            locked: cached.extraction.locked,
             snapshot: cached.snapshot,
             inventory: None,
             controls: patchula_update::dashboard::Controls::default(),

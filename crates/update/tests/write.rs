@@ -492,6 +492,7 @@ fn setup(
                     group: None,
                     policy: None,
                     release_age: None,
+                    fixes: Vec::new(),
                 }],
             }],
         }],
@@ -2151,6 +2152,29 @@ async fn manually_closed_update_stays_closed_across_files_and_wording_but_newer_
 }
 
 #[tokio::test(start_paused = true)]
+async fn security_updates_skip_the_concurrent_and_hourly_limits() {
+    let (mut config, repo) = pr_config();
+    config.prs.concurrent = Some(1);
+    config.prs.per_hour = Some(1);
+    let (p, snapshot) = make_plan("22.0.0");
+    let (mut security, _) = make_plan("24.0.0");
+    security.changes[0].advisories = vec![
+        serde_json::from_value(
+            json!({"id":"GHSA-test","url":"https://osv.dev/vulnerability/GHSA-test"}),
+        )
+        .unwrap(),
+    ];
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    let mut plans = vec![p, security];
+    let actions = pr_cycle(&github, &repo, &config, &mut plans, &snapshot).await;
+    assert!(
+        actions.iter().all(|a| a.status == ActionStatus::Created),
+        "{actions:?}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn concurrent_and_hourly_limits_include_closed_creates_and_null_is_unlimited() {
     let (mut config, repo) = pr_config();
     config.prs.concurrent = Some(1);
@@ -2681,6 +2705,7 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
                 group: None,
                 policy: None,
                 release_age: None,
+                fixes: Vec::new(),
             })
             .collect();
         let r = ReportDependency {
@@ -3073,6 +3098,7 @@ fn reference_data_pins_get_their_own_branch() {
                     group: None,
                     policy: None,
                     release_age: None,
+                    fixes: Vec::new(),
                 })
                 .collect(),
         };
