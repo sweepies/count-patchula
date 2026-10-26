@@ -96,3 +96,21 @@ fn a_negated_exclude_reads_a_default_excluded_directory_again() {
         ["examples/app/package.json"]
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_tracked_file_below_a_symlinked_directory_is_not_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("checkout");
+    let outside = dir.path().join("outside");
+    write(&outside, "package.json", MANIFEST);
+    git(dir.path(), &["init", "-q", "checkout"]);
+    write(&root, "app/package.json", MANIFEST);
+    git(&root, &["add", "app/package.json"]);
+    std::fs::remove_dir_all(root.join("app")).unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("app")).unwrap();
+    let scanner = scanner("amends \"PatchulaConfig.pkl\"\n");
+    let (paths, files) = patchula_engine::read_tree(&root, &scanner).unwrap();
+    assert!(files.is_empty(), "{files:?}");
+    assert!(!paths.contains("app/package.json"));
+}

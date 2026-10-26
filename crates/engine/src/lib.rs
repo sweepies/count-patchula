@@ -52,8 +52,9 @@ pub enum Stage {
     Discovery,
     /// Reading each repository's manifests; counts repositories.
     Extraction,
-    /// Reading releases and current digests; counts unique packages, each read
-    /// once per batch however many dependencies share it.
+    /// Reading releases and current digests; counts unique lookups, one per
+    /// package and one per action ref whose digest is read, however many
+    /// dependencies share them.
     Lookup,
     /// Resolving the digests updates pin to; counts digests.
     Digests,
@@ -2185,8 +2186,17 @@ pub fn read_tree(
     let mut files = Files::new();
     for relative in listed {
         let path = dir.join(&relative);
-        // Deleted tracked files, symlinks and submodules are not files here.
-        if !std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file()) {
+        // Deleted tracked files, symlinks and submodules are not files here,
+        // and a file below a symlinked directory would be read, and written,
+        // outside the tree.
+        let below_symlink = std::path::Path::new(&relative)
+            .ancestors()
+            .skip(1)
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .any(|parent| {
+                std::fs::symlink_metadata(dir.join(parent)).is_ok_and(|meta| meta.is_symlink())
+            });
+        if below_symlink || !std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file()) {
             continue;
         }
         if scanner.needs(&relative)
