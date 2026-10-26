@@ -76,10 +76,11 @@ with GitHub's issuer instead.
 
 ## Release notes
 
-communique reads the Anthropic key from Infisical through GitHub OIDC. A
-dispatched run's OIDC subject is
-`repo:sweepies/count-patchula:ref:refs/heads/main`, so the Infisical machine
-identity must trust that subject. Until the `INFISICAL_IDENTITY_ID` and
+communique reads the Anthropic key from Infisical through GitHub OIDC. The
+repository uses GitHub's immutable OIDC subject format, and the Infisical
+machine identity trusts
+`repo:sweepies@7191851/*:ref:refs/{tags/v*,heads/main}`, which covers a run
+dispatched on `main`. Until the `INFISICAL_IDENTITY_ID` and
 `INFISICAL_PROJECT_ID` repository variables are set, the release keeps
 GitHub's generated notes. `mise run release:notes vX.Y.Z` also rewrites a
 published release's notes locally, with `ANTHROPIC_API_KEY` set.
