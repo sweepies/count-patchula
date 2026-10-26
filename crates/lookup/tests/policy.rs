@@ -1158,3 +1158,25 @@ fn gitlab_refs_update_to_the_exact_tag_name() {
     values.sort();
     assert_eq!(values, [("major", Some("v2.0")), ("minor", Some("1.1"))]);
 }
+#[test]
+fn pre_commit_revs_update_to_the_exact_tag_name() {
+    let cfg = config("benchmark-public");
+    let eval = Evaluator::new(&cfg).unwrap();
+    let mut dep = dependency("org/hooks");
+    dep.manager = Manager::PreCommit;
+    dep.file = ".pre-commit-config.yaml".into();
+    dep.kind = DependencyKind::Tool;
+    dep.source = Source::GithubTags;
+    dep.scheme = Scheme::Loose;
+    dep.current = "v1.0".into();
+    dep.resolved = Some("v1.0".into());
+    let proposals = eval
+        .propose(&dep, &catalog(&["v1.0", "v1.1", "2.0"]))
+        .unwrap();
+    let mut values: Vec<_> = proposals
+        .iter()
+        .map(|p| (p.update_type.as_str(), p.new_value.as_deref()))
+        .collect();
+    values.sort();
+    assert_eq!(values, [("major", Some("2.0")), ("minor", Some("v1.1"))]);
+}

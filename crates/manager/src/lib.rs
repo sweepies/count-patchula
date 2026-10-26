@@ -130,6 +130,15 @@ impl Dependency {
         self.manager == Manager::GithubActions
             && matches!(self.source, Source::GithubTags | Source::ForgeTags)
     }
+    /// A git ref its tool checks out by name, so an update writes the upstream
+    /// tag exactly as tagged rather than a normalized version.
+    pub fn exact_tag_ref(&self) -> bool {
+        match self.manager {
+            Manager::PreCommit => true,
+            Manager::Gitlabci | Manager::GitlabciInclude => self.source == Source::ForgeTags,
+            _ => false,
+        }
+    }
 }
 /// Gitea and Forgejo hosts the `forge-tags` source recognises by name.
 pub(crate) fn gitea_host(host: &str) -> bool {
