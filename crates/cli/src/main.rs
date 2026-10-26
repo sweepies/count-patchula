@@ -315,13 +315,13 @@ async fn tui_command(
             miette::miette!("patchula tui needs a terminal; use --once for a plain snapshot"),
         ));
     }
-    let (report, checkout) = report(app, &tui.lookup, None, services).await?;
-    let origin = match checkout {
-        Some((dir, config)) => tui::Origin::Local(Box::new(
-            tui::local(&dir, config).map_err(|e| (2, miette::miette!("{e}")))?,
+    let (report, read) = report(app, &tui.lookup, None, services).await?;
+    let origin = match read {
+        Read::Checkout(checkout) => tui::Origin::Local(Box::new(
+            tui::local(&checkout.0, checkout.1).map_err(|e| (2, miette::miette!("{e}")))?,
         )),
-        None if tui.lookup.repositories.is_empty() && !tui.lookup.all_repos => tui::Origin::Server,
-        None => tui::Origin::GitHub,
+        Read::Server => tui::Origin::Server,
+        Read::GitHub => tui::Origin::GitHub,
     };
     let model = tui::Model::new(&report, origin);
     if tui.once {
@@ -1064,6 +1064,13 @@ mod tests;
 /// the tree's own `patchula.pkl`.
 type Checkout = (std::path::PathBuf, Option<patchula_config::Config>);
 
+/// What a lookup read: the working tree here, GitHub, or a server.
+enum Read {
+    Checkout(Box<Checkout>),
+    GitHub,
+    Server,
+}
+
 /// Build the engine from lookup flags and run one lookup or run batch, with the
 /// working tree it read, if it read one.
 async fn report(
@@ -1071,7 +1078,7 @@ async fn report(
     options: &cli::Lookup,
     run: Option<&cli::Run>,
     services: &Services,
-) -> Result<(patchula_report::Report, Option<Checkout>), (u8, miette::Report)> {
+) -> Result<(patchula_report::Report, Read), (u8, miette::Report)> {
     use patchula_engine::{Engine, Options};
     let scan = &options.scan;
     if scan.concurrency == 0 || scan.concurrency > 100 {
@@ -1083,7 +1090,7 @@ async fn report(
             repositories,
         } => {
             let report = remote_report(services, &server, repositories, run).await?;
-            return Ok((report, None));
+            return Ok((report, Read::Server));
         }
         Source::GitHub(repositories) => {
             let config = options
@@ -1145,5 +1152,11 @@ async fn report(
         };
         (code, miette::miette!("{e}"))
     })?;
-    Ok((report, local.map(|dir| (dir, config))))
+    Ok((
+        report,
+        match local {
+            Some(dir) => Read::Checkout(Box::new((dir, config))),
+            None => Read::GitHub,
+        },
+    ))
 }

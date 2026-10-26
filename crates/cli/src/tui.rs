@@ -782,6 +782,7 @@ impl Model {
             return;
         };
         let rows = self.rows();
+        let tab = self.tab;
         match binding.action {
             Action::Quit => self.quit = true,
             Action::Help => self.help = true,
@@ -834,6 +835,7 @@ impl Model {
                 if self.templates.get(self.cursor).is_none() {
                     return;
                 }
+                self.refresh();
                 match self.copier_blocked() {
                     Some(reason) => {
                         self.message = Some(format!("The Count cannot run copier: {reason}."))
@@ -841,6 +843,16 @@ impl Model {
                     None => self.confirming_template = Some(self.cursor),
                 }
             }
+        }
+        if self.tab == Tab::Templates && tab != Tab::Templates {
+            self.refresh();
+        }
+    }
+    /// Read the working tree's Git state again; it may have changed outside
+    /// the TUI since the last look.
+    fn refresh(&mut self) {
+        if let Origin::Local(local) = &self.origin {
+            self.uncommitted = uncommitted(&local.dir);
         }
     }
     fn switch(&mut self, step: usize) {
@@ -1543,7 +1555,7 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
     let columns = |s: &str| Span::raw(s).width();
     let mut lines = Vec::new();
-    for paragraph in text.split('\n') {
+    for paragraph in text.lines() {
         let mut line = String::new();
         for word in paragraph.split(' ') {
             let mut word = word;
