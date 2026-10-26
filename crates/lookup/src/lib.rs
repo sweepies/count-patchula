@@ -834,6 +834,11 @@ impl Evaluator {
                         &version.version
                     },
                 )
+            } else if matches!(dep.manager, Manager::Gitlabci | Manager::GitlabciInclude)
+                && dep.source == Source::ForgeTags
+            {
+                // GitLab loads a ref by its exact tag name.
+                version.version.clone()
             } else {
                 let value = if dep.manager == Manager::Npm
                     && dep.kind == DependencyKind::Peer

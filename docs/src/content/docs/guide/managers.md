@@ -190,7 +190,8 @@ also updates CI/CD component references
 component project's tags. `~latest` and commit SHAs are left alone.
 
 `gitlabci-include` updates the `ref` of `include: project:` entries from that
-project's tags. Entries without a `ref`, branch names and commit SHAs are left
+project's tags. Refs and component versions are written as the tag is named,
+since GitLab loads them by exact name. Entries without a `ref`, branch names and commit SHAs are left
 alone, and so are `local`, `remote` and `template` includes. A ref or
 component reference shared through a YAML anchor is skipped, since one tag may
 not exist in every project that uses it; an anchored image is edited once, at
