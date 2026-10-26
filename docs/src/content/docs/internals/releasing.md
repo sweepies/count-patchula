@@ -19,6 +19,7 @@ uses only the built-in `GITHUB_TOKEN`.
    later than the latest `v*` tag and not tagged yet, and the commit it runs
    on has a successful **CI result** check from GitHub Actions. That check is
    the only verification of the code: the commit already passed CI.
+   Versions are `X.Y.Z`; prereleases are not supported.
 2. **Bump.** `mise run release:bump <version>` sets the workspace version
    and the internal path-dependency versions, refreshes the workspace entries
    in `Cargo.lock`, moves the docs' `@vX.Y.Z` and `@X.Y.Z` pins, and
@@ -37,7 +38,9 @@ uses only the built-in `GITHUB_TOKEN`.
 A failed build pushes nothing, so fix the problem on `main` and run the
 workflow again. If `main` moves while the run builds, the push to `main` is
 refused and nothing is tagged, leaving only an untagged image; run the
-workflow again from the new `main`.
+workflow again from the new `main`. If a step after the push fails, re-run
+the failed jobs: the land job sees the tag already on the bump commit and
+carries on.
 
 ## Dry run
 

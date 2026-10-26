@@ -49,8 +49,8 @@ jobs:
           VERSION: ${{ inputs.version }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
-          # SemVer 2.0 without build metadata.
-          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
+          # X.Y.Z, without leading zeros. Prereleases are not supported.
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
           if ! [[ "$VERSION" =~ $semver ]]; then
             echo "::error::$VERSION is not a version such as 0.5.1"
             exit 1
@@ -60,30 +60,14 @@ jobs:
             exit 1
           fi
 
-          # Whether $1 is a later version than $2: the X.Y.Z parts by number,
-          # and a release after its own prereleases.
-          later() {
-            local a=${1%%-*} b=${2%%-*}
-            if [ "$a" != "$b" ]; then
-              [ "$(printf '%s\n' "$a" "$b" | sort -V | tail -n 1)" = "$a" ]
-            elif [ "$1" = "$a" ]; then
-              [ "$2" != "$b" ]
-            else
-              [ "$2" != "$b" ] && [ "$1" != "$2" ] && [ "$(printf '%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]
-            fi
-          }
-          latest=
-          while IFS= read -r tag; do
-            tag=${tag#v}
-            if [ -z "$latest" ] || later "$tag" "$latest"; then
-              latest=$tag
-            fi
-          done < <(gh api "repos/$REPO/tags" --paginate --jq '.[].name | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$"))')
+          # A failed request stops the step here, before any comparison.
+          tags=$(gh api "repos/$REPO/tags" --paginate --jq '.[].name | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | ltrimstr("v")')
+          latest=$(printf '%s\n' "$tags" | sort -V | tail -n 1)
           if [ "$latest" = "$VERSION" ]; then
             echo "::error::v$VERSION is already tagged"
             exit 1
           fi
-          if [ -n "$latest" ] && ! later "$VERSION" "$latest"; then
+          if [ -n "$latest" ] && [ "$(printf '%s\n' "$latest" "$VERSION" | sort -V | tail -n 1)" != "$VERSION" ]; then
             echo "::error::$VERSION is not later than the latest release, $latest"
             exit 1
           fi
@@ -289,14 +273,14 @@ jobs:
           DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
         with:
           images: ${{ env.IMAGE }}
-          # A release is X.Y.Z and latest, with no floating minor or major tags,
-          # and a prerelease never takes latest. A dry run builds the same
+          # A release is X.Y.Z and latest, with no floating minor or major tags.
+          # A dry run builds the same
           # labels, which the smoke test checks, and pushes nothing. GHCR reads
           # a multi-platform image's description from its index annotations, so
           # the annotations repeat the labels.
           tags: |
             type=raw,value=${{ steps.version.outputs.version }}
-            type=raw,value=latest,enable=${{ !contains(steps.version.outputs.version, '-') }}
+            type=raw,value=latest
           labels: |
             org.opencontainers.image.title=Count Patchula
             org.opencontainers.image.description=The Count's GitHub App server: patchula serve, with mise and git for lockfile updates
@@ -505,6 +489,11 @@ jobs:
           gh auth setup-git
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # A re-run after a later step failed finds the commit already landed.
+          if [ "$(git ls-remote origin "refs/tags/v$VERSION^{}" | cut -f1)" = "$SHA" ]; then
+            echo "v$VERSION already points at $SHA." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           # A check run needs a commit GitHub has, so the commit goes to a
           # branch outside main's ruleset first.
           branch=release/v$VERSION
