@@ -4,7 +4,6 @@ title: "Environment variables"
 | Variable | Used by | Meaning |
 |---|---|---|
 | `PATCHULA_TOKEN` | `lookup`, `run` | GitHub token; falls back to `GITHUB_TOKEN`, then `GH_TOKEN`, then `gh auth token --hostname github.com` |
-| `NO_COLOR` | all | set to anything but empty, turns colour off; `--color always` still forces it |
 | `PATCHULA_LOG` | all | log level: `error`, `warn` (the CLI default), `info` (the server default), `debug` or `trace`; `-vv` means `debug` |
 | `PATCHULA_RECHECK` | `run`, server | `now` or `next-run`: when a ticked checkbox says it takes effect |
 | `PATCHULA_TOOLS_DIR` | `run`, `tools` | the tool store, holding the lockfile tools and the pinned mise that lists `mise` tools; default `<cache>.tools` |
@@ -21,7 +20,7 @@ title: "Environment variables"
 | `PATCHULA_SERVER_CACHE` | server | the server's SQLite cache |
 | `PATCHULA_LISTEN` | server | bind address; default `127.0.0.1:8080` |
 | `PATCHULA_SHUTDOWN_TIMEOUT_SECS` | server | drain deadline on SIGTERM, 1 to 3600; default 60 |
-| `NO_COLOR` | `--help` | any value prints help without colour, as when it is piped |
+| `NO_COLOR` | all | turns colour off: any value for `--help`, which prints as when it is piped; any non-empty value for reports, the spinner and errors, unless `--color always` forces it |
 | `CLICOLOR_FORCE` | `--help` | any value but `0` colours help that is piped; `NO_COLOR` still wins |
 | `COLUMNS` | `--help` | the width help wraps to; default the terminal's, else 80 |
 
