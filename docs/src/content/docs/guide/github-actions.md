@@ -47,7 +47,7 @@ jobs:
         with:
           client-id: ${{ vars.PATCHULA_CLIENT_ID }}
           private-key: ${{ secrets.PATCHULA_APP_PRIVATE_KEY }}
-      - uses: sweepies/count-patchula@v0.4.0
+      - uses: sweepies/count-patchula@v0.5.0
         with:
           token: ${{ steps.app.outputs.token }}
 ```
@@ -91,7 +91,7 @@ jobs:
           private-key: ${{ secrets.PATCHULA_APP_PRIVATE_KEY }}
           # Every repository the App is installed on in this organization.
           owner: ${{ github.repository_owner }}
-      - uses: sweepies/count-patchula@v0.4.0
+      - uses: sweepies/count-patchula@v0.5.0
         with:
           token: ${{ steps.app.outputs.token }}
           all-repos: "true"
