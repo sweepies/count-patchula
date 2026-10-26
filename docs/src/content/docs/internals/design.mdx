@@ -17,52 +17,37 @@ Measured baseline (Renovate 44.155.6, warm caches, one EC2 c7i.large):
 | Largest repository alone, after the patch | 44 s |
 | Smallest repository alone, after the patch | 13 s |
 
-Where Renovate's time went: one repository at a time, per-repository caches,
-full release and tag histories fetched through paginated APIs, every changelog
-re-parsed per version, and Node startup per process. The remaining floor is
-GitHub round-trips and lockfile tools (`bun`, `npm`, `cargo`, `go`), which no
+Renovate's time went to processing one repository at a time with
+per-repository caches, fetching full release and tag histories through
+paginated APIs, re-parsing every changelog per version, and starting Node per
+process. What remains is GitHub round-trips and lockfile tools, which no
 language change removes.
-
-Targets (to be confirmed by Phase 1 measurements):
-
-- Warm batch, nothing changed: under 5 s of patchula time for 12 repos.
-- Warm batch with updates: 10–30 s, bounded by lockfile tools and GitHub writes.
 
 ## Principles
 
-1. **Batch-native.** One process handles the whole batch. Repositories are
-   processed concurrently (default 8) behind one GitHub rate-limit governor.
-   Each lookup (data source + package) runs at most once per batch, however
-   many repositories use the package.
-2. **Incremental by default.** Release lists, tag lists and changelogs are
-   stored with their validators (ETag, Last-Modified) and the newest item seen.
-   A refresh fetches newest-first and stops at the first item already known.
-   Nothing paginates a full history after the first fetch.
-3. **Conditional everywhere.** Every GET is conditional when a validator
-   exists. GitHub does not count 304 responses against the primary rate limit.
-4. **No clone unless needed.** Repository files are read through the GitHub
-   API at the default branch's commit. Commits are created through the API
-   (signed by GitHub). A working tree is materialised from a persistent partial
-   clone only when a lockfile tool must run.
-5. **Skip unchanged work.** If the default branch's commit and the resolved
-   config are unchanged, the previous extraction is reused. If no new versions
-   appeared either, no branch work happens.
-6. **Fail loudly.** Unknown config fields, unknown managers and unsupported
-   files are errors with precise diagnostics, never silently ignored.
-7. **Structured output.** A stable, versioned JSON report is the interface to
-   callers such as a scheduled runner. Logs are for humans and never parsed.
-8. **Clean-room and MIT.** See the README.
+The user-facing [principles](/guide/how-it-works/#principles) apply. Inside the
+engine they mean:
+
+- Each lookup (data source and package) runs at most once per batch, however
+  many repositories use the package.
+- Release lists, tag lists and changelogs are stored with their validators
+  (ETag, Last-Modified) and the newest item seen. A refresh fetches
+  newest-first and stops at the first item already known.
+- Repository files are read through the GitHub API at the default branch's
+  commit, and commits are created through the API, signed by GitHub.
+- If the default branch's commit and the resolved config are unchanged, the
+  previous extraction is reused. If no new versions appeared either, no branch
+  work happens.
+- A stable, versioned JSON [report](/reference/report/) is the interface to
+  callers. Logs are never parsed.
 
 ## Configuration
 
 Pkl only, evaluated in-process with `pklr`. patchula publishes a typed
-`PatchulaConfig.pkl` schema; a repository's config amends it, and an organisation
-can share a base config through Pkl imports. There is no `renovate.json`
-reader and no migration tool: repositories are migrated by hand or by agents.
-
-The schema is designed from scratch around the concepts our repositories use:
-rules matching packages, managers, files and update types; grouping; pinning
-of versions and digests; labels; PR limits; regex managers; release notes.
+`PatchulaConfig.pkl` schema; a repository's config amends it, and an
+organisation can share a base config through Pkl imports. There is no
+`renovate.json` reader; [migrating](/renovate/migrating/) covers moving a
+config by hand.
 
 ## Architecture
 
@@ -70,93 +55,65 @@ of versions and digests; labels; PR limits; regex managers; release notes.
 - crates/
   - config/ Pkl schema, evaluation (pklr), typed model, rule engine, templates
   - versioning/ semver (npm and Cargo), Docker tags, PEP 440, Go modules, HashiCorp, loose
-  - datasource/ trait + implementations; all HTTP through github/ and cache/
-  - manager/ per-ecosystem extract and update, regex managers
+  - datasource/ registry lookups with conditional GETs, through http/ and github/
+  - mise/ tool version lookups through the pinned `mise ls-remote`
+  - manager/ per-ecosystem extraction and surgical edits, regex managers
   - lookup/ batch-wide deduplicated lookups, update classification, grouping
-  - update/ branches, API commits, PRs, dashboard, lockfile-tool runner (Phase 2)
-  - github/ REST + GraphQL client, conditional requests, rate-limit governor
+  - engine/ batch lookup and branch writing, shared by the CLI and server
+  - update/ branch plans, API commits, PRs, dashboard, lockfile tools
+  - github/ REST and GraphQL client, App tokens, rate-limit governor
   - cache/ SQLite: HTTP entries, release lists, extraction fingerprints
   - http/ reqwest transport boundary, shared network pool
-  - testkit/ dev-dependency only: redacted recording and offline cassette replay
+  - process/ external commands with an explicit environment and time limit
+  - server/ GitHub App server over the engine
+  - testkit/ dev-dependency only: redacted recording and offline replay
   - report/ versioned batch JSON caller contract, shared with conformance
   - cli/ `patchula` binary, defined with usage
 - conformance/ Renovate comparison harness (black box only)
 </FileTree>
 
 Async runtime: tokio. HTTP: reqwest with HTTP/2 and rustls. Errors and
-diagnostics: miette. Interactive prompts: demand, only on interactive terminals.
+diagnostics: miette. Terminal UI: ratatui, only on interactive terminals.
 
-## Scope for the first release
+## Scope
 
-Managers: npm and bun (workspaces, `bun.lock`, `package-lock.json`), GitHub
-Actions (with digest pinning), mise (`mise.toml`, `.tool-versions`), Cargo,
-Dockerfile and Compose, Go modules, Terraform (with its lock file), Kubernetes,
-kustomize, Flux and Helm values, pip requirements, regex managers.
-
-Data sources: npm registry, GitHub releases and tags, Docker registries
-(Docker Hub, ghcr.io), crates.io sparse index, Go module proxy, Terraform
-registry, PyPI, Helm and OCI repositories, and whatever `mise ls-remote` lists.
-
-Platform: GitHub only. The CLI uses a token the caller provides; server mode
-mints installation tokens from GitHub App credentials.
-
-Out of scope: other platforms, onboarding PRs, hosted services, Docker-based
-tool installation, arbitrary post-upgrade commands, encrypted config.
+GitHub only. Out of scope: other platforms, onboarding PRs, hosted services,
+Docker-based tool installation, arbitrary post-upgrade commands and encrypted
+config. The [compatibility matrix](/renovate/compatibility/) lists what is
+supported.
 
 ## Run modes
 
-One engine library runs every batch. The CLI and the server are thin front
-ends over it, so a batch behaves the same however it was started.
+One engine runs every batch, so a batch behaves the same however it started.
+The CLI (`patchula run`, `patchula lookup`) runs one batch with a token the
+caller supplies. The [server](/guide/server/)
+(`patchula serve`) mints installation tokens from GitHub App credentials and
+keeps its queue and caches warm. With `--remote`, the CLI signs in with the
+server's App through GitHub's device flow, and the server runs the batch with
+its own credentials once the user is shown to have push access.
 
-- **CLI** (`patchula run`, `patchula lookup`): one batch per invocation,
-  with a token supplied by the caller.
-- **Server** (`patchula serve`): a long-running process that exposes an API
-  for GitHub webhooks (signatures verified before parsing) plus health and
-  readiness endpoints, keeps one de-duplicated queue, runs sweeps on a cron
-  schedule, and drains work in batches with caches kept warm.
-- **CLI on a server** (`--remote`): the CLI signs in with the server's App
-  through GitHub's device flow, and the server runs the lookup or run with its
-  own credentials once the user is shown to have push access.
-
-Checkboxes patchula adds to issues and PRs say when a click takes effect:
-"re-check now" in server mode, "re-check on the next run" in CLI mode. Operators
-can override this with `--recheck now|next-run` (or `PATCHULA_RECHECK`) for
-setups where an external webhook receiver starts CLI runs immediately. A hidden marker, not the text, identifies patchula's checkboxes.
-
-### Server settings
+Checkboxes say when a click takes effect: "re-check now" in server mode,
+"re-check on the next run" in CLI mode. `--recheck now|next-run` (or
+`PATCHULA_RECHECK`) overrides this for setups where a webhook receiver starts
+CLI runs at once. A hidden marker, not the text, identifies the Count's
+checkboxes.
 
 Operator settings (sweep schedule, triggers, concurrency, re-check wording)
-are separate from repository configs and come only from operator-supplied
-configuration: a Pkl file amending the published settings schema, plus flags
-and environment variables. Changes to the file are picked up when it changes;
-an invalid file keeps the last good settings and reports the error.
-
-Secrets (App private key, webhook secret) never appear in settings; they come
-from environment variables or files.
-
-Not planned for now (decision 2026-10-15): a web UI and settings managed by
-patchula itself. Besides the webhook and health checks, the server has the
-`/api/v1` API behind `--remote` and a read-only repository API that a separate
-dashboard can read.
+are a Pkl file separate from repository configs; see
+[settings](/guide/server/#settings). Secrets, such as the App private key and
+the webhook secret, never appear in settings and come only from environment
+variables or files. There is no web UI and no settings managed by the Count
+himself. Besides webhooks and health checks, the server has the `/api/v1` API
+behind `--remote` and a read-only repository API for a separate dashboard.
 
 ## Tooling
 
 All tools come from mise. Builds go through mr-boxington (`mbx`) locally and in
 CI. The CLI is defined with usage, which also generates completions, Markdown
-docs and the man page. Performance is tracked with tak, report-only until tak
-stabilises. Tests never touch the network: they replay responses recorded by
-patchula itself.
+docs and the man page. Performance is tracked with tak, report-only for now.
+Tests never touch the network: they replay responses recorded by patchula
+itself.
 
-This site is Astro Starlight, in `docs/`, served from Cloudflare Workers. It is
-built from `main`'s pages, with no per-release versions: `mise run docs:build`
-builds it and `mise run docs:dev` serves it with live reload.
-
-## Phases
-
-0. Foundations: workspace, CLI, Pkl config, GitHub client, cache,
-   record/replay, comparison harness, benchmarks.
-1. Read-only: `patchula lookup` produces a dry-run report for all 12
-   repositories, triaged against Renovate's dry-run output.
-2. Write side: branches, commits, PRs, dashboard, lockfile tools.
-   Then server mode: webhook API, queue, file-based operator settings.
-3. Shadow mode next to Renovate on the existing runner, then cutover.
+This site is Astro Starlight, in `docs/`, served from Cloudflare Workers and
+built from `main` with no per-release versions. `mise run docs:build` builds it
+and `mise run docs:dev` serves it with live reload.

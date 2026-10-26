@@ -1,28 +1,32 @@
 ---
 title: "HTTP fixtures"
 ---
-Production code accepts `patchula_http::Transport`. It takes a reqwest Request
-constructed with `Request::new`, so building a request needs no Client. The
-separate `patchula-testkit` crate belongs only in consuming crates'
-dev-dependencies. Replay has cassette data, match options and a consumption
-cursor only. It has no reqwest Client or fallback transport. Its unmatched
-request error names the redacted method/URL and the fields to check. A test
-passes a panicking network factory to the default replay constructor, and uses
-an unresolvable `.invalid` host to demonstrate this boundary.
+Production code accepts a `patchula_http::Transport`, which takes a reqwest
+`Request` built with `Request::new`, so building a request needs no client.
+`patchula-testkit` belongs only in dev-dependencies. Replay holds only the
+cassette data, match options and a consumption cursor, with no reqwest client
+and no fallback transport. An unmatched request fails with the redacted method
+and URL and the fields to check. A test passes a panicking network factory and
+an unresolvable `.invalid` host to prove replay never reaches the network.
 
-JSON cassettes live under `fixtures/`, one per scenario, with schema version,
-provenance, request and response. Bodies are parsed JSON (human-diffable and
-object-order-independent) or UTF-8 text. Binary/streaming bodies fail explicitly.
-Requests match method, sanitized URL, selected headers and the complete body,
-including GraphQL query and variables. Defaults select Accept, Content-Type,
-If-None-Match, If-Modified-Since and X-GitHub-Api-Version; callers can replace
-the list. Repeated identical requests consume successive recorded interactions.
-`Replay::assert_finished` detects unexpectedly unused interactions.
+## Cassettes
 
-Replay is the default. `from_env` only calls the provided network factory when
-`PATCHULA_RECORD=1`. Recording starts a fresh scenario and atomically persists
-after each exchange; failures may leave a partial recording, so review the diff
-and replay before committing. Ordinary tests and CI never opt into recording.
+JSON cassettes live under `fixtures/`, one per scenario, with a schema version,
+provenance, requests and responses. Bodies are parsed JSON, so they diff well
+and ignore key order, or UTF-8 text; binary and streaming bodies fail.
+Requests match on the method, sanitised URL, selected headers and the complete
+body, including GraphQL query and variables. The default headers are `Accept`,
+`Content-Type`, `If-None-Match`, `If-Modified-Since` and
+`X-GitHub-Api-Version`, and callers can replace the list. Repeated identical
+requests consume successive interactions, and `Replay::assert_finished`
+catches unused ones.
+
+## Recording
+
+Replay is the default. `from_env` calls the network factory only when
+`PATCHULA_RECORD=1`, which ordinary tests and CI never set. Recording starts a
+fresh scenario and saves atomically after each exchange, so a failure can leave
+a partial recording: review the diff and replay before committing.
 
 ```console
 mise run test
@@ -33,51 +37,41 @@ mise run fixtures:record
 mise run test
 ```
 
-Redaction happens before writing: authorization and cookie headers; sensitive
-JSON keys; URL credentials and token/key/signature query parameters; GitHub
-`ghp_`, `ghs_`, `gho_`, `github_pat_` and `v1.` token values anywhere. Callers
-also get `ghu_`/`ghr_` coverage and full stateless `ghs_` JWT suffix redaction,
-including dots and hyphens. Legacy `v1.` detection requires at least 20 suffix
-characters to retain ordinary version tags such as `v1.24.0`; the recording
-caller also adds its exact token as a literal. Regression tests cover both.
-GitHub documents the [stateless token format](https://github.blog/changelog/2026-04-24-notice-about-upcoming-new-format-for-github-app-installation-tokens/).
-Callers can add literal secret values or regex patterns through `Redactor`. The scanner
-also accepts comma-separated literal values in `PATCHULA_REDACT`. Redaction
-does not change the in-memory response returned to a recording test. Scanning
-checks raw and parsed JSON (including escaped tokens), all nested fields, and
-URLs. Failures name the cassette path without printing matched values.
-`mise run ci` runs the scan as well as the test suite.
+Every real cassette must say it was recorded by patchula, with the endpoint
+URLs. Simulated rate-limit and transport responses are labelled as such.
+Never import another bot's fixtures, including Renovate's.
+
+## Redaction
+
+Redaction happens before anything is written:
+
+- authorization and cookie headers, and sensitive JSON keys;
+- URL credentials and token, key and signature query parameters;
+- GitHub tokens anywhere: `ghp_`, `ghs_`, `gho_`, `ghu_`, `ghr_` and
+  `github_pat_` values, including dotted [stateless `ghs_`
+  tokens](https://github.blog/changelog/2026-04-24-notice-about-upcoming-new-format-for-github-app-installation-tokens/);
+- legacy `v1.` tokens, which need at least 20 characters after the prefix so
+  version tags such as `v1.24.0` survive;
+- the recording token itself, as a literal, and any literals or patterns a
+  caller adds through `Redactor`.
+
+The in-memory response a recording test sees is not redacted. The scanner
+(`mise run fixtures:check`, also part of `mise run ci`) checks raw and parsed
+JSON, escaped tokens, nested fields and URLs, and accepts extra literals as
+comma-separated values in `PATCHULA_REDACT`. Failures name the cassette without
+printing the match.
 
 ## mise
 
-A subprocess has no HTTP cassette. Mise lookups run through
-`patchula_process::Executor`, and tests replace it with
-`patchula_testkit::MiseReplay`, which answers from
-`fixtures/mise/listings.json`: for each command after `mise` (such as
-`ls-remote --json --prerelease -- jq`), the JSON mise printed or the error it failed with.
-The replay also keeps every command it was given, with the environment and
-working directory, so tests can assert the sandbox. A lookup the fixture lacks
-fails the test; replay never runs mise.
+A subprocess has no HTTP cassette. mise lookups run through
+`patchula_process::Executor`, and tests swap in `patchula_testkit::MiseReplay`,
+which answers from `fixtures/mise/listings.json`: for each command after
+`mise` (such as `ls-remote --json --prerelease -- jq`), the JSON mise printed
+or the error it failed with. The replay keeps every command with its
+environment and working directory, so tests can assert the sandbox. A lookup
+missing from the fixture fails the test; replay never runs mise.
 
-`mise run fixtures:record-mise` (or `mise run fixtures:record`) runs the pinned
-mise through `MiseRecorder` and rewrites the file. It needs the network, a
-`mise` on `PATH` and `GH_TOKEN`, which mise gets as it would in production and
-which is never written down. `mise run fixtures:check` scans these files for
-secrets with the cassettes.
-
-Every real cassette must say it was recorded by patchula from the endpoint
-URLs. Simulated rate-limit and transport responses are explicitly labelled.
-Never import another bot's fixtures, including Renovate's.
-
-API references read for this implementation:
-[reqwest](https://docs.rs/reqwest/0.13.5/reqwest/),
-[Request](https://docs.rs/reqwest/0.13.5/reqwest/struct.Request.html),
-[Response](https://docs.rs/reqwest/0.13.5/reqwest/struct.Response.html),
-[Body](https://docs.rs/reqwest/0.13.5/reqwest/struct.Body.html),
-[ClientBuilder](https://docs.rs/reqwest/0.13.5/reqwest/struct.ClientBuilder.html),
-[serde](https://docs.rs/serde/latest/serde/),
-[serde_json](https://docs.rs/serde_json/latest/serde_json/),
-[regex](https://docs.rs/regex/latest/regex/),
-[percent-encoding](https://docs.rs/percent-encoding/latest/percent_encoding/),
-[tempfile](https://docs.rs/tempfile/latest/tempfile/),
-[thiserror](https://docs.rs/thiserror/latest/thiserror/).
+`mise run fixtures:record-mise` runs the pinned mise through `MiseRecorder` and
+rewrites the file. It needs the network, a `mise` on `PATH` and `GH_TOKEN`,
+which mise gets as it would in production and which is never written down.
+`mise run fixtures:check` scans these files with the cassettes.
