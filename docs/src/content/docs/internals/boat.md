@@ -49,10 +49,12 @@ but its cache is published only by runs on main that took the runner path.
 
 ## The snapshot
 
-Saved snapshots of this repository are named
-`count-patchula-ci-<UTC timestamp>-<12-character commit>`. The boat tasks only
-touch names that match `boat_snapshot_pattern` in `mise.toml`; every other
-saved snapshot and sandbox in the account is left alone.
+CI selects saved snapshots named
+`count-patchula-ci-<UTC timestamp>-<12-character commit>`; a build first saves
+under `count-patchula-ci-staging-<UTC timestamp>-<commit>`, which CI never
+selects. The boat tasks only touch names that match `boat_snapshot_pattern` or
+`boat_staging_pattern` in `mise.toml`; every other saved snapshot and sandbox
+in the account is left alone.
 
 `mise run boat:snapshot` builds one from HEAD:
 
@@ -60,14 +62,19 @@ saved snapshot and sandbox in the account is left alone.
    mise and copies the checkout in;
 2. runs `mise run ci` and the release build, then removes the checkout, so no
    file from this commit reaches a later run;
-3. saves the sandbox under a new name and waits until boat reports it `ready`;
-4. deploys it once in a probe sandbox;
-5. only then deletes every other saved snapshot of this repository.
+3. saves the sandbox under the staging name and waits until boat reports it
+   `ready`;
+4. deploys the staging snapshot once in a probe sandbox and checks that mise and
+   the mbx store survived;
+5. saves the unchanged builder again under the name CI selects;
+6. only then deletes every other saved snapshot of this repository, the staging
+   one included.
 
-A failure before step 5 saves or deletes nothing that already works, and the new
-snapshot is never deleted. A run that fails in step 5 leaves the new snapshot in
-place and is safe to repeat. CI always picks the newest ready snapshot, so an
-extra one only costs storage until the next run. `--dry-run` lists the
+A failure before step 6 changes nothing CI uses and deletes nothing. A run that
+fails in step 6 leaves the new snapshot in place and is safe to repeat. CI picks
+the newest ready snapshot, so an extra one only costs storage until the next
+run. If a refresh deletes the snapshot a CI job was given before the job starts
+its sandbox, `boat:run` starts from the newest one instead. `--dry-run` lists the
 current snapshots and what a real run would create and delete.
 
 ## Refresh the snapshot
@@ -109,7 +116,7 @@ before then.
 
 ## Limits and cost
 
-A CI run starts two sandboxes and a snapshot build two. Starts count against the
+A CI run starts two sandboxes and a snapshot build three. Starts count against the
 boat plan's limits (12 a minute on the $20 plan). A `large` sandbox costs
 $0.072 an hour while it runs. Each saved snapshot above the plan's included
 count costs $0.056 a day, which is why the task keeps one.

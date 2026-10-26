@@ -21,10 +21,13 @@ AR = "{% if os() == 'linux' %}{{config_root}}/mise-tasks/ar{% else %}ar{% endif 
 
 # Shared by the boat tasks; mise expands $NAME in vars, so $$ is a literal $.
 # A saved snapshot keeps ~/.local and ~/.cargo but not ~/.cache, so commands in
-# a sandbox keep their caches (mbx, mise) in ~/.boat-cache. Saved snapshots whose names match boat_snapshot_pattern belong
-# to this repository; the boat tasks never touch any other.
+# a sandbox keep their caches (mbx, mise) in ~/.boat-cache. Saved snapshots
+# whose names match boat_snapshot_pattern (selected by CI) or
+# boat_staging_pattern (not yet deployed) belong to this repository; the boat
+# tasks never touch any other.
 [vars]
 boat_snapshot_pattern = '^count-patchula-ci-[0-9]{14}-[0-9a-f]{12}$$'
+boat_staging_pattern = '^count-patchula-ci-staging-[0-9]{14}-[0-9a-f]{12}$$'
 boat_prelude = 'export PATH="$$HOME/.local/bin:$$PATH" XDG_CACHE_HOME="$$HOME/.boat-cache" MISE_YES=1 MISE_TRUSTED_CONFIG_PATHS="$$HOME/count-patchula" CI=true'
 
 [tasks.build]
@@ -176,10 +179,20 @@ eval "fetch=(${usage_fetch:-})"
 login=$(printf '%s' "${BOAT_API_KEY:?BOAT_API_KEY is not set}" | boat login --key-stdin --json) || { echo "$login" >&2; exit 1; }
 # --no-env keeps the account's secrets out; --no-snapshots erases the sandbox
 # if it auto-stops because the delete below never ran.
-id=$(boat new --from "${usage_from?}" --type large --no-env --no-snapshots --ttl 3600 --name count-patchula-ci-run --json | jq -r 'select(.event == "ready") | .id')
-test -n "$id"
+from="${usage_from?}"
+create() { boat new --from "$from" --type large --no-env --no-snapshots --ttl 3600 --name count-patchula-ci-run --json | jq -r 'select(.event == "ready") | .id'; }
+# A snapshot refresh can delete the snapshot this job was given; start from
+# the newest one instead.
+if ! id=$(create) || [ -z "$id" ]; then
+  newest=$(mise run boat:current)
+  [ -n "$newest" ] && [ "$newest" != "$from" ] || { echo "::error::could not start a sandbox from $from"; exit 1; }
+  echo "::notice::$from is gone; starting from $newest"
+  from=$newest
+  id=$(create)
+  test -n "$id"
+fi
 trap 'boat delete "$id" --yes --json > /dev/null || echo "::warning::could not delete boat sandbox $id"' EXIT
-echo "boat sandbox $id from $usage_from"
+echo "boat sandbox $id from $from"
 # The whole checkout, .git included, so Git-aware code and tests see the same
 # tree as on a runner.
 work=$(mktemp -d)
@@ -196,10 +209,19 @@ set +e
 boat exec "$id" --timeout 0 -- bash -c '{{vars.boat_prelude}}; set -a; . ~/.boat-run-env; set +a; rm -f ~/.boat-run-env; mkdir -p count-patchula && tar -xzf src.tgz -C count-patchula && rm src.tgz && cd count-patchula && exec "$@"' bash "${command[@]}"
 code=$?
 set -e
+# Each path replaces the local copy only once it has arrived whole.
+work=$(mktemp -d)
 for path in "${fetch[@]}"; do
-  rm -rf "./$path"
-  boat scp --recursive "$id:/home/user/count-patchula/$path" "./$path" || echo "::warning::could not copy $path back from the sandbox"
+  if boat scp --recursive "$id:/home/user/count-patchula/$path" "$work/copy"; then
+    rm -rf "./$path"
+    mkdir -p "$(dirname "./$path")"
+    mv "$work/copy" "./$path"
+  else
+    rm -rf "$work/copy"
+    echo "::warning::could not copy $path back from the sandbox; the local copy is unchanged"
+  fi
 done
+rm -rf "$work"
 exit "$code"
 '''
 
@@ -213,10 +235,19 @@ run = '''
 set -euo pipefail
 api="${BOAT_API_BASE:-https://boat.dev/api/v1}"
 pattern='{{vars.boat_snapshot_pattern}}'
+staging_pattern='{{vars.boat_staging_pattern}}'
 call() { curl -fsS --retry 3 -H "Authorization: Bearer ${BOAT_API_KEY:?BOAT_API_KEY is not set}" "$@"; }
-ours() { call "$api/saved-snapshots" | jq -r --arg re "$pattern" '.snapshots[] | select(.name | test($re)) | .name'; }
-name="count-patchula-ci-$(date -u +%Y%m%d%H%M%S)-$(git rev-parse HEAD | cut -c1-12)"
-mapfile -t before < <(ours)
+# The saved snapshots of this repository, CI's and staging ones, one per line.
+ours() {
+  local list
+  list=$(call "$api/saved-snapshots") || return 1
+  jq -r --arg re "$pattern" --arg staging "$staging_pattern" '.snapshots[] | select((.name | test($re)) or (.name | test($staging))) | .name' <<< "$list"
+}
+suffix="$(date -u +%Y%m%d%H%M%S)-$(git rev-parse HEAD | cut -c1-12)"
+name="count-patchula-ci-$suffix"
+staging="count-patchula-ci-staging-$suffix"
+listed=$(ours)
+mapfile -t before <<< "$listed"
 echo "Snapshots of this repository: ${before[*]:-none}"
 if [ "${usage_dry_run:-false}" = true ]; then
   echo "Dry run: would build $name from $(git rev-parse HEAD), then delete: ${before[*]:-nothing}"
@@ -251,28 +282,36 @@ rm -rf "$work"
 # is removed, so no stale file reaches a later run.
 boat exec "$builder" --timeout 0 -- bash -c '{{vars.boat_prelude}}; set -euo pipefail; mkdir -p count-patchula && tar -xzf src.tgz -C count-patchula && rm src.tgz && cd count-patchula && mise run ci && mise exec -- cargo build --release --locked -p patchula-cli && cd && rm -rf count-patchula'
 
-call -X POST -H "Content-Type: application/json" -d "$(jq -n --arg id "$builder" --arg name "$name" '{sandboxId: $id, name: $name}')" "$api/saved-snapshots" > /dev/null
-status=saving
-for _ in $(seq 180); do
-  status=$(call "$api/saved-snapshots/$name" | jq -r .snapshot.status)
-  [ "$status" = saving ] || break
-  sleep 10
-done
-if [ "$status" != ready ]; then
-  echo "::error::$name ended as $status; the existing snapshots are kept"
-  exit 1
-fi
+save() {
+  local status=saving
+  call -X POST -H "Content-Type: application/json" -d "$(jq -n --arg id "$builder" --arg name "$1" '{sandboxId: $id, name: $name}')" "$api/saved-snapshots" > /dev/null
+  for _ in $(seq 180); do
+    status=$(call "$api/saved-snapshots/$1" | jq -r .snapshot.status)
+    [ "$status" = saving ] || break
+    sleep 10
+  done
+  if [ "$status" != ready ]; then
+    echo "::error::$1 ended as $status; the existing snapshots are kept"
+    exit 1
+  fi
+}
 
-# Deploy the new snapshot once before anything else is deleted.
-probe=$(sandbox --from "$name" --no-snapshots --ttl 900 --name "count-patchula-ci-probe $name")
+# Save under a staging name that CI never selects, and deploy it once. Only a
+# disk that survived a save and a deploy is saved again under the name CI
+# selects; the builder has not changed in between.
+save "$staging"
+probe=$(sandbox --from "$staging" --no-snapshots --ttl 900 --name "count-patchula-ci-probe $staging")
 test -n "$probe"
-boat exec "$probe" --timeout 120 -- bash -c '{{vars.boat_prelude}}; mise --version && test -d "$XDG_CACHE_HOME/mbx"'
-echo "Saved and deployed $name"
+boat exec "$probe" --timeout 120 -- bash -c '{{vars.boat_prelude}}; mise --version && test -d "$XDG_CACHE_HOME/mbx"' ||
+  { echo "::error::$staging did not deploy with mise and the mbx store; CI keeps its current snapshot"; exit 1; }
+save "$name"
+echo "Saved $name, deployed as $staging"
 
 failed=0
-mapfile -t stale < <(ours)
+listed=$(ours)
+mapfile -t stale <<< "$listed"
 for old in "${stale[@]}"; do
-  [ "$old" = "$name" ] && continue
+  [ -z "$old" ] || [ "$old" = "$name" ] && continue
   if call -X DELETE "$api/saved-snapshots/$old" > /dev/null; then
     echo "Deleted $old"
   else
