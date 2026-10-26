@@ -1,8 +1,8 @@
 # Dependency corpus
 
 Real manifests from permissively licensed projects, copied at fixed commits.
-They give the Count a large, varied dependency set to chew on in CI: about 2,600
-dependencies across 19 managers.
+They give the Count a large, varied dependency set to chew on in CI: about 2,750
+dependencies across 20 managers.
 
 - `mise run test` extracts the whole corpus offline and compares it with
   `tests/corpus-extraction.tsv`. A change to extraction shows up as a diff
@@ -14,7 +14,9 @@ dependencies across 19 managers.
 
 Each directory keeps its project's own relative paths. The `.github/workflows`
 directory holds Home Assistant's workflows at the root, where the Actions
-manager looks for them. The files are unmodified copies; their licences are
+manager looks for them. Woodpecker workflows sit at the root for the same
+reason: Woodpecker's own `.woodpecker` directory, and webtail's
+`.woodpecker.yml` in the older `pipeline:` shape. The files are unmodified copies; their licences are
 those of the projects below.
 
 | Source | Commit | Licence | Directory |
@@ -35,3 +37,5 @@ those of the projects below.
 | [jdx/mise](https://github.com/jdx/mise) | `60c6a39f36b5` | MIT | `tools/mise` |
 | [microsoft/vscode](https://github.com/microsoft/vscode) | `f82f4adff5e0` | MIT | `editors/vscode` |
 | [home-assistant/core](https://github.com/home-assistant/core) | `a38890c0da2f` | Apache-2.0 | `.github/workflows` |
+| [woodpecker-ci/woodpecker](https://github.com/woodpecker-ci/woodpecker) | `ae3b942fa228` | Apache-2.0 | `.woodpecker` (YAML files only) |
+| [LeKovr/webtail](https://github.com/LeKovr/webtail) | `6ee527cd624a` | MIT | `.woodpecker.yml` |

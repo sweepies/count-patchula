@@ -29,6 +29,7 @@ quoting, comments and formatting.
 | `pyproject` | `pyproject.toml`, `.python-version` | `uv.lock`, `poetry.lock` |
 | `pre-commit` | `.pre-commit-config.yaml` | |
 | `devcontainer` | `devcontainer.json`, `.devcontainer.json` | |
+| `woodpecker` | `.woodpecker.yml`, `.woodpecker.yaml`, `.woodpecker/*.yml` and `*.yaml` | |
 | `maven` | `pom.xml` | |
 | `gradle` | `*.gradle`, `*.gradle.kts`, `gradle.properties`, `gradle/*.versions.toml`, the wrapper | the wrapper checksum; `gradle.lockfile` holds the update |
 | `nuget` | `*.csproj`, `*.fsproj`, `*.vbproj`, `Directory.Packages.props`, `Directory.Build.props`, `global.json`, `.config/dotnet-tools.json` | `packages.lock.json` |
@@ -109,6 +110,23 @@ requirements are maintained too.
 
 Terraform reads providers, registry modules and the provider lock with a real
 HCL parser; `.terraform-version` pins Terraform itself.
+
+## Woodpecker
+
+`woodpecker` reads the images of steps, services and the `clone` step, under
+`steps:` or the older `pipeline:` key, written as a map or a list. Only the
+root `.woodpecker.yml` or `.woodpecker.yaml` and files directly inside
+`.woodpecker/` are workflows. Images, plugins included, are pinned to digests
+by default like any other container image. An image defined once under a YAML
+anchor and aliased by several steps is one dependency, edited at the anchor;
+one merged into a step with `<<: *anchor` is read too.
+
+An image built from a variable, such as `golang:${GO_VERSION}` from the
+workflow's `matrix` or `${REGISTRY}/tool:1` from the environment, is only
+known when the workflow runs, so the Count skips it. Each skipped image is
+listed with its line and the reason, in the run summary and under `skipped` in
+the [JSON report](/reference/report/). Unlike a warning, a skipped image
+doesn't stop the Count from closing obsolete branches.
 
 ## Containers and Kubernetes
 

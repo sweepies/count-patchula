@@ -2728,3 +2728,38 @@ terraform	terraform/eks/versions.tf	aws	>= 6.59	-
 terraform	terraform/eks/versions.tf	hashicorp/terraform	>= 1.5.7	-
 terraform	terraform/eks/versions.tf	time	>= 0.9	-
 terraform	terraform/eks/versions.tf	tls	>= 4.0	-
+woodpecker	.woodpecker.yml	ghcr.io/dopos/golang-alpine	v1.19.7-alpine3.17.2	v1.19.7-alpine3.17.2
+woodpecker	.woodpecker.yml	golangci/golangci-lint	v1.53-alpine	v1.53-alpine
+woodpecker	.woodpecker.yml	plugins/docker	latest	-
+woodpecker	.woodpecker.yml	woodpeckerci/plugin-git	latest	-
+woodpecker	.woodpecker/binaries.yaml	docker.io/golang	1.27	1.27
+woodpecker	.woodpecker/binaries.yaml	docker.io/node	24-alpine	24-alpine
+woodpecker	.woodpecker/binaries.yaml	docker.io/techknowlogick/xgo	go-1.27.x	go-1.27.x
+woodpecker	.woodpecker/binaries.yaml	woodpeckerci/plugin-release	0.3.3	0.3.3
+woodpecker	.woodpecker/docker.yaml	docker.io/golang	1.27	1.27
+woodpecker	.woodpecker/docker.yaml	docker.io/node	24-alpine	24-alpine
+woodpecker	.woodpecker/docker.yaml	docker.io/techknowlogick/xgo	go-1.27.x	go-1.27.x
+woodpecker	.woodpecker/docker.yaml	docker.io/woodpeckerci/plugin-docker-buildx	6.1.2	6.1.2
+woodpecker	.woodpecker/docs.yaml	docker.io/alpine	3.24	3.24
+woodpecker	.woodpecker/docs.yaml	docker.io/golang	1.27	1.27
+woodpecker	.woodpecker/docs.yaml	docker.io/node	24-alpine	24-alpine
+woodpecker	.woodpecker/docs.yaml	docker.io/woodpeckerci/plugin-surge-preview	1.5.0	1.5.0
+woodpecker	.woodpecker/links.yaml	docker.io/alpine	3.24	3.24
+woodpecker	.woodpecker/links.yaml	docker.io/lycheeverse/lychee	0.24.2	0.24.2
+woodpecker	.woodpecker/release-helper.yaml	docker.io/woodpeckerci/plugin-ready-release-go	4.1.2	4.1.2
+woodpecker	.woodpecker/securityscan.yaml	docker.io/woodpeckerci/plugin-trivy	1.6.1	1.6.1
+woodpecker	.woodpecker/social.yaml	docker.io/woodpeckerci/plugin-bluesky-post	1.0.0	1.0.0
+woodpecker	.woodpecker/social.yaml	docker.io/woodpeckerci/plugin-mastodon-post	1.1.0	1.1.0
+woodpecker	.woodpecker/social.yaml	docker.io/woodpeckerci/plugin-mastodon-profile	1.0.2	1.0.2
+woodpecker	.woodpecker/static.yaml	docker.io/alpine	3.24	3.24
+woodpecker	.woodpecker/static.yaml	docker.io/alpine	3.24	3.24
+woodpecker	.woodpecker/static.yaml	docker.io/node	24-alpine	24-alpine
+woodpecker	.woodpecker/static.yaml	docker.io/woodpeckerci/plugin-agentscan	latest	-
+woodpecker	.woodpecker/static.yaml	docker.io/woodpeckerci/plugin-editorconfig-checker	0.3.4	0.3.4
+woodpecker	.woodpecker/static.yaml	docker.io/woodpeckerci/plugin-prettier	next	next
+woodpecker	.woodpecker/test.yaml	docker.io/golang	1.27	1.27
+woodpecker	.woodpecker/test.yaml	docker.io/mysql	26.10.0	26.10.0
+woodpecker	.woodpecker/test.yaml	docker.io/postgres	18	18
+woodpecker	.woodpecker/test.yaml	docker.io/woodpeckerci/plugin-codecov	2.3.3	2.3.3
+woodpecker	.woodpecker/test.yaml	golangci/golangci-lint	v2.15.0	v2.15.0
+woodpecker	.woodpecker/web.yaml	docker.io/node	24-alpine	24-alpine

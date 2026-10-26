@@ -396,3 +396,23 @@ fn composer_constraints_with_spaces_are_replaced() {
         manifest.replace("^7.8.2", "^7.8.2 || ^8.0")
     );
 }
+
+#[test]
+fn woodpecker_pins_anchored_images_once_at_the_anchor() {
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let text = "variables:\n  - &golang 'golang:1.22'\nsteps:\n  a:\n    image: *golang\n  b:\n    image: *golang\n  c:\n    image: woodpeckerci/plugin-git:2.5.0 # plugin\n";
+    let new = replace(
+        Manager::Woodpecker,
+        ".woodpecker/ci.yaml",
+        text,
+        "1.22",
+        Some(&digest),
+    );
+    assert!(
+        new.contains(&format!("&golang 'golang:1.22@{digest}'")),
+        "{new}"
+    );
+    assert_eq!(new.matches("*golang").count(), 2, "{new}");
+    assert!(new.contains("woodpeckerci/plugin-git:1.22@"), "{new}");
+    assert!(new.ends_with("# plugin\n"), "{new}");
+}

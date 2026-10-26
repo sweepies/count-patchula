@@ -41,6 +41,7 @@ too, so a new field means a new version.
 | `reason` | Why it was skipped or failed; null when complete |
 | `packageFiles` | Files with dependencies, each with a `path` and `dependencies` |
 | `warnings` | Optional. Files skipped, stale registry data and similar |
+| `skipped` | Optional. Declarations that are not read as versions, such as images built from variables: `manager`, `path`, `line`, `value` and `reason` |
 | `defaultBranch`, `commit` | Optional. The branch and commit that were read |
 
 A `complete` repository with no package files had nothing the Count supports.

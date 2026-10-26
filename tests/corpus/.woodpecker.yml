@@ -1,0 +1,57 @@
+
+# lint this file
+# go run github.com/woodpecker-ci/woodpecker/cmd/cli lint
+
+variables:
+#    - &build_plugin 'woodpeckerci/plugin-docker-buildx'
+    - &build_plugin 'plugins/docker'
+    - &golint_img 'golangci/golangci-lint:v1.53-alpine'
+    - &golang_img 'ghcr.io/dopos/golang-alpine:v1.19.7-alpine3.17.2'
+    - base_settings: &base_buildx_settings
+        registry: it.elfire.ru
+        repo: it.elfire.ru/${CI_REPO_OWNER}/${CI_REPO_NAME}
+
+clone:
+  git:
+    image: woodpeckerci/plugin-git
+    settings:
+      lfs: false
+      tags: true
+
+pipeline:
+
+  test:
+    image: *golang_img
+    commands: make test
+
+  lint:
+    image: *golint_img
+    commands: golangci-lint run
+
+  build:
+    image: *golang_img
+    commands:
+      - make build-standalone
+
+  publish-dryrun:
+    image: *build_plugin
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    settings:
+      <<: *base_buildx_settings
+      dry_run: true
+
+  publish:
+    image: *build_plugin
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    settings:
+      <<: *base_buildx_settings
+      auto_tag: true
+      custom_labels: org.opencontainers.image.version=${CI_COMMIT_TAG##v}
+      username: ${CI_REPO_OWNER}
+      password:
+        from_secret: cb_token
+    when:
+      event: tag
+      ref: refs/tags/v*

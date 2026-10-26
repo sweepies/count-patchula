@@ -223,6 +223,7 @@ fn repo() -> Repository {
         status: patchula_report::Status::Complete,
         reason: None,
         warnings: Vec::new(),
+        skipped: Vec::new(),
         package_files: Vec::new(),
     }
 }

@@ -469,6 +469,7 @@ fn setup(
         status: Status::Complete,
         reason: None,
         warnings: vec![],
+        skipped: vec![],
         default_branch: Some("main".into()),
         commit: Some("base".into()),
         package_files: vec![PackageFile {

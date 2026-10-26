@@ -1,0 +1,40 @@
+when:
+  - event: [pull_request]
+  - event: push
+    branch:
+      - ${CI_REPO_DEFAULT_BRANCH}
+
+variables:
+  - &trivy_plugin docker.io/woodpeckerci/plugin-trivy:1.6.1
+
+steps:
+  backend:
+    depends_on: []
+    image: *trivy_plugin
+    settings:
+      server: server
+      skip-dirs: web/,docs/
+
+  docs:
+    depends_on: []
+    image: *trivy_plugin
+    settings:
+      server: server
+      skip-dirs: node_modules/,plugins/woodpecker-plugins/node_modules/
+      dir: docs/
+
+  web:
+    depends_on: []
+    image: *trivy_plugin
+    settings:
+      server: server
+      skip-dirs: node_modules/
+      dir: web/
+
+services:
+  server:
+    image: *trivy_plugin
+    settings:
+      db-repository: mirror.gcr.io/aquasec/trivy-db:2
+    ports:
+      - 10000

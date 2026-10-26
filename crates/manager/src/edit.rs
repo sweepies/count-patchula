@@ -113,6 +113,7 @@ fn yaml(dep: &Dependency) -> bool {
             | Manager::HelmValues
             | Manager::PreCommit
             | Manager::Helm
+            | Manager::Woodpecker
     ) || (matches!(dep.manager, Manager::Npm | Manager::Bun)
         && (dep.file.ends_with(".yaml") || dep.file.ends_with(".yml")))
 }

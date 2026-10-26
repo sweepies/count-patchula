@@ -485,6 +485,15 @@ async fn batch(
         for warning in &repo.warnings {
             eprintln!("  warning: {warning}");
         }
+        for skipped in &repo.skipped {
+            eprintln!(
+                "  skipped: {}{}: {} ({})",
+                skipped.path,
+                skipped.line.map_or(String::new(), |l| format!(":{l}")),
+                skipped.value,
+                skipped.reason
+            );
+        }
         if repo.status == Status::Error {
             errors += 1;
         }
