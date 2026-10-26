@@ -262,6 +262,17 @@ impl Evaluator {
         }
         true
     }
+    /// A forge action's digest comes only from its tag catalog, so the catalog
+    /// is needed whenever its tag pin can change, even with version updates off.
+    pub fn needs_forge_catalog(&self, dep: &Dependency) -> bool {
+        dep.tagged_action()
+            && dep.source == Source::ForgeTags
+            && !(dep.digest.is_some() && dep.resolved.is_none())
+            && Ecosystem::Loose
+                .parse(dep.resolved.as_deref().unwrap_or(&dep.current))
+                .is_ok()
+            && self.digest_proposal(dep, "probe").is_some()
+    }
     fn effective(&self, dep: &Dependency, update: Update) -> Effective<'_> {
         let mut effective = Effective {
             policy: self.config.defaults.clone(),

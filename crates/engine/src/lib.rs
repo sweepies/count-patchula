@@ -850,7 +850,7 @@ impl Engine {
         for (repo, eval) in work.iter().zip(&evaluators) {
             if let Some(eval) = eval {
                 for dep in &repo.dependencies {
-                    if eval.needs_lookup(dep) {
+                    if eval.needs_lookup(dep) || eval.needs_forge_catalog(dep) {
                         let key = self.catalog_key(dep, repo.config.as_ref());
                         keys.insert(key.clone());
                         let hours = eval.catalog_wait_hours(dep);
@@ -890,7 +890,7 @@ impl Engine {
                 let catalogs = repo
                     .dependencies
                     .iter()
-                    .filter(|dep| eval.needs_lookup(dep))
+                    .filter(|dep| eval.needs_lookup(dep) || eval.needs_forge_catalog(dep))
                     .map(|dep| self.catalog_key(dep, repo.config.as_ref()))
                     .collect();
                 let digests = current_refs
@@ -980,17 +980,20 @@ impl Engine {
             }
         }
         // A vulnerable dependency's fix may be newer than a catalog reused
-        // under its release-age wait, so those catalogs are read again.
+        // under its release-age wait, so those catalogs are read again. So is a
+        // forge action's: its tags may have moved, and their commits are its pins.
         let mut vulnerable = BTreeSet::new();
         for (repo, eval) in work.iter().zip(&evaluators) {
             if let Some(eval) = eval {
                 for dep in &repo.dependencies {
                     let key = self.catalog_key(dep, repo.config.as_ref());
-                    if eval.needs_lookup(dep)
-                        && catalog_evidence.get(&key).is_some_and(|e| e.reused)
-                        && patchula_lookup::advisory_query(dep)
-                            .and_then(|q| advisories.get(&q))
-                            .is_some_and(|found| !found.is_empty())
+                    let reused = catalog_evidence.get(&key).is_some_and(|e| e.reused);
+                    if reused
+                        && (eval.needs_forge_catalog(dep)
+                            || (eval.needs_lookup(dep)
+                                && patchula_lookup::advisory_query(dep)
+                                    .and_then(|q| advisories.get(&q))
+                                    .is_some_and(|found| !found.is_empty())))
                     {
                         vulnerable.insert(key);
                     }
@@ -1113,7 +1116,8 @@ impl Engine {
                                 "{}: SHA pin has no version comment; replacement tag is unknown",
                                 dep.name
                             ));
-                        } else if dep.source == Source::GithubTags || eval.needs_lookup(dep) {
+                        } else if dep.source == Source::GithubTags || eval.needs_forge_catalog(dep)
+                        {
                             // A forge resolves only tags, which its catalog
                             // already carries; branch refs stay unpinned.
                             let reference = dep.resolved.as_deref().unwrap_or(&dep.current);
@@ -1906,7 +1910,7 @@ impl Engine {
         let key = ExtractionKey {
             repo: repo.into(),
             default_branch_commit: commit,
-            config_hash: format!("extract-v9:{}", hash(&serde_json::to_vec(&config)?)),
+            config_hash: format!("extract-v10:{}", hash(&serde_json::to_vec(&config)?)),
         };
         let cached: CachedExtraction = if let Some(bytes) = self.cache.extraction_get(&key).await? {
             self.extraction_hits.fetch_add(1, Ordering::Relaxed);
