@@ -1,3 +1,4 @@
+apm	tools/apm/templates/hello-world/apm.yml	microsoft/apm-sample-package	v1.0.0	v1.0.0
 bundler	ruby/rails/Gemfile	argon2	~> 2.3.2	2.3.2
 bundler	ruby/rails/Gemfile	bcrypt	~> 3.1.11	3.1.20
 bundler	ruby/rails/Gemfile	bootsnap	>= 1.4.4	1.18.4

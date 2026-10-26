@@ -104,12 +104,12 @@ description = "Test the workspace through mbx"
 # Lockfile engines the offline real-tool tests run, matching
 # crates/update/src/lockfiles/defaults.toml. Task-scoped so a development
 # `mise install` does not fetch them.
-tools = { aube = "2.8.1", yarn = "4.18.1", python = "3.14.8", uv = "0.13.1", poetry = "2.5.1", dotnet = "9.0.319", ruby = "3.4.11", "http:php[url=https://dl.static-php.dev/static-php-cli/common/php-{{version}}-cli-linux-x86_64.tar.gz]" = "8.5.8", "http:composer[url=https://getcomposer.org/download/{{version}}/composer.phar,bin=composer]" = "2.10.3", "http:nix[url=https://hydra.nixos.org/build/350797336/download/2/nix,checksum=sha256:5d580d993636e3b987868881776214a7d4a169434715ec30bf9ead9345d78fb6,bin=nix]" = "2.35.5" }
+tools = { aube = "2.8.1", yarn = "4.18.1", python = "3.14.8", uv = "0.13.1", poetry = "2.5.1", dotnet = "9.0.319", ruby = "3.4.11", apm = "0.35.0", "http:php[url=https://dl.static-php.dev/static-php-cli/common/php-{{version}}-cli-linux-x86_64.tar.gz]" = "8.5.8", "http:composer[url=https://getcomposer.org/download/{{version}}/composer.phar,bin=composer]" = "2.10.3", "http:nix[url=https://hydra.nixos.org/build/350797336/download/2/nix,checksum=sha256:5d580d993636e3b987868881776214a7d4a169434715ec30bf9ead9345d78fb6,bin=nix]" = "2.35.5" }
 run = "cargo test --workspace --locked --no-fail-fast"
 
 [tasks."test:stress"]
 description = "Repeat the offline suite with varied test thread counts; logs stay outside the repository"
-tools = { aube = "2.8.1", yarn = "4.18.1", python = "3.14.8", uv = "0.13.1", poetry = "2.5.1", dotnet = "9.0.319", ruby = "3.4.11", "http:php[url=https://dl.static-php.dev/static-php-cli/common/php-{{version}}-cli-linux-x86_64.tar.gz]" = "8.5.8", "http:composer[url=https://getcomposer.org/download/{{version}}/composer.phar,bin=composer]" = "2.10.3", "http:nix[url=https://hydra.nixos.org/build/350797336/download/2/nix,checksum=sha256:5d580d993636e3b987868881776214a7d4a169434715ec30bf9ead9345d78fb6,bin=nix]" = "2.35.5" }
+tools = { aube = "2.8.1", yarn = "4.18.1", python = "3.14.8", uv = "0.13.1", poetry = "2.5.1", dotnet = "9.0.319", ruby = "3.4.11", apm = "0.35.0", "http:php[url=https://dl.static-php.dev/static-php-cli/common/php-{{version}}-cli-linux-x86_64.tar.gz]" = "8.5.8", "http:composer[url=https://getcomposer.org/download/{{version}}/composer.phar,bin=composer]" = "2.10.3", "http:nix[url=https://hydra.nixos.org/build/350797336/download/2/nix,checksum=sha256:5d580d993636e3b987868881776214a7d4a169434715ec30bf9ead9345d78fb6,bin=nix]" = "2.35.5" }
 env = { CARGO_NET_OFFLINE = "true", PATCHULA_RECORD = "0" }
 run = '''
 log_dir="${PATCHULA_STRESS_LOG_DIR:-/tmp/patchula-stress}"

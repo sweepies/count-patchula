@@ -60,11 +60,12 @@ Managers the Count supports, under Renovate's names:
 | `gitlabci` | `gitlabci` | GitLab CI variables in images are skipped, not aliased |
 | `gitlabci-include` | `gitlabci-include` | |
 | `nix` | `nix` | on by default; inputs resolved by nix itself, not `git-refs` |
+| `apm` | `apm` | `apm.lock.yaml` refreshed with `apm lock`; commit pins by default |
 | `regex` | `regex` | Pkl extractors |
 
 Renovate managers with no Count equivalent yet:
 
-`ansible`, `ansible-galaxy`, `ant`, `apm`, `argocd`, `azure-pipelines`, `batect`,
+`ansible`, `ansible-galaxy`, `ant`, `argocd`, `azure-pipelines`, `batect`,
 `batect-wrapper`, `bazel`, `bazel-module`, `bazelisk`, `bicep`,
 `bitbucket-pipelines`, `bitrise`, `buildkite`, `buildpacks`, `bun-version`,
 `cake`, `cdnurl`, `circleci`, `cloudbuild`, `cocoapods`, `conan`, `cpanfile`,

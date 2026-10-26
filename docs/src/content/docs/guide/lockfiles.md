@@ -24,6 +24,7 @@ commit. If the tool fails, nothing is published.
 | `composer.lock` | Composer | `composer update <packages> --with-all-dependencies --minimal-changes --no-install --no-scripts --no-plugins` |
 | `mise.lock` | mise | `mise lock` with the lockfile's recorded platforms |
 | `flake.lock` | nix | `nix flake update <input>`, or `nix flake update` for maintenance |
+| `apm.lock.yaml` | APM | `apm lock`, or `apm lock --update` for maintenance |
 
 Lifecycle scripts never run. A lockfile that does not change after an edit that
 changed recorded dependencies fails the branch, so a tool that says "up to date"
@@ -85,6 +86,7 @@ pinned defaults apply:
 | .NET SDK | 9.0.319 |
 | Ruby | 3.4.11 |
 | PHP, Composer | 8.5.8, 2.10.3 |
+| APM | 0.35.0 |
 
 ### PHP
 
@@ -110,6 +112,17 @@ system and user `nix.conf` are not read. The GitHub token reaches nix only as
 `access-tokens = github.com=…`, for its GitHub API calls. Locking reads
 `flake.nix` but does not evaluate the flake's outputs, so no repository code
 runs.
+
+### APM
+
+`apm lock` is APM's lock-only mode. It resolves every package and downloads it
+into `apm_modules/` to record its commit and content hashes, but it deploys
+nothing to agent directories such as `.github/` or `.claude/`, and runs no
+package content: no scripts, hooks or MCP servers. Only `apm.lock.yaml` is
+kept; `apm_modules/` never enters the commit. Git may use the `file`
+protocol as well as `https` in this run, because APM clones each package from
+its own local cache. APM reads only `apm.yml`, so a manifest named
+`apm.yaml` gets no lockfile refresh.
 
 ## The tool store
 
@@ -140,7 +153,7 @@ the same filesystem as the store) are hard-linked into the store instead of
 downloaded. That takes no time or extra disk, and pruning never touches your
 installs. Each version is borrowed once; if that fails, mise installs it.
 Python, Ruby, PHP and .NET installs depend on where they live, so they are
-always installed fresh, as is any install with a symlink leading outside its
+always installed fresh, as are APM and any install with a symlink leading outside its
 own directory. The server never borrows.
 
 ## Isolation

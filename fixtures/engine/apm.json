@@ -1,0 +1,648 @@
+{
+  "schema_version": 1,
+  "provenance": "Recorded by patchula from the request URLs; never imported from other bots",
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://gitlab.com/api/v4/projects/components%2Fsast/repository/tags?per_page=100&page=1",
+        "headers": {
+          "accept": [
+            "application/json"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "cache-control": [
+            "max-age=0, private, must-revalidate"
+          ],
+          "cf-cache-status": [
+            "BYPASS"
+          ],
+          "cf-ray": [
+            "a507682e5d489798-EWR"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "date": [
+            "Mon, 26 Oct 2026 06:29:30 GMT"
+          ],
+          "etag": [
+            "W/\"e30bcb18e474ea4170893826f268670a\""
+          ],
+          "gitlab-lb": [
+            "haproxy-main-17-lb-gprd"
+          ],
+          "gitlab-sv": [
+            "api-gke-us-east1-c"
+          ],
+          "link": [
+            "<https://gitlab.com/api/v4/projects/components%2Fsast/repository/tags?id=components%2Fsast&order_by=updated&page=1&per_page=100&sort=desc>; rel=\"first\", <https://gitlab.com/api/v4/projects/components%2Fsast/repository/tags?id=components%2Fsast&order_by=updated&page=1&per_page=100&sort=desc>; rel=\"last\""
+          ],
+          "nel": [
+            "{\"max_age\": 0}"
+          ],
+          "ratelimit-limit": [
+            "500"
+          ],
+          "ratelimit-name": [
+            "throttle_unauthenticated_api"
+          ],
+          "ratelimit-observed": [
+            "1"
+          ],
+          "ratelimit-remaining": [
+            "499"
+          ],
+          "ratelimit-reset": [
+            "1792996200"
+          ],
+          "referrer-policy": [
+            "strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "cloudflare"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000"
+          ],
+          "vary": [
+            "Origin"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "SAMEORIGIN"
+          ],
+          "x-gitlab-meta": [
+            "{\"correlation_id\":\"a507682e5d489798-EWR\",\"version\":\"1\"}"
+          ],
+          "x-next-page": [
+            ""
+          ],
+          "x-page": [
+            "1"
+          ],
+          "x-per-page": [
+            "100"
+          ],
+          "x-prev-page": [
+            ""
+          ],
+          "x-request-id": [
+            "a507682e5d489798-EWR"
+          ],
+          "x-runtime": [
+            "0.078573"
+          ],
+          "x-total": [
+            "17"
+          ],
+          "x-total-pages": [
+            "1"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": [
+            {
+              "commit": {
+                "author_email": "hyan@gitlab.com",
+                "author_name": "Hua Yan",
+                "authored_date": "2026-09-25T09:59:27.000+10:00",
+                "committed_date": "2026-09-25T09:59:27.000+10:00",
+                "committer_email": "hyan@gitlab.com",
+                "committer_name": "Hua Yan",
+                "created_at": "2026-09-25T09:59:27.000+10:00",
+                "extended_trailers": {},
+                "id": "0d64668d42dea9a265409e194a034653d41362ae",
+                "message": "Merge branch 'hyan3/add-gitlab-advanced-sast-ext' into 'main'\n\nAdd gitlab-advanced-sast-ext job for beta languages\n\nCloses gitlab-com/request-for-help#5435\n\nSee merge request components/sast!48",
+                "parent_ids": [
+                  "0a29cf13041d2693472a2ce536c126df209b1cd4",
+                  "555b6e04e7fe47baea9b0739ab09a0c6b2d29926"
+                ],
+                "short_id": "0d64668d",
+                "title": "Merge branch 'hyan3/add-gitlab-advanced-sast-ext' into 'main'",
+                "trailers": {},
+                "web_url": "https://gitlab.com/components/sast/-/commit/0d64668d42dea9a265409e194a034653d41362ae"
+              },
+              "created_at": null,
+              "message": "",
+              "name": "3.5.0",
+              "protected": false,
+              "release": {
+                "description": "Release 3.5.0 of components repository components/sast\n\n* Add gitlab-advanced-sast-ext job for beta languages (https://gitlab.com/components/sast/-/merge_requests/48)",
+                "tag_name": "3.5.0"
+              },
+              "target": "0d64668d42dea9a265409e194a034653d41362ae"
+            },
+            {
+              "commit": {
+                "author_email": "hyan@gitlab.com",
+                "author_name": "Hua Yan",
+                "authored_date": "2026-01-14T08:52:50.000+11:00",
+                "committed_date": "2026-01-14T08:52:50.000+11:00",
+                "committer_email": "hyan@gitlab.com",
+                "committer_name": "Hua Yan",
+                "created_at": "2026-01-14T08:52:50.000+11:00",
+                "extended_trailers": {},
+                "id": "0a29cf13041d2693472a2ce536c126df209b1cd4",
+                "message": "Merge branch 'hyan/revert-43' into 'main'\n\nRevert \"Add input for runner tags\"\n\nSee merge request components/sast!45",
+                "parent_ids": [
+                  "e9be38ba48c5a481b6a9c170c3d8028eaecbb085",
+                  "cd3defa9ef1824ff117c9ca30cc9ab8690a51b51"
+                ],
+                "short_id": "0a29cf13",
+                "title": "Merge branch 'hyan/revert-43' into 'main'",
+                "trailers": {},
+                "web_url": "https://gitlab.com/components/sast/-/commit/0a29cf13041d2693472a2ce536c126df209b1cd4"
+              },
+              "created_at": null,
+              "message": "",
+              "name": "3.4.0",
+              "protected": false,
+              "release": {
+                "description": "Release 3.4.0 of components repository components/sast\n\n* Revert \"Add input for runner tags\" (!45)",
+                "tag_name": "3.4.0"
+              },
+              "target": "0a29cf13041d2693472a2ce536c126df209b1cd4"
+            },
+            {
+              "commit": {
+                "author_email": "hyan@gitlab.com",
+                "author_name": "Hua Yan",
+                "authored_date": "2025-12-22T10:13:43.000+11:00",
+                "committed_date": "2025-12-22T10:13:43.000+11:00",
+                "committer_email": "hyan@gitlab.com",
+                "committer_name": "Hua Yan",
+                "created_at": "2025-12-22T10:13:43.000+11:00",
+                "extended_trailers": {},
+                "id": "e9be38ba48c5a481b6a9c170c3d8028eaecbb085",
+                "message": "Merge branch 'add-input-for-runner-tags' into 'main'\n\nAdd input for runner tags\n\nSee merge request components/sast!43",
+                "parent_ids": [
+                  "4b546e854338eca5f185707d541b3a3579d41ca8",
+                  "313c205d106879e575de71d4896c328e512fac0a"
+                ],
+                "short_id": "e9be38ba",
+                "title": "Merge branch 'add-input-for-runner-tags' into 'main'",
+                "trailers": {},
+                "web_url": "https://gitlab.com/components/sast/-/commit/e9be38ba48c5a481b6a9c170c3d8028eaecbb085"
+              },
+              "created_at": null,
+              "message": "",
+              "name": "3.3.0",
+              "protected": false,
+              "release": {
+                "description": "Release 3.3.0 of components repository components/sast\n\n* Add input for runner tags (https://gitlab.com/components/sast/-/merge_requests/43)",
+                "tag_name": "3.3.0"
+              },
+              "target": "e9be38ba48c5a481b6a9c170c3d8028eaecbb085"
+            },
+            {
+              "commit": {
+                "author_email": "hyan@gitlab.com",
+                "author_name": "Hua Yan",
+                "authored_date": "2025-11-25T10:15:24.000+11:00",
+                "committed_date": "2025-11-25T10:15:24.000+11:00",
+                "committer_email": "hyan@gitlab.com",
+                "committer_name": "Hua Yan",
+                "created_at": "2025-11-25T10:15:24.000+11:00",
+                "extended_trailers": {},
+                "id": "aadcc69a1cd11c31864d142873c12a5c88b35ebb",
+                "message": "Merge branch 'add/SastReport' into 'main'\n\nAdd report file paths to SAST scans\n\nSee merge request components/sast!41",
+                "parent_ids": [
+                  "102024ebc8c9acfd8137c02b02c9fd2a9e5fed74",
+                  "58c0bffa1b3412236fe18a752a19198a82fa3ce9"
+                ],
+                "short_id": "aadcc69a",
+                "title": "Merge branch 'add/SastReport' into 'main'",
+                "trailers": {},
+                "web_url": "https://gitlab.com/components/sast/-/commit/aadcc69a1cd11c31864d142873c12a5c88b35ebb"
+              },
+              "created_at": "2025-11-24T23:18:01.000Z",
+              "message": "Add report file paths to SAST scans",
+              "name": "3.2.0",
+              "protected": false,
+              "release": {
+                "description": "Release 3.2.0 of components repository components/sast",
+                "tag_name": "3.2.0"
+              },
+              "target": "a434e4020c94e0a0b04e45e6bba0160593f97f38"
+            },
+            {
+              "commit": {
+                "author_email": "hyan@gitlab.com",
+                "author_name": "Hua Yan",
+                "authored_date": "2025-10-15T16:02:19.000+11:00",
+                "committed_date": "2025-10-15T16:02:19.000+11:00",
+                "committer_email": "hyan@gitlab.com",
+                "committer_name": "Hua Yan",
+                "created_at": "2025-10-15T16:02:19.000+11:00",
+                "extended_trailers": {},
+                "id": "411cb45e1ae6d1c80c79e0eec34c1c4eaf02cfc5",
+                "message": "Merge branch 'add-clangsa' into 'main'\n\nAdd gitlab-advanced-sast-cpp analyzer\n\nSee merge request components/sast!29",
+                "parent_ids": [
+                  "f6a5077c4ebd85a087ea0a15ab2113d52ef8e77e",
+                  "05b0f039a679338a7e8f534129fe266f3973b2a0"
+                ],
+                "short_id": "411cb45e",
+                "title": "Merge branch 'add-clangsa' into 'main'",
+                "trailers": {},
+                "web_url": "https://gitlab.com/components/sast/-/commit/411cb45e1ae6d1c80c79e0eec34c1c4eaf02cfc5"
+              },
+              "created_at": "2025-10-17T08:55:55.000Z",
+              "message": "Beta release of gitlab-advanced-sast-cpp",
+              "name": "3.1.0",
+              "protected": false,
+              "release": {
+                "description": "Release 3.1.0 of components repository components/sast",
+                "tag_name": "3.1.0"
+              },
+              "target": "93fd9d0ad199688771b85d73b72ebbf1887e0f33"
+            },
+            {
+              "commit": {
+                "author_email": "acohen@gitlab.com",
+                "author_name": "Adam Cohen",
+                "authored_date": "2025-06-03T11:27:24.000+10:00",
+                "committed_date": "2025-06-03T11:27:24.000+10:00",
+                "committer_email": "acohen@gitlab.com",
+                "committer_name": "Adam Cohen",
+                "created_at": "2025-06-03T11:27:24.000+10:00",
+                "extended_trailers": {},
+                "id": "3f2b327a85330a5c70d76060cbe506c5c22b7add",
+                "message": "Merge branch 'hyan/fix-iac-sast' into 'main'\n\nFix syntax error in iac-sast.yml\n\nSee merge request components/sast!26",
+                "parent_ids": [
+                  "ef9a281ea83df6bb443d5da6baf56e3ee27ddde8",
+                  "8ce5c87369619aa2d8548234fae1fb71118384dc"
+                ],
+                "short_id": "3f2b327a",
+                "title": "Merge branch 'hyan/fix-iac-sast' into 'main'",
+                "trailers": {},
+                "web_url": "https://gitlab.com/components/sast/-/commit/3f2b327a85330a5c70d76060cbe506c5c22b7add"
+              },
+              "created_at": null,
+              "message": "",
+              "name": "3.0.1",
+              "protected": false,
+              "release": {
+                "description": "Release 3.0.1 of components repository components/sast\n\n* Fix syntax error in iac-sast.yml (https://gitlab.com/components/sast/-/merge_requests/26)\n* Fix a typo in iac-sast.yml (https://gitlab.com/components/sast/-/merge_requests/25)",
+                "tag_name": "3.0.1"
+              },
+              "target": "3f2b327a85330a5c70d76060cbe506c5c22b7add"
+            },
+            {
+              "commit": {
+                "author_email": "tfigueiro@gitlab.com",
+                "author_name": "Thiago Figueiró",
+                "authored_date": "2025-04-28T13:49:41.000+10:00",
+                "committed_date": "2025-04-28T13:49:41.000+10:00",
+                "committer_email": "tfigueiro@gitlab.com",
+                "committer_name": "Thiago Figueiró",
+                "created_at": "2025-04-28T13:49:41.000+10:00",
+                "extended_trailers": {},
+                "id": "7f7984b96d9a7ea2969f35141e0fd9d9bcd9d94c",
+                "message": "Merge branch 'hyan/sast-18.0' into 'main'\n\nBump SAST analyser major version for 18.0\n\nSee merge request components/sast!24",
+                "parent_ids": [
+                  "6666b112b4905d298d545556e819aec8be13c449",
+                  "70e258313531c24ed6edbac44f9adfc5caae9450"
+                ],
+                "short_id": "7f7984b9",
+                "title": "Merge branch 'hyan/sast-18.0' into 'main'",
+                "trailers": {},
+                "web_url": "https://gitlab.com/components/sast/-/commit/7f7984b96d9a7ea2969f35141e0fd9d9bcd9d94c"
+              },
+              "created_at": null,
+              "message": "",
+              "name": "3.0.0",
+              "protected": false,
+              "release": {
+                "description": "Release 3.0.0 of components repository components/sast\n\n* Add missing MIT license (https://gitlab.com/components/sast/-/merge_requests/16)\n* Add support for `yml` and `properties` extensions (https://gitlab.com/components/sast/-/merge_requests/19)\n* Bump analyzer versions (https://gitlab.com/components/sast/-/merge_requests/24)\n\nThe change of spotbugs from version `5` to `6` includes a breaking change (https://gitlab.com/gitlab-org/security-products/analyzers/spotbugs/-/merge_requests/243)",
+                "tag_name": "3.0.0"
+              },
+              "target": "7f7984b96d9a7ea2969f35141e0fd9d9bcd9d94c"
+            },
+            {
+              "commit": {
+                "author_email": "mbenayoun@gitlab.com",
+                "author_name": "Meir Benayoun",
+                "authored_date": "2024-10-01T20:24:04.000+00:00",
+                "committed_date": "2024-10-01T20:24:04.000+00:00",
+                "committer_email": "mbenayoun@gitlab.com",
+                "committer_name": "Meir Benayoun",
+                "created_at": "2024-10-01T20:24:04.000+00:00",
+                "extended_trailers": {},
+                "id": "886b6b67bfc36d802f7f6d4f660234707a02169a",
+                "message": "Merge branch 'advanced-sast' into 'main'\n\nAdd support for advanced sast\n\nCloses #4\n\nSee merge request components/sast!15",
+                "parent_ids": [
+                  "e51eb34e0f0783918da9d82021747b0175cae72f",
+                  "6cf357976eafcfda026febddfba3745451f94af6"
+                ],
+                "short_id": "886b6b67",
+                "title": "Merge branch 'advanced-sast' into 'main'",
+                "trailers": {},
+                "web_url": "https://gitlab.com/components/sast/-/commit/886b6b67bfc36d802f7f6d4f660234707a02169a"
+              },
+              "created_at": "2024-10-09T09:44:13.000Z",
+              "message": "GitLab Advanced SAST support",
+              "name": "2.1.0",
+              "protected": false,
+              "release": {
+                "description": "Release 2.1.0 of components repository components/sast",
+                "tag_name": "2.1.0"
+              },
+              "target": "991cf8df9bd551c57c12ddefb621c1cb088be42c"
+            },
+            {
+              "commit": {
+                "author_email": "fpitino@gitlab.com",
+                "author_name": "Fabio Pitino",
+                "authored_date": "2024-06-25T19:53:41.000+00:00",
+                "committed_date": "2024-06-25T19:53:41.000+00:00",
+                "committer_email": "fpitino@gitlab.com",
+                "committer_name": "Fabio Pitino",
+                "created_at": "2024-06-25T19:53:41.000+00:00",
+                "extended_trailers": {},
+                "id": "ce2ceffd8c03223ccc7bfe7259fba2b3ade9c252",
+                "message": "Merge branch 'run-some-jobs-only-on-gitlab-com' into 'main'\n\nRun a couple of jobs only on Gitlab.com\n\nSee merge request components/sast!11",
+                "parent_ids": [
+                  "7dca06303290a7887ca021aad6a1576d80101ca3",
+                  "70b25f51acfc2c16cc76fc1284b2ea7d5807f2bf"
+                ],
+                "short_id": "ce2ceffd",
+                "title": "Merge branch 'run-some-jobs-only-on-gitlab-com' into 'main'",
+                "trailers": {},
+                "web_url": "https://gitlab.com/components/sast/-/commit/ce2ceffd8c03223ccc7bfe7259fba2b3ade9c252"
+              },
+              "created_at": "2024-06-25T21:26:07.000Z",
+              "message": "Run certain jobs only on Gitlab.com",
+              "name": "2.0.2",
+              "protected": false,
+              "release": {
+                "description": "Release 2.0.2 of components repository components/sast",
+                "tag_name": "2.0.2"
+              },
+              "target": "e8ee78108d52323aa679692d47cbf23c4afe28d6"
+            },
+            {
+              "commit": {
+                "author_email": "me@lucascharles.me",
+                "author_name": "Lucas Charles",
+                "authored_date": "2024-05-08T12:11:25.000+00:00",
+                "committed_date": "2024-05-08T12:11:25.000+00:00",
+                "committer_email": "me@lucascharles.me",
+                "committer_name": "Lucas Charles",
+                "created_at": "2024-05-08T12:11:25.000+00:00",
+                "extended_trailers": {},
+                "id": "82680e8bfd9403a35e2b31879a059c5f6a585240",
+                "message": "Merge branch 'craigmsmith-bump-semgrep-version' into 'main'\n\nBump SAST major analyzer version to 5\n\nSee merge request components/sast!9",
+                "parent_ids": [
+                  "7669fa23fcd85253e25ef6f2fb1e012a11999ac2",
+                  "6e626ca47661466e3a47ffc7afdb613b961ae10f"
+                ],
+                "short_id": "82680e8b",
+                "title": "Merge branch 'craigmsmith-bump-semgrep-version' into 'main'",
+                "trailers": {},
+                "web_url": "https://gitlab.com/components/sast/-/commit/82680e8bfd9403a35e2b31879a059c5f6a585240"
+              },
+              "created_at": "2024-05-08T12:18:54.000Z",
+              "message": "Bump SAST major analyzer version to 5  (!9)",
+              "name": "2.0.1",
+              "protected": false,
+              "release": {
+                "description": "Release 2.0.1 of components repository components/sast",
+                "tag_name": "2.0.1"
+              },
+              "target": "badc3862d73523283ba9b55526af1c549593c4e7"
+            },
+            {
+              "commit": {
+                "author_email": "me@lucascharles.me",
+                "author_name": "Lucas Charles",
+                "authored_date": "2024-05-07T13:33:41.000+00:00",
+                "committed_date": "2024-05-07T13:33:41.000+00:00",
+                "committer_email": "me@lucascharles.me",
+                "committer_name": "Lucas Charles",
+                "created_at": "2024-05-07T13:33:41.000+00:00",
+                "extended_trailers": {},
+                "id": "7669fa23fcd85253e25ef6f2fb1e012a11999ac2",
+                "message": "Merge branch 'craigmsmith-disable-analyzers-replaced-by-semgrep' into 'main'\n\nDisable analyzer replaced by semgrep\n\nSee merge request components/sast!8",
+                "parent_ids": [
+                  "036c14b9edff83c4ff9de4df9f04e61a043497be",
+                  "4852fea0ce8b49d6fc69e3d1551f1f23b9a8136e"
+                ],
+                "short_id": "7669fa23",
+                "title": "Merge branch 'craigmsmith-disable-analyzers-replaced-by-semgrep' into 'main'",
+                "trailers": {},
+                "web_url": "https://gitlab.com/components/sast/-/commit/7669fa23fcd85253e25ef6f2fb1e012a11999ac2"
+              },
+              "created_at": "2024-05-07T14:08:35.000Z",
+              "message": "Disable analyzer replaced by semgrep (!8)",
+              "name": "2.0.0",
+              "protected": false,
+              "release": {
+                "description": "Release 2.0.0 of components repository components/sast",
+                "tag_name": "2.0.0"
+              },
+              "target": "bb25c5c2e0eb2ec1820e5583d03d5bd5243fb5c4"
+            },
+            {
+              "commit": {
+                "author_email": "me@lucascharles.me",
+                "author_name": "Lucas Charles",
+                "authored_date": "2024-04-25T22:07:13.000+00:00",
+                "committed_date": "2024-04-25T22:07:13.000+00:00",
+                "committer_email": "me@lucascharles.me",
+                "committer_name": "Lucas Charles",
+                "created_at": "2024-04-25T22:07:13.000+00:00",
+                "extended_trailers": {},
+                "id": "036c14b9edff83c4ff9de4df9f04e61a043497be",
+                "message": "Merge branch 'remove-flawfinder' into 'main'\n\nRemove deprecated analyzer flawfinder\n\nSee merge request components/sast!7",
+                "parent_ids": [
+                  "e0e218323480bf6ad8d298d592a61af3f8c2454a",
+                  "0c1ebfb832356a738baf1c2974d98f845576553b"
+                ],
+                "short_id": "036c14b9",
+                "title": "Merge branch 'remove-flawfinder' into 'main'",
+                "trailers": {},
+                "web_url": "https://gitlab.com/components/sast/-/commit/036c14b9edff83c4ff9de4df9f04e61a043497be"
+              },
+              "created_at": "2024-04-25T22:08:51.000Z",
+              "message": "Remove deprecated analyzer flawfinder",
+              "name": "1.1.2",
+              "protected": false,
+              "release": {
+                "description": "Release 1.1.2 of components repository components/sast",
+                "tag_name": "1.1.2"
+              },
+              "target": "931031dd093f4b09095da6200a4b3ec26a0020e8"
+            },
+            {
+              "commit": {
+                "author_email": "fpitino@gitlab.com",
+                "author_name": "Fabio Pitino",
+                "authored_date": "2024-04-10T10:26:58.000+00:00",
+                "committed_date": "2024-04-10T10:26:58.000+00:00",
+                "committer_email": "fpitino@gitlab.com",
+                "committer_name": "Fabio Pitino",
+                "created_at": "2024-04-10T10:26:58.000+00:00",
+                "extended_trailers": {},
+                "id": "6299531f9b8afc662905edea27e900455630b8aa",
+                "message": "Merge branch 'CI_SERVER_HOST' into 'main'\n\nUse variables instead of hardcoded references in CI pipeline\n\nSee merge request components/sast!5",
+                "parent_ids": [
+                  "ae26bdfa37eebcaafb05ed6c0606cf9abb3c7b0e",
+                  "4add1d344985d20d4b941d4ce4e40cdb0866dacd"
+                ],
+                "short_id": "6299531f",
+                "title": "Merge branch 'CI_SERVER_HOST' into 'main'",
+                "trailers": {},
+                "web_url": "https://gitlab.com/components/sast/-/commit/6299531f9b8afc662905edea27e900455630b8aa"
+              },
+              "created_at": "2024-04-11T14:19:28.000Z",
+              "message": "Use variables instead of hardcoded references.",
+              "name": "1.1.1",
+              "protected": false,
+              "release": {
+                "description": "Release 1.1.1 of components repository components/sast",
+                "tag_name": "1.1.1"
+              },
+              "target": "130350600e049a2cae3f0379fbebddbd794aba21"
+            },
+            {
+              "commit": {
+                "author_email": "ahemdan@gitlab.com",
+                "author_name": "Ahmed Hemdan",
+                "authored_date": "2024-02-20T12:15:05.000+00:00",
+                "committed_date": "2024-02-20T12:15:05.000+00:00",
+                "committer_email": "ahemdan@gitlab.com",
+                "committer_name": "Ahmed Hemdan",
+                "created_at": "2024-02-20T12:15:05.000+00:00",
+                "extended_trailers": {},
+                "id": "ae26bdfa37eebcaafb05ed6c0606cf9abb3c7b0e",
+                "message": "Merge branch 'zillemarco-main-patch-ce18' into 'main'\n\nDisabled security-code-scan to align with the CI template\n\nSee merge request components/sast!4",
+                "parent_ids": [
+                  "7068da1da1a636ef3ec4bc3064cb1ca1325dc68a",
+                  "5f4dce98c151814d6210be39013d877a0cc06118"
+                ],
+                "short_id": "ae26bdfa",
+                "title": "Merge branch 'zillemarco-main-patch-ce18' into 'main'",
+                "trailers": {},
+                "web_url": "https://gitlab.com/components/sast/-/commit/ae26bdfa37eebcaafb05ed6c0606cf9abb3c7b0e"
+              },
+              "created_at": "2024-02-20T12:21:31.000Z",
+              "message": "Deprecate `security-code-scan` job to align with CI template",
+              "name": "1.1.0",
+              "protected": false,
+              "release": {
+                "description": "Release 1.1.0 of components repository components/sast",
+                "tag_name": "1.1.0"
+              },
+              "target": "91498608ed9ab0f475dc6abed73a7762c8069613"
+            },
+            {
+              "commit": {
+                "author_email": "awolfe@gitlab.com",
+                "author_name": "Avielle Wolfe",
+                "authored_date": "2023-12-22T11:19:53.000+00:00",
+                "committed_date": "2023-12-22T11:19:53.000+00:00",
+                "committer_email": "awolfe@gitlab.com",
+                "committer_name": "Avielle Wolfe",
+                "created_at": "2023-12-22T11:19:53.000+00:00",
+                "extended_trailers": {},
+                "id": "7068da1da1a636ef3ec4bc3064cb1ca1325dc68a",
+                "message": "Merge branch 'sast-20231220_updates' into 'main'\n\nUpdate README.md to reference updated component path\n\nSee merge request components/sast!2",
+                "parent_ids": [
+                  "a373e2cf130b2669f0e3dc85eb9f5ee0616d802b",
+                  "e31763068c317268b447379441114489fa340e83"
+                ],
+                "short_id": "7068da1d",
+                "title": "Merge branch 'sast-20231220_updates' into 'main'",
+                "trailers": {},
+                "web_url": "https://gitlab.com/components/sast/-/commit/7068da1da1a636ef3ec4bc3064cb1ca1325dc68a"
+              },
+              "created_at": "2024-02-11T17:31:02.000Z",
+              "message": "Fix automatically generated component include_path",
+              "name": "1.0.1",
+              "protected": false,
+              "release": {
+                "description": "Release 1.0.1 of components repository components/sast",
+                "tag_name": "1.0.1"
+              },
+              "target": "7bbe96d12c5144f6614166644835553916a4c590"
+            },
+            {
+              "commit": {
+                "author_email": "fpitino@gitlab.com",
+                "author_name": "Fabio Pitino",
+                "authored_date": "2023-11-09T12:39:21.000+00:00",
+                "committed_date": "2023-11-09T12:39:21.000+00:00",
+                "committer_email": "fpitino@gitlab.com",
+                "committer_name": "Fabio Pitino",
+                "created_at": "2023-11-09T12:39:21.000+00:00",
+                "extended_trailers": {},
+                "id": "d98e1fe8f2f3ee9bfd7c0c983a11ec5c0006dafc",
+                "message": "Merge branch 'rename-component' into 'main'\n\nRename component to sast\n\nSee merge request gitlab-components/sast!9",
+                "parent_ids": [
+                  "01f964281a09893bab142b43f917e13730bbe84c",
+                  "dbd1e3989915f30d2d33d41dcd580fd114b8a926"
+                ],
+                "short_id": "d98e1fe8",
+                "title": "Merge branch 'rename-component' into 'main'",
+                "trailers": {},
+                "web_url": "https://gitlab.com/components/sast/-/commit/d98e1fe8f2f3ee9bfd7c0c983a11ec5c0006dafc"
+              },
+              "created_at": "2023-11-10T15:31:46.000Z",
+              "message": "First major version",
+              "name": "1.0",
+              "protected": false,
+              "release": {
+                "description": "",
+                "tag_name": "1.0"
+              },
+              "target": "584b740e70591a8e0e8516533ddb5bb2a943c6e1"
+            },
+            {
+              "commit": {
+                "author_email": "fpitino@gitlab.com",
+                "author_name": "Fabio Pitino",
+                "authored_date": "2023-11-09T09:46:06.000+00:00",
+                "committed_date": "2023-11-09T09:46:06.000+00:00",
+                "committer_email": "fpitino@gitlab.com",
+                "committer_name": "Fabio Pitino",
+                "created_at": "2023-11-09T09:46:06.000+00:00",
+                "extended_trailers": {},
+                "id": "01f964281a09893bab142b43f917e13730bbe84c",
+                "message": "Merge branch 'ensure-job-on-branch-only' into 'main'\n\nRun ensure-x-job-added only on branch\n\nSee merge request gitlab-components/sast!8",
+                "parent_ids": [
+                  "1087014f46fae369c69182a0679fd46e8202c05c",
+                  "ed5437cc87d2c4c1ca48a659dd3c9b0cf56bca2e"
+                ],
+                "short_id": "01f96428",
+                "title": "Merge branch 'ensure-job-on-branch-only' into 'main'",
+                "trailers": {},
+                "web_url": "https://gitlab.com/components/sast/-/commit/01f964281a09893bab142b43f917e13730bbe84c"
+              },
+              "created_at": "2023-11-09T09:46:52.000Z",
+              "message": "Initial version",
+              "name": "0.1",
+              "protected": false,
+              "release": null,
+              "target": "667d6d4d3413bd2c887ae4ae638927ee4ab83564"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

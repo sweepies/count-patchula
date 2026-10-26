@@ -478,3 +478,40 @@ fn copier_commit_is_never_edited() {
     let error = edits(&dependencies[0], text, "v1.6.0", None).unwrap_err();
     assert!(error.contains("copier update"), "{error}");
 }
+
+#[test]
+fn apm_refs_keep_their_tag_and_pins_keep_the_tag_comment() {
+    let sha = "fb2851683d0b49ef9e1e0c6d0a9a3e6a1f0e2b3c";
+    let old = "dependencies:\n  apm:\n    - owner/repo#v1\n";
+    assert_eq!(
+        replace(Manager::Apm, "apm.yml", old, "v2", None),
+        "dependencies:\n  apm:\n    - owner/repo#v2\n"
+    );
+    assert_eq!(
+        replace(Manager::Apm, "apm.yml", old, "v1", Some(sha)),
+        format!("dependencies:\n  apm:\n    - owner/repo#{sha} # v1\n")
+    );
+    let pinned = format!(
+        "dependencies:\n  apm:\n    - 'owner/repo/sub#{}' # v1.0.0 stable\n",
+        "b".repeat(40)
+    );
+    assert_eq!(
+        replace(Manager::Apm, "apm.yml", &pinned, "v1.1.0", Some(sha)),
+        format!("dependencies:\n  apm:\n    - 'owner/repo/sub#{sha}' # v1.1.0 stable\n")
+    );
+}
+
+#[test]
+fn apm_pins_leave_a_tab_separated_comment_after_the_new_one() {
+    let sha = "fb2851683d0b49ef9e1e0c6d0a9a3e6a1f0e2b3c";
+    assert_eq!(
+        replace(
+            Manager::Apm,
+            "apm.yml",
+            "dependencies:\n  apm:\n    - owner/repo#v1.0.0\t# note\n",
+            "v1.0.0",
+            Some(sha)
+        ),
+        format!("dependencies:\n  apm:\n    - owner/repo#{sha} # v1.0.0\t# note\n")
+    );
+}

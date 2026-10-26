@@ -2,7 +2,7 @@ use crate::*;
 use regex::Regex;
 use serde_yaml_ng::Value;
 
-fn version_comment(value: &str) -> bool {
+pub(crate) fn version_comment(value: &str) -> bool {
     static VERSION: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
         Regex::new(r"^v?[0-9]+(?:\.[0-9]+){0,2}(?:[-+][0-9A-Za-z.-]+)?$").expect("version comment")
     });
@@ -540,8 +540,9 @@ fn runner_scope(text: &str, job: &str) -> Result<std::ops::Range<usize>, String>
     Ok(lines[runner].0..end)
 }
 
-/// Render an action scalar at its extracted location, retaining subpaths,
-/// quoting, whitespace, and the rest of an existing version comment.
+/// Render an action or APM scalar at its extracted location, retaining
+/// subpaths, quoting, whitespace, and the rest of an existing version comment.
+/// An APM entry separates its ref with `#` rather than `@`.
 pub fn replacement(
     dep: &Dependency,
     text: &str,
@@ -554,7 +555,12 @@ pub fn replacement(
     let (scalar, comment) = raw
         .split_once(" #")
         .map_or((raw, None), |(a, b)| (a, Some(b)));
-    let at = scalar.rfind('@').ok_or("action scalar has no ref")?;
+    let separator = if dep.manager == Manager::Apm {
+        '#'
+    } else {
+        '@'
+    };
+    let at = scalar.rfind(separator).ok_or("action scalar has no ref")?;
     let old_ref = scalar[at + 1..].trim_end_matches(['\'', '"', ' ', '\t', '\r']);
     let end = at + 1 + old_ref.len();
     let mut result = format!(

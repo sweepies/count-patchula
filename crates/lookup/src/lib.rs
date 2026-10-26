@@ -329,16 +329,17 @@ impl Evaluator {
     }
     pub fn needs_digest(&self, dep: &Dependency, proposal: &Proposal) -> bool {
         let update = parse_update(&proposal.update_type);
-        (dep.source == Source::Docker
-            || dep.source == Source::Oci
-            || dep.manager == Manager::GithubActions)
-            && matches!(
-                dep.kind,
-                DependencyKind::Action
-                    | DependencyKind::ReusableWorkflow
-                    | DependencyKind::ContainerImage
-                    | DependencyKind::Chart
-            )
+        (dep.manager == Manager::Apm
+            || (dep.source == Source::Docker
+                || dep.source == Source::Oci
+                || dep.manager == Manager::GithubActions)
+                && matches!(
+                    dep.kind,
+                    DependencyKind::Action
+                        | DependencyKind::ReusableWorkflow
+                        | DependencyKind::ContainerImage
+                        | DependencyKind::Chart
+                ))
             && self.effective(dep, update).digest
     }
     pub fn digest_proposal(&self, dep: &Dependency, new_digest: &str) -> Option<Proposal> {
@@ -736,7 +737,10 @@ impl Evaluator {
             if scheme.order(&parsed, &baseline) != Ordering::Greater {
                 continue;
             }
-            if dep.tagged_action()
+            // Only Actions float a short tag such as v4 along its release line;
+            // an APM tag names one release.
+            if dep.manager == Manager::GithubActions
+                && dep.tagged_action()
                 && numeric_fields(&dep.current).is_some_and(|n| n < 3)
                 && numeric_prefix(&dep.current, &normalized)
             {
@@ -924,7 +928,9 @@ impl Evaluator {
             let mut update = proposal(
                 Some(new_value),
                 Some(normalized),
-                if effective.digest && dep.manager == Manager::GithubActions {
+                if effective.digest
+                    && (dep.manager == Manager::GithubActions || dep.tagged_action())
+                {
                     version.digest.clone()
                 } else {
                     None
@@ -1235,7 +1241,7 @@ pub fn resolved_current_version(dep: &Dependency, catalog: &Catalog) -> Option<S
     if dep.manager == Manager::Mise || dep.kind == DependencyKind::Tool {
         return resolved_tool_version(dep, catalog);
     }
-    if !dep.tagged_action() {
+    if dep.manager != Manager::GithubActions || !dep.tagged_action() {
         return None;
     }
     let current = dep.resolved.as_deref().unwrap_or(&dep.current);
