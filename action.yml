@@ -69,7 +69,7 @@ runs:
             version=latest
           fi
         fi
-        args=(run --cache "$CACHE_DIR")
+        args=(run)
         if [ "$INPUT_DRY_RUN" = true ]; then
           args+=(--dry-run)
         fi
@@ -92,4 +92,12 @@ runs:
           export MISE_USE_VERSIONS_HOST=0
         fi
         bin=$(cd "$RUNNER_TEMP" && MISE_MINIMUM_RELEASE_AGE=0 mise exec "packslip:sweepies/count-patchula@$version" -- sh -c 'command -v patchula')
+        # The version input can install any release. Releases up to 0.4.0 take
+        # --cache as the SQLite file; later ones take the directory holding it.
+        help=$("$bin" run --help)
+        if [[ "$help" == *'--cache <DIR>'* ]]; then
+          args+=(--cache "$CACHE_DIR")
+        else
+          args+=(--cache "$CACHE_DIR/cache.sqlite")
+        fi
         "$bin" "${args[@]}"
