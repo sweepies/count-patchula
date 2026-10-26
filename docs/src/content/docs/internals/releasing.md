@@ -68,7 +68,7 @@ doesn't run on the branch or on `main` either.
 
 The packslip manifest and the build attestations are signed with the run's
 OIDC identity, `.github/workflows/release.yml@refs/heads/main`. Releases up to
-0.5.0 were signed from their tag ref. mise's signer continuity compares the
+0.5.1 were signed from their tag ref. mise's signer continuity compares the
 workflow path without the ref, so installs carry on. A mise configuration that
 pins `workflow = "release.yml"` accepts only tag refs, so it needs
 `identity_prefix = "https://github.com/sweepies/count-patchula/.github/workflows/release.yml@"`
