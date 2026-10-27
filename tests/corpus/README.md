@@ -8,9 +8,10 @@ dependencies across 25 managers.
   `tests/corpus-extraction.tsv`. A change to extraction shows up as a diff
   in that file. Regenerate it with `mise run corpus:snapshot`.
 - On pull requests, CI also looks up every dependency against the live
-  registries and plans every branch without writing (`mise run corpus:check`,
-  which is `patchula run --dry-run` in `tests/corpus`). A branch that fails
-  to plan fails the job; counts, skips and timings go in the job summary.
+  registries and plans every branch without writing (`mise run corpus:report`,
+  which wraps `mise run corpus:check`, `patchula run --dry-run` in
+  `tests/corpus`). A branch that fails to plan fails the job; counts, skips
+  and timings go in the job summary.
 
 Each directory keeps its project's own relative paths. The `.github/workflows`
 directory holds Home Assistant's workflows at the root, where the Actions

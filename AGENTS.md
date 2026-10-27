@@ -19,6 +19,8 @@ An unrecorded difference is a bug.
 
 - Every tool comes from mise, and every repeatable action is a mise task
   (`mise tasks` lists them). Add a task for a new workflow rather than a script.
+  Anything longer than a command or two is a file task under `mise-tasks/`,
+  with `#MISE` and `#USAGE` headers, not shell inside `mise.toml` or a workflow.
   JavaScript packages go through aube.
 - Changes are hard cutovers: rename, remove and migrate in one change, with no
   compatibility shims, aliases or deprecated paths left behind.
@@ -46,7 +48,7 @@ are plain and direct.
 
 ## Done
 
-A change is done when the **CI result** check on GitHub is green after pushing.
-GitHub runs the full `mise run ci`, so run only the checks for what changed
-locally, such as one crate's tests. Commits use conventional commit
+A change is done when every CI check on GitHub is green after pushing. GitHub
+runs the tasks in `mise run ci` as parallel jobs, so run only the checks for
+what changed locally, such as one crate's tests. Commits use conventional commit
 messages (`feat(manager): …`, `fix(lookup): …`).

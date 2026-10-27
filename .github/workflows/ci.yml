@@ -17,9 +17,8 @@ concurrency:
 # Every job runs one or two mise tasks, so `mise run ci` runs the same checks
 # locally. internals/ci-cache.md describes the caches.
 jobs:
-  # The workflow always runs, so "CI result" can be a required check. Each job
-  # below runs only when a changed path can affect it; a docs-only change runs
-  # just the docs build.
+  # Each job below runs only when a changed path can affect it; a docs-only
+  # change runs just the docs build.
   changes:
     name: Changed paths
     runs-on: ubuntu-latest
@@ -295,18 +294,3 @@ jobs:
           path: corpus-report.json
           if-no-files-found: warn
           retention-days: 14
-
-  # The one check to require. Skipped jobs count as passing; failed or
-  # cancelled ones, or a failed path check, do not.
-  result:
-    name: CI result
-    needs: [changes, lint, workflows, build, test, tools, docs, corpus]
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
-        env:
-          RESULTS: ${{ toJSON(needs.*.result) }}
-        run: echo "A required job did not pass; results in needs order $RESULTS" && exit 1
-      - run: echo "Required jobs passed or were skipped."
