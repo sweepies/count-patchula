@@ -1,4 +1,4 @@
-# Release archives, checksums and the GitHub release. The release workflow
+# Release archives and checksums. The release workflow
 # (.github/workflows/release.yml) runs this through `mise run release:dist`,
 # which sets SDKROOT for the macOS links; see internals/releasing.md.
 version: 2
@@ -18,13 +18,6 @@ builds:
       - x86_64-apple-darwin
       - aarch64-apple-darwin
     mod_timestamp: "{{ .CommitTimestamp }}"
-    # Zig's Mach-O linker names anonymous local symbols after the thread that
-    # read their object file, so the symbol table, and with it the UUID and
-    # code signature, changed from build to build. -x leaves local symbols
-    # out of the macOS symbol tables.
-    env:
-      - CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS=-C link-arg=-Wl,-x
-      - CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS=-C link-arg=-Wl,-x
     # The usage spec, man page and completions come from the build this host
     # can run, before any archive needs them.
     hooks:
@@ -70,22 +63,9 @@ archives:
 checksum:
   name_template: patchula-v{{ .Version }}-checksums.txt
 
-# The checksums the smoke tests ran against are the only ones that may be
-# signed: release:sign compares them before packslip signs the archives.
-signs:
-  - id: packslip
-    artifacts: checksum
-    signature: packslip.sigstore.json
-    cmd: mise
-    args: [run, release:sign, "${artifact}", "${signature}", "{{ .Tag }}", "{{ .FullCommit }}"]
-    output: true
-
+# The release workflow publishes these files itself, after the smoke tests.
 release:
-  name_template: Count Patchula {{ .Tag }}
-  extra_files:
-    - glob: generated/patchula.usage.kdl
+  disable: true
 
-# A commit list from git, which needs no token; communique rewrites the
-# notes after publishing.
 changelog:
-  use: git
+  disable: true

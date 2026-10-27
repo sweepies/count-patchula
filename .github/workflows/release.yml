@@ -7,7 +7,7 @@ name: Release
 # its own platform, builds and pushes the server image, and only then pushes
 # the bump commit to main, tags it and publishes the GitHub release with a
 # signed packslip manifest and communique's notes. A dry run does all of the
-# building, checking and signing and pushes nothing.
+# building and checking and pushes nothing.
 on:
   workflow_dispatch:
     inputs:
@@ -138,9 +138,9 @@ jobs:
           if-no-files-found: error
 
   # One Linux runner builds every archive, macOS ones included, with
-  # GoReleaser and cargo-zigbuild. GoReleaser runs as it will at publish,
-  # against a local tag, so the archive names and checksums are the
-  # release's; the publish job rebuilds them and signs only an identical set.
+  # GoReleaser and cargo-zigbuild, against a local tag so the archive names
+  # are the release's. These files are the ones smoke-tested, put in the image
+  # and published.
   build:
     name: Build
     needs: bump
@@ -176,13 +176,14 @@ jobs:
             exit 1
           fi
       - name: Build the archives
-        run: mise run release:dist --skip=publish,sign
+        run: mise run release:dist
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist
           path: |
             dist/*.tar.gz
             dist/*-checksums.txt
+            generated/patchula.usage.kdl
           if-no-files-found: error
 
   smoke:
@@ -205,7 +206,6 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
-          path: dist
       - name: Run the binary
         env:
           PLATFORM: ${{ matrix.platform }}
@@ -237,7 +237,6 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
-          path: dist
       - name: Read the version from the archives
         id: version
         env:
@@ -527,17 +526,12 @@ jobs:
           docker buildx imagetools create "${args[@]}" "$IMAGE@$DIGEST"
           printf 'Tagged %s@%s as:\n%s\n' "$IMAGE" "$DIGEST" "$TAGS" >> "$GITHUB_STEP_SUMMARY"
 
-  # GoReleaser OSS cannot publish files it did not build, so this job builds
-  # the archives again from the tagged commit. The build is reproducible, and
-  # release:sign refuses to sign, and GoReleaser then to publish, unless the
-  # checksums match the smoke-tested ones. A dry run does the same rebuild,
-  # comparison and signing, and publishes nothing.
+  # The release is made from the build job's files, unchanged.
   release:
     name: Publish
-    needs: [bump, smoke, image, land]
-    if: ${{ !cancelled() && needs.smoke.result == 'success' && needs.image.result == 'success' && (inputs.dry_run || needs.land.result == 'success') }}
+    needs: [bump, land]
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 20
     permissions:
       contents: write
       id-token: write
@@ -545,77 +539,45 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: v${{ inputs.version }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: release-bump
-          path: ${{ runner.temp }}/bump
-      # A release finds the tag the land job pushed; a dry run tags locally.
-      - name: Check out the tagged commit
-        env:
-          SHA: ${{ needs.bump.outputs.sha }}
-          VERSION: ${{ inputs.version }}
-          DRY_RUN: ${{ inputs.dry_run }}
-        run: |
-          git fetch --quiet --no-tags "$RUNNER_TEMP/bump/release.bundle" HEAD
-          if [ "$DRY_RUN" = true ]; then
-            git tag "v$VERSION" "$SHA"
-          else
-            git fetch --quiet origin "refs/tags/v$VERSION:refs/tags/v$VERSION"
-          fi
-          if [ "$(git rev-parse "v$VERSION^{commit}")" != "$SHA" ]; then
-            echo "::error::v$VERSION does not point at $SHA"
-            exit 1
-          fi
-          git checkout --quiet --detach "$SHA"
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
           name: dist
-          path: ${{ runner.temp }}/tested
-      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
-        with:
-          # A release never restores a cache, so nothing cached reaches the artifacts.
-          cache: false
-      # The packslip manifest links each archive's provenance by digest.
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        if: ${{ !inputs.dry_run }}
-        with:
-          subject-path: ${{ runner.temp }}/tested/*.tar.gz
-      - name: Build, sign and publish the release
+      - name: Check the archives against their checksums
         env:
-          GITHUB_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
-          DRY_RUN: ${{ inputs.dry_run }}
-        run: |
-          export PATCHULA_TESTED_CHECKSUMS="$RUNNER_TEMP/tested/patchula-v$VERSION-checksums.txt"
-          if [ "$DRY_RUN" = true ]; then
-            mise run release:dist --skip=publish
-          else
-            mise run release:dist
-          fi
-          {
-            echo '### Archives'
-            echo '```'
-            cat "dist/patchula-v$VERSION-checksums.txt"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-      # A rebuild that differs is kept for comparison with the smoke-tested
-      # archives.
-      - if: ${{ failure() }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        run: (cd dist && sha256sum --check --strict "patchula-v$VERSION-checksums.txt")
+      - name: Create a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ inputs.version }}
+        run: gh release create "$TAG" --draft --verify-tag --title "Count Patchula $TAG" --generate-notes dist/* generated/patchula.usage.kdl
+      - uses: jdx/packslip@7d397618045bd98b76cd5cb8177767b2f52789b8 # v1.10.1
         with:
-          name: dist-rebuilt
-          path: |
-            dist/*.tar.gz
-            dist/*-checksums.txt
-          if-no-files-found: ignore
+          tag: v${{ inputs.version }}
+          commit: ${{ needs.bump.outputs.sha }}
+          artifacts: dist/*.tar.gz
+          bin: patchula=bin/patchula
+          resources: |
+            man=archive:share/man/man1/patchula.1
+            completion/bash=archive:share/bash-completion/completions/patchula
+            completion/zsh=archive:share/zsh/site-functions/_patchula
+            completion/fish=archive:share/fish/vendor_completions.d/patchula.fish
+            cli-spec/usage=asset:generated/patchula.usage.kdl
+            skill/patchula=repo:skills/patchula
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ inputs.version }}
+        run: gh release edit "$TAG" --draft=false
       # The Anthropic key lives in Infisical as anthropic-api-key (project
       # INFISICAL_PROJECT_ID, environment prod), read through GitHub OIDC by a
       # machine identity that trusts main, the ref a release runs from. Until
-      # both repository variables are set, the release keeps GoReleaser's generated
+      # both repository variables are set, the release keeps GitHub's generated
       # notes.
-      - if: ${{ !inputs.dry_run && vars.INFISICAL_IDENTITY_ID != '' && vars.INFISICAL_PROJECT_ID != '' }}
+      - if: vars.INFISICAL_IDENTITY_ID != '' && vars.INFISICAL_PROJECT_ID != ''
         uses: Infisical/secrets-action@d2e351f16c6ca20d17c85e6c992e04bdeb64e87d # v1.0.18
         with:
           method: oidc
@@ -623,9 +585,17 @@ jobs:
           project-id: ${{ vars.INFISICAL_PROJECT_ID }}
           env-slug: prod
           secret-name: anthropic-api-key
+      - if: vars.INFISICAL_IDENTITY_ID != '' && vars.INFISICAL_PROJECT_ID != ''
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          install: false
+          # A release never restores a cache, so nothing cached reaches the artifacts.
+          cache: false
       - name: Write the release notes
-        if: ${{ !inputs.dry_run && vars.INFISICAL_IDENTITY_ID != '' && vars.INFISICAL_PROJECT_ID != '' }}
+        if: vars.INFISICAL_IDENTITY_ID != '' && vars.INFISICAL_PROJECT_ID != ''
         env:
+          # Only the release tool, not the workspace toolchains.
+          MISE_ENABLE_TOOLS: communique
           GITHUB_TOKEN: ${{ github.token }}
           # The action exports the secret under its Infisical name.
           ANTHROPIC_API_KEY: ${{ env['anthropic-api-key'] }}

@@ -33,9 +33,9 @@ uses only the built-in `GITHUB_TOKEN`.
 4. **Land.** Only when all of that passes, the image is pushed to GHCR by
    digest, the commit is pushed to `main` and tagged `vX.Y.Z`, and the
    image gets its `X.Y.Z` and `latest` tags.
-5. **Publish.** GoReleaser builds the archives again from the tag, checks
-   that they match the smoke-tested ones, signs the packslip manifest and
-   publishes the GitHub release. communique then rewrites the notes
+5. **Publish.** The GitHub release is created from the build job's
+   archives, checksums and usage spec, the same files the smoke tests ran,
+   with its signed packslip manifest. communique then rewrites the notes
    (`mise run release:notes vX.Y.Z`).
 
 A failed build pushes nothing, so fix the problem on `main` and run the
@@ -47,9 +47,8 @@ carries on.
 
 ## Dry run
 
-`dry_run: true` does the guard, the bump, the builds, the image checks and
-the publish job's rebuild, comparison and packslip signature, and skips every
-push, the tag, the provenance attestations and the release. A dry run may start from any
+`dry_run: true` does the guard, the bump, the builds and the image checks,
+and skips every push, the tag and the release. A dry run may start from any
 branch whose head passed CI, which is how a change to the workflow is tested:
 
 ```sh
@@ -60,15 +59,15 @@ gh workflow run release.yml --ref my-branch -f version=0.5.2 -f dry_run=true
 
 `.goreleaser.yaml` builds the four targets with `cargo zigbuild`, packs each
 into `patchula-vX.Y.Z-PLATFORM.tar.gz` (`bin/patchula`, the man page, the
-completions under `share/`, `LICENSE` and `README.md`), writes
-`patchula-vX.Y.Z-checksums.txt` and creates the GitHub release with those,
-`patchula.usage.kdl` and `packslip.sigstore.json`. The release body starts
-as GoReleaser's list of commits since the previous tag. The usage spec, man page and completions come
-from the build the host can run, through `docs:cli`. GoReleaser, cargo-zigbuild
-and packslip are task tools of `release:dist` and `release:sign`.
+completions under `share/`, `LICENSE` and `README.md`) and writes
+`patchula-vX.Y.Z-checksums.txt`. It publishes nothing: the workflow creates
+the GitHub release from those files with `gh`, after the smoke tests and the
+land job, so the published archives are the ones that ran. The usage spec, man
+page and completions come from the build the host can run, through
+`docs:cli`. GoReleaser and cargo-zigbuild are task tools of `release:dist`.
 
-`mise run release:dist --snapshot` builds the archives locally, unversioned,
-with no tag and no signature; it runs on Linux.
+`mise run release:dist --snapshot` builds the archives locally, unversioned
+and with no tag; it runs on Linux.
 
 ### macOS on Linux
 
@@ -83,26 +82,6 @@ SDK is downloaded.
 
 A dependency update that imports a new symbol from either framework fails the
 link with `undefined symbol: _Name`. Add the name to the stub's `symbols` list.
-
-### One build, published twice
-
-GoReleaser without Pro cannot publish files it did not build, so the release
-is built twice: once before landing, for the smoke tests, and again from the
-tag in the publish job. Both builds use the same toolchains, paths and commit
-timestamps, so the archives are byte-identical. The macOS binaries are
-linked with `-x`, which leaves local symbols out of the symbol table: Zig's
-Mach-O linker names anonymous ones after the thread that read their object
-file, which made the symbol table, the UUID and the code signature differ
-between two builds of the same commit. GoReleaser runs
-`release:sign` as its signing step, after the checksums and before
-publishing. It compares the checksums file with the smoke-tested one and fails
-on any difference, so a release that does not match what was tested is never
-signed or published. The provenance attestations are made for the
-smoke-tested archives, which by then have the same digests.
-
-The server image is not built by GoReleaser: its rebuild would install
-Debian packages again, so the pushed image would not be the one that ran. The
-image job builds, runs and pushes it as before.
 
 ## No CI on the bump commit
 
@@ -134,5 +113,5 @@ machine identity trusts
 `repo:sweepies@7191851/*:ref:refs/{tags/v*,heads/main}`, which covers a run
 dispatched on `main`. Until the `INFISICAL_IDENTITY_ID` and
 `INFISICAL_PROJECT_ID` repository variables are set, the release keeps
-GoReleaser's commit list. `mise run release:notes vX.Y.Z` also rewrites a
+GitHub's generated notes. `mise run release:notes vX.Y.Z` also rewrites a
 published release's notes locally, with `ANTHROPIC_API_KEY` set.

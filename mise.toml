@@ -184,65 +184,13 @@ done
 '''
 
 [tasks."release:dist"]
-description = "Build the release archives and checksums into dist with GoReleaser on Linux; forwards goreleaser release flags, such as --snapshot or --skip=publish,sign"
+description = "Build the release archives and checksums into dist with GoReleaser on Linux; forwards goreleaser release flags, such as --snapshot"
 tools = { goreleaser = "2.19.0", "github:rust-cross/cargo-zigbuild" = "0.24.0" }
 # Zig has no Apple frameworks, so the macOS links read the stubs under
 # release/macos-sdk instead of an Xcode SDK.
 env = { SDKROOT = "{{config_root}}/release/macos-sdk" }
 raw_args = true
-run = "goreleaser release --clean"
-
-[tasks."release:sign"]
-description = "Sign the release's packslip manifest, run by GoReleaser; refuses checksums that differ from PATCHULA_TESTED_CHECKSUMS, the smoke-tested ones"
-usage = '''
-arg "<checksums>" help="GoReleaser's checksums file"
-arg "<bundle>" help="Where the packslip bundle goes"
-arg "<tag>" help="Release tag, such as v0.5.2"
-arg "<commit>" help="Full commit SHA the release was built from"
-'''
-tools = { packslip = "1.10.1" }
-run = '''
-#!/usr/bin/env bash
-set -euo pipefail
-checksums="${usage_checksums?}"
-tested="${PATCHULA_TESTED_CHECKSUMS:?set PATCHULA_TESTED_CHECKSUMS to the smoke-tested checksums file}"
-if ! cmp -s "$tested" "$checksums"; then
-  echo "The rebuilt archives differ from the smoke-tested ones:" >&2
-  diff "$tested" "$checksums" >&2 || true
-  exit 1
-fi
-tag="${usage_tag?}"
-repo=sweepies/count-patchula
-dist=$(dirname "$checksums")
-args=(
-  create
-  --project "github.com/$repo"
-  --version "${tag#v}"
-  --out "$(dirname "${usage_bundle?}")"
-  --url-base "https://github.com/$repo/releases/download/$tag"
-  --notes-url "https://github.com/$repo/releases/tag/$tag"
-  --source-repo "https://github.com/$repo"
-  --tag "$tag"
-  --commit "${usage_commit?}"
-  --bin patchula=bin/patchula
-  --resource man=archive:share/man/man1/patchula.1
-  --resource completion/bash=archive:share/bash-completion/completions/patchula
-  --resource completion/zsh=archive:share/zsh/site-functions/_patchula
-  --resource completion/fish=archive:share/fish/vendor_completions.d/patchula.fish
-  --resource cli-spec/usage=asset:generated/patchula.usage.kdl
-  --resource skill/patchula=repo:skills/patchula
-)
-archives=()
-# The release workflow attests the smoke-tested archives, and GitHub serves
-# each one's provenance by digest.
-while read -r digest name; do
-  archives+=("$dist/$name")
-  args+=(--provenance "$name=https://api.github.com/repos/$repo/attestations/sha256:$digest")
-done < "$checksums"
-packslip "${args[@]}" "${archives[@]}"
-packslip verify "$usage_bundle" --source-repository "https://github.com/$repo" \
-  --issuer https://token.actions.githubusercontent.com
-'''
+run = "goreleaser release --clean --skip=publish"
 
 [tasks."release:notes"]
 description = "Rewrite a published GitHub release's notes with communique; needs ANTHROPIC_API_KEY (Infisical, environment prod)"
