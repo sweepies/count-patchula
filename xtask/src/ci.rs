@@ -89,24 +89,26 @@ pub fn changes(args: Args) -> Result {
             r#"if (.files | length) >= 300 then "unknown" else .files[].filename end"#,
         ]))?
     };
-    let jobs = classify(files.trim_end_matches('\n').split('\n'));
+    let jobs = classify(files.lines());
     let mut outputs = File::options().append(true).open(env("GITHUB_OUTPUT")?)?;
-    write!(
+    writeln!(
         outputs,
-        "rust={}\nactions={}\ndocs={}\n",
+        "rust={}\nactions={}\ndocs={}",
         jobs.rust, jobs.actions, jobs.docs
     )?;
     let mut summary = File::options()
         .append(true)
         .open(env("GITHUB_STEP_SUMMARY")?)?;
-    write!(
+    writeln!(
         summary,
-        "Rust jobs: {}\nWorkflow lint: {}\nDocs build: {}\n",
+        "Rust jobs: {}\nWorkflow lint: {}\nDocs build: {}",
         jobs.rust, jobs.actions, jobs.docs
     )?;
     Ok(())
 }
 
+/// The jobs a list of changed paths needs. An empty list is unexpected, so it
+/// runs everything.
 fn classify<'a>(files: impl IntoIterator<Item = &'a str>) -> Jobs {
     const IGNORED_DIRS: &[&str] = &["assets/", "skills/", ".claude/"];
     const IGNORED: &[&str] = &[
@@ -122,6 +124,10 @@ fn classify<'a>(files: impl IntoIterator<Item = &'a str>) -> Jobs {
         "tak.toml",
     ];
     let mut jobs = Jobs::default();
+    let mut files = files.into_iter().peekable();
+    if files.peek().is_none() {
+        return classify(["unknown"]);
+    }
     for file in files {
         match file {
             "unknown" | "mise.toml" | "mise.lock" | ".github/workflows/ci.yml" => {
@@ -191,9 +197,8 @@ mod tests {
         assert_eq!(classify(["unknown"]), jobs(true, true, true));
     }
 
-    /// An empty file list is unexpected, so it runs the Rust jobs to be safe.
     #[test]
-    fn an_empty_list_runs_the_rust_jobs() {
-        assert_eq!(classify("".split('\n')), jobs(true, true, false));
+    fn an_empty_list_runs_everything() {
+        assert_eq!(classify("".lines()), jobs(true, true, true));
     }
 }
