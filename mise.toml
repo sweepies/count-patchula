@@ -184,7 +184,7 @@ done
 '''
 
 [tasks."release:dist"]
-description = "Build the release archives and checksums into dist with GoReleaser on Linux; forwards goreleaser release flags, such as --snapshot or --skip=publish,sign"
+description = "Build the release archives and checksums into dist with GoReleaser on Linux; forwards goreleaser release flags, such as --snapshot or --skip=publish,sign,changelog"
 tools = { goreleaser = "2.19.0", "github:rust-cross/cargo-zigbuild" = "0.24.0" }
 # Zig has no Apple frameworks, so the macOS links read the stubs under
 # release/macos-sdk instead of an Xcode SDK.

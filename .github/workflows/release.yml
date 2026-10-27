@@ -176,7 +176,7 @@ jobs:
             exit 1
           fi
       - name: Build the archives
-        run: mise run release:dist --skip=publish,sign
+        run: mise run release:dist --skip=publish,sign,changelog
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist
@@ -590,7 +590,7 @@ jobs:
         run: |
           export PATCHULA_TESTED_CHECKSUMS="$RUNNER_TEMP/tested/patchula-v$VERSION-checksums.txt"
           if [ "$DRY_RUN" = true ]; then
-            mise run release:dist --skip=publish
+            mise run release:dist --skip=publish,changelog
           else
             mise run release:dist
           fi
