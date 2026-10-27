@@ -245,7 +245,7 @@ jobs:
       - run: mise run test:tools
       # This job installs the base tools and every lockfile engine, so its
       # store holds nearly every download the other jobs need.
-      - if: github.ref == 'refs/heads/main' && steps.mise-downloads.outputs.cache-hit != 'true'
+      - if: steps.mise-downloads.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         continue-on-error: true
         with:
