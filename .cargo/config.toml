@@ -10,3 +10,7 @@ rustflags = ["-C", "link-self-contained=no", "-C", "link-arg=-target", "-C", "li
 [target.aarch64-unknown-linux-musl]
 linker = "mise-tasks/cc"
 rustflags = ["-C", "link-self-contained=no", "-C", "link-arg=-target", "-C", "link-arg=aarch64-linux-musl"]
+
+# Repository tasks with real logic live in the xtask crate; mise runs them.
+[alias]
+xtask = "run --quiet --locked --package xtask --"
