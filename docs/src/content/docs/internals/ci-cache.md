@@ -18,7 +18,8 @@ is a file task under `mise-tasks/`.
 | Tests: unit (others) | `test:unit --part others` | Rust can be affected |
 | Tests: real lockfile tools | `test:tools` | Rust can be affected |
 | Docs: build | `docs:build` | the docs site, `mise.toml` or `ci.yml` changed |
-| Corpus: lookup | `corpus:report` | Rust can be affected |
+| Corpus: lookup | `corpus:report`, after the build job | Rust can be affected |
+| Cache: prune superseded entries | `cache:prune` | pushes to `main` |
 
 `ci:changes` reads the changed paths from the GitHub API. A docs-only change
 runs only the docs build; files that no job reads, such as `README.md`, run
@@ -28,6 +29,12 @@ nothing. Unknown or unlisted paths run every Rust job.
 the other crates' tests. `test:tools` runs only the `lockfiles::tests::real_`
 tests, the ones that drive the real lockfile engines, and `test:unit` skips
 them, so only one job installs the task-scoped engines.
+
+The corpus lookup is mostly network time, so it runs the build job's dev
+binary, passed as an artifact and named by `PATCHULA_BIN`, instead of a
+release build of its own. A release build took about two minutes and kept a
+separate 250 MB objects cache that shared nothing with the debug bundles; the
+dev binary plans the corpus in under a minute.
 
 There is no aggregate gate job; every check is reported on its own.
 
@@ -44,10 +51,10 @@ runners so imported objects survive. The GitHub backend needs no server URL,
 OIDC permission or extra token scope. See the action's
 [documentation](https://mr-boxington.jdx.dev/github-action).
 
-Each job has its own cache generation: `v4-lint-objects`,
+Each job that compiles has its own cache generation: `v4-lint-objects`,
 `v4-build-objects`, `v4-test-update-objects`, `v4-test-others-objects`,
-`v4-tools-objects`, `v3-corpus-objects`, and `v3-benchmarks-objects` for
-the Benchmarks workflow. The generation is part of both the primary key and the
+`v4-tools-objects`, and `v3-benchmarks-objects` for the Benchmarks
+workflow, which never saves. The generation is part of both the primary key and the
 restore prefix, so two jobs never publish the same key or restore each other's
 profile artifacts. Clippy's check metadata, the test builds and the release
 builds share almost no objects, so one combined bundle would only make every
@@ -87,16 +94,46 @@ The corpus job keeps registry validators and catalogs in
 `corpus-v2-<run id>`, restored by prefix like a real deployment's cache.
 Only `main` saves it.
 
+## Pruning
+
+Every save creates a new immutable entry: mbx keys carry the commit, corpus
+keys the run, and the mise, Cargo download and lockfile engine keys a hash of
+their inputs. GitHub only evicts past the repository's 10 GB limit, so the
+cache used to sit at that limit. Two jobs keep it small:
+
+- On every push to `main`, the last CI job, Cache: prune superseded entries,
+  runs `mise run cache:prune --drop-others <prefix>...`. It keeps the newest
+  `main` entry of each listed prefix and deletes the older ones, and
+  `--drop-others` deletes `main` entries that match no prefix, such as retired
+  mbx generations. Every cache `main` should keep must be in that list. It
+  runs after the saving jobs finish, even when some fail; a failed job saves
+  nothing, so its family keeps its previous entry.
+- When a pull request closes, `cache-cleanup.yml` runs
+  `mise run cache:prune --all --ref refs/pull/<n>/merge` from the default
+  branch and deletes every cache the pull request saved.
+
+Both use the built-in token with `actions: write` on that job alone, and run
+the task file directly, without installing mise.
+
 ## Footprint
 
-A push to `main` publishes about 1.3 GB of mbx bundles, one per Rust job and
-commit (lint 90 MB, build 306 MB, unit tests 206 MB and 249 MB, real-tool tests
-202 MB, corpus 247 MB), and about 250 MB of corpus cache. The mise (305 MB),
-Cargo download (58 MB) and lockfile engine (414 MB) entries change only with
-their keys. GitHub evicts the least
-recently used entries past the repository's 10 GB limit, and every job restores
-the newest entry for its own prefix, so eviction only removes bundles nothing
-restores any more.
+After pruning, `main` holds one entry per family, about 2.1 GB in total:
+
+| Family | Size | New entry |
+| --- | --- | --- |
+| mbx `v4-lint-objects` | 90 MB | every push that runs Rust jobs |
+| mbx `v4-build-objects` | 306 MB | every push that runs Rust jobs |
+| mbx `v4-test-update-objects` | 206 MB | every push that runs Rust jobs |
+| mbx `v4-test-others-objects` | 249 MB | every push that runs Rust jobs |
+| mbx `v4-tools-objects` | 202 MB | every push that runs Rust jobs |
+| `corpus-v2` | about 250 MB | every push that runs Rust jobs |
+| `mise-v1` | 305 MB | `mise.toml` changes |
+| `lockfile-tools-v1` | 414 MB | `mise-tasks/test/tools` changes |
+| `cargo-downloads-v1` | 58 MB | `Cargo.lock` changes |
+
+A push that runs the Rust jobs saves about 1.3 GB and the prune job deletes
+about as much. Pull requests save only a mise entry when they change
+`mise.toml`, and lose it when they close.
 
 ## Build settings
 

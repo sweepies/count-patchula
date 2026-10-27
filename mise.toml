@@ -129,10 +129,10 @@ env = { PATCHULA_UPDATE_SNAPSHOT = "1" }
 run = "cargo test --locked -p patchula-cli --test cli help_pages_match_the_snapshot"
 
 [tasks."corpus:check"]
-description = "Look up every corpus dependency against live registries and plan its branches without writing; needs a GitHub token; forwards run flags"
+description = "Look up every corpus dependency against live registries and plan its branches without writing; needs a GitHub token; forwards run flags; PATCHULA_BIN runs an already-built binary"
 raw_args = true
 dir = "{{config_root}}/tests/corpus"
-run = "cargo run --release --locked --manifest-path ../../Cargo.toml -p patchula-cli -- run --dry-run --json -v"
+run = "${PATCHULA_BIN:-cargo run --release --locked --manifest-path ../../Cargo.toml -p patchula-cli --} run --dry-run --json -v"
 
 [tasks.lookup]
 description = "Run read-only lookup; forwards repository and lookup flags"

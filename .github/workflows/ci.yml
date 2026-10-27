@@ -132,6 +132,13 @@ jobs:
           cache-generation: v4-build-objects
           save-on-pull-request: false
       - run: mise run build
+      # The corpus lookup runs this binary instead of building its own.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: patchula-debug-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/debug/patchula
+          if-no-files-found: error
+          retention-days: 1
       # The scanner is a dev binary, so it reuses the build above.
       - run: mise run fixtures:check
       - run: mise run cache:usage
@@ -246,9 +253,12 @@ jobs:
           cache: true
       - run: mise run docs:build
 
+  # The lookup is mostly network time, so the build job's dev binary does it
+  # instead of a release build of its own, which took about two minutes and a
+  # separate 250 MB objects cache.
   corpus:
     name: "Corpus: lookup"
-    needs: changes
+    needs: [changes, build]
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -259,20 +269,11 @@ jobs:
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
           cache: true
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          path: *cargo-downloads
-          key: *cargo-downloads-key
-          restore-keys: cargo-downloads-v1-
-      - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
-        continue-on-error: true
-        with:
-          backend: github
-          github-cache-mode: objects
-          isolate-objects-cache: true
-          clean-target-before-export: true
-          cache-generation: v3-corpus-objects
-          save-on-pull-request: false
+          name: patchula-debug-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/bin
+      - run: chmod +x "$RUNNER_TEMP/bin/patchula"
       # Registry validators and catalogs carry over between runs, like a real
       # deployment's cache; a cold run still works, just slower. Main publishes.
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -285,6 +286,7 @@ jobs:
       - name: Look up and plan every corpus dependency
         env:
           PATCHULA_TOKEN: ${{ github.token }}
+          PATCHULA_BIN: ${{ runner.temp }}/bin/patchula
         run: mise run corpus:report --cache "$RUNNER_TEMP/corpus-cache" --summary "$GITHUB_STEP_SUMMARY"
       - if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -300,3 +302,32 @@ jobs:
           path: corpus-report.json
           if-no-files-found: warn
           retention-days: 14
+
+  # Every save above makes a new immutable entry, and GitHub only evicts past
+  # the repository limit, so main keeps only the newest entry of each family
+  # below and deletes the rest, including families no job saves any more. A
+  # cache main should keep must be listed here. A failed job saves nothing,
+  # and its family keeps its last entry.
+  prune:
+    name: "Cache: prune superseded entries"
+    needs: [lint, workflows, build, test, tools, docs, corpus]
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: mise-tasks/cache
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: >-
+          mise-tasks/cache/prune --drop-others
+          mise-v1- cargo-downloads-v1- lockfile-tools-v1- corpus-v2- patchula-v2-
+          linux-x64-mbx-v4-lint-objects- linux-x64-mbx-v4-build-objects-
+          linux-x64-mbx-v4-test-update-objects- linux-x64-mbx-v4-test-others-objects-
+          linux-x64-mbx-v4-tools-objects-
