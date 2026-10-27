@@ -5,8 +5,13 @@ title: "CI jobs and caches"
 
 `.github/workflows/ci.yml` runs each check as its own job, and every job runs
 one or two mise tasks, so `mise run ci` runs the same checks locally, one after
-another. The workflow holds no shell beyond single task calls; anything longer
-is a file task under `mise-tasks/`.
+another. The workflow holds no shell beyond single task calls. A task that runs
+a command or two is an entry in `mise.toml`; one with real logic, such as
+`corpus:report`, is a command in the `xtask` crate, and its mise task runs
+`cargo xtask <task>`. `ci:changes` and `cache:prune` stay shell file tasks
+under `mise-tasks/`: their jobs run them without installing mise or Rust, and
+building xtask there took about 40 seconds, which Changed paths would add to
+every pull request.
 
 | Job | Tasks | Runs when |
 | --- | --- | --- |
@@ -32,9 +37,11 @@ them, so only one job installs the task-scoped engines.
 
 The corpus lookup is mostly network time, so it runs the build job's dev
 binary, passed as an artifact and named by `PATCHULA_BIN`, instead of a
-release build of its own. A release build took about two minutes and kept a
-separate 250 MB objects cache that shared nothing with the debug bundles; the
-dev binary plans the corpus in under a minute.
+release build of its own. The same artifact carries the build job's `xtask`
+binary, named by `XTASK_BIN`, so the corpus job compiles nothing. A release
+build took about two minutes and kept a separate 250 MB objects cache that
+shared nothing with the debug bundles; the dev binary plans the corpus in under
+a minute.
 
 There is no aggregate gate job; every check is reported on its own.
 

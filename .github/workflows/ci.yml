@@ -152,14 +152,16 @@ jobs:
           cache-generation: v4-build-objects
           save-on-pull-request: false
       - run: mise run build
-      # The corpus lookup runs this binary instead of building its own. Artifacts
+      # The corpus lookup runs these binaries instead of building its own. Artifacts
       # belong to the run, not the attempt, so a rerun of only the corpus job
       # still finds it, and a rerun of this job replaces it.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: patchula-debug
           overwrite: true
-          path: target/debug/patchula
+          path: |
+            target/debug/patchula
+            target/debug/xtask
           if-no-files-found: error
           retention-days: 1
       # The scanner is a dev binary, so it reuses the build above.
@@ -303,7 +305,7 @@ jobs:
         with:
           name: patchula-debug
           path: ${{ runner.temp }}/bin
-      - run: chmod +x "$RUNNER_TEMP/bin/patchula"
+      - run: chmod +x "$RUNNER_TEMP/bin/patchula" "$RUNNER_TEMP/bin/xtask"
       # Registry validators and catalogs carry over between runs, like a real
       # deployment's cache; a cold run still works, just slower. Main publishes.
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -317,6 +319,7 @@ jobs:
         env:
           PATCHULA_TOKEN: ${{ github.token }}
           PATCHULA_BIN: ${{ runner.temp }}/bin/patchula
+          XTASK_BIN: ${{ runner.temp }}/bin/xtask
         run: mise run corpus:report --cache "$RUNNER_TEMP/corpus-cache" --summary "$GITHUB_STEP_SUMMARY"
       - if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

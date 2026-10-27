@@ -23,10 +23,11 @@ mise run conformance:compare --report /path/to/patchula-report.json \
   owner/repo-one owner/repo-two
 ```
 
-The harness installs the exact Renovate package with `mise exec -- bun install
+The harness installs the exact Renovate package with `mise exec -- aube install
 --ignore-scripts` in a temporary directory, then invokes its executable with
-mise's Node 24. Bun is only the installer, avoiding Renovate's unsupported-runtime
-warning under Bun. It sets `LOG_LEVEL=debug`, `LOG_FORMAT=json`,
+mise's Node 24. aube's trust policy rejects a dependency release that lost the
+provenance an earlier release had; Renovate 44.155.6 has one such dependency,
+`@yarnpkg/libzip@3.2.2`, which the harness exempts by exact version. It sets `LOG_LEVEL=debug`, `LOG_FORMAT=json`,
 `RENOVATE_DRY_RUN=lookup`, GitHub platform, explicit targets, no autodiscovery and
 no onboarding. It supplies an empty operator config and temporary base/cache
 paths. This is a read-only dry run. Repository configs still influence Renovate's

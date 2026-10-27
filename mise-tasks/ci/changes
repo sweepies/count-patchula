@@ -16,7 +16,7 @@ actions=false
 docs=false
 while IFS= read -r file; do
   case "$file" in
-    unknown | mise.toml | mise.lock | mise-tasks/docs/* | .github/workflows/ci.yml) rust=true actions=true docs=true ;;
+    unknown | mise.toml | mise.lock | .github/workflows/ci.yml) rust=true actions=true docs=true ;;
     # The conformance tests read the departures page.
     docs/src/content/docs/renovate/departures.md) rust=true docs=true ;;
     docs/*) docs=true ;;

@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-#MISE description="Show the build target's size and the free disk space"
-# mbx manages the target through a symlink, so measure what it points to.
-set -euo pipefail
-du -sh target/.
-df -h . "${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
