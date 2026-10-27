@@ -78,5 +78,7 @@ release:
   extra_files:
     - glob: generated/patchula.usage.kdl
 
+# A commit list from git, which needs no token; communique rewrites the
+# notes after publishing.
 changelog:
-  use: github-native
+  use: git

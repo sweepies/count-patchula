@@ -63,7 +63,7 @@ into `patchula-vX.Y.Z-PLATFORM.tar.gz` (`bin/patchula`, the man page, the
 completions under `share/`, `LICENSE` and `README.md`), writes
 `patchula-vX.Y.Z-checksums.txt` and creates the GitHub release with those,
 `patchula.usage.kdl` and `packslip.sigstore.json`. The release body starts
-as GitHub's generated notes. The usage spec, man page and completions come
+as GoReleaser's list of commits since the previous tag. The usage spec, man page and completions come
 from the build the host can run, through `docs:cli`. GoReleaser, cargo-zigbuild
 and packslip are task tools of `release:dist` and `release:sign`.
 
