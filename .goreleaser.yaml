@@ -1,0 +1,82 @@
+# Release archives, checksums and the GitHub release. The release workflow
+# (.github/workflows/release.yml) runs this through `mise run release:dist`,
+# which sets SDKROOT for the macOS links; see internals/releasing.md.
+version: 2
+
+project_name: patchula
+
+builds:
+  - builder: rust
+    binary: bin/patchula
+    flags:
+      - --release
+      - --locked
+      - --package=patchula-cli
+    targets:
+      - x86_64-unknown-linux-musl
+      - aarch64-unknown-linux-musl
+      - x86_64-apple-darwin
+      - aarch64-apple-darwin
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    # The usage spec, man page and completions come from the build this host
+    # can run, before any archive needs them.
+    hooks:
+      post:
+        - cmd: '{{ if and (eq .Os .Runtime.Goos) (eq .Arch .Runtime.Goarch) }}mise run docs:cli{{ else }}true{{ end }}'
+          env:
+            - PATCHULA_BIN={{ .Path }}
+          output: true
+
+archives:
+  - formats: [tar.gz]
+    name_template: >-
+      patchula-v{{ .Version }}-
+      {{- if eq .Os "darwin" }}darwin{{ else }}linux{{ end }}-
+      {{- if eq .Arch "amd64" }}x64{{ else }}arm64{{ end }}
+      {{- if eq .Os "linux" }}-musl{{ end }}
+    builds_info:
+      owner: root
+      group: root
+      mtime: "{{ .CommitDate }}"
+    files:
+      - src: generated/patchula.1
+        dst: share/man/man1/patchula.1
+        info: &file
+          owner: root
+          group: root
+          mode: 0644
+          mtime: "{{ .CommitDate }}"
+      - src: generated/completions/patchula.bash
+        dst: share/bash-completion/completions/patchula
+        info: *file
+      - src: generated/completions/patchula.zsh
+        dst: share/zsh/site-functions/_patchula
+        info: *file
+      - src: generated/completions/patchula.fish
+        dst: share/fish/vendor_completions.d/patchula.fish
+        info: *file
+      - src: LICENSE
+        info: *file
+      - src: README.md
+        info: *file
+
+checksum:
+  name_template: patchula-v{{ .Version }}-checksums.txt
+
+# The checksums the smoke tests ran against are the only ones that may be
+# signed: release:sign compares them before packslip signs the archives.
+signs:
+  - id: packslip
+    artifacts: checksum
+    signature: packslip.sigstore.json
+    cmd: mise
+    args: [run, release:sign, "${artifact}", "${signature}"]
+    output: true
+
+release:
+  name_template: Count Patchula {{ .Tag }}
+  extra_files:
+    - glob: generated/patchula.usage.kdl
+
+changelog:
+  use: github-native
