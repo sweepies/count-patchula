@@ -13,7 +13,7 @@ workspace = true
 base64 = "0.22"
 httpdate = "1"
 reqwest.workspace = true
-patchula-cache = { version = "0.5.2", path = "../cache" }
+patchula-cache = { version = "0.5.1", path = "../cache" }
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
 tokio.workspace = true

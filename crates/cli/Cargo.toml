@@ -21,11 +21,11 @@ serde_json = "1"
 serde.workspace = true
 reqwest.workspace = true
 miette = { version = "7", features = ["fancy-no-backtrace"] }
-patchula-engine = { version = "0.5.2", path = "../engine" }
-patchula-cache = { version = "0.5.2", path = "../cache" }
-patchula-http = { version = "0.5.2", path = "../http" }
+patchula-engine = { version = "0.5.1", path = "../engine" }
+patchula-cache = { version = "0.5.1", path = "../cache" }
+patchula-http = { version = "0.5.1", path = "../http" }
 patchula-process = { path = "../process" }
-patchula-report = { version = "0.5.2", path = "../report" }
+patchula-report = { version = "0.5.1", path = "../report" }
 tokio.workspace = true
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "registry", "json"] }
