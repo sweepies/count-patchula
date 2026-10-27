@@ -429,3 +429,66 @@ jobs:
           linux-x64-mbx-v4-test-update-objects- linux-x64-mbx-v4-test-others-objects-
           linux-x64-mbx-v4-tools-objects- linux-x64-mbx-v4-xtask-objects-
           docker.io--tonistiigi--binfmt-
+
+  # TEMPORARY: before/after timing for the prune job on this pull request.
+  # Both list a prefix that matches nothing, so neither deletes anything.
+  measure-prune-shell:
+    name: "Measure: prune (shell, main)"
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: 87a9bd0c2decc97df4572a863dfe4968fd06bb6f
+          sparse-checkout: mise-tasks/cache
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: mise-tasks/cache/prune --drop-others --ref "refs/pull/${{ github.event.pull_request.number }}/merge" measure-none-
+
+  measure-prune-xtask:
+    name: "Measure: prune (xtask)"
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    env:
+      MISE_TASK_RUN_AUTO_INSTALL: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *mise-downloads
+          key: *mise-downloads-key
+          restore-keys: *mise-downloads-restore
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          cache: false
+          install_args: *xtask-tools
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *cargo-downloads
+          key: *cargo-downloads-key
+          restore-keys: cargo-downloads-v1-
+      - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
+        continue-on-error: true
+        with:
+          backend: github
+          github-cache-mode: objects
+          isolate-objects-cache: true
+          clean-target-before-export: true
+          cache-generation: v4-xtask-objects
+          save-on-pull-request: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: mise run cache:prune --drop-others --ref "refs/pull/${{ github.event.pull_request.number }}/merge" measure-none-
