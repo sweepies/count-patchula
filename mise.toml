@@ -13,7 +13,7 @@ go = "1.27.2"
 
 [env]
 MBX_DISPLAY = "plain"
-# CI checks run sequentially; share the target instead of duplicating a check lane.
+# Clippy, tests and builds share one target instead of duplicating a check lane.
 MBX_TARGET_LANES = "0"
 # Zig compiles and links native code on Linux; macOS keeps Apple's toolchain.
 CC = "{% if os() == 'linux' %}{{config_root}}/mise-tasks/cc{% else %}cc{% endif %}"
@@ -31,55 +31,6 @@ run = "mbx doctor"
 description = "Compare Renovate JSON output with a versioned patchula report; forwards CLI arguments"
 raw_args = true
 run = "cargo run --quiet --locked -p patchula-conformance --"
-
-[tasks."conformance:inspect"]
-description = "Summarize triage buckets; optional manager argument prints representative differences"
-raw_args = true
-run = '''
-bun -e '
-const [path, manager, limit = "2"] = process.argv.slice(1);
-const triage = await Bun.file(path).json();
-const buckets = new Map();
-for (const d of triage.differences) {
-  const key = [d.repository, d.manager, d.classification, d.field].join(" / ");
-  buckets.set(key, (buckets.get(key) ?? 0) + 1);
-}
-if (!manager) for (const [key, count] of [...buckets].sort()) console.log(`${count}\t${key}`);
-if (manager === "warnings") {
-  for (const r of triage.patchula.repositories) if (r.warnings?.length) console.log(JSON.stringify({repository:r.repository,warnings:r.warnings}));
-} else if (manager) {
-  const seen = new Map();
-  for (const d of triage.differences.filter(d => d.manager === manager && d.classification !== "deliberate-departure")) {
-    const key = [d.repository, d.classification, d.field].join("/");
-    if ((seen.get(key) ?? 0) >= Number(limit)) continue;
-    seen.set(key, (seen.get(key) ?? 0) + 1);
-    const actual = triage.patchula.repositories.find(r => r.repository === d.repository)?.packageFiles
-      .find(f => f.path === d.packageFile)?.dependencies.find(a => a.manager === d.manager && a.name === d.dependency);
-    console.log(JSON.stringify({...d, heldBack: actual?.metadata?.heldBack}));
-  }
-}
-' "$@"
-'''
-
-[tasks."conformance:logs"]
-description = "Inspect output snapshot identities and skip reasons without reading upstream source"
-raw_args = true
-run = '''
-bun -e '
-const [path, repository, manager] = process.argv.slice(1);
-for (const line of (await Bun.file(path).text()).split("\n")) {
-  if (!line.startsWith("{")) continue;
-  const r = JSON.parse(line);
-  if (r.repository !== repository) continue;
-  if (r.msg === "Repository finished") console.log(JSON.stringify({result:r.result,exitCode:r.exitCode}));
-  if (r.msg !== "packageFiles with updates") continue;
-  for (const [m, files] of Object.entries(r.config ?? r.packageFiles ?? {})) {
-    if (manager && m !== manager) continue;
-    for (const file of files) for (const d of file.deps) console.log(JSON.stringify({manager:m,file:file.packageFile,name:d.depName,package:d.packageName,source:d.datasource,current:d.currentValue,version:d.currentVersion,digest:d.currentDigest,skip:d.skipReason,updates:d.updates,registry:d.registryUrls}));
-  }
-}
-' "$@"
-'''
 
 [tasks."benchmarks:build"]
 description = "Build release subjects outside tak's measured commands"
@@ -100,62 +51,25 @@ description = "Export local HEAD benchmark notes as a portable artifact"
 run = ["mkdir -p benchmark-results", "tak artifact export --output benchmark-results/tak-artifact.json"]
 
 [tasks.test]
-description = "Test the workspace through mbx"
-# Lockfile engines the offline real-tool tests run, matching
-# crates/update/src/lockfiles/defaults.toml. Task-scoped so a development
-# `mise install` does not fetch them.
-tools = { aube = "2.8.1", yarn = "4.18.1", python = "3.14.8", uv = "0.13.1", poetry = "2.5.1", dotnet = "9.0.319", ruby = "3.4.11", apm = "0.35.0", "http:php[url=https://dl.static-php.dev/static-php-cli/common/php-{{version}}-cli-linux-x86_64.tar.gz]" = "8.5.8", "http:composer[url=https://getcomposer.org/download/{{version}}/composer.phar,bin=composer]" = "2.10.3", "http:nix[url=https://hydra.nixos.org/build/350797336/download/2/nix,checksum=sha256:5d580d993636e3b987868881776214a7d4a169434715ec30bf9ead9345d78fb6,bin=nix]" = "2.35.5" }
-run = "cargo test --workspace --locked --no-fail-fast"
+description = "Run the whole offline suite: unit tests, then the real lockfile tool tests"
+run = [{ task = "test:unit" }, { task = "test:tools" }]
 
-[tasks."test:stress"]
-description = "Repeat the offline suite with varied test thread counts; logs stay outside the repository"
-tools = { aube = "2.8.1", yarn = "4.18.1", python = "3.14.8", uv = "0.13.1", poetry = "2.5.1", dotnet = "9.0.319", ruby = "3.4.11", apm = "0.35.0", "http:php[url=https://dl.static-php.dev/static-php-cli/common/php-{{version}}-cli-linux-x86_64.tar.gz]" = "8.5.8", "http:composer[url=https://getcomposer.org/download/{{version}}/composer.phar,bin=composer]" = "2.10.3", "http:nix[url=https://hydra.nixos.org/build/350797336/download/2/nix,checksum=sha256:5d580d993636e3b987868881776214a7d4a169434715ec30bf9ead9345d78fb6,bin=nix]" = "2.35.5" }
-env = { CARGO_NET_OFFLINE = "true", PATCHULA_RECORD = "0" }
-run = '''
-log_dir="${PATCHULA_STRESS_LOG_DIR:-/tmp/patchula-stress}"
-mkdir -p "$log_dir"
-for iteration in $(seq 1 "${PATCHULA_STRESS_RUNS:-12}"); do
-  for threads in 1 2 16; do
-    log="$log_dir/${iteration}-${threads}.log"
-    if ! cargo test --workspace --locked -- --test-threads="$threads" "${PATCHULA_STRESS_FILTER:-}" > "$log" 2>&1; then
-      cat "$log"
-      exit 1
-    fi
-    echo "passed iteration=$iteration threads=$threads"
-  done
-done
-'''
+[tasks."test:unit"]
+description = "Test the workspace through mbx, without the real lockfile tool tests"
+run = "cargo test --workspace --locked --no-fail-fast -- --skip lockfiles::tests::real_"
 
 [tasks.lint]
 description = "Check formatting, reject all Clippy warnings, and lint the GitHub workflows"
-depends = ["lint:actions"]
+depends = ["lint:rust", "lint:actions"]
+
+[tasks."lint:rust"]
+description = "Check formatting and reject all Clippy warnings"
 run = ["cargo fmt --all --check", "cargo clippy --workspace --all-targets --locked -- -D warnings"]
 
 [tasks."lint:actions"]
 description = "Lint the GitHub Actions workflows"
 tools = { jactionlint = "2.2.0", shellcheck = "0.11.0" }
 run = "jactionlint"
-
-[tasks.ci]
-description = "Run the same checks locally and on GitHub"
-env = { PATCHULA_RECORD = "0", CARGO_TERM_COLOR = "never" }
-run = '''
-log_dir="${PATCHULA_CI_LOG_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/patchula-ci.XXXXXX")}"
-mkdir -p "$log_dir"
-echo "CI full logs: $log_dir"
-for task in fixtures:check lint test build; do
-  log="$log_dir/${task%%:*}.log"
-  if mise run "$task" > "$log" 2>&1; then
-    cat "$log"
-  else
-    cat "$log"
-    failed_tests=$(awk '/^test .* \.\.\. FAILED$/ {sub(/^test /, ""); sub(/ \.\.\. FAILED$/, ""); printf "%s,", $0}' "$log")
-    # Keep the path and test names even when a caller filters for test result:.
-    echo "test result: FAILED; stage=$task; failing-tests=${failed_tests:-see-log}; full-log=$log"
-    exit 1
-  fi
-done
-'''
 
 [tasks."fixtures:check"]
 description = "Reject possible secrets in all HTTP cassettes"
@@ -165,65 +79,6 @@ run = "cargo run --quiet --locked -p patchula-testkit --bin fixtures -- fixtures
 description = "Opt in to live HTTP recording, then scan the resulting cassettes"
 env = { PATCHULA_RECORD = "1" }
 run = ["cargo test --workspace --locked", "mise run fixtures:check"]
-
-[tasks."docs:cli"]
-description = "Generate the CLI reference page, man page and bash/zsh/fish completions from usage derive"
-# PATCHULA_BIN reads the spec from an already-built binary instead.
-run = '''
-mkdir -p generated/completions
-${PATCHULA_BIN:-cargo run --quiet --locked -p patchula-cli --} __usage_spec__ > generated/patchula.usage.kdl
-usage lint generated/patchula.usage.kdl
-# Front matter must open the page, so drop the comment usage writes above it.
-page=docs/src/content/docs/reference/cli.md
-usage generate markdown --file generated/patchula.usage.kdl --template spec=docs/.usage/spec.md.tera --template command=docs/.usage/command.md.tera --out-file "$page"
-sed -i.orig '1{/^<!-- @generated by usage-cli/d;}' "$page" && rm "$page.orig"
-usage generate manpage --file generated/patchula.usage.kdl --out-file generated/patchula.1
-for shell in bash zsh fish; do
-  usage generate completion "$shell" patchula --file generated/patchula.usage.kdl > "generated/completions/patchula.$shell"
-done
-'''
-
-[tasks."release:package"]
-description = "Build static release archives for the given targets into target/dist; the first target must run on this host"
-usage = 'arg "<target>..." help="Rust target triples, such as x86_64-unknown-linux-musl"'
-run = '''
-#!/usr/bin/env bash
-set -euo pipefail
-version="v$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "patchula-cli") | .version')"
-mkdir -p target/dist
-first=1
-eval "targets=(${usage_target?})"
-for target in "${targets[@]}"; do
-  case "$target" in
-    x86_64-unknown-linux-musl) platform=linux-x64-musl ;;
-    aarch64-unknown-linux-musl) platform=linux-arm64-musl ;;
-    x86_64-apple-darwin) platform=darwin-x64 ;;
-    aarch64-apple-darwin) platform=darwin-arm64 ;;
-    *) echo "no release platform for $target" >&2; exit 1 ;;
-  esac
-  rustup target add "$target"
-  cargo build --release --locked -p patchula-cli --target "$target"
-  bin="target/$target/release/patchula"
-  if [ "$first" = 1 ]; then
-    PATCHULA_BIN="$bin" mise run docs:cli
-    cp generated/patchula.usage.kdl target/dist/
-    first=0
-  fi
-  name="patchula-$version-$platform"
-  stage="$(mktemp -d)"
-  mkdir -p "$stage/bin" "$stage/share/man/man1" "$stage/share/bash-completion/completions" \
-    "$stage/share/zsh/site-functions" "$stage/share/fish/vendor_completions.d"
-  cp "$bin" "$stage/bin/patchula"
-  cp generated/patchula.1 "$stage/share/man/man1/patchula.1"
-  cp generated/completions/patchula.bash "$stage/share/bash-completion/completions/patchula"
-  cp generated/completions/patchula.zsh "$stage/share/zsh/site-functions/_patchula"
-  cp generated/completions/patchula.fish "$stage/share/fish/vendor_completions.d/patchula.fish"
-  cp LICENSE README.md "$stage/"
-  tar -C "$stage" -czf "target/dist/$name.tar.gz" .
-  echo "target/dist/$name.tar.gz"
-done
-'''
-tools = { jq = "1.8.2" }
 
 [tasks."release:notes"]
 description = "Rewrite a published GitHub release's notes with communique; needs ANTHROPIC_API_KEY (Infisical, environment prod)"
@@ -302,29 +157,6 @@ run = "cargo run --quiet --locked -p patchula-cli -- serve"
 description = "Print the published operator settings schema"
 run = "cargo run --quiet --locked -p patchula-cli -- config server-schema"
 
-[tasks."server:replay"]
-description = "Sign and deliver a saved webhook locally: PAYLOAD EVENT DELIVERY [URL]"
-raw_args = true
-run = '''
-bun -e '
-import { createHmac } from "node:crypto";
-const [path, event, delivery, url = "http://127.0.0.1:8080/webhook"] = process.argv.slice(1);
-if (!path || !event || !delivery) throw new Error("usage: mise run server:replay PAYLOAD EVENT DELIVERY [URL]");
-const destination = new URL(url);
-if (!["127.0.0.1", "localhost", "[::1]"].includes(destination.hostname)) throw new Error("replay target must be loopback");
-const file = process.env.PATCHULA_WEBHOOK_SECRET_FILE;
-const value = process.env.PATCHULA_WEBHOOK_SECRET;
-if (file && value) throw new Error("choose a secret file or environment value");
-const secret = (file ? await Bun.file(file).text() : value)?.replace(/[\r\n]+$/, "");
-if (!secret) throw new Error("set PATCHULA_WEBHOOK_SECRET_FILE or PATCHULA_WEBHOOK_SECRET");
-const body = new Uint8Array(await Bun.file(path).arrayBuffer());
-const signature = "sha256=" + createHmac("sha256", secret).update(body).digest("hex");
-const response = await fetch(destination, {method:"POST", body, redirect:"error", headers:{"content-type":"application/json", "x-hub-signature-256":signature, "x-github-event":event, "x-github-delivery":delivery}});
-console.log(`HTTP ${response.status}`);
-if (response.status !== (event === "ping" ? 200 : 202)) process.exitCode = 1;
-' "$@"
-'''
-
 [tasks."lookup:release"]
 description = "Run read-only lookup in release mode; forwards repository and lookup flags"
 raw_args = true
@@ -339,12 +171,6 @@ description = "Replay four captured public npm documents offline; arguments: inp
 raw_args = true
 env = { CARGO_NET_OFFLINE = "true" }
 run = "cargo run --release --locked -p patchula-datasource --example catalog_bench --"
-
-[tasks."registry:update"]
-description = "Refresh backend identities from the installed mise published registry"
-run = '''
-mise registry --json | bun -e 'const entries = await Bun.stdin.json(); const registry = Object.fromEntries(entries.map(e => [e.short, e.backends])); process.stdout.write(JSON.stringify(registry, null, 2) + "\n")' > crates/mise/registry.json
-'''
 
 [tasks."fixtures:refresh-npm"]
 description = "Record full public npm metadata in existing cassettes without GitHub credentials"

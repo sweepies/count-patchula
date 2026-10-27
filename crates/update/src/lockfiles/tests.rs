@@ -1538,11 +1538,26 @@ fn npm_locks_aube_cannot_write_stay_on_native_npm() {
 
 /// The runner's tool pins match the task-scoped pins the real-tool tests use.
 #[test]
-fn lockfile_engine_pins_match_the_repository_mise_config() {
-    let repo: toml_edit::Document<String> = include_str!("../../../../mise.toml").parse().unwrap();
+fn lockfile_engine_pins_match_the_repository_mise_tasks() {
     let defaults = tool_defaults().unwrap();
-    for task in ["test", "test:stress"] {
-        let tools = &repo["tasks"][task]["tools"];
+    for (task, script) in [
+        (
+            "test:tools",
+            include_str!("../../../../mise-tasks/test/tools"),
+        ),
+        (
+            "test:stress",
+            include_str!("../../../../mise-tasks/test/stress"),
+        ),
+    ] {
+        let header: toml_edit::Document<String> = script
+            .lines()
+            .filter_map(|line| line.strip_prefix("#MISE "))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .parse()
+            .unwrap();
+        let tools = &header["tools"];
         assert_eq!(
             tools["aube"].as_str(),
             defaults["tools"]["aube"].as_str(),

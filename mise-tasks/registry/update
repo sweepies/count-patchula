@@ -1,0 +1,5 @@
+#!/usr/bin/env bun
+//MISE description="Refresh backend identities from the installed mise published registry"
+const entries = await Bun.$`mise registry --json`.json();
+const registry = Object.fromEntries(entries.map((e) => [e.short, e.backends]));
+await Bun.write("crates/mise/registry.json", JSON.stringify(registry, null, 2) + "\n");

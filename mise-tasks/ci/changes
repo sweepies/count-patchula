@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+#MISE description="Decide which CI jobs a push or pull request needs; GitHub Actions only"
+# Reads GH_TOKEN, REPO, EVENT, PR, BEFORE and AFTER, and writes rust, actions
+# and docs to $GITHUB_OUTPUT.
+set -euo pipefail
+if [ "$EVENT" = pull_request ]; then
+  files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename')
+elif [ "$BEFORE" = 0000000000000000000000000000000000000000 ]; then
+  files=unknown
+else
+  # The compare API lists at most 300 files; assume more means everything.
+  files=$(gh api "repos/$REPO/compare/$BEFORE...$AFTER" --jq 'if (.files | length) >= 300 then "unknown" else .files[].filename end')
+fi
+rust=false
+actions=false
+docs=false
+while IFS= read -r file; do
+  case "$file" in
+    unknown | mise.toml | mise-tasks/docs/* | .github/workflows/ci.yml) rust=true actions=true docs=true ;;
+    # The conformance tests read the departures page.
+    docs/src/content/docs/renovate/departures.md) rust=true docs=true ;;
+    docs/*) docs=true ;;
+    assets/* | skills/* | .claude/* | conformance/README.md | README.md | AGENTS.md | CLAUDE.md | LICENSE | .gitignore | .deepsource.toml | socket.yml | communique.toml | tak.toml) ;;
+    action.yml | .github/workflows/*) actions=true ;;
+    # Anything else may change what the Rust jobs check.
+    *) rust=true actions=true ;;
+  esac
+done <<< "$files"
+{
+  echo "rust=$rust"
+  echo "actions=$actions"
+  echo "docs=$docs"
+} >> "$GITHUB_OUTPUT"
+{
+  echo "Rust jobs: $rust"
+  echo "Workflow lint: $actions"
+  echo "Docs build: $docs"
+} >> "$GITHUB_STEP_SUMMARY"
