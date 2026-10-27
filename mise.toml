@@ -54,10 +54,6 @@ run = ["mkdir -p benchmark-results", "tak artifact export --output benchmark-res
 description = "Run the whole offline suite: unit tests, then the real lockfile tool tests"
 run = [{ task = "test:unit" }, { task = "test:tools" }]
 
-[tasks."test:unit"]
-description = "Test the workspace through mbx, without the real lockfile tool tests"
-run = "cargo test --workspace --locked --no-fail-fast -- --skip lockfiles::tests::real_"
-
 [tasks.lint]
 description = "Check formatting, reject all Clippy warnings, and lint the GitHub workflows"
 depends = ["lint:rust", "lint:actions"]

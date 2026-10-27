@@ -136,12 +136,18 @@ jobs:
       - run: mise run fixtures:check
       - run: mise run cache:usage
 
+  # patchula-update's suite takes about a minute on its own, so it runs beside
+  # the other crates instead of after them.
   test:
-    name: "Tests: unit"
+    name: "Tests: unit (${{ matrix.part }})"
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [update, others]
     env:
       PATCHULA_RECORD: "0"
     steps:
@@ -163,9 +169,9 @@ jobs:
           github-cache-mode: objects
           isolate-objects-cache: true
           clean-target-before-export: true
-          cache-generation: v4-test-objects
+          cache-generation: v4-test-${{ matrix.part }}-objects
           save-on-pull-request: true
-      - run: mise run test:unit
+      - run: mise run test:unit --part "${{ matrix.part }}"
       - run: mise run cache:usage
 
   tools:
