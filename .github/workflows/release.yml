@@ -603,7 +603,7 @@ jobs:
       # The Anthropic key lives in Infisical as anthropic-api-key (project
       # INFISICAL_PROJECT_ID, environment prod), read through GitHub OIDC by a
       # machine identity that trusts main, the ref a release runs from. Until
-      # both repository variables are set, the release keeps GitHub's generated
+      # both repository variables are set, the release keeps GoReleaser's generated
       # notes.
       - if: ${{ !inputs.dry_run && vars.INFISICAL_IDENTITY_ID != '' && vars.INFISICAL_PROJECT_ID != '' }}
         uses: Infisical/secrets-action@d2e351f16c6ca20d17c85e6c992e04bdeb64e87d # v1.0.18

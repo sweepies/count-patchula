@@ -130,5 +130,5 @@ machine identity trusts
 `repo:sweepies@7191851/*:ref:refs/{tags/v*,heads/main}`, which covers a run
 dispatched on `main`. Until the `INFISICAL_IDENTITY_ID` and
 `INFISICAL_PROJECT_ID` repository variables are set, the release keeps
-GitHub's generated notes. `mise run release:notes vX.Y.Z` also rewrites a
+GoReleaser's commit list. `mise run release:notes vX.Y.Z` also rewrites a
 published release's notes locally, with `ANTHROPIC_API_KEY` set.
