@@ -89,7 +89,11 @@ link with `undefined symbol: _Name`. Add the name to the stub's `symbols` list.
 GoReleaser without Pro cannot publish files it did not build, so the release
 is built twice: once before landing, for the smoke tests, and again from the
 tag in the publish job. Both builds use the same toolchains, paths and commit
-timestamps, so the archives are byte-identical. GoReleaser runs
+timestamps, so the archives are byte-identical. The macOS binaries are
+linked with `-x`, which leaves local symbols out of the symbol table: Zig's
+Mach-O linker names anonymous ones after the thread that read their object
+file, which made the symbol table, the UUID and the code signature differ
+between two builds of the same commit. GoReleaser runs
 `release:sign` as its signing step, after the checksums and before
 publishing. It compares the checksums file with the smoke-tested one and fails
 on any difference, so a release that does not match what was tested is never
