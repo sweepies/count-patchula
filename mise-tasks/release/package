@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+#MISE description="Build static release archives for the given targets into target/dist; the first target must run on this host"
+#MISE tools.jq = "1.8.2"
+#USAGE arg "<target>..." help="Rust target triples, such as x86_64-unknown-linux-musl"
+set -euo pipefail
+version="v$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "patchula-cli") | .version')"
+mkdir -p target/dist
+first=1
+eval "targets=(${usage_target?})"
+for target in "${targets[@]}"; do
+  case "$target" in
+    x86_64-unknown-linux-musl) platform=linux-x64-musl ;;
+    aarch64-unknown-linux-musl) platform=linux-arm64-musl ;;
+    x86_64-apple-darwin) platform=darwin-x64 ;;
+    aarch64-apple-darwin) platform=darwin-arm64 ;;
+    *) echo "no release platform for $target" >&2; exit 1 ;;
+  esac
+  rustup target add "$target"
+  cargo build --release --locked -p patchula-cli --target "$target"
+  bin="target/$target/release/patchula"
+  if [ "$first" = 1 ]; then
+    PATCHULA_BIN="$bin" mise run docs:cli
+    cp generated/patchula.usage.kdl target/dist/
+    first=0
+  fi
+  name="patchula-$version-$platform"
+  stage="$(mktemp -d)"
+  mkdir -p "$stage/bin" "$stage/share/man/man1" "$stage/share/bash-completion/completions" \
+    "$stage/share/zsh/site-functions" "$stage/share/fish/vendor_completions.d"
+  cp "$bin" "$stage/bin/patchula"
+  cp generated/patchula.1 "$stage/share/man/man1/patchula.1"
+  cp generated/completions/patchula.bash "$stage/share/bash-completion/completions/patchula"
+  cp generated/completions/patchula.zsh "$stage/share/zsh/site-functions/_patchula"
+  cp generated/completions/patchula.fish "$stage/share/fish/vendor_completions.d/patchula.fish"
+  cp LICENSE README.md "$stage/"
+  tar -C "$stage" -czf "target/dist/$name.tar.gz" .
+  echo "target/dist/$name.tar.gz"
+done

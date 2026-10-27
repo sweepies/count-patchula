@@ -1,0 +1,25 @@
+#!/usr/bin/env bun
+//MISE description="Sign and deliver a saved webhook locally"
+//USAGE arg "<payload>" help="Saved webhook body"
+//USAGE arg "<event>" help="X-GitHub-Event value, such as push"
+//USAGE arg "<delivery>" help="X-GitHub-Delivery value"
+//USAGE arg "[url]" default="http://127.0.0.1:8080/webhook" help="Loopback webhook URL"
+import { createHmac } from "node:crypto";
+const [path, event, delivery, url = "http://127.0.0.1:8080/webhook"] = process.argv.slice(2);
+const destination = new URL(url);
+if (!["127.0.0.1", "localhost", "[::1]"].includes(destination.hostname)) throw new Error("replay target must be loopback");
+const file = process.env.PATCHULA_WEBHOOK_SECRET_FILE;
+const value = process.env.PATCHULA_WEBHOOK_SECRET;
+if (file && value) throw new Error("choose a secret file or environment value");
+const secret = (file ? await Bun.file(file).text() : value)?.replace(/[\r\n]+$/, "");
+if (!secret) throw new Error("set PATCHULA_WEBHOOK_SECRET_FILE or PATCHULA_WEBHOOK_SECRET");
+const body = new Uint8Array(await Bun.file(path).arrayBuffer());
+const signature = "sha256=" + createHmac("sha256", secret).update(body).digest("hex");
+const response = await fetch(destination, {
+  method: "POST",
+  body,
+  redirect: "error",
+  headers: { "content-type": "application/json", "x-hub-signature-256": signature, "x-github-event": event, "x-github-delivery": delivery },
+});
+console.log(`HTTP ${response.status}`);
+if (response.status !== (event === "ping" ? 200 : 202)) process.exitCode = 1;

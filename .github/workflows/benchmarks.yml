@@ -38,9 +38,7 @@ jobs:
       # If unavailable, tak still reports wall time. Nothing here gates CI.
       - name: Install optional instruction counter
         continue-on-error: true
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y valgrind
+        run: sudo apt-get update && sudo apt-get install -y valgrind
       - name: Measure and record locally (no notes push)
         env:
           GIT_AUTHOR_NAME: patchula benchmarks
@@ -51,19 +49,10 @@ jobs:
       - name: Export portable measurement artifact
         run: mise run benchmarks:export
       - name: Measure build storage before cache export
-        run: |
-          du -sh target/.
-          df -h . "${RUNNER_TEMP}"
+        run: mise run cache:usage
       - name: Publish timing summary
         if: always()
-        run: |
-          if [ -f benchmark-results/summary.txt ]; then
-            {
-              printf '<pre>\n'
-              mise exec -- cat benchmark-results/summary.txt
-              printf '</pre>\n'
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
+        run: mise run benchmarks:summary --out "$GITHUB_STEP_SUMMARY"
       - name: Publish report-only results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

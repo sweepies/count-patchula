@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+#MISE description="Delete superseded GitHub Actions caches: all but the newest entry of each key prefix, or every entry on a ref"
+#USAGE flag "--ref <ref>" default="refs/heads/main" help="Git ref whose caches to prune, such as refs/pull/61/merge"
+#USAGE flag "--all" help="Delete every cache on the ref instead of keeping the newest per prefix"
+#USAGE flag "--drop-others" help="Also delete caches on the ref that match none of the prefixes, such as retired generations"
+#USAGE arg "[prefix]..." help="Cache key prefixes; each keeps only its newest entry"
+# Needs GH_TOKEN with actions: write and GH_REPO. CI runs this file directly,
+# without installing mise, so it parses its own arguments.
+set -euo pipefail
+ref=refs/heads/main
+all=false
+drop_others=false
+prefixes=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --ref) ref="$2"; shift 2 ;;
+    --ref=*) ref="${1#--ref=}"; shift ;;
+    --all) all=true; shift ;;
+    --drop-others) drop_others=true; shift ;;
+    *) prefixes+=("$1"); shift ;;
+  esac
+done
+if [ "$all" = false ] && [ "${#prefixes[@]}" = 0 ]; then
+  echo "name at least one key prefix, or pass --all" >&2
+  exit 2
+fi
+list() {
+  gh cache list --ref "$ref" --limit 1000 --sort created_at --order desc --json id,key,sizeInBytes "$@" \
+    --jq '.[] | [.id, .sizeInBytes, .key] | @tsv'
+}
+delete() {
+  local skip=$1 freed=0 count=0
+  while IFS=$'\t' read -r id size key; do
+    [ -n "$id" ] || continue
+    if [ "$skip" -gt 0 ]; then
+      echo "keep   $key"
+      skip=$((skip - 1))
+      continue
+    fi
+    echo "delete $key"
+    gh cache delete "$id" || echo "::warning::could not delete cache $key"
+    freed=$((freed + size))
+    count=$((count + 1))
+  done
+  echo "deleted $count entries, $((freed / 1048576)) MB"
+}
+if [ "$all" = true ]; then
+  list | delete 0
+else
+  for prefix in "${prefixes[@]}"; do
+    list --key "$prefix" | delete 1
+  done
+  if [ "$drop_others" = true ]; then
+    echo "caches matching no prefix:"
+    list | while IFS=$'\t' read -r id size key; do
+      for prefix in "${prefixes[@]}"; do
+        [[ "$key" == "$prefix"* ]] && continue 2
+      done
+      printf '%s\t%s\t%s\n' "$id" "$size" "$key"
+    done | delete 0
+  fi
+fi

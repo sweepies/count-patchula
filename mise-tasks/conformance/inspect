@@ -1,0 +1,28 @@
+#!/usr/bin/env bun
+//MISE description="Summarize triage buckets; optional manager argument prints representative differences"
+//USAGE arg "<triage>" help="Path to triage.json"
+//USAGE arg "[manager]" help="A manager to print differences for, or warnings"
+//USAGE arg "[limit]" default="2" help="Differences per repository, classification and field"
+const [path, manager, limit = "2"] = process.argv.slice(2);
+const triage = await Bun.file(path).json();
+const buckets = new Map();
+for (const d of triage.differences) {
+  const key = [d.repository, d.manager, d.classification, d.field].join(" / ");
+  buckets.set(key, (buckets.get(key) ?? 0) + 1);
+}
+if (!manager) for (const [key, count] of [...buckets].sort()) console.log(`${count}\t${key}`);
+if (manager === "warnings") {
+  for (const r of triage.patchula.repositories) if (r.warnings?.length) console.log(JSON.stringify({ repository: r.repository, warnings: r.warnings }));
+} else if (manager) {
+  const seen = new Map();
+  for (const d of triage.differences.filter((d) => d.manager === manager && d.classification !== "deliberate-departure")) {
+    const key = [d.repository, d.classification, d.field].join("/");
+    if ((seen.get(key) ?? 0) >= Number(limit)) continue;
+    seen.set(key, (seen.get(key) ?? 0) + 1);
+    const actual = triage.patchula.repositories
+      .find((r) => r.repository === d.repository)
+      ?.packageFiles.find((f) => f.path === d.packageFile)
+      ?.dependencies.find((a) => a.manager === d.manager && a.name === d.dependency);
+    console.log(JSON.stringify({ ...d, heldBack: actual?.metadata?.heldBack }));
+  }
+}

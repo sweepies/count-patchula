@@ -104,9 +104,9 @@ Install [mise](https://mise.jdx.dev), then `mise trust` and `mise install`.
 
 ```sh
 mise run build      # build the workspace
-mise run test       # offline tests
+mise run test       # offline tests, including the real lockfile tool tests
 mise run lint       # rustfmt, Clippy (warnings denied) and jactionlint
-mise run ci         # fixtures check, lint, test and build
+mise run ci         # every check CI runs, one after another
 mise run docs:dev   # the documentation site for this checkout
 ```
 
