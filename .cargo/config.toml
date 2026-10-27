@@ -1,12 +1,2 @@
 [target.x86_64-unknown-linux-gnu]
 linker = "mise-tasks/cc"
-
-# Release builds are static musl binaries, cross-linked by Zig. Zig supplies
-# the C runtime and libc, so Rust's self-contained copies stay out.
-[target.x86_64-unknown-linux-musl]
-linker = "mise-tasks/cc"
-rustflags = ["-C", "link-self-contained=no", "-C", "link-arg=-target", "-C", "link-arg=x86_64-linux-musl"]
-
-[target.aarch64-unknown-linux-musl]
-linker = "mise-tasks/cc"
-rustflags = ["-C", "link-self-contained=no", "-C", "link-arg=-target", "-C", "link-arg=aarch64-linux-musl"]

@@ -26,14 +26,17 @@ uses only the built-in `GITHUB_TOKEN`.
    regenerates the CLI reference (`docs:cli`) and the help snapshot
    (`help:snapshot`). The run commits the result as `chore: X.Y.Z` and
    fails if the commit touches anything else.
-3. **Build.** The static archives are built from that commit for Linux and
-   macOS, each is run on its own platform, and the server image is built
-   from the Linux archives and run.
+3. **Build.** One Linux runner builds the static archives for Linux and
+   macOS with GoReleaser (`mise run release:dist`), against a local
+   `vX.Y.Z` tag on that commit. Each archive is run on its own platform,
+   and the server image is built from the Linux archives and run.
 4. **Land.** Only when all of that passes, the image is pushed to GHCR by
-   digest, the commit is pushed to `main` and tagged `vX.Y.Z`, the image
-   gets its `X.Y.Z` and `latest` tags, and the GitHub release is published
-   with its signed packslip manifest. communique then rewrites
-   the notes (`mise run release:notes vX.Y.Z`).
+   digest, the commit is pushed to `main` and tagged `vX.Y.Z`, and the
+   image gets its `X.Y.Z` and `latest` tags.
+5. **Publish.** The GitHub release is created from the build job's
+   archives, checksums and usage spec, the same files the smoke tests ran,
+   with its signed packslip manifest. communique then rewrites the notes
+   (`mise run release:notes vX.Y.Z`).
 
 A failed build pushes nothing, so fix the problem on `main` and run the
 workflow again. If `main` moves while the run builds, the push to `main` is
@@ -51,6 +54,34 @@ branch whose head passed CI, which is how a change to the workflow is tested:
 ```sh
 gh workflow run release.yml --ref my-branch -f version=0.5.2 -f dry_run=true
 ```
+
+## GoReleaser
+
+`.goreleaser.yaml` builds the four targets with `cargo zigbuild`, packs each
+into `patchula-vX.Y.Z-PLATFORM.tar.gz` (`bin/patchula`, the man page, the
+completions under `share/`, `LICENSE` and `README.md`) and writes
+`patchula-vX.Y.Z-checksums.txt`. It publishes nothing: the workflow creates
+the GitHub release from those files with `gh`, after the smoke tests and the
+land job, so the published archives are the ones that ran. The usage spec, man
+page and completions come from the build the host can run, through
+`docs:cli`. GoReleaser and cargo-zigbuild are task tools of `release:dist`.
+
+`mise run release:dist --snapshot` builds the archives locally, unversioned
+and with no tag; it runs on Linux.
+
+### macOS on Linux
+
+Zig compiles the C dependencies (aws-lc, SQLite, zstd) for macOS with its own
+headers and links against its own `libSystem`, but it ships no Apple
+frameworks. rustls-platform-verifier needs Security and CoreFoundation for the
+system trust store, so `release/macos-sdk` holds text stubs (`.tbd`) of the
+two frameworks that list only the symbols the binary imports, and
+`release:dist` points `SDKROOT` at them. The linker records the frameworks'
+real install names, and macOS loads the real frameworks at run time. No Xcode
+SDK is downloaded.
+
+A dependency update that imports a new symbol from either framework fails the
+link with `undefined symbol: _Name`. Add the name to the stub's `symbols` list.
 
 ## No CI on the bump commit
 
