@@ -4,7 +4,8 @@ mr-boxington = "1.24.0"
 usage = "7.0.1"
 tak = "0.0.15"
 zig = "0.17.0"
-bun = "1.4.3"
+# The conformance harness installs Renovate with aube.
+aube = "2.8.1"
 node = "24.21.0"
 go = "1.27.2"
 # The DeepSource CLI, for the deepsource agent skill. Its current builds are
@@ -27,10 +28,30 @@ run = "cargo build --workspace --locked"
 description = "Inspect mbx toolchain, local store and remote configuration"
 run = "mbx doctor"
 
+[tasks."cache:usage"]
+description = "Show the build target's size and the free disk space"
+# mbx manages the target through a symlink, so measure what it points to.
+run = ["du -sh target/.", 'df -h . "${RUNNER_TEMP:-${TMPDIR:-/tmp}}"']
+
+[tasks."cache:prune"]
+description = "Delete superseded GitHub Actions caches: all but the newest entry of each key prefix, or every entry on a ref; needs GH_TOKEN with actions: write and GH_REPO; arguments: [--ref <ref>] [--all] [--drop-others] [prefix]..."
+raw_args = true
+run = "cargo xtask cache:prune"
+
 [tasks."conformance:compare"]
 description = "Compare Renovate JSON output with a versioned patchula report; forwards CLI arguments"
 raw_args = true
 run = "cargo run --quiet --locked -p patchula-conformance --"
+
+[tasks."conformance:inspect"]
+description = "Summarize triage buckets; optional manager argument prints representative differences; arguments: <triage> [manager|warnings] [limit]"
+raw_args = true
+run = "cargo xtask conformance:inspect"
+
+[tasks."conformance:logs"]
+description = "Inspect output snapshot identities and skip reasons without reading upstream source; arguments: <log> <repository> [manager]"
+raw_args = true
+run = "cargo xtask conformance:logs"
 
 [tasks."benchmarks:build"]
 description = "Build release subjects outside tak's measured commands"
@@ -50,9 +71,73 @@ run = ["mkdir -p benchmark-results", "tak run --record --export-json benchmark-r
 description = "Export local HEAD benchmark notes as a portable artifact"
 run = ["mkdir -p benchmark-results", "tak artifact export --output benchmark-results/tak-artifact.json"]
 
+[tasks."benchmarks:summary"]
+description = "Append the tak timing summary, when there is one, as preformatted Markdown"
+usage = 'flag "--out <file>" default="/dev/stdout" help="Markdown file to append to"'
+run = '[ ! -f benchmark-results/summary.txt ] || { echo "<pre>"; cat benchmark-results/summary.txt; echo "</pre>"; } >> "$usage_out"'
+
 [tasks.test]
 description = "Run the whole offline suite: unit tests, then the real lockfile tool tests"
 run = [{ task = "test:unit" }, { task = "test:tools" }]
+
+[tasks."test:unit"]
+description = "Test the workspace through mbx, without the real lockfile tool tests"
+usage = '''
+flag "--part <part>" default="all" help="all, or one half for CI: update (patchula-update, the slowest suite) or others (every other crate)" {
+  choices "all" "update" "others"
+}
+'''
+run = 'cargo test {% if usage.part == "update" %}-p patchula-update{% elif usage.part == "others" %}--workspace --exclude patchula-update{% else %}--workspace{% endif %} --locked --no-fail-fast -- --skip lockfiles::tests::real_'
+
+[tasks."test:tools"]
+description = "Run the tests that drive the real lockfile tools"
+run = "cargo test --locked -p patchula-update --lib --no-fail-fast -- lockfiles::tests::real_"
+
+# The lockfile engines these tests run, matching
+# crates/update/src/lockfiles/defaults.toml. Task-scoped so a development
+# `mise install` does not fetch them. test:stress uses the same pins, and a
+# unit test keeps all three equal.
+[tasks."test:tools".tools]
+aube = "2.8.1"
+yarn = "4.18.1"
+python = "3.14.8"
+uv = "0.13.1"
+poetry = "2.5.1"
+dotnet = "9.0.319"
+ruby = "3.4.11"
+apm = "0.35.0"
+"http:php[url=https://dl.static-php.dev/static-php-cli/common/php-{{version}}-cli-linux-x86_64.tar.gz]" = "8.5.8"
+"http:composer[url=https://getcomposer.org/download/{{version}}/composer.phar,bin=composer]" = "2.10.3"
+"http:nix[url=https://hydra.nixos.org/build/350797336/download/2/nix,checksum=sha256:5d580d993636e3b987868881776214a7d4a169434715ec30bf9ead9345d78fb6,bin=nix]" = "2.35.5"
+
+[tasks."test:stress"]
+description = "Repeat the offline suite with varied test thread counts; logs stay outside the repository; arguments: [--runs <runs>] [--filter <filter>] [--log-dir <dir>]"
+env = { CARGO_NET_OFFLINE = "true", PATCHULA_RECORD = "0" }
+raw_args = true
+run = "cargo xtask test:stress"
+
+[tasks."test:stress".tools]
+aube = "2.8.1"
+yarn = "4.18.1"
+python = "3.14.8"
+uv = "0.13.1"
+poetry = "2.5.1"
+dotnet = "9.0.319"
+ruby = "3.4.11"
+apm = "0.35.0"
+"http:php[url=https://dl.static-php.dev/static-php-cli/common/php-{{version}}-cli-linux-x86_64.tar.gz]" = "8.5.8"
+"http:composer[url=https://getcomposer.org/download/{{version}}/composer.phar,bin=composer]" = "2.10.3"
+"http:nix[url=https://hydra.nixos.org/build/350797336/download/2/nix,checksum=sha256:5d580d993636e3b987868881776214a7d4a169434715ec30bf9ead9345d78fb6,bin=nix]" = "2.35.5"
+
+[tasks.ci]
+description = "Run every check GitHub runs, one after another, and keep each stage's log; arguments: [--log-dir <dir>]"
+env = { PATCHULA_RECORD = "0", CARGO_TERM_COLOR = "never" }
+raw_args = true
+run = "cargo xtask ci"
+
+[tasks."ci:changes"]
+description = "Decide which CI jobs a push or pull request needs; GitHub Actions only"
+run = "cargo xtask ci:changes"
 
 [tasks.lint]
 description = "Check formatting, reject all Clippy warnings, and lint the GitHub workflows"
@@ -81,6 +166,11 @@ description = "Rewrite a published GitHub release's notes with communique; needs
 usage = 'arg "<tag>" help="Release tag, such as v0.1.0"'
 tools = { communique = "1.6.1" }
 run = 'communique generate "${usage_tag?}" --github-release'
+
+[tasks."release:package"]
+description = "Build static release archives for the given targets into target/dist; the first target must run on this host; arguments: <target>..."
+raw_args = true
+run = "cargo xtask release:package"
 
 # The documentation site. Node and aube are task-scoped, like the test-only
 # lockfile engines, so a development `mise install` does not fetch them.
@@ -118,6 +208,21 @@ dir = "docs"
 tools = { node = "24.21.0", aube = "2.8.1" }
 run = "aube exec wrangler versions upload"
 
+[tasks."docs:cli"]
+description = "Generate the CLI reference page, man page and bash/zsh/fish completions from usage derive; PATCHULA_BIN reads the spec from an already-built binary"
+run = [
+  "mkdir -p generated/completions",
+  "${PATCHULA_BIN:-cargo run --quiet --locked -p patchula-cli --} __usage_spec__ > generated/patchula.usage.kdl",
+  "usage lint generated/patchula.usage.kdl",
+  "usage generate markdown --file generated/patchula.usage.kdl --template spec=docs/.usage/spec.md.tera --template command=docs/.usage/command.md.tera --out-file docs/src/content/docs/reference/cli.md",
+  # Front matter must open the page, so drop the comment usage writes above it.
+  "sed -i.orig '1{/^<!-- @generated by usage-cli/d;}' docs/src/content/docs/reference/cli.md && rm docs/src/content/docs/reference/cli.md.orig",
+  "usage generate manpage --file generated/patchula.usage.kdl --out-file generated/patchula.1",
+  "usage generate completion bash patchula --file generated/patchula.usage.kdl > generated/completions/patchula.bash",
+  "usage generate completion zsh patchula --file generated/patchula.usage.kdl > generated/completions/patchula.zsh",
+  "usage generate completion fish patchula --file generated/patchula.usage.kdl > generated/completions/patchula.fish",
+]
+
 [tasks."corpus:snapshot"]
 description = "Regenerate tests/corpus-extraction.tsv after an intended extraction change"
 env = { PATCHULA_UPDATE_SNAPSHOT = "1" }
@@ -133,6 +238,11 @@ description = "Look up every corpus dependency against live registries and plan 
 raw_args = true
 dir = "{{config_root}}/tests/corpus"
 run = "${PATCHULA_BIN:-cargo run --release --locked --manifest-path ../../Cargo.toml -p patchula-cli --} run --dry-run --json -v"
+
+[tasks."corpus:report"]
+description = "Look up and plan every corpus dependency, then summarize the report; fails when a branch fails to plan; arguments: --cache <dir> [--out <file>] [--summary <file>]"
+raw_args = true
+run = "cargo xtask corpus:report"
 
 [tasks.lookup]
 description = "Run read-only lookup; forwards repository and lookup flags"
@@ -152,6 +262,15 @@ run = "cargo run --quiet --locked -p patchula-cli -- serve"
 [tasks."server:schema"]
 description = "Print the published operator settings schema"
 run = "cargo run --quiet --locked -p patchula-cli -- config server-schema"
+
+[tasks."server:replay"]
+description = "Sign and deliver a saved webhook locally; arguments: <payload> <event> <delivery> [url]"
+raw_args = true
+run = "cargo xtask server:replay"
+
+[tasks."registry:update"]
+description = "Refresh backend identities from the installed mise published registry"
+run = "cargo xtask registry:update"
 
 [tasks."lookup:release"]
 description = "Run read-only lookup in release mode; forwards repository and lookup flags"

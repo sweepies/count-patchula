@@ -8,9 +8,12 @@ use std::{fs, path::Path, process::Command};
 /// on this host, since its binary generates the man page and completions.
 pub fn package(args: Args) -> Result {
     let targets = args.positional(1, usize::MAX)?;
-    let metadata: Value = serde_json::from_str(&output(
-        Command::new("cargo").args(["metadata", "--no-deps", "--format-version", "1"]),
-    )?)?;
+    let metadata: Value = serde_json::from_str(&output(Command::new("cargo").args([
+        "metadata",
+        "--no-deps",
+        "--format-version",
+        "1",
+    ]))?)?;
     let version = metadata["packages"]
         .as_array()
         .into_iter()
@@ -29,11 +32,24 @@ pub fn package(args: Args) -> Result {
             _ => return Err(format!("no release platform for {target}").into()),
         };
         run(Command::new("rustup").args(["target", "add", target]))?;
-        run(Command::new("cargo").args(["build", "--release", "--locked", "-p", "patchula-cli", "--target", target]))?;
+        run(Command::new("cargo").args([
+            "build",
+            "--release",
+            "--locked",
+            "-p",
+            "patchula-cli",
+            "--target",
+            target,
+        ]))?;
         let bin = format!("target/{target}/release/patchula");
         if index == 0 {
-            run(Command::new("mise").args(["run", "docs:cli"]).env("PATCHULA_BIN", &bin))?;
-            fs::copy("generated/patchula.usage.kdl", dist.join("patchula.usage.kdl"))?;
+            run(Command::new("mise")
+                .args(["run", "docs:cli"])
+                .env("PATCHULA_BIN", &bin))?;
+            fs::copy(
+                "generated/patchula.usage.kdl",
+                dist.join("patchula.usage.kdl"),
+            )?;
         }
         let name = format!("patchula-v{version}-{platform}");
         let stage = std::env::temp_dir().join(&name);
@@ -43,9 +59,18 @@ pub fn package(args: Args) -> Result {
         for (from, to) in [
             (bin.as_str(), "bin/patchula"),
             ("generated/patchula.1", "share/man/man1/patchula.1"),
-            ("generated/completions/patchula.bash", "share/bash-completion/completions/patchula"),
-            ("generated/completions/patchula.zsh", "share/zsh/site-functions/_patchula"),
-            ("generated/completions/patchula.fish", "share/fish/vendor_completions.d/patchula.fish"),
+            (
+                "generated/completions/patchula.bash",
+                "share/bash-completion/completions/patchula",
+            ),
+            (
+                "generated/completions/patchula.zsh",
+                "share/zsh/site-functions/_patchula",
+            ),
+            (
+                "generated/completions/patchula.fish",
+                "share/fish/vendor_completions.d/patchula.fish",
+            ),
             ("LICENSE", "LICENSE"),
             ("README.md", "README.md"),
         ] {
@@ -54,7 +79,12 @@ pub fn package(args: Args) -> Result {
             fs::copy(from, &to).map_err(|e| format!("could not stage {from}: {e}"))?;
         }
         let archive = dist.join(format!("{name}.tar.gz"));
-        run(Command::new("tar").arg("-C").arg(&stage).arg("-czf").arg(&archive).arg("."))?;
+        run(Command::new("tar")
+            .arg("-C")
+            .arg(&stage)
+            .arg("-czf")
+            .arg(&archive)
+            .arg("."))?;
         fs::remove_dir_all(&stage)?;
         println!("{}", archive.display());
     }

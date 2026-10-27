@@ -1540,24 +1540,9 @@ fn npm_locks_aube_cannot_write_stay_on_native_npm() {
 #[test]
 fn lockfile_engine_pins_match_the_repository_mise_tasks() {
     let defaults = tool_defaults().unwrap();
-    for (task, script) in [
-        (
-            "test:tools",
-            include_str!("../../../../mise-tasks/test/tools"),
-        ),
-        (
-            "test:stress",
-            include_str!("../../../../mise-tasks/test/stress"),
-        ),
-    ] {
-        let header: toml_edit::Document<String> = script
-            .lines()
-            .filter_map(|line| line.strip_prefix("#MISE "))
-            .collect::<Vec<_>>()
-            .join("\n")
-            .parse()
-            .unwrap();
-        let tools = &header["tools"];
+    let mise: toml_edit::Document<String> = include_str!("../../../../mise.toml").parse().unwrap();
+    for task in ["test:tools", "test:stress"] {
+        let tools = &mise["tasks"][task]["tools"];
         assert_eq!(
             tools["aube"].as_str(),
             defaults["tools"]["aube"].as_str(),

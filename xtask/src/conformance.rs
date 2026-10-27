@@ -41,17 +41,19 @@ pub fn inspect(args: Args) -> Result {
         Some("warnings") => {
             for r in each(&triage["patchula"]["repositories"]) {
                 if r["warnings"].as_array().is_some_and(|w| !w.is_empty()) {
-                    let fields = [("repository", r.get("repository")), ("warnings", r.get("warnings"))];
+                    let fields = [
+                        ("repository", r.get("repository")),
+                        ("warnings", r.get("warnings")),
+                    ];
                     println!("{}", object(&fields));
                 }
             }
         }
         Some(manager) => {
             let mut seen = BTreeMap::<String, usize>::new();
-            for d in differences
-                .iter()
-                .filter(|d| d["manager"] == manager && d["classification"] != "deliberate-departure")
-            {
+            for d in differences.iter().filter(|d| {
+                d["manager"] == manager && d["classification"] != "deliberate-departure"
+            }) {
                 let key = ["repository", "classification", "field"]
                     .map(|field| text(&d[field]))
                     .join("/");
@@ -63,7 +65,11 @@ pub fn inspect(args: Args) -> Result {
                 let actual = each(&triage["patchula"]["repositories"])
                     .iter()
                     .find(|r| r["repository"] == d["repository"])
-                    .and_then(|r| each(&r["packageFiles"]).iter().find(|f| f["path"] == d["packageFile"]))
+                    .and_then(|r| {
+                        each(&r["packageFiles"])
+                            .iter()
+                            .find(|f| f["path"] == d["packageFile"])
+                    })
                     .and_then(|f| {
                         each(&f["dependencies"])
                             .iter()
@@ -75,7 +81,10 @@ pub fn inspect(args: Args) -> Result {
                     .flatten()
                     .map(|(name, value)| (name.as_str(), Some(value)))
                     .collect();
-                fields.push(("heldBack", actual.and_then(|a| a["metadata"].get("heldBack"))));
+                fields.push((
+                    "heldBack",
+                    actual.and_then(|a| a["metadata"].get("heldBack")),
+                ));
                 println!("{}", object(&fields));
             }
         }
@@ -97,7 +106,10 @@ pub fn logs(args: Args) -> Result {
             continue;
         }
         if record["msg"] == "Repository finished" {
-            let fields = [("result", record.get("result")), ("exitCode", record.get("exitCode"))];
+            let fields = [
+                ("result", record.get("result")),
+                ("exitCode", record.get("exitCode")),
+            ];
             println!("{}", object(&fields));
         }
         if record["msg"] != "packageFiles with updates" {

@@ -19,8 +19,11 @@ An unrecorded difference is a bug.
 
 - Every tool comes from mise, and every repeatable action is a mise task
   (`mise tasks` lists them). Add a task for a new workflow rather than a script.
-  Anything longer than a command or two is a file task under `mise-tasks/`,
-  with `#MISE` and `#USAGE` headers, not shell inside `mise.toml` or a workflow.
+  A task that runs a command or two in order is an entry in `mise.toml`.
+  Anything with real logic is a command in the `xtask` crate, which its mise
+  task runs as `cargo xtask <task>`; never a shell script, and never shell
+  inside a workflow. Only the `cc` and `ar` wrappers in `mise-tasks/` stay shell,
+  because they run on every C compile.
   JavaScript packages go through aube.
 - Changes are hard cutovers: rename, remove and migrate in one change, with no
   compatibility shims, aliases or deprecated paths left behind.

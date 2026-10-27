@@ -60,13 +60,20 @@ pub fn report(mut args: Args) -> Result {
 }
 
 fn branches(report: &Value) -> impl Iterator<Item = &Value> {
-    report["actions"]["branches"].as_array().into_iter().flatten()
+    report["actions"]["branches"]
+        .as_array()
+        .into_iter()
+        .flatten()
 }
 
 fn summarize(report: &Value, log: &str) -> String {
     let each = |value: &Value| value.as_array().cloned().unwrap_or_default();
     let mut lines = vec!["### Corpus".to_owned(), "```".to_owned()];
-    lines.extend(log.lines().filter(|l| l.starts_with("patchula")).map(str::to_owned));
+    lines.extend(
+        log.lines()
+            .filter(|l| l.starts_with("patchula"))
+            .map(str::to_owned),
+    );
     for repository in each(&report["repositories"]) {
         let dependencies: Vec<Value> = each(&repository["packageFiles"])
             .iter()

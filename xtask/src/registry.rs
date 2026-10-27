@@ -12,7 +12,9 @@ pub fn update(args: Args) -> Result {
     let registry = entries
         .iter()
         .map(|entry| {
-            let short = entry["short"].as_str().ok_or("a registry entry has no short name")?;
+            let short = entry["short"]
+                .as_str()
+                .ok_or("a registry entry has no short name")?;
             Ok((short.to_owned(), entry["backends"].clone()))
         })
         .collect::<Result<Map<_, _>>>()?;

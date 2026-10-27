@@ -39,7 +39,11 @@ pub fn all(mut args: Args) -> Result {
                 .filter_map(|line| line.strip_prefix("test ")?.strip_suffix(" ... FAILED"))
                 .map(|name| format!("{name},"))
                 .collect();
-            let failed = if failed.is_empty() { "see-log" } else { &failed };
+            let failed = if failed.is_empty() {
+                "see-log"
+            } else {
+                &failed
+            };
             // Keep the path and test names even when a caller filters for test result:.
             println!(
                 "test result: FAILED; stage={stage}; failing-tests={failed}; full-log={}",
@@ -161,11 +165,23 @@ mod tests {
 
     #[test]
     fn paths_choose_the_jobs_they_can_affect() {
-        assert_eq!(classify(["docs/src/content/docs/guide/x.md"]), jobs(false, false, true));
-        assert_eq!(classify(["README.md", "skills/a/SKILL.md"]), jobs(false, false, false));
-        assert_eq!(classify([".github/workflows/release.yml"]), jobs(false, true, false));
+        assert_eq!(
+            classify(["docs/src/content/docs/guide/x.md"]),
+            jobs(false, false, true)
+        );
+        assert_eq!(
+            classify(["README.md", "skills/a/SKILL.md"]),
+            jobs(false, false, false)
+        );
+        assert_eq!(
+            classify([".github/workflows/release.yml"]),
+            jobs(false, true, false)
+        );
         assert_eq!(classify(["action.yml"]), jobs(false, true, false));
-        assert_eq!(classify(["crates/cli/src/main.rs"]), jobs(true, true, false));
+        assert_eq!(
+            classify(["crates/cli/src/main.rs"]),
+            jobs(true, true, false)
+        );
         assert_eq!(classify(["xtask/src/ci.rs"]), jobs(true, true, false));
         assert_eq!(
             classify(["docs/src/content/docs/renovate/departures.md"]),

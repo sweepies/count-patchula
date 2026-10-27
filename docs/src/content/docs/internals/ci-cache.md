@@ -5,8 +5,10 @@ title: "CI jobs and caches"
 
 `.github/workflows/ci.yml` runs each check as its own job, and every job runs
 one or two mise tasks, so `mise run ci` runs the same checks locally, one after
-another. The workflow holds no shell beyond single task calls; anything longer
-is a file task under `mise-tasks/`.
+another. The workflow holds no shell beyond single task calls. A task that runs
+a command or two is an entry in `mise.toml`; one with real logic, such as
+`ci:changes`, `corpus:report` or `cache:prune`, is a command in the `xtask`
+crate, and its mise task runs `cargo xtask <task>`.
 
 | Job | Tasks | Runs when |
 | --- | --- | --- |
@@ -51,10 +53,13 @@ runners so imported objects survive. The GitHub backend needs no server URL,
 OIDC permission or extra token scope. See the action's
 [documentation](https://mr-boxington.jdx.dev/github-action).
 
-Each job that compiles has its own cache generation: `v4-lint-objects`,
-`v4-build-objects`, `v4-test-update-objects`, `v4-test-others-objects`,
-`v4-tools-objects`, and `v3-benchmarks-objects` for the Benchmarks
-workflow, which never saves. The generation is part of both the primary key and the
+Each job that compiles the workspace has its own cache generation:
+`v4-lint-objects`, `v4-build-objects`, `v4-test-update-objects`,
+`v4-test-others-objects`, `v4-tools-objects`, and `v3-benchmarks-objects` for
+the Benchmarks workflow, which never saves. The jobs that only build xtask
+(Changed paths, Corpus: lookup, Cache: prune superseded entries and the pull
+request cache cleanup) share `v4-xtask-objects`, since they compile the same
+objects; on `main` the first of them to finish publishes it. The generation is part of both the primary key and the
 restore prefix, so two jobs never publish the same key or restore each other's
 profile artifacts. Clippy's check metadata, the test builds and the release
 builds share almost no objects, so one combined bundle would only make every
@@ -119,8 +124,10 @@ cache used to sit at that limit. Two jobs keep it small:
   `mise run cache:prune --all --ref refs/pull/<n>/merge` from the default
   branch and deletes every cache the pull request saved.
 
-Both use the built-in token with `actions: write` on that job alone, and run
-the task file directly, without installing mise.
+Both use the built-in token with `actions: write` on that job alone. Like
+Changed paths, they install only Rust, Zig and mbx from mise
+(`install_args`, with `MISE_TASK_RUN_AUTO_INSTALL=false` so `mise run` does not
+install the rest), then build xtask from the `v4-xtask-objects` bundle.
 
 ## Footprint
 
@@ -133,6 +140,7 @@ After pruning, `main` holds one entry per family, about 1.9 GB in total:
 | mbx `v4-test-update-objects` | 206 MB | every push that runs Rust jobs |
 | mbx `v4-test-others-objects` | 249 MB | every push that runs Rust jobs |
 | mbx `v4-tools-objects` | 202 MB | every push that runs Rust jobs |
+| mbx `v4-xtask-objects` | XTASKSIZE | every push |
 | `corpus-v2` | about 250 MB | every push that runs Rust jobs |
 | `mise-downloads` | 565 MB | `mise.lock` changes |
 | `cargo-downloads-v1` | 58 MB | `Cargo.lock` changes |

@@ -30,27 +30,9 @@ jobs:
       rust: ${{ steps.filter.outputs.rust }}
       actions: ${{ steps.filter.outputs.actions }}
       docs: ${{ steps.filter.outputs.docs }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          sparse-checkout: mise-tasks/ci
-      - id: filter
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          EVENT: ${{ github.event_name }}
-          PR: ${{ github.event.pull_request.number }}
-          BEFORE: ${{ github.event.before }}
-          AFTER: ${{ github.sha }}
-        run: mise-tasks/ci/changes
-
-  lint:
-    name: "Lint: rustfmt, clippy"
-    needs: changes
-    if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # This job only builds and runs xtask, so it installs just the toolchain.
+    env:
+      MISE_TASK_RUN_AUTO_INSTALL: "false"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -66,14 +48,59 @@ jobs:
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
           cache: false
-      - id: cargo-downloads
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+          install_args: &xtask-tools rust zig mr-boxington
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: &cargo-downloads |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
           key: &cargo-downloads-key cargo-downloads-v1-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-downloads-v1-
+      # The jobs that only run xtask share one small objects generation.
+      - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
+        continue-on-error: true
+        with:
+          backend: github
+          github-cache-mode: objects
+          isolate-objects-cache: true
+          clean-target-before-export: true
+          cache-generation: v4-xtask-objects
+          save-on-pull-request: false
+      - id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: mise run ci:changes
+
+  lint:
+    name: "Lint: rustfmt, clippy"
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: mise-downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *mise-downloads
+          key: *mise-downloads-key
+          restore-keys: *mise-downloads-restore
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          cache: false
+      - id: cargo-downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *cargo-downloads
+          key: *cargo-downloads-key
           restore-keys: cargo-downloads-v1-
       - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
         # The pinned action has no nonfatal-cache input. This also covers its post step.
@@ -304,6 +331,21 @@ jobs:
           name: patchula-debug
           path: ${{ runner.temp }}/bin
       - run: chmod +x "$RUNNER_TEMP/bin/patchula"
+      # corpus:report is an xtask command, so this job builds xtask.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *cargo-downloads
+          key: *cargo-downloads-key
+          restore-keys: cargo-downloads-v1-
+      - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
+        continue-on-error: true
+        with:
+          backend: github
+          github-cache-mode: objects
+          isolate-objects-cache: true
+          clean-target-before-export: true
+          cache-generation: v4-xtask-objects
+          save-on-pull-request: false
       # Registry validators and catalogs carry over between runs, like a real
       # deployment's cache; a cold run still works, just slower. Main publishes.
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -347,17 +389,43 @@ jobs:
     permissions:
       actions: write
       contents: read
+    env:
+      MISE_TASK_RUN_AUTO_INSTALL: "false"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          sparse-checkout: mise-tasks/cache
+      - id: mise-downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *mise-downloads
+          key: *mise-downloads-key
+          restore-keys: *mise-downloads-restore
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          cache: false
+          install_args: *xtask-tools
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *cargo-downloads
+          key: *cargo-downloads-key
+          restore-keys: cargo-downloads-v1-
+      - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
+        continue-on-error: true
+        with:
+          backend: github
+          github-cache-mode: objects
+          isolate-objects-cache: true
+          clean-target-before-export: true
+          cache-generation: v4-xtask-objects
+          save-on-pull-request: false
       - env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: >-
-          mise-tasks/cache/prune --drop-others
+          mise run cache:prune --drop-others
           mise-downloads- cargo-downloads-v1- corpus-v2- patchula-v2-
           linux-x64-mbx-v4-lint-objects- linux-x64-mbx-v4-build-objects-
           linux-x64-mbx-v4-test-update-objects- linux-x64-mbx-v4-test-others-objects-
-          linux-x64-mbx-v4-tools-objects- docker.io--tonistiigi--binfmt-
+          linux-x64-mbx-v4-tools-objects- linux-x64-mbx-v4-xtask-objects-
+          docker.io--tonistiigi--binfmt-

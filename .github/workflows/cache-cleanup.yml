@@ -20,15 +20,42 @@ jobs:
       actions: write
       contents: read
     timeout-minutes: 5
+    env:
+      MISE_TASK_RUN_AUTO_INSTALL: "false"
     steps:
-      # The default branch's script, never the pull request's, gets the write token.
+      # The default branch's task, never the pull request's, gets the write token.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.event.repository.default_branch }}
-          sparse-checkout: mise-tasks/cache
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/mise/downloads-cas
+          key: mise-downloads-${{ runner.os }}-${{ hashFiles('mise.lock') }}
+          restore-keys: mise-downloads-${{ runner.os }}-
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          cache: false
+          install_args: rust zig mr-boxington
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-downloads-v1-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-downloads-v1-
+      - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
+        continue-on-error: true
+        with:
+          backend: github
+          github-cache-mode: objects
+          isolate-objects-cache: true
+          clean-target-before-export: true
+          cache-generation: v4-xtask-objects
+          save-on-pull-request: false
       - env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
-        run: mise-tasks/cache/prune --all --ref "refs/pull/$PR/merge"
+        run: mise run cache:prune --all --ref "refs/pull/$PR/merge"

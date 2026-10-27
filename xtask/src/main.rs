@@ -16,7 +16,10 @@ use std::process::{Command, ExitCode, Stdio};
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-const COMMANDS: &[(&str, fn(Args) -> Result, &str)] = &[
+/// A command's name, entry point and argument synopsis.
+type Task = (&'static str, fn(Args) -> Result, &'static str);
+
+const COMMANDS: &[Task] = &[
     (
         "cache:prune",
         cache::prune,

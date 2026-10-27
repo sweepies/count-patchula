@@ -5,7 +5,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use std::{
     io::{BufRead, BufReader, Write},
-    net::{TcpStream, ToSocketAddrs},
+    net::TcpStream,
 };
 
 /// Signs a saved webhook body with the secret the server reads, and posts it
@@ -13,8 +13,12 @@ use std::{
 pub fn replay(args: Args) -> Result {
     let args = args.positional(3, 4)?;
     let (payload, event, delivery) = (&args[0], &args[1], &args[2]);
-    let url = args.get(3).map_or("http://127.0.0.1:8080/webhook", String::as_str);
-    let rest = url.strip_prefix("http://").ok_or("replay target must be an http:// URL")?;
+    let url = args
+        .get(3)
+        .map_or("http://127.0.0.1:8080/webhook", String::as_str);
+    let rest = url
+        .strip_prefix("http://")
+        .ok_or("replay target must be an http:// URL")?;
     let (authority, path) = rest.find('/').map_or((rest, "/"), |i| rest.split_at(i));
     let (host, port) = match authority.rsplit_once(':') {
         Some((host, port)) if !port.contains(']') => (host, port.parse()?),
@@ -36,14 +40,17 @@ pub fn replay(args: Args) -> Result {
         return Err("set PATCHULA_WEBHOOK_SECRET_FILE or PATCHULA_WEBHOOK_SECRET".into());
     }
     let body = std::fs::read(payload)?;
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key size");
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key size");
     mac.update(&body);
-    let signature: String = mac.finalize().into_bytes().iter().map(|b| format!("{b:02x}")).collect();
-    let address = (host.trim_start_matches('[').trim_end_matches(']'), port)
-        .to_socket_addrs()?
-        .next()
-        .ok_or("the replay target resolves to no address")?;
-    let mut stream = TcpStream::connect(address)?;
+    let signature: String = mac
+        .finalize()
+        .into_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let mut stream = TcpStream::connect((host, port))?;
     write!(
         stream,
         "POST {path} HTTP/1.1\r\nhost: {authority}\r\ncontent-type: application/json\r\nx-hub-signature-256: sha256={signature}\r\nx-github-event: {event}\r\nx-github-delivery: {delivery}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
