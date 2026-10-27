@@ -69,7 +69,7 @@ Two `actions/cache` entries hold downloads that mbx does not:
   Cargo unpacks them from the cached archives.
 - **Lockfile engines**, `lockfile-tools-v1-<hash of mise-tasks/test/tools>`:
   the mise installs of the task-scoped engines `test:tools` declares, about
-  415 MB. The real-tool job restores it before the task and saves it on a miss
+  414 MB. The real-tool job restores it before the task and saves it on a miss
   from `main`. It replaces about 20 seconds of downloads from several hosts
   with a 9-second restore.
 
@@ -89,9 +89,11 @@ Only `main` saves it.
 
 ## Footprint
 
-A push to `main` publishes about 1.6 GB of mbx bundles (one per job and
-commit), plus the corpus cache when it changes. The mise, Cargo download and
-lockfile engine entries change only with their keys. GitHub evicts the least
+A push to `main` publishes about 1.3 GB of mbx bundles, one per Rust job and
+commit (lint 90 MB, build 306 MB, unit tests 206 MB and 249 MB, real-tool tests
+202 MB, corpus 247 MB), and about 250 MB of corpus cache. The mise (305 MB),
+Cargo download (58 MB) and lockfile engine (414 MB) entries change only with
+their keys. GitHub evicts the least
 recently used entries past the repository's 10 GB limit, and every job restores
 the newest entry for its own prefix, so eviction only removes bundles nothing
 restores any more.
