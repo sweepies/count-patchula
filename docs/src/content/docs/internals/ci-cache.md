@@ -65,8 +65,21 @@ only restore (`save-on-pull-request: false`).
 
 ## Downloads
 
-Two `actions/cache` entries hold downloads that mbx does not:
+The CI jobs follow mise's
+[continuous integration guide](https://mise.jdx.dev/continuous-integration.html):
+`mise.lock` pins every tool, including the ones tasks declare, for linux-x64,
+linux-arm64 and macos-arm64 (regenerate it with
+`mise lock --platform linux-x64,linux-arm64,macos-arm64`), and
+`jdx/mise-action` runs `mise install --locked` with its own install cache
+turned off. Two `actions/cache` entries hold downloads instead:
 
+- **mise downloads**, `mise-downloads-Linux-<mise.lock hash>`: mise's
+  download store, `~/.cache/mise/downloads-cas`, about 565 MB. mise checks
+  every stored file against the checksum in `mise.lock` before using it, so a
+  stale or poisoned entry cannot change what is installed; tools are still
+  unpacked on every run. Every job restores it before `jdx/mise-action`, with
+  the previous lockfile's entry as a fallback. Only the real-tool job saves it,
+  from `main`, because it installs the base tools and every lockfile engine.
 - **Cargo downloads**, `cargo-downloads-v1-<Cargo.lock hash>`:
   `~/.cargo/registry/index`, `~/.cargo/registry/cache` and
   `~/.cargo/git/db`, about 60 MB. Every Rust job restores it, with the
@@ -74,16 +87,10 @@ Two `actions/cache` entries hold downloads that mbx does not:
   `main`, because Clippy over all targets fetches every crate the other jobs
   build. The extracted sources in `~/.cargo/registry/src` are not cached;
   Cargo unpacks them from the cached archives.
-- **Lockfile engines**, `lockfile-tools-v1-<hash of mise-tasks/test/tools>`:
-  the mise installs of the task-scoped engines `test:tools` declares, about
-  414 MB. The real-tool job restores it before the task and saves it on a miss
-  from `main`. It replaces about 20 seconds of downloads from several hosts
-  with a 9-second restore.
 
-`jdx/mise-action` caches the rest of the mise installs under its default key,
-which hashes `mise.toml`. Every job restores the same entry, about 305 MB, and
-the first job to miss saves it. The Rust toolchain comes from rustup, outside
-the mise directory, and installs in about 10 seconds.
+The Rust toolchain comes from rustup, outside mise's download store, and
+installs in about 10 seconds. The .NET SDK installs through Microsoft's script,
+which mise does not store either.
 
 The lockfile engine tests are offline, so the engines' own package caches
 (NuGet, pip and uv, gems, Composer, npm) are never filled and are not cached.
@@ -97,8 +104,8 @@ Only `main` saves it.
 ## Pruning
 
 Every save creates a new immutable entry: mbx keys carry the commit, corpus
-keys the run, and the mise, Cargo download and lockfile engine keys a hash of
-their inputs. GitHub only evicts past the repository's 10 GB limit, so the
+keys the run, and the mise and Cargo download keys a hash of their
+lockfiles. GitHub only evicts past the repository's 10 GB limit, so the
 cache used to sit at that limit. Two jobs keep it small:
 
 - On every push to `main`, the last CI job, Cache: prune superseded entries,
@@ -117,7 +124,7 @@ the task file directly, without installing mise.
 
 ## Footprint
 
-After pruning, `main` holds one entry per family, about 2.1 GB in total:
+After pruning, `main` holds one entry per family, about 1.9 GB in total:
 
 | Family | Size | New entry |
 | --- | --- | --- |
@@ -127,13 +134,11 @@ After pruning, `main` holds one entry per family, about 2.1 GB in total:
 | mbx `v4-test-others-objects` | 249 MB | every push that runs Rust jobs |
 | mbx `v4-tools-objects` | 202 MB | every push that runs Rust jobs |
 | `corpus-v2` | about 250 MB | every push that runs Rust jobs |
-| `mise-v1` | 305 MB | `mise.toml` changes |
-| `lockfile-tools-v1` | 414 MB | `mise-tasks/test/tools` changes |
+| `mise-downloads` | 565 MB | `mise.lock` changes |
 | `cargo-downloads-v1` | 58 MB | `Cargo.lock` changes |
 
 A push that runs the Rust jobs saves about 1.3 GB and the prune job deletes
-about as much. Pull requests save only a mise entry when they change
-`mise.toml`, and lose it when they close.
+about as much. Pull requests save nothing in CI.
 
 ## Build settings
 
