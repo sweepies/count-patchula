@@ -600,6 +600,16 @@ jobs:
             cat "dist/patchula-v$VERSION-checksums.txt"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      # A rebuild that differs is kept for comparison with the smoke-tested
+      # archives.
+      - if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-rebuilt
+          path: |
+            dist/*.tar.gz
+            dist/*-checksums.txt
+          if-no-files-found: ignore
       # The Anthropic key lives in Infisical as anthropic-api-key (project
       # INFISICAL_PROJECT_ID, environment prod), read through GitHub OIDC by a
       # machine identity that trusts main, the ref a release runs from. Until
