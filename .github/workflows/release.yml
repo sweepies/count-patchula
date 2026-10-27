@@ -2,12 +2,11 @@ name: Release
 
 # One run makes a release: run it from the Actions tab, or with
 # `gh workflow run release.yml -f version=X.Y.Z`. It checks main's commit
-# passed CI, bumps the version in the runner, builds static archives for
-# Linux and macOS on one Linux runner with GoReleaser, checks each one runs on
-# its own platform, builds and pushes the server image, and only then pushes
-# the bump commit to main, tags it and publishes the GitHub release with a
-# signed packslip manifest and communique's notes. A dry run does all of the
-# building and checking and pushes nothing.
+# passed CI, bumps the version in the runner, builds static archives, checks
+# each one runs on its own platform, builds and pushes the server image, and
+# only then pushes the bump commit to main, tags it and publishes the GitHub
+# release with a signed packslip manifest and communique's notes. A dry run
+# does all of the building and checking and pushes nothing.
 on:
   workflow_dispatch:
     inputs:
@@ -137,14 +136,22 @@ jobs:
           path: ${{ runner.temp }}/release.bundle
           if-no-files-found: error
 
-  # One Linux runner builds every archive, macOS ones included, with
-  # GoReleaser and cargo-zigbuild, against a local tag so the archive names
-  # are the release's. These files are the ones smoke-tested, put in the image
-  # and published.
   build:
-    name: Build
+    name: Build (${{ matrix.name }})
     needs: bump
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # The first target of each runs on the runner itself, so it can
+          # generate the man page and completions.
+          - name: Linux
+            runner: ubuntu-latest
+            targets: x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+          - name: macOS
+            runner: macos-26
+            targets: aarch64-apple-darwin x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -154,14 +161,12 @@ jobs:
         with:
           name: release-bump
           path: ${{ runner.temp }}/bump
-      - name: Check out and tag the bump commit
+      - name: Check out the bump commit
         env:
           SHA: ${{ needs.bump.outputs.sha }}
-          VERSION: ${{ inputs.version }}
         run: |
           git fetch --quiet --no-tags "$RUNNER_TEMP/bump/release.bundle" HEAD
           git checkout --quiet --detach "$SHA"
-          git tag "v$VERSION" "$SHA"
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
           # A release never restores a cache, so nothing cached reaches the artifacts.
@@ -175,15 +180,16 @@ jobs:
             echo "patchula-cli is $version, not $VERSION" >&2
             exit 1
           fi
-      - name: Build the archives
-        run: mise run release:dist
+      - name: Package
+        env:
+          TARGETS: ${{ matrix.targets }}
+        run: |
+          # shellcheck disable=SC2086 # one argument per target
+          mise run release:package $TARGETS
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: dist
-          path: |
-            dist/*.tar.gz
-            dist/*-checksums.txt
-            generated/patchula.usage.kdl
+          name: dist-${{ matrix.name }}
+          path: target/dist/*
           if-no-files-found: error
 
   smoke:
@@ -205,7 +211,9 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: dist
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
       - name: Run the binary
         env:
           PLATFORM: ${{ matrix.platform }}
@@ -236,7 +244,8 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: dist
+          name: dist-Linux
+          path: dist
       - name: Read the version from the archives
         id: version
         env:
@@ -526,7 +535,6 @@ jobs:
           docker buildx imagetools create "${args[@]}" "$IMAGE@$DIGEST"
           printf 'Tagged %s@%s as:\n%s\n' "$IMAGE" "$DIGEST" "$TAGS" >> "$GITHUB_STEP_SUMMARY"
 
-  # The release is made from the build job's files, unchanged.
   release:
     name: Publish
     needs: [bump, land]
@@ -544,16 +552,14 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: dist
-      - name: Check the archives against their checksums
-        env:
-          VERSION: ${{ inputs.version }}
-        run: (cd dist && sha256sum --check --strict "patchula-v$VERSION-checksums.txt")
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
       - name: Create a draft release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: v${{ inputs.version }}
-        run: gh release create "$TAG" --draft --verify-tag --title "Count Patchula $TAG" --generate-notes dist/* generated/patchula.usage.kdl
+        run: gh release create "$TAG" --draft --verify-tag --title "Count Patchula $TAG" --generate-notes dist/*
       - uses: jdx/packslip@7d397618045bd98b76cd5cb8177767b2f52789b8 # v1.10.1
         with:
           tag: v${{ inputs.version }}
@@ -565,7 +571,7 @@ jobs:
             completion/bash=archive:share/bash-completion/completions/patchula
             completion/zsh=archive:share/zsh/site-functions/_patchula
             completion/fish=archive:share/fish/vendor_completions.d/patchula.fish
-            cli-spec/usage=asset:generated/patchula.usage.kdl
+            cli-spec/usage=asset:dist/patchula.usage.kdl
             skill/patchula=repo:skills/patchula
       - name: Publish the release
         env:

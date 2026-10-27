@@ -19,7 +19,7 @@ case "$TARGETARCH" in
   *) echo "no release archive for $TARGETARCH" >&2; exit 1 ;;
 esac
 mkdir /out
-tar -xzf /dist/patchula-v*-"$platform".tar.gz -C /out bin/patchula LICENSE
+tar -xzf /dist/patchula-v*-"$platform".tar.gz -C /out ./bin/patchula ./LICENSE
 EOF
 
 FROM base
