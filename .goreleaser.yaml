@@ -70,7 +70,7 @@ signs:
     artifacts: checksum
     signature: packslip.sigstore.json
     cmd: mise
-    args: [run, release:sign, "${artifact}", "${signature}"]
+    args: [run, release:sign, "${artifact}", "${signature}", "{{ .Tag }}", "{{ .FullCommit }}"]
     output: true
 
 release:
