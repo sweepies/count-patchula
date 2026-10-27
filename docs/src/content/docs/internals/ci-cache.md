@@ -28,7 +28,10 @@ nothing. Unknown or unlisted paths run every Rust job.
 `patchula-update`'s suite takes about a minute on its own, so it runs beside
 the other crates' tests. `test:tools` runs only the `lockfiles::tests::real_`
 tests, the ones that drive the real lockfile engines, and `test:unit` skips
-them, so only one job installs the task-scoped engines.
+them, so only one job installs the engines `test:tools` declares as
+task-scoped tools. `mise run test` runs `test:unit` and then `test:tools`, so
+it installs them too; `mise run ci` runs `lint`, `build`, `fixtures:check`,
+`test:unit`, `test:tools` and `docs:build` in series.
 
 The corpus lookup is mostly network time, so it runs the build job's dev
 binary, passed as an artifact and named by `PATCHULA_BIN`, instead of a

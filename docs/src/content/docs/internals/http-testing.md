@@ -29,13 +29,17 @@ fresh scenario and saves atomically after each exchange, so a failure can leave
 a partial recording: review the diff and replay before committing.
 
 ```console
-mise run test
+mise run test:unit
 mise run fixtures:check
 # For real GitHub recordings, provide GITHUB_TOKEN in the invoking environment.
 # Never put its value in command arguments, fixtures, or logs.
 mise run fixtures:record
-mise run test
+mise run test:unit
 ```
+
+`mise run test` runs `test:unit` and then the real lockfile tool tests, which
+install the lockfile engines (mise installs them for that task alone) and reach
+the network for their own tooling. Iterate on cassettes with `test:unit`.
 
 Every real cassette must say it was recorded by patchula, with the endpoint
 URLs. Simulated rate-limit and transport responses are labelled as such.
