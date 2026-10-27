@@ -9,16 +9,17 @@ permissions:
   contents: read
 
 # A newer push to a pull request supersedes its older runs. Runs on main finish,
-# since they publish the build cache.
+# since they publish the caches.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Every job runs one or two mise tasks, so `mise run ci` runs the same checks
+# locally. internals/ci-cache.md describes the caches.
 jobs:
-  # The workflow always runs, so "CI result" can be a required check. Changes
-  # that no Rust job reads, such as the docs site (which Cloudflare builds),
-  # skip the Rust jobs. Changes to workflows other than this one only lint
-  # the workflows.
+  # The workflow always runs, so "CI result" can be a required check. Each job
+  # below runs only when a changed path can affect it; a docs-only change runs
+  # just the docs build.
   changes:
     name: Changed paths
     runs-on: ubuntu-latest
@@ -29,7 +30,12 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       actions: ${{ steps.filter.outputs.actions }}
+      docs: ${{ steps.filter.outputs.docs }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: mise-tasks/ci
       - id: filter
         env:
           GH_TOKEN: ${{ github.token }}
@@ -38,98 +44,10 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           BEFORE: ${{ github.event.before }}
           AFTER: ${{ github.sha }}
-        run: |
-          if [ "$EVENT" = pull_request ]; then
-            files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename')
-          elif [ "$BEFORE" = 0000000000000000000000000000000000000000 ]; then
-            files=unknown
-          else
-            # The compare API lists at most 300 files; assume more means Rust.
-            files=$(gh api "repos/$REPO/compare/$BEFORE...$AFTER" --jq 'if (.files | length) >= 300 then "unknown" else .files[].filename end')
-          fi
-          rust=false
-          actions=false
-          while IFS= read -r file; do
-            case "$file" in
-              # The conformance tests read the departures page.
-              docs/src/content/docs/renovate/departures.md) rust=true ;;
-              docs/* | assets/* | skills/* | .claude/* | conformance/README.md | README.md | AGENTS.md | CLAUDE.md | LICENSE | .gitignore | .deepsource.toml | socket.yml | communique.toml | tak.toml) ;;
-              action.yml | .github/workflows/action.yml | .github/workflows/release.yml | .github/workflows/benchmarks.yml) actions=true ;;
-              # Anything else, including "unknown", may change what the Rust jobs check.
-              *) rust=true ;;
-            esac
-          done <<< "$files"
-          {
-            echo "rust=$rust"
-            echo "actions=$actions"
-          } >> "$GITHUB_OUTPUT"
-          {
-            echo "Rust jobs: $rust"
-            echo "Workflow lint only: $([ "$rust" = false ] && echo "$actions" || echo false)"
-          } >> "$GITHUB_STEP_SUMMARY"
+        run: mise-tasks/ci/changes
 
-  ci:
-    needs: changes
-    if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # Cache mise installs, including the task-scoped lockfile toolchains the
-      # real-tool tests install (Python, Ruby, .NET, PHP), keyed on mise.toml.
-      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
-        with:
-          cache: true
-      # Transport mbx objects, predictions and build-script state between runners.
-      # Default-branch pushes publish in the post step; PRs only restore.
-      - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
-        id: mbx
-        # The pinned action has no nonfatal-cache input. This also covers its post step.
-        continue-on-error: true
-        with:
-          backend: github
-          github-cache-mode: objects
-          isolate-objects-cache: true
-          # All target consumers finish before the post step; keep only portable objects.
-          clean-target-before-export: true
-          cache-generation: v3-ci-objects
-          save-on-pull-request: false
-      - name: Inspect cache configuration
-        continue-on-error: true
-        env:
-          CACHE_KEY: ${{ steps.mbx.outputs.cache-primary-key }}
-          CACHE_HIT: ${{ steps.mbx.outputs.cache-hit }}
-          CACHE_SAVE_ELIGIBLE: ${{ steps.mbx.outputs.cache-save-eligible }}
-          CACHE_SAVE_REASON: ${{ steps.mbx.outputs.cache-save-reason }}
-        run: |
-          printf 'mbx key=%s exact-hit=%s save=%s (%s)\n' "$CACHE_KEY" "$CACHE_HIT" "$CACHE_SAVE_ELIGIBLE" "$CACHE_SAVE_REASON"
-          mise run cache:doctor
-      - run: mise run ci
-      - name: Measure build storage before cache export
-        run: |
-          du -sh target/.
-          df -h . "${RUNNER_TEMP}"
-
-  # The ci job lints the workflows too; this runs when only workflows changed.
-  actions:
-    name: Workflow lint
-    needs: changes
-    if: needs.changes.outputs.rust != 'true' && needs.changes.outputs.actions == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
-        with:
-          cache: true
-      - run: mise run lint:actions
-
-  corpus:
-    name: Corpus lookup
+  lint:
+    name: "Lint: rustfmt, clippy"
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
@@ -141,6 +59,206 @@ jobs:
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
           cache: true
+      - id: cargo-downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: &cargo-downloads |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: &cargo-downloads-key cargo-downloads-v1-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-downloads-v1-
+      - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
+        # The pinned action has no nonfatal-cache input. This also covers its post step.
+        continue-on-error: true
+        with:
+          backend: github
+          github-cache-mode: objects
+          isolate-objects-cache: true
+          # All target consumers finish before the post step; keep only portable objects.
+          clean-target-before-export: true
+          cache-generation: v4-lint-objects
+          save-on-pull-request: true
+      - run: mise run lint:rust
+      # Clippy checks every target, so it fetches every crate the other jobs
+      # build; this job alone publishes the downloads, from main.
+      - if: steps.cargo-downloads.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        continue-on-error: true
+        with:
+          path: *cargo-downloads
+          key: *cargo-downloads-key
+      - run: mise run cache:usage
+
+  workflows:
+    name: "Lint: workflows"
+    needs: changes
+    if: needs.changes.outputs.actions == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          cache: true
+      - run: mise run lint:actions
+
+  build:
+    name: "Build: workspace, fixture secret scan"
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          cache: true
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *cargo-downloads
+          key: *cargo-downloads-key
+          restore-keys: cargo-downloads-v1-
+      - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
+        continue-on-error: true
+        with:
+          backend: github
+          github-cache-mode: objects
+          isolate-objects-cache: true
+          clean-target-before-export: true
+          cache-generation: v4-build-objects
+          save-on-pull-request: true
+      - run: mise run build
+      # The scanner is a dev binary, so it reuses the build above.
+      - run: mise run fixtures:check
+      - run: mise run cache:usage
+
+  test:
+    name: "Tests: unit"
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PATCHULA_RECORD: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          cache: true
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *cargo-downloads
+          key: *cargo-downloads-key
+          restore-keys: cargo-downloads-v1-
+      - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
+        continue-on-error: true
+        with:
+          backend: github
+          github-cache-mode: objects
+          isolate-objects-cache: true
+          clean-target-before-export: true
+          cache-generation: v4-test-objects
+          save-on-pull-request: true
+      - run: mise run test:unit
+      - run: mise run cache:usage
+
+  tools:
+    name: "Tests: real lockfile tools"
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PATCHULA_RECORD: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          cache: true
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *cargo-downloads
+          key: *cargo-downloads-key
+          restore-keys: cargo-downloads-v1-
+      - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
+        continue-on-error: true
+        with:
+          backend: github
+          github-cache-mode: objects
+          isolate-objects-cache: true
+          clean-target-before-export: true
+          cache-generation: v4-tools-objects
+          save-on-pull-request: true
+      # The lockfile engines are task-scoped, so the shared mise cache never
+      # holds them. They download from several hosts on every cold run.
+      - id: lockfile-tools
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: &lockfile-tools |
+            ~/.local/share/mise/installs/aube
+            ~/.local/share/mise/installs/yarn
+            ~/.local/share/mise/installs/python
+            ~/.local/share/mise/installs/uv
+            ~/.local/share/mise/installs/poetry
+            ~/.local/share/mise/installs/dotnet
+            ~/.local/share/mise/installs/ruby
+            ~/.local/share/mise/installs/apm
+            ~/.local/share/mise/installs/http-php
+            ~/.local/share/mise/installs/http-composer
+            ~/.local/share/mise/installs/http-nix
+            ~/.local/share/mise/dotnet-root
+          key: &lockfile-tools-key lockfile-tools-v1-${{ hashFiles('mise-tasks/test/tools') }}
+      - run: mise run test:tools
+      - if: steps.lockfile-tools.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        continue-on-error: true
+        with:
+          path: *lockfile-tools
+          key: *lockfile-tools-key
+      - run: mise run cache:usage
+
+  docs:
+    name: "Docs: build"
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          cache: true
+      - run: mise run docs:build
+
+  corpus:
+    name: "Corpus: lookup"
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          cache: true
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *cargo-downloads
+          key: *cargo-downloads-key
+          restore-keys: cargo-downloads-v1-
       - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
         continue-on-error: true
         with:
@@ -149,10 +267,10 @@ jobs:
           isolate-objects-cache: true
           clean-target-before-export: true
           cache-generation: v3-corpus-objects
-          save-on-pull-request: false
+          save-on-pull-request: true
       # Registry validators and catalogs carry over between runs, like a real
-      # deployment's cache; a cold run still works, just slower.
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # deployment's cache; a cold run still works, just slower. Main publishes.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/corpus-cache
           key: corpus-v2-${{ github.run_id }}
@@ -162,25 +280,13 @@ jobs:
       - name: Look up and plan every corpus dependency
         env:
           PATCHULA_TOKEN: ${{ github.token }}
-          CACHE_DIR: ${{ runner.temp }}/corpus-cache
-        run: |
-          mkdir -p "$CACHE_DIR"
-          mise run corpus:check --cache "$CACHE_DIR" > corpus-report.json 2> corpus.log || { grep -v '^[-+@ ]' corpus.log | tail -40; exit 1; }
-          jq='mise exec jq@1.8.2 -- jq'
-          {
-            echo '### Corpus'
-            echo '```'
-            grep -E '^patchula' corpus.log
-            $jq -r '.repositories[] | "\(.repository): \([.packageFiles[].dependencies[]] | length) dependencies, \([.packageFiles[].dependencies[].updates[]] | length) updates", ((.warnings // [])[] | "  warning: \(.)")' corpus-report.json
-            $jq -r '.actions.branches | group_by(.status) | map("\(.[0].status): \(length) branches") | .[]' corpus-report.json
-            $jq -r '.actions.branches[] | select(.status == "skipped" or .status == "error") | "\(.status) \(.branch): \(.reason)"' corpus-report.json
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          errors=$($jq '[.actions.branches[] | select(.status == "error")] | length' corpus-report.json)
-          if [ "$errors" != 0 ]; then
-            echo "::error::$errors corpus branches failed to plan"
-            exit 1
-          fi
+        run: mise run corpus:report --cache "$RUNNER_TEMP/corpus-cache" --summary "$GITHUB_STEP_SUMMARY"
+      - if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        continue-on-error: true
+        with:
+          path: ${{ runner.temp }}/corpus-cache
+          key: corpus-v2-${{ github.run_id }}
       - name: Publish the corpus report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -194,7 +300,7 @@ jobs:
   # cancelled ones, or a failed path check, do not.
   result:
     name: CI result
-    needs: [changes, ci, actions, corpus]
+    needs: [changes, lint, workflows, build, test, tools, docs, corpus]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -202,7 +308,5 @@ jobs:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         env:
           RESULTS: ${{ toJSON(needs.*.result) }}
-        run: |
-          echo "A required job did not pass: $RESULTS"
-          exit 1
+        run: echo "A required job did not pass; results in needs order $RESULTS" && exit 1
       - run: echo "Required jobs passed or were skipped."
