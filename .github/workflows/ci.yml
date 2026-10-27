@@ -55,9 +55,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # mise checks every stored download against mise.lock before it uses
+      # it, so the store is cached instead of the installs.
+      - id: mise-downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: &mise-downloads ~/.cache/mise/downloads-cas
+          key: &mise-downloads-key mise-downloads-${{ runner.os }}-${{ hashFiles('mise.lock') }}
+          restore-keys: &mise-downloads-restore mise-downloads-${{ runner.os }}-
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
-          cache: true
+          cache: false
       - id: cargo-downloads
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -99,9 +107,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - id: mise-downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *mise-downloads
+          key: *mise-downloads-key
+          restore-keys: *mise-downloads-restore
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
-          cache: true
+          cache: false
       - run: mise run lint:actions
 
   build:
@@ -114,9 +128,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - id: mise-downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *mise-downloads
+          key: *mise-downloads-key
+          restore-keys: *mise-downloads-restore
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
-          cache: true
+          cache: false
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: *cargo-downloads
@@ -161,9 +181,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - id: mise-downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *mise-downloads
+          key: *mise-downloads-key
+          restore-keys: *mise-downloads-restore
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
-          cache: true
+          cache: false
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: *cargo-downloads
@@ -193,9 +219,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - id: mise-downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *mise-downloads
+          key: *mise-downloads-key
+          restore-keys: *mise-downloads-restore
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
-          cache: true
+          cache: false
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: *cargo-downloads
@@ -210,32 +242,15 @@ jobs:
           clean-target-before-export: true
           cache-generation: v4-tools-objects
           save-on-pull-request: false
-      # The lockfile engines are task-scoped, so the shared mise cache never
-      # holds them. They download from several hosts on every cold run.
-      - id: lockfile-tools
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: &lockfile-tools |
-            ~/.local/share/mise/installs/aube
-            ~/.local/share/mise/installs/yarn
-            ~/.local/share/mise/installs/python
-            ~/.local/share/mise/installs/uv
-            ~/.local/share/mise/installs/poetry
-            ~/.local/share/mise/installs/dotnet
-            ~/.local/share/mise/installs/ruby
-            ~/.local/share/mise/installs/apm
-            ~/.local/share/mise/installs/http-php
-            ~/.local/share/mise/installs/http-composer
-            ~/.local/share/mise/installs/http-nix
-            ~/.local/share/mise/dotnet-root
-          key: &lockfile-tools-key lockfile-tools-v1-${{ hashFiles('mise-tasks/test/tools') }}
       - run: mise run test:tools
-      - if: github.ref == 'refs/heads/main' && steps.lockfile-tools.outputs.cache-hit != 'true'
+      # This job installs the base tools and every lockfile engine, so its
+      # store holds nearly every download the other jobs need.
+      - if: github.ref == 'refs/heads/main' && steps.mise-downloads.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         continue-on-error: true
         with:
-          path: *lockfile-tools
-          key: *lockfile-tools-key
+          path: *mise-downloads
+          key: *mise-downloads-key
       - run: mise run cache:usage
 
   docs:
@@ -248,9 +263,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - id: mise-downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *mise-downloads
+          key: *mise-downloads-key
+          restore-keys: *mise-downloads-restore
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
-          cache: true
+          cache: false
       - run: mise run docs:build
 
   # The lookup is mostly network time, so the build job's dev binary does it
@@ -266,9 +287,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - id: mise-downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *mise-downloads
+          key: *mise-downloads-key
+          restore-keys: *mise-downloads-restore
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
-          cache: true
+          cache: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: patchula-debug-${{ github.run_id }}-${{ github.run_attempt }}
@@ -327,7 +354,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: >-
           mise-tasks/cache/prune --drop-others
-          mise-v1- cargo-downloads-v1- lockfile-tools-v1- corpus-v2- patchula-v2-
+          mise-downloads- cargo-downloads-v1- corpus-v2- patchula-v2-
           linux-x64-mbx-v4-lint-objects- linux-x64-mbx-v4-build-objects-
           linux-x64-mbx-v4-test-update-objects- linux-x64-mbx-v4-test-others-objects-
-          linux-x64-mbx-v4-tools-objects-
+          linux-x64-mbx-v4-tools-objects- docker.io--tonistiigi--binfmt-
