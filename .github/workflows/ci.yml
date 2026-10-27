@@ -77,11 +77,11 @@ jobs:
           # All target consumers finish before the post step; keep only portable objects.
           clean-target-before-export: true
           cache-generation: v4-lint-objects
-          save-on-pull-request: true
+          save-on-pull-request: false
       - run: mise run lint:rust
       # Clippy checks every target, so it fetches every crate the other jobs
       # build; this job alone publishes the downloads, from main.
-      - if: steps.cargo-downloads.outputs.cache-hit != 'true'
+      - if: github.ref == 'refs/heads/main' && steps.cargo-downloads.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         continue-on-error: true
         with:
@@ -130,7 +130,7 @@ jobs:
           isolate-objects-cache: true
           clean-target-before-export: true
           cache-generation: v4-build-objects
-          save-on-pull-request: true
+          save-on-pull-request: false
       - run: mise run build
       # The scanner is a dev binary, so it reuses the build above.
       - run: mise run fixtures:check
@@ -170,7 +170,7 @@ jobs:
           isolate-objects-cache: true
           clean-target-before-export: true
           cache-generation: v4-test-${{ matrix.part }}-objects
-          save-on-pull-request: true
+          save-on-pull-request: false
       - run: mise run test:unit --part "${{ matrix.part }}"
       - run: mise run cache:usage
 
@@ -202,7 +202,7 @@ jobs:
           isolate-objects-cache: true
           clean-target-before-export: true
           cache-generation: v4-tools-objects
-          save-on-pull-request: true
+          save-on-pull-request: false
       # The lockfile engines are task-scoped, so the shared mise cache never
       # holds them. They download from several hosts on every cold run.
       - id: lockfile-tools
@@ -223,7 +223,7 @@ jobs:
             ~/.local/share/mise/dotnet-root
           key: &lockfile-tools-key lockfile-tools-v1-${{ hashFiles('mise-tasks/test/tools') }}
       - run: mise run test:tools
-      - if: steps.lockfile-tools.outputs.cache-hit != 'true'
+      - if: github.ref == 'refs/heads/main' && steps.lockfile-tools.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         continue-on-error: true
         with:
@@ -272,7 +272,7 @@ jobs:
           isolate-objects-cache: true
           clean-target-before-export: true
           cache-generation: v3-corpus-objects
-          save-on-pull-request: true
+          save-on-pull-request: false
       # Registry validators and catalogs carry over between runs, like a real
       # deployment's cache; a cold run still works, just slower. Main publishes.
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
