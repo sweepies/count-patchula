@@ -35,11 +35,26 @@ jobs:
         with:
           persist-credentials: false
           sparse-checkout: mise-tasks/ci
+      # The jobs that only need nu keep its download in a small store of its
+      # own; the shared mise-downloads store holds every tool and would take
+      # longer to restore than nu takes to download.
+      - id: mise-nu
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: &mise-nu ~/.cache/mise/downloads-cas
+          key: &mise-nu-key mise-nu-${{ runner.os }}-${{ hashFiles('mise.lock') }}
+          restore-keys: &mise-nu-restore mise-nu-${{ runner.os }}-
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
           cache: false
           # The task is a nu script; nothing else needs installing.
           install_args: nu
+      - if: github.ref == 'refs/heads/main' && steps.mise-nu.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        continue-on-error: true
+        with:
+          path: *mise-nu
+          key: *mise-nu-key
       - id: filter
         env:
           GH_TOKEN: ${{ github.token }}
@@ -357,6 +372,11 @@ jobs:
         with:
           persist-credentials: false
           sparse-checkout: mise-tasks/cache
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *mise-nu
+          key: *mise-nu-key
+          restore-keys: *mise-nu-restore
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
           cache: false
@@ -367,7 +387,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: >-
           mise-tasks/cache/prune --drop-others
-          mise-downloads- cargo-downloads-v1- corpus-v2- patchula-v2-
+          mise-downloads- mise-nu- cargo-downloads-v1- corpus-v2- patchula-v2-
           linux-x64-mbx-v4-lint-objects- linux-x64-mbx-v4-build-objects-
           linux-x64-mbx-v4-test-update-objects- linux-x64-mbx-v4-test-others-objects-
           linux-x64-mbx-v4-tools-objects- docker.io--tonistiigi--binfmt-
