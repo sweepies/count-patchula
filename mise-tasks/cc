@@ -10,4 +10,6 @@ for arg in "$@"; do
   esac
   args+=("$arg")
 done
-exec zig cc "${args[@]}"
+# Without it, Zig builds its runtime for the build machine's CPU, and a binary
+# from an AVX-512 runner dies with SIGILL on a runner without it.
+exec zig cc -mcpu=baseline "${args[@]}"

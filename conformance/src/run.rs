@@ -41,18 +41,25 @@ pub fn run_renovate(repositories: &[String]) -> Result<String> {
         install.join("package.json"),
         format!(r#"{{"private":true,"dependencies":{{"renovate":"{RENOVATE_VERSION}"}}}}"#),
     )?;
+    // aube refuses a release that lost the provenance an earlier one had.
+    // This Renovate's tree has one: @yarnpkg/libzip 3.2.2 has no attestation,
+    // while 3.2.0 had one.
+    std::fs::write(
+        install.join("aube-workspace.yaml"),
+        "trustPolicyExclude:\n  - \"@yarnpkg/libzip@3.2.2\"\n",
+    )?;
     let config = root.path().join("config.json");
     std::fs::write(&config, "{}")?;
     let result = Command::new("mise")
-        .args(["exec", "--", "bun", "install", "--ignore-scripts"])
-        .arg("--cwd")
+        .args(["exec", "--", "aube", "--dir"])
         .arg(&install)
+        .args(["install", "--ignore-scripts"])
         .env_remove("RENOVATE_TOKEN")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()?;
     if !result.success() {
-        return Err(Error::Input("Bun could not install the pinned Renovate executable; check mise install and registry access".into()));
+        return Err(Error::Input("aube could not install the pinned Renovate executable; check mise install and registry access".into()));
     }
     let log_path = root.path().join("stdout.jsonl");
     let stderr_path = root.path().join("stderr.jsonl");

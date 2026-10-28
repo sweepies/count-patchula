@@ -1,9 +1,10 @@
-#!/usr/bin/env bash
+#!/usr/bin/env nu
 #MISE description="Repeat the offline suite with varied test thread counts; logs stay outside the repository"
 #MISE env.CARGO_NET_OFFLINE = "true"
 #MISE env.PATCHULA_RECORD = "0"
 # The same lockfile engines as test:tools; a unit test keeps the pins equal.
 #MISE tools.aube = "2.8.1"
+#MISE tools.bun = "1.4.3"
 #MISE tools.yarn = "4.18.1"
 #MISE tools.python = "3.14.8"
 #MISE tools.uv = "0.13.1"
@@ -17,16 +18,20 @@
 #USAGE flag "--runs <runs>" default="12" help="Iterations of the whole suite"
 #USAGE flag "--filter <filter>" default="" help="Only run tests whose names contain this"
 #USAGE flag "--log-dir <dir>" default="/tmp/patchula-stress" help="Where each run's log goes"
-set -euo pipefail
-log_dir="${usage_log_dir:?}"
-mkdir -p "$log_dir"
-for iteration in $(seq 1 "${usage_runs:?}"); do
-  for threads in 1 2 16; do
-    log="$log_dir/${iteration}-${threads}.log"
-    if ! cargo test --workspace --locked -- --test-threads="$threads" "${usage_filter:-}" > "$log" 2>&1; then
-      cat "$log"
-      exit 1
-    fi
-    echo "passed iteration=$iteration threads=$threads"
-  done
-done
+
+def main [--runs: int = 12, --filter: string = "", --log-dir: string = "/tmp/patchula-stress"] {
+  mkdir $log_dir
+  let filter = if $filter == "" { [] } else { [$filter] }
+  for iteration in 1..$runs {
+    for threads in [1 2 16] {
+      let log = $log_dir | path join $"($iteration)-($threads).log"
+      try {
+        ^cargo test --workspace --locked -- $"--test-threads=($threads)" ...$filter o+e> $log
+      } catch {
+        print --raw --no-newline (open --raw $log)
+        exit 1
+      }
+      print $"passed iteration=($iteration) threads=($threads)"
+    }
+  }
+}

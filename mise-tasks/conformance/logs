@@ -1,19 +1,34 @@
-#!/usr/bin/env bun
-//MISE description="Inspect output snapshot identities and skip reasons without reading upstream source"
-//USAGE arg "<log>" help="Renovate JSON log"
-//USAGE arg "<repository>" help="Repository, such as owner/repo"
-//USAGE arg "[manager]" help="Only this manager's dependencies"
-const [path, repository, manager] = process.argv.slice(2);
-for (const line of (await Bun.file(path).text()).split("\n")) {
-  if (!line.startsWith("{")) continue;
-  const r = JSON.parse(line);
-  if (r.repository !== repository) continue;
-  if (r.msg === "Repository finished") console.log(JSON.stringify({ result: r.result, exitCode: r.exitCode }));
-  if (r.msg !== "packageFiles with updates") continue;
-  for (const [m, files] of Object.entries(r.config ?? r.packageFiles ?? {})) {
-    if (manager && m !== manager) continue;
-    for (const file of files)
-      for (const d of file.deps)
-        console.log(JSON.stringify({ manager: m, file: file.packageFile, name: d.depName, package: d.packageName, source: d.datasource, current: d.currentValue, version: d.currentVersion, digest: d.currentDigest, skip: d.skipReason, updates: d.updates, registry: d.registryUrls }));
+#!/usr/bin/env nu
+#MISE description="Inspect output snapshot identities and skip reasons without reading upstream source"
+#USAGE arg "<log>" help="Renovate JSON log"
+#USAGE arg "<repository>" help="Repository, such as owner/repo"
+#USAGE arg "[manager]" help="Only this manager's dependencies"
+
+# The record's fields under new names, in order, leaving out the ones it lacks.
+def pick [fields: record] {
+  let source = $in
+  $fields | items {|name, field| {name: $name, field: $field} }
+  | where {|f| $f.field in ($source | columns) }
+  | reduce -f {} {|f, picked| $picked | insert $f.name ($source | get $f.field) }
+}
+
+def main [log: path, repository: string, manager?: string] {
+  for line in (open --raw $log | lines | where {|line| $line | str starts-with "{" }) {
+    let record = $line | from json
+    if $record.repository? != $repository { continue }
+    if $record.msg? == "Repository finished" {
+      print ($record | pick {result: result, exitCode: exitCode} | to json --raw)
+    }
+    if $record.msg? != "packageFiles with updates" { continue }
+    let managers = $record.config? | default $record.packageFiles? | default {}
+    for entry in ($managers | transpose name files) {
+      if $manager != null and $entry.name != $manager { continue }
+      for file in $entry.files {
+        for d in $file.deps {
+          let fields = $d | pick {name: depName, package: packageName, source: datasource, current: currentValue, version: currentVersion, digest: currentDigest, skip: skipReason, updates: updates, registry: registryUrls}
+          print ({manager: $entry.name} | merge ($file | pick {file: packageFile}) | merge $fields | to json --raw)
+        }
+      }
+    }
   }
 }
