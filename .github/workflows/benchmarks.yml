@@ -48,8 +48,6 @@ jobs:
         run: mise run benchmarks:record
       - name: Export portable measurement artifact
         run: mise run benchmarks:export
-      - name: Measure build storage before cache export
-        run: mise run cache:usage
       - name: Publish timing summary
         if: always()
         run: mise run benchmarks:summary --out "$GITHUB_STEP_SUMMARY"

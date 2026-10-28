@@ -9,11 +9,6 @@ run = "cargo build --workspace --locked"
 description = "Inspect mbx toolchain, local store and remote configuration"
 run = "mbx doctor"
 
-["cache:usage"]
-description = "Show the build target's size and the free disk space"
-# mbx manages the target through a symlink, so measure what it points to.
-run = ["du -sh target/.", 'df -h . "${RUNNER_TEMP:-${TMPDIR:-/tmp}}"']
-
 ["conformance:compare"]
 description = "Compare Renovate JSON output with a versioned patchula report; forwards CLI arguments"
 raw_args = true
@@ -83,6 +78,11 @@ apm = "0.35.0"
 [lint]
 description = "Run every check in hk.pkl on the whole tree, Clippy included"
 run = "hk check --all"
+
+["lint:ci"]
+description = "Run hk's check hook on the files changed since a ref, writing SARIF for code scanning; GitHub Actions only"
+usage = 'arg "<from_ref>" help="The base branch, or the commit before a push"'
+run = 'hk check --from-ref "${usage_from_ref?}" --to-ref HEAD --no-progress --sarif "$RUNNER_TEMP/hk.sarif"'
 
 ["hooks:install"]
 description = "Install the pre-commit and commit-msg hooks, which run hk through mise"

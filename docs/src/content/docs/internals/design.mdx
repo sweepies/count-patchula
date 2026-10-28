@@ -131,13 +131,18 @@ git hooks that run hk through mise:
 
 `mise run lint` runs `hk check --all`: the pre-commit checks on the whole tree
 plus Clippy, which is too slow for every commit. CI's lint job runs
-`mise run lint:ci` instead, with `--from-ref`, so each step checks only the
-files a push or pull request changed, and Clippy runs only when Rust sources,
-Cargo files or `mise.toml` change. It turns the findings hk can place on a
-line into annotations on the diff, and writes a job summary of every step.
-A separate pull request check runs `mise-tasks/lint/commits` over every
-commit, the title and the body, since a squash merge takes its message from
-the title and credits each commit author after the local hooks have run.
+`mise run lint:ci` instead, with the base branch or the commit before a push,
+so each step checks only the files that changed, and Clippy runs only when
+Rust sources, Cargo files or `mise.toml` change. hk's findings go to GitHub
+code scanning as SARIF, which shows them on the diff. A separate pull request
+check runs `mise-tasks/lint/commits` over every commit and the body, since a
+commit made without the hooks arrives unchecked and a squash merge credits
+each commit author after the local hooks have run.
+
+CI's first job sorts the changed paths with `dorny/paths-filter`: a docs-only
+change skips the Rust jobs and leaves the Rust toolchain out of lint, and a
+change outside `docs/` and the mise files skips the docs build. Caches are plain
+`actions/cache` and mr-boxington entries that GitHub evicts on its own.
 
 This site is Astro Starlight, in `docs/`, served from Cloudflare Workers and
 built from `main` with no per-release versions. `mise run docs:build` builds it
