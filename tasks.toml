@@ -1,0 +1,227 @@
+# mise tasks, included by mise.toml. Anything longer than a command or two
+# is a nu file task in mise-tasks/ instead.
+
+[build]
+description = "Build the workspace through mbx"
+run = "cargo build --workspace --locked"
+
+["cache:doctor"]
+description = "Inspect mbx toolchain, local store and remote configuration"
+run = "mbx doctor"
+
+["cache:usage"]
+description = "Show the build target's size and the free disk space"
+# mbx manages the target through a symlink, so measure what it points to.
+run = ["du -sh target/.", 'df -h . "${RUNNER_TEMP:-${TMPDIR:-/tmp}}"']
+
+["conformance:compare"]
+description = "Compare Renovate JSON output with a versioned patchula report; forwards CLI arguments"
+raw_args = true
+run = "cargo run --quiet --locked -p patchula-conformance --"
+
+["benchmarks:build"]
+description = "Build release subjects outside tak's measured commands"
+run = ["cargo build --release --locked -p patchula-cli", "cargo build --release --locked -p patchula-github --example replay_bench"]
+
+["benchmarks:run"]
+description = "Report tak timings and optional instruction counts; accepts tak run flags"
+depends = ["benchmarks:build"]
+run = ["mkdir -p benchmark-results", "tak run --export-json benchmark-results/results.json > benchmark-results/summary.txt"]
+
+["benchmarks:record"]
+description = "Record report-only tak results in local git notes; never push"
+depends = ["benchmarks:build"]
+run = ["mkdir -p benchmark-results", "tak run --record --export-json benchmark-results/results.json > benchmark-results/summary.txt"]
+
+["benchmarks:export"]
+description = "Export local HEAD benchmark notes as a portable artifact"
+run = ["mkdir -p benchmark-results", "tak artifact export --output benchmark-results/tak-artifact.json"]
+
+["benchmarks:summary"]
+description = "Append the tak timing summary, when there is one, as preformatted Markdown"
+usage = 'flag "--out <file>" default="/dev/stdout" help="Markdown file to append to"'
+run = '[ ! -f benchmark-results/summary.txt ] || { echo "<pre>"; cat benchmark-results/summary.txt; echo "</pre>"; } >> "$usage_out"'
+
+[test]
+description = "Run the whole offline suite: unit tests, then the real lockfile tool tests"
+run = [{ task = "test:unit" }, { task = "test:tools" }]
+
+["test:unit"]
+description = "Test the workspace through mbx, without the real lockfile tool tests"
+usage = '''
+flag "--part <part>" default="all" help="all, or one half for CI: update (patchula-update, the slowest suite) or others (every other crate)" {
+  choices "all" "update" "others"
+}
+'''
+run = 'cargo test {% if usage.part == "update" %}-p patchula-update{% elif usage.part == "others" %}--workspace --exclude patchula-update{% else %}--workspace{% endif %} --locked --no-fail-fast -- --skip lockfiles::tests::real_'
+
+["test:tools"]
+description = "Run the tests that drive the real lockfile tools"
+run = "cargo test --locked -p patchula-update --lib --no-fail-fast -- lockfiles::tests::real_"
+
+# The lockfile engines these tests run, matching
+# crates/update/src/lockfiles/defaults.toml. Task-scoped so a development
+# `mise install` does not fetch them. mise-tasks/test/stress uses the same
+# pins, and a unit test keeps all three equal.
+["test:tools".tools]
+aube = "2.8.1"
+bun = "1.4.3"
+yarn = "4.18.1"
+python = "3.14.8"
+uv = "0.13.1"
+poetry = "2.5.1"
+dotnet = "9.0.319"
+ruby = "3.4.11"
+apm = "0.35.0"
+"http:php[url=https://dl.static-php.dev/static-php-cli/common/php-{{version}}-cli-linux-x86_64.tar.gz]" = "8.5.8"
+"http:composer[url=https://getcomposer.org/download/{{version}}/composer.phar,bin=composer]" = "2.10.3"
+"http:nix[url=https://hydra.nixos.org/build/350797336/download/2/nix,checksum=sha256:5d580d993636e3b987868881776214a7d4a169434715ec30bf9ead9345d78fb6,bin=nix]" = "2.35.5"
+
+[lint]
+description = "Check formatting, reject all Clippy warnings, and lint the GitHub workflows"
+depends = ["lint:rust", "lint:actions"]
+
+["lint:rust"]
+description = "Check formatting and reject all Clippy warnings"
+run = ["cargo fmt --all --check", "cargo clippy --workspace --all-targets --locked -- -D warnings"]
+
+["lint:actions"]
+description = "Lint the GitHub Actions workflows"
+tools = { jactionlint = "2.2.0", shellcheck = "0.11.0" }
+run = "jactionlint"
+
+["fixtures:check"]
+description = "Reject possible secrets in all HTTP cassettes"
+run = "cargo run --quiet --locked -p patchula-testkit --bin fixtures -- fixtures"
+
+["fixtures:record"]
+description = "Opt in to live HTTP recording, then scan the resulting cassettes"
+env = { PATCHULA_RECORD = "1" }
+run = ["cargo test --workspace --locked", "mise run fixtures:check"]
+
+["release:notes"]
+description = "Rewrite a published GitHub release's notes with communique; needs ANTHROPIC_API_KEY (Infisical, environment prod)"
+usage = 'arg "<tag>" help="Release tag, such as v0.1.0"'
+tools = { communique = "1.6.1" }
+run = 'communique generate "${usage_tag?}" --github-release'
+
+# The documentation site. Node and aube are task-scoped, like the test-only
+# lockfile engines, so a development `mise install` does not fetch them.
+["docs:install"]
+description = "Install the documentation site's packages from its lockfile"
+dir = "docs"
+tools = { node = "24.21.0", aube = "2.8.1" }
+run = "aube ci"
+
+["docs:dev"]
+description = "Serve the documentation site with live reload"
+depends = ["docs:install"]
+dir = "docs"
+tools = { node = "24.21.0", aube = "2.8.1" }
+run = "aube run dev"
+
+["docs:build"]
+description = "Build the documentation site into docs/dist"
+depends = ["docs:install"]
+dir = "docs"
+tools = { node = "24.21.0", aube = "2.8.1" }
+sources = ["src/**/*", "public/**/*", "astro.config.mjs", "package.json", "aube-lock.yaml", "tsconfig.json"]
+outputs = ["dist/**/*"]
+run = "aube run build"
+
+["docs:deploy"]
+description = "Deploy the built site to Cloudflare Workers; needs CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID"
+depends = ["docs:build"]
+dir = "docs"
+tools = { node = "24.21.0", aube = "2.8.1" }
+run = "aube exec wrangler deploy"
+
+["docs:upload"]
+description = "Upload the built site as a Cloudflare preview version, without deploying it; Workers Builds runs this for pull request branches"
+depends = ["docs:build"]
+dir = "docs"
+tools = { node = "24.21.0", aube = "2.8.1" }
+run = "aube exec wrangler versions upload"
+
+["corpus:snapshot"]
+description = "Regenerate tests/corpus-extraction.tsv after an intended extraction change"
+env = { PATCHULA_UPDATE_SNAPSHOT = "1" }
+run = "cargo test --locked -p patchula-manager --test corpus"
+
+["help:snapshot"]
+description = "Regenerate crates/cli/tests/help.txt, the plain --help pages, after an intended help change"
+env = { PATCHULA_UPDATE_SNAPSHOT = "1" }
+run = "cargo test --locked -p patchula-cli --test cli help_pages_match_the_snapshot"
+
+["corpus:check"]
+description = "Look up every corpus dependency against live registries and plan its branches without writing; needs a GitHub token; forwards run flags; PATCHULA_BIN runs an already-built binary"
+raw_args = true
+dir = "{{config_root}}/tests/corpus"
+run = "${PATCHULA_BIN:-cargo run --release --locked --manifest-path ../../Cargo.toml -p patchula-cli --} run --dry-run --json -v"
+
+[lookup]
+description = "Run read-only lookup; forwards repository and lookup flags"
+raw_args = true
+run = "cargo run --quiet --locked -p patchula-cli -- lookup"
+
+[run]
+description = "Plan or apply dependency branches; forwards repositories and write flags"
+raw_args = true
+run = "cargo run --quiet --locked -p patchula-cli -- run"
+
+[server]
+description = "Run the API-only GitHub App server; accepts server flags"
+raw_args = true
+run = "cargo run --quiet --locked -p patchula-cli -- serve"
+
+["server:schema"]
+description = "Print the published operator settings schema"
+run = "cargo run --quiet --locked -p patchula-cli -- config server-schema"
+
+["lookup:release"]
+description = "Run read-only lookup in release mode; forwards repository and lookup flags"
+raw_args = true
+run = "cargo run --release --quiet --locked -p patchula-cli -- lookup"
+
+["benchmarks:lookup-release"]
+description = "Measure release cold/warm source and engine fixtures offline"
+run = ["cargo test --release --locked -p patchula-datasource --test recorded public_sources_cold_and_conditional_warm -- --nocapture", "cargo test --release --locked -p patchula-engine --test recorded -- --nocapture"]
+
+["benchmarks:catalogs"]
+description = "Replay four captured public npm documents offline; arguments: input-directory new-cache-path"
+raw_args = true
+env = { CARGO_NET_OFFLINE = "true" }
+run = "cargo run --release --locked -p patchula-datasource --example catalog_bench --"
+
+["fixtures:refresh-npm"]
+description = "Record full public npm metadata in existing cassettes without GitHub credentials"
+env = { PATCHULA_RECORD = "1" }
+run = ["cargo test --locked -p patchula-datasource --test recorded refresh_public_npm_metadata -- --ignored", "mise run fixtures:check"]
+
+["fixtures:record-mise"]
+description = "Record what the pinned mise lists for the tools in fixtures/mise; needs the network, a mise on PATH and GH_TOKEN"
+env = { PATCHULA_RECORD = "1" }
+run = ["cargo test --locked -p patchula-update --test mise_listings -- --nocapture", "mise run fixtures:check"]
+
+["fixtures:record-wave1"]
+description = "Record only Phase 1 public sources and multi-repo lookup fixtures"
+env = { PATCHULA_RECORD = "1" }
+run = ["cargo test --locked -p patchula-datasource --test recorded -- --nocapture", "cargo test --locked -p patchula-engine --test recorded -- --nocapture", "mise run fixtures:check"]
+
+["benchmarks:lookup"]
+description = "Measure cold/warm batch and source replay with fixed public cassettes"
+run = ["cargo test --locked -p patchula-datasource --test recorded -- --nocapture", "cargo test --locked -p patchula-engine --test recorded -- --nocapture"]
+
+["fixtures:record-wave2"]
+description = "Record public registry v2, Terraform, PyPI and Helm fixtures"
+env = { PATCHULA_RECORD = "1" }
+run = ["cargo test --locked -p patchula-datasource --test wave2 -- --nocapture", "mise run fixtures:check"]
+
+["benchmarks:wave2"]
+description = "Replay wave 2 source fixtures in release mode"
+run = "cargo test --release --locked -p patchula-datasource --test wave2 -- --nocapture"
+
+["fixtures:record-engine"]
+description = "Record the public multi-repository manager/engine fixture, and what mise lists for its tools; needs a mise on PATH"
+env = { PATCHULA_RECORD = "1" }
+run = ["cargo test --locked -p patchula-engine --test recorded -- --nocapture", "mise run fixtures:check"]

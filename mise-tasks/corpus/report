@@ -1,26 +1,53 @@
-#!/usr/bin/env bash
+#!/usr/bin/env nu
 #MISE description="Look up and plan every corpus dependency, then summarize the report; fails when a branch fails to plan"
-#MISE tools.jq = "1.8.2"
 #USAGE flag "--cache <dir>" required=#true help="Registry cache directory, kept between runs"
 #USAGE flag "--out <file>" default="corpus-report.json" help="Where the JSON report goes"
 #USAGE flag "--summary <file>" help="Append the Markdown summary here instead of printing it"
-set -euo pipefail
-report="$(realpath -m "${usage_out:?}")"
-cache="$(realpath -m "${usage_cache:?}")"
-log="$(mktemp)"
-mkdir -p "$cache"
-mise run corpus:check --cache "$cache" > "$report" 2> "$log" || { grep -v '^[-+@ ]' "$log" | tail -40; exit 1; }
-{
-  echo '### Corpus'
-  echo '```'
-  grep -E '^patchula' "$log" || true
-  jq -r '.repositories[] | "\(.repository): \([.packageFiles[].dependencies[]] | length) dependencies, \([.packageFiles[].dependencies[].updates[]] | length) updates", ((.warnings // [])[] | "  warning: \(.)")' "$report"
-  jq -r '.actions.branches | group_by(.status) | map("\(.[0].status): \(length) branches") | .[]' "$report"
-  jq -r '.actions.branches[] | select(.status == "skipped" or .status == "error") | "\(.status) \(.branch): \(.reason)"' "$report"
-  echo '```'
-} >> "${usage_summary:-/dev/stdout}"
-errors=$(jq '[.actions.branches[] | select(.status == "error")] | length' "$report")
-if [ "$errors" != 0 ]; then
-  echo "::error::$errors corpus branches failed to plan"
-  exit 1
-fi
+
+# A value as jq's string interpolation prints it: strings bare, the rest as JSON.
+def text []: any -> string {
+  if ($in | describe) == string { $in } else { $in | to json --raw }
+}
+
+def main [--cache: path, --out: path = "corpus-report.json", --summary: path] {
+  if $cache == null {
+    error make --unspanned {msg: "--cache is required"}
+  }
+  # corpus:check runs in tests/corpus, so both paths must be absolute.
+  let cache = $cache | path expand --no-symlink
+  let report_path = $out | path expand --no-symlink
+  let log = mktemp -t patchula-corpus.XXXXXX
+  mkdir $cache
+  try {
+    ^mise run corpus:check --cache $cache out> $report_path err> $log
+  } catch {
+    open --raw $log | lines | where {|line| not ($line =~ '^[-+@ ]') } | last 40 | each {|line| print -e $line } | ignore
+    exit 1
+  }
+  # Parse as JSON whatever the file is called; open would go by the extension.
+  let report = open --raw $report_path | from json
+  let branches = $report.actions.branches
+  let lines = [
+    "### Corpus"
+    "```"
+    ...(open --raw $log | lines | where {|line| $line | str starts-with patchula })
+    ...($report.repositories | each {|repository|
+      let dependencies = $repository.packageFiles | get dependencies | flatten
+      let updates = $dependencies | get updates | flatten | length
+      [
+        $"($repository.repository | text): ($dependencies | length) dependencies, ($updates) updates"
+        ...($repository.warnings? | default [] | each {|warning| $"  warning: ($warning | text)" })
+      ]
+    } | flatten)
+    ...($branches | group-by status | items {|status, group| $"($status): ($group | length) branches" } | sort)
+    ...($branches | where status in [skipped error] | each {|branch| $"($branch.status | text) ($branch.branch | text): ($branch.reason? | text)" })
+    "```"
+  ]
+  let text = $lines | str join "\n" | $in + "\n"
+  if $summary == null { print --raw --no-newline $text } else { $text | save --append $summary }
+  let errors = $branches | where status == error | length
+  if $errors > 0 {
+    print $"::error::($errors) corpus branches failed to plan"
+    exit 1
+  }
+}

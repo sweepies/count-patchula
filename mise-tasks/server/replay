@@ -1,25 +1,41 @@
-#!/usr/bin/env bun
-//MISE description="Sign and deliver a saved webhook locally"
-//USAGE arg "<payload>" help="Saved webhook body"
-//USAGE arg "<event>" help="X-GitHub-Event value, such as push"
-//USAGE arg "<delivery>" help="X-GitHub-Delivery value"
-//USAGE arg "[url]" default="http://127.0.0.1:8080/webhook" help="Loopback webhook URL"
-import { createHmac } from "node:crypto";
-const [path, event, delivery, url = "http://127.0.0.1:8080/webhook"] = process.argv.slice(2);
-const destination = new URL(url);
-if (!["127.0.0.1", "localhost", "[::1]"].includes(destination.hostname)) throw new Error("replay target must be loopback");
-const file = process.env.PATCHULA_WEBHOOK_SECRET_FILE;
-const value = process.env.PATCHULA_WEBHOOK_SECRET;
-if (file && value) throw new Error("choose a secret file or environment value");
-const secret = (file ? await Bun.file(file).text() : value)?.replace(/[\r\n]+$/, "");
-if (!secret) throw new Error("set PATCHULA_WEBHOOK_SECRET_FILE or PATCHULA_WEBHOOK_SECRET");
-const body = new Uint8Array(await Bun.file(path).arrayBuffer());
-const signature = "sha256=" + createHmac("sha256", secret).update(body).digest("hex");
-const response = await fetch(destination, {
-  method: "POST",
-  body,
-  redirect: "error",
-  headers: { "content-type": "application/json", "x-hub-signature-256": signature, "x-github-event": event, "x-github-delivery": delivery },
-});
-console.log(`HTTP ${response.status}`);
-if (response.status !== (event === "ping" ? 200 : 202)) process.exitCode = 1;
+#!/usr/bin/env nu
+#MISE description="Sign and deliver a saved webhook locally"
+#USAGE arg "<payload>" help="Saved webhook body"
+#USAGE arg "<event>" help="X-GitHub-Event value, such as push"
+#USAGE arg "<delivery>" help="X-GitHub-Delivery value"
+#USAGE arg "[url]" default="http://127.0.0.1:8080/webhook" help="Loopback webhook URL"
+
+# HMAC-SHA256 (RFC 2104) as lowercase hex, computed in nu so the secret never
+# appears in a command line.
+def hmac-sha256 [key: binary]: binary -> string {
+  let message = $in
+  let block = 64
+  let key = if ($key | bytes length) > $block { $key | hash sha256 --binary } else { $key }
+  let key = [$key ...(0..<($block - ($key | bytes length)) | each { 0x[00] })] | bytes collect
+  let pad = {|byte| 0..<$block | each { $byte } | bytes collect }
+  let inner = [($key | bits xor (do $pad 0x[36])) $message] | bytes collect | hash sha256 --binary
+  [($key | bits xor (do $pad 0x[5c])) $inner] | bytes collect | hash sha256
+}
+
+def main [payload: path, event: string, delivery: string, url: string = "http://127.0.0.1:8080/webhook"] {
+  if ($url | url parse | get host) not-in [127.0.0.1 localhost "[::1]"] {
+    error make --unspanned {msg: "replay target must be loopback"}
+  }
+  let file = $env.PATCHULA_WEBHOOK_SECRET_FILE?
+  let value = $env.PATCHULA_WEBHOOK_SECRET?
+  if $file != null and $value != null {
+    error make --unspanned {msg: "choose a secret file or environment value"}
+  }
+  let secret = if $file != null { open --raw $file } else { $value | default "" } | str replace --regex '[\r\n]+$' ''
+  if $secret == "" {
+    error make --unspanned {msg: "set PATCHULA_WEBHOOK_SECRET_FILE or PATCHULA_WEBHOOK_SECRET"}
+  }
+  let body = open --raw $payload | into binary
+  let signature = $"sha256=($body | hmac-sha256 ($secret | into binary))"
+  let headers = {content-type: application/json, x-hub-signature-256: $signature, x-github-event: $event, x-github-delivery: $delivery}
+  let response = http post --full --allow-errors --redirect-mode error --headers $headers $url $body
+  print $"HTTP ($response.status)"
+  if $response.status != (if $event == ping { 200 } else { 202 }) {
+    exit 1
+  }
+}

@@ -1,21 +1,23 @@
-#!/usr/bin/env bash
+#!/usr/bin/env nu
 #MISE description="Run every check GitHub runs, one after another, and keep each stage's log"
 #MISE env.PATCHULA_RECORD = "0"
 #MISE env.CARGO_TERM_COLOR = "never"
 #USAGE flag "--log-dir <dir>" help="Where the stage logs go; a new temporary directory by default"
-set -euo pipefail
-log_dir="${usage_log_dir:-$(mktemp -d "${TMPDIR:-/tmp}/patchula-ci.XXXXXX")}"
-mkdir -p "$log_dir"
-echo "CI full logs: $log_dir"
-for task in lint build fixtures:check test:unit test:tools docs:build; do
-  log="$log_dir/${task//:/-}.log"
-  if mise run "$task" > "$log" 2>&1; then
-    cat "$log"
-  else
-    cat "$log"
-    failed_tests=$(awk '/^test .* \.\.\. FAILED$/ {sub(/^test /, ""); sub(/ \.\.\. FAILED$/, ""); printf "%s,", $0}' "$log")
-    # Keep the path and test names even when a caller filters for test result:.
-    echo "test result: FAILED; stage=$task; failing-tests=${failed_tests:-see-log}; full-log=$log"
-    exit 1
-  fi
-done
+
+def main [--log-dir: string] {
+  let log_dir = if $log_dir == null { mktemp -d -t patchula-ci.XXXXXX } else { $log_dir }
+  mkdir $log_dir
+  print $"CI full logs: ($log_dir)"
+  for task in [lint build fixtures:check test:unit test:tools docs:build] {
+    let log = $log_dir | path join $"($task | str replace --all ':' '-').log"
+    let failed = try { ^mise run $task o+e> $log; false } catch { true }
+    print --raw --no-newline (open --raw $log)
+    if $failed {
+      let tests = open --raw $log | lines | parse --regex '^test (?<name>.*) \.\.\. FAILED$' | get name
+      let tests = if ($tests | is-empty) { "see-log" } else { $tests | each {|name| $"($name)," } | str join }
+      # Keep the path and test names even when a caller filters for test result:.
+      print $"test result: FAILED; stage=($task); failing-tests=($tests); full-log=($log)"
+      exit 1
+    }
+  }
+}

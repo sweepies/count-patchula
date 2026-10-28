@@ -1540,24 +1540,19 @@ fn npm_locks_aube_cannot_write_stay_on_native_npm() {
 #[test]
 fn lockfile_engine_pins_match_the_repository_mise_tasks() {
     let defaults = tool_defaults().unwrap();
-    for (task, script) in [
-        (
-            "test:tools",
-            include_str!("../../../../mise-tasks/test/tools"),
-        ),
-        (
-            "test:stress",
-            include_str!("../../../../mise-tasks/test/stress"),
-        ),
+    let tasks: toml_edit::Document<String> =
+        include_str!("../../../../tasks.toml").parse().unwrap();
+    let stress: toml_edit::Document<String> = include_str!("../../../../mise-tasks/test/stress")
+        .lines()
+        .filter_map(|line| line.strip_prefix("#MISE "))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .parse()
+        .unwrap();
+    for (task, tools) in [
+        ("test:tools", &tasks["test:tools"]["tools"]),
+        ("test:stress", &stress["tools"]),
     ] {
-        let header: toml_edit::Document<String> = script
-            .lines()
-            .filter_map(|line| line.strip_prefix("#MISE "))
-            .collect::<Vec<_>>()
-            .join("\n")
-            .parse()
-            .unwrap();
-        let tools = &header["tools"];
         assert_eq!(
             tools["aube"].as_str(),
             defaults["tools"]["aube"].as_str(),
@@ -1568,7 +1563,7 @@ fn lockfile_engine_pins_match_the_repository_mise_tasks() {
             defaults["yarn"]["berry"].as_str(),
             "{task}"
         );
-        for tool in ["python", "uv", "poetry", "dotnet", "ruby", "apm"] {
+        for tool in ["bun", "python", "uv", "poetry", "dotnet", "ruby", "apm"] {
             assert_eq!(
                 tools[tool].as_str(),
                 defaults["tools"][tool].as_str(),
