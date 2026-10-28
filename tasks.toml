@@ -42,6 +42,10 @@ description = "Append the tak timing summary, when there is one, as preformatted
 usage = 'flag "--out <file>" default="/dev/stdout" help="Markdown file to append to"'
 run = '[ ! -f benchmark-results/summary.txt ] || { echo "<pre>"; cat benchmark-results/summary.txt; echo "</pre>"; } >> "$usage_out"'
 
+[ci]
+description = "Run every check GitHub runs, in parallel"
+depends = ["lint", "build", "fixtures:check", "test", "docs:build"]
+
 [test]
 description = "Run the whole offline suite: unit tests, then the real lockfile tool tests"
 run = [{ task = "test:unit" }, { task = "test:tools" }]
