@@ -88,6 +88,15 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
         .recover_work()
         .await
         .map_err(|_| Error("cannot recover pending work"))?;
+    let transport: Arc<dyn Transport> =
+        Arc::new(patchula_http::Network::new().map_err(|_| Error("cannot create HTTP transport"))?);
+    let app = App::new(options.app_id, &options.private_key, transport.clone())
+        .map_err(|_| Error("invalid GitHub App credentials"))?;
+    // The canonical slug is fetched, never guessed from repository names or senders.
+    let bot = app
+        .bot_login()
+        .await
+        .map_err(|_| Error("GitHub App authentication failed"))?;
     // The image has no mise of its own: the first start installs the pinned
     // one into the tool store, and later starts find it there.
     if let Some(workspace) = cache.workspace_dir() {
@@ -104,15 +113,6 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
             }
         }
     }
-    let transport: Arc<dyn Transport> =
-        Arc::new(patchula_http::Network::new().map_err(|_| Error("cannot create HTTP transport"))?);
-    let app = App::new(options.app_id, &options.private_key, transport.clone())
-        .map_err(|_| Error("invalid GitHub App credentials"))?;
-    // The canonical slug is fetched, never guessed from repository names or senders.
-    let bot = app
-        .bot_login()
-        .await
-        .map_err(|_| Error("GitHub App authentication failed"))?;
     // Without a client ID the CLI cannot sign in, but webhooks still work.
     let client_id = app.client_id().await.ok();
     if client_id.is_none() {
