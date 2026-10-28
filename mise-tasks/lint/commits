@@ -1,10 +1,10 @@
 #!/usr/bin/env nu
-#MISE description="Reject AI credit in a commit message, or check a pull request's commits, title and body"
+#MISE description="Reject AI credit in a commit message, or check a pull request's commits and body"
 #USAGE arg "[message_file]" help="Commit message file, as the commit-msg hook passes it; without one, checks the pull request that GH_TOKEN, REPO and PR name"
-# For a pull request, the title and every non-merge commit must also be
-# conventional commits: GitHub builds a squash merge's message from the title
-# and adds a Co-authored-by line for each commit author, which no local hook
-# sees.
+# For a pull request, every non-merge commit must also be a conventional
+# commit, since a commit made without the hooks arrives unchecked. A squash
+# merge also adds a Co-authored-by line for each commit author, which no local
+# hook sees.
 
 # AI tools and bots that must not be credited. Matched as whole words, in any
 # case. Add a name here to reject it.
@@ -63,12 +63,8 @@ def main [message_file?: path] {
   let pr = ^gh api $api | from json
   let commits = ^gh api $"($api)/commits" --paginate --slurp | from json | flatten
   mut problems = []
-  for line in (ai-credits $pr.title) { $problems ++= [$"title: ($line)"] }
   if $pr.body != null {
     for line in (ai-credits $pr.body) { $problems ++= [$"body: ($line)"] }
-  }
-  if not (conventional $pr.title) {
-    $problems ++= [$"the title is not a conventional commit: ($pr.title)"]
   }
   for commit in $commits {
     let id = $commit.sha | str substring 0..<12
@@ -85,7 +81,7 @@ def main [message_file?: path] {
     }
   }
   if ($problems | is-empty) {
-    print $"The title, the body and ($commits | length) commits credit no AI."
+    print $"The body and ($commits | length) commits credit no AI."
     return
   }
   for problem in $problems { print $"::error::($problem)" }

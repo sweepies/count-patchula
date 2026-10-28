@@ -1,7 +1,7 @@
 name: Commits
 
-# GitHub builds a squash merge's message from the pull request's title and adds
-# a Co-authored-by line for each commit author, after every local hook has run.
+# Commits made without the local hooks, and the Co-authored-by lines a squash
+# merge adds for each commit author, are only checked here.
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
