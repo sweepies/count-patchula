@@ -84,6 +84,8 @@ fn remove_intermediates(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+const INVARIANT: &str = "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT";
+
 /// The restore's environment. The server image has no ICU and sets
 /// `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT` instead; the tool's environment
 /// starts empty, so the server's setting is passed on.
@@ -98,7 +100,7 @@ pub(super) fn restore_env(packages: &Path, invariant: Option<String>) -> Vec<(St
         ),
     ];
     if let Some(invariant) = invariant {
-        env.push(("DOTNET_SYSTEM_GLOBALIZATION_INVARIANT".into(), invariant));
+        env.push((INVARIANT.into(), invariant));
     }
     env
 }
@@ -125,7 +127,7 @@ impl Runner {
         let target = target(&cwd)?;
         let env = restore_env(
             &driver.join("nuget-packages"),
-            std::env::var("DOTNET_SYSTEM_GLOBALIZATION_INVARIANT").ok(),
+            std::env::var(INVARIANT).ok(),
         );
         self.tool(
             driver,

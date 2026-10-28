@@ -24,6 +24,8 @@ pub(super) const INSTALL_TIMEOUT: std::time::Duration = std::time::Duration::fro
 /// Where packslip installs the pinned mise in the store, one directory per
 /// version, when the host has no mise of its own.
 const STORE_MISE: &str = "patchula-mise";
+/// Tokens packslip reads for GitHub's API.
+const GITHUB_TOKENS: [&str; 2] = ["GITHUB_TOKEN", "GH_TOKEN"];
 /// The signer fingerprint mise publishes for its packslip releases.
 const MISE_SIGNER: &str = "ps1_nlhmwtfeufglxv5myvwvronk7a";
 
@@ -112,10 +114,9 @@ pub(super) async fn install_mise(
             ("PATH", Some("/usr/local/bin:/usr/bin:/bin".into())),
             ("HOME", Some(home.path().as_os_str().into())),
             ("NO_COLOR", Some("1".into())),
-            ("GITHUB_TOKEN", std::env::var_os("GITHUB_TOKEN")),
-            ("GH_TOKEN", std::env::var_os("GH_TOKEN")),
         ]
         .into_iter()
+        .chain(GITHUB_TOKENS.map(|key| (key, std::env::var_os(key))))
         .filter_map(|(key, value)| Some((key.into(), value?)))
         .collect(),
         timeout: INSTALL_TIMEOUT,
