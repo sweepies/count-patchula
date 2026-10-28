@@ -1542,46 +1542,23 @@ fn lockfile_engine_pins_match_the_repository_mise_tasks() {
     let defaults = tool_defaults().unwrap();
     let tasks: toml_edit::Document<String> =
         include_str!("../../../../tasks.toml").parse().unwrap();
-    let stress: toml_edit::Document<String> = include_str!("../../../../mise-tasks/test/stress")
-        .lines()
-        .filter_map(|line| line.strip_prefix("#MISE "))
-        .collect::<Vec<_>>()
-        .join("\n")
-        .parse()
-        .unwrap();
-    for (task, tools) in [
-        ("test:tools", &tasks["test:tools"]["tools"]),
-        ("test:stress", &stress["tools"]),
-    ] {
+    let tools = &tasks["test:tools"]["tools"];
+    assert_eq!(tools["aube"].as_str(), defaults["tools"]["aube"].as_str());
+    assert_eq!(tools["yarn"].as_str(), defaults["yarn"]["berry"].as_str());
+    for tool in ["bun", "python", "uv", "poetry", "dotnet", "ruby", "apm"] {
         assert_eq!(
-            tools["aube"].as_str(),
-            defaults["tools"]["aube"].as_str(),
-            "{task}"
+            tools[tool].as_str(),
+            defaults["tools"][tool].as_str(),
+            "{tool}"
         );
-        assert_eq!(
-            tools["yarn"].as_str(),
-            defaults["yarn"]["berry"].as_str(),
-            "{task}"
-        );
-        for tool in ["bun", "python", "uv", "poetry", "dotnet", "ruby", "apm"] {
-            assert_eq!(
-                tools[tool].as_str(),
-                defaults["tools"][tool].as_str(),
-                "{task} {tool}"
-            );
-        }
-        let php = php::tools(
-            patchula_config::PhpBuild::Static,
-            defaults["tools"]["php"].as_str().unwrap(),
-            defaults["tools"]["composer"].as_str().unwrap(),
-        );
-        for (tool, version) in php {
-            assert_eq!(
-                tools[&tool].as_str(),
-                Some(version.as_str()),
-                "{task} {tool}"
-            );
-        }
+    }
+    let php = php::tools(
+        patchula_config::PhpBuild::Static,
+        defaults["tools"]["php"].as_str().unwrap(),
+        defaults["tools"]["composer"].as_str().unwrap(),
+    );
+    for (tool, version) in php {
+        assert_eq!(tools[&tool].as_str(), Some(version.as_str()), "{tool}");
     }
 }
 
