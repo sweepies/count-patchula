@@ -1,0 +1,141 @@
+#!/usr/bin/env nu
+#MISE description="Smoke-test the server image image:build loaded: user, annotations, tools, a first start that installs mise, the server and its volume, and lockfile tools from mise"
+#USAGE flag "--arch <arch>" default="amd64" help="Which patchula:smoke-<arch> image to run; arm64 runs under QEMU, so it only gets the quick checks" {
+#USAGE   choices "amd64" "arm64"
+#USAGE }
+
+def check [name: string, ok: bool] {
+  if not $ok {
+    print $"FAIL ($name)"
+    error make --unspanned {msg: $"smoke check failed: ($name)"}
+  }
+  print $"ok   ($name)"
+}
+
+def since [start: datetime] {
+  (date now) - $start | format duration sec
+}
+
+def --wrapped run-in [image: string, platform: string, entrypoint: string, ...args: string] {
+  ^docker run --rm --platform $platform --entrypoint $entrypoint $image ...$args | complete
+}
+
+# A project whose packages.lock.json is stale. The lockfile runner restores
+# it with mise's dotnet in an environment that starts empty, as below. The
+# image has no ICU, so dotnet only starts with the invariant-globalization
+# setting the image sets and the runner passes on; without it, the restore
+# must fail.
+const NUGET_PROJECT = '<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+  </ItemGroup>
+</Project>
+'
+
+const NUGET_RESTORE = 'set -eu
+mise=$1 dotnet=$2 invariant=$3
+cp -r /smoke /tmp/app
+cd /tmp/app
+env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp/home MISE_DATA_DIR=/var/lib/patchula/tools MISE_YES=1 \
+  DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 NUGET_PACKAGES=/tmp/nuget "$invariant" \
+  "$mise" exec "dotnet@$dotnet" -- dotnet restore App.csproj --force-evaluate >&2
+cat packages.lock.json'
+
+def restore [image: string, volume: string, work: string, mise: string, dotnet: string, invariant: string] {
+  ^docker run --rm --volume $"($volume):/var/lib/patchula" --volume $"($work)/nuget:/smoke:ro" --entrypoint sh $image -c $NUGET_RESTORE sh $mise $dotnet $invariant | complete
+}
+
+def main [--arch: string = "amd64"] {
+  let image = $"patchula:smoke-($arch)"
+  let platform = $"linux/($arch)"
+  let annotations = ^tar --extract --to-stdout --file target/image/image.tar index.json | from json | get annotations
+  let version = $annotations."org.opencontainers.image.version"
+  let patchula = ^docker run --rm --platform $platform $image --version | complete
+  check $"patchula --version is ($version)" ($patchula.exit_code == 0 and ($patchula.stdout | str trim) == $"patchula ($version)")
+  check "git --version" ((run-in $image $platform git --version).exit_code == 0)
+  check "packslip version" ((run-in $image $platform packslip version).exit_code == 0)
+  check "no mise in the image" ((run-in $image $platform sh -c "command -v mise").exit_code != 0)
+  if $arch != "amd64" { return }
+
+  let config = ^docker image inspect --format '{{json .Config}}' $image | from json
+  check "runs as 10001" (((run-in $image $platform id -u).stdout | str trim) == "10001")
+  check "a volume at /var/lib/patchula" ($config.Volumes has "/var/lib/patchula")
+  check "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1" ("DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1" in $config.Env)
+  check "annotations" ($annotations."org.opencontainers.image.source" == "https://github.com/sweepies/count-patchula" and $annotations."org.opencontainers.image.licenses" == "MIT" and $annotations."org.opencontainers.image.revision" == (^git rev-parse HEAD | str trim))
+  check "config check-server" ((^docker run --rm $image config check-server /etc/patchula/server.pkl | complete).exit_code == 0)
+  check "git over https with the image's CA bundle" ((run-in $image $platform git ls-remote --heads https://github.com/sweepies/count-patchula main).exit_code == 0)
+
+  let work = mktemp -d -t patchula-smoke.XXXXXX
+  let name = $"patchula-smoke-(random chars -l 6 | str lowercase)"
+  let volume = $"($name)-data"
+  let out = try {
+    ^openssl genrsa -out $"($work)/app.pem" 2048
+    ^openssl req -x509 -newkey rsa:2048 -nodes -keyout $"($work)/ca.key" -out $"($work)/ca.pem" -days 1 -subj "/CN=patchula-smoke-ca" -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign"
+    ^openssl req -newkey rsa:2048 -nodes -keyout $"($work)/github.key" -out $"($work)/github.csr" -subj "/CN=api.github.com"
+    "subjectAltName=DNS:api.github.com\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n" | save $"($work)/github.ext"
+    ^openssl x509 -req -in $"($work)/github.csr" -CA $"($work)/ca.pem" -CAkey $"($work)/ca.key" -CAcreateserial -days 1 -extfile $"($work)/github.ext" -out $"($work)/github.pem"
+    mkdir $"($work)/www" $"($work)/nuget"
+    '{"slug":"patchula-smoke","client_id":"smoke"}' | save $"($work)/www/app"
+    $NUGET_PROJECT | save $"($work)/nuget/App.csproj"
+    '{"version": 1, "dependencies": {"net9.0": {}}}' | save $"($work)/nuget/packages.lock.json"
+    ^chmod -R a+rX $work
+    let credentials = [--env PATCHULA_APP_ID=12345 --env $"PATCHULA_APP_PRIVATE_KEY=(open --raw $'($work)/app.pem')" --env $"PATCHULA_WEBHOOK_SECRET=(random chars -l 32)"]
+
+    # The first start, against the real GitHub: the server installs mise into
+    # the new volume with packslip, then stops, because GitHub does not know
+    # the throwaway App. A token keeps packslip within GitHub's API limits on
+    # a shared runner.
+    let started = date now
+    let first = ^docker run --rm --env GITHUB_TOKEN --volume $"($volume):/var/lib/patchula" ...$credentials $image | complete
+    let installed = $first.stderr | lines | where $it =~ "lockfile tools run with this mise"
+    if ($installed | is-empty) { print ($first.stderr | lines | last 10 | str join "\n") }
+    check $"first start installs mise with packslip in (since $started)" ($first.exit_code != 0 and ($installed | length) == 1)
+    let mise = $installed | first | from json | get fields.mise
+    let mise_version = ^docker run --rm --volume $"($volume):/var/lib/patchula" --entrypoint $mise $image --version | complete
+    check $"($mise) runs \(($mise_version.stdout | str trim)\)" ($mise_version.exit_code == 0)
+
+    # The server asks GitHub who its App is before it listens, and the API's
+    # address is fixed, so a throwaway App needs a stand-in GitHub: openssl
+    # serves one answer for api.github.com under a CA only this container
+    # trusts.
+    job spawn { cd $"($work)/www"; ^sudo openssl s_server -accept 443 -cert ../github.pem -key ../github.key -WWW -quiet }
+    let started = date now
+    ^docker run --detach --name $name --add-host api.github.com:host-gateway --publish 127.0.0.1:18080:8080 --volume $"($volume):/var/lib/patchula" --volume $"($work)/ca.pem:/etc/smoke-ca.pem:ro" --env SSL_CERT_FILE=/etc/smoke-ca.pem ...$credentials $image
+    mut status = 0
+    for _ in 1..60 {
+      $status = ^curl --silent --max-time 2 --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18080/healthz | complete | get stdout | into int
+      if $status == 200 { break }
+      sleep 1sec
+    }
+    check $"/healthz answers 200 after (since $started)" ($status == 200)
+    check "the second start reuses the volume's mise" ((^docker logs $name | complete | get stderr | lines | where $it =~ "lockfile tools run with this mise" | length) == 1)
+    check "cache.sqlite in the volume" ((^docker exec $name test -f /var/lib/patchula/cache.sqlite | complete).exit_code == 0)
+    check "the documented health check command" ((^docker exec $name curl --fail --silent --show-error --output /dev/null http://127.0.0.1:8080/healthz | complete).exit_code == 0)
+
+    # Tools go into the server's volume as user 10001, as the runner installs them.
+    let started = date now
+    let node = ^docker run --rm --volume $"($volume):/var/lib/patchula" --env MISE_DATA_DIR=/var/lib/patchula/tools --env MISE_YES=1 --entrypoint $mise $image exec node@24 -- node --version | complete
+    if $node.exit_code != 0 { print ($node.stderr | lines | last 10 | str join "\n") }
+    check $"mise installs and runs node as 10001 \(($node.stdout | str trim)\) in (since $started)" ($node.exit_code == 0)
+
+    let dotnet = open crates/update/src/lockfiles/defaults.toml | get tools.dotnet
+    let started = date now
+    let nuget = restore $image $volume $work $mise $dotnet "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1"
+    if $nuget.exit_code != 0 { print ($nuget.stderr | lines | last 30 | str join "\n") }
+    let resolved = try { $nuget.stdout | from json | get dependencies."net9.0"."Newtonsoft.Json".resolved } catch { "none" }
+    check $"dotnet ($dotnet) from mise rewrites a NuGet lockfile as 10001 \(Newtonsoft.Json ($resolved)\) in (since $started)" ($nuget.exit_code == 0 and $resolved == "13.0.4")
+    let icu = restore $image $volume $work $mise $dotnet "PATCHULA_SMOKE=1"
+    check "and fails without DOTNET_SYSTEM_GLOBALIZATION_INVARIANT, for want of ICU" ($icu.exit_code != 0 and ($icu.stderr =~ "ICU"))
+    "passed"
+  } catch {|e| $e.msg }
+  if $out != "passed" { print (^docker logs $name | complete | get stderr | lines | last 20 | str join "\n") }
+  try { ^docker rm --force $name }
+  try { ^sudo pkill -f "s_server -accept 443" }
+  try { ^docker volume rm $volume }
+  rm --recursive --force $work
+  if $out != "passed" { error make --unspanned {msg: $out} }
+}

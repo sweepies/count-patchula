@@ -21,6 +21,141 @@ const SEEDABLE: &[&str] = &["node", "go", "bun", "aube", "yarn", "uv", "terrafor
 /// served about 44 KB/s when measured.
 pub(super) const INSTALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1800);
 
+/// Where packslip installs the pinned mise in the store, one directory per
+/// version, when the host has no mise of its own.
+const STORE_MISE: &str = "patchula-mise";
+/// The signer fingerprint mise publishes for its packslip releases.
+const MISE_SIGNER: &str = "ps1_nlhmwtfeufglxv5myvwvronk7a";
+
+fn on_path(name: &str) -> Option<PathBuf> {
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join(name))
+            .find(|file| file.is_file())
+    })
+}
+
+fn pinned_mise() -> Result<String, String> {
+    tool_defaults()?["tools"]["mise"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "embedded defaults pin no mise".into())
+}
+
+fn store_mise(tools: &Path) -> Option<PathBuf> {
+    let mise = tools
+        .join(STORE_MISE)
+        .join(pinned_mise().ok()?)
+        .join("bin/mise");
+    mise.is_file().then_some(mise)
+}
+
+/// The mise the runner starts: the host's on PATH, else the pinned one
+/// `bootstrap_mise` installed in the store.
+pub(super) fn find_mise(tools: &Path) -> Option<PathBuf> {
+    on_path("mise").or_else(|| store_mise(tools))
+}
+
+/// Make sure a host without mise has the pinned one: with packslip on PATH,
+/// install mise into the tool store, verified against mise's signer. Returns
+/// the mise lockfile tools will run with, or `None` when there is no mise and
+/// no packslip to install it.
+pub async fn bootstrap_mise(tools: &Path) -> Result<Option<PathBuf>, String> {
+    if let Some(mise) = on_path("mise") {
+        return Ok(Some(mise));
+    }
+    let Some(packslip) = on_path("packslip") else {
+        return Ok(store_mise(tools));
+    };
+    install_mise(&SystemExecutor, &packslip, tools)
+        .await
+        .map(Some)
+}
+
+pub(super) async fn install_mise(
+    executor: &dyn Executor,
+    packslip: &Path,
+    tools: &Path,
+) -> Result<PathBuf, String> {
+    if let Some(mise) = store_mise(tools) {
+        return Ok(mise);
+    }
+    let version = pinned_mise()?;
+    let root = tools.join(STORE_MISE);
+    let install = root.join(&version);
+    // packslip refuses to replace a tree a failed attempt left unmarked.
+    if install.exists() {
+        std::fs::remove_dir_all(&install).map_err(|e| e.to_string())?;
+    }
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    // packslip keeps its download cache and trust state under HOME; the pin is
+    // passed on every install, so neither needs to outlive it.
+    let home = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let spec = patchula_process::CommandSpec {
+        program: packslip.into(),
+        args: vec![
+            "install".into(),
+            "github.com/jdx/mise".into(),
+            "--version".into(),
+            version.clone(),
+            "--pin".into(),
+            MISE_SIGNER.into(),
+            "--install-dir".into(),
+            install.to_string_lossy().into_owned(),
+            "--bin-dir".into(),
+            root.join("bin").to_string_lossy().into_owned(),
+        ],
+        cwd: home.path().into(),
+        // A token only raises GitHub's limit for anonymous API requests, which
+        // hosts behind a shared address can run out of.
+        env: [
+            ("PATH", Some("/usr/local/bin:/usr/bin:/bin".into())),
+            ("HOME", Some(home.path().as_os_str().into())),
+            ("NO_COLOR", Some("1".into())),
+            ("GITHUB_TOKEN", std::env::var_os("GITHUB_TOKEN")),
+            ("GH_TOKEN", std::env::var_os("GH_TOKEN")),
+        ]
+        .into_iter()
+        .filter_map(|(key, value)| Some((key.into(), value?)))
+        .collect(),
+        timeout: INSTALL_TIMEOUT,
+        output_limit: 4096,
+        complete_output: false,
+    };
+    executor
+        .run(spec)
+        .await
+        .map_err(|e| format!("packslip could not install mise {version}: {}", plain(&e)))?;
+    let mise = store_mise(tools)
+        .ok_or_else(|| format!("packslip installed mise {version} without bin/mise"))?;
+    // Only the pinned version is ever started, so earlier ones are removed.
+    for entry in std::fs::read_dir(&root)
+        .map_err(|e| e.to_string())?
+        .flatten()
+    {
+        if entry.path().is_dir() && entry.file_name() != "bin" && entry.file_name() != *version {
+            std::fs::remove_dir_all(entry.path()).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(mise)
+}
+
+/// packslip's error report on one line, without its colours or the source
+/// location after it.
+fn plain(error: &str) -> String {
+    let mut text = String::new();
+    let mut chars = error.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            chars.by_ref().find(char::is_ascii_alphabetic);
+        } else {
+            text.push(c);
+        }
+    }
+    let report = text.split("Location:").next().unwrap_or_default();
+    report.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// `PATCHULA_TOOLS_DIR`, or `tools/` beside the worktrees in the cache directory.
 pub fn tools_dir(workspace: &Path) -> PathBuf {
     std::env::var_os("PATCHULA_TOOLS_DIR")

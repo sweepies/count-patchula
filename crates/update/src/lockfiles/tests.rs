@@ -3092,3 +3092,137 @@ async fn removals_wait_for_runs_using_the_tool_store() {
     drop(other);
     removal.await.unwrap().unwrap();
 }
+
+/// Answers a packslip install by writing the tree it would unpack, or fails.
+struct Packslip {
+    fail: bool,
+    calls: Mutex<Vec<CommandSpec>>,
+}
+impl Executor for Packslip {
+    fn run(
+        &self,
+        spec: CommandSpec,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+        Box::pin(async move {
+            let install = spec
+                .args
+                .iter()
+                .position(|arg| arg == "--install-dir")
+                .map(|i| PathBuf::from(&spec.args[i + 1]))
+                .unwrap();
+            self.calls.lock().unwrap().push(spec);
+            if self.fail {
+                return Err("exit exit status: 1:  Error: \n   0: \u{1b}[91mHTTP 403 for https://api.github.com/repos/jdx/mise\u{1b}[0m\n\nLocation:\n   \u{1b}[35msrc/install.rs\u{1b}[0m:\u{1b}[35m411\u{1b}[0m\n".into());
+            }
+            std::fs::create_dir_all(install.join("bin")).unwrap();
+            std::fs::write(install.join("bin/mise"), "").unwrap();
+            Ok(Vec::new())
+        })
+    }
+}
+
+fn pinned_mise() -> String {
+    tool_defaults().unwrap()["tools"]["mise"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+/// A host without mise gets the pinned one from packslip, held to mise's
+/// signer, with nothing from the server's environment; a leftover tree and
+/// earlier versions are cleared.
+#[tokio::test]
+async fn packslip_installs_the_pinned_mise_into_the_store() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("patchula-mise");
+    let version = pinned_mise();
+    std::fs::create_dir_all(root.join(&version).join("man")).unwrap();
+    std::fs::create_dir_all(root.join("2000.1.1/bin")).unwrap();
+    let packslip = Packslip {
+        fail: false,
+        calls: Mutex::new(Vec::new()),
+    };
+    let mise = tools::install_mise(&packslip, Path::new("/usr/bin/packslip"), temp.path())
+        .await
+        .unwrap();
+    assert_eq!(mise, root.join(&version).join("bin/mise"));
+    assert!(!root.join("2000.1.1").exists());
+    assert!(!root.join(&version).join("man").exists());
+    let calls = packslip.calls.lock().unwrap();
+    let call = &calls[0];
+    assert_eq!(call.program, Path::new("/usr/bin/packslip"));
+    assert_eq!(
+        call.args[..7],
+        [
+            "install",
+            "github.com/jdx/mise",
+            "--version",
+            version.as_str(),
+            "--pin",
+            "ps1_nlhmwtfeufglxv5myvwvronk7a",
+            "--install-dir"
+        ]
+    );
+    assert!(call.env.keys().all(|key| {
+        ["HOME", "NO_COLOR", "PATH", "GITHUB_TOKEN", "GH_TOKEN"].contains(&key.to_str().unwrap())
+    }));
+}
+
+/// A store that already holds the pinned mise is used as it is.
+#[tokio::test]
+async fn packslip_is_not_run_when_the_store_has_the_pinned_mise() {
+    let temp = tempfile::tempdir().unwrap();
+    let mise = temp
+        .path()
+        .join("patchula-mise")
+        .join(pinned_mise())
+        .join("bin/mise");
+    std::fs::create_dir_all(mise.parent().unwrap()).unwrap();
+    std::fs::write(&mise, "").unwrap();
+    let packslip = Packslip {
+        fail: false,
+        calls: Mutex::new(Vec::new()),
+    };
+    assert_eq!(
+        tools::install_mise(&packslip, Path::new("packslip"), temp.path())
+            .await
+            .unwrap(),
+        mise
+    );
+    assert!(packslip.calls.lock().unwrap().is_empty());
+}
+
+/// A failed download names packslip, mise's version and packslip's error.
+#[tokio::test]
+async fn a_failed_mise_install_says_why() {
+    let temp = tempfile::tempdir().unwrap();
+    let packslip = Packslip {
+        fail: true,
+        calls: Mutex::new(Vec::new()),
+    };
+    let error = tools::install_mise(&packslip, Path::new("packslip"), temp.path())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error,
+        format!(
+            "packslip could not install mise {}: exit exit status: 1: Error: 0: HTTP 403 for https://api.github.com/repos/jdx/mise",
+            pinned_mise()
+        )
+    );
+}
+
+/// dotnet restore gets the server's invariant-globalization setting, which
+/// the image sets because it has no ICU, and nothing when the server has none.
+#[test]
+fn dotnet_restore_passes_on_invariant_globalization() {
+    let packages = Path::new("/driver/nuget-packages");
+    let invariant = dotnet::restore_env(packages, Some("1".into()));
+    assert!(invariant.contains(&("DOTNET_SYSTEM_GLOBALIZATION_INVARIANT".into(), "1".into())));
+    assert!(invariant.contains(&("NUGET_PACKAGES".into(), "/driver/nuget-packages".into())));
+    assert!(
+        !dotnet::restore_env(packages, None)
+            .iter()
+            .any(|(key, _)| key == "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT")
+    );
+}

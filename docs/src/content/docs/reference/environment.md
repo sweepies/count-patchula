@@ -6,7 +6,8 @@ title: "Environment variables"
 | `PATCHULA_TOKEN` | `lookup`, `run` | GitHub token; falls back to `GITHUB_TOKEN`, then `GH_TOKEN`, then `gh auth token --hostname github.com` |
 | `PATCHULA_LOG` | all | log level: `error`, `warn` (the CLI default), `info` (the server default), `debug` or `trace`; `-vv` means `debug` |
 | `PATCHULA_RECHECK` | `run`, server | `now` or `next-run`: when a ticked checkbox says it takes effect |
-| `PATCHULA_TOOLS_DIR` | `run`, `tools` | the tool store, holding the lockfile tools and the pinned mise that lists `mise` tools; default `tools/` in the cache directory |
+| `PATCHULA_TOOLS_DIR` | `run`, `tools`, server | the tool store, holding the lockfile tools, the pinned mise that lists `mise` tools, and the mise packslip installs when there is none on `PATH`; default `tools/` in the cache directory |
+| `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT` | lockfiles | passed on to `dotnet restore`, whose environment otherwise starts empty; the container image sets `1` because it has no ICU |
 | `XDG_CACHE_HOME` | local commands, server | the user cache directory on Linux and other non-macOS systems, holding `patchula/` (the server's default is `patchula/server`); default `~/.cache`. macOS uses `~/Library/Caches` |
 | `PATCHULA_SERVER` | `lookup`, `run`, `tui`, `auth` | the [server](/guide/server/#run-from-your-machine) URL for `--remote`, and for `auth` without `--server` |
 | `XDG_CONFIG_HOME` | `lookup`, `run`, `tui`, `auth` | where the server sign-ins (`patchula/servers.json`) and per-repository server choices (`patchula/repositories.json`) are stored; default `~/.config` |

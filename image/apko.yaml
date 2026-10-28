@@ -1,0 +1,78 @@
+# The server image, built from Wolfi packages and the two local packages that
+# melange makes (patchula.melange.yaml and packslip.melange.yaml) by
+# mise run image:build. There is no mise in the image: on its first start the
+# server installs the pinned one into the volume with packslip.
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    # The partial clones lockfile tools work in.
+    - git
+    # For a health check the container runtime runs, since an apko image
+    # cannot carry a HEALTHCHECK of its own.
+    - curl
+    # Tools mise installs: Node's installer runs npm through env bash, Node and
+    # .NET link libstdc++, .NET's installer downloads with curl, and busybox is
+    # the shell and utilities they expect.
+    - bash
+    - busybox
+    - libstdc++
+    # .NET loads OpenSSL 3 at run time; git and curl link OpenSSL 4.
+    - libssl3
+    - patchula@local
+    - packslip@local
+
+accounts:
+  groups:
+    - groupname: patchula
+      gid: 10001
+  users:
+    - username: patchula
+      uid: 10001
+      gid: 10001
+      homedir: /home/patchula
+      shell: /sbin/nologin
+  run-as: "10001"
+
+# A new named volume copies the owner of /var/lib/patchula.
+paths:
+  - path: /var/lib/patchula
+    type: directory
+    uid: 10001
+    gid: 10001
+    permissions: 0o755
+  - path: /home/patchula
+    type: directory
+    uid: 10001
+    gid: 10001
+    permissions: 0o755
+
+# The lockfile runner starts each tool with a temporary HOME and a PATH of
+# /usr/local/bin:/usr/bin:/bin, and keeps mise and its installs in
+# PATCHULA_TOOLS_DIR. Everything worth keeping is under the volume, including
+# rustup's toolchains, which RUSTUP_HOME would otherwise put under HOME. There
+# is no ICU, so .NET runs with invariant globalization, which the runner passes
+# on to dotnet.
+environment:
+  HOME: /home/patchula
+  PATCHULA_LISTEN: 0.0.0.0:8080
+  PATCHULA_SERVER_SETTINGS: /etc/patchula/server.pkl
+  PATCHULA_SERVER_CACHE: /var/lib/patchula
+  PATCHULA_TOOLS_DIR: /var/lib/patchula/tools
+  RUSTUP_HOME: /var/lib/patchula/rustup
+  DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
+
+work-dir: /var/lib/patchula
+volumes:
+  - /var/lib/patchula
+entrypoint:
+  command: /usr/bin/patchula
+cmd: serve
+
+archs:
+  - x86_64
+  - aarch64

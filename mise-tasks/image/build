@@ -1,0 +1,48 @@
+#!/usr/bin/env nu
+#MISE description="Build the server image from the musl release archives in target/dist into target/image/image.tar, an OCI index for both platforms, and load each platform into the local Docker as patchula:smoke-<arch>"
+#MISE tools={melange="0.63.2", apko="1.4.13"}
+
+# Every timestamp comes from the commit, so the same commit and archives give
+# the same image digests. melange packages patchula from the archives and
+# packslip from its pinned release executables, and apko builds the image from
+# those and Wolfi.
+#
+# The local packages are unsigned: a signing key made for one build would end
+# up in the image's apk database and keyring, and change its digest every
+# time. So apko first builds the Wolfi packages alone, checking their
+# signatures and filling a package cache, and then builds the image offline
+# from that cache and the local packages, without checking signatures.
+def main [] {
+  let archives = glob target/dist/patchula-v*-linux-x64-musl.tar.gz
+  if ($archives | length) != 1 {
+    error make --unspanned {msg: $"expected one linux-x64-musl archive in target/dist, found ($archives | length)"}
+  }
+  let version = $archives | first | path basename | parse "patchula-v{version}-linux-x64-musl.tar.gz" | first | get version
+  if $env.GITHUB_REF_TYPE? == "tag" and $env.GITHUB_REF_NAME? != $"v($version)" {
+    error make --unspanned {msg: $"tag ($env.GITHUB_REF_NAME) does not match the archives' version ($version)"}
+  }
+  let out = "target/image" | path expand
+  rm --recursive --force $out
+  mkdir $out $"($out)/sbom"
+  let melange = [--arch "x86_64,aarch64" --runner docker --out-dir $"($out)/packages"]
+  # apko splits --annotations at commas, so no value may hold one.
+  let annotations = {
+    "org.opencontainers.image.title": "Count Patchula"
+    "org.opencontainers.image.description": "The Count's GitHub App server: patchula serve with git and mise for lockfile updates"
+    "org.opencontainers.image.source": "https://github.com/sweepies/count-patchula"
+    "org.opencontainers.image.licenses": "MIT"
+    "org.opencontainers.image.version": $version
+    "org.opencontainers.image.revision": (^git rev-parse HEAD | str trim)
+  } | items {|key, value| [--annotations $"($key):($value)"] } | flatten
+  let config = open image/apko.yaml
+  $config | update contents.packages { where $it !~ "@local$" } | to yaml | save $"($out)/wolfi.apko.yaml"
+  open image/patchula.melange.yaml | update package.version $version | to yaml | save $"($out)/patchula.melange.yaml"
+  with-env {SOURCE_DATE_EPOCH: (^git log -1 --format=%ct | str trim)} {
+    ^melange build $"($out)/patchula.melange.yaml" ...$melange --source-dir target/dist
+    ^melange build image/packslip.melange.yaml ...$melange --empty-workspace
+    ^apko build $"($out)/wolfi.apko.yaml" wolfi:checked $"($out)/wolfi.tar" --cache-dir $"($out)/apk-cache" --sbom=false
+    ^apko build image/apko.yaml patchula:smoke $"($out)/image.tar" --cache-dir $"($out)/apk-cache" --offline --ignore-signatures --build-repository-append $"@local ($out)/packages" --vcs=false --sbom-path $"($out)/sbom" ...$annotations
+  }
+  ^docker load --input $"($out)/image.tar"
+  print $"index sha256:((^tar --extract --to-stdout --file $'($out)/image.tar' index.json) | hash sha256)"
+}
