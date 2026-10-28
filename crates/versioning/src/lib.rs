@@ -401,3 +401,4 @@ mod tests {
         );
     }
 }
+// Timing control for #66; never merged.
