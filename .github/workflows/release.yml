@@ -109,6 +109,10 @@ jobs:
     env:
       # Only nu and the image tools, not the workspace toolchains.
       MISE_ENABLE_TOOLS: nu,melange,apko
+      # The image tasks install melange and apko themselves. Without this, mise
+      # rewrites mise.lock after that install and spends 9 s re-locking every
+      # tool for every platform.
+      MISE_LOCKED: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
