@@ -1,0 +1,70 @@
+amends "package://github.com/jdx/hk/releases/download/v2.9.0/hk@2.9.0#/Config.pkl"
+
+import "package://github.com/jdx/hk/releases/download/v2.9.0/hk@2.9.0#/Builtins.pkl"
+
+// Report every failing step, not only the first.
+fail_fast = false
+
+// Fast enough for every commit: pre-commit runs these on the staged files and
+// fixes what it can.
+local linters = new Mapping<String, Step> {
+  ["cargo-fmt"] = Builtins.cargo_fmt
+  // Every file task is nu except the sh wrappers that run on each C compile.
+  ["nu-lint"] {
+    glob = "mise-tasks/**"
+    exclude = List("mise-tasks/cc", "mise-tasks/ar")
+    batch = true
+    check = new Command {
+      argv = List("nu-lint", "--config", "nu-lint.toml", "--format", "compact", "{{files}}")
+    }
+  }
+  ["jactionlint"] = (Builtins.jactionlint) {
+    glob = List(".github/workflows/*.y*ml", "action.yml")
+  }
+  ["zizmor"] = (Builtins.zizmor) {
+    exclude = List("tests/corpus/**", "fixtures/**")
+  }
+  ["mise"] = Builtins.mise
+  ["pkl-format"] = (Builtins.pkl_format) {
+    // patchula config schema and config server-schema print these.
+    exclude = List("PatchulaConfig.pkl", "PatchulaServer.pkl", "tests/action/PatchulaConfig.pkl")
+  }
+  ["secrets"] = (Builtins.betterleaks) {
+    // Third-party files the extraction tests read, example passwords included.
+    exclude = List("tests/corpus/**")
+  }
+}
+
+hooks {
+  ["pre-commit"] {
+    fix = true
+    stash = "git"
+    steps = linters
+  }
+  ["commit-msg"] {
+    steps {
+      ["conventional-commit"] = Builtins.check_conventional_commit
+      ["ai-credit"] {
+        check = new Command { argv = List("mise-tasks/lint/commits", "{{commit_msg_file}}") }
+      }
+    }
+  }
+  ["fix"] {
+    fix = true
+    steps = linters
+  }
+  // CI runs `hk check --all`. Clippy builds the workspace, so it runs here
+  // and not on every commit.
+  ["check"] {
+    steps = (linters) {
+      ["clippy"] = (Builtins.cargo_clippy) {
+        // mise.toml pins the Rust toolchain, whose new lints can fail the check.
+        glob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock", ".cargo/config.toml", "mise.toml")
+        workspace_indicator = null
+        check = "cargo clippy --workspace --all-targets --locked -- -D warnings"
+        fix =
+          "cargo clippy --workspace --all-targets --locked --fix --allow-dirty --allow-staged -- -D warnings"
+      }
+    }
+  }
+}

@@ -78,17 +78,12 @@ apm = "0.35.0"
 "http:nix[url=https://hydra.nixos.org/build/350797336/download/2/nix,checksum=sha256:5d580d993636e3b987868881776214a7d4a169434715ec30bf9ead9345d78fb6,bin=nix]" = "2.35.5"
 
 [lint]
-description = "Check formatting, reject all Clippy warnings, and lint the GitHub workflows"
-depends = ["lint:rust", "lint:actions"]
+description = "Run every check in hk.pkl on the whole tree, Clippy included"
+run = "hk check --all"
 
-["lint:rust"]
-description = "Check formatting and reject all Clippy warnings"
-run = ["cargo fmt --all --check", "cargo clippy --workspace --all-targets --locked -- -D warnings"]
-
-["lint:actions"]
-description = "Lint the GitHub Actions workflows"
-tools = { jactionlint = "2.2.0", shellcheck = "0.11.0" }
-run = "jactionlint"
+["hooks:install"]
+description = "Install the pre-commit and commit-msg hooks, which run hk through mise"
+run = "hk install --mise"
 
 ["fixtures:check"]
 description = "Reject possible secrets in all HTTP cassettes"

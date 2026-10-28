@@ -103,11 +103,12 @@ config](https://count-patchula.sweepy.dev/renovate/migrating/) maps
 Install [mise](https://mise.jdx.dev), then `mise trust` and `mise install`.
 
 ```sh
-mise run build      # build the workspace
-mise run test       # offline tests, including the real lockfile tool tests
-mise run lint       # rustfmt, Clippy (warnings denied) and jactionlint
-mise run ci         # every check CI runs, one after another
-mise run docs:dev   # the documentation site for this checkout
+mise run build          # build the workspace
+mise run test           # offline tests, including the real lockfile tool tests
+mise run lint           # every hk check, Clippy (warnings denied) included
+mise run hooks:install  # the pre-commit and commit-msg hooks
+mise run ci             # every check CI runs, one after another
+mise run docs:dev       # the documentation site for this checkout
 ```
 
 Builds go through [mr boxington](https://mr-boxington.jdx.dev) for a shared

@@ -14,7 +14,9 @@ files = new Listing {
 extractors = new Listing {
   new Extractor {
     paths = new Listing { "go.mod" }
-    patterns = new Listing { #"(?m)^\s*(?<dependency>golang\.org/x/(?:net|sys|text|crypto|sync|time))\s+(?<current>v\S+)"# }
+    patterns = new Listing {
+      #"(?m)^\s*(?<dependency>golang\.org/x/(?:net|sys|text|crypto|sync|time))\s+(?<current>v\S+)"#
+    }
     source = "go"
     scheme = "go"
   }

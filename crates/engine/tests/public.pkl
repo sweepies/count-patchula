@@ -1,10 +1,17 @@
 amends "PatchulaConfig.pkl"
+
 managers = new Listing { "npm"; "github-actions"; "mise"; "cargo" }
 // This legacy cassette verifies conditional source freshness, including wait=0.
 defaults { waitHours = 0 }
 files = new Listing {
-  new FileSet { manager = "npm"; paths = new Listing { "package.json"; "docs/package.json"; "package-lock.json"; "bun.lock" } }
-  new FileSet { manager = "github-actions"; paths = new Listing { ".github/workflows/ci.yml"; ".github/workflows/test.yml" } }
+  new FileSet {
+    manager = "npm"
+    paths = new Listing { "package.json"; "docs/package.json"; "package-lock.json"; "bun.lock" }
+  }
+  new FileSet {
+    manager = "github-actions"
+    paths = new Listing { ".github/workflows/ci.yml"; ".github/workflows/test.yml" }
+  }
   new FileSet { manager = "mise"; paths = new Listing { "mise.toml" } }
 }
 // Keep the live recording bounded while extracting all selected manifests.

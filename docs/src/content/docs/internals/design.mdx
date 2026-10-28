@@ -114,6 +114,31 @@ docs and the man page. Performance is tracked with tak, report-only for now.
 Tests never touch the network: they replay responses recorded by patchula
 itself.
 
+Linting is hk, configured in `hk.pkl`. `mise run hooks:install` installs two
+git hooks that run hk through mise:
+
+- pre-commit fixes the staged files with rustfmt and `pkl format`, checks
+  that `mise fmt` has nothing to change, and runs jactionlint and zizmor on
+  the workflows, nu-lint on the nu file tasks and betterleaks on every staged
+  file. Mark a test credential betterleaks reports with a trailing
+  `// betterleaks:allow` comment on its line. nu-lint reads `nu-lint.toml`,
+  where each rule group is either an error or off; silence a single finding
+  with a `# nu-lint-ignore: <rule>` comment on the line before it.
+- commit-msg rejects a message that is not a conventional commit, or that
+  credits an AI tool in a trailer such as `Co-authored-by` or a "Generated
+  with" line. The names and line patterns are lists at the top of
+  `mise-tasks/lint/commits`.
+
+`mise run lint` runs `hk check --all`: the pre-commit checks on the whole tree
+plus Clippy, which is too slow for every commit. CI's lint job runs
+`mise run lint:ci` instead, with `--from-ref`, so each step checks only the
+files a push or pull request changed, and Clippy runs only when Rust sources,
+Cargo files or `mise.toml` change. It turns the findings hk can place on a
+line into annotations on the diff, and writes a job summary of every step.
+A separate pull request check runs `mise-tasks/lint/commits` over every
+commit, the title and the body, since a squash merge takes its message from
+the title and credits each commit author after the local hooks have run.
+
 This site is Astro Starlight, in `docs/`, served from Cloudflare Workers and
 built from `main` with no per-release versions. `mise run docs:build` builds it
 and `mise run docs:dev` serves it with live reload.
