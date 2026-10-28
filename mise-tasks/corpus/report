@@ -14,6 +14,7 @@ def main [--cache: path, --out: path = "corpus-report.json", --summary: path] {
     error make --unspanned {msg: "--cache is required"}
   }
   # corpus:check runs in tests/corpus, so both paths must be absolute.
+  # nu-lint-ignore: check_typed_flag_before_use
   let cache = $cache | path expand --no-symlink
   let report_path = $out | path expand --no-symlink
   let log = mktemp -t patchula-corpus.XXXXXX
@@ -21,7 +22,7 @@ def main [--cache: path, --out: path = "corpus-report.json", --summary: path] {
   try {
     ^mise run corpus:check --cache $cache out> $report_path err> $log
   } catch {
-    open --raw $log | lines | where {|line| not ($line =~ '^[-+@ ]') } | last 40 | each {|line| print -e $line } | ignore
+    for line in (open --raw $log | lines | where {|line| not ($line =~ '^[-+@ ]') } | last 40) { print -e $line }
     exit 1
   }
   # Parse as JSON whatever the file is called; open would go by the extension.
@@ -47,6 +48,8 @@ def main [--cache: path, --out: path = "corpus-report.json", --summary: path] {
   if $summary == null { print --raw --no-newline $text } else { $text | save --append $summary }
   let errors = $branches | where status == error | length
   if $errors > 0 {
+    # GitHub reads workflow commands from stdout.
+    # nu-lint-ignore: errors_to_stderr
     print $"::error::($errors) corpus branches failed to plan"
     exit 1
   }

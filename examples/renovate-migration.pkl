@@ -9,7 +9,13 @@ rules = new Listing {
     note = "Alchemy, Effect, overrides and SvelteKit must update together."
     select {
       managers = new Listing { "npm" }
-      packages = new Listing { "alchemy"; "@alchemy.run/**"; "effect"; "@effect/**"; "@sveltejs/kit" }
+      packages = new Listing {
+        "alchemy"
+        "@alchemy.run/**"
+        "effect"
+        "@effect/**"
+        "@sveltejs/kit"
+      }
     }
     apply { group = "alchemy, effect and sveltekit" }
   }
@@ -26,11 +32,15 @@ rules = new Listing {
 extractors = new Listing {
   new Extractor {
     paths = new Listing { "infra/versions.ts" }
-    patterns = new Listing { #"// renovate: datasource=(?<source>npm) depName=(?<dependency>renovate)\s+export const RENOVATE_VERSION = "(?<current>[^"]+)";"# }
+    patterns = new Listing {
+      #"// renovate: datasource=(?<source>npm) depName=(?<dependency>renovate)\s+export const RENOVATE_VERSION = "(?<current>[^"]+)";"#
+    }
   }
   new Extractor {
     paths = new Listing { "infra/versions.ts" }
-    patterns = new Listing { #"// renovate: datasource=(?<source>github-releases) depName=(?<dependency>jdx/mise)\s+export const MISE_VERSION = "(?<current>[^"]+)";"# }
+    patterns = new Listing {
+      #"// renovate: datasource=(?<source>github-releases) depName=(?<dependency>jdx/mise)\s+export const MISE_VERSION = "(?<current>[^"]+)";"#
+    }
     extract = #"^v?(?<version>.*)$"#
   }
 }

@@ -24,6 +24,3 @@ name = "javascript"
 
 [[analyzers]]
 name = "shell"
-
-[[analyzers]]
-name = "secrets"

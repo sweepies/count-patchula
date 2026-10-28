@@ -10,6 +10,17 @@ aube = "2.8.1"
 nu = "0.116.1"
 node = "24.21.0"
 go = "1.27.2"
+# hk runs the linters in hk.pkl from the git hooks and from CI.
+hk = "2.9.0"
+pkl = "0.32.2"
+jactionlint = "2.2.0"
+betterleaks = "1.9.0"
+zizmor = "1.31.1"
+# nu-lint publishes Linux builds only, on Codeberg; macOS builds it from crates.io.
+"forgejo:wvhulle/nu-lint" = { version = "1.7.1", api_url = "https://codeberg.org/api/v1", os = [
+  "linux",
+] }
+"cargo:nu-lint" = { version = "1.7.1", os = ["macos"] }
 # The DeepSource CLI, for the deepsource agent skill. Its current builds are
 # published on cli.deepsource.com, not as GitHub releases.
 "http:deepsource" = { version = "2.0.55", url = 'https://cli.deepsource.com/build/deepsource_{{ version }}_{{ os(macos="darwin") }}_{{ arch(x64="amd64") }}.tar.gz' }

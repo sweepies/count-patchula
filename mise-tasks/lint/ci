@@ -1,0 +1,65 @@
+#!/usr/bin/env nu
+#MISE description="Run hk's check hook as CI does, then annotate the findings on the diff and write a job summary; GitHub Actions only"
+#USAGE flag "--from-ref <ref>" help="Check only the files changed between this ref and HEAD; every file without it"
+# hk's own output still goes to the job log. Findings that hk can place on a
+# line (jactionlint's, for now) become annotations; the summary lists every
+# step that ran.
+
+# A value for a workflow command, which ends at a newline.
+def escape-data []: string -> string {
+  str replace --all '%' '%25' | str replace --all "\r" '%0D' | str replace --all "\n" '%0A'
+}
+
+def escape-property []: string -> string {
+  escape-data | str replace --all ':' '%3A' | str replace --all ',' '%2C'
+}
+
+def main [--from-ref: string] {
+  let dir = mktemp -d -t patchula-lint.XXXXXX
+  let sarif = $dir | path join hk.sarif
+  let events = $dir | path join events.jsonl
+  let range = if $from_ref == null { [--all] } else { [--from-ref $from_ref --to-ref HEAD] }
+  let passed = try { ^hk check ...$range --no-progress --sarif $sarif --format jsonl out> $events; true } catch { false }
+
+  let findings = if ($sarif | path exists) {
+    open --raw $sarif | from json | get runs | each {|run| $run.results? | default [] } | flatten
+  } else { [] }
+  for finding in $findings {
+    let level = match $finding.level? { "warning" => "warning", "note" => "notice", _ => "error" }
+    let place = $finding.locations.0?.physicalLocation?
+    if $place == null { continue }
+    let title = [$finding.properties.step $finding.ruleId?] | compact | str join ' ' | escape-property
+    let position = [
+      $"file=($place.artifactLocation.uri | escape-property)"
+      $"line=($place.region.startLine)"
+      ...(if $place.region.startColumn? == null { [] } else { [$"col=($place.region.startColumn)"] })
+      $"title=($title)"
+    ] | str join ','
+    print $"::($level) ($position)::($finding.message.text | escape-data)"
+  }
+
+  let steps = open --raw $events | lines | each {|line| $line | from json } | where event == step_completed | get data
+  let rows = $steps | each {|step|
+    let found = $findings | where properties.step == $step.name | length
+    let result = if $step.status == failed { "✗ failed" } else { $step.status }
+    $"| ($step.name) | ($result) | ($found) |"
+  }
+  let failed = $steps | where status == failed | get name
+  let note = if ($failed | is-empty) {
+    "Every step passed."
+  } else {
+    $"Failed: ($failed | str join ', '). Findings with a position are annotated on the diff; the rest are in this step's log. Run `mise run lint` locally to reproduce, and `hk fix --all` for the steps that can fix."
+  }
+  let summary = [
+    "### hk check"
+    ""
+    "| Step | Result | Annotations |"
+    "| --- | --- | --- |"
+    ...$rows
+    ""
+    $note
+    ""
+  ] | str join "\n"
+  if "GITHUB_STEP_SUMMARY" in $env { $summary | save --append $env.GITHUB_STEP_SUMMARY } else { print $summary }
+  if not $passed { exit 1 }
+}

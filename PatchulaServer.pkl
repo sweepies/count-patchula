@@ -8,7 +8,7 @@ concurrency: Int = 8
 batchSize: Int = 32
 coalescingMs: Int = 1000
 /// null uses server default (now); flags/env take precedence.
-recheck: "now"|"next-run"? = null
+recheck: "now" | "next-run"? = null
 /// null emits the versioned report as a structured log event.
 reportDirectory: String? = null
 /// Empty lists allow all installations/repositories the App can access.

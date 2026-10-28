@@ -31,7 +31,7 @@ jobs:
           persist-credentials: false
       # This repository has no config of its own, so a GitHub Actions-only one
       # stands in: the dry run plans real updates without lockfile tools.
-      - uses: ./
+      - uses: $/
         with:
           token: ${{ github.token }}
           dry-run: "true"
