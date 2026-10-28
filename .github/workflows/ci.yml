@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Every job runs one or two mise tasks, so `mise run ci` runs the same checks
-# locally. internals/ci-cache.md describes the caches.
+# locally.
 jobs:
   # Each job below runs only when a changed path can affect it; a docs-only
   # change runs just the docs build.
