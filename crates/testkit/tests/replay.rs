@@ -95,10 +95,8 @@ async fn recording_redacts_before_atomic_write_and_replays_with_other_credential
         "Simulated redaction test".into(),
     );
     let mut request = request();
-    *request.url_mut() =
-        "https://user:password@offline.invalid/graphql?access_token=private-query&safe=yes"
-            .parse()
-            .unwrap();
+    let url = "https://user:password@offline.invalid/graphql?access_token=private-query&safe=yes"; // betterleaks:allow
+    *request.url_mut() = url.parse().unwrap();
     request.headers_mut().insert(
         "authorization",
         HeaderValue::from_static("Bearer private-auth"),

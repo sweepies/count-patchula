@@ -28,6 +28,7 @@ def main [--runs: int = 12, --filter: string = "", --log-dir: string = "/tmp/pat
       try {
         ^cargo test --workspace --locked -- $"--test-threads=($threads)" ...$filter o+e> $log
       } catch {
+        # nu-lint-ignore: errors_to_stderr
         print --raw --no-newline (open --raw $log)
         exit 1
       }

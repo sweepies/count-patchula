@@ -3,12 +3,71 @@
 /// amend an organisation module that itself amends this one.
 module PatchulaConfig
 
-typealias Manager = "npm"|"bun"|"github-actions"|"mise"|"cargo"|"dockerfile"|"compose"|"go"|"terraform"|"kubernetes"|"kustomize"|"flux"|"helm-values"|"requirements"|"pyproject"|"pre-commit"|"helm"|"devcontainer"|"woodpecker"|"copier"|"maven"|"gradle"|"nuget"|"bundler"|"composer"|"gitlabci"|"gitlabci-include"|"nix"|"apm"|"regex"
-typealias Source = "npm"|"github-releases"|"github-tags"|"github-runners"|"docker"|"crates"|"go"|"terraform"|"pypi"|"helm"|"oci"|"mise"|"forge-tags"|"maven"|"nuget"|"rubygems"|"packagist"|"nix"
-typealias Update = "major"|"minor"|"patch"|"digest"|"pin"
-typealias VersionPolicy = "exact"|"preserve"|"widen"
-typealias ReleaseChannel = "stable"|"lts"
-typealias Scheme = "semver"|"docker"|"pep440"|"poetry"|"maven"|"nuget"|"rubygems"|"composer"|"go"|"hashicorp"|"loose"
+typealias Manager =
+  "npm"
+    | "bun"
+    | "github-actions"
+    | "mise"
+    | "cargo"
+    | "dockerfile"
+    | "compose"
+    | "go"
+    | "terraform"
+    | "kubernetes"
+    | "kustomize"
+    | "flux"
+    | "helm-values"
+    | "requirements"
+    | "pyproject"
+    | "pre-commit"
+    | "helm"
+    | "devcontainer"
+    | "woodpecker"
+    | "copier"
+    | "maven"
+    | "gradle"
+    | "nuget"
+    | "bundler"
+    | "composer"
+    | "gitlabci"
+    | "gitlabci-include"
+    | "nix"
+    | "apm"
+    | "regex"
+typealias Source =
+  "npm"
+    | "github-releases"
+    | "github-tags"
+    | "github-runners"
+    | "docker"
+    | "crates"
+    | "go"
+    | "terraform"
+    | "pypi"
+    | "helm"
+    | "oci"
+    | "mise"
+    | "forge-tags"
+    | "maven"
+    | "nuget"
+    | "rubygems"
+    | "packagist"
+    | "nix"
+typealias Update = "major" | "minor" | "patch" | "digest" | "pin"
+typealias VersionPolicy = "exact" | "preserve" | "widen"
+typealias ReleaseChannel = "stable" | "lts"
+typealias Scheme =
+  "semver"
+    | "docker"
+    | "pep440"
+    | "poetry"
+    | "maven"
+    | "nuget"
+    | "rubygems"
+    | "composer"
+    | "go"
+    | "hashicorp"
+    | "loose"
 /// Dependency roles emitted by first-release managers. npm/bun use the first
 /// four roles; Cargo also uses build. Ordinary Go/Python/regex packages use
 /// production. Actions distinguish steps from reusable workflows; containers,
@@ -16,7 +75,26 @@ typealias Scheme = "semver"|"docker"|"pep440"|"poetry"|"maven"|"nuget"|"rubygems
 /// charts have explicit roles. A `transitive` package is one only a lockfile
 /// records; it gets an update only to fix an advisory. These are exact values,
 /// not match patterns.
-typealias DependencyKind = "production"|"development"|"peer"|"optional"|"build"|"action"|"reusable-workflow"|"runner"|"container-image"|"tool"|"go-directive"|"toolchain"|"provider"|"module"|"chart"|"template"|"reference-data"|"transitive"|"flake-input"
+typealias DependencyKind =
+  "production"
+    | "development"
+    | "peer"
+    | "optional"
+    | "build"
+    | "action"
+    | "reusable-workflow"
+    | "runner"
+    | "container-image"
+    | "tool"
+    | "go-directive"
+    | "toolchain"
+    | "provider"
+    | "module"
+    | "chart"
+    | "template"
+    | "reference-data"
+    | "transitive"
+    | "flake-input"
 
 /// Match lists are OR; populated selector fields are AND. Empty means any.
 /// Patterns are path-aware globs, or `regex:...`; prefix `!` excludes a match.
@@ -113,7 +191,7 @@ class PullRequests {
   perHour: Int? = null
   dashboard: Boolean = false
   branch: String = "patchula/"
-  rebase: "conflicts"|"behind" = "conflicts"
+  rebase: "conflicts" | "behind" = "conflicts"
   /// The batch PR collects updates whose "Add to batch" box was ticked. It
   /// only auto-merges when this is true, behind the usual check gates.
   batchMerge: Boolean = false
@@ -126,10 +204,10 @@ class Lockfiles {
   tidyGo: Boolean = false
   /// Engine that regenerates npm lockfiles: aube by default, or native npm.
   /// pnpm and Yarn lockfiles always use aube and Yarn respectively.
-  npmEngine: "aube"|"npm" = "aube"
+  npmEngine: "aube" | "npm" = "aube"
   /// PHP for composer.lock: a prebuilt static binary, or PHP compiled from
   /// source by mise, which needs a C toolchain and development libraries.
-  php: "static"|"compiled" = "static"
+  php: "static" | "compiled" = "static"
 }
 
 /// GitLab CI files.
@@ -165,10 +243,36 @@ class Security {
 
 /// All first-release managers are selected unless a repository replaces this list.
 managers: Listing<Manager> = new {
-  "npm"; "bun"; "github-actions"; "mise"; "cargo"; "dockerfile"; "compose"
-  "go"; "terraform"; "kubernetes"; "kustomize"; "flux"; "helm-values"
-  "requirements"; "pyproject"; "pre-commit"; "helm"; "devcontainer"; "woodpecker"; "copier"; "maven"; "gradle"; "nuget"; "bundler"; "composer"
-  "gitlabci"; "gitlabci-include"; "nix"; "apm"; "regex"
+  "npm"
+  "bun"
+  "github-actions"
+  "mise"
+  "cargo"
+  "dockerfile"
+  "compose"
+  "go"
+  "terraform"
+  "kubernetes"
+  "kustomize"
+  "flux"
+  "helm-values"
+  "requirements"
+  "pyproject"
+  "pre-commit"
+  "helm"
+  "devcontainer"
+  "woodpecker"
+  "copier"
+  "maven"
+  "gradle"
+  "nuget"
+  "bundler"
+  "composer"
+  "gitlabci"
+  "gitlabci-include"
+  "nix"
+  "apm"
+  "regex"
 }
 defaults: Policy = new {}
 /// Rules apply in order after `defaults`. The first one is built in: reference

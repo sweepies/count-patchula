@@ -26,6 +26,8 @@ def main [payload: path, event: string, delivery: string, url: string = "http://
   if $file != null and $value != null {
     error make --unspanned {msg: "choose a secret file or environment value"}
   }
+  # A missing value and an empty one are both rejected below.
+  # nu-lint-ignore: default_empty_string_masks_missing
   let secret = if $file != null { open --raw $file } else { $value | default "" } | str replace --regex '[\r\n]+$' ''
   if $secret == "" {
     error make --unspanned {msg: "set PATCHULA_WEBHOOK_SECRET_FILE or PATCHULA_WEBHOOK_SECRET"}

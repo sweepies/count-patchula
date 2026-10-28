@@ -320,7 +320,7 @@ fn github_remotes_name_their_repository() {
         "https://github.com/sweepies/count-patchula",
         "https://github.com/sweepies/count-patchula.git",
         "https://github.com/sweepies/count-patchula/",
-        "https://x-access-token:secret@github.com/sweepies/count-patchula.git",
+        "https://x-access-token:secret@github.com/sweepies/count-patchula.git", // betterleaks:allow
         "http://GitHub.com/sweepies/count-patchula",
         "git@github.com:sweepies/count-patchula.git",
         "github.com:sweepies/count-patchula",

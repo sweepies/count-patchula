@@ -8,7 +8,8 @@
 def pick [fields: record] {
   let source = $in
   $fields | items {|name, field| {name: $name, field: $field} }
-  | where {|f| $f.field in ($source | columns) }
+  | where {|f| $source has $f.field }
+  # nu-lint-ignore: unsafe_dynamic_record_access
   | reduce -f {} {|f, picked| $picked | insert $f.name ($source | get $f.field) }
 }
 

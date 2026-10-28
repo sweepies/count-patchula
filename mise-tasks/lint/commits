@@ -1,0 +1,93 @@
+#!/usr/bin/env nu
+#MISE description="Reject AI credit in a commit message, or check a pull request's commits, title and body"
+#USAGE arg "[message_file]" help="Commit message file, as the commit-msg hook passes it; without one, checks the pull request that GH_TOKEN, REPO and PR name"
+# For a pull request, the title and every non-merge commit must also be
+# conventional commits: GitHub builds a squash merge's message from the title
+# and adds a Co-authored-by line for each commit author, which no local hook
+# sees.
+
+# AI tools and bots that must not be credited. Matched as whole words, in any
+# case. Add a name here to reject it.
+const AI_NAMES = [
+  aider
+  anthropic
+  capy
+  capy-ai
+  chatgpt
+  claude
+  codex
+  coderabbit
+  copilot
+  cursor
+  devin
+  gemini
+  greptile
+  openai
+]
+
+# Lines that give credit. A line is rejected when it matches one of these and
+# names an AI. Add a pattern here to reject another form.
+const CREDIT_LINES = [
+  # Co-authored-by, Signed-off-by, Assisted-by and the like.
+  '(?i)^\s*[a-z-]+-by:'
+  '(?i)^\s*made-with:'
+  # "🤖 Generated with [Claude Code](…)" and the like.
+  '(?i)^\W*generated (with|by)\b'
+]
+
+def names-ai [text: string] {
+  $text =~ ('(?i)(^|[^a-z0-9-])(' + ($AI_NAMES | str join '|') + ')($|[^a-z0-9-])')
+}
+
+def ai-credits [message: string] {
+  $message | lines | where {|line| ($CREDIT_LINES | any {|pattern| $line =~ $pattern }) and (names-ai $line) }
+}
+
+def conventional [message: string] {
+  let file = mktemp -t patchula-commit-msg.XXXXXX
+  $message | save --force $file
+  let ok = (do { ^hk util check-conventional-commit $file } | complete).exit_code == 0
+  rm $file
+  $ok
+}
+
+def main [message_file?: path] {
+  if $message_file != null {
+    let found = ai-credits (open --raw $message_file)
+    if ($found | is-empty) { return }
+    print --stderr "A commit message credits an AI. Remove these lines:"
+    for line in $found { print --stderr $"  ($line)" }
+    exit 1
+  }
+  let api = $"repos/($env.REPO)/pulls/($env.PR)"
+  let pr = ^gh api $api | from json
+  let commits = ^gh api $"($api)/commits" --paginate --slurp | from json | flatten
+  mut problems = []
+  for line in (ai-credits $pr.title) { $problems ++= [$"title: ($line)"] }
+  if $pr.body != null {
+    for line in (ai-credits $pr.body) { $problems ++= [$"body: ($line)"] }
+  }
+  if not (conventional $pr.title) {
+    $problems ++= [$"the title is not a conventional commit: ($pr.title)"]
+  }
+  for commit in $commits {
+    let id = $commit.sha | str substring 0..<12
+    let message = $commit.commit.message
+    for line in (ai-credits $message) { $problems ++= [$"($id): ($line)"] }
+    for person in [[role who]; [author $commit.commit.author] [committer $commit.commit.committer]] {
+      if (names-ai $"($person.who.name) <($person.who.email)>") {
+        $problems ++= [$"($id): the ($person.role) is ($person.who.name) <($person.who.email)>"]
+      }
+    }
+    # git writes a merge commit's message, so only its credits are checked.
+    if ($commit.parents | length) == 1 and not (conventional $message) {
+      $problems ++= [$"($id): not a conventional commit: ($message | lines | first)"]
+    }
+  }
+  if ($problems | is-empty) {
+    print $"The title, the body and ($commits | length) commits credit no AI."
+    return
+  }
+  for problem in $problems { print $"::error::($problem)" }
+  exit 1
+}

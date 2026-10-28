@@ -28,7 +28,6 @@ jobs:
       pull-requests: read
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
-      actions: ${{ steps.filter.outputs.actions }}
       docs: ${{ steps.filter.outputs.docs }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -50,16 +49,26 @@ jobs:
           AFTER: ${{ github.sha }}
         run: mise-tasks/ci/changes
 
+  # hk.pkl's check hook, the same steps the git hooks run, plus Clippy. It runs
+  # on every change, since it is the only secret scan in CI, but each step
+  # checks only the files the push or pull request changed, and a step whose
+  # files are untouched does not run.
   lint:
-    name: "Lint: rustfmt, clippy"
+    name: "Lint: hk"
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # Without Rust changes, only hk and its linters are needed.
+      MISE_DISABLE_TOOLS: ${{ needs.changes.outputs.rust != 'true' && 'rust,mr-boxington,zig,go,node,aube,tak,http:deepsource' || '' }}
+      # A pull request's merge commit has the base branch as its first parent.
+      FROM_REF: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # hk compares against the base branch, or the commit before a push.
+          fetch-depth: 0
       # mise checks every stored download against mise.lock before it uses
       # it, so the store is cached instead of the installs.
       - id: mise-downloads
@@ -72,6 +81,7 @@ jobs:
         with:
           cache: false
       - id: cargo-downloads
+        if: needs.changes.outputs.rust == 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: &cargo-downloads |
@@ -80,7 +90,8 @@ jobs:
             ~/.cargo/git/db
           key: &cargo-downloads-key cargo-downloads-v1-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-downloads-v1-
-      - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
+      - if: needs.changes.outputs.rust == 'true'
+        uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
         # The pinned action has no nonfatal-cache input. This also covers its post step.
         continue-on-error: true
         with:
@@ -91,37 +102,20 @@ jobs:
           clean-target-before-export: true
           cache-generation: v4-lint-objects
           save-on-pull-request: false
-      - run: mise run lint:rust
+      - env:
+          # zizmor's online audits, such as impostor commits.
+          GH_TOKEN: ${{ github.token }}
+        run: mise run lint:ci --from-ref "$FROM_REF"
       # Clippy checks every target, so it fetches every crate the other jobs
       # build; this job alone publishes the downloads, from main.
-      - if: github.ref == 'refs/heads/main' && steps.cargo-downloads.outputs.cache-hit != 'true'
+      - if: github.ref == 'refs/heads/main' && needs.changes.outputs.rust == 'true' && steps.cargo-downloads.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         continue-on-error: true
         with:
           path: *cargo-downloads
           key: *cargo-downloads-key
-      - run: mise run cache:usage
-
-  workflows:
-    name: "Lint: workflows"
-    needs: changes
-    if: needs.changes.outputs.actions == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - id: mise-downloads
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: *mise-downloads
-          key: *mise-downloads-key
-          restore-keys: *mise-downloads-restore
-      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
-        with:
-          cache: false
-      - run: mise run lint:actions
+      - if: needs.changes.outputs.rust == 'true'
+        run: mise run cache:usage
 
   build:
     name: "Build: workspace, fixture secret scan"
@@ -345,7 +339,7 @@ jobs:
   # and its family keeps its last entry.
   prune:
     name: "Cache: prune superseded entries"
-    needs: [lint, workflows, build, test, tools, docs, corpus]
+    needs: [lint, build, test, tools, docs, corpus]
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5

@@ -5,7 +5,8 @@
 #USAGE flag "--log-dir <dir>" help="Where the stage logs go; a new temporary directory by default"
 
 def main [--log-dir: string] {
-  let log_dir = if $log_dir == null { mktemp -d -t patchula-ci.XXXXXX } else { $log_dir }
+  # nu-lint-ignore: check_typed_flag_before_use
+  let log_dir = $log_dir | default { mktemp -d -t patchula-ci.XXXXXX }
   mkdir $log_dir
   print $"CI full logs: ($log_dir)"
   for task in [lint build fixtures:check test:unit test:tools docs:build] {
@@ -16,6 +17,7 @@ def main [--log-dir: string] {
       let tests = open --raw $log | lines | parse --regex '^test (?<name>.*) \.\.\. FAILED$' | get name
       let tests = if ($tests | is-empty) { "see-log" } else { $tests | each {|name| $"($name)," } | str join }
       # Keep the path and test names even when a caller filters for test result:.
+      # nu-lint-ignore: errors_to_stderr
       print $"test result: FAILED; stage=($task); failing-tests=($tests); full-log=($log)"
       exit 1
     }

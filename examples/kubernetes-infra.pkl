@@ -7,14 +7,20 @@ files = new Listing {
   new FileSet { manager = "kubernetes"; paths = new Listing { #"regex:\.yaml$"# } }
   new FileSet {
     manager = "flux"
-    paths = new Listing { #"regex:(^|/)apps/.+\.yaml$"#; #"regex:(^|/)infrastructure/.+\.yaml$"#; #"regex:(^|/)clusters/.+\.yaml$"# }
+    paths = new Listing {
+      #"regex:(^|/)apps/.+\.yaml$"#
+      #"regex:(^|/)infrastructure/.+\.yaml$"#
+      #"regex:(^|/)clusters/.+\.yaml$"#
+    }
   }
   new FileSet { manager = "helm-values"; paths = new Listing { #"regex:\.yaml$"# } }
 }
 extractors = new Listing {
   new Extractor {
     paths = new Listing { #"regex:(^|/)infrastructure/system-upgrade/.+\.yaml$"# }
-    patterns = new Listing { #"# renovate: datasource=(?<source>\S+) depName=(?<dependency>\S+)\s+version: (?<current>\S+)"# }
+    patterns = new Listing {
+      #"# renovate: datasource=(?<source>\S+) depName=(?<dependency>\S+)\s+version: (?<current>\S+)"#
+    }
   }
 }
 rules = new Listing {
@@ -33,12 +39,20 @@ rules = new Listing {
   }
   new Rule {
     note = "Hold the Notifuse PostgreSQL major version."
-    select { files = new Listing { "apps/notifuse/deployment-database.yaml" }; packages = new Listing { "postgres" }; updates = new Listing { "major" } }
+    select {
+      files = new Listing { "apps/notifuse/deployment-database.yaml" }
+      packages = new Listing { "postgres" }
+      updates = new Listing { "major" }
+    }
     apply { active = false }
   }
   new Rule {
     note = "Immich v3 requires PostgreSQL 14."
-    select { files = new Listing { "apps/immich/deployment-database.yaml" }; packages = new Listing { "ghcr.io/immich-app/postgres" }; updates = new Listing { "major" } }
+    select {
+      files = new Listing { "apps/immich/deployment-database.yaml" }
+      packages = new Listing { "ghcr.io/immich-app/postgres" }
+      updates = new Listing { "major" }
+    }
     apply { active = false }
   }
   new Rule {
@@ -47,7 +61,9 @@ rules = new Listing {
   }
   new Rule {
     note = "Flux image automation owns these :latest images."
-    select { packages = new Listing { "ghcr.io/acme/account-manager"; "ghcr.io/acme/mail-provisioner" } }
+    select {
+      packages = new Listing { "ghcr.io/acme/account-manager"; "ghcr.io/acme/mail-provisioner" }
+    }
     apply { active = false }
   }
 }

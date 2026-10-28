@@ -1,0 +1,39 @@
+# nu-lint configuration for the nu file tasks. hk passes it with --config.
+# Every group either fails the check (error) or is off, so a finding is never
+# left as a warning nobody acts on.
+
+[groups]
+catch-runtime-failures = "error"
+isolate-side-effects = "error"
+adopt-nu-syntax = "error"
+parse-structured-data = "error"
+replace-external-tools = "error"
+remove-dead-code = "error"
+follow-naming-conventions = "error"
+forward-parser-diagnostics = "error"
+migrate-deprecated-syntax = "error"
+# The tasks' helpers are a few lines each; annotating every signature adds
+# noise without catching anything nu's parser does not.
+annotate-types = "off"
+# mise reads each task's arguments from its #USAGE header, which already
+# documents them; nu doc comments would repeat it.
+document-interfaces = "off"
+# Layout and length preferences, with no formatter to keep them.
+format-whitespace = "off"
+reduce-complexity = "off"
+# Closure and pipeline-shape preferences, such as $it over a named parameter.
+pipe-instead-of-loop = "off"
+stream-in-process = "off"
+
+[rules]
+# A failed open, save or rm should stop the task, which is what nu does when
+# the error is not caught.
+catch_builtin_error_try = "off"
+# nu already stops with an error when an external command exits non-zero.
+unhandled_external_error = "off"
+# Every flagged pipeline ends in from json, which collects the output and
+# fails when the external command fails; the rule cannot tell it from a
+# streaming command such as lines.
+non_final_failure_check = "off"
+# The tasks mark every external command with ^ on purpose.
+remove_hat_not_builtin = "off"
