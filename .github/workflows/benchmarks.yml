@@ -61,3 +61,4 @@ jobs:
           path: benchmark-results/
           if-no-files-found: warn
           retention-days: 14
+# Timing control for #66; never merged.
