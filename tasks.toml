@@ -85,7 +85,7 @@ usage = 'arg "<from_ref>" help="The base branch, or the commit before a push"'
 run = 'hk check --from-ref "${usage_from_ref?}" --to-ref HEAD --no-progress --sarif "$RUNNER_TEMP/hk.sarif"'
 
 ["hooks:install"]
-description = "Install the pre-commit and commit-msg hooks, which run hk through mise"
+description = "Install the pre-commit hook, which runs hk through mise"
 run = "hk install --mise"
 
 ["fixtures:check"]
