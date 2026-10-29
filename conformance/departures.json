@@ -22,6 +22,18 @@
       "description": "A missing or invalid baseline is reported on its own under noBaseline and never implies parity."
     },
     {
+      "id": "implicit-latest-image",
+      "description": "A Docker dependency with no current value or version in Renovate's output, whose counterpart in the report has the same manager, name, package and digest and the current value latest with no version, compares as having no current value, since Docker reads a missing tag as latest."
+    },
+    {
+      "id": "groups-unavailable-skipped",
+      "description": "Groups compare only when Renovate supplies one on that update, including enrichment from unambiguous branch summaries; a missing group is unknown, and every skipped group comparison is counted."
+    },
+    {
+      "id": "empty-package-file-ignored",
+      "description": "A package file with no dependencies that only one side lists is counted and ignored. Missing repositories, and files that hold dependencies, still produce coverage differences."
+    },
+    {
       "id": "repeated-dependencies",
       "departure": "repeated-dependencies",
       "description": "Renovate's output gets the same occurrence normalization as the report, so nothing is excluded. Unlabelled duplicate identities are invalid."

@@ -68,9 +68,10 @@ The Count is one binary, `patchula`. Releases have static builds for Linux
 
 ## What the runner needs
 
-- `mise` on the `PATH`, or [packslip](https://packslip.dev), with which the
-  Count installs his own pinned mise. Without either, mise tools and lockfiles
-  fail and everything else works. Tools go into the [tool
+- `mise` on the `PATH`, or [packslip](https://packslip.dev), with which
+  `patchula serve` and `patchula tools install` install the Count's own pinned
+  mise; with only packslip, run `patchula tools install` before other commands.
+  Without mise, mise tools and lockfiles fail and everything else works. Tools go into the [tool
   store](/guide/lockfiles/#the-tool-store); keep it on a persistent volume.
 - `git`, for the partial clones a lockfile tool works in.
 - A writable cache directory. By default it is `patchula/` in your user cache
