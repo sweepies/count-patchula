@@ -1,0 +1,35 @@
+# packslip for the server image: the static release executables, pinned by
+# digest. The server runs it once to install the pinned mise into its volume.
+package:
+  name: packslip
+  version: 1.11.1
+  epoch: 0
+  description: packslip, which installs and verifies signed releases
+  copyright:
+    - license: MIT
+
+environment:
+  contents:
+    repositories:
+      - https://packages.wolfi.dev/os
+    keyring:
+      - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+    packages:
+      - busybox
+      - ca-certificates-bundle
+      - wget
+
+pipeline:
+  - if: ${{build.arch}} == 'x86_64'
+    uses: fetch
+    with:
+      uri: https://github.com/jdx/packslip/releases/download/v${{package.version}}/packslip-v${{package.version}}-linux-x64
+      expected-sha256: 12cba32a65670fdb813dae13762352660de1d5f68414d963fa9ae4d0086167d9
+      extract: false
+  - if: ${{build.arch}} == 'aarch64'
+    uses: fetch
+    with:
+      uri: https://github.com/jdx/packslip/releases/download/v${{package.version}}/packslip-v${{package.version}}-linux-arm64
+      expected-sha256: 20d16a7df2980f6936eddd14536afd4fc7be11d223a23601beb0fb98f9dacab9
+      extract: false
+  - runs: install -Dm755 packslip-v${{package.version}}-linux-* ${{targets.destdir}}/usr/bin/packslip

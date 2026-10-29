@@ -84,6 +84,27 @@ fn remove_intermediates(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+const INVARIANT: &str = "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT";
+
+/// The restore's environment. The server image has no ICU and sets
+/// `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT` instead; the tool's environment
+/// starts empty, so the server's setting is passed on.
+pub(super) fn restore_env(packages: &Path, invariant: Option<String>) -> Vec<(String, String)> {
+    let mut env = vec![
+        ("DOTNET_CLI_TELEMETRY_OPTOUT".into(), "1".into()),
+        ("DOTNET_NOLOGO".into(), "1".into()),
+        ("DOTNET_SKIP_FIRST_TIME_EXPERIENCE".into(), "1".into()),
+        (
+            "NUGET_PACKAGES".into(),
+            packages.to_string_lossy().into_owned(),
+        ),
+    ];
+    if let Some(invariant) = invariant {
+        env.push((INVARIANT.into(), invariant));
+    }
+    env
+}
+
 impl Runner {
     pub(super) async fn dotnet_restore(
         &self,
@@ -104,7 +125,10 @@ impl Runner {
             })
             .collect();
         let target = target(&cwd)?;
-        let packages = driver.join("nuget-packages");
+        let env = restore_env(
+            &driver.join("nuget-packages"),
+            std::env::var(INVARIANT).ok(),
+        );
         self.tool(
             driver,
             Invocation {
@@ -114,15 +138,7 @@ impl Runner {
                 )],
                 bin: "dotnet".into(),
                 cwd: Some(cwd.clone()),
-                env: vec![
-                    ("DOTNET_CLI_TELEMETRY_OPTOUT".into(), "1".into()),
-                    ("DOTNET_NOLOGO".into(), "1".into()),
-                    ("DOTNET_SKIP_FIRST_TIME_EXPERIENCE".into(), "1".into()),
-                    (
-                        "NUGET_PACKAGES".into(),
-                        packages.to_string_lossy().into_owned(),
-                    ),
-                ],
+                env,
                 args: vec![
                     "restore".into(),
                     target.to_string_lossy().into_owned(),

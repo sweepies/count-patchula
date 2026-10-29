@@ -2,6 +2,46 @@
 
 lockfile_version = 3
 
+[[tools.apko]]
+version = "1.4.13"
+backend = "aqua:chainguard-dev/apko"
+specifiers = ["1.4.13"]
+
+[tools.apko."platforms.linux-arm64"]
+checksum = "sha256:5efcfad7166ab90d4a19434547474611c7b138afdbbd7d040593fdf4b61b7d09"
+url = "https://github.com/chainguard-dev/apko/releases/download/v1.4.13/apko_1.4.13_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/chainguard-dev/apko/releases/assets/670562047"
+
+[tools.apko."platforms.linux-arm64-musl"]
+checksum = "sha256:5efcfad7166ab90d4a19434547474611c7b138afdbbd7d040593fdf4b61b7d09"
+url = "https://github.com/chainguard-dev/apko/releases/download/v1.4.13/apko_1.4.13_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/chainguard-dev/apko/releases/assets/670562047"
+
+[tools.apko."platforms.linux-x64"]
+checksum = "sha256:2377cd4a2efed58905da580f835fbdf2a6ed4ad0f10ff541827153a42d491cee"
+url = "https://github.com/chainguard-dev/apko/releases/download/v1.4.13/apko_1.4.13_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/chainguard-dev/apko/releases/assets/670561998"
+
+[tools.apko."platforms.linux-x64-baseline"]
+checksum = "sha256:2377cd4a2efed58905da580f835fbdf2a6ed4ad0f10ff541827153a42d491cee"
+url = "https://github.com/chainguard-dev/apko/releases/download/v1.4.13/apko_1.4.13_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/chainguard-dev/apko/releases/assets/670561998"
+
+[tools.apko."platforms.linux-x64-musl"]
+checksum = "sha256:2377cd4a2efed58905da580f835fbdf2a6ed4ad0f10ff541827153a42d491cee"
+url = "https://github.com/chainguard-dev/apko/releases/download/v1.4.13/apko_1.4.13_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/chainguard-dev/apko/releases/assets/670561998"
+
+[tools.apko."platforms.linux-x64-musl-baseline"]
+checksum = "sha256:2377cd4a2efed58905da580f835fbdf2a6ed4ad0f10ff541827153a42d491cee"
+url = "https://github.com/chainguard-dev/apko/releases/download/v1.4.13/apko_1.4.13_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/chainguard-dev/apko/releases/assets/670561998"
+
+[tools.apko."platforms.macos-arm64"]
+checksum = "sha256:b413d7c4b9b5280b5d33d7db8844db6e3540bc0e34c732169706ef7f14d3395c"
+url = "https://github.com/chainguard-dev/apko/releases/download/v1.4.13/apko_1.4.13_darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/chainguard-dev/apko/releases/assets/670562033"
+
 [[tools.apm]]
 version = "0.35.0"
 backend = "github:microsoft/apm"
@@ -261,6 +301,46 @@ checksum = "sha256:622b29b15a59618bc032163073209ffc434252e9a19eafd451e69207a50f2
 url = "https://github.com/jdx/jactionlint/releases/download/v2.2.0/jactionlint_2.2.0_darwin_arm64.tar.gz"
 url_api = "https://api.github.com/repos/jdx/jactionlint/releases/assets/640875646"
 provenance = "github-attestations"
+
+[[tools.melange]]
+version = "0.63.2"
+backend = "aqua:chainguard-dev/melange"
+specifiers = ["0.63.2"]
+
+[tools.melange."platforms.linux-arm64"]
+checksum = "sha256:12fa4f39745fc4283fcf8f600a7dfaca17cc892b0d3c6ef1f2a2de0efc4020b0"
+url = "https://github.com/chainguard-dev/melange/releases/download/v0.63.2/melange_0.63.2_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/chainguard-dev/melange/releases/assets/676538207"
+
+[tools.melange."platforms.linux-arm64-musl"]
+checksum = "sha256:12fa4f39745fc4283fcf8f600a7dfaca17cc892b0d3c6ef1f2a2de0efc4020b0"
+url = "https://github.com/chainguard-dev/melange/releases/download/v0.63.2/melange_0.63.2_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/chainguard-dev/melange/releases/assets/676538207"
+
+[tools.melange."platforms.linux-x64"]
+checksum = "sha256:1ae37d2b529b07542bfbc915789a75dd527fb1fd7eae387793a873fd7fb9d5e0"
+url = "https://github.com/chainguard-dev/melange/releases/download/v0.63.2/melange_0.63.2_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/chainguard-dev/melange/releases/assets/676538206"
+
+[tools.melange."platforms.linux-x64-baseline"]
+checksum = "sha256:1ae37d2b529b07542bfbc915789a75dd527fb1fd7eae387793a873fd7fb9d5e0"
+url = "https://github.com/chainguard-dev/melange/releases/download/v0.63.2/melange_0.63.2_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/chainguard-dev/melange/releases/assets/676538206"
+
+[tools.melange."platforms.linux-x64-musl"]
+checksum = "sha256:1ae37d2b529b07542bfbc915789a75dd527fb1fd7eae387793a873fd7fb9d5e0"
+url = "https://github.com/chainguard-dev/melange/releases/download/v0.63.2/melange_0.63.2_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/chainguard-dev/melange/releases/assets/676538206"
+
+[tools.melange."platforms.linux-x64-musl-baseline"]
+checksum = "sha256:1ae37d2b529b07542bfbc915789a75dd527fb1fd7eae387793a873fd7fb9d5e0"
+url = "https://github.com/chainguard-dev/melange/releases/download/v0.63.2/melange_0.63.2_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/chainguard-dev/melange/releases/assets/676538206"
+
+[tools.melange."platforms.macos-arm64"]
+checksum = "sha256:170bc989939d6a32e679f323ad82901b2faa9dd3722d71865ca91f22cbbe0449"
+url = "https://github.com/chainguard-dev/melange/releases/download/v0.63.2/melange_0.63.2_darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/chainguard-dev/melange/releases/assets/676538205"
 
 [[tools.mr-boxington]]
 version = "1.24.0"

@@ -295,18 +295,51 @@ ghcr.io/sweepies/count-patchula:X.Y.Z
 
 The tags are each release's version without the `v`, and `latest`, which a
 prerelease does not move. There are no minor, major or edge tags, so pin the
-version and upgrade on purpose. Every image carries an SBOM and a provenance
-attestation from BuildKit.
+version and upgrade on purpose.
 
-It is Debian slim with `patchula`, mise and `git` (see [what the runner
-needs](/installation/#what-the-runner-needs)), and starts `patchula serve` as
-user and group 10001. Lockfile tools are not in the image: mise installs each
-one into the volume the first time a repository needs it.
+:::caution[The image changed]
+Images after 0.5.1 are built with [apko](https://github.com/chainguard-dev/apko)
+from [Wolfi](https://wolfi.dev) packages instead of Debian slim, and nothing
+in them comes from Docker Hub. This changes three things for operators:
+
+- The image has no `HEALTHCHECK` and no `EXPOSE`, which apko cannot set.
+  Configure the health check where you run the container, as [shown
+  below](#health-check), and publish port 8080 yourself.
+- mise is no longer in the image. The first start installs it into the
+  volume, which needs GitHub at that moment, or a [pre-seeded
+  volume](#offline-hosts).
+- The SBOMs (apko's, one per platform) and the provenance are GitHub
+  attestations stored beside the image; BuildKit's attestation manifests are
+  gone.
+:::
+
+The image holds `patchula`, `git`, `curl` and
+[packslip](https://packslip.dev), on Wolfi's glibc, and starts `patchula serve`
+as user and group 10001. Lockfile tools are not in the image: mise installs
+each one into the volume the first time a repository needs it (see [what the
+runner needs](/installation/#what-the-runner-needs)). The image has no ICU, so
+it sets `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1`, which the runner passes on
+to dotnet.
+
+Each build takes Wolfi's current packages, so a release picks up Wolfi's
+fixes, and rebuilding an old commit later gives a different image. The image a
+tag publishes is exactly the one the release smoke-tested, and its
+[provenance attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations)
+records the commit and workflow run that built it. The release workflow
+attests that provenance, and each platform's SPDX SBOM from apko, in GitHub and
+in the registry. Check the provenance with:
+
+```sh
+gh attestation verify oci://ghcr.io/sweepies/count-patchula:X.Y.Z --repo sweepies/count-patchula
+```
+
+A platform's SBOM is attested to that platform's image, so name it by digest
+and add `--predicate-type https://spdx.dev/Document/v2.3`.
 
 `/var/lib/patchula` is a volume. It holds the server cache and queue, the
-partial clones, and the tool store, so a new container picks up where the last
-one stopped. A new named volume takes the directory's owner; a bind mount must
-be writable by user 10001.
+partial clones, mise and the tool store, so a new container picks up where the
+last one stopped. A new named volume takes the directory's owner; a bind mount
+must be writable by user 10001.
 
 | Variable | Image default |
 |---|---|
@@ -315,6 +348,7 @@ be writable by user 10001.
 | `PATCHULA_SERVER_CACHE` | `/var/lib/patchula` |
 | `PATCHULA_TOOLS_DIR` | `/var/lib/patchula/tools` |
 | `RUSTUP_HOME` | `/var/lib/patchula/rustup` |
+| `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT` | `1` |
 
 The credentials have no default. Mount your [settings](#settings) file over
 `/etc/patchula/server.pkl`, or point `PATCHULA_SERVER_SETTINGS` at another path.
@@ -323,6 +357,8 @@ The credentials have no default. Mount your [settings](#settings) file over
 docker run --detach --name patchula \
   --publish 127.0.0.1:8080:8080 \
   --stop-timeout 75 \
+  --health-cmd 'curl --fail --silent --output /dev/null http://127.0.0.1:8080/healthz' \
+  --health-start-period 30s \
   --volume patchula:/var/lib/patchula \
   --volume /etc/patchula/server.pkl:/etc/patchula/server.pkl:ro \
   --volume /etc/patchula/app.pem:/run/secrets/app.pem:ro \
@@ -340,9 +376,85 @@ PATCHULA_WEBHOOK_SECRET` with no value, which read them from your shell.
 60-second drain, because Docker's default of 10 seconds would kill a running
 batch.
 
-The image's health check calls `/healthz`. The lockfile runner works in the
-container's temporary directory, so a read-only root filesystem needs a
-writable `/tmp`.
+The lockfile runner works in the container's temporary directory, so a
+read-only root filesystem needs a writable `/tmp`.
+
+### Health check
+
+`GET /healthz` answers 200 while the server runs. The image has `curl` for
+runtimes that run a command, such as Docker (above) and Compose:
+
+```yaml
+services:
+  patchula:
+    image: ghcr.io/sweepies/count-patchula:X.Y.Z
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--output", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+```
+
+Kubernetes probes the port itself:
+
+```yaml
+ports:
+  - containerPort: 8080
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 3
+startupProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+  failureThreshold: 30
+  periodSeconds: 2
+```
+
+### mise on first start
+
+When there is no `mise` on `PATH`, as in the image, `patchula serve` makes sure
+the tool store has the mise version the Count pins before it signs in to
+GitHub. If it is missing, it runs packslip:
+
+```sh
+packslip install github.com/jdx/mise --version <pinned> --pin ps1_nlhmwtfeufglxv5myvwvronk7a
+```
+
+packslip checks the release's signature against mise's GitHub repository and
+that signer fingerprint, then unpacks it into
+`$PATCHULA_TOOLS_DIR/patchula-mise/<version>/`, as user 10001. That takes about
+15 seconds, once per volume; later starts find it there and log the same
+`lockfile tools run with this mise` line. When an upgrade pins a newer mise, the
+next start installs it and removes the old one.
+
+If the install fails, for example without network access, the server logs
+`cannot install mise` with packslip's reason and keeps running: webhooks,
+lookups and branches without lockfiles work, and mise tools and lockfiles fail
+until a start succeeds. packslip asks GitHub's API for the release; set
+`GITHUB_TOKEN` (any token, no scopes needed) if the host shares an address that
+runs out of GitHub's anonymous API limit.
+
+### Offline hosts
+
+A host that cannot reach GitHub needs a volume that already holds mise. Fill
+one on a connected machine, with the same image version, and copy it over:
+
+```sh
+docker run --rm --volume patchula:/var/lib/patchula \
+  --entrypoint patchula ghcr.io/sweepies/count-patchula:X.Y.Z tools install
+```
+
+`patchula tools install` installs mise the same way, then prewarms every
+pinned lockfile tool into the store, so the offline host needs no downloads
+for the default tool versions either.
 
 ## Hosting on Railway
 

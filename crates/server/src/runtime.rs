@@ -92,6 +92,22 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
         Arc::new(patchula_http::Network::new().map_err(|_| Error("cannot create HTTP transport"))?);
     let app = App::new(options.app_id, &options.private_key, transport.clone())
         .map_err(|_| Error("invalid GitHub App credentials"))?;
+    // The image has no mise of its own: the first start installs the pinned
+    // one into the tool store, and later starts find it there.
+    if let Some(workspace) = cache.workspace_dir() {
+        let tools = patchula_update::lockfiles::tools_dir(workspace);
+        match patchula_update::lockfiles::bootstrap_mise(&tools).await {
+            Ok(Some(mise)) => {
+                tracing::info!(target: "patchula_server", mise = %mise.display(), "lockfile tools run with this mise");
+            }
+            Ok(None) => {
+                tracing::warn!(target: "patchula_server", "no mise on PATH and no packslip to install it; mise tools and lockfiles will fail");
+            }
+            Err(error) => {
+                tracing::error!(target: "patchula_server", %error, "cannot install mise; mise tools and lockfiles will fail until the next start");
+            }
+        }
+    }
     // The canonical slug is fetched, never guessed from repository names or senders.
     let bot = app
         .bot_login()

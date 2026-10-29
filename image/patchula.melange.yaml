@@ -1,0 +1,33 @@
+# patchula for the server image, from the smoke-tested musl release archives
+# in target/dist. mise run image:build sets the version from the archives.
+package:
+  name: patchula
+  version: 0.0.0
+  epoch: 0
+  description: Count Patchula, from its musl release archive
+  copyright:
+    - license: MIT
+
+environment:
+  contents:
+    repositories:
+      - https://packages.wolfi.dev/os
+    keyring:
+      - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+    packages:
+      - busybox
+
+pipeline:
+  - runs: |
+      case "${{build.arch}}" in
+        x86_64) platform=x64 ;;
+        aarch64) platform=arm64 ;;
+      esac
+      mkdir unpacked
+      tar -xzf patchula-v${{package.version}}-linux-${platform}-musl.tar.gz -C unpacked ./bin/patchula ./LICENSE
+      install -Dm755 unpacked/bin/patchula ${{targets.destdir}}/usr/bin/patchula
+      install -Dm644 unpacked/LICENSE ${{targets.destdir}}/usr/share/doc/patchula/LICENSE
+      # The settings serve needs. Mount a file over it, or point
+      # PATCHULA_SERVER_SETTINGS elsewhere, to configure the server.
+      mkdir -p ${{targets.destdir}}/etc/patchula
+      echo 'amends "PatchulaServer.pkl"' > ${{targets.destdir}}/etc/patchula/server.pkl

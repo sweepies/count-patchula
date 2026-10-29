@@ -10,7 +10,7 @@ mod process;
 mod python;
 mod ruby;
 mod tools;
-pub use tools::tools_dir;
+pub use tools::{bootstrap_mise, tools_dir};
 mod wrapper;
 use crate::{
     Blob, Plan, Snapshot, blob_sha,
@@ -467,13 +467,7 @@ impl Runner {
             .map(PathBuf::from)
             .unwrap_or_else(std::env::temp_dir);
         let mise_data = tools::tools_dir(&cache);
-        let mise = std::env::var_os("PATH")
-            .and_then(|p| {
-                std::env::split_paths(&p)
-                    .map(|p| p.join("mise"))
-                    .find(|p| p.is_file())
-            })
-            .unwrap_or_else(|| "mise".into());
+        let mise = tools::find_mise(&mise_data).unwrap_or_else(|| "mise".into());
         let rustup = std::env::var_os("CARGO_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".cargo"))
