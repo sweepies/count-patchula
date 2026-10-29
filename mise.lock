@@ -72,9 +72,29 @@ checksum = "sha256:12eda315743aea0a1a66eedaf4ebd2f2de80d985c71cf21d44475cf6c9f87
 url = "https://github.com/aubepkg/aube/releases/download/v2.8.1/aube-v2.8.1-aarch64-unknown-linux-gnu.tar.gz"
 signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release.yml"
 
+[tools.aube."platforms.linux-arm64-musl"]
+checksum = "sha256:b067a7b4633f8ecafcf9e8d2d8ffe0de7c36af5dc7f632aff079782d11c5e49f"
+url = "https://github.com/aubepkg/aube/releases/download/v2.8.1/aube-v2.8.1-aarch64-unknown-linux-musl.tar.gz"
+signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release.yml"
+
 [tools.aube."platforms.linux-x64"]
 checksum = "sha256:83ca5541a10a21b81189fc391d3853774826a439db28d3b0136648c37fbdbe79"
 url = "https://github.com/aubepkg/aube/releases/download/v2.8.1/aube-v2.8.1-x86_64-unknown-linux-gnu.tar.gz"
+signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release.yml"
+
+[tools.aube."platforms.linux-x64-baseline"]
+checksum = "sha256:83ca5541a10a21b81189fc391d3853774826a439db28d3b0136648c37fbdbe79"
+url = "https://github.com/aubepkg/aube/releases/download/v2.8.1/aube-v2.8.1-x86_64-unknown-linux-gnu.tar.gz"
+signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release.yml"
+
+[tools.aube."platforms.linux-x64-musl"]
+checksum = "sha256:5a8bb76fb728cc8d130014e660dd229fd908648ab8d1a8f2e005210f2c472a0d"
+url = "https://github.com/aubepkg/aube/releases/download/v2.8.1/aube-v2.8.1-x86_64-unknown-linux-musl.tar.gz"
+signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release.yml"
+
+[tools.aube."platforms.linux-x64-musl-baseline"]
+checksum = "sha256:5a8bb76fb728cc8d130014e660dd229fd908648ab8d1a8f2e005210f2c472a0d"
+url = "https://github.com/aubepkg/aube/releases/download/v2.8.1/aube-v2.8.1-x86_64-unknown-linux-musl.tar.gz"
 signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release.yml"
 
 [tools.aube."platforms.macos-arm64"]
@@ -93,7 +113,31 @@ url = "https://github.com/betterleaks/betterleaks/releases/download/v1.9.0/bette
 url_api = "https://api.github.com/repos/betterleaks/betterleaks/releases/assets/599108932"
 provenance = "cosign"
 
+[tools.betterleaks."platforms.linux-arm64-musl"]
+checksum = "sha256:1d39116e0a58dc94574715e2aa12a2dbd5062f193eee3fec011fef6ba06bd13b"
+url = "https://github.com/betterleaks/betterleaks/releases/download/v1.9.0/betterleaks_1.9.0_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/betterleaks/betterleaks/releases/assets/599108932"
+provenance = "cosign"
+
 [tools.betterleaks."platforms.linux-x64"]
+checksum = "sha256:f8b185a39ffcece2a1ca82bf3a4e7435cd81963ffd16b7a9128daf75f35f6de7"
+url = "https://github.com/betterleaks/betterleaks/releases/download/v1.9.0/betterleaks_1.9.0_linux_x64.tar.gz"
+url_api = "https://api.github.com/repos/betterleaks/betterleaks/releases/assets/599108929"
+provenance = "cosign"
+
+[tools.betterleaks."platforms.linux-x64-baseline"]
+checksum = "sha256:f8b185a39ffcece2a1ca82bf3a4e7435cd81963ffd16b7a9128daf75f35f6de7"
+url = "https://github.com/betterleaks/betterleaks/releases/download/v1.9.0/betterleaks_1.9.0_linux_x64.tar.gz"
+url_api = "https://api.github.com/repos/betterleaks/betterleaks/releases/assets/599108929"
+provenance = "cosign"
+
+[tools.betterleaks."platforms.linux-x64-musl"]
+checksum = "sha256:f8b185a39ffcece2a1ca82bf3a4e7435cd81963ffd16b7a9128daf75f35f6de7"
+url = "https://github.com/betterleaks/betterleaks/releases/download/v1.9.0/betterleaks_1.9.0_linux_x64.tar.gz"
+url_api = "https://api.github.com/repos/betterleaks/betterleaks/releases/assets/599108929"
+provenance = "cosign"
+
+[tools.betterleaks."platforms.linux-x64-musl-baseline"]
 checksum = "sha256:f8b185a39ffcece2a1ca82bf3a4e7435cd81963ffd16b7a9128daf75f35f6de7"
 url = "https://github.com/betterleaks/betterleaks/releases/download/v1.9.0/betterleaks_1.9.0_linux_x64.tar.gz"
 url_api = "https://api.github.com/repos/betterleaks/betterleaks/releases/assets/599108929"
@@ -178,7 +222,27 @@ checksum = "sha256:db029ad9d4c9e5f89548e540dcc721bb4079d658189f0f5072bb8220fd53c
 url = "https://codeberg.org/wvhulle/nu-lint/releases/download/v1.7.1/nu-lint-aarch64-unknown-linux-musl.tar.gz"
 url_api = "https://codeberg.org/attachments/919c6a5f-b29f-442f-bf03-6b928d6e1fee"
 
+[tools."forgejo:wvhulle/nu-lint"."platforms.linux-arm64-musl"]
+checksum = "sha256:db029ad9d4c9e5f89548e540dcc721bb4079d658189f0f5072bb8220fd53c987"
+url = "https://codeberg.org/wvhulle/nu-lint/releases/download/v1.7.1/nu-lint-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://codeberg.org/attachments/919c6a5f-b29f-442f-bf03-6b928d6e1fee"
+
 [tools."forgejo:wvhulle/nu-lint"."platforms.linux-x64"]
+checksum = "sha256:cc1ea09d6b182c45d954114d6543fdcf4dbb53af707065ccfd3fa6505b0d8bd4"
+url = "https://codeberg.org/wvhulle/nu-lint/releases/download/v1.7.1/nu-lint-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://codeberg.org/attachments/b2563b0c-7911-4917-aae4-1f3fff7ed809"
+
+[tools."forgejo:wvhulle/nu-lint"."platforms.linux-x64-baseline"]
+checksum = "sha256:cc1ea09d6b182c45d954114d6543fdcf4dbb53af707065ccfd3fa6505b0d8bd4"
+url = "https://codeberg.org/wvhulle/nu-lint/releases/download/v1.7.1/nu-lint-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://codeberg.org/attachments/b2563b0c-7911-4917-aae4-1f3fff7ed809"
+
+[tools."forgejo:wvhulle/nu-lint"."platforms.linux-x64-musl"]
+checksum = "sha256:cc1ea09d6b182c45d954114d6543fdcf4dbb53af707065ccfd3fa6505b0d8bd4"
+url = "https://codeberg.org/wvhulle/nu-lint/releases/download/v1.7.1/nu-lint-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://codeberg.org/attachments/b2563b0c-7911-4917-aae4-1f3fff7ed809"
+
+[tools."forgejo:wvhulle/nu-lint"."platforms.linux-x64-musl-baseline"]
 checksum = "sha256:cc1ea09d6b182c45d954114d6543fdcf4dbb53af707065ccfd3fa6505b0d8bd4"
 url = "https://codeberg.org/wvhulle/nu-lint/releases/download/v1.7.1/nu-lint-x86_64-unknown-linux-musl.tar.gz"
 url_api = "https://codeberg.org/attachments/b2563b0c-7911-4917-aae4-1f3fff7ed809"
@@ -192,7 +256,23 @@ specifiers = ["1.27.2"]
 checksum = "sha256:94f3e30b8e374bc285e7dadc11e0865726b9bc6e85b841ccceaabc0214c6b7c8"
 url = "https://dl.google.com/go/go1.27.2.linux-arm64.tar.gz"
 
+[tools.go."platforms.linux-arm64-musl"]
+checksum = "sha256:94f3e30b8e374bc285e7dadc11e0865726b9bc6e85b841ccceaabc0214c6b7c8"
+url = "https://dl.google.com/go/go1.27.2.linux-arm64.tar.gz"
+
 [tools.go."platforms.linux-x64"]
+checksum = "sha256:ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5"
+url = "https://dl.google.com/go/go1.27.2.linux-amd64.tar.gz"
+
+[tools.go."platforms.linux-x64-baseline"]
+checksum = "sha256:ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5"
+url = "https://dl.google.com/go/go1.27.2.linux-amd64.tar.gz"
+
+[tools.go."platforms.linux-x64-musl"]
+checksum = "sha256:ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5"
+url = "https://dl.google.com/go/go1.27.2.linux-amd64.tar.gz"
+
+[tools.go."platforms.linux-x64-musl-baseline"]
 checksum = "sha256:ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5"
 url = "https://dl.google.com/go/go1.27.2.linux-amd64.tar.gz"
 
@@ -210,9 +290,29 @@ checksum = "sha256:1ed0259505fab94bc4f90b42f36e38b61b316c20f2f6f7589d0b090cc4206
 url = "https://github.com/jdx/hk/releases/download/v2.9.0/hk-aarch64-unknown-linux-gnu.tar.gz"
 signer = "sigstore-oidc:https://github.com/jdx/hk/.github/workflows/release.yml"
 
+[tools.hk."platforms.linux-arm64-musl"]
+checksum = "sha256:9f16526f08f9ed2835a3c50e6e5aa2baf32284e7325a799b5c9b250e3ede12f0"
+url = "https://github.com/jdx/hk/releases/download/v2.9.0/hk-aarch64-unknown-linux-musl.tar.gz"
+signer = "sigstore-oidc:https://github.com/jdx/hk/.github/workflows/release.yml"
+
 [tools.hk."platforms.linux-x64"]
 checksum = "sha256:db1021a8920b71c161e26bef246c5b00a3ea6aa480b6cb837ee098ffeb8c41a1"
 url = "https://github.com/jdx/hk/releases/download/v2.9.0/hk-x86_64-unknown-linux-gnu.tar.gz"
+signer = "sigstore-oidc:https://github.com/jdx/hk/.github/workflows/release.yml"
+
+[tools.hk."platforms.linux-x64-baseline"]
+checksum = "sha256:db1021a8920b71c161e26bef246c5b00a3ea6aa480b6cb837ee098ffeb8c41a1"
+url = "https://github.com/jdx/hk/releases/download/v2.9.0/hk-x86_64-unknown-linux-gnu.tar.gz"
+signer = "sigstore-oidc:https://github.com/jdx/hk/.github/workflows/release.yml"
+
+[tools.hk."platforms.linux-x64-musl"]
+checksum = "sha256:91136908087b35d1dba1caee108b577774223429546d8b28a9de57280fcc7d36"
+url = "https://github.com/jdx/hk/releases/download/v2.9.0/hk-x86_64-unknown-linux-musl.tar.gz"
+signer = "sigstore-oidc:https://github.com/jdx/hk/.github/workflows/release.yml"
+
+[tools.hk."platforms.linux-x64-musl-baseline"]
+checksum = "sha256:91136908087b35d1dba1caee108b577774223429546d8b28a9de57280fcc7d36"
+url = "https://github.com/jdx/hk/releases/download/v2.9.0/hk-x86_64-unknown-linux-musl.tar.gz"
 signer = "sigstore-oidc:https://github.com/jdx/hk/.github/workflows/release.yml"
 
 [tools.hk."platforms.macos-arm64"]
@@ -242,7 +342,20 @@ specifiers = ["2.0.55"]
 [tools."http:deepsource"."platforms.linux-arm64"]
 url = "https://cli.deepsource.com/build/deepsource_2.0.55_linux_arm64.tar.gz"
 
+[tools."http:deepsource"."platforms.linux-arm64-musl"]
+url = "https://cli.deepsource.com/build/deepsource_2.0.55_linux_arm64.tar.gz"
+
 [tools."http:deepsource"."platforms.linux-x64"]
+checksum = "blake3:4ed0a4aaa97e521caa5cb7983e394d3dfab604d9874a7f1a8ab53f42aa762f0a"
+url = "https://cli.deepsource.com/build/deepsource_2.0.55_linux_amd64.tar.gz"
+
+[tools."http:deepsource"."platforms.linux-x64-baseline"]
+url = "https://cli.deepsource.com/build/deepsource_2.0.55_linux_amd64.tar.gz"
+
+[tools."http:deepsource"."platforms.linux-x64-musl"]
+url = "https://cli.deepsource.com/build/deepsource_2.0.55_linux_amd64.tar.gz"
+
+[tools."http:deepsource"."platforms.linux-x64-musl-baseline"]
 url = "https://cli.deepsource.com/build/deepsource_2.0.55_linux_amd64.tar.gz"
 
 [tools."http:deepsource"."platforms.macos-arm64"]
@@ -290,7 +403,31 @@ url = "https://github.com/jdx/jactionlint/releases/download/v2.2.0/jactionlint_2
 url_api = "https://api.github.com/repos/jdx/jactionlint/releases/assets/640875713"
 provenance = "github-attestations"
 
+[tools.jactionlint."platforms.linux-arm64-musl"]
+checksum = "sha256:6d4c3831cc360b14550fb2f4605b4de9d2761515cd3fd5c1da718528b314647d"
+url = "https://github.com/jdx/jactionlint/releases/download/v2.2.0/jactionlint_2.2.0_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/jdx/jactionlint/releases/assets/640875713"
+provenance = "github-attestations"
+
 [tools.jactionlint."platforms.linux-x64"]
+checksum = "sha256:8137d5bfe266dd5e48d2af2306827785ce07c6988e04b1c3d6ad4776e97d27d2"
+url = "https://github.com/jdx/jactionlint/releases/download/v2.2.0/jactionlint_2.2.0_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/jdx/jactionlint/releases/assets/640875708"
+provenance = "github-attestations"
+
+[tools.jactionlint."platforms.linux-x64-baseline"]
+checksum = "sha256:8137d5bfe266dd5e48d2af2306827785ce07c6988e04b1c3d6ad4776e97d27d2"
+url = "https://github.com/jdx/jactionlint/releases/download/v2.2.0/jactionlint_2.2.0_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/jdx/jactionlint/releases/assets/640875708"
+provenance = "github-attestations"
+
+[tools.jactionlint."platforms.linux-x64-musl"]
+checksum = "sha256:8137d5bfe266dd5e48d2af2306827785ce07c6988e04b1c3d6ad4776e97d27d2"
+url = "https://github.com/jdx/jactionlint/releases/download/v2.2.0/jactionlint_2.2.0_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/jdx/jactionlint/releases/assets/640875708"
+provenance = "github-attestations"
+
+[tools.jactionlint."platforms.linux-x64-musl-baseline"]
 checksum = "sha256:8137d5bfe266dd5e48d2af2306827785ce07c6988e04b1c3d6ad4776e97d27d2"
 url = "https://github.com/jdx/jactionlint/releases/download/v2.2.0/jactionlint_2.2.0_linux_amd64.tar.gz"
 url_api = "https://api.github.com/repos/jdx/jactionlint/releases/assets/640875708"
@@ -352,9 +489,29 @@ checksum = "sha256:80a2909eff63aaf5b9901f923d68ab8b70056bb11d5fd025535614033e48d
 url = "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx-aarch64-unknown-linux-gnu.tar.gz"
 signer = "sigstore-oidc:https://github.com/jdx/mr-boxington/.github/workflows/release.yml"
 
+[tools.mr-boxington."platforms.linux-arm64-musl"]
+checksum = "sha256:9e63b57eea37c97d1b1eb47801a92a73337e4a537d2678d761244fbc8434b123"
+url = "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx-aarch64-unknown-linux-musl.tar.gz"
+signer = "sigstore-oidc:https://github.com/jdx/mr-boxington/.github/workflows/release.yml"
+
 [tools.mr-boxington."platforms.linux-x64"]
 checksum = "sha256:3e35b12dd105875fa0505c45224eaf7e2fd7103d86199ffca97c0cd4093e708f"
 url = "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx-x86_64-unknown-linux-gnu.tar.gz"
+signer = "sigstore-oidc:https://github.com/jdx/mr-boxington/.github/workflows/release.yml"
+
+[tools.mr-boxington."platforms.linux-x64-baseline"]
+checksum = "sha256:3e35b12dd105875fa0505c45224eaf7e2fd7103d86199ffca97c0cd4093e708f"
+url = "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx-x86_64-unknown-linux-gnu.tar.gz"
+signer = "sigstore-oidc:https://github.com/jdx/mr-boxington/.github/workflows/release.yml"
+
+[tools.mr-boxington."platforms.linux-x64-musl"]
+checksum = "sha256:823626ca1246a6df1c20f83cfc49522f062bfa772b266f86614651483cea1c62"
+url = "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx-x86_64-unknown-linux-musl.tar.gz"
+signer = "sigstore-oidc:https://github.com/jdx/mr-boxington/.github/workflows/release.yml"
+
+[tools.mr-boxington."platforms.linux-x64-musl-baseline"]
+checksum = "sha256:823626ca1246a6df1c20f83cfc49522f062bfa772b266f86614651483cea1c62"
+url = "https://github.com/jdx/mr-boxington/releases/download/v1.24.0/mbx-x86_64-unknown-linux-musl.tar.gz"
 signer = "sigstore-oidc:https://github.com/jdx/mr-boxington/.github/workflows/release.yml"
 
 [tools.mr-boxington."platforms.macos-arm64"]
@@ -371,9 +528,25 @@ specifiers = ["24.21.0"]
 checksum = "sha256:724282c3b43aec998aa9527380465b45d229e021b58035f5f4f63095eabfe5d5"
 url = "https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-arm64.tar.gz"
 
+[tools.node."platforms.linux-arm64-musl"]
+checksum = "sha256:3048b0811e158ca0d8672b59c839861763e144492980d8d29b369dfee45747e4"
+url = "https://unofficial-builds.nodejs.org/download/release/v24.21.0/node-v24.21.0-linux-arm64-musl.tar.gz"
+
 [tools.node."platforms.linux-x64"]
 checksum = "sha256:6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff"
 url = "https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-x64.tar.gz"
+
+[tools.node."platforms.linux-x64-baseline"]
+checksum = "sha256:6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff"
+url = "https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-x64.tar.gz"
+
+[tools.node."platforms.linux-x64-musl"]
+checksum = "sha256:01a713e34da98e7b4d2a3191ee7ca3f93dd0384d1a2ef23c379b2161ee6e133a"
+url = "https://unofficial-builds.nodejs.org/download/release/v24.21.0/node-v24.21.0-linux-x64-musl.tar.gz"
+
+[tools.node."platforms.linux-x64-musl-baseline"]
+checksum = "sha256:01a713e34da98e7b4d2a3191ee7ca3f93dd0384d1a2ef23c379b2161ee6e133a"
+url = "https://unofficial-builds.nodejs.org/download/release/v24.21.0/node-v24.21.0-linux-x64-musl.tar.gz"
 
 [tools.node."platforms.macos-arm64"]
 checksum = "sha256:bed7eea5325e1108f32ce5228ddd6a5f0f08a499ee42aa7442aea583702f6057"
@@ -389,10 +562,30 @@ checksum = "sha256:e7bbb1639253fb83e2391600b957ba3e918f04a2c81850e9f30a68cb1ef20
 url = "https://github.com/nushell/nushell/releases/download/0.116.1/nu-0.116.1-aarch64-unknown-linux-gnu.tar.gz"
 url_api = "https://api.github.com/repos/nushell/nushell/releases/assets/610027667"
 
+[tools.nu."platforms.linux-arm64-musl"]
+checksum = "sha256:e7bbb1639253fb83e2391600b957ba3e918f04a2c81850e9f30a68cb1ef20ef8"
+url = "https://github.com/nushell/nushell/releases/download/0.116.1/nu-0.116.1-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/nushell/nushell/releases/assets/610027667"
+
 [tools.nu."platforms.linux-x64"]
 checksum = "sha256:d6d8ace4be491ed8abba4026e73b60c0470b4671d7039307e7d772282ef863da"
 url = "https://github.com/nushell/nushell/releases/download/0.116.1/nu-0.116.1-x86_64-unknown-linux-gnu.tar.gz"
 url_api = "https://api.github.com/repos/nushell/nushell/releases/assets/610020338"
+
+[tools.nu."platforms.linux-x64-baseline"]
+checksum = "sha256:d6d8ace4be491ed8abba4026e73b60c0470b4671d7039307e7d772282ef863da"
+url = "https://github.com/nushell/nushell/releases/download/0.116.1/nu-0.116.1-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/nushell/nushell/releases/assets/610020338"
+
+[tools.nu."platforms.linux-x64-musl"]
+checksum = "sha256:13ef75df08df30f8d7b031df538e82a52c6e74ce839b1a9091c3a3f1969c3742"
+url = "https://github.com/nushell/nushell/releases/download/0.116.1/nu-0.116.1-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/nushell/nushell/releases/assets/610034802"
+
+[tools.nu."platforms.linux-x64-musl-baseline"]
+checksum = "sha256:13ef75df08df30f8d7b031df538e82a52c6e74ce839b1a9091c3a3f1969c3742"
+url = "https://github.com/nushell/nushell/releases/download/0.116.1/nu-0.116.1-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/nushell/nushell/releases/assets/610034802"
 
 [tools.nu."platforms.macos-arm64"]
 checksum = "sha256:302fb3dfc5d44e7fe0d5b8227be8e75b4c3956ca8d4804234e5c68fbdd3e4917"
@@ -409,7 +602,27 @@ checksum = "sha256:e60744e17d4ddc0257a35260998b5f98387b5d6a5e868317cccfbebe8d962
 url = "https://github.com/apple/pkl/releases/download/0.32.2/pkl-linux-aarch64"
 url_api = "https://api.github.com/repos/apple/pkl/releases/assets/663850794"
 
+[tools.pkl."platforms.linux-arm64-musl"]
+checksum = "sha256:e60744e17d4ddc0257a35260998b5f98387b5d6a5e868317cccfbebe8d962ae3"
+url = "https://github.com/apple/pkl/releases/download/0.32.2/pkl-linux-aarch64"
+url_api = "https://api.github.com/repos/apple/pkl/releases/assets/663850794"
+
 [tools.pkl."platforms.linux-x64"]
+checksum = "sha256:874c75484c79add77fb2346ea4ab2e8875eea35fb707894bf5457a2df5d03def"
+url = "https://github.com/apple/pkl/releases/download/0.32.2/pkl-linux-amd64"
+url_api = "https://api.github.com/repos/apple/pkl/releases/assets/663850808"
+
+[tools.pkl."platforms.linux-x64-baseline"]
+checksum = "sha256:874c75484c79add77fb2346ea4ab2e8875eea35fb707894bf5457a2df5d03def"
+url = "https://github.com/apple/pkl/releases/download/0.32.2/pkl-linux-amd64"
+url_api = "https://api.github.com/repos/apple/pkl/releases/assets/663850808"
+
+[tools.pkl."platforms.linux-x64-musl"]
+checksum = "sha256:874c75484c79add77fb2346ea4ab2e8875eea35fb707894bf5457a2df5d03def"
+url = "https://github.com/apple/pkl/releases/download/0.32.2/pkl-linux-amd64"
+url_api = "https://api.github.com/repos/apple/pkl/releases/assets/663850808"
+
+[tools.pkl."platforms.linux-x64-musl-baseline"]
 checksum = "sha256:874c75484c79add77fb2346ea4ab2e8875eea35fb707894bf5457a2df5d03def"
 url = "https://github.com/apple/pkl/releases/download/0.32.2/pkl-linux-amd64"
 url_api = "https://api.github.com/repos/apple/pkl/releases/assets/663850808"
@@ -490,10 +703,34 @@ url = "https://github.com/jdx/tak/releases/download/v0.0.15/tak-aarch64-unknown-
 url_api = "https://api.github.com/repos/jdx/tak/releases/assets/628260527"
 provenance = "github-attestations"
 
+[tools.tak."platforms.linux-arm64-musl"]
+checksum = "sha256:0ffa0538fd55957036ab5577c0c8734022c501d62e80d376b11d099207489aeb"
+url = "https://github.com/jdx/tak/releases/download/v0.0.15/tak-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/jdx/tak/releases/assets/628260525"
+provenance = "github-attestations"
+
 [tools.tak."platforms.linux-x64"]
 checksum = "sha256:dad3a6d09ac44aa2d278ac8bd871356b8b00abbc54b66f31b9a2fe75a7f927af"
 url = "https://github.com/jdx/tak/releases/download/v0.0.15/tak-x86_64-unknown-linux-gnu.tar.gz"
 url_api = "https://api.github.com/repos/jdx/tak/releases/assets/628260542"
+provenance = "github-attestations"
+
+[tools.tak."platforms.linux-x64-baseline"]
+checksum = "sha256:dad3a6d09ac44aa2d278ac8bd871356b8b00abbc54b66f31b9a2fe75a7f927af"
+url = "https://github.com/jdx/tak/releases/download/v0.0.15/tak-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/jdx/tak/releases/assets/628260542"
+provenance = "github-attestations"
+
+[tools.tak."platforms.linux-x64-musl"]
+checksum = "sha256:d829ab9b804cb030a03d9c01958a401201d0a67296baa2187410543204339b57"
+url = "https://github.com/jdx/tak/releases/download/v0.0.15/tak-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/jdx/tak/releases/assets/628260545"
+provenance = "github-attestations"
+
+[tools.tak."platforms.linux-x64-musl-baseline"]
+checksum = "sha256:d829ab9b804cb030a03d9c01958a401201d0a67296baa2187410543204339b57"
+url = "https://github.com/jdx/tak/releases/download/v0.0.15/tak-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/jdx/tak/releases/assets/628260545"
 provenance = "github-attestations"
 
 [tools.tak."platforms.macos-arm64"]
@@ -512,9 +749,29 @@ checksum = "sha256:2dc8c0b1f1cdc9dffb69c0a4c550d2d7d62cf690915ee8657c861f97024bc
 url = "https://github.com/jdx/usage/releases/download/v7.0.1/usage-aarch64-unknown-linux-gnu.tar.gz"
 signer = "sigstore-oidc:https://github.com/jdx/usage/.github/workflows/publish-cli.yml"
 
+[tools.usage."platforms.linux-arm64-musl"]
+checksum = "sha256:0cd9e322b714acb9858cbada439c11231110c0420c790ea33ae3128f899ab2b4"
+url = "https://github.com/jdx/usage/releases/download/v7.0.1/usage-aarch64-unknown-linux-musl.tar.gz"
+signer = "sigstore-oidc:https://github.com/jdx/usage/.github/workflows/publish-cli.yml"
+
 [tools.usage."platforms.linux-x64"]
 checksum = "sha256:f8e4a3080d5f5447e6265662d7d45522108a080bf60024a56033a289719f9828"
 url = "https://github.com/jdx/usage/releases/download/v7.0.1/usage-x86_64-unknown-linux-gnu.tar.gz"
+signer = "sigstore-oidc:https://github.com/jdx/usage/.github/workflows/publish-cli.yml"
+
+[tools.usage."platforms.linux-x64-baseline"]
+checksum = "sha256:f8e4a3080d5f5447e6265662d7d45522108a080bf60024a56033a289719f9828"
+url = "https://github.com/jdx/usage/releases/download/v7.0.1/usage-x86_64-unknown-linux-gnu.tar.gz"
+signer = "sigstore-oidc:https://github.com/jdx/usage/.github/workflows/publish-cli.yml"
+
+[tools.usage."platforms.linux-x64-musl"]
+checksum = "sha256:722d8170c711fbac64f11cb82d68f0873242a7161b7265c54dcfff8888da291c"
+url = "https://github.com/jdx/usage/releases/download/v7.0.1/usage-x86_64-unknown-linux-musl.tar.gz"
+signer = "sigstore-oidc:https://github.com/jdx/usage/.github/workflows/publish-cli.yml"
+
+[tools.usage."platforms.linux-x64-musl-baseline"]
+checksum = "sha256:722d8170c711fbac64f11cb82d68f0873242a7161b7265c54dcfff8888da291c"
+url = "https://github.com/jdx/usage/releases/download/v7.0.1/usage-x86_64-unknown-linux-musl.tar.gz"
 signer = "sigstore-oidc:https://github.com/jdx/usage/.github/workflows/publish-cli.yml"
 
 [tools.usage."platforms.macos-arm64"]
@@ -559,7 +816,24 @@ specifiers = ["0.17.0"]
 checksum = "sha256:9e8d11661d4ae3bd57702a3832781e23ad151dde5798e16a5ccd503f65234ff8"
 url = "https://ziglang.org/download/0.17.0/zig-aarch64-linux-0.17.0.tar.xz"
 
+[tools.zig."platforms.linux-arm64-musl"]
+checksum = "sha256:9e8d11661d4ae3bd57702a3832781e23ad151dde5798e16a5ccd503f65234ff8"
+url = "https://ziglang.org/download/0.17.0/zig-aarch64-linux-0.17.0.tar.xz"
+
 [tools.zig."platforms.linux-x64"]
+checksum = "sha256:1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026"
+url = "https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz"
+provenance = "minisign"
+
+[tools.zig."platforms.linux-x64-baseline"]
+checksum = "sha256:1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026"
+url = "https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz"
+
+[tools.zig."platforms.linux-x64-musl"]
+checksum = "sha256:1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026"
+url = "https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz"
+
+[tools.zig."platforms.linux-x64-musl-baseline"]
 checksum = "sha256:1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026"
 url = "https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz"
 
@@ -578,7 +852,31 @@ url = "https://github.com/zizmorcore/zizmor/releases/download/v1.31.1/zizmor-aar
 url_api = "https://api.github.com/repos/zizmorcore/zizmor/releases/assets/645467282"
 provenance = "github-attestations"
 
+[tools.zizmor."platforms.linux-arm64-musl"]
+checksum = "sha256:37eebbd5762a44f262d94875431b14a6d2402991e90a685113ea97b8b41be833"
+url = "https://github.com/zizmorcore/zizmor/releases/download/v1.31.1/zizmor-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/zizmorcore/zizmor/releases/assets/645467282"
+provenance = "github-attestations"
+
 [tools.zizmor."platforms.linux-x64"]
+checksum = "sha256:d185f726bdaf92df78273217dfdd24ebcd6b0ef48cf3ce776ff5762b6e138c99"
+url = "https://github.com/zizmorcore/zizmor/releases/download/v1.31.1/zizmor-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/zizmorcore/zizmor/releases/assets/645467284"
+provenance = "github-attestations"
+
+[tools.zizmor."platforms.linux-x64-baseline"]
+checksum = "sha256:d185f726bdaf92df78273217dfdd24ebcd6b0ef48cf3ce776ff5762b6e138c99"
+url = "https://github.com/zizmorcore/zizmor/releases/download/v1.31.1/zizmor-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/zizmorcore/zizmor/releases/assets/645467284"
+provenance = "github-attestations"
+
+[tools.zizmor."platforms.linux-x64-musl"]
+checksum = "sha256:d185f726bdaf92df78273217dfdd24ebcd6b0ef48cf3ce776ff5762b6e138c99"
+url = "https://github.com/zizmorcore/zizmor/releases/download/v1.31.1/zizmor-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/zizmorcore/zizmor/releases/assets/645467284"
+provenance = "github-attestations"
+
+[tools.zizmor."platforms.linux-x64-musl-baseline"]
 checksum = "sha256:d185f726bdaf92df78273217dfdd24ebcd6b0ef48cf3ce776ff5762b6e138c99"
 url = "https://github.com/zizmorcore/zizmor/releases/download/v1.31.1/zizmor-x86_64-unknown-linux-gnu.tar.gz"
 url_api = "https://api.github.com/repos/zizmorcore/zizmor/releases/assets/645467284"

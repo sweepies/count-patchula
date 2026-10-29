@@ -106,7 +106,7 @@ Install [mise](https://mise.jdx.dev), then `mise trust` and `mise install`.
 mise run build          # build the workspace
 mise run test           # offline tests, including the real lockfile tool tests
 mise run lint           # every hk check, Clippy (warnings denied) included
-mise run hooks:install  # the pre-commit and commit-msg hooks
+mise run hooks:install  # the pre-commit and conventional commit-msg hooks
 mise run ci             # every check CI runs, in parallel
 mise run docs:dev       # the documentation site for this checkout
 ```
