@@ -2,10 +2,11 @@
 #MISE description="Build the server image from the musl release archives in target/dist into target/image/image.tar, an OCI index for both platforms, and load each platform into the local Docker as patchula:smoke-<arch>"
 #MISE tools={melange="0.63.2", apko="1.4.13"}
 
-# Every timestamp comes from the commit, so the same commit and archives give
-# the same image digests. melange packages patchula from the archives and
-# packslip from its pinned release executables, and apko builds the image from
-# those and Wolfi.
+# Every timestamp comes from the commit, and every Wolfi package is held to the
+# version in image/apko.lock.json, so the same commit and archives give the
+# same image digests. melange packages patchula from the archives and packslip
+# from its pinned release executables, and apko builds the image from those and
+# Wolfi.
 #
 # The local packages are unsigned: a signing key made for one build would end
 # up in the image's apk database and keyring, and change its digest every
@@ -35,13 +36,26 @@ def main [] {
     "org.opencontainers.image.revision": (^git rev-parse HEAD | str trim)
   } | items {|key, value| [--annotations $"($key):($value)"] } | flatten
   let config = open image/apko.yaml
-  $config | update contents.packages { where $it !~ "@local$" } | to yaml | save $"($out)/wolfi.apko.yaml"
+  let wolfi = $config | update contents.packages { where $it !~ "@local$" }
+  $wolfi | to yaml | save $"($out)/wolfi.apko.yaml"
+  let lock = open image/apko.lock.json
+  if $lock.config.checksum != $"sha256-(open --raw $'($out)/wolfi.apko.yaml' | hash sha256 --binary | encode base64)" {
+    error make --unspanned {msg: "image/apko.lock.json was made for another package list; run mise run image:lock"}
+  }
+  # A locked apko build fetches packages without an index, which the offline
+  # build would need, so the lock becomes exact version constraints instead.
+  let pins = $lock.contents.packages | group-by architecture | values | each { each {|p| $"($p.name)=($p.version)" } | sort } | uniq
+  if ($pins | length) != 1 {
+    error make --unspanned {msg: "image/apko.lock.json pins different versions per architecture; run mise run image:lock"}
+  }
+  $wolfi | update contents.packages ($pins | first) | to yaml | save $"($out)/wolfi-pinned.apko.yaml"
+  $config | update contents.packages { where $it =~ "@local$" | prepend ($pins | first) } | to yaml | save $"($out)/image.apko.yaml"
   open image/patchula.melange.yaml | update package.version $version | to yaml | save $"($out)/patchula.melange.yaml"
   with-env {SOURCE_DATE_EPOCH: (^git log -1 --format=%ct | str trim)} {
     ^melange build $"($out)/patchula.melange.yaml" ...$melange --source-dir target/dist
     ^melange build image/packslip.melange.yaml ...$melange --empty-workspace
-    ^apko build $"($out)/wolfi.apko.yaml" wolfi:checked $"($out)/wolfi.tar" --cache-dir $"($out)/apk-cache" --sbom=false
-    ^apko build image/apko.yaml patchula:smoke $"($out)/image.tar" --cache-dir $"($out)/apk-cache" --offline --ignore-signatures --build-repository-append $"@local ($out)/packages" --vcs=false --sbom-path $"($out)/sbom" ...$annotations
+    ^apko build $"($out)/wolfi-pinned.apko.yaml" wolfi:checked $"($out)/wolfi.tar" --cache-dir $"($out)/apk-cache" --sbom=false
+    ^apko build $"($out)/image.apko.yaml" patchula:smoke $"($out)/image.tar" --cache-dir $"($out)/apk-cache" --offline --ignore-signatures --build-repository-append $"@local ($out)/packages" --vcs=false --sbom-path $"($out)/sbom" ...$annotations
   }
   ^docker load --input $"($out)/image.tar"
   print $"index sha256:((^tar --extract --to-stdout --file $'($out)/image.tar' index.json) | hash sha256)"

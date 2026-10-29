@@ -321,7 +321,10 @@ runner needs](/installation/#what-the-runner-needs)). The image has no ICU, so
 it sets `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1`, which the runner passes on
 to dotnet.
 
-The same commit and release archives always build the same image digests.
+The same commit and release archives always build the same image digests:
+every Wolfi package, down to each dependency, is held to the version in
+`image/apko.lock.json`. An image takes Wolfi's updates only when that lock is
+refreshed with `mise run image:lock`.
 The release workflow
 [attests](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations)
 the image's build provenance, and each platform's SPDX SBOM from apko, in

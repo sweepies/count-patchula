@@ -1,0 +1,11 @@
+#!/usr/bin/env nu
+#MISE description="Pin the image's Wolfi packages, and everything they depend on, in image/apko.lock.json, which image:build holds the image to"
+#MISE tools={apko="1.4.13"}
+
+# Run it after changing the packages in image/apko.yaml, and to take Wolfi's
+# updates into the next image.
+def main [] {
+  mkdir target/image
+  open image/apko.yaml | update contents.packages { where $it !~ "@local$" } | to yaml | save --force target/image/wolfi.apko.yaml
+  ^apko lock target/image/wolfi.apko.yaml --output image/apko.lock.json
+}
