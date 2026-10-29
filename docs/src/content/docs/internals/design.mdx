@@ -114,33 +114,23 @@ docs and the man page. Performance is tracked with tak, report-only for now.
 Tests never touch the network: they replay responses recorded by patchula
 itself.
 
-Linting is hk, configured in `hk.pkl`. `mise run hooks:install` installs two
-git hooks that run hk through mise:
-
-- pre-commit fixes the staged files with rustfmt and `pkl format`, checks
-  that `mise fmt` has nothing to change, and runs jactionlint and zizmor on
-  the workflows, nu-lint on the nu file tasks and betterleaks on every staged
-  file. Mark a test credential betterleaks reports with a trailing
-  `// betterleaks:allow` comment on its line. nu-lint reads `nu-lint.toml`,
-  where each rule group is either an error or off; silence a single finding
-  with a `# nu-lint-ignore: <rule>` comment on the line before it.
-- commit-msg rejects a message that is not a conventional commit.
+Linting is hk, configured in `hk.pkl`. `mise run hooks:install` installs a
+pre-commit git hook that runs hk through mise. It fixes the staged files with
+rustfmt and `pkl format`, checks that `mise fmt` has nothing to change, and
+runs jactionlint and zizmor on the workflows, nu-lint on the nu file tasks and
+betterleaks on every staged file. Mark a test credential betterleaks reports
+with a trailing `// betterleaks:allow` comment on its line. nu-lint reads
+`nu-lint.toml`, where each rule group is either an error or off; silence a
+single finding with a `# nu-lint-ignore: <rule>` comment on the line before it.
+Commit messages and pull request titles are not checked, since pull requests
+are squash merged with a message written at merge time.
 
 `mise run lint` runs `hk check --all`: the pre-commit checks on the whole tree
 plus Clippy, which is too slow for every commit. CI's lint job runs
 `mise run lint:ci` instead, with the base branch or the commit before a push,
 so each step checks only the files that changed, and Clippy runs only when
 Rust sources, Cargo files or `mise.toml` change. hk's findings go to GitHub
-code scanning as SARIF, which shows them on the diff. A separate pull request
-check runs `mise-tasks/lint/commits` over every commit, its author and
-committer, and the body. It rejects a commit that is not a conventional
-commit, since a commit made without the hooks arrives unchecked,
-and any credit to an AI tool, such as a `Co-authored-by` trailer or a
-"Generated with" line. The AI check runs only there, so it never blocks a
-local commit, and it also catches the credit a squash merge adds for each
-commit author. The names and line patterns are lists at the top of
-`mise-tasks/lint/commits`; run it by hand on a message file with
-`mise run lint:commits <file>`.
+code scanning as SARIF, which shows them on the diff.
 
 CI's first job sorts the changed paths with `dorny/paths-filter`: a docs-only
 change skips the Rust jobs and leaves the Rust toolchain out of lint, and a
