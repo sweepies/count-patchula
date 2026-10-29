@@ -3,7 +3,7 @@ title: Internals
 description: How the Count is put together, for people working on him.
 ---
 
-import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
+import { CardGrid, LinkCard } from "@astrojs/starlight/components";
 
 How the Count is put together, for people working on him. None of this is
 needed to use him.
@@ -16,9 +16,5 @@ needed to use him.
   <LinkCard title="HTTP fixtures" href="/internals/http-testing/" description="How tests record and replay registries offline." />
 </CardGrid>
 
-<Aside type="caution" title="Clean room">
 The source lives at
-[sweepies/count-patchula](https://github.com/sweepies/count-patchula). The
-clean-room rule applies to every change: Renovate may be run as a black box,
-but its source code, presets and test fixtures are never read or copied.
-</Aside>
+[sweepies/count-patchula](https://github.com/sweepies/count-patchula).

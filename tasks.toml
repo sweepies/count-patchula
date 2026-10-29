@@ -9,11 +9,6 @@ run = "cargo build --workspace --locked"
 description = "Inspect mbx toolchain, local store and remote configuration"
 run = "mbx doctor"
 
-["conformance:compare"]
-description = "Compare Renovate JSON output with a versioned patchula report; forwards CLI arguments"
-raw_args = true
-run = "cargo run --quiet --locked -p patchula-conformance --"
-
 ["benchmarks:build"]
 description = "Build release subjects outside tak's measured commands"
 run = ["cargo build --release --locked -p patchula-cli", "cargo build --release --locked -p patchula-github --example replay_bench"]

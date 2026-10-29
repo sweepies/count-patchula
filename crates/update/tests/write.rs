@@ -2602,8 +2602,7 @@ async fn lookup_warnings_defer_obsolete_pr_closure() {
 
 #[test]
 fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
-    // Self-authored manifests and target facts from the owner's patchula report;
-    // no Renovate fixture, source or preset data is used.
+    // Self-authored manifests and target facts from the owner's patchula report.
     let (config, mut repo, _, _) = setup("22.0.0", false);
     let mut config = config;
     config.managers = vec![

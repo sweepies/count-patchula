@@ -104,8 +104,7 @@ must initialise tracing for the warnings to show.
 ## Freshness floors
 
 Two flags keep validator-free catalogs from being downloaded on every run. The
-user-facing summary is in [sources](/guide/sources/) and the reason in
-[departures](/renovate/departures/#source-refresh).
+user-facing summary is in [sources](/guide/sources/#fetching-less).
 
 - `--registry-freshness-secs 3600` applies to OCI `tags/list` pages with
   neither ETag nor Last-Modified. After expiry every page is fetched again, so
@@ -160,8 +159,8 @@ Successful catalog views are stored apart from HTTP bodies, scoped to the
 credential and source mode. A dependency with a positive effective `waitHours`
 reuses a catalog younger than `clamp(waitHours - 1, 1, 24)` hours, 23 hours
 for the default 24-hour wait. Zero keeps the usual HTTP freshness. Dependencies
-sharing a catalog use the shortest wait among them. The reason is in
-[departures](/renovate/departures/#catalog-reuse).
+sharing a catalog use the shortest wait among them. A release that must wait a
+day does not need a fresh catalog on every run.
 
 Only the catalog is cached; policy always uses the current time, so a known
 held-back release can become eligible during reuse. The report records

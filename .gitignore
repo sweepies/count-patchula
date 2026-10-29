@@ -6,6 +6,5 @@
 *.sqlite-shm
 *.pem
 /server-reports/
-/conformance-results/
 /benchmark-results/
 .env

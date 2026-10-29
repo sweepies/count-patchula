@@ -1,5 +1,4 @@
-//! Config coverage uses authored representative manifests, never upstream source
-//! from the comparison subjects (particularly the clean-room excluded project).
+//! Config coverage uses authored representative manifests.
 use patchula_config::Manager;
 use patchula_manager::{Files, Scanner};
 use std::path::Path;

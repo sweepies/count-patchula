@@ -155,7 +155,7 @@ export default defineConfig({
           items: [
             { label: "Compatibility matrix", slug: "renovate/compatibility" },
             { label: "Migrating a config", slug: "renovate/migrating" },
-            { label: "Deliberate departures", slug: "renovate/departures" },
+            { label: "Departures", slug: "renovate/departures" },
           ],
         },
         { label: "About", items: [{ label: "Benchmarks", slug: "benchmarks" }] },

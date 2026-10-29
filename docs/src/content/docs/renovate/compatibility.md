@@ -1,23 +1,20 @@
 ---
 title: "Compatibility with Renovate"
 ---
-The Count covers the managers most repositories on GitHub actually use, and
-does them fast. Renovate covers far more ground: more platforms, more managers,
-private registries and GitHub's vulnerability alerts. This page says which is which, so
-you can tell whether your repositories will notice the switch.
+This page maps a Renovate setup onto the Count: which managers, datasources,
+versioning schemes, lockfiles and options have an equivalent, under which name,
+and which have none. [Migrating a config](/renovate/migrating/) translates the
+options one by one, and [departures](/renovate/departures/) lists the defaults
+that differ.
 
-Renovate's lists below come from its public documentation (version 44.174),
-never from its source. "Yes" means supported, "partial" says what is missing,
-and "no" means not yet. Some of the "no"s are deliberate, and
-[departures](/renovate/departures/) explains why.
+Renovate's names come from its public documentation (version 44.174). "Partial"
+says what is missing.
 
 ## Platforms
 
-| Platform | Renovate | Count Patchula |
-|---|---|---|
-| GitHub and GitHub Enterprise Server | yes | GitHub.com only |
-| GitLab, Bitbucket Cloud and Server, Azure DevOps, Gitea, Forgejo | yes | no |
-| CodeCommit, Gerrit, SCM-Manager, local | experimental | no |
+The Count runs on GitHub.com only. GitHub Enterprise Server, GitLab, Bitbucket,
+Azure DevOps, Gitea, Forgejo and Renovate's experimental platforms have no
+equivalent.
 
 ## Managers
 
@@ -49,7 +46,7 @@ Managers the Count supports, under Renovate's names:
 | `pre-commit` | `pre-commit` | GitHub, GitLab, Codeberg, Gitea and Forgejo hooks |
 | `devcontainer` | `devcontainer` | |
 | `woodpecker` | `woodpecker` | anchored images are edited at the anchor |
-| `copier` | `copier` | partial: newer tags are reported, never applied by a run ([departure](/renovate/departures/#copier-templates)). GitHub, GitLab, Gitea and Forgejo templates only |
+| `copier` | `copier` | partial: newer tags are reported, never applied by a run ([why](/renovate/departures/#copier-templates)). GitHub, GitLab, Gitea and Forgejo templates only |
 | `maven` | `maven` | |
 | `gradle` | `gradle` | catalogs, scripts, variables, `gradle.properties`; `gradle.lockfile` not regenerated |
 | `gradle-wrapper` | `gradle` | the wrapper checksum is refreshed |
@@ -131,58 +128,41 @@ Renovate's other schemes, including `regex` versioning, `node`, `debian`,
 
 ## Lockfiles
 
-| Lockfile | Renovate | Count Patchula |
-|---|---|---|
-| `package-lock.json` | npm | aube by default, npm with `npmEngine = "npm"` |
-| `pnpm-lock.yaml` | pnpm | aube |
-| `yarn.lock` | Yarn | Yarn |
-| `bun.lock` | Bun | Bun |
-| `bun.lockb` | Bun | no |
-| `Cargo.lock`, `go.sum`, `.terraform.lock.hcl` | yes | yes |
-| `uv.lock`, `poetry.lock` | yes | yes |
-| `packages.lock.json`, `Gemfile.lock`, `composer.lock` | yes | yes |
-| `mise.lock` | not listed in its docs | yes |
-| `Chart.lock`, `gradle.lockfile` | yes | no |
-| `Pipfile.lock`, `pdm.lock` and others | yes | no |
+| Lockfile | Count Patchula |
+|---|---|
+| `package-lock.json` | aube by default, npm with `npmEngine = "npm"` |
+| `pnpm-lock.yaml` | aube |
+| `yarn.lock`, `bun.lock` | Yarn, Bun |
+| `Cargo.lock`, `go.sum`, `.terraform.lock.hcl` | yes |
+| `uv.lock`, `poetry.lock` | yes |
+| `packages.lock.json`, `Gemfile.lock`, `composer.lock` | yes |
+| `mise.lock`, `flake.lock`, `apm.lock.yaml` | yes |
+| `bun.lockb`, `Chart.lock`, `gradle.lockfile`, `Pipfile.lock`, `pdm.lock` and others | no |
 
-## Features
+## Options and features
 
-| Feature | Renovate | Count Patchula |
-|---|---|---|
-| Config format | JSON or JSON5 with presets | [Pkl](/guide/configuration/), with `amends` and `import` instead of presets |
-| Onboarding PR | yes | no; repositories opt in with a config file |
-| Config migration PRs | yes | no |
-| `packageRules` | yes | `rules`, with typed selectors |
-| Grouping | `groupName` | `group` |
-| Separate PRs per update type | `separateMajorMinor` and friends | one PR per update line by default |
-| `rangeStrategy` | `auto`, `pin`, `bump`, `replace`, `widen`, ... | `versions`: `exact`, `preserve` or `widen` |
-| Digest pinning | opt-in | on by default for actions and images |
-| `minimumReleaseAge` | off by default | `waitHours`, 24 by default |
-| Schedules | natural language and cron | cron `windows` with a timezone |
-| PR limits | `prConcurrentLimit`, `prHourlyLimit` | `concurrent`, `perHour`, unlimited by default |
-| `rebaseWhen` | several modes | `conflicts` or `behind` |
-| Automerge | branch, PR or PR comment, native or not | native auto-merge, or a checked fallback on a later run |
-| Dependency dashboard | yes | yes |
-| Dashboard approval | yes | create a held-back update from the dashboard |
-| Lockfile maintenance | yes | yes |
-| Release notes | yes | yes, with mention and backlink suppression |
-| Custom regex managers | yes | yes |
-| JSONata managers, custom datasources | yes | no |
-| Private registries, `hostRules` | yes | no; tool environments are scrubbed |
-| `postUpgradeTasks` | yes, admin-allowed | no, on purpose |
-| Vulnerability alerts, OSV | yes | OSV.dev advisories mark fixing updates in PRs, labels, the dashboard and the report; see [security advisories](/guide/security/) |
-| Merge confidence | Mend beta | no |
-| Abandonment detection | yes | no |
-| Replacement PRs | yes | no |
-| Draft PRs | yes | no |
-| Commit signing | configurable author | always API commits signed by GitHub |
-| Batch PR by checkbox | no | [yes](/guide/batch/) |
-| Machine-readable output | logs | a [versioned JSON report](/reference/report/) |
-| Self-hosted server | Renovate CE, the Mend app | [`patchula serve`](/guide/server/) |
-| Write updates into a local checkout | no; the local platform is dry-run only | [`patchula apply`](/guide/apply/) and the [terminal UI](/guide/tui/) |
-
-## Performance
-
-On six large public repositories the Count was 6.1 times faster than Renovate
-cold and 18.5 times faster warm; the [benchmarks](/benchmarks/) page has the
-numbers and the method.
+| Renovate | Count Patchula |
+|---|---|
+| JSON or JSON5 config, `extends` and presets | [Pkl](/guide/configuration/), with `amends` and `import`; no presets |
+| Onboarding PR | none; repositories opt in with a config file |
+| Config migration PRs | none |
+| `packageRules` | `rules`, with typed selectors |
+| `groupName` | `group` |
+| `separateMajorMinor` and friends | one PR per update line by default |
+| `rangeStrategy` | `versions`: `exact`, `preserve` or `widen` |
+| `pinDigests` | `digest`, on by default for actions and images |
+| `minimumReleaseAge` | `waitHours`, 24 by default |
+| `schedule`, `timezone` | cron `windows` with a zone; no natural-language schedules |
+| `prConcurrentLimit`, `prHourlyLimit` | `concurrent`, `perHour`, unlimited by default |
+| `rebaseWhen` | `rebase`: `conflicts` or `behind` |
+| `automerge` | `merge`: native auto-merge, or a checked fallback on a later run |
+| `dependencyDashboard`, dashboard approval | `dashboard`; a held-back update can be created from it |
+| `lockFileMaintenance` | `lockfiles { refresh }` |
+| `fetchChangeLogs` | `releaseNotes` |
+| `customManagers` (regex) | `extractors` |
+| `vulnerabilityAlerts`, `osvVulnerabilityAlerts` | OSV.dev [advisories](/guide/security/), on by default |
+| JSONata managers, custom datasources | none |
+| `hostRules`, private registries | none; tool environments are scrubbed |
+| `postUpgradeTasks` | none, on purpose |
+| `gitAuthor` | none; commits are made through the API and signed by GitHub |
+| Merge confidence, abandonment detection, replacement PRs, draft PRs | none |

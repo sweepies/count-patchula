@@ -374,10 +374,10 @@ pub struct Update {
     pub new_value: Option<String>,
     pub new_version: Option<String>,
     pub new_digest: Option<String>,
-    /// major, minor, patch, digest, pin; comparison retains other upstream types.
+    /// major, minor, patch, digest or pin.
     pub update_type: String,
     pub group: Option<String>,
-    /// Lookup metadata; absent in black-box comparison inputs.
+    /// Lookup metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<UpdatePolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

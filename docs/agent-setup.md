@@ -72,8 +72,8 @@ grouping, custom managers and anything else in the config. Check each against:
 
 - the [compatibility matrix](https://count-patchula.sweepy.dev/renovate/compatibility/), for platforms,
   managers, datasources, versioning, lockfiles and features;
-- [deliberate departures](https://count-patchula.sweepy.dev/renovate/departures/), for behaviour that differs on
-  purpose;
+- [departures](https://count-patchula.sweepy.dev/renovate/departures/), for the defaults and behaviour that
+  differ;
 - the [migration guide](https://count-patchula.sweepy.dev/renovate/migrating/), for the option-by-option
   translation and what does not carry over.
 
