@@ -124,10 +124,7 @@ git hooks that run hk through mise:
   `// betterleaks:allow` comment on its line. nu-lint reads `nu-lint.toml`,
   where each rule group is either an error or off; silence a single finding
   with a `# nu-lint-ignore: <rule>` comment on the line before it.
-- commit-msg rejects a message that is not a conventional commit, or that
-  credits an AI tool in a trailer such as `Co-authored-by` or a "Generated
-  with" line. The names and line patterns are lists at the top of
-  `mise-tasks/lint/commits`.
+- commit-msg rejects a message that is not a conventional commit.
 
 `mise run lint` runs `hk check --all`: the pre-commit checks on the whole tree
 plus Clippy, which is too slow for every commit. CI's lint job runs
@@ -135,9 +132,15 @@ plus Clippy, which is too slow for every commit. CI's lint job runs
 so each step checks only the files that changed, and Clippy runs only when
 Rust sources, Cargo files or `mise.toml` change. hk's findings go to GitHub
 code scanning as SARIF, which shows them on the diff. A separate pull request
-check runs `mise-tasks/lint/commits` over every commit and the body, since a
-commit made without the hooks arrives unchecked and a squash merge credits
-each commit author after the local hooks have run.
+check runs `mise-tasks/lint/commits` over every commit, its author and
+committer, and the body. It rejects a commit that is not a conventional
+commit, since a commit made without the hooks arrives unchecked,
+and any credit to an AI tool, such as a `Co-authored-by` trailer or a
+"Generated with" line. The AI check runs only there, so it never blocks a
+local commit, and it also catches the credit a squash merge adds for each
+commit author. The names and line patterns are lists at the top of
+`mise-tasks/lint/commits`; run it by hand on a message file with
+`mise run lint:commits <file>`.
 
 CI's first job sorts the changed paths with `dorny/paths-filter`: a docs-only
 change skips the Rust jobs and leaves the Rust toolchain out of lint, and a

@@ -41,9 +41,6 @@ hooks {
   ["commit-msg"] {
     steps {
       ["conventional-commit"] = Builtins.check_conventional_commit
-      ["ai-credit"] {
-        check = new Command { argv = List("mise-tasks/lint/commits", "{{commit_msg_file}}") }
-      }
     }
   }
   ["fix"] {

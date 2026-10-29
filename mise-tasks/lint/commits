@@ -1,10 +1,11 @@
 #!/usr/bin/env nu
 #MISE description="Reject AI credit in a commit message, or check a pull request's commits and body"
-#USAGE arg "[message_file]" help="Commit message file, as the commit-msg hook passes it; without one, checks the pull request that GH_TOKEN, REPO and PR name"
-# For a pull request, every non-merge commit must also be a conventional
-# commit, since a commit made without the hooks arrives unchecked. A squash
-# merge also adds a Co-authored-by line for each commit author, which no local
-# hook sees.
+#USAGE arg "[message_file]" help="Commit message file to check; without one, checks the pull request that GH_TOKEN, REPO and PR name"
+# No local hook runs this; the Commits workflow runs it on every pull request.
+# There every non-merge commit must also be a conventional commit, since a
+# commit made without the hooks arrives unchecked. A squash merge also adds a
+# Co-authored-by line for each commit author, which only the pull request
+# check can see coming.
 
 # AI tools and bots that must not be credited. Matched as whole words, in any
 # case. Add a name here to reject it.

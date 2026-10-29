@@ -1,7 +1,7 @@
 name: Commits
 
-# Commits made without the local hooks, and the Co-authored-by lines a squash
-# merge adds for each commit author, are only checked here.
+# AI credit is only checked here, not by a local hook. Conventional commits
+# are checked here too, for commits made without the local hooks.
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
