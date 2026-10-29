@@ -2252,20 +2252,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "patchula-conformance"
-version = "0.5.1"
-dependencies = [
- "chrono",
- "patchula-report",
- "semver",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
- "usage-rs",
-]
-
-[[package]]
 name = "patchula-datasource"
 version = "0.5.1"
 dependencies = [

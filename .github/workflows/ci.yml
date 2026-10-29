@@ -41,9 +41,6 @@ jobs:
         with:
           filters: |
             rust:
-              # The conformance tests check departures.json against the
-              # departures page's anchors.
-              - docs/src/content/docs/renovate/departures.md
               - .github/workflows/ci.yml
             docs:
               - docs/**
@@ -72,7 +69,6 @@ jobs:
               - "!socket.yml"
               - "!communique.toml"
               - "!tak.toml"
-              - "!conformance/README.md"
               # hk lints the workflows on every change.
               - "!action.yml"
               - "!.github/**"
@@ -93,7 +89,7 @@ jobs:
     env:
       # Lint never needs these. Without Rust changes, Clippy and rustfmt do
       # not run either, so their toolchain is left out too.
-      MISE_DISABLE_TOOLS: go,node,aube,tak,usage,nu,http:deepsource${{ needs.changes.outputs.rust != 'true' && ',rust,mr-boxington,zig' || '' }}
+      MISE_DISABLE_TOOLS: go,node,tak,usage,nu,http:deepsource${{ needs.changes.outputs.rust != 'true' && ',rust,mr-boxington,zig' || '' }}
       # A pull request's merge commit has the base branch as its first parent.
       FROM_REF: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
     steps:

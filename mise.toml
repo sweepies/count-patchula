@@ -4,8 +4,6 @@ mr-boxington = "1.24.0"
 usage = "7.0.1"
 tak = "0.0.15"
 zig = "0.17.0"
-# The conformance harness installs Renovate with aube.
-aube = "2.8.1"
 # File tasks with real logic are nu scripts.
 nu = "0.116.1"
 node = "24.21.0"
