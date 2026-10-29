@@ -66,11 +66,15 @@ updated twice. Binary `bun.lockb` is not supported; switch to text `bun.lock`.
 Workflow steps, reusable workflows, job containers, services and composite
 action steps. `run:` text, expressions and local `./` actions are ignored.
 Actions and images are pinned to digests by default, keeping the version in a
-comment. Setup actions' version inputs (`node-version`, `go-version`,
+comment. A SHA pin with a version comment (`@8e5e7e5... # v4.2.2`) upgrades
+both; one without a comment cannot safely pick a replacement tag, so it stays
+put with a warning. Branch refs keep the branch and only refresh the digest.
+Setup actions' version inputs (`node-version`, `go-version`,
 `bun-version`, golangci-lint and goreleaser versions) are tools in their own
-right. Hosted runner labels in `runs-on` upgrade within their OS and
-architecture family. Flow-style YAML and YAML aliases at a version location are
-not editable yet and report an error.
+right. Hosted runner labels in `runs-on`, such as `ubuntu-24.04`, upgrade within
+their OS and architecture family; `ubuntu-latest` floats and is left alone.
+Flow-style YAML and YAML aliases at a version location are not editable yet
+and report an error.
 
 ### Forgejo and Gitea Actions
 
@@ -171,15 +175,33 @@ and the [JSON report](/reference/report/).
 
 A newer tag is reported, never proposed: the run summary, the JSON report
 under `notices`, the [dashboard](/guide/dashboard/) and the
-[TUI](/guide/tui/#templates) show "template gh:acme/template: v1.4.0 → v1.6.0
+[TUI](/guide/tui/) show "template gh:acme/template: v1.4.0 → v1.6.0
 available", with a compare link where the host has one. The release-age wait
 and rules apply as usual, and the kind is `template`. The Count never opens a
 pull request for it and never edits `_commit`: only `copier update` applies a
 template's changes, and a bare `_commit` bump would make the next update start
-from the wrong version and drop them. He runs copier only where you ask him
-to, on your own machine: from the [TUI](/guide/tui/#templates) or with
-[`patchula apply --copier`](/guide/apply/#copier-templates). See the
+from the wrong version and drop them. See the
 [departure](/renovate/departures/#copier-templates).
+
+He runs copier only when you ask, on your own working tree: `u` on the
+[TUI](/guide/tui/)'s Templates tab updates one template after a `y`, and
+`patchula apply --copier` updates every template the filters select
+(`--manager` and `--dependency` apply; any `--type` leaves templates out) before
+writing the other updates, which are then planned against the tree copier left. It is your own `copier` from `PATH`, run as you with
+`copier update --vcs-ref <new tag> --skip-answered`, never `--trust`, and
+nothing is committed. The template's new, unreviewed code runs with your
+permissions, so read the compare link first.
+
+- The tree must be clean, untracked files included. With `apply` and two
+  templates, the second is refused: commit, then run again.
+- Copier asks the template's new questions on the terminal. Without one,
+  `apply` refuses the template unless you pass `--copier-defaults`.
+- A template that needs `--trust` stops copier; review it and run
+  `copier update --trust` yourself.
+- Conflicts stay as copier leaves them, and the Count lists the files it
+  changed and the ones with conflicts.
+- With `apply`, a template copier did not update exits 3, and `--copier`
+  does not combine with `--dry-run`, `--check` or `--json`.
 
 ## APM
 

@@ -94,13 +94,3 @@ rules {
   }
 }
 ```
-
-## GitHub Actions refs
-
-A version tag (`actions/checkout@v4`) can upgrade and gets pinned to its commit,
-keeping the tag in a comment. A SHA pin with a version comment
-(`@8e5e7e5... # v4.2.2`) upgrades both. A SHA pin without a comment cannot safely
-pick a replacement tag, so it stays put with a warning. Branch refs keep the
-branch and only refresh the digest. Hosted runner labels such as `ubuntu-24.04`
-upgrade within their OS and architecture family; `ubuntu-latest` floats and is
-left alone.
