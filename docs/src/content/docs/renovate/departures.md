@@ -430,8 +430,7 @@ The Count never bumps `_commit` on its own either. Copier treats `_commit` as
 the version the project was last generated from, so the next `copier update`
 would diff from the wrong base and silently drop the template changes in
 between. When he runs copier for you, the Count never passes `--trust`. See
-[Copier](/guide/managers/#copier), the [TUI](/guide/tui/#templates) and
-[`patchula apply`](/guide/apply/#copier-templates).
+[Copier](/guide/managers/#copier).
 
 ### Pins and lockfile refreshes {#update-types}
 

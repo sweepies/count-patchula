@@ -107,37 +107,9 @@ with the reason rather than guess, and nothing is written. Lockfiles are not reg
 run your package manager afterwards (`aube install`, `cargo update -w`,
 `uv lock` and so on).
 
-## Templates
-
 Template updates are never selected with the other updates, and `w` never
-touches them. In the working tree, `u` on the Templates tab offers to run
-`copier update` for that one template, and `y` runs it; any other key cancels.
-Copier runs from your `PATH`, as you, from the root of the checkout:
-
-```sh
-copier update --vcs-ref <new tag> --skip-answered --answers-file <answers file name> <its directory>
-```
-
-It is your own copier, with your environment and copier settings (its
-`trust` list included), not a tool from the Count's store: the template's code
-runs with your permissions either way. That code is the new, unreviewed
-version of the template, so read the compare link first.
-
-- The checkout must be clean, untracked files included, as copier requires.
-  The Count refuses before running copier otherwise, so update a template
-  before applying other updates, or commit them first.
-- Copier gets the terminal, so it can ask the template's new questions.
-  Questions you already answered are not asked again.
-- The Count never passes `--trust`. If the template uses tasks, migrations or
-  extensions, copier stops, and you can review the template and run
-  `copier update --trust` yourself.
-- Conflicts stay as copier leaves them: inline markers, or `.rej` files. The
-  Count lists the files copier changed and the ones with conflicts, and
-  commits nothing.
-
-Outside the TUI, [`patchula apply --copier`](/guide/apply/#copier-templates)
-does the same for every selected template. `lookup`, `run`, `--remote` and the
-server [never run copier](/renovate/departures/#copier-templates).
+touches them: some managers only report a newer version. See
+[Managers](/guide/managers/).
 
 To write updates without picking them, in a script or a pre-commit hook, use
 [`patchula apply`](/guide/apply/). It writes through the same edits, and
