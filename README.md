@@ -116,10 +116,7 @@ Cargo cache. Tests never touch the network: they replay HTTP fixtures the Count
 recorded himself. Tools only the tests need, like the lockfile engines, are
 task-scoped, so a plain `mise install` does not fetch them.
 
-Count Patchula is an independent implementation under the MIT licence. Renovate
-(AGPL-3.0) may be run as a black box to compare results, but its source code,
-preset data and test fixtures are never read, copied or adapted into this
-repository.
+Count Patchula is an independent project under the MIT licence.
 
 ## Thanks
 

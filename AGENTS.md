@@ -4,17 +4,6 @@ Count Patchula is a dependency update bot for GitHub, written in Rust. The
 binary is `patchula`. Docs live in `docs/` and are the published site, built
 with Astro Starlight; the pages are under `docs/src/content/docs/`.
 
-## Clean room
-
-Renovate is AGPL; Count Patchula is MIT. Read only Renovate's public
-documentation, and treat Renovate itself as a black box you may run to compare
-results. Its source code, preset data and test fixtures stay unread: before you
-fetch anything from `renovatebot/*` on GitHub, confirm it is documentation.
-
-When the Count behaves differently from Renovate on purpose, record the
-departure and its reason in `docs/src/content/docs/renovate/departures.md`.
-An unrecorded difference is a bug.
-
 ## Working
 
 - Every tool comes from mise, and every repeatable action is a mise task
@@ -39,6 +28,8 @@ An unrecorded difference is a bug.
 - User-facing behaviour changes update the matching page under
   `docs/src/content/docs/guide/` in the same commit. The compatibility matrix
   is `docs/src/content/docs/renovate/compatibility.md`.
+- Document a major deviation from Renovate, one a Renovate user would trip
+  over, in `docs/src/content/docs/renovate/departures.md`.
 
 Architecture, caching and the HTTP test design are in
 `docs/src/content/docs/internals/`. Read the relevant page before changing the

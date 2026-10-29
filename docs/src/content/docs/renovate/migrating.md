@@ -22,7 +22,8 @@ prs { dashboard = true }
 ```
 
 Read through the [defaults](/guide/configuration/#defaults) and keep what you
-actually rely on.
+actually rely on. [Departures](/renovate/departures/) lists the defaults that
+differ from Renovate's, such as the 24-hour release-age wait and exact npm pins.
 
 ## Option by option
 
