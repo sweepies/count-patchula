@@ -25,7 +25,7 @@ def main [] {
   let out = "target/image" | path expand
   rm --recursive --force $out
   mkdir $out $"($out)/sbom"
-  let melange = [--arch "x86_64,aarch64" --runner docker --out-dir $"($out)/packages"]
+  let melange = [--runner docker --out-dir $"($out)/packages"]
   # apko splits --annotations at commas, so no value may hold one.
   let annotations = {
     "org.opencontainers.image.title": "Count Patchula"
@@ -39,8 +39,17 @@ def main [] {
   $config | update contents.packages { where $it !~ "@local$" } | to yaml | save $"($out)/wolfi.apko.yaml"
   open image/patchula.melange.yaml | update package.version $version | to yaml | save $"($out)/patchula.melange.yaml"
   with-env {SOURCE_DATE_EPOCH: (^git log -1 --format=%ct | str trim)} {
-    ^melange build $"($out)/patchula.melange.yaml" ...$melange --source-dir target/dist
-    ^melange build image/packslip.melange.yaml ...$melange --empty-workspace
+    # One melange run builds its architectures at once, and each writes a probe
+    # file into the source directory while the other copies that directory
+    # into its workspace. So each architecture gets a source directory of its
+    # own, holding just its archive.
+    for arch in [[melange archive]; [x86_64 x64] [aarch64 arm64]] {
+      let source = $"($out)/source/($arch.melange)"
+      mkdir $source
+      cp $"target/dist/patchula-v($version)-linux-($arch.archive)-musl.tar.gz" $source
+      ^melange build $"($out)/patchula.melange.yaml" ...$melange --arch $arch.melange --source-dir $source
+    }
+    ^melange build image/packslip.melange.yaml ...$melange --arch "x86_64,aarch64" --empty-workspace
     ^apko build $"($out)/wolfi.apko.yaml" wolfi:checked $"($out)/wolfi.tar" --cache-dir $"($out)/apk-cache" --sbom=false
     ^apko build image/apko.yaml patchula:smoke $"($out)/image.tar" --cache-dir $"($out)/apk-cache" --offline --ignore-signatures --build-repository-append $"@local ($out)/packages" --vcs=false --sbom-path $"($out)/sbom" ...$annotations
   }
