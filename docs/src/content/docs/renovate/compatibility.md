@@ -49,7 +49,7 @@ Managers the Count supports, under Renovate's names:
 | `pre-commit` | `pre-commit` | GitHub, GitLab, Codeberg, Gitea and Forgejo hooks |
 | `devcontainer` | `devcontainer` | |
 | `woodpecker` | `woodpecker` | anchored images are edited at the anchor |
-| `copier` | `copier` | partial: newer template tags are reported, never applied by a run or on the server, because applying one runs the template's code; the working-tree TUI and `patchula apply --copier` can run your own copier on request ([departure](/renovate/departures/#copier-templates)). GitHub, GitLab, Gitea and Forgejo templates only |
+| `copier` | `copier` | partial: newer tags are reported, never applied by a run ([departure](/renovate/departures/#copier-templates)). GitHub, GitLab, Gitea and Forgejo templates only |
 | `maven` | `maven` | |
 | `gradle` | `gradle` | catalogs, scripts, variables, `gradle.properties`; `gradle.lockfile` not regenerated |
 | `gradle-wrapper` | `gradle` | the wrapper checksum is refreshed |
@@ -103,7 +103,7 @@ he does not read Renovate presets.
 | `node-version`, `golang-version`, `python-version`, `rust-version` | `mise` |
 | `git-refs`, for Nix flake inputs | `nix`, through `nix flake prefetch` |
 
-The rest of Renovate's 82 datasources (`git-refs`, `git-tags`, the GitLab and
+The rest of Renovate's 82 datasources (`git-refs` other than for Nix, `git-tags`, the GitLab and
 Gitea release sources, `artifactory`, `conda`, `hex`, `dart`, `pod`, `cdnjs`,
 `endoflife-date`, `repology`, `deb`, `rpm`, `apk`, AWS and Azure sources,
 `custom` and others) have no equivalent. The Count also has a `mise` source
@@ -183,8 +183,6 @@ Renovate's other schemes, including `regex` versioning, `node`, `debian`,
 
 ## Performance
 
-On six large public repositories, on the same EC2 instance, the Count was 6.1
-times faster than Renovate 44.173.1 cold and 18.5 times faster warm, at a fifth
-to a sixteenth of the memory. Coverage, measured as unique dependency names,
-matched closely on four of them. The [benchmarks](/benchmarks/) page has the
+On six large public repositories the Count was 6.1 times faster than Renovate
+cold and 18.5 times faster warm; the [benchmarks](/benchmarks/) page has the
 numbers and the method.

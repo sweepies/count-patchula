@@ -48,6 +48,11 @@ have a [known vulnerability](/guide/security/#lockfile-only-packages). A file
 that does not parse at all, such as an ERB-templated YAML file, is skipped with
 a warning and the rest of the repository carries on.
 
+Declarations a manager cannot read as versions are *skipped*: each is listed
+with its line and reason in the run summary and under `skipped` in the
+[JSON report](/reference/report/). Unlike a warning, a skip doesn't hold back
+branch cleanup or auto-merge.
+
 ## JavaScript
 
 `npm` covers dependencies, devDependencies, peers, optional dependencies,
@@ -118,18 +123,8 @@ tool on a publisher's domain. An existing `mise.lock` is regenerated with the
 update. mise runs in a [sandbox](/guide/sources/#mise-lookups), with the
 Count's own pinned mise and none of your configuration.
 
-Some tools are not looked up, each with a lookup warning:
-
-- `asdf:` and `vfox:` tools, and registry names whose only backend is an asdf
-  or vfox plugin, because those backends run plugin code. A short name that
-  lists a plugin first and another backend after it uses the other backend.
-- Names with tool options in brackets, such as `pypi:black[extras=jupyter]`.
-  Options can point a backend at another host, so the Count passes none, and
-  mise's options in a table (`{ version = "1", asset_pattern = "..." }`) are
-  not read either.
-- Backends that install from a Git ref rather than from releases, such as
-  `cargo:https://github.com/owner/repo`: mise lists only `HEAD` for them, so
-  there is no version to update to, including with a `tag:` pin.
+Some tools are refused for safety (plugin backends, tool options, Git-ref
+installs); see [mise lookups](/guide/sources/#mise-lookups).
 
 ## Cargo, Go and Terraform
 
@@ -157,10 +152,7 @@ one merged into a step with `<<: *anchor` is read too.
 
 An image built from a variable, such as `golang:${GO_VERSION}` from the
 workflow's `matrix` or `${REGISTRY}/tool:1` from the environment, is only
-known when the workflow runs, so the Count skips it. Each skipped image is
-listed with its line and the reason, in the run summary and under `skipped` in
-the [JSON report](/reference/report/). Unlike a warning, a skipped image
-doesn't stop the Count from closing obsolete branches.
+known when the workflow runs, so it is skipped.
 
 ## Copier
 
@@ -170,38 +162,18 @@ are looked up as `github-tags`, and templates on GitLab (`gl:` included),
 Gitea and Forgejo as `forge-tags`, compared as `pep440` versions. SSH URLs
 are looked up over the same host's API. A template on any other host, a local
 template, or a `_commit` that is not a release tag (such as
-`v1.4.0-5-g1a2b3c4`) is skipped, and listed with the reason in the run summary
-and the [JSON report](/reference/report/).
+`v1.4.0-5-g1a2b3c4`) is skipped.
 
 A newer tag is reported, never proposed: the run summary, the JSON report
 under `notices`, the [dashboard](/guide/dashboard/) and the
 [TUI](/guide/tui/) show "template gh:acme/template: v1.4.0 → v1.6.0
 available", with a compare link where the host has one. The release-age wait
 and rules apply as usual, and the kind is `template`. The Count never opens a
-pull request for it and never edits `_commit`: only `copier update` applies a
-template's changes, and a bare `_commit` bump would make the next update start
-from the wrong version and drop them. See the
+PR for it or edits `_commit`; see the
 [departure](/renovate/departures/#copier-templates).
 
-He runs copier only when you ask, on your own working tree: `u` on the
-[TUI](/guide/tui/)'s Templates tab updates one template after a `y`, and
-`patchula apply --copier` updates every template the filters select
-(`--manager` and `--dependency` apply; any `--type` leaves templates out) before
-writing the other updates, which are then planned against the tree copier left. It is your own `copier` from `PATH`, run as you with
-`copier update --vcs-ref <new tag> --skip-answered`, never `--trust`, and
-nothing is committed. The template's new, unreviewed code runs with your
-permissions, so read the compare link first.
-
-- The tree must be clean, untracked files included. With `apply` and two
-  templates, the second is refused: commit, then run again.
-- Copier asks the template's new questions on the terminal. Without one,
-  `apply` refuses the template unless you pass `--copier-defaults`.
-- A template that needs `--trust` stops copier; review it and run
-  `copier update --trust` yourself.
-- Conflicts stay as copier leaves them, and the Count lists the files it
-  changed and the ones with conflicts.
-- With `apply`, a template copier did not update exits 3, and `--copier`
-  does not combine with `--dry-run`, `--check` or `--json`.
+`patchula apply --copier` and the TUI's Templates tab can run your own
+`copier update` on request; see [applying updates](/guide/apply/#copier-templates).
 
 ## APM
 
@@ -220,8 +192,7 @@ default. A new tag is written exactly as upstream tagged it, so `v2.0` stays
 `v2.0` and never becomes `2.0.0`. Set `defaults { actionDigests = false }`, or a rule with
 `digest = false` for `managers { "apm" }`, to keep plain tags.
 
-The Count skips these entries and lists each one, with its line and the reason,
-in the run summary and under `skipped` in the [JSON report](/reference/report/):
+These entries are skipped:
 
 - an entry with no `#ref`, which the lockfile pins;
 - a branch, or a tag that is not a version, such as `#main`;
@@ -246,8 +217,8 @@ reads each service's `image`. Kubernetes reads workload images, Kustomize its
 `images` and `helmCharts` transforms, Flux its repositories and releases, and
 Helm values files their `repository`/`tag`/`digest` maps. ConfigMaps, Secrets
 and annotations are not dependencies. Templated images need concrete values;
-Helm templates are not rendered. Image updates keep the tag's variant, so
-`3.12-slim` never becomes `3.13-alpine`.
+Helm templates are not rendered. Image updates keep the tag's
+[variant](/guide/versioning/#docker-tags).
 
 ## Python
 
@@ -289,9 +260,7 @@ gitlab { host = "gitlab.example.com" }
 
 Other GitLab CI variables are not expanded. An image such as
 `$CI_REGISTRY_IMAGE:latest` or `${CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX}/node:22`
-is skipped, and listed with its line and the reason in the run summary and
-under `skipped` in the [JSON report](/reference/report/). Unlike a warning, a
-skipped reference leaves branch cleanup and auto-merge on.
+is skipped.
 
 ## Helm, pre-commit and devcontainers
 
@@ -366,19 +335,9 @@ move, the same as with nix itself.
 Inputs nix would fetch from outside the repository are skipped with a reason:
 `path:` and `git+file:` inputs that leave the repository, ssh URLs, plain
 `http`, and Mercurial. A `path:` input inside the repository changes with the
-repository, so it is skipped too.
+repository, so it is skipped too. How nix runs, and how the inputs it fetches
+are checked, is under [Lockfiles](/guide/lockfiles/#nix).
 
-nix fetches what `flake.nix` declares, so before it runs the Count reads the
-declared inputs, nested input overrides included, under nix's restricted
-evaluation, which fetches nothing and reads only the flake's directory. An
-input `flake.nix` adds or points somewhere refused fails the branch before any
-request. After nix runs, every node it added or changed in the lock is checked
-the same way, and an update must lock exactly the revision that passed the
-lookup and its release-age wait: if the branch moved in between, the update
-fails and is retried with the newer revision. Inputs that an upstream flake
-declares for itself are fetched by nix before the lock can be checked; a lock
-that reaches outside is still never published. How nix runs is under
-[Lockfiles](/guide/lockfiles/#nix).
 
 ## Kinds
 

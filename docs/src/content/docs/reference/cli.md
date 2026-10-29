@@ -8,7 +8,7 @@ description: Every patchula command, argument and flag, generated from the CLI's
 
 Count Patchula vants to update your deps. A modern dependency updater with strong defaults.
 
-Exit codes: 0 = success; 1 = runtime error; 2 = usage or configuration error; `apply` adds 3 = updates still waiting.
+Exit codes: 0 = success; 1 = runtime error; 2 = usage or configuration error; `lookup` and `apply` add 4 = a lookup failed; `apply` adds 3 = updates still waiting.
 
 
 ## Examples
@@ -73,7 +73,7 @@ patchula serve --settings server.pkl
 
 Write available updates into the working tree here, without branches or pull requests.
 
-Exit codes: 0 = nothing selected is left to apply; 1 = runtime error; 2 = usage or configuration error; 3 = selected updates are still waiting: `--check` or `--dry-run` found some, or some could not be written in place.
+Exit codes: 0 = nothing selected is left to apply; 1 = runtime error; 2 = usage or configuration error; 3 = selected updates are still waiting: `--check` or `--dry-run` found some, or some could not be written in place; 4 = a dependency's lookup failed, so its updates are unknown. 4 takes precedence over 3.
 
 ### Flags
 
@@ -333,6 +333,8 @@ patchula lookup --remote
 Create or update dependency branches and pull requests with verified API commits.
 
 With no repository, `--dry-run` plans from the working tree, uncommitted changes included. A real run with no repository opens pull requests for this checkout's GitHub repository and requires a clean tree at the remote's default branch.
+
+Failed lookups are reported but the run still exits 0, since it keeps the pull requests it could plan; it holds off auto-merge and closing pull requests for that repository.
 
 ### Arguments
 

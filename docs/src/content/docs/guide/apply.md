@@ -21,11 +21,9 @@ every other command. It always runs on this machine. Repository arguments,
 `--all-repos` and `--remote` are refused, and a checkout you chose to run
 on a server is never offered to it.
 
-In a checkout with no `patchula.pkl`, it asks first, like the
-[terminal UI](/guide/tui/): `d` (or Enter) uses the Count's defaults for this
-run, `w` writes a starter `patchula.pkl` and carries on, and `q` quits.
-Scripts and hooks have no terminal to ask on, so they pass `--default-config`
-to use the defaults, or the command stops with exit 2 and says so.
+In a checkout with no `patchula.pkl` it [asks
+first](/guide/configuration/#where-the-config-lives). Scripts and hooks pass
+`--default-config`, or the command exits 2.
 
 Nothing is written to the checkout except the updates. The cache lives in your
 user cache directory, shared by every checkout; see
@@ -34,9 +32,9 @@ move it.
 
 ## What gets written
 
-The edits are the ones the [terminal UI](/guide/tui/#applying-updates) makes:
-the Count reads each file again, finds the same declaration at the same place,
-and rewrites only its version and digest. A digest pin, such as
+The Count reads each file again, finds the same declaration at the same place,
+and rewrites only its version and digest; the [terminal UI](/guide/tui/) makes
+the same edits. A digest pin, such as
 `actions/checkout@v5` becoming the commit it points to, is an update like any
 other.
 
@@ -99,18 +97,34 @@ patch for `git apply`. With `--json`, stdout is one JSON object instead:
 also exits 3, so a script can tell "done" from "done, but look at the
 summary".
 
-A dependency whose lookup failed, for example because its registry is down or
-refused the token, has no updates the Count can see, so the command exits 4.
-Exit 4 takes precedence over 3: `--check` with updates waiting and a failed
-lookup exits 4, since what is waiting may not be everything. Without
-`--check` or `--dry-run`, the updates that could be looked up are still
-written first. Each failure is listed under "Lookup failures" with the
-dependency, its file, its datasource, the kind of error and the registry's
-message.
+Exit 4 wins over 3, since a failed lookup means the waiting list may be
+incomplete; without `--check` or `--dry-run`, what could be looked up is still
+written. Each failure is listed under "Lookup failures" with the dependency,
+its file, its datasource, the kind of error and the registry's message. The
+[CLI reference](/reference/cli/) has the exit codes of the other commands.
 
-`patchula lookup` exits 4 for the same reason. `patchula run` reports failed
-lookups but still exits 0, since it keeps the pull requests it could plan, and
-it holds off automerge and closing pull requests for that repository.
+## Copier templates
+
+The Count runs copier only when you ask, on your own working tree: `u` on the
+[TUI](/guide/tui/)'s Templates tab updates one template after a `y`, and
+`patchula apply --copier` updates every template the filters select
+(`--manager` and `--dependency` apply; any `--type` leaves templates out) before
+writing the other updates, which are then planned against the tree copier
+left. It is your own `copier` from `PATH`, run as you with
+`copier update --vcs-ref <new tag> --skip-answered`, never `--trust`, and
+nothing is committed. The template's new, unreviewed code runs with your
+permissions, so read the compare link first.
+
+- The tree must be clean, untracked files included. With `apply` and two
+  templates, the second is refused: commit, then run again.
+- Copier asks the template's new questions on the terminal. Without one,
+  `apply` refuses the template unless you pass `--copier-defaults`.
+- A template that needs `--trust` stops copier; review it and run
+  `copier update --trust` yourself.
+- Conflicts stay as copier leaves them, and the Count lists the files it
+  changed and the ones with conflicts.
+- With `apply`, a template copier did not update exits 3, and `--copier`
+  does not combine with `--dry-run`, `--check` or `--json`.
 
 ## In hooks and scripts
 

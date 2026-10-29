@@ -65,9 +65,12 @@ actually rely on.
 | `extractVersion` | `extract` |
 | `datasourceTemplate`, `depNameTemplate`, `packageNameTemplate`, `versioningTemplate` | `source`, `dependency`, `package`, `scheme` |
 
-Rules apply in order, and a later rule's value replaces an earlier one's,
-lists included. Empty `group` means separate PRs. Zero is never "unlimited";
-use `null`.
+Watch for these when translating (the [configuration guide](/guide/configuration/)
+has the details):
+
+- A later rule replaces an earlier one's lists instead of merging them.
+- Empty `group` means separate PRs.
+- Zero is never "unlimited"; use `null`.
 
 ## A worked example
 

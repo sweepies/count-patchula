@@ -42,7 +42,7 @@ holds:
 - The head has at least one check run or commit status, every check run is
   completed with success, neutral or skipped, and every status is a success.
 
-The App needs read access to checks and commit statuses for this.
+The [App needs read access](/guide/server/#create-the-github-app) to checks and commit statuses for this.
 
 The dashboard shows open PRs that are waiting on checks or policy, and the last
 twenty fallback merges.

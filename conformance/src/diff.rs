@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 // Empirical comparison ceiling, not Renovate's configured minimum release age.
 // unocss 66.11.0 was still held at 72 h 17 min; effect 4.0.3 was proposed at
-// about 84 h. See departure 23 for the black-box observations behind 96 h.
+// about 84 h. See the release-age-new-value rule in conformance/departures.json.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -51,7 +51,19 @@ pub struct Departure {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Rules {
     schema_version: u32,
+    normalizations: Vec<Normalization>,
     rules: Vec<Rule>,
+}
+
+/// A fixed normalization or exclusion implemented in the adapter, recorded so
+/// the rules file describes everything the comparison explains.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Normalization {
+    id: String,
+    /// The departure's section anchor, when the normalization explains one.
+    departure: Option<String>,
+    description: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,6 +72,7 @@ struct Rule {
     id: String,
     /// The departure's section anchor, such as `minimum-release-age`.
     departure: String,
+    description: String,
     classification: Classification,
     managers: Vec<String>,
     field: String,
@@ -98,17 +111,30 @@ enum Predicate {
 impl Rules {
     pub fn from_json(bytes: &[u8]) -> Result<Self> {
         let rules: Self = serde_json::from_slice(bytes)?;
-        if rules.schema_version != 1 {
+        if rules.schema_version != 2 {
             return Err(Error::Input("unsupported rules schemaVersion".into()));
         }
         let mut ids = BTreeSet::new();
+        for normalization in &rules.normalizations {
+            if normalization.id.is_empty()
+                || !ids.insert(&normalization.id)
+                || normalization.description.is_empty()
+                || normalization
+                    .departure
+                    .as_ref()
+                    .is_some_and(String::is_empty)
+            {
+                return Err(Error::Input(
+                    "invalid normalization, duplicate ID or missing description".into(),
+                ));
+            }
+        }
         for rule in &rules.rules {
             if rule.id.is_empty()
                 || !ids.insert(&rule.id)
+                || rule.departure.is_empty()
+                || rule.description.is_empty()
                 || rule.managers.is_empty()
-                || !include_str!("../../docs/src/content/docs/renovate/departures.md")
-                    .lines()
-                    .any(|line| line.ends_with(&format!("{{#{}}}", rule.departure)))
                 || !matches!(
                     (&rule.predicate, rule.classification, rule.field.as_str()),
                     (
@@ -197,7 +223,7 @@ impl Rules {
                 )
             {
                 return Err(Error::Input(
-                    "invalid departure rule, duplicate ID or missing docs/src/content/docs/renovate/departures.md section".into(),
+                    "invalid departure rule, duplicate ID or missing description".into(),
                 ));
             }
         }

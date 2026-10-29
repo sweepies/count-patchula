@@ -68,16 +68,10 @@ The Count is one binary, `patchula`. Releases have static builds for Linux
 
 ## What the runner needs
 
-- `mise` on the `PATH`, or [packslip](https://packslip.dev), with which
-  `patchula serve` and `patchula tools install` install the pinned mise into the
-  tool store, as the [container image](/guide/server/#mise-on-first-start)
-  does. Lockfiles are regenerated with the real tools (aube, Yarn, Bun, Cargo,
-  Go, Terraform, uv, Poetry, dotnet, Bundler, Composer), and `mise.toml` and
-  `.tool-versions` tools are looked up with mise. Without it, mise tools and
-  lockfiles report an error and everything else works. The tools go into the
-  Count's own [tool store](/guide/lockfiles/#the-tool-store),
-  `PATCHULA_TOOLS_DIR` or `tools/` in the cache directory. Put it on a
-  persistent volume.
+- `mise` on the `PATH`, or [packslip](https://packslip.dev), with which the
+  Count installs his own pinned mise. Without either, mise tools and lockfiles
+  fail and everything else works. Tools go into the [tool
+  store](/guide/lockfiles/#the-tool-store); keep it on a persistent volume.
 - `git`, for the partial clones a lockfile tool works in.
 - A writable cache directory. By default it is `patchula/` in your user cache
   directory: `$XDG_CACHE_HOME/patchula` or `~/.cache/patchula` on Linux, and
@@ -89,8 +83,7 @@ The Count is one binary, `patchula`. Releases have static builds for Linux
   speed, so keep it between runs. With neither `HOME` nor `XDG_CACHE_HOME` set,
   local commands stop and ask for `--cache`.
 
-Some tools download slowly. The static PHP build has been measured at about
-44 KB/s, so prewarm the store when you build an image:
+Some tools download slowly, so prewarm the store when you build an image:
 
 ```sh
 patchula tools install --cache /var/lib/patchula

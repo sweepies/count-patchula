@@ -978,7 +978,7 @@ fn indirect_go_and_test_compose_departures_do_not_extend_to_direct_or_production
             .as_ref()
             .unwrap()
             .id,
-        "compose-test-services"
+        "default-exclude"
     );
     actual.repositories[0].package_files[0].path = "production/docker-compose.demo.yml".into();
     assert_eq!(

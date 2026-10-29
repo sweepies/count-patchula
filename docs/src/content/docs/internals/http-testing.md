@@ -75,3 +75,15 @@ missing from the fixture fails the test; replay never runs mise.
 rewrites the file. It needs the network, a `mise` on `PATH` and `GH_TOKEN`,
 which mise gets as it would in production and which is never written down.
 `mise run fixtures:check` scans these files with the cassettes.
+
+## Replaying a webhook to a local server
+
+```sh
+mise run server:replay /tmp/push.json push local-push-001
+```
+
+The `server:replay` task signs a recorded payload with your webhook secret and
+posts it to a loopback listener. It prints only the HTTP status and refuses
+non-loopback targets. Set only one of `PATCHULA_WEBHOOK_SECRET_FILE` and
+`PATCHULA_WEBHOOK_SECRET` when you use it. A repeated delivery ID is accepted
+but ignored, so use a new ID to trigger again.

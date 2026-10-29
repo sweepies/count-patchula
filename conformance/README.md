@@ -88,10 +88,11 @@ versions and all value/digest targets still compare.
 
 Output-only, audited normalization covers Bun/npm package.json identities,
 numeric version prefixes and Docker compatibility suffixes, Helm registry
-identities and archive checksums. Narrow inventory/duplicate scope and policy
-rules are documented in [departures](../docs/src/content/docs/renovate/departures.md). Exclusions count
-every removed dependency/proposal; normalization counts are separate from
-differences and neither implies a successful live engine rerun.
+identities and archive checksums. Every normalization, exclusion and departure
+rule is listed with its description in [departures.json](departures.json),
+the only place these rules are written down. Exclusions count every removed
+dependency/proposal; normalization counts are separate from differences and
+neither implies a successful live engine rerun.
 
 Inspect a local triage or source snapshot without copying private records:
 
@@ -138,8 +139,16 @@ compared field by field. Ambiguous proposals remain extra/missing.
 The command exits 0 after producing triage even when differences exist: this is
 report-only. Input or execution failures exit nonzero.
 
-[departures.json](departures.json) is a versioned, deliberately small rules file;
-`--rules PATH` selects a replacement. Digest additions for actions/images
+[departures.json](departures.json) is a versioned (`schemaVersion` 2),
+deliberately small rules file; `--rules PATH` selects a replacement. It has two
+lists. `normalizations` records the fixed normalizations and exclusions the
+adapter implements in Rust, so the file describes everything the comparison
+explains; editing them changes nothing at run time. `rules` are the departure
+rules that classify a difference as `deliberate-departure`. Every entry has an
+`id` and a `description`, and names the `departure` it explains, an entry on the
+[departures page](../docs/src/content/docs/renovate/departures.md), when there
+is one. The page records only why the Count differs; it does not repeat these
+rules. Digest additions for actions/images
 are mapped to [explicit-defaults](../docs/src/content/docs/renovate/departures.md#explicit-defaults). An extra pin must
 keep the current value/version, add a digest to an unpinned dependency and have
 no group. Release-age differences map to [minimum-release-age](../docs/src/content/docs/renovate/departures.md#minimum-release-age)
@@ -150,13 +159,13 @@ the same class. Exact npm major range edits map narrowly to
 [npm-range-edits](../docs/src/content/docs/renovate/departures.md#npm-range-edits) with identical resolved targets
 and an explicit exact policy. Other version and identity differences remain actionable.
 
-Departure 45 additionally covers newer full action targets on an identical
+[action-ref-precision](../docs/src/content/docs/renovate/departures.md#action-ref-precision) additionally covers newer full action targets on an identical
 proposed floating major/minor tag when the declared precision is preserved.
 The patchula report must include independent `metadata.tagDigests` evidence
 whose entry for that tag equals the proposed commit. Absent evidence or a
 different commit remains actionable; the proposal itself is not evidence.
 
-The reverse age difference is also departure 23 when Renovate's newer target
+The reverse age difference is also [minimum-release-age](../docs/src/content/docs/renovate/departures.md#minimum-release-age) when Renovate's newer target
 matches any version in a patchula `metadata.heldBack.versions` summary in the same
 update class (legacy single-version entries remain accepted).
 The paired patchula proposal must carry a 24-hour policy and an evaluation
@@ -174,7 +183,10 @@ Groups compare only when Renovate supplies a group on that update, including
 enrichment from unambiguous branch summaries. Missing group metadata is unknown.
 Empty package-file-only differences are ignored when no dependency is missing;
 missing repositories and dependencies still produce coverage differences.
-Rule validation checks row IDs against the bundled departures document. Adding
-new predicates requires reviewed Rust code, not unrestricted matching rules.
+Rule validation rejects duplicate IDs, empty descriptions and predicates used
+with the wrong classification or field. The conformance tests check that every
+departure the bundled file names is an entry on the departures page, and that
+the page carries no harness rules of its own. Adding new predicates requires
+reviewed Rust code, not unrestricted matching rules.
 Markdown links resolve to the local departures document; JSON keeps portable
 repository-root links. Do not commit captured logs: they can contain credentials.

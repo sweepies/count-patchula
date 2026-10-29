@@ -24,7 +24,8 @@ is rewritten.
 Major, minor and patch follow each scheme's own components. Cargo counts a
 change in the leftmost nonzero component as major, so `0.3` to `0.4` is major,
 as Cargo's compatibility rules say. A Python epoch change is major. Prereleases
-need opting in.
+are only proposed as [release age and channels](/guide/lookup-policy/)
+describes.
 
 ## Version policies
 
@@ -40,6 +41,17 @@ need opting in.
 
 A compound range that cannot be rewritten without guessing (`>=1.0 <2.0`
 needing `3.0`) fails with a warning instead of inventing something.
+
+Installed npm dependencies follow `versions`, so the default pins them
+exactly. Peer dependencies describe what consumers may use, so they are
+treated differently: a range widens at a new major (`^5` becomes
+`^5 || ^7.0.0`), an exact peer bumps in place, and exact policy never pins a
+peer range.
+
+Cargo's `preserve` keeps a satisfying floor, and a two-part requirement that
+crosses a major starts at the new major's floor (`0.30` becomes `1.0` for
+1.1.0). A Terraform provider constraint that already allows the new version is
+left as written, even under exact policy.
 
 ## Docker tags
 
