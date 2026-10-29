@@ -3111,6 +3111,7 @@ impl Executor for Packslip {
                 .map(|i| PathBuf::from(&spec.args[i + 1]))
                 .unwrap();
             self.calls.lock().unwrap().push(spec);
+            tokio::task::yield_now().await;
             if self.fail {
                 return Err("exit exit status: 1:  Error: \n   0: \u{1b}[91mHTTP 403 for https://api.github.com/repos/jdx/mise\u{1b}[0m\n\nLocation:\n   \u{1b}[35msrc/install.rs\u{1b}[0m:\u{1b}[35m411\u{1b}[0m\n".into());
             }
@@ -3190,6 +3191,23 @@ async fn packslip_is_not_run_when_the_store_has_the_pinned_mise() {
         mise
     );
     assert!(packslip.calls.lock().unwrap().is_empty());
+}
+
+/// Two starts sharing a store install mise once, and neither removes the
+/// other's unfinished install.
+#[tokio::test]
+async fn concurrent_bootstraps_install_mise_once() {
+    let temp = tempfile::tempdir().unwrap();
+    let packslip = Packslip {
+        fail: false,
+        calls: Mutex::new(Vec::new()),
+    };
+    let (first, second) = tokio::join!(
+        tools::install_mise(&packslip, Path::new("packslip"), temp.path()),
+        tools::install_mise(&packslip, Path::new("packslip"), temp.path()),
+    );
+    assert_eq!(first.unwrap(), second.unwrap());
+    assert_eq!(packslip.calls.lock().unwrap().len(), 1);
 }
 
 /// A failed download names packslip, mise's version and packslip's error.

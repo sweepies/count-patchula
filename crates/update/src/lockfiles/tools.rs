@@ -79,6 +79,9 @@ pub(super) async fn install_mise(
     packslip: &Path,
     tools: &Path,
 ) -> Result<PathBuf, String> {
+    // Replicas sharing a volume, or a server beside `patchula tools install`,
+    // may bootstrap at once: whoever waited finds the finished install.
+    let _store = lock_store(tools, true).await?;
     if let Some(mise) = store_mise(tools) {
         return Ok(mise);
     }
