@@ -88,12 +88,6 @@ async fn public_multi_repo_report_cold_and_warm() {
     let bytes = serde_json::to_vec(&cold).unwrap();
     Report::from_json(&bytes).unwrap();
     let warm = engine.lookup_at(options(), now).await.unwrap();
-    // Keep context before assertions: an intermittent failure otherwise loses
-    // the request/cache counters and evaluation instant printed at test end.
-    eprintln!(
-        "engine replay diagnostics: evaluated_at={now}; cold_stats={:?}; warm_stats={:?}",
-        cold.stats, warm.stats
-    );
     assert_eq!(cold.repositories, warm.repositories);
     let stats = warm.stats.as_ref().unwrap();
     assert_eq!(stats.extraction_hits, 2);

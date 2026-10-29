@@ -18,7 +18,7 @@ concurrency:
 # locally.
 jobs:
   # Each job below runs only when a changed path can affect it; a docs-only
-  # change runs just the docs build.
+  # change skips the Rust jobs. A skipped job still reports its check.
   changes:
     name: Changed paths
     runs-on: ubuntu-latest
@@ -27,27 +27,54 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      rust: ${{ steps.filter.outputs.rust }}
-      docs: ${{ steps.filter.outputs.docs }}
+      rust: ${{ steps.some.outputs.rust == 'true' || steps.every.outputs.rust == 'true' }}
+      docs: ${{ steps.some.outputs.docs }}
     steps:
+      # A push is compared with the commit before it, which needs the history.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          sparse-checkout: mise-tasks/ci
-      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+          fetch-depth: 0
+      # A file counts when it matches any pattern of a filter.
+      - id: some
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
-          cache: false
-          # The task is a nu script; nothing else needs installing.
-          install_args: nu
-      - id: filter
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          EVENT: ${{ github.event_name }}
-          PR: ${{ github.event.pull_request.number }}
-          BEFORE: ${{ github.event.before }}
-          AFTER: ${{ github.sha }}
-        run: mise-tasks/ci/changes
+          filters: |
+            rust:
+              # The conformance tests read the departures page.
+              - docs/src/content/docs/renovate/departures.md
+              - .github/workflows/ci.yml
+            docs:
+              - docs/**
+              - mise.toml
+              - tasks.toml
+              - mise.lock
+              - .github/workflows/ci.yml
+      # A file counts when it matches every pattern: anything outside these
+      # may change what the Rust jobs check.
+      - id: every
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          predicate-quantifier: every
+          filters: |
+            rust:
+              - "**"
+              - "!docs/**"
+              - "!assets/**"
+              - "!skills/**"
+              - "!.claude/**"
+              - "!README.md"
+              - "!AGENTS.md"
+              - "!CLAUDE.md"
+              - "!LICENSE"
+              - "!.gitignore"
+              - "!socket.yml"
+              - "!communique.toml"
+              - "!tak.toml"
+              - "!conformance/README.md"
+              # hk lints the workflows on every change.
+              - "!action.yml"
+              - "!.github/**"
 
   # hk.pkl's check hook, the same steps the git hooks run, plus Clippy. It runs
   # on every change, since it is the only secret scan in CI, but each step
@@ -58,9 +85,14 @@ jobs:
     needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      # Code scanning shows hk's findings on the diff.
+      security-events: write
     env:
-      # Without Rust changes, only hk and its linters are needed.
-      MISE_DISABLE_TOOLS: ${{ needs.changes.outputs.rust != 'true' && 'rust,mr-boxington,zig,go,node,aube,tak,http:deepsource' || '' }}
+      # Lint never needs these. Without Rust changes, Clippy and rustfmt do
+      # not run either, so their toolchain is left out too.
+      MISE_DISABLE_TOOLS: go,node,aube,tak,usage,nu,http:deepsource${{ needs.changes.outputs.rust != 'true' && ',rust,mr-boxington,zig' || '' }}
       # A pull request's merge commit has the base branch as its first parent.
       FROM_REF: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
     steps:
@@ -71,8 +103,7 @@ jobs:
           fetch-depth: 0
       # mise checks every stored download against mise.lock before it uses
       # it, so the store is cached instead of the installs.
-      - id: mise-downloads
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: &mise-downloads ~/.cache/mise/downloads-cas
           key: &mise-downloads-key mise-downloads-${{ runner.os }}-${{ hashFiles('mise.lock') }}
@@ -89,7 +120,7 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
           key: &cargo-downloads-key cargo-downloads-v1-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-downloads-v1-
+          restore-keys: &cargo-downloads-restore cargo-downloads-v1-
       - if: needs.changes.outputs.rust == 'true'
         uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
         # The pinned action has no nonfatal-cache input. This also covers its post step.
@@ -105,7 +136,15 @@ jobs:
       - env:
           # zizmor's online audits, such as impostor commits.
           GH_TOKEN: ${{ github.token }}
-        run: mise run lint:ci --from-ref "$FROM_REF"
+        run: mise run lint:ci "$FROM_REF"
+      - if: always()
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        # A fork's pull request gets a read-only token and cannot upload; its
+        # findings are still in the log above.
+        continue-on-error: true
+        with:
+          sarif_file: ${{ runner.temp }}/hk.sarif
+          category: hk
       # Clippy checks every target, so it fetches every crate the other jobs
       # build; this job alone publishes the downloads, from main.
       - if: github.ref == 'refs/heads/main' && needs.changes.outputs.rust == 'true' && steps.cargo-downloads.outputs.cache-hit != 'true'
@@ -114,8 +153,6 @@ jobs:
         with:
           path: *cargo-downloads
           key: *cargo-downloads-key
-      - if: needs.changes.outputs.rust == 'true'
-        run: mise run cache:usage
 
   build:
     name: "Build: workspace, fixture secret scan"
@@ -140,7 +177,7 @@ jobs:
         with:
           path: *cargo-downloads
           key: *cargo-downloads-key
-          restore-keys: cargo-downloads-v1-
+          restore-keys: *cargo-downloads-restore
       - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
         continue-on-error: true
         with:
@@ -163,7 +200,6 @@ jobs:
           retention-days: 1
       # The scanner is a dev binary, so it reuses the build above.
       - run: mise run fixtures:check
-      - run: mise run cache:usage
 
   # patchula-update's suite takes about a minute on its own, so it runs beside
   # the other crates instead of after them.
@@ -196,7 +232,7 @@ jobs:
         with:
           path: *cargo-downloads
           key: *cargo-downloads-key
-          restore-keys: cargo-downloads-v1-
+          restore-keys: *cargo-downloads-restore
       - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
         continue-on-error: true
         with:
@@ -207,7 +243,6 @@ jobs:
           cache-generation: v4-test-${{ matrix.part }}-objects
           save-on-pull-request: false
       - run: mise run test:unit --part "${{ matrix.part }}"
-      - run: mise run cache:usage
 
   tools:
     name: "Tests: real lockfile tools"
@@ -234,7 +269,7 @@ jobs:
         with:
           path: *cargo-downloads
           key: *cargo-downloads-key
-          restore-keys: cargo-downloads-v1-
+          restore-keys: *cargo-downloads-restore
       - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
         continue-on-error: true
         with:
@@ -253,28 +288,6 @@ jobs:
         with:
           path: *mise-downloads
           key: *mise-downloads-key
-      - run: mise run cache:usage
-
-  docs:
-    name: "Docs: build"
-    needs: changes
-    if: needs.changes.outputs.docs == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - id: mise-downloads
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: *mise-downloads
-          key: *mise-downloads-key
-          restore-keys: *mise-downloads-restore
-      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
-        with:
-          cache: false
-      - run: mise run docs:build
 
   # The lookup is mostly network time, so the build job's dev binary does it
   # instead of a release build of its own, which took about two minutes and a
@@ -332,36 +345,22 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  # Every save above makes a new immutable entry, and GitHub only evicts past
-  # the repository limit, so main keeps only the newest entry of each family
-  # below and deletes the rest, including families no job saves any more. A
-  # cache main should keep must be listed here. A failed job saves nothing,
-  # and its family keeps its last entry.
-  prune:
-    name: "Cache: prune superseded entries"
-    needs: [lint, build, test, tools, docs, corpus]
-    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+  docs:
+    name: "Docs: build"
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      actions: write
-      contents: read
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          sparse-checkout: mise-tasks/cache
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *mise-downloads
+          key: *mise-downloads-key
+          restore-keys: *mise-downloads-restore
       - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
         with:
           cache: false
-          # The task is a nu script; nothing else needs installing.
-          install_args: nu
-      - env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: >-
-          mise-tasks/cache/prune --drop-others
-          mise-downloads- cargo-downloads-v1- corpus-v2- patchula-v2-
-          linux-x64-mbx-v4-lint-objects- linux-x64-mbx-v4-build-objects-
-          linux-x64-mbx-v4-test-update-objects- linux-x64-mbx-v4-test-others-objects-
-          linux-x64-mbx-v4-tools-objects- docker.io--tonistiigi--binfmt-
+      - run: mise run docs:build

@@ -54,7 +54,7 @@ replay those recordings, so they say nothing about a live batch.
 ```sh
 mise run benchmarks:lookup
 mise run benchmarks:lookup-release
-GH_TOKEN=$(mise exec -- gh auth token) mise run fixtures:record-wave1
+GH_TOKEN=$(mise exec -- gh auth token) mise run fixtures:record-lookup
 mise run fixtures:check
 # A live batch: run twice against the same private cache.
 mise run lookup:release --config examples/renovate-migration.pkl \

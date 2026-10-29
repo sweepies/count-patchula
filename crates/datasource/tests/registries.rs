@@ -1,4 +1,4 @@
-//! Public wave-2 endpoints recorded by this implementation; replay is offline.
+//! Public registry v2, Terraform, PyPI and Helm endpoints recorded by this implementation; replay is offline.
 use patchula_cache::Cache;
 use patchula_config::Source;
 use patchula_datasource::Client;
@@ -6,8 +6,9 @@ use patchula_http::{Cached, Network};
 use std::{path::Path, sync::Arc};
 
 #[tokio::test]
-async fn public_wave2_catalogs_and_index_digest() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/datasource/wave2.json");
+async fn public_registry_catalogs_and_index_digest() {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/datasource/registries.json");
     let transport =
         patchula_testkit::from_env(&path, Default::default(), || Ok(Arc::new(Network::new()?)))
             .unwrap();
@@ -79,7 +80,7 @@ async fn public_wave2_catalogs_and_index_digest() {
             .unwrap()
     );
     eprintln!(
-        "wave2 cold={cold:?} warm={:?} cold_requests={} warm_requests={} warm_304={}",
+        "registries cold={cold:?} warm={:?} cold_requests={} warm_requests={} warm_304={}",
         start.elapsed(),
         before.requests,
         http.stats().requests - before.requests,
@@ -89,5 +90,5 @@ async fn public_wave2_catalogs_and_index_digest() {
         .unwrap()
         .map(|entry| entry.unwrap().metadata().unwrap().len())
         .sum();
-    eprintln!("wave2 cache_with_wal_bytes={cache_bytes}");
+    eprintln!("registries cache_with_wal_bytes={cache_bytes}");
 }

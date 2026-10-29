@@ -9,11 +9,6 @@ run = "cargo build --workspace --locked"
 description = "Inspect mbx toolchain, local store and remote configuration"
 run = "mbx doctor"
 
-["cache:usage"]
-description = "Show the build target's size and the free disk space"
-# mbx manages the target through a symlink, so measure what it points to.
-run = ["du -sh target/.", 'df -h . "${RUNNER_TEMP:-${TMPDIR:-/tmp}}"']
-
 ["conformance:compare"]
 description = "Compare Renovate JSON output with a versioned patchula report; forwards CLI arguments"
 raw_args = true
@@ -42,6 +37,10 @@ description = "Append the tak timing summary, when there is one, as preformatted
 usage = 'flag "--out <file>" default="/dev/stdout" help="Markdown file to append to"'
 run = '[ ! -f benchmark-results/summary.txt ] || { echo "<pre>"; cat benchmark-results/summary.txt; echo "</pre>"; } >> "$usage_out"'
 
+[ci]
+description = "Run every check GitHub runs, in parallel"
+depends = ["lint", "build", "fixtures:check", "test", "docs:build"]
+
 [test]
 description = "Run the whole offline suite: unit tests, then the real lockfile tool tests"
 run = [{ task = "test:unit" }, { task = "test:tools" }]
@@ -61,8 +60,7 @@ run = "cargo test --locked -p patchula-update --lib --no-fail-fast -- lockfiles:
 
 # The lockfile engines these tests run, matching
 # crates/update/src/lockfiles/defaults.toml. Task-scoped so a development
-# `mise install` does not fetch them. mise-tasks/test/stress uses the same
-# pins, and a unit test keeps all three equal.
+# `mise install` does not fetch them. A unit test keeps the two equal.
 ["test:tools".tools]
 aube = "2.8.1"
 bun = "1.4.3"
@@ -80,6 +78,11 @@ apm = "0.35.0"
 [lint]
 description = "Run every check in hk.pkl on the whole tree, Clippy included"
 run = "hk check --all"
+
+["lint:ci"]
+description = "Run hk's check hook on the files changed since a ref, writing SARIF for code scanning; GitHub Actions only"
+usage = 'arg "<from_ref>" help="The base branch, or the commit before a push"'
+run = 'hk check --from-ref "${usage_from_ref?}" --to-ref HEAD --no-progress --sarif "$RUNNER_TEMP/hk.sarif"'
 
 ["hooks:install"]
 description = "Install the pre-commit and commit-msg hooks, which run hk through mise"
@@ -198,8 +201,8 @@ description = "Record what the pinned mise lists for the tools in fixtures/mise;
 env = { PATCHULA_RECORD = "1" }
 run = ["cargo test --locked -p patchula-update --test mise_listings -- --nocapture", "mise run fixtures:check"]
 
-["fixtures:record-wave1"]
-description = "Record only Phase 1 public sources and multi-repo lookup fixtures"
+["fixtures:record-lookup"]
+description = "Record the public source and multi-repository lookup fixtures"
 env = { PATCHULA_RECORD = "1" }
 run = ["cargo test --locked -p patchula-datasource --test recorded -- --nocapture", "cargo test --locked -p patchula-engine --test recorded -- --nocapture", "mise run fixtures:check"]
 
@@ -207,14 +210,14 @@ run = ["cargo test --locked -p patchula-datasource --test recorded -- --nocaptur
 description = "Measure cold/warm batch and source replay with fixed public cassettes"
 run = ["cargo test --locked -p patchula-datasource --test recorded -- --nocapture", "cargo test --locked -p patchula-engine --test recorded -- --nocapture"]
 
-["fixtures:record-wave2"]
+["fixtures:record-registries"]
 description = "Record public registry v2, Terraform, PyPI and Helm fixtures"
 env = { PATCHULA_RECORD = "1" }
-run = ["cargo test --locked -p patchula-datasource --test wave2 -- --nocapture", "mise run fixtures:check"]
+run = ["cargo test --locked -p patchula-datasource --test registries -- --nocapture", "mise run fixtures:check"]
 
-["benchmarks:wave2"]
-description = "Replay wave 2 source fixtures in release mode"
-run = "cargo test --release --locked -p patchula-datasource --test wave2 -- --nocapture"
+["benchmarks:registries"]
+description = "Replay the registry v2, Terraform, PyPI and Helm fixtures in release mode"
+run = "cargo test --release --locked -p patchula-datasource --test registries -- --nocapture"
 
 ["fixtures:record-engine"]
 description = "Record the public multi-repository manager/engine fixture, and what mise lists for its tools; needs a mise on PATH"
