@@ -321,14 +321,13 @@ runner needs](/installation/#what-the-runner-needs)). The image has no ICU, so
 it sets `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1`, which the runner passes on
 to dotnet.
 
-The same commit and release archives always build the same image digests:
-every Wolfi package, down to each dependency, is held to the version in
-`image/apko.lock.json`. An image takes Wolfi's updates only when that lock is
-refreshed with `mise run image:lock`.
-The release workflow
-[attests](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations)
-the image's build provenance, and each platform's SPDX SBOM from apko, in
-GitHub and in the registry. Check the provenance with:
+Each build takes Wolfi's current packages, so a release picks up Wolfi's
+fixes, and rebuilding an old commit later gives a different image. The image a
+tag publishes is exactly the one the release smoke-tested, and its
+[provenance attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations)
+records the commit and workflow run that built it. The release workflow
+attests that provenance, and each platform's SPDX SBOM from apko, in GitHub and
+in the registry. Check the provenance with:
 
 ```sh
 gh attestation verify oci://ghcr.io/sweepies/count-patchula:X.Y.Z --repo sweepies/count-patchula

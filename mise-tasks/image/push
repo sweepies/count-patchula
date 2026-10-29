@@ -3,9 +3,9 @@
 #MISE tools={apko="1.4.13"}
 #USAGE flag "--repository <repository>" default="ghcr.io/sweepies/count-patchula" help="Image repository to publish to"
 
-# apko builds the image again from the same packages, offline, and pushes it.
-# The build is reproducible, so the published index must be the one the smoke
-# test ran; anything else stops the release. Its digest goes to GITHUB_OUTPUT
+# apko builds the image again, offline, from the packages image:build cached,
+# and pushes it. The published index must be the one the smoke test ran;
+# anything else stops the release. Its digest goes to GITHUB_OUTPUT
 # for the provenance attestation, and each platform's for its SBOM's.
 def main [--repository: string = "ghcr.io/sweepies/count-patchula"] {
   let out = "target/image" | path expand
@@ -17,7 +17,7 @@ def main [--repository: string = "ghcr.io/sweepies/count-patchula"] {
   let tags = [$"($repository):($version)"] | append (if $version =~ "-" { [] } else { [$"($repository):latest"] })
   let flags = $annotations | each {|annotation| [--annotations $"($annotation.key):($annotation.value)"] } | flatten
   with-env {SOURCE_DATE_EPOCH: (^git log -1 --format=%ct | str trim)} {
-    ^apko publish $"($out)/image.apko.yaml" ...$tags --cache-dir $"($out)/apk-cache" --offline --ignore-signatures --build-repository-append $"@local ($out)/packages" --vcs=false --sbom=false --image-refs $"($out)/published" ...$flags
+    ^apko publish image/apko.yaml ...$tags --cache-dir $"($out)/apk-cache" --offline --ignore-signatures --build-repository-append $"@local ($out)/packages" --vcs=false --sbom=false --image-refs $"($out)/published" ...$flags
   }
   let published = open $"($out)/published" | lines | each { split row "@" | last }
   if $tested not-in $published {
