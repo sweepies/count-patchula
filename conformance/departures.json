@@ -1,9 +1,79 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "normalizations": [
+    {
+      "id": "bun-as-npm",
+      "description": "Bun's npm-sourced or source-less package.json rows compare as npm."
+    },
+    {
+      "id": "numeric-v-prefix",
+      "description": "Numeric v prefixes on mise versions, regex GitHub versions and Flux chart versions are dropped. The literal current and proposed values are kept."
+    },
+    {
+      "id": "docker-version",
+      "description": "Docker numeric version fields are canonicalized; value keeps the full variant tag."
+    },
+    {
+      "id": "unknown-versions",
+      "description": "An absent baseline currentVersion, or an absent newVersion on an otherwise identical digest proposal, is unknown rather than a difference."
+    },
+    {
+      "id": "missing-baseline",
+      "description": "A missing or invalid baseline is reported on its own under noBaseline and never implies parity."
+    },
+    {
+      "id": "implicit-latest-image",
+      "description": "A Docker dependency with no current value or version in Renovate's output, whose counterpart in the report has the same manager, name, package and digest and the current value latest with no version, compares as having no current value, since Docker reads a missing tag as latest."
+    },
+    {
+      "id": "groups-unavailable-skipped",
+      "description": "Groups compare only when Renovate supplies one on that update, including enrichment from unambiguous branch summaries; a missing group is unknown, and every skipped group comparison is counted."
+    },
+    {
+      "id": "empty-package-file-ignored",
+      "description": "A package file with no dependencies that only one side lists is counted and ignored. Missing repositories, and files that hold dependencies, still produce coverage differences."
+    },
+    {
+      "id": "repeated-dependencies",
+      "departure": "repeated-dependencies",
+      "description": "Renovate's output gets the same occurrence normalization as the report, so nothing is excluded. Unlabelled duplicate identities are invalid."
+    },
+    {
+      "id": "renovate-config-manager",
+      "departure": "configuration-dependencies",
+      "description": "Removes Renovate's own renovate-config manager, including its branch upgrade summaries, before normalization, and lists the repository, manager and counts under exclusions. No config contents or preset data are read. Every other manager, including unknown names, is still compared."
+    },
+    {
+      "id": "api-version-inventory",
+      "departure": "kubernetes-api-versions",
+      "description": "Excludes kubernetes rows with datasource kubernetes-api and no proposals, and counts them in exclusions. API migration proposals are still compared."
+    },
+    {
+      "id": "yaml-image-single-owner",
+      "departure": "yaml-image-ownership",
+      "description": "Excludes a helm-values Docker row only when Renovate has the same package, current fields and proposals under kubernetes or flux in the same file, and the Count reports that owner and package there. A kubernetes image already owned by flux in a HelmRelease is handled the same way. Any difference in version, digest, proposals, file or owner keeps the row, as do standalone values. Every removed row and proposal is counted."
+    },
+    {
+      "id": "unversioned-inventory",
+      "departure": "unversioned-references",
+      "description": "Excludes rows the Count lacks in terraform, github-actions, flux or npm that have no proposals, no resolved version or digest, and either no current value, a local file:, ./ or ../ reference, or a GitHub expression. Concrete versions, opaque selectors such as latest, every proposal and versioned setup-action inputs are still compared."
+    },
+    {
+      "id": "npm-newDigest-ignored",
+      "departure": "npm-integrity",
+      "description": "Ignores only the proposed newDigest of npm-datasource dependencies, including regex-extracted npm versions, and of npm or bun manager rows with no source. Current digests, other sources, targets and update types are still compared."
+    },
+    {
+      "id": "helm-archive-checksums",
+      "departure": "helm-archive-checksums",
+      "description": "Ignores only the proposed newDigest of datasource helm. Helm registry URLs are joined to chart names so both sides use the same registry identity; a different registry is still a difference."
+    }
+  ],
   "rules": [
     {
       "id": "release-age-action-digest",
       "departure": "minimum-release-age",
+      "description": "Explains the GitHub Actions digest change that goes with a release-age difference, on the same terms as release-age-new-value. A changed digest for the same version is not explained.",
       "classification": "field-mismatch",
       "managers": ["github-actions"],
       "field": "updates.newDigest",
@@ -12,6 +82,7 @@
     {
       "id": "npm-satisfying-range-pin",
       "departure": "npm-range-edits",
+      "description": "Explains a missing Renovate proposal where Renovate left a satisfying caret or tilde declaration unchanged and the Count pins the identical exact target, under an explicit exact policy. Peers never qualify.",
       "classification": "patchula-missing",
       "managers": ["npm"],
       "field": "updates",
@@ -20,6 +91,7 @@
     {
       "id": "explicit-disabled-class",
       "departure": "disabled-update-types",
+      "description": "Explains only missing proposals whose exact class is listed in disabledUpdates, on a report with a valid metadata.lookup.evaluatedAt. Nothing is inferred from absent proposals or reports without that evidence.",
       "classification": "patchula-missing",
       "managers": ["npm", "mise", "cargo", "go", "regex", "github-actions", "kubernetes", "flux", "terraform"],
       "field": "updates",
@@ -28,6 +100,7 @@
     {
       "id": "rejected-release",
       "departure": "rejected-releases",
+      "description": "Explains only missing digest-free version upgrades from an npm, crates or PyPI source, on a report with a valid evaluation time, where the exact version is listed as deprecated or yanked in metadata.lookup.rejected.",
       "classification": "patchula-missing",
       "managers": ["npm", "cargo", "requirements"],
       "field": "updates",
@@ -36,6 +109,7 @@
     {
       "id": "observed-current-resolution",
       "departure": "current-versions",
+      "description": "Explains only current.version mismatches on matching declarations, packages and digests, where the report's resolution metadata equals its current.version. For npm lockfiles, both versions must satisfy the same declaration and Renovate's must be newer. For pinned GitHub actions, the pin must be a 40-digit SHA with a numeric partial alias, and both full versions must be on that alias's line with Renovate's newer. Reports without resolution metadata cannot use this rule.",
       "classification": "field-mismatch",
       "managers": ["npm", "github-actions"],
       "field": "current.version",
@@ -44,6 +118,7 @@
     {
       "id": "release-age-missing-target",
       "departure": "minimum-release-age",
+      "description": "Explains a missing proposal when the Count is still holding the exact target Renovate proposed, inside its 24-hour window at the time of the lookup: the held-back release matches Renovate's target in the same update class, the proposal carries a 24-hour policy, and the evaluation time falls inside the release's publication and eligibility interval. Future publication dates, expired eligibility and missing evidence are not explained.",
       "classification": "patchula-missing",
       "managers": ["npm", "mise", "cargo", "go", "regex", "github-actions", "flux", "terraform", "requirements"],
       "field": "updates",
@@ -52,6 +127,7 @@
     {
       "id": "cargo-manifest-noop",
       "departure": "cargo-no-ops",
+      "description": "Explains only missing version proposals on a Cargo dependency with identical declarations, Renovate's crate and the Count's crates source, an unchanged newValue, no digest, and a stable target that satisfies the original non-exact requirement.",
       "classification": "patchula-missing",
       "managers": ["cargo"],
       "field": "updates",
@@ -60,6 +136,7 @@
     {
       "id": "go-major-module-path",
       "departure": "go-major-versions",
+      "description": "Explains only missing major proposals on GitHub-hosted Go modules with matching identities and the Go datasource on both sides, where the target is a stable SemVer major of 2 or more without build metadata, newValue equals newVersion, there is no digest, and the module path lacks the required /vN suffix. +incompatible releases are not explained.",
       "classification": "patchula-missing",
       "managers": ["go"],
       "field": "updates",
@@ -68,6 +145,7 @@
     {
       "id": "npm-exact-minor-patch-range",
       "departure": "npm-range-edits",
+      "description": "Explains a minor or patch newValue difference where Renovate keeps a simple caret or tilde range containing the identical target, with the correct update class, and the Count pins it under an explicit exact policy. Peers never qualify.",
       "classification": "field-mismatch",
       "managers": ["npm"],
       "field": "updates.newValue",
@@ -76,6 +154,7 @@
     {
       "id": "npm-exact-range-pin",
       "departure": "npm-range-edits",
+      "description": "Explains an extra pin on an existing npm dependency with the same caret or tilde range, no Renovate pin, a satisfying exact target, no digest and an explicit exact policy. Peers never qualify.",
       "classification": "patchula-extra",
       "managers": ["npm"],
       "field": "updates",
@@ -84,6 +163,7 @@
     {
       "id": "separate-patch-track",
       "departure": "patch-track",
+      "description": "Explains an extra patch that is strictly newer than Renovate's resolved current version, on the same major and minor line, and actually changes the manifest value. Both sides must have the identical newer minor target on that major line, and the patch must carry explicit policy metadata. The minor target may differ only when the release-age rule explains it, or be missing only when the Count is holding that exact minor inside an evidenced 24-hour window. npm integrity and Helm archive checksums are ignored as in the main comparison.",
       "classification": "patchula-extra",
       "managers": ["npm", "mise", "regex", "cargo", "github-actions", "go", "kubernetes", "flux"],
       "field": "updates",
@@ -92,6 +172,7 @@
     {
       "id": "exact-latest-pins",
       "departure": "floating-selectors",
+      "description": "Explains only extra pin proposals for mise and npm dependencies, or GitHub setup-action tool inputs with tool-kind and GitHub-release metadata, whose current value is exactly latest, with no Renovate proposals, an explicit exact policy, no digest and identical newValue/newVersion.",
       "classification": "patchula-extra",
       "managers": ["mise", "npm", "github-actions"],
       "field": "updates",
@@ -100,6 +181,7 @@
     {
       "id": "indirect-go-upgrades",
       "departure": "indirect-go-requirements",
+      "description": "Explains only extra version upgrades on a Go dependency Renovate marks indirect, with equal current values, no Renovate proposal, a strictly newer SemVer target, identical newValue/newVersion and no digest. Direct requirements, pseudo-version changes and extraction differences are not explained.",
       "classification": "patchula-extra",
       "managers": ["go"],
       "field": "updates",
@@ -107,7 +189,8 @@
     },
     {
       "id": "compose-test-fixtures",
-      "departure": "compose-test-services",
+      "departure": "default-exclude",
+      "description": "Explains only extra compose dependencies in test/**/docker-compose.*.yml or .yaml, with the Docker datasource and container-image metadata: a repository can re-include test paths in the Count's exclude list while a Renovate config extending config:recommended still ignores them.",
       "classification": "patchula-extra",
       "managers": ["compose"],
       "field": "dependency",
@@ -116,6 +199,7 @@
     {
       "id": "release-age-new-value",
       "departure": "minimum-release-age",
+      "description": "Explains a newValue difference when the Count's target is newer than Renovate's, in the same update class, and at least 24 and less than 96 hours old at Renovate's own package-snapshot log timestamp, under an explicit 24-hour policy. The 96-hour ceiling is empirical, not Renovate's rule: in black-box runs Renovate still held one release at about 72 hours and proposed another at about 84. Undated releases and targets older than the window are not explained.",
       "classification": "field-mismatch",
       "managers": ["npm", "bun", "mise", "regex", "github-actions", "cargo", "go", "requirements"],
       "field": "updates.newValue",
@@ -124,6 +208,7 @@
     {
       "id": "release-age-new-version",
       "departure": "minimum-release-age",
+      "description": "Explains a newVersion difference on the same terms as release-age-new-value.",
       "classification": "field-mismatch",
       "managers": ["npm", "bun", "mise", "regex", "github-actions", "cargo", "go", "requirements"],
       "field": "updates.newVersion",
@@ -132,6 +217,7 @@
     {
       "id": "npm-exact-major",
       "departure": "npm-range-edits",
+      "description": "Explains a major newValue difference where the current value is a numeric caret, tilde or shorthand range, the Count proposes an exact target under an explicit exact policy, and Renovate proposes a caret or tilde range on the target's major line, possibly with a lower floor, that contains the target. Differing resolved targets also need independent release-age evidence. Peers never qualify.",
       "classification": "field-mismatch",
       "managers": ["npm", "bun"],
       "field": "updates.newValue",
@@ -140,6 +226,7 @@
     {
       "id": "cargo-pre1-breaking",
       "departure": "cargo-compatibility",
+      "description": "Reclassifies only minor or patch versus major at Cargo's pre-1.0 compatibility boundaries, with identical targets. It never explains version or range differences.",
       "classification": "field-mismatch",
       "managers": ["cargo"],
       "field": "updates.updateType",
@@ -148,6 +235,7 @@
     {
       "id": "default-added-digest",
       "departure": "explicit-defaults",
+      "description": "Explains a digest added to an action or image. The extra pin must keep the current value and version, add a digest to an unpinned dependency, and have no group.",
       "classification": "field-mismatch",
       "managers": ["github-actions", "dockerfile", "compose"],
       "field": "updates.newDigest",
@@ -156,6 +244,7 @@
     {
       "id": "default-digest-only-pin",
       "departure": "explicit-defaults",
+      "description": "Explains an extra digest-only pin for an action or image on the same terms as default-added-digest.",
       "classification": "patchula-extra",
       "managers": ["github-actions", "dockerfile", "compose"],
       "field": "updates",
@@ -164,6 +253,7 @@
     {
       "id": "stable-node-extra",
       "departure": "release-channels",
+      "description": "Covers mise Node, setup-node inputs and @types/node, where the Count picks a newer stable major while Renovate stays on a lower line. It requires equal declarations and digests, stable policy, stable ordered majors and digest-free major proposals. Other packages, peer ranges, same-major drift and explicit LTS policy are not explained. LTS membership is never guessed from an even major.",
       "classification": "patchula-extra",
       "managers": ["mise"],
       "field": "updates",
@@ -172,6 +262,7 @@
     {
       "id": "stable-node-value",
       "departure": "release-channels",
+      "description": "The newValue form of stable-node-extra, on the same terms.",
       "classification": "field-mismatch",
       "managers": ["github-actions", "npm"],
       "field": "updates.newValue",
@@ -180,6 +271,7 @@
     {
       "id": "stable-node-version",
       "departure": "release-channels",
+      "description": "The newVersion form of stable-node-extra, on the same terms.",
       "classification": "field-mismatch",
       "managers": ["github-actions", "npm"],
       "field": "updates.newVersion",
@@ -188,6 +280,7 @@
     {
       "id": "declared-go-current",
       "departure": "go-language-floor",
+      "description": "Requires the exact go/go identity, Renovate's golang-version/golang metadata, the Count's mise/go-directive metadata, identical manifest values and digests, and a declared resolution equal to the floor. Only a newer Renovate compiler is explained.",
       "classification": "field-mismatch",
       "managers": ["go"],
       "field": "current.version",
@@ -196,6 +289,7 @@
     {
       "id": "declared-go-upgrades",
       "departure": "go-language-floor",
+      "description": "On the same terms as declared-go-current, explains digest-free exact patch or minor floor edits up to Renovate's compiler when Renovate has no proposals. Toolchains, modules and targets beyond the observed compiler are not explained.",
       "classification": "patchula-extra",
       "managers": ["go"],
       "field": "updates",
@@ -204,6 +298,7 @@
     {
       "id": "published-mise-backends",
       "departure": "mise-backends",
+      "description": "Explains the package field only: a tool or toolchain listed by mise whose package is its own name, with the same current value and digest as Renovate's. Proposals and targets are compared separately. This is not package equivalence.",
       "classification": "field-mismatch",
       "managers": ["mise", "npm", "bun", "cargo", "terraform", "bundler", "pyproject", "gradle", "go"],
       "field": "package",
@@ -212,6 +307,7 @@
     {
       "id": "action-floating-newVersion",
       "departure": "action-ref-precision",
+      "description": "The newVersion form of action-alias-precision, on the same terms.",
       "classification": "field-mismatch",
       "managers": ["github-actions"],
       "field": "updates.newVersion",
@@ -220,6 +316,7 @@
     {
       "id": "action-floating-newDigest",
       "departure": "action-ref-precision",
+      "description": "The newDigest form of action-alias-precision, on the same terms.",
       "classification": "field-mismatch",
       "managers": ["github-actions"],
       "field": "updates.newDigest",
@@ -228,6 +325,7 @@
     {
       "id": "action-alias-precision",
       "departure": "action-ref-precision",
+      "description": "Same target: requires equal package and current identity, github-tags action or workflow metadata, an unchanged alias with one or two numeric parts, and the identical full target. The commit must be a 40-digit hash and match Renovate's when it has one; an added commit is explained by default-added-digest. Newer target: both sides propose the same floating tag and update class, with stable full versions on that line and the Count's newer. The proposed commit must equal the report's metadata.tagDigests entry for that tag; the proposal itself is not evidence. This covers Renovate pinning an older release's commit.",
       "classification": "field-mismatch",
       "managers": ["github-actions"],
       "field": "updates.newValue",
@@ -236,6 +334,7 @@
     {
       "id": "cargo-compatible-missing",
       "departure": "cargo-target-resolution",
+      "description": "Requires matching declarations and digests, crate/crates sources, no stale data, a current pre-1.0 minor below both targets, stable ordered releases on the same nonzero minor, identical proposed 0.minor intervals, past both release-age windows, an explicit preserve policy, no digests, and the minor-to-major taxonomy Renovate reports. Observed with keepass 0.15.0 against 0.15.2 and toml_edit 0.25.16 against 0.25.17+spec-1.1.0.",
       "classification": "patchula-missing",
       "managers": ["cargo"],
       "field": "updates",
@@ -244,6 +343,7 @@
     {
       "id": "cargo-compatible-extra",
       "departure": "cargo-target-resolution",
+      "description": "The extra-row form of cargo-compatible-missing, on the same terms. The missing and extra rows are each audited.",
       "classification": "patchula-extra",
       "managers": ["cargo"],
       "field": "updates",

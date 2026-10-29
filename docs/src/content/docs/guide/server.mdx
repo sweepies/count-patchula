@@ -4,13 +4,9 @@ title: "GitHub App server"
 
 import { Steps } from "@astrojs/starlight/components";
 
-`patchula serve` is the recommended way to run the Count: the same engine as
-`patchula run`, as a long-lived process. It takes GitHub webhooks into one
-deduplicated queue, sweeps every installed repository on a schedule and mints
-its own installation tokens. Its caches stay warm, so every batch after the
-first is cheap; work from many repositories is batched together; and a ticked
-checkbox on a PR or the dashboard is acted on within seconds, not at the next
-scheduled run. Between batches it sits idle with little memory in use.
+`patchula serve` runs the same engine as `patchula run` as a long-lived GitHub
+App: it queues webhooks, sweeps on a schedule, mints its own tokens and keeps
+caches warm, so a ticked checkbox is acted on within seconds.
 
 :::note[No web UI]
 The routes are `POST /webhook`, `GET /healthz`,
@@ -272,18 +268,6 @@ started later. An unknown or hidden repository is a 404 with `errorKind`
 `unknown-repository`, and with the API off every request is a 404 with
 `errorKind` `disabled`.
 
-## Replaying a webhook locally
-
-```sh
-mise run server:replay /tmp/push.json push local-push-001
-```
-
-The `server:replay` task signs a recorded payload with your webhook secret and
-posts it to a loopback listener. It prints only the HTTP status and refuses
-non-loopback targets. Set only one of `PATCHULA_WEBHOOK_SECRET_FILE` and
-`PATCHULA_WEBHOOK_SECRET` when you use it. A repeated delivery ID is accepted
-but ignored, so use a new ID to trigger again.
-
 ## Container image
 
 Each release publishes an image for linux/amd64 and linux/arm64 to the GitHub
@@ -297,29 +281,15 @@ The tags are each release's version without the `v`, and `latest`, which a
 prerelease does not move. There are no minor, major or edge tags, so pin the
 version and upgrade on purpose.
 
-:::caution[The image changed]
-Images after 0.5.1 are built with [apko](https://github.com/chainguard-dev/apko)
-from [Wolfi](https://wolfi.dev) packages instead of Debian slim, and nothing
-in them comes from Docker Hub. This changes three things for operators:
-
-- The image has no `HEALTHCHECK` and no `EXPOSE`, which apko cannot set.
-  Configure the health check where you run the container, as [shown
-  below](#health-check), and publish port 8080 yourself.
-- mise is no longer in the image. The first start installs it into the
-  volume, which needs GitHub at that moment, or a [pre-seeded
-  volume](#offline-hosts).
-- The SBOMs (apko's, one per platform) and the provenance are GitHub
-  attestations stored beside the image; BuildKit's attestation manifests are
-  gone.
-:::
-
-The image holds `patchula`, `git`, `curl` and
+The image is built with [apko](https://github.com/chainguard-dev/apko) from
+[Wolfi](https://wolfi.dev) packages. It holds `patchula`, `git`, `curl` and
 [packslip](https://packslip.dev), on Wolfi's glibc, and starts `patchula serve`
 as user and group 10001. Lockfile tools are not in the image: mise installs
 each one into the volume the first time a repository needs it (see [what the
 runner needs](/installation/#what-the-runner-needs)). The image has no ICU, so
 it sets `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1`, which the runner passes on
-to dotnet.
+to dotnet. The image sets no `HEALTHCHECK` or `EXPOSE`; configure the [health
+check](#health-check) and publish 8080 yourself.
 
 Each build takes Wolfi's current packages, so a release picks up Wolfi's
 fixes, and rebuilding an old commit later gives a different image. The image a
@@ -487,7 +457,8 @@ seconds, so it would never sleep, and one that did would miss its sweeps.
 
 ## systemd
 
-Install mise for the service user; the server needs it like any
+Install mise or packslip for the service user, on the `PATH` in
+`/etc/patchula/environment`; the server needs it like any
 [runner](/installation/#what-the-runner-needs).
 
 ```ini
@@ -517,5 +488,5 @@ NoNewPrivileges=true
 WantedBy=multi-user.target
 ```
 
-`/etc/patchula/environment` needs `PATCHULA_APP_ID` and a `PATH` that includes
-mise. Keep the stop timeout longer than the drain deadline.
+`/etc/patchula/environment` needs `PATCHULA_APP_ID` and that `PATH`. Keep the
+stop timeout longer than the drain deadline.

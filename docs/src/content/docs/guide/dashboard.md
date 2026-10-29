@@ -17,8 +17,8 @@ In order:
 1. open update PRs, grouped by update type, then the ones he merged;
 2. pending updates, each with the reason it is held (release age with the time
    it becomes eligible, PR limits, schedule windows);
-3. template updates, such as a Copier template's new tag, which only
-   `copier update` applies, so they have no PR and no checkbox;
+3. template updates, which have no PR or checkbox
+   ([Copier](/guide/managers/#copier));
 4. updates you closed ("Updates you closed"), with the target that was
    suppressed, and updates "Batched by the Count";
 5. lookup warnings and sources served from stale cache;
@@ -45,9 +45,8 @@ Ticking a box asks for one thing:
 
 Each box is unticked once its action is done, or disappears when its row is
 resolved. Boxes are read on live runs only; `lookup` and `--dry-run` never
-consume them. The CLI's wording says the click takes effect "on the next run";
-`--recheck now` or `PATCHULA_RECHECK=now` changes it for setups where a webhook
-starts a run straight away.
+consume them. Box wording says when the click takes effect; see
+[`--recheck`](/reference/cli/).
 
 A box only counts when the Count's own hidden action marker is on that line and
 the issue is his. Copies made by someone else, duplicate actions and examples in

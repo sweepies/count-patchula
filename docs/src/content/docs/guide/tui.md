@@ -17,10 +17,8 @@ It takes the same flags as [`lookup`](/reference/cli/#patchula-lookup): `--cache
 stdout; `--once` prints a snapshot of the updates and exits, for pipes and CI
 logs.
 
-In a checkout with no `patchula.pkl`, the Count asks before he starts, with one
-keypress: `d` (or Enter) uses his defaults for this run, `w` writes a starter
-`patchula.pkl` and carries on, and `q` quits. `--default-config` answers `d`
-up front, and is required when there is no terminal to ask on.
+In a checkout with no `patchula.pkl` the Count [asks
+first](/guide/configuration/#where-the-config-lives).
 
 ```text
  Count Patchula   1 repository · 2576 dependencies · 131 updates · 2 selected
@@ -73,43 +71,15 @@ published 2026-09-24T19:36:54Z
 | `w` | on the Updates tab, apply: write the selection into the working tree, after a `y` to confirm |
 | `u` | on the Templates tab, run `copier update` for the template under the cursor, after a `y` to confirm |
 
-The bar at the bottom lists the keys that work on the current tab, and wraps
-rather than cutting off on a narrow terminal. When `w` or `u` cannot run, the
-bar says why next to the key: the lookup ran on a server, the repositories come
-from GitHub, nothing is selected yet, or, for copier, the tree has uncommitted
-changes. A message from the last key appears above the bar until the next key.
-
-Warnings are laid out like the end of a `lookup` report: grouped by
-repository when there are several, failed lookups one row each with the
-message under it, then the other warnings. They wrap to the width of the
-terminal. When they fill more than the pane, the title shows which lines are
-on screen, and `j`, `k`, `PgDn` and `PgUp` scroll through them, as the bar
-says.
-
-The Updates table sizes its columns by what is in them. The current version
-takes up to 32 columns and the target up to 48, enough for a version with a
-short digest; on a narrow terminal they give way last, after the dependency
-name and the file. A long dependency name is cut in the middle, keeping its
-start and its last segment.
+The bar at the bottom lists the keys for the current tab, and says why `w` or
+`u` can't run.
 
 ## Applying updates
 
-Select updates with `space` or `a`, press `w`, then `y` to write them; any
-other key cancels. Applying only works on the working tree in the current
-directory, with no repository named and not on a server. If this checkout is
-set to run on a server, pass `--here` to look it up on this machine and apply.
-The Count reads each selected file again,
-finds the same declaration at the same place, and rewrites just the version,
-the way he edits a branch. If a selected update cannot be written in place,
-because its declaration changed since the lookup, the package is only in a
-lockfile, or another selected update takes the same declaration, he refuses
-with the reason rather than guess, and nothing is written. Lockfiles are not regenerated, so
-run your package manager afterwards (`aube install`, `cargo update -w`,
-`uv lock` and so on).
-
-Template updates are never selected with the other updates, and `w` never
-touches them: some managers only report a newer version. See
-[Managers](/guide/managers/).
+Select updates with `space` or `a`, press `w`, then `y`. Only the working tree
+here can be written, with the same edits as
+[`patchula apply`](/guide/apply/#what-gets-written); lockfiles are not
+regenerated. If this checkout is set to run on a server, pass `--here`.
 
 To write updates without picking them, in a script or a pre-commit hook, use
 [`patchula apply`](/guide/apply/). It writes through the same edits, and

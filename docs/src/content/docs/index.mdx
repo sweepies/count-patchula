@@ -1,6 +1,6 @@
 ---
 title: Count Patchula
-description: He never sleeps. Neither do your CVEs. A modern dependency updater with strong defaults.
+description: A modern dependency updater for GitHub with strong defaults.
 template: splash
 editUrl: false
 lastUpdated: false
@@ -57,7 +57,7 @@ import { Card, CardGrid, LinkButton } from "@astrojs/starlight/components";
     <LinkButton href="/benchmarks/" variant="minimal" icon="right-arrow">Benchmarks</LinkButton>
   </Card>
   <Card title="The server is MIT too" icon="server">
-    The GitHub App server, with webhooks, scheduled sweeps and warm caches, ships in the same MIT-licensed binary as the CLI. No paid edition, no feature gates, no licence key.
+    The GitHub App server, with webhooks, scheduled sweeps and warm caches, is part of the same MIT-licensed binary.
 
     <LinkButton href="/guide/server/" variant="minimal" icon="right-arrow">Server mode</LinkButton>
   </Card>
@@ -72,7 +72,7 @@ verified commit signed by GitHub.
 
 ```sh
 patchula run --dry-run acme/my-app   # look first
-patchula run acme/my-app             # then let him bite
+patchula run acme/my-app             # then for real
 ```
 
 ```pkl
@@ -88,9 +88,5 @@ rules {
 }
 ```
 
-Supported ecosystems include npm, pnpm, Yarn and Bun, GitHub Actions, mise,
-Cargo, Go, Docker and Compose, Kubernetes, Kustomize, Flux and Helm, Terraform,
-Python (requirements, PEP 621, uv and Poetry), Maven and Gradle, NuGet, Bundler,
-Composer, pre-commit, devcontainers, Woodpecker CI, Nix flakes and APM, plus notices for new
-Copier template versions. The [compatibility
-matrix](/renovate/compatibility/) lists what is covered and what is not.
+Over 30 ecosystems are supported, from npm and Cargo to Helm, Terraform and Nix
+flakes; the [compatibility matrix](/renovate/compatibility/) lists them.

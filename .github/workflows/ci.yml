@@ -41,7 +41,8 @@ jobs:
         with:
           filters: |
             rust:
-              # The conformance tests read the departures page.
+              # The conformance tests check departures.json against the
+              # departures page's anchors.
               - docs/src/content/docs/renovate/departures.md
               - .github/workflows/ci.yml
             docs:

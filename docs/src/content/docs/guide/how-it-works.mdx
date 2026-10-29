@@ -4,10 +4,7 @@ title: "How it works"
 
 import { Steps } from "@astrojs/starlight/components";
 
-The Count was built to replace a Renovate setup that spent 6.7 minutes on
-twelve repositories, one at a time, with caches reset between them, full
-release histories fetched page by page and every changelog parsed again. He
-takes the whole batch in one process.
+One process takes a whole batch of repositories. A run goes like this:
 
 ## A run, start to finish
 
@@ -54,15 +51,13 @@ the Count. Logs are for people and are never meant to be parsed.
   formats are errors, never silent skips. A file that does not parse at all is
   skipped with a warning, and warnings stop branch cleanup so nothing is closed
   by mistake.
-- Clean-room: Renovate is only ever run as a black box for comparison.
 
 ## Two ways to run
 
 `patchula run` and `patchula lookup` process one batch with a token you supply
 and exit. `patchula serve` is a long-running [GitHub App
 server](/guide/server/): it verifies webhooks, keeps a deduplicated queue, sweeps
-on a cron schedule and keeps every cache warm between batches. It is the
-recommended way to run him for real. Both use the same engine, so a batch
+on a cron schedule and keeps every cache warm between batches. Both use the same engine, so a batch
 behaves the same however it started.
 
 ### Tokens

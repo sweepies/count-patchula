@@ -40,14 +40,9 @@ or `gradle.lockfile`. Updates to those hold as lockfile-pending.
 
 ## Why aube for npm and pnpm
 
-The package manager sets a floor on how fast an update can be. Manifest edits
-and API commits take milliseconds; the lockfile tool takes seconds.
-
-[aube](https://aube.sh) reads and writes pnpm and npm lockfiles in place. On a
-project with 265 locked packages, refreshing the lock after a manifest edit took
-0.11 s with aube on the pnpm lock and 0.12 s on the npm lock, against 2.48 s
-with pnpm 10 and 1.46 s with npm 11, all with warm metadata caches. So the Count
-uses aube for both.
+[aube](https://aube.sh) rewrites pnpm and npm lockfiles in place about 10 to 20
+times faster than pnpm or npm (0.1 s against 1.5 to 2.5 s on a 265-package
+project), so the Count uses it for both.
 
 aube's npm lockfiles stay valid for `npm ci`,
 but a later `npm install` may rewrite a few lines (hoisting and `funding`
@@ -113,6 +108,17 @@ system and user `nix.conf` are not read. The GitHub token reaches nix only as
 `flake.nix` but does not evaluate the flake's outputs, so no repository code
 runs.
 
+nix fetches what `flake.nix` declares, so before it runs the Count reads the
+declared inputs, nested input overrides included, under nix's restricted
+evaluation, which fetches nothing and reads only the flake's directory. An
+input `flake.nix` adds or points somewhere refused fails the branch before any
+request. After nix runs, every node it added or changed in the lock is checked
+the same way, and an update must lock exactly the revision that passed the
+lookup and its release-age wait: if the branch moved in between, the update
+fails and is retried with the newer revision. Inputs that an upstream flake
+declares for itself are fetched by nix before the lock can be checked; a lock
+that reaches outside is still never published.
+
 ### APM
 
 `apm lock` is APM's lock-only mode. It resolves every package and downloads it
@@ -141,10 +147,8 @@ only installs and starts it. Each successful tool run records its
   inputs, and a `nixpkgs` input alone takes several hundred MB. The next nix
   run downloads what it needs again, so run prune on a schedule if you update
   flakes.
-- A version the store has never run successfully is reinstalled from scratch on
-  first use, with a 30-minute install allowance. This recovers from an install
-  cut short by a timeout or crash, which can leave a directory mise treats as
-  installed but with no binaries.
+- An install that never completed a run is redone from scratch on first use
+  (30-minute allowance).
 - Known versions keep a 180-second limit per command.
 
 On a local run, Node, Go, Bun, aube, Yarn, uv and Terraform versions you
@@ -168,6 +172,7 @@ a copy of `.yarnrc.yml` without `yarnPath`, plugins or `${VAR}` interpolations,
 since a committed Yarn release and plugins are repository code.
 
 Output is kept only when something fails, at most 4 KiB of each stream.
+
 :::note[Private registries]
 Private registries do not work yet, because credentials are scrubbed on
 purpose. Scoped registry credentials will be a separate, explicit opt-in.

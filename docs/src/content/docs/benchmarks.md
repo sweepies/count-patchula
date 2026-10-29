@@ -38,14 +38,11 @@ Unique dependency names found.
 | kafka | 46 | 128 | 35 |
 
 Most of mastodon's gap is gems with no version requirement, which the Count
-leaves to lockfile maintenance. Kafka's was versions in a Groovy map, which the
-Gradle manager has read since these runs.
+leaves to lockfile maintenance. Kafka's was versions in a Groovy map.
 
 ## Notes
 
-- Run on 2026-10-21 with Count Patchula `e89e99c`. Renovate used each
-  repository's own config with `dryRun=lookup`.
+- Run on 2026-10-21 (`e89e99c`); the Gradle and Go managers have improved
+  since. Renovate used each repository's own config with `dryRun=lookup`.
 - Renovate's cold time includes cloning. The Count reads files through the
-  GitHub API and never clones.
-- Go lookups got faster after these runs, so grafana's cold time (1,076 Go
-  modules) is now lower than shown.
+  GitHub API, and lookups never clone.

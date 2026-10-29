@@ -3,7 +3,7 @@ title: "SQLite cache"
 ---
 `patchula-cache` uses rusqlite 0.40 with bundled SQLite, so the system
 SQLite's version and features never matter. HTTP bodies are stored with Zstd
-level 3. The pinned Zig mise tasks build the native dependencies.
+level 3.
 
 ## Layout
 

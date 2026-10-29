@@ -31,7 +31,7 @@ lists and validator-free OCI tag pages get a one-hour local freshness floor
 (`--go-freshness-secs`, `--registry-freshness-secs`; `0` restores upstream
 behaviour), because those endpoints would otherwise be read on every run.
 
-GitHub histories, where Renovate spent most of its time, are read in pieces:
+GitHub histories are read in pieces:
 
 - A cold release history is fetched through batched GraphQL queries, sixteen
   sources at a time.
@@ -66,10 +66,8 @@ The Count runs mise the way he runs the lockfile tools, and more strictly:
   (`MISE_NO_CONFIG`), env templates (`MISE_NO_ENV`) or hooks
   (`MISE_NO_HOOKS`), so neither your global configuration nor a repository's
   `mise.toml` can apply.
-- With tool names checked first: no leading `-`, no brackets (tool options can
-  redirect a backend), and no `@version` selector. `@` is allowed only to open an
-  npm scope right after the backend, as in `npm:@types/node`; `prettier@3` is
-  refused because mise would list a selector rather than the tool.
+- With tool names validated first: no leading `-`, no bracketed options and no
+  `@version` selector.
 - With the backends `asdf` and `vfox` disabled (`MISE_DISABLE_BACKENDS`), and
   names for them refused before mise starts. A backend prefix mise does not
   know fails in mise, which runs no plugin for it. Nothing installs during a lookup

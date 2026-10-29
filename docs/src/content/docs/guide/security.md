@@ -119,5 +119,3 @@ security {
   lowestFix = true     // propose the lowest full fix past permitted and channel
 }
 ```
-
-`advisories = false` turns the lookup off for a repository.

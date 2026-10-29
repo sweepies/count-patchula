@@ -30,31 +30,20 @@ engine they mean:
 
 - Each lookup (data source and package) runs at most once per batch, however
   many repositories use the package.
-- Release lists, tag lists and changelogs are stored with their validators
-  (ETag, Last-Modified) and the newest item seen. A refresh fetches
-  newest-first and stops at the first item already known.
-- Repository files are read through the GitHub API at the default branch's
-  commit, and commits are created through the API, signed by GitHub.
 - If the default branch's commit and the resolved config are unchanged, the
   previous extraction is reused. If no new versions appeared either, no branch
   work happens.
-- A stable, versioned JSON [report](/reference/report/) is the interface to
-  callers. Logs are never parsed.
 
 ## Configuration
 
-Pkl only, evaluated in-process with `pklr`. patchula publishes a typed
-`PatchulaConfig.pkl` schema; a repository's config amends it, and an
-organisation can share a base config through Pkl imports. There is no
-`renovate.json` reader; [migrating](/renovate/migrating/) covers moving a
-config by hand.
+Pkl, evaluated in process with `pklr`; see [configuration](/guide/configuration/).
 
 ## Architecture
 
 <FileTree>
 - crates/
   - config/ Pkl schema, evaluation (pklr), typed model, rule engine, templates
-  - versioning/ semver (npm and Cargo), Docker tags, PEP 440, Go modules, HashiCorp, loose
+  - versioning/ every version scheme in Versioning
   - datasource/ registry lookups with conditional GETs, through http/ and github/
   - mise/ tool version lookups through the pinned `mise ls-remote`
   - manager/ per-ecosystem extraction and surgical edits, regex managers
@@ -91,20 +80,6 @@ caller supplies. The [server](/guide/server/)
 keeps its queue and caches warm. With `--remote`, the CLI signs in with the
 server's App through GitHub's device flow, and the server runs the batch with
 its own credentials once the user is shown to have push access.
-
-Checkboxes say when a click takes effect: "re-check now" in server mode,
-"re-check on the next run" in CLI mode. `--recheck now|next-run` (or
-`PATCHULA_RECHECK`) overrides this for setups where a webhook receiver starts
-CLI runs at once. A hidden marker, not the text, identifies the Count's
-checkboxes.
-
-Operator settings (sweep schedule, triggers, concurrency, re-check wording)
-are a Pkl file separate from repository configs; see
-[settings](/guide/server/#settings). Secrets, such as the App private key and
-the webhook secret, never appear in settings and come only from environment
-variables or files. There is no web UI and no settings managed by the Count
-himself. Besides webhooks and health checks, the server has the `/api/v1` API
-behind `--remote` and a read-only repository API for a separate dashboard.
 
 ## Tooling
 

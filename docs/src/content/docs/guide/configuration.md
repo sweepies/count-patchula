@@ -45,7 +45,7 @@ patchula config check .            # a file or a repository directory
 patchula config check --json .     # a versioned validation envelope
 ```
 
-Configuration errors exit 2, runtime errors exit 1.
+Configuration errors exit 2; the [CLI reference](/reference/cli/) lists every exit code.
 
 ## Sharing policy across repositories
 
@@ -290,12 +290,6 @@ still want.
 tags and for the mise lookups that mise runs, and reads every catalog from its
 upstream.
 
-:::note[Not acted on yet]
-`submodules` and `ignoreAuthors` are accepted and validated, but the Count does
-not act on them yet: submodules are not processed, and every push to the
-default branch is treated alike.
-:::
-
 ## Custom extractors
 
 The `regex` manager finds versions the built-in managers do not know about.
@@ -321,8 +315,7 @@ identity. `scheme` picks the version comparison. `extract` normalises registry
 tags and needs a named `version` capture.
 
 Rust regexes have no lookaround or backreferences. Pkl raw strings such as
-`#"(?<current>\S+)"#` avoid double escaping. A `renovate:` comment marker in
-your files is fine: it is just text in a file you own.
+`#"(?<current>\S+)"#` avoid double escaping.
 
 ## Diagnostics
 

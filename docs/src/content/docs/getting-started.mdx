@@ -57,19 +57,15 @@ secrets. The steps below do the same by hand.
    ```
    </Aside>
 
-   No config yet? In a checkout without one, `lookup`, `tui` and
-   `run --dry-run` offer to use the defaults or write a starter file. Without a
-   terminal, pass `--default-config`.
-
 3. ### Get a token
 
    Export `PATCHULA_TOKEN` (or `GITHUB_TOKEN` or `GH_TOKEN`). With none set,
    the Count uses a signed-in [GitHub CLI](/guide/how-it-works/#tokens)'s token.
 
    - `lookup` and dry runs need any token that can read the repository.
-   - Real runs need a GitHub App installation token, so GitHub signs the
-     commits. The App needs write access to contents, pull requests, issues and
-     workflows, and read access to checks and commit statuses.
+   - Real runs need a GitHub App installation token so GitHub signs the
+     commits; the [App's permissions](/guide/server/#create-the-github-app) are
+     listed with the server.
 
    The [GitHub App server](/guide/server/) can mint installation tokens itself.
 
@@ -85,10 +81,7 @@ secrets. The steps below do the same by hand.
    [JSON report](/reference/report/) instead. `run --dry-run` prints the
    branches and diffs it would publish, without touching GitHub.
 
-   On a terminal, a spinner shows what the Count is doing, and the output is
-   coloured and fitted to the window. Piped or redirected, it is plain text
-   with one item per line and the summary wrapped at 80 columns, and
-   `NO_COLOR` or `--color never` turns colour off anywhere. `-v` adds request counts and phase timings on stderr.
+   `-v` adds request counts and phase timings.
 
 5. ### Run it
 
@@ -101,11 +94,8 @@ secrets. The steps below do the same by hand.
    which mise installs on first use. A repeat run on an unchanged repository
    costs one GraphQL query.
 
-   With no repository named, `lookup` and `run --dry-run` read the working
-   tree here, uncommitted changes included. A real `run` opens PRs for the
-   checkout's github.com repository, once the tree is clean and at the remote's
-   default branch. `--all-repos` processes every repository the token can
-   reach.
+   With no repository named, commands use this checkout; see [working tree or
+   GitHub](/guide/how-it-works/#working-tree-or-github).
 
    To have the updates written into your checkout instead of opened as PRs, run
    [`patchula apply`](/guide/apply/) there, or pick them one by one in the

@@ -45,16 +45,8 @@ rules {
 
 ## Ranges, peers and providers
 
-Installed npm dependencies follow `versions`, so the default pins them
-exactly. Peer dependencies describe what consumers may use, so they are
-treated differently: a range widens at a new major (`^5` becomes
-`^5 || ^7.0.0`), an exact peer bumps in place, and exact policy never pins a
-peer range.
-
-Cargo's `preserve` keeps a satisfying floor, and a two-part requirement that
-crosses a major starts at the new major's floor (`0.30` becomes `1.0` for
-1.1.0). A Terraform provider constraint that already allows the new version is
-left as written, even under exact policy.
+How a declaration is rewritten, peer ranges, Cargo floors and Terraform
+constraints included, is under [version policies](/guide/versioning/#version-policies).
 
 ## Node release channels
 

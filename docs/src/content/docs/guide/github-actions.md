@@ -116,9 +116,6 @@ Policy files amend `PatchulaConfig.pkl` like any config, and the Count supplies 
 [sharing policy](/guide/configuration/#sharing-policy-across-repositories) to
 build these files on one organization module.
 
-A batch across many repositories shares lookups and caches, so one scheduled
-run is much cheaper than one per repository.
-
 ## Inputs
 
 | Input | Default | |
@@ -127,7 +124,7 @@ run is much cheaper than one per repository.
 | `repositories` | this repository | `owner/repo` names, separated by spaces or newlines |
 | `all-repos` | `false` | Every repository the token can reach |
 | `dry-run` | `false` | Print planned branches and diffs without writing |
-| `version` | the action's version | The Count version to install, such as `0.1.1` |
+| `version` | the action's version, or the latest release when the action is not used at a release tag | The Count version to install, such as `0.5.1` |
 | `args` | | Extra `patchula run` arguments, such as `--config-dir policy` |
 
 The cache, with HTTP validators, write receipts and the lockfile tools, is
