@@ -19,6 +19,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use sha2::Digest as _;
+
 type Headers = BTreeMap<String, Vec<String>>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -225,6 +227,7 @@ pub struct Recorder {
     network: Arc<dyn Transport>,
     cassette: Mutex<Cassette>,
     options: Options,
+    addressed: Mutex<std::collections::BTreeSet<String>>,
 }
 
 impl Recorder {
@@ -243,6 +246,7 @@ impl Recorder {
                 interactions: Vec::new(),
             }),
             options,
+            addressed: Mutex::default(),
         }
     }
 }
@@ -252,7 +256,27 @@ impl Transport for Recorder {
         Box::pin(async move {
             let key = request_key(&request, &self.options)?;
             let response = self.network.send(request).await?;
-            let mut body = Body::read(&response.body)?;
+            // A registry body is checked against the digest it was requested
+            // by, even after a redirect, so it is kept byte for byte rather
+            // than as reformatted JSON.
+            let verbatim = {
+                let mut addressed = self
+                    .addressed
+                    .lock()
+                    .map_err(|_| failure("recorder lock poisoned"))?;
+                if let Some((_, digest)) = key.url.split_once("/sha256:") {
+                    addressed.insert(digest.chars().take(64).collect::<String>());
+                }
+                let hex: String = sha2::Sha256::digest(&response.body)
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect();
+                addressed.contains(&hex)
+            };
+            let mut body = match String::from_utf8(response.body.to_vec()) {
+                Ok(text) if verbatim => Body::Text(text),
+                _ => Body::read(&response.body)?,
+            };
             self.options.redactor.body(&mut body);
             let interaction = Interaction {
                 request: key,

@@ -370,3 +370,68 @@ fn template_notices_are_listed_without_a_branch_or_a_checkbox() {
             .any(|l| l.contains("acme/template") && l.contains("patchula-action"))
     );
 }
+
+#[test]
+fn images_the_count_cant_vouch_for_follow_known_vulnerabilities() {
+    let mut repo = repository();
+    repo.warnings.clear();
+    repo.package_files[0].dependencies[0]
+        .metadata
+        .as_mut()
+        .unwrap()
+        .advisories = serde_json::from_value(json!([
+        {"id":"GHSA-open","url":"https://osv.dev/vulnerability/GHSA-open"}
+    ]))
+    .unwrap();
+    let image =
+        |package: &str, tag: &str, state: serde_json::Value| -> patchula_report::Dependency {
+            serde_json::from_value(json!({
+                "manager":"compose","name":package,"package":package,
+                "current":{"value":tag,"version":tag,"digest":"sha256:aa"},"updates":[],
+                "metadata":{"source":"docker","kinds":[],"locations":[],"image":state}
+            }))
+            .unwrap()
+        };
+    repo.package_files
+        .push(serde_json::from_value(json!({"path":"compose.yaml","dependencies":[]})).unwrap());
+    let deps = &mut repo.package_files[1].dependencies;
+    deps.push(image(
+        "quay.io/argoproj/argocd",
+        "v3.1.8",
+        json!({"state":"no-sbom"}),
+    ));
+    deps.push(image(
+        "ghcr.io/acme/api",
+        "2.4",
+        json!({"state":"sbom-without-os","detail":"ko"}),
+    ));
+    deps.push(image(
+        "mysql",
+        "8.4",
+        json!({"state":"os-not-covered","os":"ol 9"}),
+    ));
+    deps.push(image(
+        "ghcr.io/acme/internal-base",
+        "1",
+        json!({"state":"no-sbom","silenced":"built from our own Wolfi base, scanned in CI"}),
+    ));
+    let text = dashboard::render(&repo, &[], &[], Recheck::NextRun, None);
+    let section = text.find("## Images the Count can't vouch for\n").unwrap();
+    assert!(
+        text.find("## Known vulnerabilities").unwrap() < section,
+        "{text}"
+    );
+    assert!(text.find("## Pending updates").unwrap() > section, "{text}");
+    for line in [
+        "- `quay.io/argoproj/argocd:v3.1.8@sha256:aa` in `compose.yaml`: no SBOM published\n",
+        "- `ghcr.io/acme/api:2.4@sha256:aa` in `compose.yaml`: its SBOM (made by ko) lists no OS packages\n",
+        "- `mysql:8.4@sha256:aa` in `compose.yaml`: ol 9, which OSV.dev doesn't cover\n",
+        "<details><summary>Silenced (1)</summary>\n\n- `ghcr.io/acme/internal-base:1@sha256:aa` in `compose.yaml`: built from our own Wolfi base, scanned in CI\n</details>\n",
+    ] {
+        assert!(text[section..].contains(line), "{line}\n{text}");
+    }
+    assert_eq!(
+        text.matches("## Images the Count can't vouch for").count(),
+        1
+    );
+}

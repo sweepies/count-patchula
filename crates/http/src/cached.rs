@@ -104,6 +104,24 @@ struct Host {
 }
 type Coalesced = Arc<tokio::sync::Mutex<Option<(Instant, Response)>>>;
 type Derive = fn(&[u8]) -> Result<Vec<u8>, Error>;
+/// How long a digest-addressed registry document stays fresh: ten years, so
+/// only the cache's size budget evicts it.
+const IMMUTABLE_SECS: u64 = 10 * 365 * 24 * 3600;
+/// How long a registry's 404 for a digest or a cosign tag is kept.
+const MISSING_SECS: i64 = 24 * 3600;
+
+/// A registry bearer token, and whether it was issued to an account rather
+/// than anonymously.
+#[derive(Clone, Copy)]
+pub struct Bearer<'a> {
+    pub token: &'a str,
+    pub account: bool,
+}
+
+/// A manifest or blob addressed by digest, which never changes.
+fn immutable(url: &Url) -> bool {
+    url.path().contains("/manifests/sha256:") || url.path().contains("/blobs/sha256:")
+}
 #[derive(Clone)]
 pub struct Cached(Arc<Inner>, bool);
 impl Cached {
@@ -275,7 +293,7 @@ impl Cached {
         &self,
         url: &str,
         accept: &str,
-        token: Option<&str>,
+        token: Option<Bearer<'_>>,
     ) -> Result<Response, Error> {
         self.registry_representation(url, accept, token, None, Method::GET)
             .await
@@ -285,7 +303,7 @@ impl Cached {
         &self,
         url: &str,
         accept: &str,
-        token: Option<&str>,
+        token: Option<Bearer<'_>>,
     ) -> Result<Response, Error> {
         self.registry_representation(url, accept, token, None, Method::HEAD)
             .await
@@ -294,7 +312,7 @@ impl Cached {
         &self,
         url: &str,
         accept: &str,
-        token: Option<&str>,
+        token: Option<Bearer<'_>>,
         format: &'static str,
         derive: Derive,
     ) -> Result<Response, Error> {
@@ -305,14 +323,15 @@ impl Cached {
         &self,
         url: &str,
         accept: &str,
-        token: Option<&str>,
+        token: Option<Bearer<'_>>,
         derived: Option<(&'static str, Derive)>,
         method: Method,
     ) -> Result<Response, Error> {
         let started = Instant::now();
         let key = format!(
-            "registry:{method}:{}:{url}\n{accept}\n{}:{}",
+            "registry:{method}:{}:{}:{url}\n{accept}\n{}:{}",
             token.is_some(),
+            token.is_some_and(|t| t.account),
             derived.map_or("", |(format, _)| format),
             self.1
         );
@@ -452,7 +471,7 @@ impl Cached {
         url: &str,
         accept: &str,
         derived: Option<(&'static str, Derive)>,
-        registry: Option<Option<&str>>,
+        registry: Option<Option<Bearer<'_>>>,
         method: Method,
     ) -> Result<Response, Error> {
         let url = Url::parse(url).map_err(|_| Error::Configuration)?;
@@ -487,6 +506,11 @@ impl Cached {
             .as_ref()
             .and_then(|entry| {
                 let floor = if registry.is_some()
+                    && immutable(&url)
+                    && StatusCode::from_u16(entry.status).is_ok_and(|s| s.is_success())
+                {
+                    IMMUTABLE_SECS
+                } else if registry.is_some()
                     && url.path().ends_with("/tags/list")
                     && entry.etag.is_none()
                     && entry.last_modified.is_none()
@@ -527,6 +551,9 @@ impl Cached {
             && !self.1
         {
             self.0.cache_hits.fetch_add(1, Ordering::Relaxed);
+            if entry.status == 404 {
+                return Err(Error::Status(404));
+            }
             let mut headers = header::HeaderMap::new();
             for (name, value) in &entry.headers {
                 headers.insert(
@@ -544,7 +571,7 @@ impl Cached {
             return Ok(response);
         }
         let mut request = Request::new(method.clone(), url.clone());
-        if let Some(Some(token)) = registry {
+        if let Some(Some(Bearer { token, .. })) = registry {
             let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
                 .map_err(|_| Error::Configuration)?;
             value.set_sensitive(true);
@@ -723,6 +750,29 @@ impl Cached {
             return Ok(response);
         }
         if !response.status.is_success() {
+            // A digest or cosign tag the registry lacks is asked about again
+            // a day later, not on every run.
+            if response.status == StatusCode::NOT_FOUND
+                && registry.is_some()
+                && (immutable(&url) || [".att", ".sbom"].iter().any(|s| url.path().ends_with(s)))
+            {
+                self.0
+                    .cache
+                    .http_put(
+                        &key,
+                        &HttpEntry {
+                            status: 404,
+                            etag: None,
+                            last_modified: None,
+                            headers: BTreeMap::new(),
+                            body: Vec::new(),
+                            fetched_at: now,
+                            expires_at: Some(now.saturating_add(MISSING_SECS)),
+                            cache_control: None,
+                        },
+                    )
+                    .await?;
+            }
             return Err(Error::Status(response.status.as_u16()));
         }
         if !not_modified && let Some((_, derive)) = derived {
@@ -749,16 +799,22 @@ impl Cached {
                 .map(str::to_owned)
         };
         let control = text("cache-control");
-        let uncacheable = control.as_ref().is_some_and(|c| {
-            c.split(',')
-                .any(|v| v.trim().eq_ignore_ascii_case("no-store"))
-        }) || text("vary").is_some_and(|v| {
-            v.split(',').any(|n| {
-                !["accept", "accept-encoding", "user-agent"]
-                    .iter()
-                    .any(|known| n.trim().eq_ignore_ascii_case(known))
-            })
-        });
+        // Bytes addressed by their digest are the same for everyone, so a
+        // registry's no-store or Vary cannot make them private. Those read with
+        // an account's token may be private, and the cache key omits the token,
+        // so they are stored only as the registry allows.
+        let account = registry.flatten().is_some_and(|bearer| bearer.account);
+        let uncacheable = !(registry.is_some() && immutable(&url) && !account)
+            && (control.as_ref().is_some_and(|c| {
+                c.split(',')
+                    .any(|v| v.trim().eq_ignore_ascii_case("no-store"))
+            }) || text("vary").is_some_and(|v| {
+                v.split(',').any(|n| {
+                    !["accept", "accept-encoding", "user-agent"]
+                        .iter()
+                        .any(|known| n.trim().eq_ignore_ascii_case(known))
+                })
+            }));
         if uncacheable {
             self.0.cache.http_remove(&key).await?;
         } else {
@@ -1272,5 +1328,71 @@ mod tests {
         })
         .await
         .expect("another host must start while the first is blocked");
+    }
+    const BLOB: &str = "https://ghcr.io/v2/example/image/blobs/sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    struct NoStore;
+    impl Transport for NoStore {
+        fn send(&self, _: Request) -> crate::Exchange<'_> {
+            Box::pin(async {
+                Ok(Response {
+                    status: StatusCode::OK,
+                    headers: header::HeaderMap::from_iter([(
+                        header::CACHE_CONTROL,
+                        HeaderValue::from_static("no-store"),
+                    )]),
+                    body: b"blob".to_vec(),
+                })
+            })
+        }
+    }
+    #[tokio::test]
+    async fn a_digest_is_cached_despite_no_store_unless_an_account_read_it() {
+        for (account, stored) in [(false, true), (true, false)] {
+            let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+            let client =
+                Cached::with_options(cache.clone(), Arc::new(NoStore), Default::default()).unwrap();
+            let bearer = Bearer {
+                token: "t",
+                account,
+            };
+            client
+                .registry_get(BLOB, "text/plain", Some(bearer))
+                .await
+                .unwrap();
+            assert_eq!(
+                cache.http_get(&key(BLOB)).await.unwrap().is_some(),
+                stored,
+                "account: {account}"
+            );
+        }
+    }
+    #[tokio::test]
+    async fn a_missing_digest_is_asked_about_again_once_its_day_is_up() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        cache
+            .http_put(
+                &key(BLOB),
+                &HttpEntry {
+                    status: 404,
+                    body: Vec::new(),
+                    headers: BTreeMap::new(),
+                    etag: None,
+                    last_modified: None,
+                    fetched_at: now - 2 * 24 * 3600,
+                    expires_at: Some(now - 24 * 3600),
+                    cache_control: None,
+                },
+            )
+            .await
+            .unwrap();
+        let transport = Arc::new(Count(std::sync::atomic::AtomicUsize::new(0)));
+        let client = Cached::with_options(cache, transport.clone(), Default::default()).unwrap();
+        let response = client.registry_get(BLOB, "text/plain", None).await.unwrap();
+        assert_eq!(response.body, b"new");
+        assert_eq!(transport.0.load(Ordering::Relaxed), 1);
     }
 }

@@ -1253,3 +1253,61 @@ fn apm_short_tags_are_fixed_tags_not_floating_aliases() {
     let minor = proposals.iter().find(|p| p.update_type == "minor").unwrap();
     assert_eq!(minor.new_value.as_deref(), Some("v1.1"));
 }
+
+fn image(digest: &str) -> Dependency {
+    Dependency {
+        manager: Manager::Dockerfile,
+        kind: DependencyKind::ContainerImage,
+        file: "Dockerfile".into(),
+        name: "ghcr.io/acme/app".into(),
+        package: "ghcr.io/acme/app".into(),
+        current: "1.0".into(),
+        resolved: None,
+        digest: Some(digest.into()),
+        source: Source::Docker,
+        scheme: Scheme::Loose,
+        ..dependency("unused")
+    }
+}
+
+#[test]
+fn an_image_rebuild_is_secured_only_as_security_apply_allows() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("patchula.pkl");
+    let secured = |overrides: &str, tag: Option<&str>| {
+        std::fs::write(
+            &path,
+            format!("amends \"PatchulaConfig.pkl\"\nsecurity {{ apply {{ {overrides} }} }}\n"),
+        )
+        .unwrap();
+        let eval = Evaluator::new(&patchula_config::load(&path).unwrap()).unwrap();
+        let dep = image(&format!("sha256:{}", "a".repeat(64)));
+        let mut update = eval
+            .digest_proposal(&dep, &format!("sha256:{}", "b".repeat(64)))
+            .unwrap();
+        if let Some(tag) = tag {
+            update.update_type = "minor".into();
+            update.new_version = Some(tag.into());
+        }
+        let applied = eval.secure(&dep, &mut update);
+        // A refused rebuild keeps the policy it had.
+        assert_eq!(
+            update.policy.as_ref().unwrap().wait_hours == 0,
+            applied && overrides.contains("waitHours")
+        );
+        applied
+    };
+    assert!(secured("waitHours = 0", None));
+    assert!(!secured("waitHours = 0; active = false", None));
+    assert!(!secured("waitHours = 0; digest = false", None));
+    // `permitted` filters the tag a rebuild moves to, not a same-tag rebuild.
+    assert!(secured("waitHours = 0; permitted = \"semver:<2\"", None));
+    assert!(secured(
+        "waitHours = 0; permitted = \"semver:<2\"",
+        Some("1.5.0")
+    ));
+    assert!(!secured(
+        "waitHours = 0; permitted = \"semver:<2\"",
+        Some("3.0.0")
+    ));
+}

@@ -14,15 +14,21 @@ closes the issue; turning it on again opens a new one.
 
 In order:
 
-1. open update PRs, grouped by update type, then the ones he merged;
-2. pending updates, each with the reason it is held (release age with the time
+1. known vulnerabilities, each with the update that fixes it, or the reason no
+   update is proposed (see [security advisories](/guide/security/));
+2. images the Count can't vouch for: pinned images whose SBOM can't show what
+   a rebuild fixes, with the reason, and the ones you silenced with
+   `security.quietImages` collapsed under "Silenced" (see
+   [container image rebuilds](/guide/security/#container-image-rebuilds));
+3. open update PRs, grouped by update type, then the ones he merged;
+4. pending updates, each with the reason it is held (release age with the time
    it becomes eligible, PR limits, schedule windows);
-3. template updates, which have no PR or checkbox
+5. template updates, which have no PR or checkbox
    ([Copier](/guide/managers/#copier));
-4. updates you closed ("Updates you closed"), with the target that was
+6. updates you closed ("Updates you closed"), with the target that was
    suppressed, and updates "Batched by the Count";
-5. lookup warnings and sources served from stale cache;
-6. every detected dependency, collapsed by manager and file.
+7. lookup warnings and sources served from stale cache;
+8. every detected dependency, collapsed by manager and file.
 
 The issue body is bounded to GitHub's size limit. An unchanged dashboard is not
 rewritten: the Count compares the rendered content with the issue's actual

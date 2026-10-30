@@ -243,6 +243,10 @@ fn invalid_values_have_actionable_diagnostics() {
             "missing capture",
         ),
         (
+            "security { imagePlatforms = new Listing {} }",
+            "at least one platform",
+        ),
+        (
             "defaults { windows = new Listing { new Window { cron = new Listing { \"nonsense\" } } } }",
             "five-field cron",
         ),

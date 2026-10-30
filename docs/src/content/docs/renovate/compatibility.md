@@ -161,6 +161,7 @@ Renovate's other schemes, including `regex` versioning, `node`, `debian`,
 | `fetchChangeLogs` | `releaseNotes` |
 | `customManagers` (regex) | `extractors` |
 | `vulnerabilityAlerts`, `osvVulnerabilityAlerts` | OSV.dev [advisories](/guide/security/), on by default |
+| none, for OS packages in images | [image rebuild advisories](/guide/security/#container-image-rebuilds): a new digest is compared with the old through their SBOMs and OSV.dev |
 | JSONata managers, custom datasources | none |
 | `hostRules`, private registries | none; tool environments are scrubbed |
 | `postUpgradeTasks` | none, on purpose |

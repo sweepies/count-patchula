@@ -67,9 +67,17 @@ impl Redactor {
         static URLS: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
         let urls =
             URLS.get_or_init(|| Regex::new(r#"https?://[^\s<>\"\\]+"#).expect("static URL regex"));
+        // A URL with nothing to redact keeps its bytes, so a body checked
+        // against its digest still matches it.
         let text = urls.replace_all(text, |captures: &regex::Captures<'_>| {
             Url::parse(&captures[0])
-                .map(|url| self.url(&url))
+                .map(|url| {
+                    if self.keeps(&url) {
+                        captures[0].to_owned()
+                    } else {
+                        self.url(&url)
+                    }
+                })
                 .unwrap_or_else(|_| MARKER.into())
         });
         self.pattern_text(&text)
@@ -102,6 +110,18 @@ impl Redactor {
         } else {
             self.text(value)
         }
+    }
+
+    /// Whether `url` has nothing to redact, whatever its serialization.
+    fn keeps(&self, url: &Url) -> bool {
+        let path = percent_encoding::percent_decode_str(url.path()).decode_utf8_lossy();
+        url.username().is_empty()
+            && url.password().is_none()
+            && url.fragment().is_none()
+            && self.pattern_text(&path) == path
+            && url
+                .query_pairs()
+                .all(|(name, value)| self.field(&name, &value) == value)
     }
 
     pub fn url(&self, url: &Url) -> String {

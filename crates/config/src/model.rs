@@ -146,6 +146,9 @@ pub struct Security {
     pub label: String,
     pub apply: Overrides,
     pub lowest_fix: bool,
+    pub images: bool,
+    pub image_platforms: Vec<String>,
+    pub quiet_images: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

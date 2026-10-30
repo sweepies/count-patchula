@@ -4,13 +4,13 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("invalid report JSON: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("unsupported report schemaVersion {0}; expected 2")]
+    #[error("unsupported report schemaVersion {0}; expected 3")]
     Version(u32),
     #[error("invalid report: {0}")]
     Invalid(String),
@@ -265,6 +265,10 @@ pub struct DependencyMetadata {
     /// Published advisories that affect the current version.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub advisories: Vec<Advisory>,
+    /// The current image digest's warning state, when its SBOM can't show
+    /// what a rebuild fixes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<ImageCheck>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -385,6 +389,70 @@ pub struct Update {
     /// IDs of the current version's advisories that the target no longer has.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fixes: Vec<String>,
+    /// The comparison of a pinned image's old and new SBOMs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<ImageCheck>,
+}
+
+/// What the Count found comparing the OS packages in two image digests.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImageCheck {
+    /// checked, partial-sources, no-os-packages, no-sbom, sbom-without-os,
+    /// previous-unavailable, os-not-covered or unreadable.
+    pub state: String,
+    /// Platforms compared, where both digests have them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub platforms: Vec<String>,
+    /// The SBOM read for each digest.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sboms: Vec<ImageSbom>,
+    /// The OS as the new SBOM names it, such as "debian 12".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<String>,
+    /// OS packages the new SBOM lists.
+    #[serde(default)]
+    pub packages: usize,
+    /// Advisories the new digest no longer has.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fixed: Vec<ImageAdvisory>,
+    /// Advisories the new digest has and the old one did not, most severe
+    /// first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub introduced: Vec<String>,
+    /// OSV.dev's records for the most severe of `introduced`, at most five.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub introduced_details: Vec<Advisory>,
+    /// What made the comparison fail, for unreadable, or the SBOM's
+    /// generator, for sbom-without-os.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// Why a warning is left off PRs, from `security.quietImages`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub silenced: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImageSbom {
+    pub digest: String,
+    /// attestation, cosign-att or cosign-sbom.
+    pub source: String,
+    pub generator: String,
+}
+
+/// One advisory a rebuild fixes, with the source package that carried it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImageAdvisory {
+    pub id: String,
+    /// The source package as OSV names it, such as "openssl".
+    pub package: String,
+    pub old: String,
+    /// None when the new image no longer has the package.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new: Option<String>,
+    pub platforms: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -642,22 +710,25 @@ mod tests {
     #[test]
     fn reject_future_schema_before_interpreting_payload() {
         assert!(matches!(
-            Report::from_json(br#"{"schemaVersion":3,"future":true}"#),
-            Err(Error::Version(3))
+            Report::from_json(br#"{"schemaVersion":4,"future":true}"#),
+            Err(Error::Version(4))
         ));
         assert!(
-            Report::from_json(br#"{"schemaVersion":2,"repositories":[],"typo":true}"#).is_err()
+            Report::from_json(br#"{"schemaVersion":3,"repositories":[],"typo":true}"#).is_err()
         );
-        assert!(matches!(
-            Report::from_json(br#"{"schemaVersion":1,"repositories":[]}"#),
-            Err(Error::Version(1))
-        ));
+        for old in [1, 2] {
+            let report = format!(r#"{{"schemaVersion":{old},"repositories":[]}}"#);
+            assert!(matches!(
+                Report::from_json(report.as_bytes()),
+                Err(Error::Version(version)) if version == old
+            ));
+        }
     }
 
     #[test]
     fn action_versions_and_dry_run_states_are_validated() {
         let mut value = serde_json::json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "repositories": [{"repository":"demo/app","status":"complete","reason":null,"packageFiles":[]}],
             "actions": {"schemaVersion":1,"dryRun":true,"branches":[{
                 "repository":"demo/app","branch":"patchula/example","baseCommit":"base",

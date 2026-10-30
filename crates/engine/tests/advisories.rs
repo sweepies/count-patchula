@@ -333,3 +333,504 @@ async fn a_vulnerable_lockfile_only_crate_is_reported_with_its_fix() {
     );
     replay.assert_finished().unwrap();
 }
+
+/// One simulated image digest for one architecture: its index, its BuildKit
+/// attestation and SBOM.
+fn simulated_image(
+    repository: &str,
+    architecture: &str,
+    sources: &[(&str, &str)],
+    annotations: serde_json::Value,
+) -> (String, Vec<patchula_testkit::Interaction>) {
+    use patchula_testkit::{Body, Interaction, RecordedRequest, RecordedResponse};
+    let sha = |text: &str| {
+        use sha2::Digest as _;
+        let hex: String = sha2::Sha256::digest(text.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        format!("sha256:{hex}")
+    };
+    let packages: Vec<_> = sources
+        .iter()
+        .map(|(name, version)| {
+            serde_json::json!({"name": name, "externalRefs": [{"referenceType": "purl",
+                "referenceLocator": format!("pkg:deb/debian/{name}@{version}?os_name=debian&os_version=12")}]})
+        })
+        .collect();
+    let spdx = serde_json::json!({
+        "_type": "https://in-toto.io/Statement/v0.1",
+        "predicateType": "https://spdx.dev/Document",
+        "subject": [],
+        "predicate": {"spdxVersion": "SPDX-2.3",
+            "creationInfo": {"creators": ["Organization: Docker, Inc", "Tool: docker-scout-1.18.1"]},
+            "packages": packages}
+    })
+    .to_string();
+    let child = sha(&format!("{repository}{spdx}"));
+    let attestation = format!(
+        r#"{{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","layers":[{{"mediaType":"application/vnd.in-toto+json","digest":"{}","size":{},"annotations":{{"in-toto.io/predicate-type":"https://spdx.dev/Document"}}}}]}}"#,
+        sha(&spdx),
+        spdx.len()
+    );
+    let index = serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "annotations": annotations,
+        "manifests": [
+            {"digest": child, "platform": {"os": "linux", "architecture": architecture}},
+            {"digest": sha(&attestation), "platform": {"os": "unknown", "architecture": "unknown"},
+             "annotations": {"vnd.docker.reference.type": "attestation-manifest", "vnd.docker.reference.digest": child}}
+        ]
+    })
+    .to_string();
+    let digest = sha(&index);
+    const MANIFEST: &str = "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json";
+    let get = |path: String, accept: &str, body: &str| Interaction {
+        request: RecordedRequest {
+            method: "GET".into(),
+            url: format!("https://ghcr.io/v2/{repository}/{path}"),
+            headers: BTreeMap::from([("accept".into(), vec![accept.into()])]),
+            body: Body::Text(String::new()),
+        },
+        response: RecordedResponse {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: Body::Text(body.into()),
+        },
+    };
+    let interactions = vec![
+        get(format!("manifests/{digest}"), MANIFEST, &index),
+        get(
+            format!("manifests/{}", sha(&attestation)),
+            MANIFEST,
+            &attestation,
+        ),
+        get(format!("blobs/{}", sha(&spdx)), "*/*", &spdx),
+    ];
+    (digest, interactions)
+}
+
+/// Only OSV can mark an image rebuild as a security update. A rebuild whose
+/// image metadata claims a security fix, with no OSV match, gets no label and
+/// no fixes; its twin with an OSV match gets both, under `security.apply`.
+/// The twin is built for arm64 alone, so under the default platforms it is
+/// compared on the first platform its index lists.
+#[tokio::test]
+async fn only_an_osv_match_marks_an_image_rebuild_as_a_security_fix() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("spec.json");
+    let claim = serde_json::json!({
+        "org.opencontainers.image.description": "Critical security fix",
+        "org.opencontainers.image.title": "security release"
+    });
+    let none = serde_json::json!({});
+    let (fixed_old, mut images) =
+        simulated_image("spec/fixed", "arm64", &[("openssl", "1")], none.clone());
+    let (fixed_new, more) =
+        simulated_image("spec/fixed", "arm64", &[("openssl", "2")], none.clone());
+    images.extend(more);
+    let (claims_old, more) = simulated_image("spec/claims", "amd64", &[("zlib", "1")], none);
+    images.extend(more);
+    let (claims_new, more) = simulated_image("spec/claims", "amd64", &[("zlib", "2")], claim);
+    images.extend(more);
+    let dockerfile = format!(
+        "FROM ghcr.io/spec/fixed:1.0@{fixed_old}\nFROM ghcr.io/spec/claims:1.0@{claims_old}\n"
+    );
+    let config = "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"dockerfile\" }\n";
+    let mut interactions = vec![exchange(
+        "POST",
+        "https://api.github.com/graphql",
+        &[GITHUB[0], GITHUB[1], ("content-type", "application/json")],
+        Body::Json(
+            json!({"query":patchula_engine::REPOSITORY_HEAD_QUERY,"variables":{"owner":"demo","name":"app"}}),
+        ),
+        200,
+        json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"oid":"head","tree":{"oid":"tree"}}}}}}),
+        None,
+    )];
+    interactions.push(github(
+        "repos/demo/app/git/trees/tree?recursive=1",
+        json!({"truncated":false,"tree":[
+            {"path":"patchula.pkl","type":"blob","sha":"config"},
+            {"path":"Dockerfile","type":"blob","sha":"dockerfile"}
+        ]}),
+        200,
+        "tree",
+        false,
+    ));
+    for (sha, text) in [("config", config), ("dockerfile", dockerfile.as_str())] {
+        interactions.push(github(
+            &format!("repos/demo/app/git/blobs/{sha}"),
+            json!({"encoding":"base64","content":STANDARD.encode(text)}),
+            200,
+            sha,
+            false,
+        ));
+    }
+    for (repository, new) in [("spec/fixed", &fixed_new), ("spec/claims", &claims_new)] {
+        interactions.push(exchange(
+            "GET",
+            &format!("https://ghcr.io/v2/{repository}/tags/list?n=1000"),
+            &[("accept", "application/json")],
+            Body::Text(String::new()),
+            200,
+            json!({"tags":["1.0"]}),
+            None,
+        ));
+        let mut head = exchange(
+            "HEAD",
+            &format!("https://ghcr.io/v2/{repository}/manifests/1.0"),
+            &[(
+                "accept",
+                "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json",
+            )],
+            Body::Text(String::new()),
+            200,
+            Value::Null,
+            None,
+        );
+        head.response.body = Body::Text(String::new());
+        head.response
+            .headers
+            .insert("docker-content-digest".into(), vec![new.to_string()]);
+        interactions.push(head);
+    }
+    interactions.extend(images);
+    let query = |name: &str, version: &str| json!({"package":{"ecosystem":"Debian:12","name":name},"version":version});
+    interactions.push(exchange(
+        "POST",
+        "https://api.osv.dev/v1/querybatch",
+        &[("accept", "application/json"), ("content-type", "application/json")],
+        Body::Json(json!({"queries":[
+            query("openssl", "1"), query("openssl", "2"), query("zlib", "1"), query("zlib", "2")
+        ]})),
+        200,
+        json!({"results":[{"vulns":[{"id":"DSA-5999-1","modified":"2026-10-01T00:00:00Z"}]},{},{},{}]}),
+        None,
+    ));
+    interactions.push(osv_record(
+        "DSA-5999-1",
+        json!({
+            "id":"DSA-5999-1","modified":"2026-10-01T00:00:00Z","summary":"openssl security update",
+            "aliases":["CVE-2026-0001"],
+            "affected":[{"package":{"ecosystem":"Debian:12","name":"openssl"},
+                "ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"0"},{"fixed":"2"}]}]}]
+        }),
+    ));
+    let cassette = Cassette {
+        schema_version: 1,
+        provenance: "Simulated from the GitHub, OCI distribution and OSV.dev API documentation"
+            .into(),
+        interactions,
+    };
+    patchula_testkit::save(&path, &cassette, &Default::default()).unwrap();
+    let replay = Arc::new(Replay::open(&path, Default::default()).unwrap());
+    let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
+        .await
+        .unwrap();
+    let engine = Engine::with_transport("offline", cache, 4, replay.clone())
+        .unwrap()
+        .with_versions_host(false)
+        .with_advisories();
+    let report = engine
+        .lookup_at(
+            Options {
+                repositories: vec!["demo/app".into()],
+                ..Options::default()
+            },
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    let repo = &report.repositories[0];
+    assert!(repo.warnings.is_empty(), "{:?}", repo.warnings);
+    assert!(
+        repo.lookup_failures.is_empty(),
+        "{:?}",
+        repo.lookup_failures
+    );
+    let deps = &repo.package_files[0].dependencies;
+    let dep = |package: &str| deps.iter().find(|d| d.package == package).unwrap();
+    let fixed = dep("ghcr.io/spec/fixed");
+    let update = &fixed.updates[0];
+    assert_eq!(update.new_digest.as_deref(), Some(fixed_new.as_str()));
+    assert_eq!(update.fixes, ["DSA-5999-1"]);
+    let policy = update.policy.as_ref().unwrap();
+    assert!(policy.labels.contains(&"security".to_owned()));
+    assert_eq!(policy.wait_hours, 0);
+    let check = update.image.as_ref().unwrap();
+    assert_eq!(check.state, "checked");
+    assert_eq!(check.platforms, ["linux/arm64"]);
+    assert_eq!(check.fixed[0].package, "openssl");
+    assert_eq!(check.fixed[0].new.as_deref(), Some("2"));
+    let advisories = &fixed.metadata.as_ref().unwrap().advisories;
+    assert_eq!(advisories.len(), 1);
+    assert_eq!(advisories[0].aliases, ["CVE-2026-0001"]);
+    let claims = dep("ghcr.io/spec/claims");
+    let update = &claims.updates[0];
+    assert_eq!(update.new_digest.as_deref(), Some(claims_new.as_str()));
+    assert!(update.fixes.is_empty());
+    assert!(
+        !update
+            .policy
+            .as_ref()
+            .unwrap()
+            .labels
+            .contains(&"security".to_owned())
+    );
+    let check = update.image.as_ref().unwrap();
+    assert_eq!(check.state, "checked");
+    assert_eq!(check.platforms, ["linux/amd64"]);
+    assert!(claims.metadata.as_ref().unwrap().advisories.is_empty());
+    replay.assert_finished().unwrap();
+}
+
+/// One image rebuild that leaves eight advisories behind and brings in seven.
+/// Only the records in `read` are served, and those in `withdrawn` are
+/// withdrawn; every one must be read, and nothing else.
+async fn rebuild_with_many_advisories(
+    withdrawn: &[&str],
+    read: &[&str],
+) -> patchula_report::Dependency {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("spec.json");
+    let none = serde_json::json!({});
+    let (old, mut images) =
+        simulated_image("spec/many", "amd64", &[("openssl", "1")], none.clone());
+    let (new, more) = simulated_image("spec/many", "amd64", &[("openssl", "2")], none);
+    images.extend(more);
+    let dockerfile = format!("FROM ghcr.io/spec/many:1.0@{old}\n");
+    let config = "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"dockerfile\" }\nsecurity { imagePlatforms = new Listing { \"linux/amd64\" } }\n";
+    let mut interactions = vec![exchange(
+        "POST",
+        "https://api.github.com/graphql",
+        &[GITHUB[0], GITHUB[1], ("content-type", "application/json")],
+        Body::Json(
+            json!({"query":patchula_engine::REPOSITORY_HEAD_QUERY,"variables":{"owner":"demo","name":"app"}}),
+        ),
+        200,
+        json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"oid":"head","tree":{"oid":"tree"}}}}}}),
+        None,
+    )];
+    interactions.push(github(
+        "repos/demo/app/git/trees/tree?recursive=1",
+        json!({"truncated":false,"tree":[
+            {"path":"patchula.pkl","type":"blob","sha":"config"},
+            {"path":"Dockerfile","type":"blob","sha":"dockerfile"}
+        ]}),
+        200,
+        "tree",
+        false,
+    ));
+    for (sha, text) in [("config", config), ("dockerfile", dockerfile.as_str())] {
+        interactions.push(github(
+            &format!("repos/demo/app/git/blobs/{sha}"),
+            json!({"encoding":"base64","content":STANDARD.encode(text)}),
+            200,
+            sha,
+            false,
+        ));
+    }
+    interactions.push(exchange(
+        "GET",
+        "https://ghcr.io/v2/spec/many/tags/list?n=1000",
+        &[("accept", "application/json")],
+        Body::Text(String::new()),
+        200,
+        json!({"tags":["1.0"]}),
+        None,
+    ));
+    let mut head = exchange(
+        "HEAD",
+        "https://ghcr.io/v2/spec/many/manifests/1.0",
+        &[(
+            "accept",
+            "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json",
+        )],
+        Body::Text(String::new()),
+        200,
+        Value::Null,
+        None,
+    );
+    head.response.body = Body::Text(String::new());
+    head.response
+        .headers
+        .insert("docker-content-digest".into(), vec![new.to_string()]);
+    interactions.push(head);
+    interactions.extend(images);
+    let fixed: Vec<String> = std::iter::once("DSA-6000-1".to_owned())
+        .chain((1..=7).map(|n| format!("DEBIAN-CVE-2025-{n}")))
+        .collect();
+    let introduced: Vec<String> = (1..=7).map(|n| format!("DEBIAN-CVE-2026-{n}")).collect();
+    let listed = |ids: &[String]| -> Vec<Value> {
+        ids.iter()
+            .map(|id| json!({"id":id,"modified":"2026-10-01T00:00:00Z"}))
+            .collect()
+    };
+    let query = |version: &str| json!({"package":{"ecosystem":"Debian:12","name":"openssl"},"version":version});
+    interactions.push(exchange(
+        "POST",
+        "https://api.osv.dev/v1/querybatch",
+        &[
+            ("accept", "application/json"),
+            ("content-type", "application/json"),
+        ],
+        Body::Json(json!({"queries":[query("1"), query("2")]})),
+        200,
+        json!({"results":[{"vulns":listed(&fixed)},{"vulns":listed(&introduced)}]}),
+        None,
+    ));
+    for id in read {
+        let mut record = json!({"id":id,"modified":"2026-10-01T00:00:00Z","summary":format!("{id} summary"),
+            "affected":[{"package":{"ecosystem":"Debian:12","name":"openssl"}}]});
+        if withdrawn.contains(id) {
+            record["withdrawn"] = json!("2026-10-02T00:00:00Z");
+        }
+        interactions.push(osv_record(id, record));
+    }
+    let cassette = Cassette {
+        schema_version: 1,
+        provenance: "Simulated from the GitHub, OCI distribution and OSV.dev API documentation"
+            .into(),
+        interactions,
+    };
+    patchula_testkit::save(&path, &cassette, &Default::default()).unwrap();
+    let replay = Arc::new(Replay::open(&path, Default::default()).unwrap());
+    let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
+        .await
+        .unwrap();
+    let engine = Engine::with_transport("offline", cache, 4, replay.clone())
+        .unwrap()
+        .with_versions_host(false)
+        .with_advisories();
+    let report = engine
+        .lookup_at(
+            Options {
+                repositories: vec!["demo/app".into()],
+                ..Options::default()
+            },
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    replay.assert_finished().unwrap();
+    report.repositories[0].package_files[0].dependencies[0].clone()
+}
+
+const INTRODUCED_READ: [&str; 5] = [
+    "DEBIAN-CVE-2026-7",
+    "DEBIAN-CVE-2026-6",
+    "DEBIAN-CVE-2026-5",
+    "DEBIAN-CVE-2026-4",
+    "DEBIAN-CVE-2026-3",
+];
+
+/// Which advisories a rebuild leaves behind comes from OSV's batch answer; only
+/// the five most severe it fixes, and the five most severe it brings in, are
+/// read in full, and a withdrawn record takes its ID out.
+#[tokio::test]
+async fn an_image_rebuild_reads_only_the_most_severe_records() {
+    let read: Vec<&str> = [
+        "DSA-6000-1",
+        "DEBIAN-CVE-2025-7",
+        "DEBIAN-CVE-2025-6",
+        "DEBIAN-CVE-2025-5",
+        "DEBIAN-CVE-2025-4",
+    ]
+    .into_iter()
+    .chain(INTRODUCED_READ)
+    .collect();
+    let dep = rebuild_with_many_advisories(&["DEBIAN-CVE-2025-4"], &read).await;
+    let update = &dep.updates[0];
+    assert_eq!(update.fixes.len(), 7, "{:?}", update.fixes);
+    assert!(!update.fixes.contains(&"DEBIAN-CVE-2025-4".to_owned()));
+    let check = update.image.as_ref().unwrap();
+    assert_eq!(check.fixed.len(), 7);
+    let shown: Vec<_> = dep
+        .metadata
+        .as_ref()
+        .unwrap()
+        .advisories
+        .iter()
+        .map(|a| a.id.as_str())
+        .collect();
+    assert_eq!(shown.len(), 4, "{shown:?}");
+    assert!(shown.iter().all(|id| read.contains(id)), "{shown:?}");
+    assert_eq!(
+        check.introduced[..2],
+        ["DEBIAN-CVE-2026-7", "DEBIAN-CVE-2026-6"]
+    );
+    assert_eq!(check.introduced.len(), 7);
+    assert_eq!(check.introduced_details.len(), 5);
+}
+
+/// When every fix read is withdrawn, the next are read in rank order until
+/// one isn't.
+#[tokio::test]
+async fn withdrawn_fixes_make_the_count_read_on_until_one_holds() {
+    let first = [
+        "DSA-6000-1",
+        "DEBIAN-CVE-2025-7",
+        "DEBIAN-CVE-2025-6",
+        "DEBIAN-CVE-2025-5",
+        "DEBIAN-CVE-2025-4",
+    ];
+    let read: Vec<&str> = first
+        .into_iter()
+        .chain([
+            "DEBIAN-CVE-2025-3",
+            "DEBIAN-CVE-2025-2",
+            "DEBIAN-CVE-2025-1",
+        ])
+        .chain(INTRODUCED_READ)
+        .collect();
+    let dep = rebuild_with_many_advisories(&first, &read).await;
+    let update = &dep.updates[0];
+    assert_eq!(
+        update.fixes,
+        [
+            "DEBIAN-CVE-2025-1",
+            "DEBIAN-CVE-2025-2",
+            "DEBIAN-CVE-2025-3"
+        ]
+    );
+    assert!(
+        update
+            .policy
+            .as_ref()
+            .unwrap()
+            .labels
+            .contains(&"security".to_owned())
+    );
+    assert_eq!(dep.metadata.as_ref().unwrap().advisories.len(), 3);
+}
+
+/// A rebuild whose every fix turns out withdrawn is no security fix.
+#[tokio::test]
+async fn a_rebuild_whose_fixes_are_all_withdrawn_is_no_security_fix() {
+    let fixes = [
+        "DSA-6000-1",
+        "DEBIAN-CVE-2025-7",
+        "DEBIAN-CVE-2025-6",
+        "DEBIAN-CVE-2025-5",
+        "DEBIAN-CVE-2025-4",
+        "DEBIAN-CVE-2025-3",
+        "DEBIAN-CVE-2025-2",
+        "DEBIAN-CVE-2025-1",
+    ];
+    let read: Vec<&str> = fixes.into_iter().chain(INTRODUCED_READ).collect();
+    let dep = rebuild_with_many_advisories(&fixes, &read).await;
+    let update = &dep.updates[0];
+    assert!(update.fixes.is_empty(), "{:?}", update.fixes);
+    assert!(
+        !update
+            .policy
+            .as_ref()
+            .unwrap()
+            .labels
+            .contains(&"security".to_owned())
+    );
+    assert!(update.image.as_ref().unwrap().fixed.is_empty());
+    assert!(dep.metadata.as_ref().unwrap().advisories.is_empty());
+}
