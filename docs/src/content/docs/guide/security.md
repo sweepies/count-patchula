@@ -36,8 +36,8 @@ the report says why in a warning.
 ## Lockfile-only packages
 
 Most vulnerable code arrives through dependencies of dependencies, which only
-a lockfile records. The Count checks every registry package in `Cargo.lock`
-and `package-lock.json` too. A lockfile-only package that turns out to be
+a lockfile records. The Count checks every registry package in `Cargo.lock`,
+`package-lock.json` and `aube-lock.yaml` too. A lockfile-only package that turns out to be
 vulnerable shows up in the report, the dashboard and the TUI as a dependency of
 kind `transitive` on its lockfile. Packages without a known vulnerability stay
 out of the report.

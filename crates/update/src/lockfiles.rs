@@ -1051,13 +1051,18 @@ fn validate_targets(
                 change.package, change.file
             ));
         };
-        // pnpm and Yarn locks are not read back, so the unchanged-lockfile rule
+        // pnpm and Yarn locks are not read back (aube-lock.yaml is), so the unchanged-lockfile rule
         // checks them instead. Every lock this runner reads must prove the target.
         let unread = matches!(dep.manager, Manager::Npm | Manager::Bun)
             && nearest(&change.file, &paths, &node::LOCKS).is_some_and(|dir| {
-                !["package-lock.json", "npm-shrinkwrap.json", "bun.lock"]
-                    .iter()
-                    .any(|leaf| paths.contains(&node::join(dir, leaf)))
+                ![
+                    "package-lock.json",
+                    "npm-shrinkwrap.json",
+                    "bun.lock",
+                    "aube-lock.yaml",
+                ]
+                .iter()
+                .any(|leaf| paths.contains(&node::join(dir, leaf)))
             });
         if !unread
             && (matches!(

@@ -42,8 +42,9 @@ Lifecycle scripts never run. A lockfile that does not change after an edit that
 changed recorded dependencies fails the branch, so a tool that says "up to date"
 without re-resolving cannot publish a stale lock. An edit that cannot affect the
 lock, such as a description, is not a failure. Where the Count can read the
-lock back (npm, Bun, Cargo, uv, Poetry, Bundler, Composer, Terraform
-providers), the requested version must be the one the new lock records.
+lock back (npm, `aube-lock.yaml`, Bun, Cargo, uv, Poetry, Bundler, Composer,
+Terraform providers), the requested version must be the one the new lock
+records. `pnpm-lock.yaml` and `yarn.lock` are not read back.
 
 :::caution[Not supported]
 Binary `bun.lockb` is not supported, and neither is regenerating `Chart.lock`,

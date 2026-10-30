@@ -1874,8 +1874,9 @@ fn npm_change(value: &str) -> crate::plan::Change {
     }
 }
 
-/// A lock the runner reads back must prove the target; only pnpm and Yarn locks,
-/// which it cannot read, defer to the unchanged-lockfile rule.
+/// A lock the runner reads back must prove the target, aube-lock.yaml included;
+/// only pnpm and Yarn locks, which it cannot read, defer to the
+/// unchanged-lockfile rule.
 #[test]
 fn readable_locks_must_resolve_the_requested_version() {
     let config = config();
@@ -1899,6 +1900,24 @@ fn readable_locks_must_resolve_the_requested_version() {
         ]);
         validate_targets(&p, &config, &files).unwrap_or_else(|e| panic!("{lock}: {e}"));
     }
+    // aube-lock.yaml is read back: the version aube locked has to be the target.
+    let aube = |version: &str| {
+        BTreeMap::from([
+            ("package.json".to_string(), manifest.to_string()),
+            (
+                "aube-lock.yaml".to_string(),
+                format!(
+                    "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      fixture:\n        specifier: 2.0.0\n        version: {version}\n"
+                ),
+            ),
+        ])
+    };
+    validate_targets(&p, &config, &aube("2.0.0")).unwrap();
+    let error = validate_targets(&p, &config, &aube("1.0.0")).unwrap_err();
+    assert!(
+        error.contains("did not resolve fixture to requested version 2.0.0"),
+        "{error}"
+    );
 }
 
 /// aube cannot read npm v1 locks; every newer lock stays with aube, including
