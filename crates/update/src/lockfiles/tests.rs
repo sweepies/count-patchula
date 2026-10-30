@@ -1446,6 +1446,9 @@ impl Executor for MiseFixture {
             if self.fault != "stale" {
                 lock = lock.replace("22.0.0", "24.0.0");
             }
+            if self.fault == "specifiers" {
+                lock = lock.replace("specifiers = [\"24.0.0\"]", "specifiers = [\"latest\"]");
+            }
             if self.fault == "unrelated" {
                 lock = lock.replace("1.4.3", "1.4.4");
             }
@@ -1465,7 +1468,14 @@ impl Executor for MiseFixture {
 #[tokio::test]
 async fn mise_lock_is_targeted_scrubbed_and_committed_with_each_supported_manifest() {
     for manifest in ["mise.toml", ".mise.toml", ".tool-versions"] {
-        for fault in ["", "unrelated", "platform", "stale", "failure"] {
+        for fault in [
+            "",
+            "unrelated",
+            "platform",
+            "stale",
+            "specifiers",
+            "failure",
+        ] {
             let old = if manifest.ends_with(".tool-versions") {
                 "node 22.0.0\nbun 1.4.3\n"
             } else {

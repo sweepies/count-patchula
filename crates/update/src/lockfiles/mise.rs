@@ -75,6 +75,21 @@ fn platforms(entries: &Value) -> BTreeSet<String> {
         .collect()
 }
 
+/// The version requests a tool declaration makes, which mise records as the
+/// `specifiers` of the lock entries it resolves.
+fn requests(spec: &toml_edit::Item) -> Vec<String> {
+    if let Some(request) = spec.as_str() {
+        vec![request.into()]
+    } else if let Some(requests) = spec.as_array() {
+        requests
+            .iter()
+            .filter_map(|request| request.as_str().map(str::to_owned))
+            .collect()
+    } else {
+        spec.get("version").map(requests).unwrap_or_default()
+    }
+}
+
 impl Runner {
     pub(super) async fn mise_lock(
         &self,
@@ -228,6 +243,21 @@ impl Runner {
                 .as_array()
                 .filter(|entries| !entries.is_empty())
                 .ok_or("mise lock removed a selected tool")?;
+            // The lock must answer the request the manifest makes: `latest` or
+            // `24` for `2.10.0` means a declaration other than the edited one
+            // was locked, and `mise` would call the lock out of date.
+            let declared = requests(&doc["tools"][name.as_str()]);
+            if let Some(specifier) = entries
+                .iter()
+                .filter_map(|entry| entry["specifiers"].as_array())
+                .flatten()
+                .filter_map(Value::as_str)
+                .find(|specifier| !declared.iter().any(|request| request == specifier))
+            {
+                return Err(format!(
+                    "mise lock recorded the request `{specifier}` for {name}, not the manifest's {declared:?}"
+                ));
+            }
             if !platforms(&before["tools"][name]).is_subset(&platforms(&after["tools"][name])) {
                 return Err(format!("mise lock dropped an existing platform for {name}"));
             }
