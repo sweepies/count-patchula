@@ -137,7 +137,7 @@ For an opt-in Node LTS rule, see [lookup policy](/guide/lookup-policy/#node-rele
 ### Warnings when auto-merge has nothing behind it {#tooling-warnings}
 
 - **Renovate:** Automerges as configured, whatever CI the repository has
-- **The Count:** Warns on PRs set to merge, and on the dashboard, when a repository has no CI, requires no checks before GitHub's auto-merge, or ships nothing when a security fix merges
+- **The Count:** Warns on PRs set to merge, and on the dashboard, only on positive evidence: no CI runs on the PR and no checks reported on recent default-branch commits; GitHub's native auto-merge is on and no status check is required; or a security fix merges, nothing runs on the default branch for its files and no checks reported on recent commits. What he can't read is unknown and never warns
 - **Why:** An update that merges untested, or merges and never ships, is worse than one left open
 
 See [tooling warnings](/guide/auto-merge/#tooling-warnings).

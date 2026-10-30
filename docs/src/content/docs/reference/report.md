@@ -44,7 +44,7 @@ too, so a new field means a new version.
 | `skipped` | Optional. Declarations that are not read as versions, such as images built from variables: `manager`, `path`, `line`, `value` and `reason` |
 | `notices` | Optional. Newer versions that are reported and never proposed, such as a [Copier template](/guide/managers/#copier)'s tags: `manager`, `path`, `line`, `name`, `package`, `current`, `available`, and `compareUrl` when the host has a compare page |
 | `lookupFailures` | Optional. Dependencies whose lookup failed; see [below](#lookup-failures) |
-| `tooling` | Optional. [Tooling warnings](/guide/auto-merge/#tooling-warnings) that hold on a live run, one per rule: `rule`, `detail` (`reviews-only` or `tagged-release`), the `branches` it applies to, and `silenced` with the reason from `warnings.quiet` |
+| `tooling` | Optional. [Tooling warnings](/guide/auto-merge/#tooling-warnings) that hold on a live run, one per rule: `rule`, optional `detail` (`native` for `merge-without-ci`, `reviews-only` or `tagged-release`), the `branches` it applies to, and optional `silenced` with the reason from `warnings.quiet` |
 | `defaultBranch`, `commit` | Optional. The branch and commit that were read |
 
 A `complete` repository with no package files had nothing the Count supports.

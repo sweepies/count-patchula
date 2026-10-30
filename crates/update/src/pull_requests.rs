@@ -1051,10 +1051,11 @@ fn tooling_section(callouts: &[crate::tooling::Callout]) -> String {
     for callout in callouts {
         let branch = safe(&callout.branch);
         let body = match (callout.rule, callout.detail) {
+            (MERGE_WITHOUT_CI, Some(NATIVE)) => "**This PR is set to merge itself, and the Count can't find any CI.** No workflow or CI file runs on pull requests, and no checks have reported on recent commits, so nothing will have tested it when GitHub merges it.".to_owned(),
             (MERGE_WITHOUT_CI, _) => "**This PR is set to merge itself, and the Count can't find any CI.** No workflow or CI file runs on pull requests, and no checks have reported on recent commits. He waits for at least one passing check before merging, so this PR will stay open.".to_owned(),
             (MERGE_WITHOUT_REQUIRED_CHECKS, Some(REVIEWS_ONLY)) => format!("**Nothing makes this PR pass its checks before GitHub merges it.** The Count uses GitHub's auto-merge here, and `{branch}` requires a review but no status checks, so once approved a red PR merges as readily as a green one. Add a required check in a ruleset."),
             (MERGE_WITHOUT_REQUIRED_CHECKS, _) => format!("**Nothing makes this PR pass its checks before GitHub merges it.** The Count uses GitHub's auto-merge here, and `{branch}` requires no status checks, so a red PR merges as readily as a green one. Add a required check in a ruleset."),
-            (SECURITY_MERGE_WITHOUT_DELIVERY, Some(TAGGED_RELEASE)) => "**This fix ships with your next tagged release, not when it merges.** It will merge on its own, but the only release workflow here runs on tags.".to_owned(),
+            (SECURITY_MERGE_WITHOUT_DELIVERY, Some(TAGGED_RELEASE)) => format!("**Merging this fix doesn't ship it.** It will merge on its own, and nothing runs when `{branch}` changes. The only workflow here that could deliver it runs on tags or releases, so it ships only if you cut one."),
             (_, _) => format!("**Merging this fix ships nothing.** This PR fixes a known vulnerability and will merge on its own, but nothing in this repository builds, releases or deploys when `{branch}` changes. Whatever runs the old code stays bitten. If something outside this repository delivers it, say so in `warnings.quiet`."),
         };
         text.push_str("> [!CAUTION]\n> ");
@@ -1619,11 +1620,13 @@ mod tooling_tests {
     fn each_tooling_warning_is_a_caution_in_the_design_wording() {
         let text = tooling_section(&[
             callout(MERGE_WITHOUT_CI, None),
+            callout(MERGE_WITHOUT_CI, Some(NATIVE)),
             callout(MERGE_WITHOUT_REQUIRED_CHECKS, None),
             callout(SECURITY_MERGE_WITHOUT_DELIVERY, None),
         ]);
-        assert_eq!(text.matches("> [!CAUTION]\n").count(), 3, "{text}");
+        assert_eq!(text.matches("> [!CAUTION]\n").count(), 4, "{text}");
         for line in [
+            "> **This PR is set to merge itself, and the Count can't find any CI.** No workflow or CI file runs on pull requests, and no checks have reported on recent commits, so nothing will have tested it when GitHub merges it.\n",
             "> **This PR is set to merge itself, and the Count can't find any CI.** No workflow or CI file runs on pull requests, and no checks have reported on recent commits. He waits for at least one passing check before merging, so this PR will stay open.\n",
             "> **Nothing makes this PR pass its checks before GitHub merges it.** The Count uses GitHub's auto-merge here, and `main` requires no status checks, so a red PR merges as readily as a green one. Add a required check in a ruleset.\n",
             "> **Merging this fix ships nothing.** This PR fixes a known vulnerability and will merge on its own, but nothing in this repository builds, releases or deploys when `main` changes. Whatever runs the old code stays bitten. If something outside this repository delivers it, say so in `warnings.quiet`.\n",
@@ -1638,7 +1641,7 @@ mod tooling_tests {
             narrower.contains("`main` requires a review but no status checks"),
             "{narrower}"
         );
-        assert!(narrower.contains("> **This fix ships with your next tagged release, not when it merges.** It will merge on its own, but the only release workflow here runs on tags.\n"), "{narrower}");
+        assert!(narrower.contains("> **Merging this fix doesn't ship it.** It will merge on its own, and nothing runs when `main` changes. The only workflow here that could deliver it runs on tags or releases, so it ships only if you cut one.\n"), "{narrower}");
         assert!(tooling_section(&[]).is_empty());
     }
 }

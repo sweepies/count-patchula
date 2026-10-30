@@ -2330,12 +2330,25 @@ impl Engine {
                 .filter(|e| e.kind == "blob")
                 .map(|e| e.path.clone())
                 .collect();
+            // Flux and Argo CD manifests are YAML anywhere in the tree, so the
+            // tooling warnings read every YAML file, unless the tree has more
+            // than they will take, when delivery stays unknown.
+            let manifests = entries
+                .iter()
+                .filter(|e| {
+                    e.kind == "blob"
+                        && patchula_update::tooling::manifest(&e.path)
+                        && !scanner.needs(&e.path)
+                })
+                .count();
+            let read_manifests = manifests <= patchula_update::tooling::MANIFEST_LIMIT;
             let selected: Vec<_> = entries
                 .into_iter()
                 .filter(|entry| {
                     entry.kind == "blob"
                         && (scanner.needs(&entry.path)
-                            || patchula_update::tooling::reads(&entry.path))
+                            || patchula_update::tooling::reads(&entry.path)
+                            || (read_manifests && patchula_update::tooling::manifest(&entry.path)))
                 })
                 .collect();
             let blobs: BTreeMap<String, patchula_update::Blob> = stream::iter(selected)

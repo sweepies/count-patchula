@@ -55,12 +55,15 @@ relies on:
 
 | Warning | When |
 |---|---|
-| `merge-without-ci` | No workflow or CI file runs on pull requests, and no check or status has reported on the default branch's last 10 commits. He waits for a passing check, so these PRs stay open. |
+| `merge-without-ci` | No workflow or CI file runs on the PR, and no check or status has reported on the default branch's last 10 commits. A `pull_request` workflow counts only when its `branches` include the default branch and its `paths` match a file the PR changes. Without native auto-merge, he waits for a passing check, so these PRs stay open; with it, nothing tests them before GitHub merges them. |
 | `merge-without-required-checks` | The repository allows native auto-merge, and neither a ruleset nor classic branch protection requires a status check on the default branch, so GitHub merges a red PR as readily as a green one. The wording changes when a review is required instead. |
-| `security-merge-without-delivery` | An update that fixes an advisory merges itself, and nothing runs when the default branch changes: no push workflow for it (directly, after one through `workflow_run`, or on a `schedule`), no Woodpecker push pipeline, no other CI file, no Flux or Argo CD manifests, and no checks on recent commits. A push workflow whose `paths` skip every file the PR changes counts as nothing. When a workflow runs on tags or releases, the warning says the fix ships with your next tagged release instead. |
+| `security-merge-without-delivery` | An update that fixes an advisory merges itself, and nothing runs when the default branch changes: no push workflow for it (directly, after one through `workflow_run`, or on a `schedule`), no Woodpecker push pipeline, no other CI file, no Flux or Argo CD manifests, and no checks on recent commits. A push workflow whose `paths` skip every file the PR changes counts as nothing. When a workflow runs on tags or releases, the warning says that is the only thing here that could deliver the fix, and nothing is known to publish or deploy it. |
 
 A warning needs positive evidence. A workflow the Count can't parse, or branch
-rules he can't read, means he doesn't know, and he says nothing. Other CI files
+rules he can't read, means he doesn't know, and he says nothing. To find Flux
+and Argo CD manifests he reads every YAML file in the repository; with more
+than 300 that no manager reads, or if one can't be fetched, delivery is unknown
+and `security-merge-without-delivery` stays quiet. Other CI files
 are `.gitlab-ci.yml`, `.circleci/config.yml`, `Jenkinsfile`, `.buildkite/`,
 `azure-pipelines.yml` and `.travis.yml`, taken to run on every change.
 

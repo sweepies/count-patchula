@@ -675,42 +675,40 @@ pub fn render(
             ));
     }
     for warning in &repo.tooling {
+        let open: Vec<_> = prs
+            .iter()
+            .filter(|p| {
+                p["state"] == "open"
+                    && warning
+                        .branches
+                        .iter()
+                        .any(|b| p["head"]["ref"] == b.as_str())
+            })
+            .filter_map(|p| p["number"].as_u64())
+            .map(|n| format!("#{n}"))
+            .collect();
+        let open = if open.is_empty() {
+            String::new()
+        } else {
+            format!(" Open now: {}.", open.join(", "))
+        };
         let row = match &warning.silenced {
             Some(reason) => (
                 TOOLING_SILENCED,
-                format!("- `{}`: \"{}\"\n", safe(&warning.rule), safe(reason)),
+                format!("- `{}`: \"{}\"{open}\n", safe(&warning.rule), safe(reason)),
             ),
-            None => {
-                let open: Vec<_> = prs
-                    .iter()
-                    .filter(|p| {
-                        p["state"] == "open"
-                            && warning
-                                .branches
-                                .iter()
-                                .any(|b| p["head"]["ref"] == b.as_str())
-                    })
-                    .filter_map(|p| p["number"].as_u64())
-                    .map(|n| format!("#{n}"))
-                    .collect();
-                let open = if open.is_empty() {
-                    String::new()
-                } else {
-                    format!(" Open now: {}.", open.join(", "))
-                };
-                (
-                    TOOLING,
-                    format!(
-                        "- {}{open}\n",
-                        tooling_line(
-                            warning,
-                            repo.default_branch
-                                .as_deref()
-                                .unwrap_or("the default branch")
-                        )
-                    ),
-                )
-            }
+            None => (
+                TOOLING,
+                format!(
+                    "- {}{open}\n",
+                    tooling_line(
+                        warning,
+                        repo.default_branch
+                            .as_deref()
+                            .unwrap_or("the default branch")
+                    )
+                ),
+            ),
         };
         sections
             .entry(row.0.into())
@@ -766,7 +764,7 @@ pub fn render(
         let (start, end) = if section == TOOLING {
             (
                 format!(
-                    "\n## {TOOLING}\n\nThe Count's settings for this repository rely on tooling he can't find.\n\n"
+                    "\n## {TOOLING}\n\nThese settings let updates merge on their own, and the Count's checks of this repository's CI, branch protection and delivery found a gap behind them.\n\n"
                 ),
                 "",
             )
@@ -838,10 +836,11 @@ fn tooling_line(warning: &patchula_report::ToolingWarning, branch: &str) -> Stri
     use crate::tooling::*;
     let branch = safe(branch);
     match (warning.rule.as_str(), warning.detail.as_deref()) {
+        (MERGE_WITHOUT_CI, Some(NATIVE)) => "**Updates are set to merge, but there's no CI.** No workflow or CI file runs on pull requests, and no checks have reported on recent commits, so nothing tests them before GitHub merges them.".into(),
         (MERGE_WITHOUT_CI, _) => "**Updates are set to merge, but there's no CI.** No workflow or CI file runs on pull requests, and no checks have reported on recent commits, so these PRs stay open.".into(),
         (MERGE_WITHOUT_REQUIRED_CHECKS, Some(REVIEWS_ONLY)) => format!("**Nothing requires checks before GitHub merges.** `{branch}` requires a review but no status checks."),
         (MERGE_WITHOUT_REQUIRED_CHECKS, _) => format!("**Nothing requires checks before GitHub merges.** `{branch}` requires no status checks."),
-        (SECURITY_MERGE_WITHOUT_DELIVERY, Some(TAGGED_RELEASE)) => "**Security fixes ship only with your next tagged release.** Fixes merge on their own, but the only release workflow here runs on tags.".into(),
+        (SECURITY_MERGE_WITHOUT_DELIVERY, Some(TAGGED_RELEASE)) => format!("**Security fixes merge, but nothing runs when they do.** No workflow runs when `{branch}` changes, and the only one that could deliver them runs on tags or releases."),
         _ => format!("**Security fixes merge, but nothing ships them.** Fixes merge on their own, and no workflow runs when `{branch}` changes."),
     }
 }

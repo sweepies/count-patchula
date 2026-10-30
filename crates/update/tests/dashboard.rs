@@ -441,11 +441,15 @@ fn tooling_warnings_sit_between_known_vulnerabilities_and_images() {
     let mut repo = repository();
     repo.warnings.clear();
     repo.default_branch = Some("main".into());
-    repo.package_files[0].dependencies[0]
+    let metadata = repo.package_files[0].dependencies[0]
         .metadata
         .as_mut()
-        .unwrap()
-        .image = Some(serde_json::from_value(json!({"state":"no-sbom"})).unwrap());
+        .unwrap();
+    metadata.image = Some(serde_json::from_value(json!({"state":"no-sbom"})).unwrap());
+    metadata.advisories = serde_json::from_value(json!([
+        {"id":"GHSA-open","url":"https://osv.dev/vulnerability/GHSA-open"}
+    ]))
+    .unwrap();
     let warning = |rule: &str, detail: Option<&str>, silenced: Option<&str>| {
         patchula_report::ToolingWarning {
             rule: rule.into(),
@@ -471,16 +475,15 @@ fn tooling_warnings_sit_between_known_vulnerabilities_and_images() {
     let section = text
         .find("## Tooling warnings\n")
         .unwrap_or_else(|| panic!("{text}"));
-    assert!(
-        text.find("## Images the Count can't vouch for").unwrap() > section,
-        "{text}"
-    );
-    assert!(text.find("## Pending updates").unwrap() > section, "{text}");
+    let known = text.find("## Known vulnerabilities\n").unwrap();
+    let images = text.find("## Images the Count can't vouch for").unwrap();
+    assert!(known < section && section < images, "{text}");
+    assert!(text.find("## Pending updates").unwrap() > images, "{text}");
     for line in [
-        "The Count's settings for this repository rely on tooling he can't find.\n\n",
+        "These settings let updates merge on their own, and the Count's checks of this repository's CI, branch protection and delivery found a gap behind them.\n\n",
         "- **Nothing requires checks before GitHub merges.** `main` requires a review but no status checks. Open now: #412.\n",
         "- **Security fixes merge, but nothing ships them.** Fixes merge on their own, and no workflow runs when `main` changes. Open now: #412.\n",
-        "<details><summary>Silenced (1)</summary>\n\n- `merge-without-ci`: \"CI runs in Buildkite, reporting to another org\"\n</details>\n",
+        "<details><summary>Silenced (1)</summary>\n\n- `merge-without-ci`: \"CI runs in Buildkite, reporting to another org\" Open now: #412.\n</details>\n",
     ] {
         assert!(text[section..].contains(line), "{line}\n{text}");
     }

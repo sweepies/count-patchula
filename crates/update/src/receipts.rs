@@ -231,7 +231,7 @@ impl Inventory {
             }
             result.actor = actor.into();
             result.merge_settings = crate::automerge::Settings::from_graphql(&data["repository"]);
-            result.default_branch = head.clone();
+            result.default_branch.clone_from(head);
             result.closed = data["nodes"]
                 .as_array()
                 .cloned()

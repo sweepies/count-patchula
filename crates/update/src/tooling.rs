@@ -16,6 +16,12 @@ pub const MERGE_WITHOUT_REQUIRED_CHECKS: &str = "merge-without-required-checks";
 pub const SECURITY_MERGE_WITHOUT_DELIVERY: &str = "security-merge-without-delivery";
 pub const REVIEWS_ONLY: &str = "reviews-only";
 pub const TAGGED_RELEASE: &str = "tagged-release";
+/// GitHub's auto-merge, not the Count, merges the PR.
+pub const NATIVE: &str = "native";
+
+/// Most unread YAML files read to look for Flux and Argo CD manifests; a tree
+/// with more leaves delivery unknown.
+pub const MANIFEST_LIMIT: usize = 300;
 
 /// CI systems the Count knows by their file alone.
 const OTHER_CI: [&str; 6] = [
@@ -58,14 +64,27 @@ fn woodpecker(path: &str) -> bool {
 /// What the repository shows. `None` is unknown.
 #[derive(Debug, Default)]
 pub struct Evidence {
-    /// A workflow or CI file runs on pull requests.
-    pub ci: Option<bool>,
+    /// The workflows and CI files that run on the Count's pull requests.
+    pub ci: Option<Ci>,
     /// A check or status reported on one of the default branch's last 10 commits.
     pub branch_checks: Option<bool>,
     /// GitHub's auto-merge is allowed, so the Count uses it.
     pub native: bool,
     pub required: Option<Required>,
     pub delivery: Option<Delivery>,
+}
+/// What runs on a pull request.
+#[derive(Clone, Debug, Default)]
+pub struct Ci {
+    /// Something runs on every pull request.
+    pub always: bool,
+    /// Workflows whose `paths` filters pick the pull requests they run on.
+    pub filtered: Vec<Filter>,
+}
+impl Ci {
+    fn runs(&self, files: &[&str]) -> bool {
+        self.always || self.filtered.iter().any(|f| f.runs_for(files))
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Required {
@@ -145,7 +164,8 @@ impl Patterns {
 #[derive(Default)]
 struct Workflow {
     name: String,
-    pull_requests: bool,
+    /// How a pull request or a push to the Count's branch runs it.
+    pull_requests: Vec<Filter>,
     /// How a push to the default branch runs it.
     push: Option<Filter>,
     tags: bool,
@@ -197,7 +217,22 @@ fn workflow(path: &str, text: &str, branch: &str) -> Result<Workflow, ()> {
                 .transpose()
         };
         match event {
-            "pull_request" | "pull_request_target" | "merge_group" => result.pull_requests = true,
+            // A pull request's workflows run for its base branch and its files.
+            "pull_request" | "pull_request_target" => {
+                let branches = filter("branches")?;
+                let ignored = filter("branches-ignore")?;
+                let paths = filter("paths")?;
+                let paths_ignore = filter("paths-ignore")?;
+                if branches.is_none_or(|b| b.includes(branch))
+                    && ignored.is_none_or(|i| !i.includes(branch))
+                {
+                    result.pull_requests.push(Filter {
+                        paths,
+                        ignore: paths_ignore,
+                    });
+                }
+            }
+            "merge_group" => result.pull_requests.push(Filter::default()),
             "schedule" => result.schedule = true,
             "release" => result.tags = true,
             "workflow_run" => match config.and_then(|c| key(c, "workflows")) {
@@ -217,19 +252,21 @@ fn workflow(path: &str, text: &str, branch: &str) -> Result<Workflow, ()> {
                     .is_some_and(|c| key(c, "tags").is_some() || key(c, "tags-ignore").is_some());
                 let branch_filter = branches.is_some() || branches_ignore.is_some();
                 result.tags |= tag_filter || !branch_filter;
+                let paths = Filter {
+                    paths: filter("paths")?,
+                    ignore: filter("paths-ignore")?,
+                };
                 // A push to the Count's branch runs it, so it reports on his PRs.
-                result.pull_requests |=
-                    branches_ignore.is_some() || (!branch_filter && !tag_filter);
+                if branches_ignore.is_some() || (!branch_filter && !tag_filter) {
+                    result.pull_requests.push(paths.clone());
+                }
                 let runs = match (&branches, &branches_ignore) {
                     (Some(b), _) => b.includes(branch),
                     (None, Some(ignore)) => !ignore.includes(branch),
                     (None, None) => !tag_filter,
                 };
                 if runs {
-                    result.push = Some(Filter {
-                        paths: filter("paths")?,
-                        ignore: filter("paths-ignore")?,
-                    });
+                    result.push = Some(paths);
                 }
             }
             _ => {}
@@ -287,7 +324,7 @@ fn pipeline(text: &str, branch: &str) -> Result<(bool, bool), ()> {
 impl Evidence {
     pub fn read(snapshot: &Snapshot, branch: &str, inventory: &Inventory) -> Self {
         let (ci, delivery) = match files(snapshot, branch) {
-            Ok((ci, delivery)) => (Some(ci), Some(delivery)),
+            Ok((ci, delivery)) => (Some(ci), delivery),
             Err(()) => (None, None),
         };
         let head = &inventory.default_branch;
@@ -329,23 +366,30 @@ fn required(head: &Value) -> Option<Required> {
     result.reviews |= classic["requiredApprovingReviewCount"]
         .as_u64()
         .is_some_and(|n| n > 0);
-    if !result.checks && rules["pageInfo"]["hasNextPage"] != false {
+    if !result.checks && rules["pageInfo"]["hasNextPage"].as_bool() != Some(false) {
         return None;
     }
     Some(result)
 }
 
+/// A file that may declare Flux or Argo CD resources.
+pub fn manifest(path: &str) -> bool {
+    path.ends_with(".yml") || path.ends_with(".yaml")
+}
+
 /// CI and delivery from the tree: workflows, Woodpecker pipelines, other CI
-/// files and GitOps manifests. An unreadable workflow makes both unknown.
-fn files(snapshot: &Snapshot, branch: &str) -> Result<(bool, Delivery), ()> {
-    let mut ci = false;
+/// files and GitOps manifests. An unreadable workflow makes both unknown, and
+/// so does a YAML file that was never fetched, unless something else already
+/// ships every change: it could be a manifest.
+fn files(snapshot: &Snapshot, branch: &str) -> Result<(Ci, Option<Delivery>), ()> {
+    let mut ci = Ci::default();
     let mut delivery = Delivery::default();
     let mut workflows = Vec::new();
     for path in snapshot.paths.iter().filter(|p| reads(p)) {
         let text = &snapshot.files.get(path).ok_or(())?.content;
         if woodpecker(path) {
             let (pull_requests, push) = pipeline(text, branch)?;
-            ci |= pull_requests;
+            ci.always |= pull_requests;
             delivery.always |= push;
         } else {
             workflows.push(workflow(path, text, branch)?);
@@ -353,7 +397,13 @@ fn files(snapshot: &Snapshot, branch: &str) -> Result<(bool, Delivery), ()> {
     }
     let by_name: BTreeMap<_, _> = workflows.iter().map(|w| (w.name.as_str(), w)).collect();
     for w in &workflows {
-        ci |= w.pull_requests;
+        for filter in &w.pull_requests {
+            if filter.paths.is_none() && filter.ignore.is_none() {
+                ci.always = true;
+            } else {
+                ci.filtered.push(filter.clone());
+            }
+        }
         delivery.tags |= w.tags;
         delivery.always |= w.schedule;
         let triggers = w
@@ -376,7 +426,7 @@ fn files(snapshot: &Snapshot, branch: &str) -> Result<(bool, Delivery), ()> {
             .iter()
             .any(|ci| p == ci || (ci.ends_with('/') && p.starts_with(ci)))
     }) {
-        ci = true;
+        ci.always = true;
         delivery.always = true;
     }
     delivery.always |= snapshot.files.values().any(|blob| {
@@ -386,7 +436,11 @@ fn files(snapshot: &Snapshot, branch: &str) -> Result<(bool, Delivery), ()> {
             || (text.contains("argoproj.io/")
                 && (text.contains("kind: Application") || text.contains("kind: ApplicationSet")))
     });
-    Ok((ci, delivery))
+    let unread = snapshot
+        .paths
+        .iter()
+        .any(|p| manifest(p) && !snapshot.files.contains_key(p));
+    Ok((ci, (delivery.always || !unread).then_some(delivery)))
 }
 
 /// Puts each holding warning on the PRs it applies to, and returns one entry
@@ -403,9 +457,18 @@ pub fn apply(
         if !crate::automerge::requested(plan, config) {
             continue;
         }
+        let files: Vec<&str> = plan
+            .action
+            .files
+            .iter()
+            .map(|f| f.path.as_str())
+            .chain(plan.changes.iter().map(|c| c.file.as_str()))
+            .collect();
         let mut holding = Vec::new();
-        if evidence.ci == Some(false) && evidence.branch_checks == Some(false) {
-            holding.push((MERGE_WITHOUT_CI, None));
+        if evidence.branch_checks == Some(false)
+            && evidence.ci.as_ref().is_some_and(|ci| !ci.runs(&files))
+        {
+            holding.push((MERGE_WITHOUT_CI, evidence.native.then_some(NATIVE)));
         }
         if let Some(required) = evidence.required.filter(|r| evidence.native && !r.checks) {
             holding.push((
@@ -416,20 +479,12 @@ pub fn apply(
         if let Some(delivery) = &evidence.delivery
             && evidence.branch_checks == Some(false)
             && plan.changes.iter().any(|c| !c.advisories.is_empty())
+            && !delivery.ships(&files)
         {
-            let files: Vec<&str> = plan
-                .action
-                .files
-                .iter()
-                .map(|f| f.path.as_str())
-                .chain(plan.changes.iter().map(|c| c.file.as_str()))
-                .collect();
-            if !delivery.ships(&files) {
-                holding.push((
-                    SECURITY_MERGE_WITHOUT_DELIVERY,
-                    delivery.tags.then_some(TAGGED_RELEASE),
-                ));
-            }
+            holding.push((
+                SECURITY_MERGE_WITHOUT_DELIVERY,
+                delivery.tags.then_some(TAGGED_RELEASE),
+            ));
         }
         for (rule, detail) in holding {
             let silenced = config.warnings.quiet.get(rule).cloned();
@@ -487,18 +542,18 @@ mod tests {
         let push = w.push.unwrap();
         assert!(push.runs_for(&["src/lib.rs"]));
         assert!(!push.runs_for(&["src/docs/a.md", "README.md"]));
-        assert!(!w.pull_requests && !w.tags);
+        assert!(w.pull_requests.is_empty() && !w.tags);
         let w = workflow(
             "ci.yml",
             "on:\n  push:\n    branches-ignore: [main]\n",
             "main",
         )
         .unwrap();
-        assert!(w.push.is_none() && w.pull_requests);
+        assert!(w.push.is_none() && w.pull_requests.len() == 1);
         let w = workflow("release.yml", "on:\n  push:\n    tags: ['v*']\n", "main").unwrap();
         assert!(w.push.is_none() && w.tags);
         let w = workflow("ci.yml", "on: [push, pull_request]\n", "main").unwrap();
-        assert!(w.push.is_some() && w.pull_requests && w.tags);
+        assert!(w.push.is_some() && w.pull_requests.len() == 2 && w.tags);
         let w = workflow(
             "ci.yml",
             "on:\n  schedule:\n    - cron: '0 0 * * *'\n",
@@ -525,7 +580,8 @@ mod tests {
             "main",
         )
         .unwrap();
-        assert!(!ci && !delivery.always);
+        let delivery = delivery.unwrap();
+        assert!(!ci.always && ci.filtered.is_empty() && !delivery.always);
         assert_eq!(delivery.filtered.len(), 2);
         assert!(delivery.ships(&["app/main.go"]));
         assert!(!delivery.ships(&["go.mod"]));
@@ -542,14 +598,52 @@ mod tests {
             (".woodpecker.yml", "steps: []\n"),
         ] {
             let (_, delivery) = files(&snapshot(&[extra]), "main").unwrap();
-            assert!(delivery.always, "{}", extra.0);
+            assert!(delivery.unwrap().always, "{}", extra.0);
         }
         let (ci, delivery) = files(
             &snapshot(&[(".woodpecker/ci.yml", "when:\n  event: pull_request\n")]),
             "main",
         )
         .unwrap();
-        assert!(ci && !delivery.always);
+        assert!(ci.always && !delivery.unwrap().always);
+    }
+
+    #[test]
+    fn pull_request_workflows_count_only_for_their_branch_and_files() {
+        let on = |text: &str| workflow("ci.yml", text, "main").unwrap().pull_requests;
+        assert!(on("on:\n  pull_request:\n    branches: [release]\n").is_empty());
+        assert!(on("on:\n  pull_request:\n    branches-ignore: [main]\n").is_empty());
+        assert_eq!(on("on:\n  pull_request:\n    branches: [main]\n").len(), 1);
+        let filtered = on("on:\n  pull_request:\n    paths: ['src/**']\n");
+        assert!(filtered[0].runs_for(&["src/lib.rs"]));
+        assert!(!filtered[0].runs_for(&["docs/a.md"]));
+        let (ci, _) = files(
+            &snapshot(&[(
+                ".github/workflows/ci.yml",
+                "on:\n  pull_request:\n    paths-ignore: ['**.md']\n",
+            )]),
+            "main",
+        )
+        .unwrap();
+        assert!(!ci.always && ci.runs(&["src/lib.rs"]) && !ci.runs(&["README.md"]));
+        let (ci, _) = files(
+            &snapshot(&[(
+                ".github/workflows/ci.yml",
+                "on:\n  pull_request:\n    branches: [release]\n",
+            )]),
+            "main",
+        )
+        .unwrap();
+        assert!(!ci.runs(&["src/lib.rs"]));
+    }
+
+    #[test]
+    fn an_unread_yaml_file_leaves_delivery_unknown_unless_something_ships() {
+        let mut tree = snapshot(&[(".github/workflows/ci.yml", "on: [pull_request]\n")]);
+        tree.paths.insert("clusters/prod.yaml".into());
+        assert!(files(&tree, "main").unwrap().1.is_none());
+        tree.paths.insert(".gitlab-ci.yml".into());
+        assert!(files(&tree, "main").unwrap().1.unwrap().always);
     }
 
     #[test]
@@ -673,7 +767,7 @@ mod tests {
     /// No CI anywhere, nothing required, GitHub's auto-merge on: every rule holds.
     fn bare() -> Evidence {
         Evidence {
-            ci: Some(false),
+            ci: Some(Ci::default()),
             branch_checks: Some(false),
             native: true,
             required: Some(Required {
@@ -695,7 +789,7 @@ mod tests {
         assert_eq!(
             rules(&plans[0]),
             [
-                (MERGE_WITHOUT_CI, None),
+                (MERGE_WITHOUT_CI, Some(NATIVE)),
                 (MERGE_WITHOUT_REQUIRED_CHECKS, None),
                 (SECURITY_MERGE_WITHOUT_DELIVERY, None)
             ]
@@ -703,7 +797,7 @@ mod tests {
         assert_eq!(
             rules(&plans[1]),
             [
-                (MERGE_WITHOUT_CI, None),
+                (MERGE_WITHOUT_CI, Some(NATIVE)),
                 (MERGE_WITHOUT_REQUIRED_CHECKS, None)
             ]
         );
@@ -747,7 +841,10 @@ mod tests {
     fn present_tooling_clears_each_warning() {
         let mut plans = vec![plan("patchula/fix", true)];
         let evidence = Evidence {
-            ci: Some(true),
+            ci: Some(Ci {
+                always: true,
+                ..Default::default()
+            }),
             required: Some(Required {
                 checks: true,
                 reviews: false,
@@ -786,7 +883,10 @@ mod tests {
     #[test]
     fn narrower_cases_change_the_wording_and_quiet_rules_stay_off_prs() {
         let evidence = Evidence {
-            ci: Some(true),
+            ci: Some(Ci {
+                always: true,
+                ..Default::default()
+            }),
             required: Some(Required {
                 checks: false,
                 reviews: true,
@@ -829,7 +929,7 @@ mod tests {
         };
         let evidence = Evidence::read(&snapshot(&[]), "main", &inventory);
         assert_eq!(evidence.branch_checks, Some(false));
-        assert_eq!(evidence.ci, Some(false));
+        assert!(!evidence.ci.unwrap().always);
         assert_eq!(
             evidence.required,
             Some(Required {

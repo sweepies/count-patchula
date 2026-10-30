@@ -425,11 +425,7 @@ fn tooling_warnings_are_silenced_by_rule_and_only_with_a_reason() {
     ] {
         let (_directory, path) = fixture(body);
         let error = format!("{:?}", load(&path).unwrap_err());
-        let flat = |text: &str| -> String {
-            text.chars()
-                .filter(|c| !c.is_whitespace() && *c != '│')
-                .collect()
-        };
+        let flat = |text: &str| text.replace(|c: char| c.is_whitespace() || c == '│', "");
         assert!(flat(&error).contains(&flat(expected)), "{body}: {error}");
     }
 }
