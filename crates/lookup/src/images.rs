@@ -197,31 +197,31 @@ pub fn compare(
         if before.ecosystem.is_none() || after.ecosystem.is_none() {
             continue;
         }
-        let ids = |sbom: &Sbom| -> BTreeMap<String, AdvisoryQuery> {
-            sbom.queries()
-                .into_iter()
-                .flat_map(|q| {
-                    listing
-                        .get(&q)
-                        .into_iter()
-                        .flatten()
-                        .map(move |(id, _)| (id.clone(), q.clone()))
-                })
-                .collect()
+        let ids = |sbom: &Sbom| {
+            let mut ids = BTreeMap::<String, Vec<AdvisoryQuery>>::new();
+            for query in sbom.queries() {
+                for (id, _) in listing.get(&query).into_iter().flatten() {
+                    ids.entry(id.clone()).or_default().push(query.clone());
+                }
+            }
+            ids
         };
         let (was, now) = (ids(before), ids(after));
         let versions: BTreeMap<_, _> = after.sources.iter().cloned().collect();
-        for (id, query) in &was {
+        // An advisory OSV lists for several source packages is fixed in each.
+        for (id, queries) in &was {
             if now.contains_key(id) {
                 continue;
             }
-            let key = (
-                id.clone(),
-                query.package.clone(),
-                query.version.clone(),
-                versions.get(&query.package).cloned(),
-            );
-            fixed.entry(key).or_default().push(platform.clone());
+            for query in queries {
+                let key = (
+                    id.clone(),
+                    query.package.clone(),
+                    query.version.clone(),
+                    versions.get(&query.package).cloned(),
+                );
+                fixed.entry(key).or_default().push(platform.clone());
+            }
         }
         introduced.extend(now.into_keys().filter(|id| !was.contains_key(id)));
     }
@@ -384,6 +384,29 @@ mod tests {
         assert_eq!(
             entries.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
             ["DSA-1", "DSA-3"]
+        );
+    }
+
+    #[test]
+    fn an_advisory_listed_for_two_packages_is_fixed_in_each() {
+        let old = side(&[("linux/amd64", sbom(&[("openssl", "1"), ("libssl", "1")]))]);
+        let new = side(&[("linux/amd64", sbom(&[("openssl", "2"), ("libssl", "3")]))]);
+        let found = Found::from([
+            (query("openssl", "1"), vec![advisory("DSA-1")]),
+            (query("libssl", "1"), vec![advisory("DSA-1")]),
+        ]);
+        let check = compare(("sha256:a", &old), ("sha256:b", &new), &listing(&found)).unwrap();
+        let fixed: Vec<_> = check
+            .fixed
+            .iter()
+            .map(|f| (f.id.as_str(), f.package.as_str(), f.new.as_deref()))
+            .collect();
+        assert_eq!(
+            fixed,
+            [
+                ("DSA-1", "libssl", Some("3")),
+                ("DSA-1", "openssl", Some("2")),
+            ]
         );
     }
 

@@ -182,3 +182,14 @@ fn redaction_preserves_release_versions_but_removes_complete_stateless_tokens() 
         "[REDACTED]"
     );
 }
+
+#[test]
+fn a_url_with_nothing_to_redact_keeps_its_bytes_however_it_serializes() {
+    let redactor = Redactor::default();
+    let kept = "see https://example.com/a?x=a%20b&y=1 and https://example.com/p%2Fq";
+    assert_eq!(redactor.text(kept), kept);
+    assert_eq!(
+        redactor.text("https://example.com/a?x=a%20b&token=abc"),
+        "https://example.com/a?x=a+b&token=%5BREDACTED%5D"
+    );
+}

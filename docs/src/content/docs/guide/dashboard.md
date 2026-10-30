@@ -14,8 +14,8 @@ closes the issue; turning it on again opens a new one.
 
 In order:
 
-1. known vulnerabilities, with the update that fixes each (see
-   [security advisories](/guide/security/));
+1. known vulnerabilities, each with the update that fixes it, or the reason no
+   update is proposed (see [security advisories](/guide/security/));
 2. images the Count can't vouch for: pinned images whose SBOM can't show what
    a rebuild fixes, with the reason, and the ones you silenced with
    `security.quietImages` collapsed under "Silenced" (see

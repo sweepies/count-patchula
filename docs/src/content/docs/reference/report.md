@@ -2,11 +2,11 @@
 title: "JSON report"
 ---
 `patchula lookup --json` and `patchula run --json` print one report for the
-whole batch. This page describes schema version 2.
+whole batch. This page describes schema version 3.
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "repositories": [{
     "repository": "owner/repo",
     "status": "complete",

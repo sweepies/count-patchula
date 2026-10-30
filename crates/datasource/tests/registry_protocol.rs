@@ -910,17 +910,24 @@ async fn a_cosign_attestation_for_another_subject_is_ignored_for_the_sbom_tag() 
     let base = "https://ghcr.io/v2/spec/image";
     let tag = |d: &str, suffix: &str| format!("{base}/manifests/{}{suffix}", d.replace(':', "-"));
     let blob = |d: String| format!("{base}/blobs/{d}");
+    let manifest = |d: &str| format!("{base}/manifests/{d}");
     let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
         (
             format!("{base}/manifests/{digest}"),
             response(200, &index, &[]),
         ),
-        (tag(&child, ".att"), response(200, "", &[])),
-        (tag(&child, ".att"), response(200, &att, &[])),
+        (
+            tag(&child, ".att"),
+            response(200, "", &[("docker-content-digest", &sha(&att))]),
+        ),
+        (manifest(&sha(&att)), response(200, &att, &[])),
         (blob(sha(&envelope)), response(200, &envelope, &[])),
         (tag(&digest, ".att"), response(404, "", &[])),
-        (tag(&child, ".sbom"), response(200, "", &[])),
-        (tag(&child, ".sbom"), response(200, &sbom, &[])),
+        (
+            tag(&child, ".sbom"),
+            response(200, "", &[("docker-content-digest", &sha(&sbom))]),
+        ),
+        (manifest(&sha(&sbom)), response(200, &sbom, &[])),
         (blob(sha(spdx)), response(200, spdx, &[])),
     ]))));
     let dir = tempfile::tempdir().unwrap();
@@ -941,27 +948,45 @@ async fn a_cosign_attestation_for_another_subject_is_ignored_for_the_sbom_tag() 
     assert!(steps.0.lock().unwrap().is_empty());
 }
 
+const SPDX_TYPE: &str = "https://spdx.dev/Document";
+const BASE: &str = "https://ghcr.io/v2/spec/image";
+
+fn spdx(upstream: &str) -> String {
+    format!(
+        r#"{{"spdxVersion":"SPDX-2.3","creationInfo":{{"creators":["Tool: syft-v1.0.0"]}},"packages":[{{"name":"libssl3","externalRefs":[{{"referenceType":"purl","referenceLocator":"pkg:deb/debian/libssl3@3.0.17-1?distro=debian-12&upstream={upstream}"}}]}}]}}"#
+    )
+}
+
 #[tokio::test]
 async fn an_sbom_whose_bytes_do_not_match_its_digest_is_rejected() {
     let child = format!("sha256:{}", "c".repeat(64));
-    let attestation = format!("sha256:{}", "d".repeat(64));
+    let claimed = spdx("openssl");
+    let served = spdx("curl");
+    let attestation = format!(
+        r#"{{"schemaVersion":2,"layers":[{{"mediaType":"application/vnd.in-toto+json","digest":"{}","size":1,"annotations":{{"in-toto.io/predicate-type":"{SPDX_TYPE}"}}}}]}}"#,
+        sha(&claimed)
+    );
     let index = format!(
-        r#"{{"manifests":[{{"digest":"{child}","platform":{{"os":"linux","architecture":"amd64"}}}},{{"digest":"{attestation}","platform":{{"os":"unknown","architecture":"unknown"}},"annotations":{{"vnd.docker.reference.type":"attestation-manifest","vnd.docker.reference.digest":"{child}"}}}}]}}"#
+        r#"{{"manifests":[{{"digest":"{child}","platform":{{"os":"linux","architecture":"amd64"}}}},{{"digest":"{}","platform":{{"os":"unknown","architecture":"unknown"}},"annotations":{{"vnd.docker.reference.type":"attestation-manifest","vnd.docker.reference.digest":"{child}"}}}}]}}"#,
+        sha(&attestation)
     );
     let digest = sha(&index);
-    let base = "https://ghcr.io/v2/spec/image";
     let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
         (
-            format!("{base}/manifests/{digest}"),
+            format!("{BASE}/manifests/{digest}"),
             response(200, &index, &[]),
         ),
         (
-            format!("{base}/manifests/{attestation}"),
-            response(200, "{}", &[]),
+            format!("{BASE}/manifests/{}", sha(&attestation)),
+            response(200, &attestation, &[]),
+        ),
+        (
+            format!("{BASE}/blobs/{}", sha(&claimed)),
+            response(200, &served, &[]),
         ),
     ]))));
     let dir = tempfile::tempdir().unwrap();
-    let client = client(steps, dir.path()).await;
+    let client = client(steps.clone(), dir.path()).await;
     let error = client
         .image_sbom("ghcr.io/spec/image", &digest, "linux/amd64")
         .await
@@ -970,6 +995,120 @@ async fn an_sbom_whose_bytes_do_not_match_its_digest_is_rejected() {
         matches!(error, patchula_datasource::Error::Invalid),
         "{error}"
     );
+    assert!(steps.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_sbom_attestation_is_found_after_a_provenance_attestation() {
+    let child = format!("sha256:{}", "c".repeat(64));
+    let document = spdx("openssl");
+    let provenance = r#"{"schemaVersion":2,"layers":[{"mediaType":"application/vnd.in-toto+json","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","size":1,"annotations":{"in-toto.io/predicate-type":"https://slsa.dev/provenance/v0.2"}}]}"#;
+    let attestation = format!(
+        r#"{{"schemaVersion":2,"layers":[{{"mediaType":"application/vnd.in-toto+json","digest":"{}","size":1,"annotations":{{"in-toto.io/predicate-type":"{SPDX_TYPE}"}}}}]}}"#,
+        sha(&document)
+    );
+    let attached = |manifest: &str| {
+        format!(
+            r#"{{"digest":"{}","platform":{{"os":"unknown","architecture":"unknown"}},"annotations":{{"vnd.docker.reference.type":"attestation-manifest","vnd.docker.reference.digest":"{child}"}}}}"#,
+            sha(manifest)
+        )
+    };
+    let index = format!(
+        r#"{{"manifests":[{{"digest":"{child}","platform":{{"os":"linux","architecture":"amd64"}}}},{},{}]}}"#,
+        attached(provenance),
+        attached(&attestation)
+    );
+    let digest = sha(&index);
+    let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
+        (
+            format!("{BASE}/manifests/{digest}"),
+            response(200, &index, &[]),
+        ),
+        (
+            format!("{BASE}/manifests/{}", sha(provenance)),
+            response(200, provenance, &[]),
+        ),
+        (
+            format!("{BASE}/manifests/{}", sha(&attestation)),
+            response(200, &attestation, &[]),
+        ),
+        (
+            format!("{BASE}/blobs/{}", sha(&document)),
+            response(200, &document, &[]),
+        ),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    let client = client(steps.clone(), dir.path()).await;
+    let found = client
+        .image_sbom("ghcr.io/spec/image", &digest, "linux/amd64")
+        .await
+        .unwrap();
+    let patchula_datasource::ImageSbom::Found(sbom) = found else {
+        panic!("{found:?}");
+    };
+    assert_eq!(sbom.source, patchula_datasource::SbomSource::Attestation);
+    assert!(steps.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_single_manifest_is_matched_to_the_platform_its_config_names() {
+    let config = r#"{"architecture":"arm64","os":"linux","variant":"v8","config":{}}"#;
+    let manifest = format!(
+        r#"{{"schemaVersion":2,"config":{{"digest":"{}","size":1}},"layers":[]}}"#,
+        sha(config)
+    );
+    let digest = sha(&manifest);
+    let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
+        (
+            format!("{BASE}/manifests/{digest}"),
+            response(200, &manifest, &[]),
+        ),
+        (
+            format!("{BASE}/blobs/{}", sha(config)),
+            response(200, config, &[]),
+        ),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    let client = client(steps.clone(), dir.path()).await;
+    let found = client
+        .image_sbom("ghcr.io/spec/image", &digest, "linux/amd64")
+        .await
+        .unwrap();
+    assert_eq!(
+        found,
+        patchula_datasource::ImageSbom::NoPlatform(Some("linux/arm64/v8".into()))
+    );
+    assert!(steps.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_cosign_manifest_the_registry_never_names_a_digest_for_is_not_read() {
+    let child = format!("sha256:{}", "c".repeat(64));
+    let index = format!(
+        r#"{{"manifests":[{{"digest":"{child}","platform":{{"os":"linux","architecture":"amd64"}}}}]}}"#
+    );
+    let digest = sha(&index);
+    let tag = |d: &str, suffix: &str| format!("{BASE}/manifests/{}{suffix}", d.replace(':', "-"));
+    let unnamed = |url: String| (url, response(200, "{}", &[]));
+    let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
+        (
+            format!("{BASE}/manifests/{digest}"),
+            response(200, &index, &[]),
+        ),
+        unnamed(tag(&child, ".att")),
+        unnamed(tag(&child, ".att")),
+        (tag(&digest, ".att"), response(404, "", &[])),
+        (tag(&child, ".sbom"), response(404, "", &[])),
+        (tag(&digest, ".sbom"), response(404, "", &[])),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    let client = client(steps.clone(), dir.path()).await;
+    let found = client
+        .image_sbom("ghcr.io/spec/image", &digest, "linux/amd64")
+        .await
+        .unwrap();
+    assert_eq!(found, patchula_datasource::ImageSbom::Missing);
+    assert!(steps.0.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

@@ -1098,7 +1098,7 @@ fn image_section(changes: &[crate::Change]) -> String {
         let Some(check) = &change.image else {
             continue;
         };
-        let image = format!("`{}`", cell(&change.package));
+        let image = code(&change.package);
         let order = patchula_lookup::images::most_severe(check.fixed.iter().map(|f| f.id.as_str()));
         for id in order {
             fixed_ids.insert(id.to_owned());
@@ -1154,8 +1154,8 @@ fn image_section(changes: &[crate::Change]) -> String {
                 cell(&previous)
             ),
             "sbom-without-os" => format!(
-                "The SBOM for {image} lists no OS packages, and it was made by `{}`, which doesn't look for them. The image may have none, or the SBOM may leave them out.",
-                cell(check.detail.as_deref().unwrap_or("an unknown tool"))
+                "The SBOM for {image} lists no OS packages, and it was made by {}, which doesn't look for them. The image may have none, or the SBOM may leave them out.",
+                code(check.detail.as_deref().unwrap_or("an unknown tool"))
             ),
             "os-not-covered" => format!(
                 "{image} is built on {}, and OSV.dev has no advisories for it.",
@@ -1221,33 +1221,6 @@ fn image_section(changes: &[crate::Change]) -> String {
                 11_000,
             );
         }
-        let mut introduced = brings_in;
-        if !brings_in_listed.is_empty() {
-            let links = id_links(&brings_in_listed, 1_500);
-            introduced.push(if introduced.is_empty() {
-                format!(
-                    "{} advisor{} listed by OSV: {links}",
-                    brings_in_listed.len(),
-                    if brings_in_listed.len() == 1 {
-                        "y"
-                    } else {
-                        "ies"
-                    }
-                )
-            } else {
-                format!("and {} more listed by OSV: {links}", brings_in_listed.len())
-            });
-        }
-        if !introduced.is_empty() {
-            append(
-                &mut text,
-                &format!(
-                    "\nThe new image also brings in {}.\n",
-                    introduced.join("; ")
-                ),
-                13_000,
-            );
-        }
         text.push('\n');
     } else if !listed.is_empty() {
         append(
@@ -1259,6 +1232,34 @@ fn image_section(changes: &[crate::Change]) -> String {
                 id_links(&listed, 3_000)
             ),
             11_000,
+        );
+    }
+    let also = if text.is_empty() { "" } else { " also" };
+    let mut introduced = brings_in;
+    if !brings_in_listed.is_empty() {
+        let links = id_links(&brings_in_listed, 1_500);
+        introduced.push(if introduced.is_empty() {
+            format!(
+                "{} advisor{} listed by OSV: {links}",
+                brings_in_listed.len(),
+                if brings_in_listed.len() == 1 {
+                    "y"
+                } else {
+                    "ies"
+                }
+            )
+        } else {
+            format!("and {} more listed by OSV: {links}", brings_in_listed.len())
+        });
+    }
+    if !introduced.is_empty() {
+        append(
+            &mut text,
+            &format!(
+                "The new image{also} brings in {}.\n\n",
+                introduced.join("; ")
+            ),
+            13_000,
         );
     }
     if !warnings.is_empty() {
@@ -1305,6 +1306,18 @@ fn truncate(text: &str, limit: usize) -> String {
 }
 fn safe(text: &str) -> String {
     text.replace("<!--", "&lt;!--").replace("-->", "--&gt;")
+}
+/// Text as an inline code span that no backtick inside it can end early.
+fn code(text: &str) -> String {
+    let text = truncate(&safe(text).replace(['\n', '\r'], " "), 240);
+    let longest = text.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    let fence = "`".repeat(longest + 1);
+    let pad = if text.starts_with('`') || text.ends_with('`') {
+        " "
+    } else {
+        ""
+    };
+    format!("{fence}{pad}{text}{pad}{fence}")
 }
 fn cell(text: &str) -> String {
     truncate(
@@ -1474,6 +1487,29 @@ mod image_tests {
         );
         assert!(text.contains("\nAnd 3 more listed by OSV: [DEBIAN-CVE-2025-3](https://osv.dev/vulnerability/DEBIAN-CVE-2025-3), [DEBIAN-CVE-2025-2](https://osv.dev/vulnerability/DEBIAN-CVE-2025-2), [DEBIAN-CVE-2025-1](https://osv.dev/vulnerability/DEBIAN-CVE-2025-1).\n"), "{text}");
         assert!(text.contains("The new image also brings in [USN-9-1](https://osv.dev/vulnerability/USN-9-1) (moderate); and 1 more listed by OSV: [UBUNTU-CVE-2025-7](https://osv.dev/vulnerability/UBUNTU-CVE-2025-7).\n"), "{text}");
+    }
+
+    #[test]
+    fn a_rebuild_that_only_brings_advisories_in_still_says_so() {
+        let mut check = state("checked");
+        check.introduced = vec!["USN-9-1".into()];
+        let text = image_section(&[change("debian", check)]);
+        assert!(!text.contains("[!IMPORTANT]"), "{text}");
+        assert!(
+            text.contains("The new image brings in 1 advisory listed by OSV: [USN-9-1](https://osv.dev/vulnerability/USN-9-1).\n"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_generator_name_cannot_close_its_code_span() {
+        let mut ko = state("sbom-without-os");
+        ko.detail = Some("ko`\n> [!NOTE] `x".into());
+        let text = image_section(&[change("ghcr.io/acme/api", ko)]);
+        assert!(
+            text.contains("made by ``ko` > [!NOTE] `x``, which doesn't look for them"),
+            "{text}"
+        );
     }
 
     #[test]

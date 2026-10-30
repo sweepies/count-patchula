@@ -151,7 +151,14 @@ impl Client {
             .map(|(v, _)| v.clone());
         drop(saved);
         let mut response = self
-            .registry_read(url, accept, bearer.as_deref(), method.clone(), derived)
+            .registry_read(
+                url,
+                accept,
+                bearer.as_deref(),
+                authenticated,
+                method.clone(),
+                derived,
+            )
             .await?;
         if response.status == 401 {
             let mut saved_token = token.lock().await;
@@ -275,7 +282,7 @@ impl Client {
             };
             drop(saved_token);
             response = self
-                .registry_read(url, accept, Some(&next), method, derived)
+                .registry_read(url, accept, Some(&next), authenticated, method, derived)
                 .await?;
             if response.status == 401 {
                 *token.lock().await = None;
@@ -322,9 +329,11 @@ impl Client {
         url: &str,
         accept: &str,
         token: Option<&str>,
+        account: bool,
         method: Method,
         derived: Option<(&'static str, Derive)>,
     ) -> Result<patchula_http::Response> {
+        let token = token.map(|token| patchula_http::Bearer { token, account });
         if method == Method::HEAD {
             return Ok(self.http.registry_head(url, accept, token).await?);
         }

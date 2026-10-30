@@ -174,6 +174,12 @@ impl Config {
             );
         }
         filter("security.apply.permitted", &self.security.apply.permitted)?;
+        if self.security.images && self.security.image_platforms.is_empty() {
+            return fail(
+                "security.imagePlatforms",
+                "list at least one platform, or set security.images to false",
+            );
+        }
         for (i, platform) in self.security.image_platforms.iter().enumerate() {
             let parts: Vec<_> = platform.split('/').collect();
             if !(2..=3).contains(&parts.len()) || parts.iter().any(|p| p.is_empty()) {

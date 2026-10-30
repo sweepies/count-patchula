@@ -687,7 +687,7 @@ pub fn batch_plan(
                 policy: None,
                 release_age: None,
                 fixes: Vec::new(),
-                image: None,
+                image: target.image.clone(),
             },
         ));
     }

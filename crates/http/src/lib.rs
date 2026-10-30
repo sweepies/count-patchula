@@ -114,7 +114,7 @@ impl Transport for Network {
 }
 
 mod cached;
-pub use cached::{Cached, Error as CacheError, Options, Stats};
+pub use cached::{Bearer, Cached, Error as CacheError, Options, Stats};
 mod trace;
 pub use trace::{PhaseTrace, RequestTrace};
 

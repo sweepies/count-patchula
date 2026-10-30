@@ -117,6 +117,9 @@ update like any other: the PR opens with a table of the five most severe
 advisories it fixes, with the package's old and new version (or "removed") and
 the platforms, then a count and links for the rest OSV lists. The commit ends
 in `[security]`, the `security` label is added and `security.apply` applies.
+When `security.apply` turns off updates or digests for the image, or its
+`permitted` filter doesn't match the new tag, the rebuild is not a security
+update, as for any other dependency; the PR still shows the comparison.
 Advisories the new image brings in are listed the same way. Only an OSV record
 the Count has read, and that isn't withdrawn, marks a rebuild as a security
 fix: not release notes, image labels or annotations. When every record he
@@ -156,7 +159,10 @@ and kept in the cache; of an SBOM only the OS packages are kept. A digest or
 cosign tag the registry lacks is asked about again a day later. A warm run
 costs one batched OSV query for all images, sent once the new digests are
 known, and a HEAD per cosign attestation tag, since those tags can move. OSV's
-full record is read only for the advisories a PR shows in its table. Each
+full record is read for the five most severe advisories a rebuild fixes and the
+five most severe it brings in, so the PR's table and its list of introduced
+advisories carry them; later ones are read only when every fix read so far is
+withdrawn. Each
 platform in `security.imagePlatforms` adds its own manifest and SBOM reads on
 the first run; on five common images, adding `linux/arm64` took the first run
 from 165 to 207 requests.
@@ -216,6 +222,7 @@ security {
 ```
 
 `advisories = false` turns the lookup off for a repository, images included, and
-`images = false` turns off only the image comparison. An image in
+`images = false` turns off only the image comparison. With `images` on,
+`imagePlatforms` must list at least one platform. An image in
 `quietImages`, matched like a dependency pattern, gets no warning on its PRs;
 the dashboard still lists it, under "Silenced", with your reason.

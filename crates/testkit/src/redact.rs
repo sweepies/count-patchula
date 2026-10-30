@@ -72,11 +72,10 @@ impl Redactor {
         let text = urls.replace_all(text, |captures: &regex::Captures<'_>| {
             Url::parse(&captures[0])
                 .map(|url| {
-                    let redacted = self.url(&url);
-                    if redacted == url.as_str() {
+                    if self.keeps(&url) {
                         captures[0].to_owned()
                     } else {
-                        redacted
+                        self.url(&url)
                     }
                 })
                 .unwrap_or_else(|_| MARKER.into())
@@ -111,6 +110,18 @@ impl Redactor {
         } else {
             self.text(value)
         }
+    }
+
+    /// Whether `url` has nothing to redact, whatever its serialization.
+    fn keeps(&self, url: &Url) -> bool {
+        let path = percent_encoding::percent_decode_str(url.path()).decode_utf8_lossy();
+        url.username().is_empty()
+            && url.password().is_none()
+            && url.fragment().is_none()
+            && self.pattern_text(&path) == path
+            && url
+                .query_pairs()
+                .all(|(name, value)| self.field(&name, &value) == value)
     }
 
     pub fn url(&self, url: &Url) -> String {

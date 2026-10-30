@@ -92,6 +92,35 @@ struct Compact {
     sources_known: bool,
 }
 
+/// The stored form of an image config: only the platform it names.
+#[derive(Serialize, Deserialize)]
+struct Platform {
+    sha256: String,
+    os: Option<String>,
+    architecture: Option<String>,
+    variant: Option<String>,
+}
+
+fn compact_platform(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+    use patchula_http::CacheError::Document;
+    let config: Value = serde_json::from_slice(bytes).map_err(|_| Document)?;
+    let text = |field: &str| config[field].as_str().map(str::to_owned);
+    serde_json::to_vec(&Platform {
+        sha256: hex(bytes),
+        os: text("os"),
+        architecture: text("architecture"),
+        variant: text("variant"),
+    })
+    .map_err(|_| Document)
+}
+
+fn platform_name(os: &str, architecture: &str, variant: Option<&str>) -> String {
+    match variant {
+        Some(variant) => format!("{os}/{architecture}/{variant}"),
+        None => format!("{os}/{architecture}"),
+    }
+}
+
 fn hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -338,20 +367,19 @@ impl Client {
                     .find_map(|p| {
                         let os = p["os"].as_str()?;
                         let architecture = p["architecture"].as_str()?;
-                        Some(match p["variant"].as_str() {
-                            Some(variant) => format!("{os}/{architecture}/{variant}"),
-                            None => format!("{os}/{architecture}"),
-                        })
+                        Some(platform_name(os, architecture, p["variant"].as_str()))
                     });
                 return Ok(ImageSbom::NoPlatform(first));
             };
             let child = child["digest"].as_str().ok_or(Error::Invalid)?.to_owned();
             validate_digest(&child)?;
-            let attestation = manifests.iter().find(|m| {
+            let attestations = manifests.iter().filter(|m| {
                 m["annotations"]["vnd.docker.reference.type"] == "attestation-manifest"
                     && m["annotations"]["vnd.docker.reference.digest"] == child.as_str()
             });
-            if let Some(attestation) = attestation {
+            // An image can carry several attestations, such as provenance
+            // beside the SBOM, in any order.
+            for attestation in attestations {
                 let reference = attestation["digest"].as_str().ok_or(Error::Invalid)?;
                 validate_digest(reference)?;
                 let response = self
@@ -367,6 +395,19 @@ impl Client {
                 }
             }
             candidates.insert(0, child);
+        } else {
+            // A single manifest names its platform only in its config.
+            let config = index["config"]["digest"].as_str().ok_or(Error::Invalid)?;
+            validate_digest(config)?;
+            let actual = self.image_platform(host, path, config).await?;
+            let named = actual.os.as_deref().zip(actual.architecture.as_deref());
+            if named != Some((os, architecture))
+                || variant.is_some_and(|v| actual.variant.as_deref() != Some(v))
+            {
+                return Ok(ImageSbom::NoPlatform(named.map(|(os, architecture)| {
+                    platform_name(os, architecture, actual.variant.as_deref())
+                })));
+            }
         }
         // cosign attaches by tag. The platform digest comes first, since some
         // publishers list packages only there.
@@ -386,25 +427,31 @@ impl Client {
                     Err(error) => return Err(error),
                 };
                 // The tag moves, but the manifest it names is read by digest,
-                // so a warm run reads it from the cache.
-                let named = head
-                    .headers
-                    .get("docker-content-digest")
-                    .and_then(|v| v.to_str().ok())
-                    .filter(|d| validate_digest(d).is_ok())
-                    .map(str::to_owned);
-                let manifest: Value = match &named {
+                // so a warm run reads it from the cache. A registry that does
+                // not name the digest on HEAD must name it on GET, so that
+                // the manifest is checked either way.
+                let digest_of = |headers: &reqwest::header::HeaderMap| {
+                    headers
+                        .get("docker-content-digest")
+                        .and_then(|v| v.to_str().ok())
+                        .filter(|d| validate_digest(d).is_ok())
+                        .map(str::to_owned)
+                };
+                let manifest = match digest_of(&head.headers) {
                     Some(named) => {
                         let response = self
-                            .registry_with(host, path, &url(named), MANIFEST, Method::GET, None)
+                            .registry_with(host, path, &url(&named), MANIFEST, Method::GET, None)
                             .await?;
-                        verified(&response.body, named)?
+                        verified(&response.body, &named)?
                     }
                     None => {
                         let response = self
                             .registry_with(host, path, &url(&tag), MANIFEST, Method::GET, None)
                             .await?;
-                        serde_json::from_slice(&response.body)?
+                        let Some(named) = digest_of(&response.headers) else {
+                            continue;
+                        };
+                        verified(&response.body, &named)?
                     }
                 };
                 for layer in manifest["layers"].as_array().into_iter().flatten() {
@@ -432,6 +479,26 @@ impl Client {
             }
         }
         Ok(ImageSbom::Missing)
+    }
+
+    async fn image_platform(&self, host: &str, path: &str, digest: &str) -> Result<Platform> {
+        let url = format!("https://{host}/v2/{path}/blobs/{digest}");
+        let derive: Derive = compact_platform;
+        let response = self
+            .registry_with(
+                host,
+                path,
+                &url,
+                BLOB,
+                Method::GET,
+                Some(("image-platform-v1", derive)),
+            )
+            .await?;
+        let platform: Platform = serde_json::from_slice(&response.body)?;
+        if format!("sha256:{}", platform.sha256) != digest {
+            return Err(Error::Invalid);
+        }
+        Ok(platform)
     }
 
     async fn sbom_blob(&self, host: &str, path: &str, layer: &Value) -> Result<Option<Compact>> {

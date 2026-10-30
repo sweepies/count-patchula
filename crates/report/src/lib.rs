@@ -4,13 +4,13 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("invalid report JSON: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("unsupported report schemaVersion {0}; expected 2")]
+    #[error("unsupported report schemaVersion {0}; expected 3")]
     Version(u32),
     #[error("invalid report: {0}")]
     Invalid(String),
@@ -710,22 +710,25 @@ mod tests {
     #[test]
     fn reject_future_schema_before_interpreting_payload() {
         assert!(matches!(
-            Report::from_json(br#"{"schemaVersion":3,"future":true}"#),
-            Err(Error::Version(3))
+            Report::from_json(br#"{"schemaVersion":4,"future":true}"#),
+            Err(Error::Version(4))
         ));
         assert!(
-            Report::from_json(br#"{"schemaVersion":2,"repositories":[],"typo":true}"#).is_err()
+            Report::from_json(br#"{"schemaVersion":3,"repositories":[],"typo":true}"#).is_err()
         );
-        assert!(matches!(
-            Report::from_json(br#"{"schemaVersion":1,"repositories":[]}"#),
-            Err(Error::Version(1))
-        ));
+        for old in [1, 2] {
+            let report = format!(r#"{{"schemaVersion":{old},"repositories":[]}}"#);
+            assert!(matches!(
+                Report::from_json(report.as_bytes()),
+                Err(Error::Version(version)) if version == old
+            ));
+        }
     }
 
     #[test]
     fn action_versions_and_dry_run_states_are_validated() {
         let mut value = serde_json::json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "repositories": [{"repository":"demo/app","status":"complete","reason":null,"packageFiles":[]}],
             "actions": {"schemaVersion":1,"dryRun":true,"branches":[{
                 "repository":"demo/app","branch":"patchula/example","baseCommit":"base",

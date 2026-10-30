@@ -1301,8 +1301,6 @@ impl Engine {
         // gap before the first rebuild; OSV is asked only about replacements.
         let mut image_reads = BTreeSet::new();
         let mut image_pairs = BTreeSet::new();
-        let mut image_replacements = BTreeSet::new();
-        let mut image_platforms = BTreeSet::new();
         let mut image_deps = Vec::new();
         for ((repo, eval), deps) in work.iter().zip(&evaluators).zip(&proposals) {
             let (Some(eval), Some(config)) = (eval, &repo.config) else {
@@ -1333,10 +1331,8 @@ impl Engine {
                 for new in current.into_iter().chain(tagged).filter(|new| *new != old) {
                     image_pairs.insert((dep.package.clone(), old.clone()));
                     image_pairs.insert((dep.package.clone(), new.clone()));
-                    image_replacements.insert((dep.package.clone(), old.clone(), new.clone()));
                     digests.push(new.clone());
                 }
-                image_platforms.extend(config.security.image_platforms.iter().cloned());
                 for digest in &digests {
                     for platform in &config.security.image_platforms {
                         image_reads.insert((dep.package.clone(), digest.clone(), platform.clone()));
@@ -1346,6 +1342,7 @@ impl Engine {
                     dep.package.clone(),
                     digests,
                     &config.security.image_platforms,
+                    BTreeSet::new(),
                 ));
             }
         }
@@ -1366,9 +1363,9 @@ impl Engine {
         // An image with none of the configured platforms is read for the first
         // platform its index lists, on every digest of the dependency.
         let mut fallback_reads = BTreeSet::new();
-        for (package, digests, platforms) in &image_deps {
-            for digest in digests {
-                let side = platforms
+        for (package, digests, configured, listed) in &mut image_deps {
+            for digest in digests.iter() {
+                let side = configured
                     .iter()
                     .filter_map(|platform| {
                         let key = (package.clone(), digest.clone(), platform.clone());
@@ -1378,13 +1375,13 @@ impl Engine {
                 let Some(platform) = patchula_lookup::images::fallback(&side) else {
                     continue;
                 };
-                for digest in digests {
+                for digest in digests.iter() {
                     let key = (package.clone(), digest.clone(), platform.clone());
                     if !image_sboms.contains_key(&key) {
                         fallback_reads.insert(key);
                     }
                 }
-                image_platforms.insert(platform);
+                listed.insert(platform);
             }
         }
         image_sboms.extend(read_sboms(fallback_reads).await);
@@ -1426,6 +1423,18 @@ impl Engine {
                 _ => BTreeSet::new(),
             }
         };
+        // Each replacement is judged on its own repository's platforms.
+        let replacements: Vec<(String, String, String, BTreeSet<String>)> = image_deps
+            .iter()
+            .flat_map(|(package, digests, configured, listed)| {
+                let (old, news) = digests.split_first().expect("a dependency's own digest");
+                let platforms: BTreeSet<String> =
+                    configured.iter().chain(listed).cloned().collect();
+                news.iter()
+                    .map(|new| (package.clone(), old.clone(), new.clone(), platforms.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
         // Which advisories a rebuild leaves behind comes from the IDs alone, but
         // only a record read in full marks it a security fix. The most severe
         // few it fixes or brings in are read; when every fix read is
@@ -1434,9 +1443,9 @@ impl Engine {
             let listing = self.sources.advisory_listing(&image_queries).await?;
             let mut fixes = Vec::new();
             let mut wanted = BTreeSet::new();
-            for (package, old, new) in &image_replacements {
+            for (package, old, new, platforms) in &replacements {
                 let (mut fixed, mut introduced) = (BTreeSet::new(), BTreeSet::new());
-                for platform in image_platforms.iter() {
+                for platform in platforms {
                     let before = listed_ids(&listing, package, old, platform);
                     let after = listed_ids(&listing, package, new, platform);
                     fixed.extend(before.difference(&after).cloned());
@@ -1648,15 +1657,16 @@ impl Engine {
                         let (verified, introduced) =
                             patchula_lookup::images::advisories(&check, &image_found);
                         if check.state != "unreadable" && !verified.is_empty() {
-                            proposal.fixes = check.fixed.iter().map(|f| f.id.clone()).collect();
-                            proposal.fixes.dedup();
-                            eval.secure(dep, proposal);
-                            let label = &config.security.label;
-                            if let Some(policy) = &mut proposal.policy
-                                && !label.is_empty()
-                                && !policy.labels.contains(label)
-                            {
-                                policy.labels.push(label.clone());
+                            if eval.secure(dep, proposal) {
+                                proposal.fixes = check.fixed.iter().map(|f| f.id.clone()).collect();
+                                proposal.fixes.dedup();
+                                let label = &config.security.label;
+                                if let Some(policy) = &mut proposal.policy
+                                    && !label.is_empty()
+                                    && !policy.labels.contains(label)
+                                {
+                                    policy.labels.push(label.clone());
+                                }
                             }
                             image_advisories.extend(verified);
                         }

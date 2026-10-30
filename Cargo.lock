@@ -2356,6 +2356,7 @@ dependencies = [
  "regex",
  "semver",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

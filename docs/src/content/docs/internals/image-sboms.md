@@ -6,9 +6,8 @@ in the old and new digests' SBOMs through OSV.dev. The user-facing behaviour is
 in [container image rebuilds](/guide/security/#container-image-rebuilds);
 this page covers how it is built.
 
-OSV.dev stays the only vulnerability source. No image layer is ever read, no
-package list is stored outside the HTTP cache, and Docker Hub is only read
-anonymously.
+OSV.dev stays the only vulnerability source. No image layer is ever read, and
+no package list is stored outside the HTTP cache.
 
 ## Where it runs
 
@@ -19,8 +18,11 @@ current digest and each new digest a proposal will pin (a same-tag digest
 update, or a tag update's `newDigest`), and reads one SBOM per digest and
 platform in `security.imagePlatforms` (`linux/amd64` by default), 16 at a
 time. A dependency with a digest that has none of those platforms is then read
-for the first platform that digest's index lists, on all its digests. Only the
-digests of a replacement are sent to OSV, in one batched `querybatch` call.
+for the first platform that digest's index lists, on all its digests. OSV
+receives no image digest and no SBOM. For the SBOMs of replacements only, one
+batched `querybatch` call carries each source package's ecosystem (such as
+`Debian:12`), name and version; full records are then read by advisory ID
+(see [Comparing](#comparing)).
 
 The current digest is read even without a replacement, so the dashboard can
 list an image whose SBOM gives nothing to compare before its first rebuild.
@@ -33,13 +35,19 @@ carries the first platform the index does list, skipping attestations) or
 `Gone` (the registry answers 404 for the digest):
 
 1. GET the manifest by digest and check its SHA-256. An index is searched for
-   the platform's manifest and for an attestation manifest whose
-   `vnd.docker.reference.digest` is that manifest; its layer with
-   `in-toto.io/predicate-type: https://spdx.dev/Document` is the SBOM.
+   the platform's manifest and for the attestation manifests whose
+   `vnd.docker.reference.digest` is that manifest, each in turn; a layer with
+   `in-toto.io/predicate-type: https://spdx.dev/Document` is the SBOM. A single
+   manifest has no platform list, so its config blob is read, checked against
+   its digest and reduced to its `os`, `architecture` and `variant`; one that
+   differs from the requested platform is `NoPlatform`.
 2. Otherwise the cosign tags: `sha256-<digest>.att` for the platform digest,
    then the index digest, then `.sbom` for both. A HEAD comes first, so a
-   missing tag costs nothing against pull limits. An `.att` layer must be an
-   SPDX DSSE envelope whose in-toto subject is the digest it was found for.
+   missing tag costs nothing against pull limits. The manifest a tag names is
+   read by the digest in `Docker-Content-Digest` (from the HEAD, or else from
+   the GET) and checked against it; a registry that sends neither has its tag
+   skipped. An `.att` layer must be an SPDX in-toto statement, optionally in a
+   DSSE envelope, whose subject is the digest it was found for.
 3. Each blob's SHA-256 is checked against its digest.
 
 A Docker official image (`library/*` on Docker Hub) is read from
@@ -95,8 +103,10 @@ names and versions haven't been measured against it yet.
 
 `patchula_lookup::images::compare` works per platform present in both
 digests, on the advisory IDs of OSV's batch answer. An advisory is fixed when
-OSV lists it for one of the old SBOM's queries and for none of the new one's; its `new` version is the new image's
-version of that source package, or none when the package is gone. Advisories
+OSV lists it for one of the old SBOM's queries and for none of the new one's. It
+gets one row for each source package of the old SBOM that OSV lists it for,
+each with the new image's version of that package, or none when the package is
+gone. Advisories
 only the new image has are `introduced`. The result's state is the worst of its
 platforms, in this order: `unreadable`, `previous-unavailable`, `no-sbom`,
 `sbom-without-os`, `os-not-covered`, `partial-sources`, `checked`,
@@ -107,7 +117,9 @@ that catalogs whole images: Docker Scout, syft or apko. Any other generator's
 empty list is `sbom-without-os`.
 
 A rebuild that fixes something gets the advisory IDs in `fixes`, the policy of
-`security.apply` (through `Evaluator::secure`) and `security.label`. The
+`security.apply` and `security.label`, through `Evaluator::secure`. `secure`
+refuses, and the rebuild stays an ordinary update, when `security.apply` turns
+off `active` or `digest`, or its `permitted` filter doesn't match the new tag. The
 advisories join `metadata.advisories`, so the dashboard's known
 vulnerabilities and the PR's `Change.advisories` carry them; the comparison
 itself is `Update.image`, and the current digest's warning, if any, is
@@ -127,10 +139,13 @@ source packages.
 ## Cost
 
 The [HTTP cache](/internals/cache/) treats a registry manifest or blob addressed
-by digest as fresh for ten years, and stores it even when the registry says
-`no-store` or `Vary` (quay.io does), since the bytes are public and checked
-against their digest. A 404 for a digest or a `.att`/`.sbom` tag is kept for a
-day. A cosign tag's manifest is read by the digest its HEAD names, so only the
+by digest as fresh for ten years once it has been read successfully, and stores
+it even when the registry says `no-store` or `Vary` (quay.io does), since the
+bytes are public and checked against their digest. The exception does not cover
+a read made with an account's Docker Hub token, whose bytes may be private and
+whose cache key leaves the token out; those follow the registry's `no-store`. A
+404 for a digest or a `.att`/`.sbom` tag is kept for a day, never longer. A
+cosign tag's manifest is read by the digest its HEAD names, so only the
 HEAD repeats.
 
 The image queries go to OSV in their own batch after the digest phase, because
@@ -169,12 +184,14 @@ so it costs the same with the check on or off.
 - `crates/datasource/src/images.rs` unit tests: syft `upstream` and the
   kernel filter, Scout source entries, ecosystem names, DSSE subjects.
 - `crates/datasource/tests/registry_protocol.rs`, simulated: an `.att` for
-  another subject is skipped for the `.sbom` tag, a manifest whose bytes don't
-  match its digest is rejected, and an official image the mirror lacks is read
-  from Docker Hub.
+  another subject is skipped for the `.sbom` tag, an SBOM blob whose bytes
+  don't match its digest is rejected, an SBOM attestation after a provenance
+  one is found, a single manifest is matched to the platform in its config, a
+  cosign manifest with no digest is not read, and an official image the mirror
+  lacks is read from Docker Hub.
 - `crates/lookup/src/images.rs` unit tests: fixed, removed and introduced
-  advisories across platforms, state precedence, and which current-digest
-  states are warnings.
+  advisories across platforms, an advisory listed for two packages, state
+  precedence, and which current-digest states are warnings.
 - `crates/engine/tests/images.rs` replays recordings: two `alpine:3.20` digests
   from mirror.gcr.io and OSV.dev, where the newer one fixes 29 advisories
   (`fixtures/engine/sboms-alpine.json`); and a Chainguard `.att`, a BuildKit

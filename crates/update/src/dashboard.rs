@@ -522,10 +522,18 @@ pub fn render(
                             ),
                         ));
                 }
+                // Two pins of one tag differ only by digest.
+                let pinned = dep
+                    .current
+                    .digest
+                    .as_deref()
+                    .map(|digest| format!("@{}", digest.chars().take(19).collect::<String>()))
+                    .unwrap_or_default();
                 let reference = format!(
-                    "`{}:{}` in `{}`",
+                    "`{}:{}{}` in `{}`",
                     safe(&dep.package),
                     safe(dep.current.value.as_deref().unwrap_or("unknown")),
+                    safe(&pinned),
                     safe(&file.path)
                 );
                 let previous = dep
