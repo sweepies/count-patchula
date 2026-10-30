@@ -1605,6 +1605,100 @@ async fn mise_lock_updates_a_tool_that_records_no_platforms() {
     }
 }
 
+/// Records the tool configuration each `mise lock` is given.
+struct ConfigSpy {
+    inner: Arc<MiseFixture>,
+    configs: Mutex<Vec<String>>,
+}
+impl Executor for ConfigSpy {
+    fn run(
+        &self,
+        spec: CommandSpec,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+        if let Some(at) = spec.args.iter().position(|arg| arg == "--cd") {
+            let work = Path::new(&spec.args[at + 1]);
+            let config = std::fs::read_to_string(work.join("mise.toml")).unwrap();
+            self.configs.lock().unwrap().push(config);
+        }
+        self.inner.run(spec)
+    }
+}
+
+/// A mise.lock records the configuration beside it and above it. A mise.toml
+/// in a subdirectory, such as a test fixture, is locked by a lock of its own
+/// and must not override what the root declares.
+#[tokio::test]
+async fn mise_lock_ignores_configuration_below_the_lockfile() {
+    let old = "[tools]\nnode = '22.0.0'\nbun = '1.4.3'\n";
+    let nested = "[tools]\nnode = '23.0.0'\n";
+    let files = BTreeMap::from([
+        ("mise.toml".to_string(), old.to_string()),
+        // Extraction skips test fixtures, but the lock job reads every file.
+        ("tests/fixture/mise.toml".into(), nested.into()),
+        ("services/api/mise.toml".into(), nested.into()),
+        (
+            "mise.lock".into(),
+            include_str!("fixtures/mise.lock").into(),
+        ),
+    ]);
+    let spy = Arc::new(ConfigSpy {
+        inner: Arc::new(MiseFixture {
+            git: fixture(files.clone(), false, false),
+            fault: "",
+            calls: Mutex::new(Vec::new()),
+        }),
+        configs: Mutex::new(Vec::new()),
+    });
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(spy.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let found = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies;
+    let update = Update {
+        new_version: Some("24.0.0".into()),
+        new_value: Some("24.0.0".into()),
+        ..serde_json::from_value(serde_json::json!({"updateType":"major"})).unwrap()
+    };
+    let in_file = |file: &str| {
+        found
+            .iter()
+            .find(|d| d.name == "node" && d.file == file)
+            .unwrap()
+    };
+    assert!(
+        job(in_file("services/api/mise.toml"), &update, &snapshot)
+            .unwrap()
+            .is_none(),
+        "the nested mise.toml has no mise.lock beside it"
+    );
+    let job = job(in_file("mise.toml"), &update, &snapshot)
+        .unwrap()
+        .unwrap();
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        .unwrap()
+        .unwrap();
+    p.maintenance = false;
+    p.lock_jobs = vec![job];
+    p.contents
+        .insert("mise.toml".into(), old.replace("22.0.0", "24.0.0"));
+    p.action.files.push(FileAction {
+        path: "mise.toml".into(),
+        blob_sha: blob_sha(old),
+        diff: String::new(),
+    });
+    runner.prepare(&mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert_eq!(
+        *spy.configs.lock().unwrap(),
+        ["[tools]\nnode = '24.0.0'\n".to_string()]
+    );
+}
+
 #[test]
 fn mise_lock_maintenance_respects_refresh_and_unlocked_manifests_need_no_job() {
     let files = BTreeMap::from([("mise.toml".into(), "[tools]\nnode='22.0.0'\n".into())]);

@@ -113,7 +113,7 @@ impl Runner {
                 matches!(
                     path.rsplit('/').next(),
                     Some("mise.toml" | ".mise.toml" | ".tool-versions")
-                ) && (under(path, directory) || under(directory, super::directory(path)))
+                ) && under(directory, super::directory(path))
             })
             .collect();
         paths.sort_by_key(|path| path.len());

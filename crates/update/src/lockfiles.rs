@@ -70,9 +70,12 @@ pub(crate) fn job(
 ) -> Result<Option<Job>, String> {
     let (ecosystem, root) = match dep.manager {
         Manager::Mise => {
-            let Some(root) = nearest(&dep.file, &snapshot.paths, &["mise.lock"]) else {
+            // A lockfile records the configuration beside it and above it, never
+            // below: a nested mise.toml is locked by a mise.lock of its own.
+            let root = directory(&dep.file);
+            if !snapshot.paths.contains(&node::join(root, "mise.lock")) {
                 return Ok(None);
-            };
+            }
             return Ok(Some(Job {
                 ecosystem: Ecosystem::Mise,
                 directory: root.into(),

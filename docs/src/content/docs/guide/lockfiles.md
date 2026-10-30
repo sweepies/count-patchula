@@ -26,6 +26,12 @@ commit. If the tool fails, nothing is published.
 | `flake.lock` | nix | `nix flake update <input>`, or `nix flake update` for maintenance |
 | `apm.lock.yaml` | APM | `apm lock`, or `apm lock --update` for maintenance |
 
+A `mise.lock` records the configuration in its own directory and above it,
+as mise does. A `mise.toml` in a subdirectory is locked by a `mise.lock` of its
+own, and with none beside it the Count updates the manifest alone. Tools with no
+platform entries, such as `rust`, lock for the platforms the rest of the
+lockfile records.
+
 A Cargo update across a semver-incompatible boundary, such as `0.22` to `0.23`
 or `1.x` to `2.x`, adds a second entry beside the old one, because other crates
 may still require it. The Count runs `cargo update --workspace` for it, which
