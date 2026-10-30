@@ -18,7 +18,11 @@ pub fn inert(text: &str) -> String {
         )
         .expect("GitHub reference URLs")
     });
-    let text = REFERENCES.replace_all(text, |c: &regex::Captures| without_backlink(&c[0]));
+    // `&#64;` renders as a mention too, so it is read as the `@` it stands for.
+    static AT_ENTITY: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"(?i)&#(?:0*64|x0*40);").expect("@ entity"));
+    let text = AT_ENTITY.replace_all(text, "@");
+    let text = REFERENCES.replace_all(&text, |c: &regex::Captures| without_backlink(&c[0]));
     let mut output = String::with_capacity(text.len());
     let mut previous = None::<char>;
     let mut chars = text.chars().peekable();

@@ -312,7 +312,7 @@ fn nothing_third_party_mentions_anyone_or_links_back() {
     repo.package_files[0].dependencies[0].metadata.as_mut().unwrap().advisories =
         serde_json::from_value(json!([
             {"id":"GHSA-evil","aliases":["CVE-2026-1"],"severity":"high",
-             "summary":"Ask @mallory (cc @org/team); fixes #12 and org/repo#34, see https://github.com/a/b/issues/5",
+             "summary":"Ask @mallory or &#64;eve (cc @org/team); fixes #12 and org/repo#34, see https://github.com/a/b/issues/5",
              "url":"https://osv.dev/vulnerability/GHSA-evil"},
             {"id":"GHSA-evil2","summary":"Second @mallory report","url":"https://osv.dev/vulnerability/GHSA-evil2"}
         ]))
@@ -330,6 +330,7 @@ fn nothing_third_party_mentions_anyone_or_links_back() {
         "@mallory",
         "@org/team",
         "&#64;",
+        "@eve",
         " #12",
         "org/repo#34",
         "//github.com/a/b/issues/5",

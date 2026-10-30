@@ -1640,6 +1640,10 @@ fn compare_urls_follow_the_tag_source() {
 fn inert_text_has_no_mention_or_issue_reference_left_for_github_to_read() {
     for (text, expected) in [
         ("mise by @jdx", "mise by @\u{200d}jdx"),
+        (
+            "&#64;jdx &#x40;jdx &#0064;jdx",
+            "@\u{200d}jdx @\u{200d}jdx @\u{200d}jdx",
+        ),
         ("(@alice, @org/team)", "(@\u{200d}alice, @\u{200d}org/team)"),
         (
             "see #12 and org/repo#34",
