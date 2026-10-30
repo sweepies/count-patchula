@@ -229,6 +229,38 @@ fn same_head(pr: &Value, proof: &Value, actor: &str, repo: &str) -> bool {
         && pr["base"]["ref"] == proof["base"]["ref"]
         && pr["body"] == proof["body"]
 }
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Native {
+    Enabled,
+    /// GitHub refused because nothing blocks the merge: no required check or
+    /// review stands in the way, so there is nothing for auto-merge to wait for.
+    AlreadyMergeable,
+}
+/// Turns on GitHub's auto-merge for a PR, pinned to its head commit. GitHub
+/// offers auto-merge only on a PR that cannot be merged yet, and answers one
+/// that can with an "is in clean status" error. That answer is not a failure,
+/// and does not entitle anything to merge: the caller's own merge rules apply.
+pub(crate) async fn enable_native(
+    client: &Client,
+    id: &Value,
+    method: &str,
+    head: &Value,
+) -> Result<Native, String> {
+    let input = json!({"input":{"pullRequestId":id,"mergeMethod":method.to_uppercase(),"expectedHeadOid":head}});
+    match client
+        .graphql(crate::pull_requests::ENABLE_AUTO_MERGE, input)
+        .await
+    {
+        Ok(result) if result["enablePullRequestAutoMerge"]["pullRequest"].is_object() => {
+            Ok(Native::Enabled)
+        }
+        Ok(_) => Err("GitHub did not acknowledge native auto-merge".into()),
+        Err(patchula_github::Error::Graphql(message)) if message.contains("is in clean status") => {
+            Ok(Native::AlreadyMergeable)
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
 async fn one(
     client: &Client,
     inventory: &Inventory,
@@ -246,16 +278,18 @@ async fn one(
         .method
         .as_deref()
         .ok_or("repository has no enabled merge method")?;
+    // A PR that GitHub already finds mergeable cannot take native auto-merge;
+    // it falls through to the Count's own merge, behind the same gate.
     if settings.native {
-        if pr["auto_merge"].is_null() {
-            let result = client.graphql(crate::pull_requests::ENABLE_AUTO_MERGE,
-                json!({"input":{"pullRequestId":pr["node_id"],"mergeMethod":method.to_uppercase(),"expectedHeadOid":pr["head"]["sha"]}})).await.map_err(|e| e.to_string())?;
-            if !result["enablePullRequestAutoMerge"]["pullRequest"].is_object() {
-                return Err("GitHub did not acknowledge native auto-merge".into());
-            }
+        if pr["auto_merge"].is_null()
+            && enable_native(client, &pr["node_id"], method, &pr["head"]["sha"]).await?
+                == Native::Enabled
+        {
             pr["auto_merge"] = json!({"enabled":true});
         }
-        return Ok((ActionStatus::Unchanged, "native auto-merge enabled".into()));
+        if !pr["auto_merge"].is_null() {
+            return Ok((ActionStatus::Unchanged, "native auto-merge enabled".into()));
+        }
     }
     let number = pr["number"].as_u64().ok_or("missing PR number")?;
     let head = pr["head"]["sha"].as_str().ok_or("missing receipt head")?;
