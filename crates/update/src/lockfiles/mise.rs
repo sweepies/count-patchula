@@ -162,12 +162,14 @@ impl Runner {
         }
         std::fs::write(work.join("mise.toml"), &sanitized).map_err(|e| e.to_string())?;
         std::fs::write(work.join("mise.lock"), original).map_err(|e| e.to_string())?;
-        let existing_platforms: BTreeSet<_> = selected
+        let mut existing_platforms: BTreeSet<_> = selected
             .iter()
             .flat_map(|name| platforms(&before["tools"][name]))
             .collect();
+        // Some tools, such as core:rust, record no platform entries. They lock
+        // for the platforms the rest of the lockfile records.
         if existing_platforms.is_empty() {
-            return Err("mise.lock has no existing platforms to preserve".into());
+            existing_platforms = old_tools.values().flat_map(platforms).collect();
         }
         let defaults =
             toml_edit::Document::parse(include_str!("defaults.toml")).map_err(|e| e.to_string())?;
@@ -186,9 +188,14 @@ impl Runner {
             "--cd".into(),
             work.to_string_lossy().into_owned(),
             "lock".into(),
-            "--platform".into(),
-            existing_platforms.into_iter().collect::<Vec<_>>().join(","),
         ]);
+        // A lockfile without any platform entry has none to preserve.
+        if !existing_platforms.is_empty() {
+            command.args.extend([
+                "--platform".into(),
+                existing_platforms.into_iter().collect::<Vec<_>>().join(","),
+            ]);
+        }
         if maintenance {
             command.args.extend([
                 "--bump".into(),

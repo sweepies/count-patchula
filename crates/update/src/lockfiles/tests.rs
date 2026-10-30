@@ -1540,6 +1540,71 @@ async fn mise_lock_is_targeted_scrubbed_and_committed_with_each_supported_manife
     }
 }
 
+/// core:rust records no `platforms.*` entries, so its lock job takes the
+/// platforms of the rest of the lockfile, and none at all when it records none.
+#[tokio::test]
+async fn mise_lock_updates_a_tool_that_records_no_platforms() {
+    let node = "[[tools.node]]\nversion = \"3.0.0\"\nbackend = \"core:node\"\nspecifiers = [\"3.0.0\"]\n[tools.node.\"platforms.linux-x64\"]\nurl = \"https://example.invalid/node/linux.tar.gz\"\nchecksum = \"sha256:0000000000000000000000000000000000000000000000000000000000000000\"\n[tools.node.\"platforms.macos-arm64\"]\nurl = \"https://example.invalid/node/macos.tar.gz\"\nchecksum = \"sha256:1111111111111111111111111111111111111111111111111111111111111111\"\n";
+    let rust = "[[tools.rust]]\nversion = \"22.0.0\"\nbackend = \"core:rust\"\nspecifiers = [\"22.0.0\"]\n[tools.rust.options]\nprofile = \"minimal\"\n";
+    for (lock, platforms) in [
+        (
+            format!("lockfile_version = 1\n\n{node}\n{rust}"),
+            Some("linux-x64,macos-arm64"),
+        ),
+        (format!("lockfile_version = 1\n\n{rust}"), None),
+    ] {
+        let old = "[tools]\nrust = { version = '22.0.0', profile = 'minimal' }\nnode = '3.0.0'\n";
+        let files = BTreeMap::from([
+            ("mise.toml".to_string(), old.to_string()),
+            ("mise.lock".into(), lock),
+        ]);
+        let executor = Arc::new(MiseFixture {
+            git: fixture(files.clone(), false, false),
+            fault: "",
+            calls: Mutex::new(Vec::new()),
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+            .with_executor(executor.clone());
+        let mut snapshot = snapshot(&files);
+        let config = config();
+        let dep = patchula_manager::Scanner::new(&config)
+            .unwrap()
+            .extract(&files)
+            .unwrap()
+            .dependencies
+            .into_iter()
+            .find(|d| d.name == "rust")
+            .unwrap();
+        let update = Update {
+            new_version: Some("24.0.0".into()),
+            new_value: Some("24.0.0".into()),
+            ..serde_json::from_value(serde_json::json!({"updateType":"major"})).unwrap()
+        };
+        let job = job(&dep, &update, &snapshot).unwrap().unwrap();
+        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+            .unwrap()
+            .unwrap();
+        p.maintenance = false;
+        p.lock_jobs = vec![job];
+        p.contents
+            .insert("mise.toml".into(), old.replace("22.0.0", "24.0.0"));
+        p.action.files.push(FileAction {
+            path: "mise.toml".into(),
+            blob_sha: blob_sha(old),
+            diff: String::new(),
+        });
+        runner.prepare(&mut p, &mut snapshot, &config).await;
+        assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+        assert!(p.contents["mise.lock"].contains("version = \"24.0.0\""));
+        let calls = executor.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].last().unwrap(), "rust");
+        let at = calls[0].iter().position(|arg| arg == "--platform");
+        assert_eq!(at.map(|at| calls[0][at + 1].as_str()), platforms);
+    }
+}
+
 #[test]
 fn mise_lock_maintenance_respects_refresh_and_unlocked_manifests_need_no_job() {
     let files = BTreeMap::from([("mise.toml".into(), "[tools]\nnode='22.0.0'\n".into())]);
