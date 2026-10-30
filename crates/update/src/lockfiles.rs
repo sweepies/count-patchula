@@ -214,7 +214,8 @@ pub(crate) fn job(
         }
         Manager::Cargo => (
             Ecosystem::Cargo,
-            nearest(&dep.file, &snapshot.paths, &["Cargo.lock"]).unwrap_or(directory(&dep.file)),
+            nearest(&dep.file, &snapshot.paths, &["Cargo.lock"])
+                .unwrap_or_else(|| directory(&dep.file)),
         ),
         Manager::Go => (Ecosystem::Go, directory(&dep.file)),
         // `.python-version` pins the interpreter, which no lockfile records.
@@ -464,23 +465,19 @@ pub struct Runner {
 }
 impl Runner {
     pub fn new(cache: PathBuf, token: &str) -> Self {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir);
+        let home = std::env::var_os("HOME").map_or_else(std::env::temp_dir, PathBuf::from);
         let mise_data = tools::tools_dir(&cache);
         let mise = tools::find_mise(&mise_data).unwrap_or_else(|| "mise".into());
         let rustup = std::env::var_os("CARGO_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".cargo"))
+            .map_or_else(|| home.join(".cargo"), PathBuf::from)
             .join("bin/rustup");
         let rustup = if rustup.is_file() {
             rustup
         } else {
             "rustup".into()
         };
-        let rustup_home = std::env::var_os("RUSTUP_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".rustup"));
+        let rustup_home =
+            std::env::var_os("RUSTUP_HOME").map_or_else(|| home.join(".rustup"), PathBuf::from);
         Self {
             credentials: None,
             cache,
@@ -805,8 +802,8 @@ impl Runner {
             {
                 return Err(format!("tool modified unexpected mise lockfile {path}"));
             }
-            let old = before.map(|b| b.content.as_str()).unwrap_or("");
-            let new = after.map(String::as_str).unwrap_or("");
+            let old = before.map_or("", |b| b.content.as_str());
+            let new = after.map_or("", String::as_str);
             files.insert(
                 path.clone(),
                 FileAction {
@@ -821,7 +818,7 @@ impl Runner {
             }
             snapshot.files.insert(
                 path,
-                before.cloned().unwrap_or(Blob {
+                before.cloned().unwrap_or_else(|| Blob {
                     sha: String::new(),
                     mode: "100644".into(),
                     content: String::new(),
@@ -858,7 +855,7 @@ impl Runner {
         }
         let _store = tools::lock_store(&self.mise_data, false).await?;
         if let Some(cwd) = &call.cwd {
-            spec.cwd = cwd.clone();
+            spec.cwd.clone_from(cwd);
         }
         // nix answers in JSON, which is read whole.
         if call.bin == "nix" {

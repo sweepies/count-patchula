@@ -76,7 +76,7 @@ fn precision(version: &str) -> usize {
 }
 /// The exclusive upper bound that bumps release number `index`.
 fn bump(version: &str, index: usize) -> Option<String> {
-    let (numbers, _, _) = key(version)?;
+    let (numbers, ..) = key(version)?;
     let mut upper = numbers;
     upper[index] += 1;
     for n in upper.iter_mut().skip(index + 1) {
@@ -101,7 +101,7 @@ fn satisfies(clause: &str, current: &str) -> Result<bool> {
     let at_least = |base: &str| order(current, base) != Ordering::Less;
     let below = |upper: &str| order(current, upper) == Ordering::Less;
     if let Some(base) = clause.strip_prefix('^') {
-        let (numbers, _, _) = key(base).ok_or_else(invalid)?;
+        let (numbers, ..) = key(base).ok_or_else(invalid)?;
         let digits = precision(base);
         let index = numbers[..digits]
             .iter()

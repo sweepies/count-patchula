@@ -131,11 +131,10 @@ impl Executor for Fixture {
                 }
                 // Real tools come from the developer's mise store, where the
                 // test task installs them, not the runner's empty tool store.
-                let store = std::env::var_os("MISE_DATA_DIR")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| {
-                        PathBuf::from(std::env::var_os("HOME").unwrap()).join(".local/share/mise")
-                    });
+                let store = std::env::var_os("MISE_DATA_DIR").map_or_else(
+                    || PathBuf::from(std::env::var_os("HOME").unwrap()).join(".local/share/mise"),
+                    PathBuf::from,
+                );
                 spec.env
                     .insert("MISE_DATA_DIR".into(), store.into_os_string());
                 for (key, value) in [

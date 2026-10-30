@@ -125,9 +125,9 @@ impl Client {
                         .api_release_catalogs(std::slice::from_ref(&package))
                         .await
                     {
-                        Ok(mut catalogs) => {
-                            catalogs.remove(&package).unwrap_or(Err(Error::Invalid))
-                        }
+                        Ok(mut catalogs) => catalogs
+                            .remove(&package)
+                            .unwrap_or_else(|| Err(Error::Invalid)),
                         Err(error) => Err(error),
                     },
                     Err(error) => Err(error),

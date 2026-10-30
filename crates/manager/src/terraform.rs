@@ -50,8 +50,7 @@ pub(super) fn extract(
                 if let Some(object) = attribute.value.as_object() {
                     let package = field(object, "source")
                         .and_then(Expression::as_str)
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| format!("hashicorp/{name}"));
+                        .map_or_else(|| format!("hashicorp/{name}"), str::to_owned);
                     if let Some(version) = field(object, "version") {
                         add(
                             path,

@@ -35,7 +35,7 @@ fn pep508(requirement: &str) -> Option<(&str, usize, usize)> {
     let skip = |at: usize| {
         at + requirement[at..]
             .find(|c: char| !c.is_whitespace())
-            .unwrap_or(requirement.len() - at)
+            .unwrap_or_else(|| requirement.len() - at)
     };
     start = skip(start);
     if requirement[start..].starts_with('[') {

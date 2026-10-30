@@ -2,10 +2,10 @@
 #![forbid(unsafe_code)]
 
 fn main() -> std::process::ExitCode {
-    let path = std::env::args_os()
-        .nth(1)
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("fixtures"));
+    let path = std::env::args_os().nth(1).map_or_else(
+        || std::path::PathBuf::from("fixtures"),
+        std::path::PathBuf::from,
+    );
     let redactor = patchula_testkit::Redactor::default().with_literals(
         std::env::var("PATCHULA_REDACT")
             .unwrap_or_default()

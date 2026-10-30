@@ -148,7 +148,11 @@ pub async fn command(
     } else {
         (String::new(), true)
     };
-    chosen.sort_by_key(|u| RANK.iter().position(|k| *k == u.kind).unwrap_or(RANK.len()));
+    chosen.sort_by_key(|u| {
+        RANK.iter()
+            .position(|k| *k == u.kind)
+            .unwrap_or_else(|| RANK.len())
+    });
     let mut declarations = BTreeSet::new();
     chosen.retain(|u| declarations.insert((u.file.clone(), u.name.clone(), u.starts.clone())));
     chosen.sort_by(|a, b| (&a.file, &a.name).cmp(&(&b.file, &b.name)));

@@ -1071,8 +1071,10 @@ fn summarize(mut releases: Vec<HeldBack>, scheme: Ecosystem) -> Vec<HeldBack> {
                 .zip(scheme.parse(&summary.version).ok())
                 .is_some_and(|(a, b)| scheme.order(&a, &b).is_gt())
             {
-                summary.version = release.version.clone();
-                summary.target_eligible_at = release.target_eligible_at.clone();
+                summary.version.clone_from(&release.version);
+                summary
+                    .target_eligible_at
+                    .clone_from(&release.target_eligible_at);
             }
             if release.eligible_at < summary.eligible_at {
                 summary.eligible_at = release.eligible_at;

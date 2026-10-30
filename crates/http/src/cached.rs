@@ -233,7 +233,7 @@ impl Cached {
         let now = Instant::now();
         let next = now
             .checked_add(delay)
-            .unwrap_or(now + Duration::from_secs(3600));
+            .unwrap_or_else(|| now + Duration::from_secs(3600));
         *until = Some(until.map_or(next, |old| old.max(next)));
         Ok(())
     }
@@ -659,7 +659,7 @@ impl Cached {
                         request.headers_mut().remove(name);
                     }
                 }
-                *request.url_mut() = next.clone();
+                request.url_mut().clone_from(&next);
                 trace = RequestTrace::new(method.as_str(), &next);
                 continue;
             }

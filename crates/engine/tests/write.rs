@@ -263,7 +263,7 @@ impl Transport for Fake {
             let mut issues = self.issues.lock().unwrap();
             let issue = issues.iter_mut().find(|i| i["number"] == number).unwrap();
             if let Some(text) = body.get("body") {
-                issue["body"] = text.clone();
+                issue["body"].clone_from(text);
             }
             if body["state"] == "closed" {
                 issue["state"] = json!("CLOSED");
@@ -281,9 +281,9 @@ impl Transport for Fake {
             let pr = prs.iter_mut().find(|p| p["number"] == number).unwrap();
             for (key, value) in body.as_object().unwrap() {
                 if key == "base" {
-                    pr["base"]["ref"] = value.clone();
+                    pr["base"]["ref"].clone_from(value);
                 } else {
-                    pr[key] = value.clone();
+                    pr[key].clone_from(value);
                 }
             }
             (200, pr.clone())

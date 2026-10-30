@@ -277,7 +277,7 @@ impl Engine {
     fn catalog_key(&self, dep: &Dependency, config: Option<&Config>) -> LookupKey {
         let enabled = self
             .versions_host_override
-            .unwrap_or(config.is_none_or(|config| config.use_versions_host));
+            .unwrap_or_else(|| config.is_none_or(|config| config.use_versions_host));
         // A flake input is looked up by the reference it was written with: the
         // same repository can be followed on different branches.
         let package = if dep.source == Source::Nix {
@@ -1637,7 +1637,7 @@ impl Engine {
                         .map(|(_, reason)| reason.clone());
                     let silence = |mut check: patchula_report::ImageCheck| {
                         if patchula_lookup::images::warns(&check.state) {
-                            check.silenced = silenced.clone();
+                            check.silenced.clone_from(&silenced);
                         }
                         check
                     };
@@ -2442,7 +2442,7 @@ impl Engine {
                 }
                 let parent = std::path::Path::new(&path)
                     .parent()
-                    .unwrap_or(std::path::Path::new(""));
+                    .unwrap_or_else(|| std::path::Path::new(""));
                 let mut normalized = std::path::PathBuf::new();
                 for component in parent.join(relative).components() {
                     match component {

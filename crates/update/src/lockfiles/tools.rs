@@ -163,8 +163,7 @@ fn plain(error: &str) -> String {
 /// `PATCHULA_TOOLS_DIR`, or `tools/` beside the worktrees in the cache directory.
 pub fn tools_dir(workspace: &Path) -> PathBuf {
     std::env::var_os("PATCHULA_TOOLS_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace.with_file_name("tools"))
+        .map_or_else(|| workspace.with_file_name("tools"), PathBuf::from)
 }
 
 fn lock_file(dir: &Path, name: &str) -> Result<std::fs::File, String> {

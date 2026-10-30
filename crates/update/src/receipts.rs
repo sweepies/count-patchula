@@ -128,7 +128,7 @@ fn not_restored(repository: &Repository, plans: &[Plan], reason: &str) -> bool {
 }
 
 pub(crate) fn rest_pr(pr: &Value) -> Option<Value> {
-    if pr["labels"]["pageInfo"]["hasNextPage"] != false {
+    if pr["labels"]["pageInfo"]["hasNextPage"].as_bool() != Some(false) {
         return None;
     }
     Some(
@@ -322,7 +322,7 @@ pub async fn restore_inventory(
             && r["target"]["author"]["user"]["login"] == actor
             && (r["target"]["committer"]["user"]["login"] == actor
                 || r["target"]["committer"]["user"]["login"] == "web-flow")
-            && r["target"]["signature"]["isValid"] == true
+            && r["target"]["signature"]["isValid"].as_bool() == Some(true)
             && (name.starts_with(&config.prs.branch)
                 || r["target"]["message"]
                     .as_str()
@@ -343,7 +343,7 @@ pub async fn restore_inventory(
             } else if !closed.iter().any(|pr| {
                 pr["id"] == receipt.pr["node_id"]
                     && pr["state"] == "CLOSED"
-                    && pr["merged"] == false
+                    && pr["merged"].as_bool() == Some(false)
                     && pr["body"] == receipt.pr["body"]
                     && actor_login(&pr["author"]).as_deref() == Some(actor)
                     && pr["headRepository"]["nameWithOwner"] == repository.repository
@@ -405,12 +405,12 @@ fn restore_write(
     if r["target"]["tree"]["oid"] != receipt.tree {
         return Err("tree-oid-changed");
     }
-    if r["target"]["signature"]["isValid"] != true {
+    if r["target"]["signature"]["isValid"].as_bool() != Some(true) {
         return Err("signature-invalid");
     }
     let prs = &r["associatedPullRequests"];
     let nodes = prs["nodes"].as_array().ok_or("pr-state-incomplete")?;
-    if nodes.len() != 1 || prs["pageInfo"]["hasNextPage"] != false {
+    if nodes.len() != 1 || prs["pageInfo"]["hasNextPage"].as_bool() != Some(false) {
         return Err("pr-state-changed");
     }
     let pr = rest_pr(&nodes[0]).ok_or("pr-state-incomplete")?;
@@ -431,8 +431,8 @@ fn restore_write(
     plan.action.verified = Some(true);
     plan.tree = Some(receipt.tree.clone());
     plan.cached_pr = Some(pr);
-    plan.fingerprint = receipt.fingerprint.clone();
-    plan.action.files = receipt.files.clone();
+    plan.fingerprint.clone_from(&receipt.fingerprint);
+    plan.action.files.clone_from(&receipt.files);
     plan.lockfiles_ready = true;
     Ok(())
 }

@@ -52,7 +52,7 @@ async fn replay_matches_body_headers_method_and_url_without_a_network_client() {
         replay.send(request()).await.is_err(),
         "interactions are consumed once"
     );
-    if std::env::var("PATCHULA_RECORD").as_deref() != Ok("1") {
+    if !patchula_testkit::recording() {
         let transport = patchula_testkit::from_env(&path, Options::default(), || {
             panic!("replay must never construct a network client")
         })

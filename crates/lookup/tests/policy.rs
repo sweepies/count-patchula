@@ -375,7 +375,7 @@ fn grouping_ops_workflow_opt_out_and_opaque_refs() {
     );
     assert!(eval.digest_proposal(&dep, &"a".repeat(40)).is_none());
     dep.name = "actions/checkout".into();
-    dep.package = dep.name.clone();
+    dep.package.clone_from(&dep.name);
     dep.kind = DependencyKind::Action;
     assert!(eval.digest_proposal(&dep, &"a".repeat(40)).is_some());
 }
@@ -401,7 +401,7 @@ fn exact_preserve_nightly_and_deprecated_yanked_filters() {
     );
     let eval = Evaluator::new(&config("nightly-pins")).unwrap();
     dep.name = "pingdotgg/t3code".into();
-    dep.package = dep.name.clone();
+    dep.package.clone_from(&dep.name);
     dep.manager = Manager::Regex;
     dep.source = Source::GithubReleases;
     dep.current = "0.1.0-nightly.1".into();

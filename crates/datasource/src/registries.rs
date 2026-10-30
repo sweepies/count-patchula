@@ -206,7 +206,10 @@ fn simple(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
         if Ecosystem::Pep440.parse(version).is_err() {
             continue;
         }
-        let yanked = file.yanked.as_bool().unwrap_or(file.yanked.is_string());
+        let yanked = file
+            .yanked
+            .as_bool()
+            .unwrap_or_else(|| file.yanked.is_string());
         let v = releases.entry(version.into()).or_insert_with(|| Version {
             yanked: true,
             ..release(version.into())

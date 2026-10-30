@@ -9,10 +9,10 @@ use serde_json::{Value, json};
 use std::{path::Path, sync::Arc};
 
 async fn client(name: &str) -> (tempfile::TempDir, Client) {
-    let recording = std::env::var("PATCHULA_RECORD").as_deref() == Ok("1");
+    let recording = patchula_testkit::recording();
     let token = if recording {
-        std::env::var("GITHUB_TOKEN")
-            .or_else(|_| std::env::var("GH_TOKEN"))
+        std::env::var(patchula_testkit::GITHUB_TOKEN_VAR)
+            .or_else(|_| std::env::var(patchula_testkit::GH_TOKEN_VAR))
             .expect("fixture recording requires an existing GITHUB_TOKEN or GH_TOKEN")
     } else {
         "offline-test-credential".into()

@@ -161,8 +161,7 @@ impl Transport for Fake {
                         state
                             .refs
                             .get(r["name"].as_str().unwrap())
-                            .map(String::as_str)
-                            .unwrap_or(zero)
+                            .map_or(zero, String::as_str)
                             == r["beforeOid"].as_str().unwrap()
                     });
                 if valid {
@@ -185,7 +184,7 @@ impl Transport for Fake {
                                         r["afterOid"].clone(),
                                     );
                                 } else {
-                                    pr["head"]["sha"] = r["afterOid"].clone();
+                                    pr["head"]["sha"].clone_from(&r["afterOid"]);
                                 }
                             }
                         }
@@ -269,9 +268,9 @@ impl Transport for Fake {
             let pr = state.prs.get_mut(&n).unwrap();
             for (key, value) in body.as_object().unwrap() {
                 if key == "base" {
-                    pr["base"]["ref"] = value.clone();
+                    pr["base"]["ref"].clone_from(value);
                 } else {
-                    pr[key] = value.clone();
+                    pr[key].clone_from(value);
                 }
             }
             response(200, pr.clone())
@@ -1100,8 +1099,8 @@ fn unsupported_lockfile_plans_skip_and_opt_in_marks_manifest_only_updates() {
     repo.package_files[0].path = "package.json".into();
     let r = &mut repo.package_files[0].dependencies[0];
     r.manager = "npm".into();
-    r.name = d.name.clone();
-    r.package = d.package.clone();
+    r.name.clone_from(&d.name);
+    r.package.clone_from(&d.package);
     r.current.value = Some(d.current.clone());
     r.updates[0].new_value = Some("2.0.0".into());
     snapshot.files = BTreeMap::from([(
@@ -1156,8 +1155,8 @@ fn pnpm_and_yarn_locks_are_supported_and_never_pending() {
     repo.package_files[0].path = "package.json".into();
     let r = &mut repo.package_files[0].dependencies[0];
     r.manager = "npm".into();
-    r.name = d.name.clone();
-    r.package = d.package.clone();
+    r.name.clone_from(&d.name);
+    r.package.clone_from(&d.package);
     r.current.value = Some(d.current.clone());
     r.updates[0].new_value = Some("2.0.0".into());
     snapshot.files = BTreeMap::from([(
@@ -1503,7 +1502,7 @@ async fn forced_batch_recheck_has_no_mutations_and_one_shared_viewer_read() {
 }
 
 fn pr_config() -> (Config, Repository) {
-    let (mut config, repo, _, _) = setup("22.0.0", false);
+    let (mut config, repo, ..) = setup("22.0.0", false);
     config.prs.concurrent = None;
     config.prs.per_hour = None;
     (config, repo)
@@ -1590,7 +1589,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
             )
             .await;
             let (mut next, _) = make_plan("22.0.0");
-            next.changes = p.changes.clone();
+            next.changes.clone_from(&p.changes);
             p = next;
         }
         let mut lifecycle = patchula_update::Lifecycle::prepare(
@@ -1626,10 +1625,10 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
         .unwrap();
         let (mut next, _) = make_plan(if case == "plan" { "22.1.0" } else { "22.0.0" });
         if case == "notes" {
-            next.changes = p.changes.clone();
+            next.changes.clone_from(&p.changes);
         }
-        next.changes[0].labels = p.changes[0].labels.clone();
-        next.lock_jobs = p.lock_jobs.clone();
+        next.changes[0].labels.clone_from(&p.changes[0].labels);
+        next.lock_jobs.clone_from(&p.lock_jobs);
         {
             let mut s = server.0.lock().unwrap();
             match case {
@@ -2044,7 +2043,7 @@ async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
     }
     let count = server.0.lock().unwrap().writes.len();
     let (mut repeat, _) = make_plan("22.0.0");
-    repeat.changes = p.changes.clone();
+    repeat.changes.clone_from(&p.changes);
     let actions = pr_cycle(
         &github,
         &repo,
@@ -2068,7 +2067,7 @@ async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
             .push(json!({"name":"human-label"}));
     }
     let (mut retry, _) = make_plan("22.0.0");
-    retry.changes = p.changes.clone();
+    retry.changes.clone_from(&p.changes);
     let actions = pr_cycle(
         &github,
         &repo,
@@ -2347,7 +2346,7 @@ async fn rechecks_refresh_notes_but_only_patch_changed_body_hashes() {
         // Exercise both unchanged and changed re-renders in distinct batches.
         for changed in [false, true] {
             let (mut next, _) = make_plan("22.0.0");
-            next.changes = p.changes.clone();
+            next.changes.clone_from(&p.changes);
             next.retry = origin == "repository";
             {
                 let mut s = server.0.lock().unwrap();
@@ -2440,7 +2439,7 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
         assert_eq!(s.release_queries.len(), 1);
     }
     let (mut repeat, _) = make_plan("22.0.0");
-    repeat.changes = p.changes.clone();
+    repeat.changes.clone_from(&p.changes);
     pr_cycle(
         &github,
         &repo,
@@ -2605,7 +2604,7 @@ async fn lookup_warnings_defer_obsolete_pr_closure() {
 #[test]
 fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
     // Self-authored manifests and target facts from the owner's patchula report.
-    let (config, mut repo, _, _) = setup("22.0.0", false);
+    let (config, mut repo, ..) = setup("22.0.0", false);
     let mut config = config;
     config.managers = vec![
         Manager::GithubActions,
@@ -3021,7 +3020,7 @@ async fn merged_pr_branch_can_be_reused_for_the_next_update_on_its_major_line() 
 async fn titles_name_versions_and_branches_skip_registry_urls() {
     let (config, mut repo, mut deps, snapshot) = setup("22.0.0", false);
     let package = "https://charts.example.test/repo|node".to_string();
-    deps[0].package = package.clone();
+    deps[0].package.clone_from(&package);
     let dep = &mut repo.package_files[0].dependencies[0];
     dep.package = package;
     dep.updates[0].new_value = Some("==22.0.0".into());

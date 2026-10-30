@@ -124,7 +124,7 @@ async fn prepare(
         &format!("repos/{repo}/git/trees/{tree_sha}?recursive=1"),
     )
     .await?;
-    if tree["truncated"] != false {
+    if tree["truncated"].as_bool() != Some(false) {
         return Err("truncated tree; cannot validate extracted blobs".into());
     }
     Ok(Base {
@@ -311,7 +311,7 @@ async fn apply_inner(
         Err(patchula_github::Error::Status(404)) => None,
         Err(e) => return Err(e.to_string()),
     };
-    plan.action.previous_commit = old.clone();
+    plan.action.previous_commit.clone_from(&old);
     let mut moved_base = false;
     if let Some(old) = &old {
         let actor = base
@@ -359,7 +359,7 @@ async fn apply_inner(
                 let message = c["commit"]["message"].as_str().unwrap_or("");
                 c["author"]["login"] == actor
                     && (c["committer"]["login"] == actor || c["committer"]["login"] == "web-flow")
-                    && c["commit"]["verification"]["verified"] == true
+                    && c["commit"]["verification"]["verified"].as_bool() == Some(true)
                     && trailer(message, "Patchula: ") == Some("v1")
                     && trailer(message, "Patchula-Branch: ").is_some()
             });
@@ -389,7 +389,7 @@ async fn apply_inner(
             .await?;
             let existing_entries = existing["tree"]
                 .as_array()
-                .filter(|_| existing["truncated"] == false)
+                .filter(|_| existing["truncated"].as_bool() == Some(false))
                 .ok_or("incomplete existing branch tree")?;
             let contents_match = plan.contents.iter().all(|(p, c)| {
                 if plan.deleted.contains(p) {
