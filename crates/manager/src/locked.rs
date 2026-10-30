@@ -209,7 +209,10 @@ fn read(files: &Files) -> Result<Aube, String> {
                             .get("version")
                             .or(Some(locked))
                             .and_then(|v| v.as_str());
-                        if let (Some(name), Some(version)) = (name.as_str(), version) {
+                        // A workspace `link:`, `file:` or Git entry is no version.
+                        if let (Some(name), Some(version)) = (name.as_str(), version)
+                            && plain(version).starts_with(|c: char| c.is_ascii_digit())
+                        {
                             out.direct
                                 .insert((join(importer), name.into()), plain(version).into());
                         }

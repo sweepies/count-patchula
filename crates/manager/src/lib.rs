@@ -250,6 +250,7 @@ impl Scanner {
                     leaf,
                     "package.json"
                         | "package-lock.json"
+                        | "aube-lock.yaml"
                         | "bun.lock"
                         | "pnpm-workspace.yaml"
                         | ".yarnrc.yml"

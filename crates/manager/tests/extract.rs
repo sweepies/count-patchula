@@ -918,7 +918,7 @@ fn lockfile_only_registry_packages_are_listed_apart_from_dependencies() {
 /// resolved versions, `packages` every registry package beneath them.
 #[test]
 fn aube_lock_yaml_gives_direct_versions_and_lists_transitive_packages() {
-    let lock = "lockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies:\n      foo:\n        specifier: ^1.0.0\n        version: 1.2.0(peer@3.0.0)\n      '@scope/baz':\n        specifier: 2.0.0\n        version: 2.0.0\n    devDependencies:\n      aliased:\n        specifier: npm:string-width@^4\n        version: string-width@4.2.3\n\n  packages/app:\n    dependencies:\n      foo:\n        specifier: ^1.0.0\n        version: 1.1.0\n\npackages:\n\n  '@scope/baz@2.0.0':\n    resolution: {integrity: sha512-aaa}\n\n  bar@2.0.0:\n    resolution: {integrity: sha512-bbb}\n\n  foo@1.1.0:\n    resolution: {integrity: sha512-ccc}\n\n  foo@1.2.0:\n    resolution: {integrity: sha512-ddd}\n\n  gitdep@1.0.0:\n    resolution: {tarball: https://example.invalid/gitdep.tgz}\n\nsnapshots: {}\n";
+    let lock = "lockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies:\n      foo:\n        specifier: ^1.0.0\n        version: 1.2.0(peer@3.0.0)\n      '@scope/baz':\n        specifier: 2.0.0\n        version: 2.0.0\n    devDependencies:\n      aliased:\n        specifier: npm:string-width@^4\n        version: string-width@4.2.3\n\n  packages/app:\n    dependencies:\n      foo:\n        specifier: ^1.0.0\n        version: 1.1.0\n      shared:\n        specifier: workspace:*\n        version: link:../shared\n\npackages:\n\n  '@scope/baz@2.0.0':\n    resolution: {integrity: sha512-aaa}\n\n  bar@2.0.0:\n    resolution: {integrity: sha512-bbb}\n\n  foo@1.1.0:\n    resolution: {integrity: sha512-ccc}\n\n  foo@1.2.0:\n    resolution: {integrity: sha512-ddd}\n\n  gitdep@1.0.0:\n    resolution: {tarball: https://example.invalid/gitdep.tgz}\n\nsnapshots: {}\n";
     let files = Files::from([
         (
             "package.json".into(),
@@ -926,11 +926,20 @@ fn aube_lock_yaml_gives_direct_versions_and_lists_transitive_packages() {
         ),
         (
             "packages/app/package.json".into(),
-            r#"{"dependencies":{"foo":"^1.0.0"}}"#.into(),
+            r#"{"dependencies":{"foo":"^1.0.0","shared":"^1.0.0"}}"#.into(),
         ),
         ("aube-lock.yaml".into(), lock.into()),
     ]);
-    let extraction = Scanner::new(&config()).unwrap().extract(&files).unwrap();
+    // The engine reads only the files the scanner needs: the lock has to be one.
+    let scanner = Scanner::new(&config()).unwrap();
+    assert!(scanner.needs("aube-lock.yaml"));
+    assert!(scanner.needs("docs/aube-lock.yaml"));
+    let files: Files = files
+        .into_iter()
+        .filter(|(p, _)| scanner.needs(p))
+        .collect();
+    assert!(files.contains_key("aube-lock.yaml"));
+    let extraction = scanner.extract(&files).unwrap();
     let resolved: Vec<_> = extraction
         .dependencies
         .iter()
@@ -950,6 +959,11 @@ fn aube_lock_yaml_gives_direct_versions_and_lists_transitive_packages() {
     );
     assert!(
         resolved.contains(&("packages/app/package.json", "foo", Some("1.1.0"))),
+        "{resolved:?}"
+    );
+    // A workspace link is no locked version.
+    assert!(
+        resolved.contains(&("packages/app/package.json", "shared", None)),
         "{resolved:?}"
     );
     // Only packages no manifest resolves to are transitive; a registry
