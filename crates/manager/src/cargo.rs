@@ -136,7 +136,11 @@ fn walk(
                     }
                     continue;
                 }
-                if let Some(registry) = value.get("registry") {
+                // `crates-io` is Cargo's reserved name for crates.io itself.
+                if let Some(registry) = value
+                    .get("registry")
+                    .filter(|registry| registry.as_str() != Some("crates-io"))
+                {
                     skipped.push(skip(match registry.as_str() {
                         Some(name) => format!(
                             "from the alternate registry `{name}`, which the Count does not look up"

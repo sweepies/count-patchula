@@ -1897,6 +1897,7 @@ private = { version = "3.0.0", registry = "acme" }
 path-only = { path = "../path-only" }
 git-only = { git = "https://github.com/acme/git-only" }
 serde = "1.0.0"
+explicit = { version = "4.0.0", registry = "crates-io" }
 "#
             .into(),
         ),
@@ -1916,6 +1917,7 @@ serde = "1.0.0"
         [
             ("Cargo.toml", "plain", "1.0.0"),
             ("Cargo.toml", "serde", "1.0.0"),
+            ("Cargo.toml", "explicit", "4.0.0"),
             ("member/Cargo.toml", "plain", "1.0.0"),
         ]
     );
