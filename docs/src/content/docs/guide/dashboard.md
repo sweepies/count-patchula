@@ -1,8 +1,10 @@
 ---
 title: "Dependency dashboard"
 ---
+The dashboard is on by default. To turn it off:
+
 ```pkl
-prs { dashboard = true }
+prs { dashboard = false }
 ```
 
 With the dashboard on, the Count keeps one issue per repository, titled

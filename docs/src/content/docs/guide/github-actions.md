@@ -108,8 +108,6 @@ runner can opt repositories in without committing to them:
 ```pkl
 // my-org/patchula-runner/policy/my-app.pkl
 amends "PatchulaConfig.pkl"
-
-prs { dashboard = true }
 ```
 
 Policy files amend `PatchulaConfig.pkl` like any config, and the Count supplies it. See

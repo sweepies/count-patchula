@@ -11,14 +11,12 @@ with a config you understand.
 `config:recommended`, `:semanticCommits`, `:dependencyDashboard`, `:pinAllExceptPeerDependencies`,
 `helpers:pinGitHubActionDigests` and `docker:pinDigests` mostly describe what
 the Count does without being asked: exact pins (ranges kept where a lockfile holds the version), digest pins for actions and
-images, semantic commit prefixes and one PR per update. Turn the dashboard on
-and you are close.
+images, semantic commit prefixes, the dependency dashboard and one PR per
+update. A config with nothing in it is close.
 
 ```pkl
 // patchula.pkl
 amends "PatchulaConfig.pkl"
-
-prs { dashboard = true }
 ```
 
 Read through the [defaults](/guide/configuration/#defaults) and keep what you
@@ -57,7 +55,7 @@ differ from Renovate's, such as the 24-hour release-age wait and exact npm pins.
 | `prConcurrentLimit`, `prHourlyLimit` | `prs { concurrent; perHour }` |
 | `branchPrefix` | `prs { branch }` |
 | `rebaseWhen` | `prs { rebase = "conflicts" \| "behind" }` |
-| `dependencyDashboard` | `prs { dashboard = true }` |
+| `dependencyDashboard` | `prs { dashboard = false }` turns off the dashboard, which is on by default |
 | `lockFileMaintenance` | `lockfiles { refresh = true }` |
 | `postUpdateOptions: ["gomodTidy"]` | `lockfiles { tidyGo = true }` |
 | `customManagers` (regex) | `extractors` |

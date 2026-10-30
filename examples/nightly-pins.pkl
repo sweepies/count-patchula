@@ -1,7 +1,6 @@
 amends "PatchulaConfig.pkl"
 
 managers = new Listing { "npm"; "regex" }
-prs { dashboard = true }
 extractors = new Listing {
   new Extractor {
     note = "T3 nightly pin in remote-tools.toml."

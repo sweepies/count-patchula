@@ -2,4 +2,3 @@ amends "PatchulaConfig.pkl"
 
 // The repository enables only npm. Its legacy regexManagers entry is inactive.
 managers = new Listing { "npm" }
-prs { dashboard = true }

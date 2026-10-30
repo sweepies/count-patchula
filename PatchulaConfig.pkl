@@ -197,7 +197,9 @@ class PullRequests {
   /// New PRs per hour. Null, the default, means unlimited; security fixes
   /// never wait.
   perHour: Int? = null
-  dashboard: Boolean = false
+  /// Keep one Dependency Dashboard issue per repository. `false` turns it off
+  /// and closes the issue.
+  dashboard: Boolean = true
   branch: String = "patchula/"
   rebase: "conflicts" | "behind" = "conflicts"
   /// The batch PR collects updates whose "Add to batch" box was ticked. It

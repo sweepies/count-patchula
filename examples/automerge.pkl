@@ -1,6 +1,5 @@
 amends "PatchulaConfig.pkl"
 
-prs { dashboard = true }
 defaults { waitHours = 0 }
 
 rules = new Listing {

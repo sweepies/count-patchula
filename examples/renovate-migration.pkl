@@ -3,7 +3,6 @@ amends "PatchulaConfig.pkl"
 managers = new Listing { "npm"; "github-actions"; "mise"; "regex" }
 // Dated proposals inherit the schema's 24-hour minimum release age.
 // To opt out explicitly: defaults { waitHours = 0 }
-prs { dashboard = true }
 rules = new Listing {
   new Rule {
     note = "Alchemy, Effect, overrides and SvelteKit must update together."

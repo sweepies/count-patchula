@@ -28,11 +28,10 @@ Invite the Count into a repository with `patchula.pkl`:
 
 ```pkl
 amends "PatchulaConfig.pkl"
-
-prs { dashboard = true }
 ```
 
-Then, with a GitHub App installation token in `PATCHULA_TOKEN`:
+That is a complete config: every default applies, including a dependency
+dashboard issue. Then, with a GitHub App installation token in `PATCHULA_TOKEN`:
 
 ```sh
 patchula run --dry-run acme/my-app   # look first

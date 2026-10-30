@@ -1,6 +1,5 @@
 amends "PatchulaConfig.pkl"
 
-prs { dashboard = true }
 defaults { bodyNotes = new Listing { "{releaseNotes}" } }
 ignore = new Listing { "acme/token-minter" }
 files = new Listing {

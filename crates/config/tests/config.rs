@@ -77,6 +77,7 @@ fn defaults_are_explicit_and_safe() {
     // cap. `null` lifts a limit.
     assert_eq!(config.prs.concurrent, Some(10));
     assert_eq!(config.prs.per_hour, None);
+    assert!(config.prs.dashboard);
     assert!(config.managers.contains(&Manager::GithubActions));
 }
 
@@ -438,4 +439,22 @@ fn the_concurrent_pr_limit_can_be_lifted_with_null() {
     assert_eq!(load(&path).unwrap().prs.concurrent, None);
     let (_directory, path) = fixture("prs { concurrent = 3 }");
     assert_eq!(load(&path).unwrap().prs.concurrent, Some(3));
+}
+
+/// The Count keeps his own repository on the schema's defaults alone: the
+/// dashboard, 10 open PRs and preserved Cargo ranges all come from the schema.
+#[test]
+fn the_repositorys_own_config_sets_nothing() {
+    let (_directory, path) = fixture("");
+    assert_eq!(
+        serde_json::to_value(load(&workspace().join("patchula.pkl")).unwrap()).unwrap(),
+        serde_json::to_value(load(&path).unwrap()).unwrap()
+    );
+    let text = std::fs::read_to_string(workspace().join("patchula.pkl")).unwrap();
+    assert!(
+        text.lines()
+            .filter(|line| !line.trim().is_empty() && !line.starts_with("//"))
+            .eq(["amends \"PatchulaConfig.pkl\""]),
+        "{text}"
+    );
 }

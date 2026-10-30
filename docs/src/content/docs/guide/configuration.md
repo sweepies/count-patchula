@@ -26,8 +26,7 @@ committed `patchula.pkl`.
 amends "PatchulaConfig.pkl"
 
 prs {
-  dashboard = true
-  concurrent = 10
+  concurrent = 5
 }
 defaults {
   labels { "dependencies"; "bot" }
@@ -64,7 +63,7 @@ defaults { releaseNotes = false }
 // patchula.pkl
 amends "org.pkl"
 
-prs { dashboard = true }
+prs { perHour = 2 }
 ```
 
 Local `import` works too. Remote imports, package imports, environment
@@ -91,6 +90,8 @@ starts out cautious:
 - at most 10 update PRs are open at once, with no limit per hour and no
   schedule window; the rest wait for a slot and are listed on the dashboard,
   and security fixes never wait;
+- a dependency dashboard issue is kept up to date, and `prs { dashboard = false }`
+  turns it off;
 - branches start with `patchula/` and are rebased only when they conflict;
 - installed and vendored dependencies (`node_modules`, `bower_components`,
   `vendor`), `.git`, and test and example directories (`test`, `tests`,
@@ -237,8 +238,8 @@ those are not covered.
 ```pkl
 prs {
   concurrent = 10        // open PRs at once (10 by default); null is unlimited
-  perHour = 4            // new PRs per hour; null is unlimited
-  dashboard = true       // keep a Dependency Dashboard issue
+  perHour = 4            // new PRs per hour; null (the default) is unlimited
+  dashboard = true       // keep a Dependency Dashboard issue (on by default)
   branch = "patchula/"   // branch prefix
   rebase = "behind"      // rebase whenever the base moves, not only on conflict
   batchMerge = false     // let the batch PR auto-merge
