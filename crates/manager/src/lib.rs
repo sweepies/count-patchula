@@ -405,13 +405,13 @@ impl Scanner {
             } else if self.selected(Manager::GithubActions, path) {
                 actions::extract(path, text)
             } else if self.selected(Manager::Mise, path) {
-                mise::extract(path, text)
+                mise::extract(path, text, &mut result.skipped)
             } else if self.selected(Manager::Cargo, path)
                 && (path.ends_with("rust-toolchain") || path.ends_with("rust-toolchain.toml"))
             {
                 toolchains::rust(path, text)
             } else if self.selected(Manager::Cargo, path) {
-                cargo::extract(path, text, &cargo)
+                cargo::extract(path, text, &cargo, &mut result.skipped)
             } else if self.selected(Manager::Dockerfile, path) {
                 images::dockerfile(path, text)
             } else if self.selected(Manager::Go, path) {

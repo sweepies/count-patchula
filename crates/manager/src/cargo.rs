@@ -18,6 +18,7 @@ pub(super) fn extract(
     path: &str,
     text: &str,
     files: &BTreeMap<&str, Document<&str>>,
+    skipped: &mut Vec<Skipped>,
 ) -> Result<Vec<Dependency>, String> {
     if !path.ends_with("Cargo.toml") {
         return Ok(Vec::new());
@@ -44,7 +45,15 @@ pub(super) fn extract(
         workspace.extend(deps.iter().map(|(k, v)| (k.to_owned(), v.clone())));
     }
     let mut out = Vec::new();
-    walk(path, text, doc.as_table(), "", &workspace, &mut out);
+    walk(
+        path,
+        text,
+        doc.as_table(),
+        "",
+        &workspace,
+        &mut out,
+        skipped,
+    );
     // A lockfile resolves direct manifest declarations only; never emit its
     // transitive packages as independent dependencies.
     let lock = files
@@ -83,6 +92,7 @@ fn walk(
     pointer: &str,
     workspace: &BTreeMap<String, Item>,
     out: &mut Vec<Dependency>,
+    skipped: &mut Vec<Skipped>,
 ) {
     for (key, item) in table.iter() {
         let next = format!("{pointer}/{key}");
@@ -100,12 +110,45 @@ fn walk(
                 } else {
                     None
                 };
+                let declared = value;
                 let value = if inherited {
                     workspace.get(name).unwrap_or(value)
                 } else {
                     value
                 };
-                if value.get("git").is_some() || value.get("registry").is_some() {
+                let skip = |reason: String| Skipped {
+                    manager: Manager::Cargo,
+                    file: path.into(),
+                    line: declared
+                        .span()
+                        .map(|span| Location::new(text, span.start, span.end, String::new()).line),
+                    value: name.into(),
+                    reason,
+                };
+                // A path or git dependency is not on crates.io. One that also
+                // names a version is worth a skip: the version is for publishing.
+                let local = ["path", "git"].into_iter().find(|k| value.get(k).is_some());
+                if let Some(kind) = local {
+                    if value.get("version").is_some() {
+                        skipped.push(skip(format!(
+                            "a {kind} dependency, not looked up on crates.io"
+                        )));
+                    }
+                    continue;
+                }
+                // `crates-io` is Cargo's reserved name for crates.io itself.
+                if let Some(registry) = value
+                    .get("registry")
+                    .filter(|registry| registry.as_str() != Some("crates-io"))
+                {
+                    skipped.push(skip(match registry.as_str() {
+                        Some(name) => format!(
+                            "from the alternate registry `{name}`, which the Count does not look up"
+                        ),
+                        None => {
+                            "from an alternate registry, which the Count does not look up".into()
+                        }
+                    }));
                     continue;
                 }
                 let version = if value.is_str() {
@@ -143,7 +186,7 @@ fn walk(
                 });
             }
         } else if let Some(table) = item.as_table_like() {
-            walk(path, text, table, &next, workspace, out);
+            walk(path, text, table, &next, workspace, out, skipped);
         }
     }
 }

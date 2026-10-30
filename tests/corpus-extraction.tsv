@@ -176,93 +176,6 @@ cargo	rust/uv/Cargo.toml	unicode-width	0.2.0	0.2.2
 cargo	rust/uv/Cargo.toml	unscanny	0.1.0	0.1.0
 cargo	rust/uv/Cargo.toml	url	2.5.2	2.5.8
 cargo	rust/uv/Cargo.toml	uuid	1.24.0	1.26.1
-cargo	rust/uv/Cargo.toml	uv	0.13.5	-
-cargo	rust/uv/Cargo.toml	uv-audit	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-audit-operations	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-auth	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-bin-install	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-build-backend	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-build-commands	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-build-frontend	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-cache	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-cache-info	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-cache-key	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-cli	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-client	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-command-support	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-configuration	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-console	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-dirs	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-dispatch	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-distribution	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-distribution-filename	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-distribution-types	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-environment-operations	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-errors	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-extract	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-fastid	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-flags	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-fs	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-git	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-git-types	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-globfilter	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-install-operations	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-install-wheel	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-installer	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-keyring	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-lock	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-lock-operations	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-logging	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-macros	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-metadata	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-netrc	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-normalize	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-once-map	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-options-metadata	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-pep440	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-pep508	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-performance-memory-allocator	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-pip-commands	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-platform	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-platform-tags	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-preview	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-project-commands	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-project-edit	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-publish	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-publish-commands	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-pypi-types	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-python-commands	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-python-discovery	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-python-interpreter	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-python-managed	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-python-types	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-redacted	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-requirements	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-requirements-txt	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-resolve-operations	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-resolver	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-resolver-types	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-scripts	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-settings	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-shell	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-small-str	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-state	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-static	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-test	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-threads	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-toml	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-tool	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-tool-commands	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-torch	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-trampoline-builder	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-types	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-unix	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-version	0.13.5	-
-cargo	rust/uv/Cargo.toml	uv-virtualenv	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-warnings	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-windows	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-workspace	0.0.97	-
-cargo	rust/uv/Cargo.toml	uv-workspace-commands	0.0.97	-
 cargo	rust/uv/Cargo.toml	version-ranges	0.2.2	0.2.2
 cargo	rust/uv/Cargo.toml	walkdir	2.5.0	2.5.0
 cargo	rust/uv/Cargo.toml	webpki	0.103.10	0.103.16
@@ -2857,3 +2770,90 @@ skipped	ci/gitaly/.gitlab-ci.yml:359	registry.gitlab.com/gitlab-org/gitlab-build
 skipped	ci/gitaly/.gitlab-ci.yml:544	${GITLAB_DEPENDENCY_PROXY}ruby:${RUBY_VERSION}	the image contains a GitLab CI variable
 skipped	ci/gitaly/.gitlab-ci.yml:561	${GITLAB_DEPENDENCY_PROXY}ruby:${RUBY_VERSION}	the image contains a GitLab CI variable
 skipped	nix/nixvim/flake/dev/flake.lock:258	path:../..	a path input changes with the repository
+skipped	rust/uv/Cargo.toml:19	uv	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:20	uv-audit	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:21	uv-audit-operations	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:22	uv-auth	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:23	uv-bin-install	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:24	uv-build-backend	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:25	uv-build-commands	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:26	uv-build-frontend	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:27	uv-cache	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:28	uv-cache-info	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:29	uv-cache-key	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:30	uv-cli	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:31	uv-client	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:32	uv-command-support	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:33	uv-configuration	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:34	uv-console	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:35	uv-dirs	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:36	uv-dispatch	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:37	uv-distribution	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:38	uv-distribution-filename	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:39	uv-distribution-types	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:40	uv-environment-operations	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:41	uv-errors	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:42	uv-extract	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:43	uv-fastid	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:44	uv-flags	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:45	uv-fs	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:49	uv-git	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:50	uv-git-types	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:51	uv-globfilter	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:52	uv-install-operations	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:53	uv-install-wheel	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:54	uv-installer	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:55	uv-keyring	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:56	uv-lock	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:57	uv-lock-operations	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:58	uv-logging	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:59	uv-macros	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:60	uv-metadata	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:61	uv-netrc	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:62	uv-normalize	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:63	uv-once-map	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:64	uv-options-metadata	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:65	uv-pep440	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:70	uv-pep508	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:73	uv-performance-memory-allocator	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:74	uv-pip-commands	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:75	uv-platform	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:76	uv-platform-tags	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:77	uv-preview	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:78	uv-project-commands	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:79	uv-project-edit	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:80	uv-publish	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:81	uv-publish-commands	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:82	uv-pypi-types	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:83	uv-python-commands	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:84	uv-python-discovery	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:85	uv-python-interpreter	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:86	uv-python-managed	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:87	uv-python-types	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:88	uv-redacted	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:89	uv-requirements	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:90	uv-requirements-txt	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:91	uv-resolve-operations	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:92	uv-resolver	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:93	uv-resolver-types	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:94	uv-scripts	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:95	uv-settings	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:96	uv-shell	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:97	uv-small-str	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:98	uv-state	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:99	uv-static	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:100	uv-test	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:101	uv-threads	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:102	uv-toml	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:103	uv-tool	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:104	uv-tool-commands	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:105	uv-torch	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:106	uv-trampoline-builder	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:107	uv-types	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:108	uv-unix	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:109	uv-version	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:110	uv-virtualenv	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:111	uv-warnings	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:112	uv-windows	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:113	uv-workspace	a path dependency, not looked up on crates.io
+skipped	rust/uv/Cargo.toml:114	uv-workspace-commands	a path dependency, not looked up on crates.io
