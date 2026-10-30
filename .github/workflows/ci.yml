@@ -119,7 +119,7 @@ jobs:
           key: &cargo-downloads-key cargo-downloads-v1-${{ hashFiles('Cargo.lock') }}
           restore-keys: &cargo-downloads-restore cargo-downloads-v1-
       - if: needs.changes.outputs.rust == 'true'
-        uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
+        uses: jdx/mr-boxington-action@88acf2bb50552c7c508cbac13e5f8c576b95b1de # v1.7.3
         # The pinned action has no nonfatal-cache input. This also covers its post step.
         continue-on-error: true
         with:
@@ -175,7 +175,7 @@ jobs:
           path: *cargo-downloads
           key: *cargo-downloads-key
           restore-keys: *cargo-downloads-restore
-      - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
+      - uses: jdx/mr-boxington-action@88acf2bb50552c7c508cbac13e5f8c576b95b1de # v1.7.3
         continue-on-error: true
         with:
           backend: github
@@ -230,7 +230,7 @@ jobs:
           path: *cargo-downloads
           key: *cargo-downloads-key
           restore-keys: *cargo-downloads-restore
-      - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
+      - uses: jdx/mr-boxington-action@88acf2bb50552c7c508cbac13e5f8c576b95b1de # v1.7.3
         continue-on-error: true
         with:
           backend: github
@@ -267,7 +267,7 @@ jobs:
           path: *cargo-downloads
           key: *cargo-downloads-key
           restore-keys: *cargo-downloads-restore
-      - uses: jdx/mr-boxington-action@47ce49b32025d93a7a2f4570815afaa2b7092240 # v1.7.2
+      - uses: jdx/mr-boxington-action@88acf2bb50552c7c508cbac13e5f8c576b95b1de # v1.7.3
         continue-on-error: true
         with:
           backend: github
