@@ -363,3 +363,166 @@ fn without_backlink(url: &str) -> String {
         url.into()
     }
 }
+
+/// An opening or closing code fence: its character and length.
+fn fence(line: &str) -> Option<(char, usize, &str)> {
+    let line = line.trim_start_matches(' ');
+    let ch = line.chars().next().filter(|c| matches!(c, '`' | '~'))?;
+    let count = line.chars().take_while(|c| *c == ch).count();
+    (count >= 3).then(|| (ch, count, &line[count..]))
+}
+
+/// An ATX heading's level, if the line is one.
+fn heading(line: &str) -> Option<usize> {
+    let indent = line.len() - line.trim_start_matches(' ').len();
+    let rest = line[indent..].trim_end_matches(['\n', '\r']);
+    let level = rest.bytes().take_while(|b| *b == b'#').count();
+    (indent <= 3
+        && (1..=6).contains(&level)
+        && (rest.len() == level || rest[level..].starts_with([' ', '\t'])))
+    .then_some(level)
+}
+
+fn list_item(line: &str) -> bool {
+    static MARKER: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"^ {0,1}(?:[-+*]|[0-9]{1,9}[.)])[ \t]").expect("list marker")
+    });
+    MARKER.is_match(line)
+}
+
+/// Lines with the fence state in force at their start.
+fn lines_with_fences(text: &str) -> Vec<(usize, &str, bool)> {
+    let mut open = None::<(char, usize)>;
+    let mut lines = Vec::new();
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        let in_fence = open.is_some();
+        lines.push((offset, line, in_fence));
+        match (open, fence(line.trim_end_matches('\n'))) {
+            (None, Some((ch, count, _))) => open = Some((ch, count)),
+            (Some((kind, size)), Some((ch, count, rest)))
+                if kind == ch && count >= size && rest.trim().is_empty() =>
+            {
+                open = None;
+            }
+            _ => {}
+        }
+        offset += line.len();
+    }
+    lines
+}
+
+/// Shifts upstream headings down so the shallowest sits at `top`, under the
+/// Count's own package and version headings. Headings in code stay as they are.
+pub(super) fn demote_headings(text: &str, top: usize) -> String {
+    let lines = lines_with_fences(text);
+    let shallowest = lines
+        .iter()
+        .filter(|(_, _, fenced)| !fenced)
+        .filter_map(|(_, line, _)| heading(line))
+        .min();
+    let Some(shift) = shallowest
+        .map(|level| top.saturating_sub(level))
+        .filter(|s| *s > 0)
+    else {
+        return text.into();
+    };
+    let mut output = String::with_capacity(text.len() + lines.len() * shift);
+    for (_, line, fenced) in lines {
+        match heading(line).filter(|_| !fenced) {
+            Some(level) => {
+                let indent = line.len() - line.trim_start_matches(' ').len();
+                output.push_str(&line[..indent]);
+                output.push_str(&"#".repeat((level + shift).min(6)));
+                output.push_str(&line[indent + level..]);
+            }
+            None => output.push_str(line),
+        }
+    }
+    output
+}
+
+/// Closes what the end of `text` leaves open: a code fence, then every
+/// `<details>`, so a cut can't swallow what follows it.
+pub(super) fn close_open_blocks(text: &str) -> String {
+    let mut output = text.trim_end().to_owned();
+    let mut open = None::<(char, usize)>;
+    let mut details = 0_i32;
+    for line in output.lines() {
+        match (open, fence(line)) {
+            (None, Some((ch, count, _))) => open = Some((ch, count)),
+            (Some((kind, size)), Some((ch, count, rest)))
+                if kind == ch && count >= size && rest.trim().is_empty() =>
+            {
+                open = None;
+            }
+            (None, _) => {
+                let lower = line.to_ascii_lowercase();
+                details += lower.matches("<details").count() as i32;
+                details -= lower.matches("</details>").count() as i32;
+            }
+            _ => {}
+        }
+    }
+    if let Some((ch, count)) = open {
+        output.push('\n');
+        output.push_str(&ch.to_string().repeat(count));
+    }
+    for _ in 0..details.max(0) {
+        output.push_str("\n</details>");
+    }
+    output.push('\n');
+    output
+}
+
+/// The longest prefix of `text`, at most `limit` bytes, that ends where a
+/// block does: never inside a paragraph (and so never inside a link or code
+/// span), a code fence or after a heading with nothing under it. Anything open
+/// at the end is closed. The flag says whether all of `text` fit.
+pub fn fit(text: &str, limit: usize) -> (String, bool) {
+    if text.len() <= limit {
+        return (close_open_blocks(text), true);
+    }
+    let lines = lines_with_fences(text);
+    let mut cut = 0;
+    let mut previous_heading = false;
+    let mut previous_blank = true;
+    for (offset, line, fenced) in &lines {
+        if *offset > limit {
+            break;
+        }
+        let blank = line.trim().is_empty();
+        let starts_block = !fenced
+            && !blank
+            && (previous_blank
+                || heading(line).is_some()
+                || list_item(line)
+                || fence(line).is_some());
+        if starts_block && !previous_heading {
+            cut = *offset;
+        }
+        if !blank {
+            previous_heading = !fenced && heading(line).is_some();
+        }
+        previous_blank = blank && !fenced;
+    }
+    if cut == 0 {
+        // One block bigger than the room: settle for the last line end that
+        // leaves no code span or link label open.
+        for (offset, line, fenced) in lines.iter().rev() {
+            let end = offset + line.len();
+            if end > limit || *fenced || line.trim().is_empty() {
+                continue;
+            }
+            let prefix = &text[..end];
+            if prefix.matches('`').count().is_multiple_of(2)
+                && prefix.matches('[').count() == prefix.matches(']').count()
+                && heading(line).is_none()
+            {
+                cut = end;
+                break;
+            }
+        }
+    }
+    (close_open_blocks(&text[..cut]), false)
+}

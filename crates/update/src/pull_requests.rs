@@ -62,6 +62,30 @@ pub fn update_key(plan: &Plan) -> String {
 fn body(pr: &Value) -> &str {
     pr["body"].as_str().unwrap_or("")
 }
+/// What another tool (a review bot's summary, say) appended after the Count's
+/// ownership marker, which is the last thing he writes.
+fn appended(body: &str) -> &str {
+    if marker(body).is_none() {
+        return "";
+    }
+    body.split_once(MARKER)
+        .and_then(|(_, rest)| rest.split_once(" -->"))
+        .map(|(_, tail)| tail)
+        .filter(|tail| !tail.trim().is_empty())
+        .unwrap_or("")
+}
+/// A freshly rendered body, followed by what the PR's current body carries
+/// after the ownership marker, so a rewrite does not lose it. A body the Count
+/// left alone already has it, so it never differs.
+fn with_appended(text: String, current: &str) -> String {
+    let tail = appended(current);
+    if tail.is_empty() || text.len() + tail.len() > APPENDED_LIMIT {
+        return text;
+    }
+    format!("{}{tail}", text.trim_end_matches('\n'))
+}
+/// GitHub's pull request body limit, with room to spare.
+const APPENDED_LIMIT: usize = 65_000;
 pub(crate) fn body_hash(text: &str) -> String {
     // GitHub may return CRLF for a body published with LF. Compare the same
     // content hash as write receipts, without treating transport newlines as edits.
@@ -673,6 +697,7 @@ impl Lifecycle {
             })
             .cloned();
         let text = self.render(sources, plan, existing.as_ref()).await;
+        let text = with_appended(text, existing.as_ref().map_or("", body));
         let title = truncate(&plan.action.message.replace(['\n', '\r'], " "), 250);
         let path = format!("repos/{}/pulls", self.repo);
         let (mut pr, status) = if let Some(pr) = existing {
@@ -914,7 +939,7 @@ impl Lifecycle {
             })
             .collect();
         let inputs = (
-            "notes-render-v4",
+            "notes-render-v5",
             &text,
             ranges,
             self.recheck,
@@ -1010,10 +1035,11 @@ impl Lifecycle {
         if let Some(permits) = self.branch_permits.get(&plan.action.branch) {
             let marker = crate::dashboard::permit_marker(permits);
             // Keep policy evidence with the PR even if its local cache is lost.
-            text = truncate(
+            text = patchula_datasource::notes::fit(
                 &text,
                 BODY_LIMIT.saturating_sub(marker.len() + reserve + 1000),
-            );
+            )
+            .0;
             text.push('\n');
             text.push_str(&marker);
         }
@@ -1086,7 +1112,7 @@ fn security_section(changes: &[crate::Change]) -> String {
                 },
                 cell(advisory.severity.as_deref().unwrap_or("unrated")),
                 cell(&change.package),
-                cell(advisory.summary.as_deref().unwrap_or("")),
+                prose_cell(advisory.summary.as_deref().unwrap_or("")),
             ));
         }
     }
@@ -1340,11 +1366,17 @@ fn code(text: &str) -> String {
     };
     format!("{fence}{pad}{text}{pad}{fence}")
 }
+/// A table cell of generated text: package names, versions, files. Those are
+/// data and stay as they are.
 fn cell(text: &str) -> String {
     truncate(
         &safe(text).replace('|', "\\|").replace(['\n', '\r'], " "),
         240,
     )
+}
+/// A table cell of third-party prose, such as an advisory summary.
+fn prose_cell(text: &str) -> String {
+    cell(&crate::text::inert(text))
 }
 fn append(text: &mut String, addition: &str, limit: usize) {
     let remaining = limit.saturating_sub(text.len());
@@ -1390,6 +1422,50 @@ mod security_tests {
         let mut plain = change;
         plain.advisories.clear();
         assert!(security_section(&[plain]).is_empty());
+    }
+
+    #[test]
+    fn advisory_text_and_package_names_never_mention_anyone() {
+        let advisory: patchula_report::Advisory = serde_json::from_value(serde_json::json!({
+            "id":"GHSA-x","severity":"high",
+            "summary":"Reported by @mallory, see #12 and https://github.com/a/b/issues/3",
+            "url":"https://osv.dev/vulnerability/GHSA-x"
+        }))
+        .unwrap();
+        let change = crate::Change {
+            source: "npm".into(),
+            package: "@scope/pkg".into(),
+            file: "package.json".into(),
+            current: "1.0.0".into(),
+            current_version: None,
+            value: Some("1.0.1".into()),
+            version: Some("1.0.1".into()),
+            digest: None,
+            kind: "patch".into(),
+            merge: false,
+            labels: Vec::new(),
+            release_notes: true,
+            body_notes: vec!["Held for @mallory".into()],
+            advisories: vec![advisory],
+            image: None,
+        };
+        let text = security_section(&[change]);
+        for forged in ["@mallory", " #12", "//github.com/a/b/issues/3"] {
+            assert!(!text.contains(forged), "{forged}: {text}");
+        }
+        assert!(text.contains("@\u{200d}mallory"), "{text}");
+        // Package names are data, not prose.
+        assert!(text.contains("| @scope/pkg |"), "{text}");
+        assert!(super::prose_cell("@mallory").contains("@\u{200d}mallory"));
+        assert!(
+            crate::batch::render(&[crate::batch::Item {
+                origin: "a".repeat(64),
+                number: Some(1),
+                title: "update @mallory/pkg".into(),
+                targets: vec![],
+            }])
+            .contains("update @\u{200d}mallory/pkg")
+        );
     }
 }
 
@@ -1643,5 +1719,39 @@ mod tooling_tests {
         );
         assert!(narrower.contains("> **Merging this fix doesn't ship it.** It will merge on its own, and nothing runs when `main` changes. The only workflow here that could deliver it runs on tags or releases, so it ships only if you cut one.\n"), "{narrower}");
         assert!(tooling_section(&[]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod appended_tests {
+    use super::{MARKER, appended, body_hash, with_appended};
+
+    fn owned(rendered: &str) -> String {
+        format!(
+            "{rendered}{MARKER}{{\"version\":1,\"identity\":\"{}\",\"update\":\"{}\"}} -->\n",
+            "a".repeat(64),
+            "b".repeat(64)
+        )
+    }
+    const CUBIC: &str = "\n\n<!-- This is an auto-generated description by cubic. -->\n<a href=\"https://www.cubic.dev/pr/o/r/pull/1\">Review</a>\n<!-- End of auto-generated description by cubic. -->";
+
+    #[test]
+    fn text_a_bot_appends_after_the_marker_survives_a_rewrite_and_a_second_one_is_stable() {
+        let current = format!("{}{CUBIC}", owned("old table\n"));
+        assert!(appended(&current).contains("auto-generated description by cubic"));
+        let rewritten = with_appended(owned("new table\n"), &current);
+        assert!(rewritten.starts_with("new table\n"), "{rewritten}");
+        assert!(
+            rewritten.ends_with("End of auto-generated description by cubic. -->"),
+            "{rewritten}"
+        );
+        assert_eq!(rewritten.matches(MARKER).count(), 1);
+        // The next run renders the same and finds the same body.
+        let again = with_appended(owned("new table\n"), &rewritten);
+        assert_eq!(body_hash(&again), body_hash(&rewritten));
+        // A body with nothing appended is what the Count rendered.
+        assert_eq!(with_appended(owned("t\n"), &owned("old\n")), owned("t\n"));
+        // Text before a missing or forged marker is not trusted as an appendix.
+        assert_eq!(appended("no marker here\n\nbot text"), "");
     }
 }

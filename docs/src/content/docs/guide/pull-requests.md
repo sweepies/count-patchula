@@ -52,15 +52,22 @@ when he can't tell whether the rebuild fixes anything, unless you silenced it
 with `security.quietImages`, or a note when he couldn't read an SBOM on this run
 (see [container image rebuilds](/guide/security/#container-image-rebuilds)). Then it
 holds a table of every update on the branch (package, change, type, file),
-release notes for each version in the range, any `bodyNotes` you configured,
-and two checkboxes:
+the release notes for each package, folded into a collapsed block per
+dependency (see [release notes](/guide/release-notes/#how-notes-are-rendered)),
+any `bodyNotes` you configured, and two checkboxes:
 
 - re-check, which forces the branch through verification and regeneration on
   the next run, or straight away under the [server](/guide/server/);
 - add to the batch, which moves the update into the [batch PR](/guide/batch/).
 
 The Count reads hidden markers, not visible text, so editing the wording does
-not confuse him. Labels come from `labels`, `dependencies` by default.
+not confuse him. Text another tool, such as a review bot, appends after his
+ownership marker is kept: a body he leaves alone keeps it, and one he rewrites
+carries it over.
+
+Nothing third-party in a body can mention anyone: advisory summaries, package
+names, titles and release notes get a zero-width joiner after `@`, and links to
+GitHub issues go through `redirect.github.com`. Labels come from `labels`, `dependencies` by default.
 
 ## Closing a PR
 

@@ -52,9 +52,26 @@ only ask for timestamps. Changelogs are parsed once per immutable blob.
 
 ## How notes are rendered
 
-The body stays within 32,000 bytes. Each dependency gets at most 12,000 bytes and
-32 releases; past the three newest versions, older notes collapse into
-`<details>`. Anything cut is marked truncated, with a link upstream.
+The body stays within 32,000 bytes. Each dependency gets at most 12,000 bytes
+and 32 releases.
+
+Under the dependency's name and its Source and Compare links, the notes sit in
+one collapsed block whose summary says what is inside, such as
+`Release notes: 4.151.3 → 4.156.0 (5 releases)`, or `3 of 5 releases` when some
+were left out. Each release keeps its linked version heading. Upstream
+headings (`### Minor Changes`) move down to sit below the version heading, so
+they never look like the next dependency. A single release with at most 8
+lines and 600 bytes stays expanded, since a fold would be longer than the
+notes.
+
+The table, any `bodyNotes` and the checkboxes stay outside the fold.
+
+A package that runs out of room is cut where a block ends, between paragraphs,
+list items or headings, and never inside a link, a code span or a code block;
+a fence or `<details>` that upstream left open is closed. The package then gets
+one notice, linking to upstream's release history: either "the Count left some
+release notes out", or, when upstream's own history couldn't be read in full,
+"these release notes may be incomplete".
 
 Two edits keep upstream text from making noise:
 

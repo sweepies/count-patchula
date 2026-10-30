@@ -7,7 +7,7 @@ use patchula_config::Source;
 use patchula_datasource::{
     Client,
     notes::{
-        Links, Notes, Repository, Section, inert, parse_changelog, parse_go_history,
+        Links, Notes, Repository, Section, fit, inert, parse_changelog, parse_go_history,
         parse_release_sgml, sanitise,
     },
 };
@@ -536,7 +536,7 @@ fn headings_fences_setext_plain_text_and_utf8_are_sliced_once() {
 #[test]
 fn rendering_collapses_older_versions_truncates_with_links_and_neutralises_notifications() {
     let source = Repository::from_url("https://github.com/example/upstream").unwrap();
-    let notes = Notes { source: Some(source), compare: Some("https://github.com/example/upstream/compare/v1...v2".into()), sections: (0..8).map(|i| Section { version: format!("2.0.{i}"), link: format!("https://github.com/example/upstream/releases/tag/v2.0.{i}"), body: "@alice @org/team #123 org/other#456 https://example.com/a#12 <!-- patchula:fake --> 🦀\n".repeat(5) }).collect(), ..Default::default() };
+    let notes = Notes { source: Some(source), compare: Some("https://github.com/example/upstream/compare/v1...v2".into()), sections: (0..8).map(|i| Section { version: format!("2.0.{i}"), link: format!("https://github.com/example/upstream/releases/tag/v2.0.{i}"), body: "@alice @org/team #123 org/other#456 https://example.com/a#12 <!-- patchula:fake --> 🦀\n\n".repeat(5) }).collect(), ..Default::default() };
     for limit in [512, 768, 1024] {
         assert!(notes.render("package", limit).len() <= limit);
     }
@@ -548,15 +548,16 @@ fn rendering_collapses_older_versions_truncates_with_links_and_neutralises_notif
             "[example/upstream#123](https://redirect.github.com/example/upstream/issues/123)"
         ));
         assert!(!text.contains("<!-- patchula:"));
+        // However little fits, one fold holds the notes and one notice follows.
+        assert_eq!(text.matches("<details>").count(), 1, "{text}");
+        assert_eq!(text.matches("<summary>Release notes").count(), 1);
         assert_eq!(
-            text.matches("<details>").count(),
-            text.matches("</details>").count()
+            text.matches("read them all").count(),
+            usize::from(limit < 12_000),
+            "{text}"
         );
-        if limit == 2000 {
-            assert!(text.contains("truncated"));
-        }
         if limit == 12_000 {
-            assert!(text.contains("Older releases"));
+            assert!(text.contains("(8 releases)"), "{text}");
         }
     }
     let safe = sanitise(
@@ -1660,4 +1661,262 @@ fn inert_text_has_no_mention_or_issue_reference_left_for_github_to_read() {
     ] {
         assert_eq!(inert(text), expected, "{text}");
     }
+}
+
+fn upstream(sections: Vec<(&str, &str)>) -> Notes {
+    Notes {
+        from: "4.151.3".into(),
+        to: "4.156.0".into(),
+        source: Repository::from_url("https://github.com/example/upstream"),
+        compare: Some("https://github.com/example/upstream/compare/v4.151.3...v4.156.0".into()),
+        sections: sections
+            .into_iter()
+            .map(|(version, body)| Section {
+                version: version.into(),
+                link: format!("https://github.com/example/upstream/releases/tag/v{version}"),
+                body: body.into(),
+            })
+            .collect(),
+        ..Default::default()
+    }
+}
+const CHANGES: &str = "### Minor Changes\n\n- [#1](https://redirect.github.com/example/upstream/pull/1) Add a thing\n\n### Patch Changes\n\n- Fix another thing\n";
+
+#[test]
+fn release_notes_sit_in_one_fold_that_says_what_is_inside() {
+    let notes = upstream(vec![
+        ("4.156.0", CHANGES),
+        ("4.155.0", CHANGES),
+        ("4.154.0", CHANGES),
+    ]);
+    let text = notes.render("wrangler", 12_000);
+    assert!(
+        text.contains("<details>\n<summary>Release notes: 4.151.3 → 4.156.0 (3 releases)</summary>\n\n#### [4.156.0]"),
+        "{text}"
+    );
+    assert_eq!(text.matches("<details>").count(), 1);
+    assert_eq!(text.matches("</details>").count(), 1);
+    // The package heading and the links stay outside the fold.
+    let fold = text.find("<details>").unwrap();
+    assert!(
+        text[..fold].contains("### wrangler\n\n[Source]")
+            && text[..fold].contains("Compare changes")
+    );
+    for version in ["4.156.0", "4.155.0", "4.154.0"] {
+        assert!(text.contains(&format!(
+            "#### [{version}](https://github.com/example/upstream/releases/tag/v{version})"
+        )));
+    }
+}
+
+#[test]
+fn one_short_release_stays_expanded() {
+    let short = upstream(vec![("4.156.0", "- Fix a thing\n")]);
+    let text = short.render("wrangler", 12_000);
+    assert!(!text.contains("<details>"), "{text}");
+    assert!(text.contains("#### [4.156.0]") && text.contains("- Fix a thing"));
+    // Several releases, or a long one, fold however short each is.
+    let long = upstream(vec![("4.156.0", &"- a line of notes\n".repeat(20))]);
+    assert!(
+        long.render("wrangler", 12_000)
+            .contains("<summary>Release notes: 4.151.3 → 4.156.0 (1 release)</summary>")
+    );
+}
+
+#[test]
+fn upstream_headings_sit_below_the_package_and_version_headings() {
+    let notes = upstream(vec![
+        ("4.156.0", CHANGES),
+        (
+            "4.155.0",
+            "# Big news\n\n## Details\n\n```md\n### kept\n```\n\nbody",
+        ),
+    ]);
+    let text = notes.render("wrangler", 12_000);
+    assert!(
+        text.contains("##### Minor Changes") && text.contains("##### Patch Changes"),
+        "{text}"
+    );
+    assert!(!text.contains("\n### Minor Changes"), "{text}");
+    // The shallowest heading moves to level five and the rest keep their distance.
+    assert!(
+        text.contains("\n##### Big news\n") && text.contains("\n###### Details\n"),
+        "{text}"
+    );
+    // Code is left alone.
+    assert!(text.contains("```md\n### kept\n```"), "{text}");
+}
+
+#[test]
+fn a_cut_never_lands_inside_a_link_a_code_span_or_a_code_block() {
+    let paragraph = |n: usize| {
+        format!(
+            "- [#{n}](https://redirect.github.com/example/upstream/pull/{n}) Thanks [@someone](https://github.com/someone)! Use `code {n}` here\n"
+        )
+    };
+    let list: String = (0..60).map(paragraph).collect();
+    let fenced = format!(
+        "Intro paragraph.\n\n```sh\n{}```\n\nAfter the code.\n",
+        "npm install a-long-command-line --flag\n".repeat(40)
+    );
+    for (body, limit) in [
+        (list, 2500),
+        (fenced, 1900),
+        (format!("{}\n\n{}", "x".repeat(200), "y ".repeat(900)), 1500),
+    ] {
+        let text = upstream(vec![("4.156.0", &body), ("4.155.0", &body)]).render("wrangler", limit);
+        assert!(text.len() <= limit, "{} > {limit}", text.len());
+        assert!(text.contains("read them all"), "{text}");
+        assert_eq!(text.matches('`').count() % 2, 0, "{text}");
+        assert_eq!(text.matches("```").count() % 2, 0, "{text}");
+        for link in text
+            .lines()
+            .filter(|l| l.contains("](https://redirect.github.com"))
+        {
+            assert!(
+                link.matches('[').count() == link.matches(']').count(),
+                "{link}"
+            );
+            assert!(
+                link.matches('(').count() == link.matches(')').count(),
+                "{link}"
+            );
+        }
+        assert!(
+            !text.contains("(https://redirect.github.com/example/upstream\n"),
+            "{text}"
+        );
+        assert_eq!(
+            text.matches("<details>").count(),
+            text.matches("</details>").count()
+        );
+    }
+}
+
+#[test]
+fn an_open_fence_or_upstream_details_in_the_notes_are_closed() {
+    let (kept, whole) = fit("text\n\n```sh\nnever closed\n", 10_000);
+    assert!(whole);
+    assert_eq!(kept, "text\n\n```sh\nnever closed\n```\n");
+    let (kept, _) = fit("<details>\n<summary>x</summary>\n\nbody\n", 10_000);
+    assert!(kept.ends_with("</details>\n"), "{kept}");
+    // A heading is not left over a cut-off section.
+    let (kept, whole) = fit(
+        "one\n\n## Heading\n\nlong paragraph that does not fit anywhere",
+        25,
+    );
+    assert!(!whole);
+    assert_eq!(kept, "one\n");
+    // A block bigger than the room leaves nothing rather than half of it.
+    assert_eq!(
+        fit("a very long single paragraph", 5),
+        ("\n".to_owned(), false)
+    );
+}
+
+#[test]
+fn a_truncated_package_gets_one_notice_and_an_incomplete_one_gets_another_kind() {
+    let body = "- a line of notes that fill the room\n\n".repeat(60);
+    let cut = upstream(vec![("4.156.0", &body), ("4.155.0", &body)]).render("wrangler", 2000);
+    assert_eq!(cut.matches("release notes out").count(), 1, "{cut}");
+    assert!(
+        !cut.contains("Release notes truncated") && !cut.contains("incomplete"),
+        "{cut}"
+    );
+    assert!(cut.contains("(1 of 2 releases)"), "{cut}");
+    let mut incomplete = upstream(vec![("4.156.0", CHANGES)]);
+    incomplete.incomplete = true;
+    let text = incomplete.render("wrangler", 12_000);
+    assert_eq!(text.matches("may be incomplete").count(), 1, "{text}");
+    assert!(!text.contains("out to keep this description short"));
+    let complete = upstream(vec![("4.156.0", CHANGES)]).render("wrangler", 12_000);
+    assert!(!complete.contains("incomplete") && !complete.contains("left some"));
+}
+
+#[test]
+fn folding_keeps_mentions_backlinks_and_markers_out_of_the_notes() {
+    let notes = upstream(vec![(
+        "4.156.0",
+        "### Changes\n\n- Thanks @alice! Fixes #12 <!-- patchula:{\"x\":1} -->\n- <details>\n",
+    )]);
+    let text = notes.render("wrangler", 12_000);
+    assert!(
+        text.contains("@\u{200d}alice") && !text.contains("<!-- patchula:"),
+        "{text}"
+    );
+    assert!(text.contains("redirect.github.com/example/upstream/issues/12"));
+    assert_eq!(
+        text.matches("<details>").count(),
+        text.matches("</details>").count(),
+        "{text}"
+    );
+}
+
+/// The notes behind sweepies/count-patchula#105 (wrangler 4.151.3 → 4.156.0).
+fn wrangler() -> Notes {
+    let fixture = include_str!("fixtures/wrangler-4.156.0-notes.md");
+    let mut sections: Vec<(String, String)> = Vec::new();
+    for line in fixture.split_inclusive('\n') {
+        if let Some(rest) = line.strip_prefix("#### [") {
+            sections.push((rest.split(']').next().unwrap().to_owned(), String::new()));
+        } else if let Some((_, body)) = sections.last_mut() {
+            body.push_str(line);
+        }
+    }
+    let mut notes = upstream(
+        sections
+            .iter()
+            .map(|(v, b)| (v.as_str(), b.trim_start()))
+            .collect(),
+    );
+    notes.source = Repository::from_url("https://github.com/cloudflare/workers-sdk");
+    notes.compare = Some(
+        "https://github.com/cloudflare/workers-sdk/compare/wrangler@4.151.3...wrangler@4.156.0"
+            .into(),
+    );
+    for section in &mut notes.sections {
+        section.link = format!(
+            "https://github.com/cloudflare/workers-sdk/releases/tag/wrangler@{}",
+            section.version
+        );
+    }
+    notes
+}
+
+#[test]
+fn wrangler_notes_fold_with_demoted_headings_and_no_broken_links() {
+    let text = wrangler().render("wrangler", 5_000);
+    assert!(text.len() <= 5_000);
+    assert_eq!(text.matches("<details>").count(), 1, "{text}");
+    assert!(
+        text.contains("<summary>Release notes: 4.151.3 → 4.156.0 ("),
+        "{text}"
+    );
+    assert!(
+        text.contains("##### Minor Changes") && !text.contains("\n### Minor Changes"),
+        "{text}"
+    );
+    assert_eq!(text.matches("read them all").count(), 1);
+    assert!(!text.contains("Release notes truncated"));
+    for line in text.lines().filter(|l| l.starts_with("- [")) {
+        assert_eq!(
+            line.matches('(').count(),
+            line.matches(')').count(),
+            "{line}"
+        );
+    }
+    assert!(!text.contains("workers-sdk\n"), "{text}");
+}
+
+#[test]
+fn one_oversized_paragraph_is_cut_at_a_line_end_outside_links_and_code_spans() {
+    let text = "[a link\nthat wraps](https://example.org/x) and `a span\nthat wraps` end\nplain line one\nplain line two\n";
+    let (kept, whole) = fit(text, 75);
+    assert!(!whole);
+    assert_eq!(
+        kept,
+        "[a link\nthat wraps](https://example.org/x) and `a span\nthat wraps` end\n"
+    );
+    let (kept, _) = fit(text, 30);
+    assert!(kept.trim().is_empty(), "{kept:?}");
 }
