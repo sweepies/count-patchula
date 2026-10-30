@@ -100,6 +100,7 @@ pub(crate) fn job(
                 &[
                     "package-lock.json",
                     "npm-shrinkwrap.json",
+                    "aube-lock.yaml",
                     "bun.lock",
                     "bun.lockb",
                     "pnpm-lock.yaml",
@@ -224,6 +225,18 @@ pub(crate) fn job(
         // `.python-version` pins the interpreter, which no lockfile records.
         Manager::Pyproject if dep.file.ends_with(".python-version") => return Ok(None),
         Manager::Pyproject => {
+            // Lockfiles of other Python tools sit beside the pyproject.toml
+            // too; leaving one stale would publish a manifest that disagrees
+            // with it.
+            if let Some(lock) = nearest(&dep.file, &snapshot.paths, &python::UNSUPPORTED_LOCKS) {
+                return Err(format!(
+                    "unsupported lockfile format: {}",
+                    python::UNSUPPORTED_LOCKS
+                        .iter()
+                        .find(|leaf| snapshot.paths.contains(&node::join(lock, leaf)))
+                        .unwrap_or(&"lockfile")
+                ));
+            }
             let Some(root) = nearest(&dep.file, &snapshot.paths, &python::LOCKS) else {
                 return Ok(None);
             };
@@ -275,6 +288,7 @@ pub fn maintenance(
         let ecosystem = match leaf {
             "package-lock.json"
             | "npm-shrinkwrap.json"
+            | "aube-lock.yaml"
             | "bun.lock"
             | "pnpm-lock.yaml"
             | "yarn.lock"
@@ -1203,6 +1217,7 @@ fn writable(path: &str) -> bool {
         "package.json"
             | "package-lock.json"
             | "npm-shrinkwrap.json"
+            | "aube-lock.yaml"
             | "pnpm-lock.yaml"
             | "yarn.lock"
             | "bun.lock"

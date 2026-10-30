@@ -11,7 +11,7 @@ quoting, comments and formatting.
 
 | Manager | Files | Lockfile the Count regenerates |
 |---|---|---|
-| `npm` | `package.json`, `pnpm-workspace.yaml` and `.yarnrc.yml` catalogs, `.nvmrc`, `.node-version` | `package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock` |
+| `npm` | `package.json`, `pnpm-workspace.yaml` and `.yarnrc.yml` catalogs, `.nvmrc`, `.node-version` | `package-lock.json`, `npm-shrinkwrap.json`, `aube-lock.yaml`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock` |
 | `bun` | `package.json` when `npm` is off | `bun.lock` |
 | `github-actions` | `.github/workflows/*.yml`, `.forgejo/workflows/*.yml`, `.gitea/workflows/*.yml`, `action.yml` | |
 | `mise` | `mise.toml`, `.mise.toml`, `.tool-versions` | `mise.lock` |

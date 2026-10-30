@@ -10,7 +10,7 @@ commit. If the tool fails, nothing is published.
 
 | Lockfile | Tool | Command |
 |---|---|---|
-| `pnpm-lock.yaml` | aube | `aube install --lockfile-only --ignore-scripts` |
+| `aube-lock.yaml`, `pnpm-lock.yaml` | aube | `aube install --lockfile-only --ignore-scripts` |
 | `package-lock.json`, `npm-shrinkwrap.json` | aube, or npm | `npm install --package-lock-only --ignore-scripts` |
 | `yarn.lock` | Yarn Classic or Berry | `yarn install --ignore-scripts`, or `--mode=update-lockfile` |
 | `bun.lock` | Bun | `bun install --lockfile-only --ignore-scripts` |
@@ -46,9 +46,17 @@ lock back (npm, Bun, Cargo, uv, Poetry, Bundler, Composer, Terraform
 providers), the requested version must be the one the new lock records.
 
 :::caution[Not supported]
-Binary `bun.lockb` is not supported, and neither is regenerating `Chart.lock`
-or `gradle.lockfile`. Updates to those hold as lockfile-pending.
+Binary `bun.lockb` is not supported, and neither is regenerating `Chart.lock`,
+`gradle.lockfile` or the Python locks `pdm.lock`, `pylock.toml` and
+`Pipfile.lock`. An update to a manifest with one of those beside it holds as
+lockfile-pending, with the lockfile named in the reason, rather than opening a
+PR whose lock disagrees with the manifest.
 :::
+
+aube keeps its own `aube-lock.yaml`, in pnpm's v9 format, beside the manifest.
+The Count regenerates a committed one in place. When it sits beside another
+lockfile he regenerates both, each by name, and never lets aube start a new
+one. Where aube reads several, `aube-lock.yaml` wins over `pnpm-lock.yaml`.
 
 ## Why aube for npm and pnpm
 

@@ -227,7 +227,7 @@ fn build(
 ) -> Result<Plan, String> {
     let mut changes = BTreeMap::<String, Vec<Edit>>::new();
     let mut reason = None;
-    let mut pending = false;
+    let mut pending = None;
     let mut lock_jobs = BTreeSet::new();
     let mut prefixes = BTreeSet::new();
     let mut titles = BTreeSet::new();
@@ -251,7 +251,7 @@ fn build(
                 lock_jobs.insert(job);
             }
             Ok(None) => {}
-            Err(_) => pending = true,
+            Err(error) => pending = Some(error),
         }
         let value = update.new_value.as_deref().unwrap_or(&dep.current);
         titles.insert(format!(
@@ -323,11 +323,13 @@ fn build(
                 .into(),
         );
     }
-    if pending && !allow_pending {
-        reason = Some("lockfile pending: unsupported lockfile (binary bun.lockb, Chart.lock or gradle.lockfile); --allow-lockfile-pending permits manifest-only testing".into());
+    if let Some(error) = pending.as_ref().filter(|_| !allow_pending) {
+        reason = Some(format!(
+            "lockfile pending: {error}; --allow-lockfile-pending permits manifest-only testing"
+        ));
     }
     let fingerprint = hash(
-        serde_json::to_string(&(&contents, &message, pending, &lock_jobs))
+        serde_json::to_string(&(&contents, &message, pending.is_some(), &lock_jobs))
             .expect("serializable plan")
             .as_bytes(),
     );
@@ -345,7 +347,7 @@ fn build(
         previous_commit: None,
         commit: None,
         verified: None,
-        lockfile_pending: pending,
+        lockfile_pending: pending.is_some(),
         files,
     };
     let changes: BTreeSet<_> = items

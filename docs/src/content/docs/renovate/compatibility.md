@@ -131,13 +131,13 @@ Renovate's other schemes, including `regex` versioning, `node`, `debian`,
 | Lockfile | Count Patchula |
 |---|---|
 | `package-lock.json` | aube by default, npm with `npmEngine = "npm"` |
-| `pnpm-lock.yaml` | aube |
+| `aube-lock.yaml`, `pnpm-lock.yaml` | aube |
 | `yarn.lock`, `bun.lock` | Yarn, Bun |
 | `Cargo.lock`, `go.sum`, `.terraform.lock.hcl` | yes |
 | `uv.lock`, `poetry.lock` | yes |
 | `packages.lock.json`, `Gemfile.lock`, `composer.lock` | yes |
 | `mise.lock`, `flake.lock`, `apm.lock.yaml` | yes |
-| `bun.lockb`, `Chart.lock`, `gradle.lockfile`, `Pipfile.lock`, `pdm.lock` and others | no |
+| `bun.lockb`, `Chart.lock`, `gradle.lockfile`, `Pipfile.lock`, `pdm.lock`, `pylock.toml` | no; updates beside them hold as lockfile-pending |
 
 ## Options and features
 
