@@ -7,7 +7,7 @@ zig = "0.17.0"
 # File tasks with real logic are nu scripts.
 nu = "0.116.1"
 node = "24.21.0"
-go = "1.27.2"
+go = "1.27.3"
 # hk runs the linters in hk.pkl from the git hooks and from CI.
 hk = "2.9.0"
 pkl = "0.32.2"
