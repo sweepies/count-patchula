@@ -116,7 +116,7 @@ itself for each tool's versions (`mise ls-remote --json`), so a tool is found
 wherever mise finds it: a short registry name such as `jq`, or an identifier for
 any backend that reads release metadata (`aqua`, `github`, `gitlab`,
 `forgejo`, `packslip`, `npm`, `pypi`, `cargo`, `go`, `gem`, `dotnet`,
-`conda`, `spm`, `http`, `s3` and `core`). That includes every form of
+`conda`, `spm` and `core`). That includes every form of
 packslip source: `packslip:owner/repo`, `packslip:github.com/owner/repo`, a
 tool inside a monorepo (`packslip:github.com/owner/repo/tools/name`) and a
 tool on a publisher's domain. An existing `mise.lock` is regenerated with the
@@ -125,6 +125,11 @@ Count's own pinned mise and none of your configuration.
 
 Some tools are refused for safety (plugin backends, tool options, Git-ref
 installs); see [mise lookups](/guide/sources/#mise-lookups).
+
+`http:` and `s3:` tools are skipped with a reason, not looked up. mise lists their
+versions only from options in the tool's table (`version_list_url`, or
+`version_prefix` for s3), which the Count does not pass to mise, so there is
+nothing to ask. They are not counted as lookup failures.
 
 ## Cargo, Go and Terraform
 

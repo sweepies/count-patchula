@@ -1960,3 +1960,45 @@ serde = "1.0.0"
         ]
     );
 }
+
+#[test]
+fn mise_http_and_s3_tools_are_skipped_because_they_list_no_versions() {
+    let mut config = config();
+    config.managers = vec![Manager::Mise];
+    let files = Files::from([
+        (
+            "mise.toml".into(),
+            "[tools]\njq = \"1.7.1\"\n\"http:deepsource\" = { version = \"2.0.55\", url = \"https://example.com/{{ version }}.tar.gz\" }\n\"s3:internal\" = \"1.0.0\"\n\"github:org/tool\" = { version = \"v2.0.0\" }\n".into(),
+        ),
+        (".tool-versions".into(), "jq 1.7.1\nhttp:other 3.0.0\n".into()),
+    ]);
+    let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+    let emitted: Vec<_> = extraction
+        .dependencies
+        .iter()
+        .map(|d| (d.file.as_str(), d.name.as_str()))
+        .collect();
+    assert_eq!(
+        emitted,
+        [
+            (".tool-versions", "jq"),
+            ("mise.toml", "jq"),
+            ("mise.toml", "github:org/tool"),
+        ]
+    );
+    let skipped: Vec<_> = extraction
+        .skipped
+        .iter()
+        .map(|s| (s.file.as_str(), s.line, s.value.as_str(), s.reason.as_str()))
+        .collect();
+    let http = "mise's http backend lists versions only with version_list_url, which the Count does not pass";
+    let s3 = "mise's s3 backend lists versions only with version_list_url or version_prefix, which the Count does not pass";
+    assert_eq!(
+        skipped,
+        [
+            (".tool-versions", Some(2), "http:other", http),
+            ("mise.toml", Some(3), "http:deepsource", http),
+            ("mise.toml", Some(4), "s3:internal", s3),
+        ]
+    );
+}
