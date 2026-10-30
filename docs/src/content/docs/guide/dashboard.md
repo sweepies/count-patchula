@@ -16,19 +16,24 @@ In order:
 
 1. known vulnerabilities, each with the update that fixes it, or the reason no
    update is proposed (see [security advisories](/guide/security/));
-2. images the Count can't vouch for: pinned images whose SBOM can't show what
+2. tooling warnings: updates set to merge in a repository whose CI, required
+   checks or delivery don't back that up, with the open PRs each affects, and
+   the ones you silenced with `warnings.quiet` collapsed under "Silenced" (see
+   [tooling warnings](/guide/auto-merge/#tooling-warnings)); the section goes
+   once the condition clears;
+3. images the Count can't vouch for: pinned images whose SBOM can't show what
    a rebuild fixes, with the reason, and the ones you silenced with
    `security.quietImages` collapsed under "Silenced" (see
    [container image rebuilds](/guide/security/#container-image-rebuilds));
-3. open update PRs, grouped by update type, then the ones he merged;
-4. pending updates, each with the reason it is held (release age with the time
+4. open update PRs, grouped by update type, then the ones he merged;
+5. pending updates, each with the reason it is held (release age with the time
    it becomes eligible, PR limits, schedule windows);
-5. template updates, which have no PR or checkbox
+6. template updates, which have no PR or checkbox
    ([Copier](/guide/managers/#copier));
-6. updates you closed ("Updates you closed"), with the target that was
+7. updates you closed ("Updates you closed"), with the target that was
    suppressed, and updates "Batched by the Count";
-7. lookup warnings and sources served from stale cache;
-8. every detected dependency, collapsed by manager and file.
+8. lookup warnings and sources served from stale cache;
+9. every detected dependency, collapsed by manager and file.
 
 The issue body is bounded to GitHub's size limit. An unchanged dashboard is not
 rewritten: the Count compares the rendered content with the issue's actual

@@ -196,6 +196,18 @@ impl Config {
                 return fail(&field, "give the reason this image's warning is silenced");
             }
         }
+        for (rule, reason) in &self.warnings.quiet {
+            let field = format!("warnings.quiet[{rule}]");
+            if !crate::TOOLING_WARNINGS.contains(&rule.as_str()) {
+                return fail(
+                    &field,
+                    format!("must be one of {}", crate::TOOLING_WARNINGS.join(", ")),
+                );
+            }
+            if reason.trim().is_empty() {
+                return fail(&field, "give the reason this warning is silenced");
+            }
+        }
         if let Some(value) = &self.security.apply.windows {
             windows("security.apply.windows", value)?;
         }

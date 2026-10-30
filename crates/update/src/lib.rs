@@ -17,4 +17,5 @@ pub use plan::{Blob, Change, Plan, Snapshot, blob_sha, branch_name, plan, unifie
 pub use write::{REF_UPDATE, apply, apply_all, needs_requeue};
 
 pub mod pull_requests;
+pub mod tooling;
 pub use pull_requests::{BODY_LIMIT, Lifecycle, Recheck, update_key};

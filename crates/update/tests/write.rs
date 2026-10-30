@@ -472,6 +472,7 @@ fn setup(
         skipped: vec![],
         notices: vec![],
         lookup_failures: vec![],
+        tooling: Vec::new(),
         default_branch: Some("main".into()),
         commit: Some("base".into()),
         package_files: vec![PackageFile {

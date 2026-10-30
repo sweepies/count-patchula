@@ -31,6 +31,7 @@ pub struct Config {
     pub prs: PullRequests,
     pub lockfiles: Lockfiles,
     pub security: Security,
+    pub warnings: Warnings,
     pub gitlab: Gitlab,
     pub use_versions_host: bool,
     pub submodules: bool,
@@ -150,6 +151,19 @@ pub struct Security {
     pub image_platforms: Vec<String>,
     pub quiet_images: std::collections::BTreeMap<String, String>,
 }
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct Warnings {
+    pub quiet: std::collections::BTreeMap<String, String>,
+}
+
+/// The tooling warnings `warnings.quiet` can silence.
+pub const TOOLING_WARNINGS: [&str; 3] = [
+    "merge-without-ci",
+    "merge-without-required-checks",
+    "security-merge-without-delivery",
+];
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

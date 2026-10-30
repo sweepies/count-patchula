@@ -116,10 +116,32 @@ pub struct Repository {
     /// Dependencies whose registry lookup failed, so their updates are unknown.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lookup_failures: Vec<LookupFailure>,
+    /// Updates that merge on their own without the CI, required checks or
+    /// delivery to back them, one entry per rule.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tooling: Vec<ToolingWarning>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_branch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolingWarning {
+    /// `merge-without-ci`, `merge-without-required-checks` or
+    /// `security-merge-without-delivery`.
+    pub rule: String,
+    /// The case with its own wording: `reviews-only` when the default branch
+    /// requires a review but no checks, `tagged-release` when only tags
+    /// trigger delivery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// Branches of the updates it applies to.
+    pub branches: Vec<String>,
+    /// Why it is left off PRs, from `warnings.quiet`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub silenced: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

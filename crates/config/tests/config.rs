@@ -403,3 +403,33 @@ fn gitlab_host_is_gitlab_com_by_default_and_must_name_a_gitlab_instance() {
         assert!(error.contains("gitlab.host"), "{host}: {error}");
     }
 }
+
+#[test]
+fn tooling_warnings_are_silenced_by_rule_and_only_with_a_reason() {
+    let (_directory, path) = fixture(
+        "warnings { quiet { [\"security-merge-without-delivery\"] = \"Argo CD in ops/ syncs main\" } }",
+    );
+    assert_eq!(
+        load(&path).unwrap().warnings.quiet["security-merge-without-delivery"],
+        "Argo CD in ops/ syncs main"
+    );
+    for (body, expected) in [
+        (
+            "warnings { quiet { [\"merge-without-ci\"] = \" \" } }",
+            "give the reason this warning is silenced",
+        ),
+        (
+            "warnings { quiet { [\"merge-without-tests\"] = \"typo\" } }",
+            "merge-without-tests",
+        ),
+    ] {
+        let (_directory, path) = fixture(body);
+        let error = format!("{:?}", load(&path).unwrap_err());
+        let flat = |text: &str| -> String {
+            text.chars()
+                .filter(|c| !c.is_whitespace() && *c != '│')
+                .collect()
+        };
+        assert!(flat(&error).contains(&flat(expected)), "{body}: {error}");
+    }
+}

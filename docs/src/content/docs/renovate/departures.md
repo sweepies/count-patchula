@@ -134,6 +134,14 @@ See [version policies](/guide/versioning/#version-policies).
 
 For an opt-in Node LTS rule, see [lookup policy](/guide/lookup-policy/#node-release-channels).
 
+### Warnings when auto-merge has nothing behind it {#tooling-warnings}
+
+- **Renovate:** Automerges as configured, whatever CI the repository has
+- **The Count:** Warns on PRs set to merge, and on the dashboard, when a repository has no CI, requires no checks before GitHub's auto-merge, or ships nothing when a security fix merges
+- **Why:** An update that merges untested, or merges and never ships, is worse than one left open
+
+See [tooling warnings](/guide/auto-merge/#tooling-warnings).
+
 ### Reference data merges itself {#reference-data}
 
 - **Renovate:** No built-in category; release age, schedules and automerge apply as configured

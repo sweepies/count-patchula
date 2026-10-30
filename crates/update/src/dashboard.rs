@@ -674,6 +674,49 @@ pub fn render(
                 ),
             ));
     }
+    for warning in &repo.tooling {
+        let row = match &warning.silenced {
+            Some(reason) => (
+                TOOLING_SILENCED,
+                format!("- `{}`: \"{}\"\n", safe(&warning.rule), safe(reason)),
+            ),
+            None => {
+                let open: Vec<_> = prs
+                    .iter()
+                    .filter(|p| {
+                        p["state"] == "open"
+                            && warning
+                                .branches
+                                .iter()
+                                .any(|b| p["head"]["ref"] == b.as_str())
+                    })
+                    .filter_map(|p| p["number"].as_u64())
+                    .map(|n| format!("#{n}"))
+                    .collect();
+                let open = if open.is_empty() {
+                    String::new()
+                } else {
+                    format!(" Open now: {}.", open.join(", "))
+                };
+                (
+                    TOOLING,
+                    format!(
+                        "- {}{open}\n",
+                        tooling_line(
+                            warning,
+                            repo.default_branch
+                                .as_deref()
+                                .unwrap_or("the default branch")
+                        )
+                    ),
+                )
+            }
+        };
+        sections
+            .entry(row.0.into())
+            .or_default()
+            .insert((None, row.1));
+    }
     for warning in &repo.warnings {
         sections
             .entry("Report warnings".into())
@@ -698,12 +741,14 @@ pub fn render(
     sections.sort_by_key(|(section, _)| {
         let rank = if section == "Known vulnerabilities" {
             0
-        } else if section.starts_with(IMAGES) {
+        } else if section.starts_with(TOOLING) {
             1
-        } else if section.starts_with("Open PRs: ") {
+        } else if section.starts_with(IMAGES) {
             2
+        } else if section.starts_with("Open PRs: ") {
+            3
         } else {
-            2 + match section.as_str() {
+            3 + match section.as_str() {
                 "Merged by the Count" => 1,
                 "Pending updates" => 2,
                 "Template updates" => 3,
@@ -716,8 +761,29 @@ pub fn render(
         (rank, section.clone())
     });
     let image_gaps = sections.iter().any(|(section, _)| section == IMAGES);
+    let tooling = sections.iter().any(|(section, _)| section == TOOLING);
     for (section, rows) in sections {
-        let (start, end) = if section == IMAGES {
+        let (start, end) = if section == TOOLING {
+            (
+                format!(
+                    "\n## {TOOLING}\n\nThe Count's settings for this repository rely on tooling he can't find.\n\n"
+                ),
+                "",
+            )
+        } else if section == TOOLING_SILENCED {
+            (
+                format!(
+                    "{}\n<details><summary>Silenced ({})</summary>\n\n",
+                    if tooling {
+                        String::new()
+                    } else {
+                        format!("\n## {TOOLING}\n")
+                    },
+                    rows.len()
+                ),
+                "</details>\n",
+            )
+        } else if section == IMAGES {
             (
                 format!(
                     "\n## {IMAGES}\n\nThese pinned images give the Count no usable package list, so he can't tell whether a new digest fixes vulnerabilities. He still proposes their updates.\n\n"
@@ -762,6 +828,22 @@ pub fn render(
         text.push_str(end);
     }
     text
+}
+
+const TOOLING: &str = "Tooling warnings";
+const TOOLING_SILENCED: &str = "Tooling warnings: silenced";
+
+/// A tooling warning as a dashboard line.
+fn tooling_line(warning: &patchula_report::ToolingWarning, branch: &str) -> String {
+    use crate::tooling::*;
+    let branch = safe(branch);
+    match (warning.rule.as_str(), warning.detail.as_deref()) {
+        (MERGE_WITHOUT_CI, _) => "**Updates are set to merge, but there's no CI.** No workflow or CI file runs on pull requests, and no checks have reported on recent commits, so these PRs stay open.".into(),
+        (MERGE_WITHOUT_REQUIRED_CHECKS, Some(REVIEWS_ONLY)) => format!("**Nothing requires checks before GitHub merges.** `{branch}` requires a review but no status checks."),
+        (MERGE_WITHOUT_REQUIRED_CHECKS, _) => format!("**Nothing requires checks before GitHub merges.** `{branch}` requires no status checks."),
+        (SECURITY_MERGE_WITHOUT_DELIVERY, Some(TAGGED_RELEASE)) => "**Security fixes ship only with your next tagged release.** Fixes merge on their own, but the only release workflow here runs on tags.".into(),
+        _ => format!("**Security fixes merge, but nothing ships them.** Fixes merge on their own, and no workflow runs when `{branch}` changes."),
+    }
 }
 
 const IMAGES: &str = "Images the Count can't vouch for";

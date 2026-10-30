@@ -408,6 +408,11 @@ impl Engine {
                         continue;
                     }
                 }
+                let branch = repo.default_branch.clone().expect("configured branch");
+                let evidence =
+                    patchula_update::tooling::Evidence::read(&work.snapshot, &branch, open);
+                repo.tooling =
+                    patchula_update::tooling::apply(&evidence, &config, &branch, &mut plans);
                 let restored = patchula_update::restore_inventory(
                     &self.cache,
                     repo,
@@ -2308,7 +2313,7 @@ impl Engine {
         let key = ExtractionKey {
             repo: repo.into(),
             default_branch_commit: commit,
-            config_hash: format!("extract-v10:{}", hash(&serde_json::to_vec(&config)?)),
+            config_hash: format!("extract-v11:{}", hash(&serde_json::to_vec(&config)?)),
         };
         let cached: CachedExtraction = if let Some(bytes) = self.cache.extraction_get(&key).await? {
             self.extraction_hits.fetch_add(1, Ordering::Relaxed);
@@ -2327,7 +2332,11 @@ impl Engine {
                 .collect();
             let selected: Vec<_> = entries
                 .into_iter()
-                .filter(|entry| entry.kind == "blob" && scanner.needs(&entry.path))
+                .filter(|entry| {
+                    entry.kind == "blob"
+                        && (scanner.needs(&entry.path)
+                            || patchula_update::tooling::reads(&entry.path))
+                })
                 .collect();
             let blobs: BTreeMap<String, patchula_update::Blob> = stream::iter(selected)
                 .map(|entry| async move {
@@ -2606,6 +2615,7 @@ fn repository(repo: &str, status: Status, reason: Option<String>) -> Repository 
         skipped: Vec::new(),
         notices: Vec::new(),
         lookup_failures: Vec::new(),
+        tooling: Vec::new(),
         default_branch: None,
         commit: None,
     }

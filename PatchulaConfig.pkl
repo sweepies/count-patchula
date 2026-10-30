@@ -55,6 +55,8 @@ typealias Source =
     | "nix"
 typealias Update = "major" | "minor" | "patch" | "digest" | "pin"
 typealias VersionPolicy = "exact" | "preserve" | "widen"
+typealias ToolingWarning =
+  "merge-without-ci" | "merge-without-required-checks" | "security-merge-without-delivery"
 typealias ReleaseChannel = "stable" | "lts"
 typealias Scheme =
   "semver"
@@ -252,6 +254,14 @@ class Security {
   quietImages: Mapping<String, String> = new {}
 }
 
+/// Warnings about tooling that merges on its own without CI, required checks
+/// or delivery to back it up.
+class Warnings {
+  /// Tooling warnings to leave off PRs, each with the reason. The dashboard
+  /// lists silenced warnings and their reasons in a collapsed line.
+  quiet: Mapping<ToolingWarning, String> = new {}
+}
+
 /// All first-release managers are selected unless a repository replaces this list.
 managers: Listing<Manager> = new {
   "npm"
@@ -325,6 +335,7 @@ exclude: Listing<String> = new {
 prs: PullRequests = new {}
 lockfiles: Lockfiles = new {}
 security: Security = new {}
+warnings: Warnings = new {}
 gitlab: Gitlab = new {}
 /// Prefer mise-versions for public catalogs; false uses the upstream sources.
 useVersionsHost: Boolean = true

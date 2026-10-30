@@ -155,7 +155,7 @@ Renovate's other schemes, including `regex` versioning, `node`, `debian`,
 | `schedule`, `timezone` | cron `windows` with a zone; no natural-language schedules |
 | `prConcurrentLimit`, `prHourlyLimit` | `concurrent`, `perHour`, unlimited by default |
 | `rebaseWhen` | `rebase`: `conflicts` or `behind` |
-| `automerge` | `merge`: native auto-merge, or a checked fallback on a later run |
+| `automerge` | `merge`: native auto-merge, or a checked fallback on a later run, with [tooling warnings](/guide/auto-merge/#tooling-warnings) when CI, required checks or delivery are missing |
 | `dependencyDashboard`, dashboard approval | `dashboard`; a held-back update can be created from it |
 | `lockFileMaintenance` | `lockfiles { refresh }` |
 | `fetchChangeLogs` | `releaseNotes` |

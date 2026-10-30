@@ -339,6 +339,7 @@ fn repo() -> Repository {
         skipped: Vec::new(),
         notices: Vec::new(),
         lookup_failures: Vec::new(),
+        tooling: Vec::new(),
         package_files: Vec::new(),
     }
 }
