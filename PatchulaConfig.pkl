@@ -231,12 +231,15 @@ class Security {
   /// Added to PRs with an update that fixes an advisory. Empty adds none.
   label: String = "security"
   /// Applied after `rules` to updates that fix an advisory. By default they
-  /// skip the release-age wait and schedule windows and get a PR of their own.
-  /// Their PRs never wait for `prs.concurrent` or `prs.perHour` either.
+  /// skip the release-age wait and schedule windows, get a PR of their own and
+  /// a `fix(deps):` commit prefix, so release tooling that releases on `fix`
+  /// ships them. Their PRs never wait for `prs.concurrent` or `prs.perHour`
+  /// either.
   apply: Overrides = new {
     waitHours = 0
     windows = new Listing {}
     group = ""
+    commitPrefix = "fix(deps):"
   }
   /// When no proposal fixes as many advisories as some release could, also
   /// propose the lowest release that fixes the most, even if `permitted` or

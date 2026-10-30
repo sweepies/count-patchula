@@ -83,7 +83,8 @@ starts out cautious:
   them (see [version policies](/guide/versioning/#version-policies)); GitHub
   Actions and container images are pinned to digests;
 - every update gets its own PR with the `dependencies` label and a
-  `chore(deps):` commit prefix, and release notes are included;
+  `chore(deps):` commit prefix (`fix(deps):` for [security fixes](/guide/security/#security-updates-go-first)),
+  and release notes are included;
 - nothing auto-merges, except [reference data](#reference-data) such as CA
   root bundles, which also skips the release-age wait;
 - dated releases wait 24 hours before they are proposed;

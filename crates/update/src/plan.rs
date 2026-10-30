@@ -234,6 +234,9 @@ fn build(
     let mut lock_jobs = BTreeSet::new();
     let mut prefixes = BTreeSet::new();
     let mut titles = BTreeSet::new();
+    // A branch with a security fix is named for it: the occurrences that do not
+    // need the fix move to the same version in the same commit.
+    let secure = items.iter().any(|item| !item.update.fixes.is_empty());
     for item in items {
         let dep = item.dep;
         let update = item.update;
@@ -244,7 +247,9 @@ fn build(
             ));
         }
         if let Some(policy) = &update.policy {
-            prefixes.insert(policy.commit_prefix.clone());
+            if !secure || !update.fixes.is_empty() {
+                prefixes.insert(policy.commit_prefix.clone());
+            }
             if !in_window(&policy.windows, since, now) {
                 reason = Some("outside the configured update windows".into());
             }

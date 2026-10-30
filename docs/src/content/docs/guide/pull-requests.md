@@ -44,7 +44,9 @@ can change what the tool resolves.
 
 The title and commit message are
 `<commitPrefix> update <dependency> to <version>`, or
-`<commitPrefix> pin dependencies` for pin branches. The body opens with any
+`<commitPrefix> pin dependencies` for pin branches. `commitPrefix` is
+`chore(deps):` by default and `fix(deps):` for an update that fixes an
+advisory. The body opens with any
 [tooling warnings](/guide/auto-merge/#tooling-warnings) for a PR set to merge
 itself, then the advisories the branch fixes, if any, and for a pinned image's
 new digest with what the Count found comparing its old and new SBOMs: a warning

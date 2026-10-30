@@ -1297,6 +1297,11 @@ fn an_image_rebuild_is_secured_only_as_security_apply_allows() {
             update.policy.as_ref().unwrap().wait_hours == 0,
             applied && overrides.contains("waitHours")
         );
+        // A fixed rebuild ships as a fix, like a package fix.
+        assert_eq!(
+            update.policy.as_ref().unwrap().commit_prefix,
+            if applied { "fix(deps):" } else { "chore(deps):" }
+        );
         applied
     };
     assert!(secured("waitHours = 0", None));
@@ -1527,3 +1532,4 @@ fn cargo_pyproject_bundler_and_composer_preserve_by_default_and_the_rest_pin() {
         );
     }
 }
+

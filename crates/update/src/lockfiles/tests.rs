@@ -4304,3 +4304,79 @@ async fn lock_only_jobs_reach_their_exact_target_in_every_lockfile_tool() {
         assert!(!p.contents.contains_key(manifest));
     }
 }
+
+/// A branch that carries a security fix takes that fix's commit prefix, even
+/// when another occurrence of the package moves to the same version without
+/// needing the fix.
+#[test]
+fn a_branch_with_a_security_fix_takes_its_commit_prefix() {
+    let manifest = |name: &str| {
+        format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n\n[dependencies]\ntokio = \"1.0\"\n"
+        )
+    };
+    let files = BTreeMap::from([
+        ("a/Cargo.toml".to_string(), manifest("a")),
+        ("b/Cargo.toml".to_string(), manifest("b")),
+    ]);
+    let config = config();
+    let extraction = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap();
+    let update = |prefix: &str, fixes: serde_json::Value| {
+        serde_json::json!({"newValue": "=1.40.0", "newVersion": "1.40.0", "newDigest": null,
+            "updateType": "minor", "group": null, "fixes": fixes,
+            "policy": {"waitHours": 0, "windows": [], "merge": false,
+                "labels": ["dependencies"], "commitPrefix": prefix,
+                "releaseNotes": true, "bodyNotes": []}})
+    };
+    let file = |path: &str, update: serde_json::Value| {
+        serde_json::json!({"path": path, "dependencies": [{
+            "manager": "cargo", "name": "tokio", "package": "tokio",
+            "current": {"value": "1.0", "version": null, "digest": null},
+            "updates": [update],
+            "metadata": {"source": "crates", "kinds": ["production"], "locations": []}
+        }]})
+    };
+    for (vulnerable, plain, expected) in [
+        (
+            "fix(deps):",
+            "chore(deps):",
+            "fix(deps): update tokio to 1.40.0 [security]",
+        ),
+        (
+            "fix(deps):",
+            "fix(deps):",
+            "fix(deps): update tokio to 1.40.0 [security]",
+        ),
+    ] {
+        let mut repository = repo();
+        repository.package_files = serde_json::from_value(serde_json::json!([
+            file(
+                "a/Cargo.toml",
+                update(vulnerable, serde_json::json!(["GHSA-test"]))
+            ),
+            file("b/Cargo.toml", update(plain, serde_json::json!([]))),
+        ]))
+        .unwrap();
+        let plans = crate::plan(
+            &repository,
+            &config,
+            &extraction.dependencies,
+            &snapshot(&files),
+            false,
+            None,
+            monday(),
+        )
+        .unwrap();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(
+            plans[0].action.status,
+            ActionStatus::Planned,
+            "{:?}",
+            plans[0].action
+        );
+        assert_eq!(plans[0].action.message, expected);
+    }
+}

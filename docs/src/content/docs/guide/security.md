@@ -178,6 +178,12 @@ The defaults are:
 - **No schedule windows:** the PR opens on the next run, whatever `windows` say.
 - **A PR of its own:** the update leaves its group, so one fix does not wait on
   the rest of the group.
+- **A `fix(deps):` commit prefix:** other updates use `chore(deps):`, and release
+  tooling such as release-please cuts no release for a `chore`, so a merged
+  security fix would never ship. The prefix covers package fixes, lockfile-only
+  fixes to transitive packages and image rebuilds that fix an advisory, and the
+  PR title follows it. When a branch holds a fix and an occurrence of the same
+  package that did not need it, the fix decides the prefix.
 
 Whatever `apply` says, a PR with a security update never waits for
 `prs.concurrent` or `prs.perHour`, and a vulnerable package's release list is
@@ -211,6 +217,7 @@ security {
     waitHours = 0
     windows = new Listing {}
     group = ""
+    commitPrefix = "fix(deps):"
   }
   lowestFix = true     // propose the lowest full fix past permitted and channel
   images = true        // compare pinned images' old and new SBOMs

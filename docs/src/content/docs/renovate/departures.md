@@ -61,7 +61,7 @@ missing, and behaviour that changes their pull requests. The
 ### Branch and commit names {#branch-names}
 
 - **Renovate:** `renovate/` branch prefix; `semanticCommits` switches the commit style
-- **The Count:** `patchula/` branch prefix and a `chore(deps):` commit prefix, both overridable
+- **The Count:** `patchula/` branch prefix and a `chore(deps):` commit prefix (`fix(deps):` for security fixes, so release tooling ships them), both overridable
 - **Why:** His own identity and predictable messages
 
 ## How the Count runs
