@@ -5,6 +5,10 @@
 description = "Build the workspace through mbx"
 run = "cargo build --workspace --locked"
 
+["build:cli"]
+description = "Build the release patchula binary, as the Count's own workflow does to run unreleased changes"
+run = "cargo build --release --locked -p patchula-cli"
+
 ["cache:doctor"]
 description = "Inspect mbx toolchain, local store and remote configuration"
 run = "mbx doctor"

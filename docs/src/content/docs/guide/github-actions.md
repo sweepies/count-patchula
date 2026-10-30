@@ -125,6 +125,7 @@ build these files on one organization module.
 | `all-repos` | `false` | Every repository the token can reach |
 | `dry-run` | `false` | Print planned branches and diffs without writing |
 | `version` | the action's version, or the latest release when the action is not used at a release tag | The Count version to install, such as `0.6.0` |
+| `binary` | | The path to a `patchula` binary to run instead of installing a release, such as one built from source to try unreleased changes. Overrides `version` |
 | `args` | | Extra `patchula run` arguments, such as `--config-dir policy` |
 
 The cache, with HTTP validators, write receipts and the lockfile tools, is
