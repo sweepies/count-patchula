@@ -77,16 +77,22 @@ fn platforms(entries: &Value) -> BTreeSet<String> {
 
 /// The version requests a tool declaration makes, which mise records as the
 /// `specifiers` of the lock entries it resolves.
-fn requests(spec: &toml_edit::Item) -> Vec<String> {
-    if let Some(request) = spec.as_str() {
-        vec![request.into()]
-    } else if let Some(requests) = spec.as_array() {
-        requests
-            .iter()
-            .filter_map(|request| request.as_str().map(str::to_owned))
-            .collect()
-    } else {
-        spec.get("version").map(requests).unwrap_or_default()
+fn requests(spec: &toml_edit::Item) -> BTreeSet<String> {
+    fn value(spec: &toml_edit::Value) -> Vec<String> {
+        if let Some(request) = spec.as_str() {
+            vec![request.into()]
+        } else if let Some(requests) = spec.as_array() {
+            requests.iter().flat_map(value).collect()
+        } else {
+            spec.as_inline_table()
+                .and_then(|table| table.get("version"))
+                .map(value)
+                .unwrap_or_default()
+        }
+    }
+    match spec.as_value() {
+        Some(spec) => value(spec).into_iter().collect(),
+        None => spec.get("version").map(requests).unwrap_or_default(),
     }
 }
 
@@ -128,7 +134,8 @@ impl Runner {
                 matches!(
                     path.rsplit('/').next(),
                     Some("mise.toml" | ".mise.toml" | ".tool-versions")
-                ) && under(directory, super::directory(path))
+                ) && (super::directory(path) == directory.as_str()
+                    || under(directory, super::directory(path)))
             })
             .collect();
         paths.sort_by_key(|path| path.len());
@@ -247,15 +254,16 @@ impl Runner {
             // `24` for `2.10.0` means a declaration other than the edited one
             // was locked, and `mise` would call the lock out of date.
             let declared = requests(&doc["tools"][name.as_str()]);
-            if let Some(specifier) = entries
+            let recorded: BTreeSet<String> = entries
                 .iter()
                 .filter_map(|entry| entry["specifiers"].as_array())
                 .flatten()
                 .filter_map(Value::as_str)
-                .find(|specifier| !declared.iter().any(|request| request == specifier))
-            {
+                .map(str::to_owned)
+                .collect();
+            if !declared.is_empty() && recorded != declared {
                 return Err(format!(
-                    "mise lock recorded the request `{specifier}` for {name}, not the manifest's {declared:?}"
+                    "mise lock recorded the requests {recorded:?} for {name}, not the manifest's {declared:?}"
                 ));
             }
             if !platforms(&before["tools"][name]).is_subset(&platforms(&after["tools"][name])) {

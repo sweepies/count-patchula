@@ -1820,6 +1820,183 @@ async fn mise_lock_ignores_configuration_below_the_lockfile() {
     );
 }
 
+/// A mise.toml in a subdirectory is locked by the mise.lock beside it, and that
+/// lock's own directory counts as its configuration.
+#[tokio::test]
+async fn mise_lock_in_a_subdirectory_reads_the_configuration_beside_it() {
+    let old = "[tools]\nnode = '22.0.0'\nbun = '1.4.3'\n";
+    let files = BTreeMap::from([
+        ("services/api/mise.toml".to_string(), old.to_string()),
+        (
+            "services/api/mise.lock".into(),
+            include_str!("fixtures/mise.lock").into(),
+        ),
+    ]);
+    let executor = Arc::new(MiseFixture {
+        git: fixture(files.clone(), false, false),
+        fault: "",
+        calls: Mutex::new(Vec::new()),
+    });
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let dep = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies
+        .into_iter()
+        .find(|d| d.name == "node")
+        .unwrap();
+    let update = Update {
+        new_version: Some("24.0.0".into()),
+        new_value: Some("24.0.0".into()),
+        ..serde_json::from_value(serde_json::json!({"updateType":"major"})).unwrap()
+    };
+    let job = job(&dep, &update, &snapshot).unwrap().unwrap();
+    assert_eq!(job.directory, "services/api");
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        .unwrap()
+        .unwrap();
+    p.maintenance = false;
+    p.lock_jobs = vec![job];
+    p.contents.insert(
+        "services/api/mise.toml".into(),
+        old.replace("22.0.0", "24.0.0"),
+    );
+    p.action.files.push(FileAction {
+        path: "services/api/mise.toml".into(),
+        blob_sha: blob_sha(old),
+        diff: String::new(),
+    });
+    runner.prepare(&mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert!(p.contents["services/api/mise.lock"].contains("version = \"24.0.0\""));
+}
+
+/// Rewrites the lock `mise lock` wrote.
+struct LockEdit {
+    inner: Arc<MiseFixture>,
+    edit: fn(String) -> String,
+}
+impl Executor for LockEdit {
+    fn run(
+        &self,
+        spec: CommandSpec,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+        let work = spec
+            .args
+            .iter()
+            .position(|arg| arg == "--cd")
+            .map(|at| PathBuf::from(&spec.args[at + 1]));
+        Box::pin(async move {
+            let output = self.inner.run(spec).await?;
+            if let Some(work) = work {
+                let lock = std::fs::read_to_string(work.join("mise.lock")).unwrap();
+                std::fs::write(work.join("mise.lock"), (self.edit)(lock)).unwrap();
+            }
+            Ok(output)
+        })
+    }
+}
+
+/// A tool with several requests, as strings or tables, is locked for all of
+/// them; a lock that answers only some is not what the manifest says.
+#[tokio::test]
+async fn mise_lock_records_every_request_a_multi_version_declaration_makes() {
+    let second = "[[tools.node]]\nversion = \"20.0.0\"\nbackend = \"core:node\"\nspecifiers = [\"20.0.0\"]\n[tools.node.\"platforms.linux-x64\"]\nurl = \"https://example.invalid/node/20.0.0/linux.tar.gz\"\nchecksum = \"sha256:3333333333333333333333333333333333333333333333333333333333333333\"\n[tools.node.\"platforms.macos-arm64\"]\nurl = \"https://example.invalid/node/20.0.0/macos.tar.gz\"\nchecksum = \"sha256:4444444444444444444444444444444444444444444444444444444444444444\"\n";
+    for declaration in [
+        "node = ['22.0.0', '20.0.0']",
+        "node = [{ version = '22.0.0' }, { version = '20.0.0' }]",
+    ] {
+        for omit in [false, true] {
+            let old = format!("[tools]\n{declaration}\nbun = '1.4.3'\n");
+            let files = BTreeMap::from([
+                ("mise.toml".to_string(), old.clone()),
+                (
+                    "mise.lock".into(),
+                    format!("{}\n{second}", include_str!("fixtures/mise.lock")),
+                ),
+            ]);
+            let executor = Arc::new(LockEdit {
+                inner: Arc::new(MiseFixture {
+                    git: fixture(files.clone(), false, false),
+                    fault: "",
+                    calls: Mutex::new(Vec::new()),
+                }),
+                edit: if omit {
+                    |lock| {
+                        lock.split("[[tools.node]]\nversion = \"20.0.0\"")
+                            .next()
+                            .unwrap()
+                            .to_owned()
+                    }
+                } else {
+                    |lock| lock
+                },
+            });
+            let temp = tempfile::tempdir().unwrap();
+            let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+                .with_executor(executor);
+            let mut snapshot = snapshot(&files);
+            let config = config();
+            let dep = patchula_manager::Scanner::new(&config)
+                .unwrap()
+                .extract(&files)
+                .unwrap()
+                .dependencies
+                .into_iter()
+                .find(|d| d.name == "node" && d.current == "22.0.0")
+                .unwrap();
+            let update = Update {
+                new_version: Some("24.0.0".into()),
+                new_value: Some("24.0.0".into()),
+                ..serde_json::from_value(serde_json::json!({"updateType":"major"})).unwrap()
+            };
+            let job = job(&dep, &update, &snapshot).unwrap().unwrap();
+            let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+                .unwrap()
+                .unwrap();
+            p.maintenance = false;
+            p.lock_jobs = vec![job];
+            p.contents
+                .insert("mise.toml".into(), old.replace("22.0.0", "24.0.0"));
+            p.action.files.push(FileAction {
+                path: "mise.toml".into(),
+                blob_sha: blob_sha(&old),
+                diff: String::new(),
+            });
+            runner.prepare(&mut p, &mut snapshot, &config).await;
+            if omit {
+                assert_eq!(
+                    p.action.status,
+                    ActionStatus::Error,
+                    "{declaration}: {:?}",
+                    p.action
+                );
+                assert!(
+                    p.action
+                        .reason
+                        .as_deref()
+                        .unwrap()
+                        .contains("recorded the requests"),
+                    "{declaration}: {:?}",
+                    p.action
+                );
+            } else {
+                assert_eq!(
+                    p.action.status,
+                    ActionStatus::Planned,
+                    "{declaration}: {:?}",
+                    p.action
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn mise_lock_maintenance_respects_refresh_and_unlocked_manifests_need_no_job() {
     let files = BTreeMap::from([("mise.toml".into(), "[tools]\nnode='22.0.0'\n".into())]);
