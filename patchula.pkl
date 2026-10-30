@@ -1,0 +1,9 @@
+// Count Patchula keeps his own repository up to date, through
+// .github/workflows/patchula.yml.
+amends "PatchulaConfig.pkl"
+
+// The crates use version ranges with Cargo.lock holding the exact versions,
+// so ranges are kept while they still match rather than pinned.
+defaults { versions = "preserve" }
+
+prs { dashboard = true }
