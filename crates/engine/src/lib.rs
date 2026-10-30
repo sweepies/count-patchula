@@ -2331,8 +2331,18 @@ impl Engine {
                 .map(|e| e.path.clone())
                 .collect();
             // Flux and Argo CD manifests are YAML anywhere in the tree, so the
-            // tooling warnings read every YAML file, unless the tree has more
-            // than they will take, when delivery stays unknown.
+            // delivery warning reads every YAML file, unless the tree has more
+            // than it will take, when delivery stays unknown. Only a config
+            // that can merge on its own and hasn't silenced the warning pays
+            // for those reads.
+            let merges = config.defaults.merge
+                || config.security.apply.merge == Some(true)
+                || config.rules.iter().any(|r| r.apply.merge == Some(true));
+            let delivery = merges
+                && !config
+                    .warnings
+                    .quiet
+                    .contains_key(patchula_update::tooling::SECURITY_MERGE_WITHOUT_DELIVERY);
             let manifests = entries
                 .iter()
                 .filter(|e| {
@@ -2341,7 +2351,7 @@ impl Engine {
                         && !scanner.needs(&e.path)
                 })
                 .count();
-            let read_manifests = manifests <= patchula_update::tooling::MANIFEST_LIMIT;
+            let read_manifests = delivery && manifests <= patchula_update::tooling::MANIFEST_LIMIT;
             let selected: Vec<_> = entries
                 .into_iter()
                 .filter(|entry| {
