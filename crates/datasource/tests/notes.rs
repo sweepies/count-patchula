@@ -7,8 +7,8 @@ use patchula_config::Source;
 use patchula_datasource::{
     Client,
     notes::{
-        Links, Notes, Repository, Section, parse_changelog, parse_go_history, parse_release_sgml,
-        sanitise,
+        Links, Notes, Repository, Section, inert, parse_changelog, parse_go_history,
+        parse_release_sgml, sanitise,
     },
 };
 use patchula_http::{Cached, Exchange, Response, Transport};
@@ -1633,4 +1633,31 @@ fn compare_urls_follow_the_tag_source() {
         Some("https://codeberg.org/acme/web/compare/0.3.0...0.3.1")
     );
     assert_eq!(compare_url(Source::Pypi, "copier", "9.0.0", "9.1.0"), None);
+}
+
+#[test]
+fn inert_text_has_no_mention_or_issue_reference_left_for_github_to_read() {
+    for (text, expected) in [
+        ("mise by @jdx", "mise by @\u{200d}jdx"),
+        ("(@alice, @org/team)", "(@\u{200d}alice, @\u{200d}org/team)"),
+        (
+            "see #12 and org/repo#34",
+            "see #\u{200d}12 and org/repo#\u{200d}34",
+        ),
+        (
+            "https://github.com/a/b/issues/7 https://github.com/a/b/pull/8#c",
+            "https://redirect.github.com/a/b/issues/7 https://redirect.github.com/a/b/pull/8#c",
+        ),
+        // Data that is not a mention is left alone.
+        (
+            "rust@1.99.0 name@example.org @ x",
+            "rust@1.99.0 name@example.org @ x",
+        ),
+        (
+            "&#96; #fff https://example.org/a#b",
+            "&#96; #fff https://example.org/a#b",
+        ),
+    ] {
+        assert_eq!(inert(text), expected, "{text}");
+    }
 }

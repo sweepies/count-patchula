@@ -1,5 +1,42 @@
-//! Preserve upstream Markdown while preventing mention and backlink notifications.
+//! Keep upstream text from mentioning anyone or linking back to an issue.
 use std::{collections::BTreeSet, sync::LazyLock};
+
+/// Follows `@` and `#` so GitHub no longer reads a mention or an issue
+/// reference there. Unlike `&#64;`, which GitHub still renders as a mention,
+/// it is invisible and survives in the stored text.
+const JOINER: char = '\u{200d}';
+
+/// Plain upstream text (tool output, registry errors, advisory summaries,
+/// titles) made harmless in GitHub Markdown: `@name` mentions and `#123`
+/// references get a joiner after the sigil, and links to GitHub issues, pull
+/// requests, discussions and commits go through `redirect.github.com`, which
+/// leaves no backlink. Prose that keeps its Markdown goes through `sanitise`.
+pub fn inert(text: &str) -> String {
+    static REFERENCES: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(
+            r#"(?i)https?://github\.com/[^/\s]+/[^/\s]+/(?:issues|pull|discussions|commit|commits)/[^\s<>()\[\]"']+"#,
+        )
+        .expect("GitHub reference URLs")
+    });
+    let text = REFERENCES.replace_all(text, |c: &regex::Captures| without_backlink(&c[0]));
+    let mut output = String::with_capacity(text.len());
+    let mut previous = None::<char>;
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        output.push(ch);
+        let next = chars.peek().copied();
+        let mention = ch == '@'
+            && next.is_some_and(char::is_alphanumeric)
+            && previous.is_none_or(|p| !p.is_alphanumeric() && p != '_');
+        let reference =
+            ch == '#' && next.is_some_and(|n| n.is_ascii_digit()) && previous != Some('&');
+        if mention || reference {
+            output.push(JOINER);
+        }
+        previous = Some(ch);
+    }
+    output
+}
 
 /// Only upstream prose passes through this function. Generated tables, package
 /// names, source links and ownership markers must never be mention-neutralised.
@@ -232,7 +269,8 @@ pub fn sanitise(text: &str, links: Links<'_>) -> String {
                     && !email_suffix
                     && !following.starts_with(['@', '+'])
                 {
-                    output.push_str("@\u{200d}");
+                    output.push('@');
+                    output.push(JOINER);
                     output.push_str(mention.as_str());
                 } else {
                     output.push_str(token);

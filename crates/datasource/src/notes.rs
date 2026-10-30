@@ -9,7 +9,7 @@ use super::*;
 pub use adapters::{parse_go_history, parse_release_sgml};
 pub use changelog::{Section, parse_changelog};
 use forge::{compare_link, releases_url};
-pub use markdown::{Links, sanitise};
+pub use markdown::{Links, inert, sanitise};
 use patchula_cache::ExtractionKey;
 use patchula_versioning::Parsed;
 pub(crate) use releases::BodyCache;
