@@ -7,7 +7,7 @@ use serde_json::json;
 
 fn repository() -> Repository {
     serde_json::from_value(json!({"repository":"demo/app","status":"complete","reason":null,
-        "warnings":["fixture: cached after rate limiting"],"packageFiles":[{"path":"package.json","dependencies":[{
+        "warnings":["fixture: cached after rate limiting","the cache was warmed by an earlier run"],"packageFiles":[{"path":"package.json","dependencies":[{
             "manager":"npm","name":"fixture","package":"fixture","current":{"value":"1.0.0","version":"1.0.0","digest":null},"updates":[],
             "metadata":{"source":"npm","kinds":[],"locations":[],"stale":{"catalog":123},"heldBack":[{
                 "version":"2.0.0","updateType":"major","publishedAt":"2026-10-15T00:00:00Z","eligibleAt":"2026-10-16T00:00:00Z"
@@ -15,23 +15,29 @@ fn repository() -> Repository {
         }]}]})).unwrap()
 }
 #[test]
-fn held_back_dashboard_reports_the_reused_catalog_timestamp() {
-    let mut repo = repository();
-    let metadata = repo.package_files[0].dependencies[0]
-        .metadata
-        .as_mut()
-        .unwrap();
-    metadata.lookup = Some(
-        serde_json::from_value(json!({
-            "evaluatedAt":"2026-10-15T12:00:00Z", "disabledUpdates":[], "rejected":[],
-            "catalog":{"fetchedAt":"2026-10-15T09:00:00Z", "reused":true}
-        }))
-        .unwrap(),
-    );
-    let text = dashboard::render(&repo, &[], &[], Recheck::NextRun, None);
-    assert!(
-        text.contains("eligible at 2026-10-16T00:00:00Z; catalog fetched at 2026-10-15T09:00:00Z")
-    );
+fn a_held_update_says_when_it_becomes_eligible_and_not_when_its_catalog_was_fetched() {
+    // Whether a catalog is reused changes from run to run; the dashboard must
+    // not, or an unchanged repository would rewrite it on every run.
+    for reused in [true, false] {
+        let mut repo = repository();
+        let metadata = repo.package_files[0].dependencies[0]
+            .metadata
+            .as_mut()
+            .unwrap();
+        metadata.lookup = Some(
+            serde_json::from_value(json!({
+                "evaluatedAt":"2026-10-15T12:00:00Z", "disabledUpdates":[], "rejected":[],
+                "catalog":{"fetchedAt":"2026-10-15T09:00:00Z", "reused":reused}
+            }))
+            .unwrap(),
+        );
+        let text = dashboard::render(&repo, &[], &[], Recheck::NextRun, None);
+        assert!(text.contains("; eligible 16 Oct 00:00 UTC) <!--"), "{text}");
+        assert!(
+            !text.contains("catalog fetched") && !text.contains("2026-10-15T09"),
+            "{text}"
+        );
+    }
 }
 #[test]
 fn a_failed_lookup_is_listed_once_under_its_dependency() {
@@ -68,10 +74,7 @@ fn dashboard_snapshot_and_identity_do_not_depend_on_wording() {
         .unwrap();
     let snapshot = text
         .replace(repo_target, "REPOSITORY")
-        .replace(
-            &dashboard::dependency_key("package.json", dep),
-            "DEPENDENCY",
-        )
+        .replace(&dashboard::retry_key("npm", "fixture", "npm"), "RETRY")
         .replace(
             &dashboard::held_key("package.json", dep, "2.0.0", "major"),
             "HELD_UPDATE",
@@ -346,8 +349,13 @@ fn known_vulnerabilities_lead_the_dashboard_with_their_fix() {
     let text = dashboard::render(&repo, &[], &[], Recheck::NextRun, None);
     let section = text.find("## Known vulnerabilities").unwrap();
     assert!(section < text.find("## Pending updates").unwrap());
-    assert!(text.contains("- fixture 1.0.0 (package.json): [GHSA-fixed](https://osv.dev/vulnerability/GHSA-fixed) (CVE-2026-0001), high; fixed by the update to 1.0.5. Prototype pollution\n"), "{text}");
-    assert!(text.contains("- fixture 1.0.0 (package.json): [GHSA-open](https://osv.dev/vulnerability/GHSA-open), unrated; no fixed release yet\n"), "{text}");
+    let row = "- **high**: `fixture` 1.0.0 in `package.json`: 2 advisories ([GHSA-fixed](https://osv.dev/vulnerability/GHSA-fixed), [GHSA-open](https://osv.dev/vulnerability/GHSA-open)). 1 fixed by the update to `1.0.5`; 1 no fixed release yet.\n";
+    assert!(text.contains(row), "{text}");
+    assert!(
+        text.contains("  - [GHSA-fixed](https://osv.dev/vulnerability/GHSA-fixed) (CVE-2026-0001), high: Prototype pollution\n"),
+        "{text}"
+    );
+    assert!(!text.contains("unrated"), "{text}");
 }
 
 #[test]

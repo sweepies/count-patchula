@@ -241,7 +241,11 @@ async fn checkbox_controls_refresh_only_the_selected_dependency_and_failures_do_
         let mut controls = patchula_update::dashboard::Controls::default();
         match mode {
             "retry" => {
-                controls.retry.insert(first.clone());
+                controls
+                    .retry
+                    .insert(patchula_update::dashboard::extracted_retry_key(
+                        &dependencies[0],
+                    ));
             }
             "pr" | "changed-pr" => {
                 controls.branches.insert("patchula/fixture-2.x".into());

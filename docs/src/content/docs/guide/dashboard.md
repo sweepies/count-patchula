@@ -14,8 +14,12 @@ closes the issue; turning it on again opens a new one.
 
 In order:
 
-1. known vulnerabilities, each with the update that fixes it, or the reason no
-   update is proposed (see [security advisories](/guide/security/));
+1. known vulnerabilities, most severe first: one line per package and version
+   that lists every file it appears in, with its advisories as links (and
+   their summaries collapsed when there are several), and the fix once: the
+   open PR that fixes it, "fixed in X, not proposed", or "no fixed release
+   yet". A severity shows only when the advisory database rates it (see
+   [security advisories](/guide/security/));
 2. tooling warnings: updates set to merge in a repository whose CI, required
    checks or delivery don't back that up, with the open PRs each affects, and
    the ones you silenced with `warnings.quiet` collapsed under "Silenced" (see
@@ -27,13 +31,27 @@ In order:
    [container image rebuilds](/guide/security/#container-image-rebuilds));
 4. open update PRs, grouped by update type, then the ones he merged;
 5. pending updates, each with the reason it is held (release age with the time
-   it becomes eligible, PR limits, schedule windows);
+   it becomes eligible, such as "eligible 31 Oct 08:29 UTC", PR limits,
+   schedule windows). A held update's lockfile or tool failure shows a short
+   reason, with the decisive lines of the tool's output (from its first error,
+   at most 10 lines) in a collapsed block. The full output stays in the CLI log
+   and the JSON report;
 6. template updates, which have no PR or checkbox
    ([Copier](/guide/managers/#copier));
 7. updates you closed ("Updates you closed"), with the target that was
    suppressed, and updates "Batched by the Count";
-8. lookup warnings and sources served from stale cache;
+8. lookup warnings and sources served from stale cache: one box per failing
+   package and source, listing every file that declares it. Ticking it
+   retries the lookup for all of them;
 9. every detected dependency, collapsed by manager and file.
+
+Package names are code. Text that comes from outside the Count (tool output,
+registry errors, advisory summaries, PR titles) is written so that GitHub
+doesn't read a mention or an issue reference in it: an `@` or `#` followed by
+a name or number gets an invisible zero-width joiner, and links to GitHub
+issues and pull requests go through `redirect.github.com`. Nobody is
+notified, and nothing is linked back, by what a tool printed. The same goes
+for PR bodies.
 
 The issue body is bounded to GitHub's size limit. An unchanged dashboard is not
 rewritten: the Count compares the rendered content with the issue's actual

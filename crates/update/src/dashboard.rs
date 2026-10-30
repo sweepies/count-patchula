@@ -1,5 +1,10 @@
 //! A deterministic issue, discovered by ownership and marker rather than title.
-use crate::{Inventory, Plan, Recheck, plan::hash, update_key};
+use crate::{
+    Inventory, Plan, Recheck,
+    plan::hash,
+    text::{self, code},
+    update_key,
+};
 use patchula_cache::{Cache, ExtractionKey};
 use patchula_config::Config;
 use patchula_github::Client;
@@ -56,6 +61,22 @@ pub fn extracted_key(dep: &patchula_manager::Dependency) -> String {
         ))
         .expect("dependency identity")
         .as_bytes(),
+    )
+}
+/// The key of a retry box: one package from one source, whichever files
+/// declare it. A lookup is shared by all of them.
+pub fn retry_key(manager: &str, package: &str, source: &str) -> String {
+    hash(
+        serde_json::to_string(&("retry", manager, package, source))
+            .expect("retry identity")
+            .as_bytes(),
+    )
+}
+pub fn extracted_retry_key(dep: &patchula_manager::Dependency) -> String {
+    retry_key(
+        &patchula_manager::word(&dep.manager),
+        &dep.package,
+        &patchula_manager::word(&dep.source),
     )
 }
 pub fn held_target(dependency: &str, version: &str, kind: &str) -> String {
@@ -318,7 +339,14 @@ pub async fn save_permits(
         .await
         .map_err(|e| e.to_string())
 }
+/// Text for the page: neutralised first (see `text::inert`), then escaped so
+/// no Markdown or HTML in it takes effect.
 fn safe(text: &str) -> String {
+    escape(&text::inert(text))
+}
+/// Text with no Markdown or HTML left in it. `&#64;` is still a mention, so
+/// this alone does not make third-party text safe.
+fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -416,7 +444,7 @@ pub fn render(
                         Some(number),
                         format!(
                             "- #{number}: {}{}\n",
-                            safe(&plan.action.message),
+                            titled(plan),
                             pr["patchula_merge"]
                                 .as_str()
                                 .map(|reason| format!(" — {}", safe(reason)))
@@ -429,7 +457,7 @@ pub fn render(
             sections
                 .entry("Batched by the Count".into())
                 .or_default()
-                .insert((None, format!("- {}\n", safe(&plan.action.message))));
+                .insert((None, format!("- {}\n", titled(plan))));
         } else if plan.action.reason.as_deref() == Some(crate::pull_requests::CLOSED_BY_OWNER) {
             sections
                 .entry("Updates you closed".into())
@@ -437,90 +465,59 @@ pub fn render(
                 .insert((
                     None,
                     checkbox(
-                        &format!(
-                            "Bring back this update you closed: {}",
-                            safe(&plan.action.message)
-                        ),
+                        &format!("Bring back this update you closed: {}", titled(plan)),
                         Action::Recreate(update_key(plan)),
                     ),
                 ));
         } else if let Some(reason) = &plan.action.reason {
-            let action = if reason.starts_with("prs.")
+            let row = if reason.starts_with("prs.")
                 || reason == "outside the configured update windows"
             {
                 checkbox(
-                    &format!(
-                        "Create it now anyway: {} ({})",
-                        safe(&plan.action.message),
-                        safe(reason)
-                    ),
+                    &format!("Create it now anyway: {} ({})", titled(plan), safe(reason)),
                     Action::Create(update_key(plan)),
                 )
             } else {
-                format!("- {}: {}\n", safe(&plan.action.message), safe(reason))
+                let failure = text::failure(reason);
+                let mut row = format!("- {}: {}\n", titled(plan), escape(&failure.summary));
+                if let Some(detail) = &failure.detail {
+                    row.push_str(&details(detail, "  "));
+                }
+                row
             };
             sections
                 .entry("Pending updates".into())
                 .or_default()
-                .insert((None, action));
+                .insert((None, row));
         }
     }
+    let mut vulnerabilities = BTreeMap::<(String, String, String), Vulnerable>::new();
+    let mut lookups = BTreeMap::<(String, String, String), Lookup>::new();
+    let mut attributed = BTreeSet::<&String>::new();
     for file in &repo.package_files {
         for dep in &file.dependencies {
             if let Some(metadata) = &dep.metadata {
+                let version = dep
+                    .current
+                    .version
+                    .as_deref()
+                    .or(dep.current.value.as_deref())
+                    .unwrap_or("unknown");
                 for advisory in &metadata.advisories {
-                    let cves: Vec<_> = advisory
-                        .aliases
-                        .iter()
-                        .filter(|a| a.starts_with("CVE-"))
-                        .map(|a| safe(a))
-                        .collect();
-                    let fix = dep
-                        .updates
-                        .iter()
-                        .filter(|u| u.fixes.contains(&advisory.id))
-                        .filter_map(|u| u.new_version.as_ref().or(u.new_value.as_ref()))
-                        .map(|v| format!("fixed by the update to {}", safe(v)))
-                        .next()
-                        .or_else(|| {
-                            advisory
-                                .fixed_in
-                                .as_ref()
-                                .map(|v| format!("fixed in {}, not proposed", safe(v)))
-                        })
-                        .unwrap_or_else(|| "no fixed release yet".into());
-                    sections
-                        .entry("Known vulnerabilities".into())
-                        .or_default()
-                        .insert((
-                            None,
-                            format!(
-                                "- {} {} ({}): [{}]({}){}, {}; {}{}\n",
-                                safe(&dep.name),
-                                safe(
-                                    dep.current
-                                        .version
-                                        .as_deref()
-                                        .or(dep.current.value.as_deref())
-                                        .unwrap_or("unknown")
-                                ),
-                                safe(&file.path),
-                                safe(&advisory.id),
-                                safe(&advisory.url),
-                                if cves.is_empty() {
-                                    String::new()
-                                } else {
-                                    format!(" ({})", cves.join(", "))
-                                },
-                                safe(advisory.severity.as_deref().unwrap_or("unrated")),
-                                fix,
-                                advisory
-                                    .summary
-                                    .as_ref()
-                                    .map(|s| format!(". {}", safe(s).replace(['\n', '\r'], " ")))
-                                    .unwrap_or_default(),
-                            ),
-                        ));
+                    let fix = fix_status(plans, prs, &file.path, dep, metadata, advisory);
+                    let group = vulnerabilities
+                        .entry((dep.manager.clone(), dep.package.clone(), version.into()))
+                        .or_insert_with(|| Vulnerable {
+                            name: dep.name.clone(),
+                            version: version.into(),
+                            ..Default::default()
+                        });
+                    group.files.insert(file.path.clone());
+                    let entry = group
+                        .advisories
+                        .entry(advisory.id.clone())
+                        .or_insert_with(|| (advisory, fix.clone()));
+                    entry.1 = entry.1.clone().min(fix);
                 }
                 // Two pins of one tag differ only by digest.
                 let pinned = dep
@@ -530,11 +527,14 @@ pub fn render(
                     .map(|digest| format!("@{}", digest.chars().take(19).collect::<String>()))
                     .unwrap_or_default();
                 let reference = format!(
-                    "`{}:{}{}` in `{}`",
-                    safe(&dep.package),
-                    safe(dep.current.value.as_deref().unwrap_or("unknown")),
-                    safe(&pinned),
-                    safe(&file.path)
+                    "{} in {}",
+                    code(&format!(
+                        "{}:{}{}",
+                        dep.package,
+                        dep.current.value.as_deref().unwrap_or("unknown"),
+                        pinned
+                    )),
+                    code(&file.path)
                 );
                 let previous = dep
                     .updates
@@ -554,12 +554,6 @@ pub fn render(
                         .or_default()
                         .insert((None, row.1));
                 }
-                let catalog_age = metadata
-                    .lookup
-                    .as_ref()
-                    .and_then(|lookup| lookup.catalog.as_ref())
-                    .map(|catalog| format!("; catalog fetched at {}", safe(&catalog.fetched_at)))
-                    .unwrap_or_default();
                 for held in &metadata.held_back {
                     sections
                         .entry("Pending updates".into())
@@ -568,17 +562,16 @@ pub fn render(
                             None,
                             checkbox(
                                 &format!(
-                                    "Create it now anyway: {} → {} ({}, {}; eligible at {}{})",
-                                    safe(&dep.name),
+                                    "Create it now anyway: {} → {} ({}, {}; eligible {})",
+                                    code(&dep.name),
                                     safe(&held.version),
                                     safe(&metadata.source),
-                                    safe(&file.path),
-                                    safe(
+                                    code(&file.path),
+                                    escape(&text::when(
                                         held.target_eligible_at
                                             .as_deref()
                                             .unwrap_or(&held.eligible_at)
-                                    ),
-                                    catalog_age
+                                    ))
                                 ),
                                 Action::Create(held_key(
                                     &file.path,
@@ -606,37 +599,34 @@ pub fn render(
                     })
                     .collect();
                 if !metadata.stale.is_empty() || !warnings.is_empty() || !failures.is_empty() {
-                    let mut row = checkbox(
-                        &format!(
-                            "Try that lookup again: {} ({}, {})",
-                            safe(&dep.name),
-                            safe(&metadata.source),
-                            safe(&file.path)
-                        ),
-                        Action::Retry(dependency_key(&file.path, dep)),
-                    );
+                    // The lookup is shared by every file that declares the package.
+                    let lookup = lookups
+                        .entry((
+                            dep.manager.clone(),
+                            dep.package.clone(),
+                            metadata.source.clone(),
+                        ))
+                        .or_insert_with(|| Lookup {
+                            name: dep.name.clone(),
+                            source: metadata.source.clone(),
+                            ..Default::default()
+                        });
+                    lookup.files.insert(file.path.clone());
                     for (key, fetched) in &metadata.stale {
-                        row.push_str(&format!(
-                            "  - Stale/rate-limited {} (cached at Unix {})\n",
-                            safe(key),
-                            fetched
-                        ));
+                        let newest = lookup.stale.entry(key.clone()).or_insert(*fetched);
+                        *newest = (*newest).max(*fetched);
                     }
-                    for warning in warnings {
-                        row.push_str(&format!("  - {}\n", safe(warning)));
-                    }
-                    for failure in failures {
-                        row.push_str(&format!(
-                            "  - Lookup failed ({}, {}): {}\n",
-                            safe(&failure.datasource),
-                            failure.kind.as_str(),
-                            safe(&failure.message)
-                        ));
-                    }
-                    sections
-                        .entry("Lookup warnings and errors".into())
-                        .or_default()
-                        .insert((None, row));
+                    attributed.extend(warnings.iter().copied());
+                    lookup
+                        .warnings
+                        .extend(warnings.into_iter().map(String::as_str));
+                    lookup.failures.extend(failures.into_iter().map(|f| {
+                        (
+                            f.datasource.clone(),
+                            f.kind.as_str().to_owned(),
+                            f.message.clone(),
+                        )
+                    }));
                 }
             }
             sections
@@ -650,11 +640,59 @@ pub fn render(
                     None,
                     format!(
                         "- {}: {}\n",
-                        safe(&dep.name),
+                        code(&dep.name),
                         safe(dep.current.value.as_deref().unwrap_or("unknown"))
                     ),
                 ));
         }
+    }
+    for ((manager, package, source), lookup) in lookups {
+        let mut row = checkbox(
+            &format!(
+                "Try that lookup again: {} ({}, {})",
+                code(&lookup.name),
+                safe(&lookup.source),
+                lookup
+                    .files
+                    .iter()
+                    .map(|file| code(file))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Action::Retry(retry_key(&manager, &package, &source)),
+        );
+        for (key, fetched) in &lookup.stale {
+            row.push_str(&format!(
+                "  - Stale or rate-limited {}, cached {}\n",
+                code(key),
+                escape(&text::when_unix(*fetched))
+            ));
+        }
+        for warning in &lookup.warnings {
+            row.push_str(&format!("  - {}\n", safe(warning)));
+        }
+        for (datasource, kind, message) in &lookup.failures {
+            let failure = text::failure(message);
+            row.push_str(&format!(
+                "  - Lookup failed ({}, {kind}): {}\n",
+                safe(datasource),
+                escape(&failure.summary)
+            ));
+            if let Some(detail) = &failure.detail {
+                row.push_str(&details(detail, "    "));
+            }
+        }
+        sections
+            .entry("Lookup warnings and errors".into())
+            .or_default()
+            .insert((None, row));
+    }
+    for group in vulnerabilities.into_values() {
+        let (rank, row) = group.render();
+        sections
+            .entry("Known vulnerabilities".into())
+            .or_default()
+            .insert((Some(rank), row));
     }
     for notice in &repo.notices {
         sections
@@ -715,7 +753,8 @@ pub fn render(
             .or_default()
             .insert((None, row.1));
     }
-    for warning in &repo.warnings {
+    // A warning about one dependency is already under its lookup.
+    for warning in repo.warnings.iter().filter(|w| !attributed.contains(w)) {
         sections
             .entry("Report warnings".into())
             .or_default()
@@ -760,7 +799,22 @@ pub fn render(
     });
     let image_gaps = sections.iter().any(|(section, _)| section == IMAGES);
     let tooling = sections.iter().any(|(section, _)| section == TOOLING);
+    let detected = sections
+        .iter()
+        .filter(|(section, _)| section.starts_with("Detected: "))
+        .fold((0, 0), |(files, rows), (_, r)| (files + 1, rows + r.len()));
+    let mut outer = false;
     for (section, rows) in sections {
+        if section.starts_with("Detected: ") && !outer {
+            // One line stands for every file's list.
+            text.push_str(&format!(
+                "\n<details>\n<summary>Every dependency the Count found ({} in {} {})</summary>\n",
+                detected.1,
+                detected.0,
+                if detected.0 == 1 { "file" } else { "files" }
+            ));
+            outer = true;
+        }
         let (start, end) = if section == TOOLING {
             (
                 format!(
@@ -804,8 +858,13 @@ pub fn render(
         } else if let Some(label) = section.strip_prefix("Detected: ") {
             (
                 format!(
-                    "\n<details>\n<summary>{label} ({} dependencies)</summary>\n\n",
-                    rows.len()
+                    "\n<details>\n<summary>{label} ({} {})</summary>\n\n",
+                    rows.len(),
+                    if rows.len() == 1 {
+                        "dependency"
+                    } else {
+                        "dependencies"
+                    }
                 ),
                 "\n</details>\n",
             )
@@ -825,7 +884,257 @@ pub fn render(
         }
         text.push_str(end);
     }
+    if outer {
+        text.push_str("\n</details>\n");
+    }
     text
+}
+
+/// A collapsed block of tool output, indented under a list item.
+fn details(output: &str, indent: &str) -> String {
+    format!(
+        "{indent}<details>\n{indent}<summary>The tool's output</summary>\n\n{}\n{indent}</details>\n",
+        text::block(output, indent)
+    )
+}
+
+/// A plan's title, with the names of its packages as code.
+fn titled(plan: &Plan) -> String {
+    let message = plan.action.message.as_str();
+    let mut names: Vec<_> = plan.changes.iter().map(|c| c.package.as_str()).collect();
+    names.sort_by_key(|n| std::cmp::Reverse(n.len()));
+    names.dedup();
+    match names
+        .into_iter()
+        .filter(|n| !n.is_empty())
+        .find_map(|n| message.find(n).map(|at| (at, n)))
+    {
+        Some((at, name)) => format!(
+            "{}{}{}",
+            safe(&message[..at]),
+            code(name),
+            safe(&message[at + name.len()..])
+        ),
+        None => safe(message),
+    }
+}
+
+/// How an advisory gets fixed. Ordered best first, so a package declared
+/// in several files reports its most hopeful state.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Fix {
+    Pr(u64),
+    Update(String),
+    NotProposed(String),
+    None,
+}
+impl Fix {
+    fn render(&self) -> String {
+        match self {
+            Self::Pr(number) => format!("fixed by #{number}"),
+            Self::Update(version) => format!("fixed by the update to {}", code(version)),
+            Self::NotProposed(version) => format!("fixed in {}, not proposed", code(version)),
+            Self::None => "no fixed release yet".into(),
+        }
+    }
+}
+fn fix_status(
+    plans: &[Plan],
+    prs: &[Value],
+    file: &str,
+    dep: &Dependency,
+    metadata: &patchula_report::DependencyMetadata,
+    advisory: &patchula_report::Advisory,
+) -> Fix {
+    let Some(update) = dep.updates.iter().find(|u| u.fixes.contains(&advisory.id)) else {
+        return advisory
+            .fixed_in
+            .clone()
+            .map_or(Fix::None, Fix::NotProposed);
+    };
+    let number = plans
+        .iter()
+        .filter(|plan| {
+            plan.changes.iter().any(|c| {
+                c.file == file
+                    && c.package == dep.package
+                    && c.source == metadata.source
+                    && ((update.new_version.is_some() && c.version == update.new_version)
+                        || (update.new_value.is_some() && c.value == update.new_value))
+            })
+        })
+        .find_map(|plan| {
+            prs.iter()
+                .find(|p| p["state"] == "open" && p["head"]["ref"] == plan.action.branch)
+                .and_then(|p| p["number"].as_u64())
+        });
+    match (
+        number,
+        update.new_version.as_ref().or(update.new_value.as_ref()),
+    ) {
+        (Some(number), _) => Fix::Pr(number),
+        (None, Some(version)) => Fix::Update(version.clone()),
+        (None, None) => Fix::None,
+    }
+}
+
+/// Every advisory against one package at one version, in every file that has it.
+#[derive(Default)]
+struct Vulnerable<'a> {
+    name: String,
+    version: String,
+    files: BTreeSet<String>,
+    advisories: BTreeMap<String, (&'a patchula_report::Advisory, Fix)>,
+}
+const SEVERITIES: [&str; 4] = ["critical", "high", "moderate", "low"];
+fn severity_rank(severity: Option<&str>) -> usize {
+    let severity = severity.map(str::to_ascii_lowercase);
+    SEVERITIES
+        .iter()
+        .position(|s| {
+            Some(*s) == severity.as_deref()
+                || (*s == "moderate" && severity.as_deref() == Some("medium"))
+        })
+        .unwrap_or(SEVERITIES.len())
+}
+impl Vulnerable<'_> {
+    /// Its severity rank, most severe first, and its bullet.
+    fn render(&self) -> (u64, String) {
+        let rank = self
+            .advisories
+            .values()
+            .map(|(a, _)| severity_rank(a.severity.as_deref()))
+            .min()
+            .unwrap_or(SEVERITIES.len());
+        let severity = SEVERITIES
+            .get(rank)
+            .map(|s| format!("**{s}**: "))
+            .unwrap_or_default();
+        let files: Vec<_> = self.files.iter().map(|f| code(f)).collect();
+        let files = if files.len() > 5 {
+            format!(
+                "{} and {} more files",
+                files[..5].join(", "),
+                files.len() - 5
+            )
+        } else {
+            files.join(", ")
+        };
+        let mut fixes = BTreeMap::<&Fix, usize>::new();
+        for (_, fix) in self.advisories.values() {
+            *fixes.entry(fix).or_default() += 1;
+        }
+        let fix = if fixes.len() == 1 {
+            fixes.keys().next().map(|f| f.render()).unwrap_or_default()
+        } else {
+            fixes
+                .iter()
+                .map(|(fix, n)| format!("{n} {}", fix.render()))
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+        let link = |advisory: &patchula_report::Advisory| {
+            format!("[{}]({})", escape(&advisory.id), url(&advisory.url))
+        };
+        let aliases = |advisory: &patchula_report::Advisory| {
+            let cves: Vec<_> = advisory
+                .aliases
+                .iter()
+                .filter(|a| a.starts_with("CVE-"))
+                .map(|a| escape(a))
+                .collect();
+            if cves.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", cves.join(", "))
+            }
+        };
+        let head = format!(
+            "- {severity}{} {} in {files}",
+            code(&self.name),
+            safe(&self.version)
+        );
+        let mut advisories: Vec<_> = self.advisories.values().map(|(a, _)| *a).collect();
+        advisories.sort_by_key(|a| (severity_rank(a.severity.as_deref()), a.id.clone()));
+        let row = if let [advisory] = advisories[..] {
+            format!(
+                "{head}: {}{}{}. {}.\n",
+                link(advisory),
+                aliases(advisory),
+                advisory
+                    .summary
+                    .as_ref()
+                    .map(|s| format!(": {}", safe(s)))
+                    .unwrap_or_default(),
+                capitalise(&fix)
+            )
+        } else {
+            let shown: Vec<_> = advisories.iter().take(12).map(|a| link(a)).collect();
+            let more = advisories.len() - shown.len();
+            let mut row = format!(
+                "{head}: {} advisories ({}{}). {}.\n  <details>\n  <summary>What they say</summary>\n\n",
+                advisories.len(),
+                shown.join(", "),
+                if more > 0 {
+                    format!(" and {more} more")
+                } else {
+                    String::new()
+                },
+                capitalise(&fix)
+            );
+            for advisory in advisories.iter().take(40) {
+                row.push_str(&format!(
+                    "  - {}{}{}{}\n",
+                    link(advisory),
+                    aliases(advisory),
+                    advisory
+                        .severity
+                        .as_ref()
+                        .map(|s| format!(", {}", safe(s)))
+                        .unwrap_or_default(),
+                    advisory
+                        .summary
+                        .as_ref()
+                        .map(|s| format!(": {}", safe(s)))
+                        .unwrap_or_default()
+                ));
+            }
+            row.push_str("\n  </details>\n");
+            row
+        };
+        (rank as u64, row)
+    }
+}
+fn capitalise(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+/// A link destination that no character in it can cut short.
+fn url(url: &str) -> String {
+    url.chars()
+        .map(|c| match c {
+            ' ' | '(' | ')' | '<' | '>' | '[' | ']' | '`' | '"' | '\\' => {
+                format!("%{:02X}", c as u32)
+            }
+            c => c.to_string(),
+        })
+        .collect::<String>()
+        .replace("<!--", "%3C!--")
+}
+
+/// One failing package from one source, with every file that declares it.
+#[derive(Default)]
+struct Lookup<'a> {
+    name: String,
+    source: String,
+    files: BTreeSet<String>,
+    stale: BTreeMap<String, i64>,
+    warnings: BTreeSet<&'a str>,
+    /// Datasource, kind and message.
+    failures: BTreeSet<(String, String, String)>,
 }
 
 const TOOLING: &str = "Tooling warnings";

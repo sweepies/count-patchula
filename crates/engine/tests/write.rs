@@ -1373,13 +1373,13 @@ async fn dashboard_age_click_bypasses_only_the_selected_target_and_survives_unti
         fake.issues.lock().unwrap()[0]["body"]
             .as_str()
             .unwrap()
-            .contains("eligible at")
+            .contains(" UTC)")
     );
     assert!(
-        fake.issues.lock().unwrap()[0]["body"]
+        !fake.issues.lock().unwrap()[0]["body"]
             .as_str()
             .unwrap()
-            .contains("catalog fetched at")
+            .contains("catalog")
     );
     fake.requests.lock().unwrap().clear();
     fake.writes.lock().unwrap().clear();
