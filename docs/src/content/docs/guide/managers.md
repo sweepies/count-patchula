@@ -133,6 +133,12 @@ crates, and resolves from the nearest `Cargo.lock`. A member's
 `workspace = true` points at the root declaration, which is where the edit
 goes. `rust-toolchain(.toml)` pins Rust.
 
+A `path` or `git` dependency is not looked up on crates.io. When it also names
+a `version` (the form a workspace crate uses to be publishable), it is skipped
+with a reason; the Count does not keep that version in step with the crate it
+points at. Without a `version` it is ignored. A dependency from an alternate
+`registry` is skipped with the registry's name.
+
 Go reads `require` blocks and single directives, plus the `go` directive (kind
 `go-directive`, the minimum language version) and `toolchain`. Indirect
 requirements are maintained too.

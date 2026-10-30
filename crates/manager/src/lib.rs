@@ -411,7 +411,7 @@ impl Scanner {
             {
                 toolchains::rust(path, text)
             } else if self.selected(Manager::Cargo, path) {
-                cargo::extract(path, text, &cargo)
+                cargo::extract(path, text, &cargo, &mut result.skipped)
             } else if self.selected(Manager::Dockerfile, path) {
                 images::dockerfile(path, text)
             } else if self.selected(Manager::Go, path) {
