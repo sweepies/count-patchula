@@ -435,3 +435,68 @@ fn images_the_count_cant_vouch_for_follow_known_vulnerabilities() {
         1
     );
 }
+
+#[test]
+fn tooling_warnings_sit_between_known_vulnerabilities_and_images() {
+    let mut repo = repository();
+    repo.warnings.clear();
+    repo.default_branch = Some("main".into());
+    let metadata = repo.package_files[0].dependencies[0]
+        .metadata
+        .as_mut()
+        .unwrap();
+    metadata.image = Some(serde_json::from_value(json!({"state":"no-sbom"})).unwrap());
+    metadata.advisories = serde_json::from_value(json!([
+        {"id":"GHSA-open","url":"https://osv.dev/vulnerability/GHSA-open"}
+    ]))
+    .unwrap();
+    let warning = |rule: &str, detail: Option<&str>, silenced: Option<&str>| {
+        patchula_report::ToolingWarning {
+            rule: rule.into(),
+            detail: detail.map(str::to_owned),
+            branches: vec!["patchula/fixture".into(), "patchula/other".into()],
+            silenced: silenced.map(str::to_owned),
+        }
+    };
+    repo.tooling = vec![
+        warning("merge-without-required-checks", Some("reviews-only"), None),
+        warning("security-merge-without-delivery", None, None),
+        warning(
+            "merge-without-ci",
+            None,
+            Some("CI runs in Buildkite, reporting to another org"),
+        ),
+    ];
+    let prs = [
+        json!({"number":412,"state":"open","title":"Update fixture","head":{"ref":"patchula/fixture"}}),
+        json!({"number":7,"state":"closed","merged_at":null,"title":"Old","head":{"ref":"patchula/other"}}),
+    ];
+    let text = dashboard::render(&repo, &[], &prs, Recheck::NextRun, None);
+    let section = text
+        .find("## Tooling warnings\n")
+        .unwrap_or_else(|| panic!("{text}"));
+    let known = text.find("## Known vulnerabilities\n").unwrap();
+    let images = text.find("## Images the Count can't vouch for").unwrap();
+    assert!(known < section && section < images, "{text}");
+    assert!(text.find("## Pending updates").unwrap() > images, "{text}");
+    for line in [
+        "These settings let updates merge on their own, and the Count's checks of this repository's CI, branch protection and delivery found a gap behind them.\n\n",
+        "- **Nothing requires checks before GitHub merges.** `main` requires a review but no status checks. Open now: #412.\n",
+        "- **Security fixes merge, but nothing ships them.** Fixes merge on their own, and no workflow runs when `main` changes. Open now: #412.\n",
+        "<details><summary>Silenced (1)</summary>\n\n- `merge-without-ci`: \"CI runs in Buildkite, reporting to another org\" Open now: #412.\n</details>\n",
+    ] {
+        assert!(text[section..].contains(line), "{line}\n{text}");
+    }
+    assert_eq!(text.matches("## Tooling warnings").count(), 1);
+    repo.tooling.clear();
+    repo.tooling
+        .push(warning("merge-without-ci", None, Some("Buildkite")));
+    let text = dashboard::render(&repo, &[], &prs, Recheck::NextRun, None);
+    assert!(
+        text.contains("\n## Tooling warnings\n\n<details><summary>Silenced (1)</summary>"),
+        "{text}"
+    );
+    repo.tooling.clear();
+    let text = dashboard::render(&repo, &[], &prs, Recheck::NextRun, None);
+    assert!(!text.contains("Tooling warnings"), "{text}");
+}

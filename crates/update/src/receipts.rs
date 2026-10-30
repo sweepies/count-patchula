@@ -15,7 +15,13 @@ pub const INVENTORY_QUERY: &str = r#"query($owner:String!,$name:String!,$prefix:
  }}
  repository(owner:$owner,name:$name){
   id autoMergeAllowed squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed deleteBranchOnMerge
-  defaultBranchRef{name target{oid}}
+  defaultBranchRef{name target{oid ... on Commit{history(first:10){nodes{statusCheckRollup{state}}}}}
+   rules(first:100){pageInfo{hasNextPage} nodes{type parameters{
+    ... on RequiredStatusChecksParameters{requiredStatusChecks{context}}
+    ... on PullRequestParameters{requiredApprovingReviewCount}
+   }}}
+   refUpdateRule{requiredStatusCheckContexts requiredApprovingReviewCount}
+  }
   issues(states:[OPEN],first:100,after:$issueCursor){pageInfo{hasNextPage endCursor} nodes{
    id number title body state author{__typename login}
   }}
@@ -70,10 +76,12 @@ fn intent(plan: &Plan, config: &Config, recheck: Recheck, server: Option<&str>) 
         config,
         recheck,
     );
+    // Tooling warnings join only when present, so other receipts stay valid.
     hash(
-        match server {
-            None => serde_json::to_string(&inputs),
-            Some(url) => serde_json::to_string(&(inputs, url)),
+        match (server, plan.tooling.is_empty()) {
+            (None, true) => serde_json::to_string(&inputs),
+            (Some(url), true) => serde_json::to_string(&(inputs, url)),
+            (server, false) => serde_json::to_string(&(inputs, server, &plan.tooling)),
         }
         .expect("serializable intent")
         .as_bytes(),
@@ -160,6 +168,9 @@ pub struct Inventory {
     pub issues: Vec<Value>,
     pub merge_settings: crate::automerge::Settings,
     pub merged_prs: Vec<Value>,
+    /// The default branch's recent check rollups and protection, for tooling
+    /// warnings.
+    pub default_branch: Value,
 }
 impl Inventory {
     pub fn pull_requests(&self, repo: &str) -> Vec<Value> {
@@ -220,6 +231,7 @@ impl Inventory {
             }
             result.actor = actor.into();
             result.merge_settings = crate::automerge::Settings::from_graphql(&data["repository"]);
+            result.default_branch.clone_from(head);
             result.closed = data["nodes"]
                 .as_array()
                 .cloned()

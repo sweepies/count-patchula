@@ -376,6 +376,7 @@ pub fn maintenance(
         deleted: BTreeSet::new(),
         maintenance: true,
         batch: None,
+        tooling: Vec::new(),
     }))
 }
 

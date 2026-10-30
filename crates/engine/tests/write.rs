@@ -166,7 +166,9 @@ impl Transport for Fake {
                     "author":p["user"],"headRepository":{"nameWithOwner":"demo/sandbox"},"baseRepository":{"nameWithOwner":"demo/sandbox"}
                 })).collect();
                 let mut repository = self.merge_settings.lock().unwrap().clone();
-                repository["defaultBranchRef"] = json!({"name":"main","target":{"oid":"base"}});
+                if repository["defaultBranchRef"].is_null() {
+                    repository["defaultBranchRef"] = json!({"name":"main","target":{"oid":"base"}});
+                }
                 repository["refs"] =
                     json!({"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}});
                 repository["issues"] = json!({"nodes":self.issues.lock().unwrap().iter().filter(|i|i["state"] == "OPEN").cloned().collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false,"endCursor":null}});
@@ -1803,4 +1805,75 @@ async fn batching_moves_updates_into_one_pr_and_never_suppresses_them() {
     let open = open_prs(&fake);
     assert_eq!(open.len(), 1, "{open:?}");
     assert_eq!(open[0]["head"]["ref"], branch.as_str());
+}
+
+#[tokio::test(start_paused = true)]
+async fn tooling_warnings_reach_the_pr_and_dashboard_and_clear_with_the_condition() {
+    let fake = Arc::new(Fake::new(false));
+    let protection = |rules: Value| {
+        let mut settings = fake.merge_settings.lock().unwrap();
+        settings["autoMergeAllowed"] = json!(true);
+        settings["defaultBranchRef"] = json!({
+            "name":"main",
+            "target":{"oid":"base","history":{"nodes":[{"statusCheckRollup":{"state":"SUCCESS"}}]}},
+            "rules":rules,
+            "refUpdateRule":null
+        });
+    };
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    let mut config = checkbox_config();
+    config.defaults.merge = true;
+    let now = chrono::Utc::now();
+    let latest = |kind: &str| {
+        fake.writes
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .filter(|(path, _)| path.contains(kind))
+            .find_map(|(_, body)| body["body"].as_str().map(str::to_owned))
+    };
+    let callout = "> **Nothing makes this PR pass its checks before GitHub merges it.** The Count uses GitHub's auto-merge here, and `main` requires no status checks";
+    protection(
+        json!({"nodes":[{"type":"DELETION","parameters":null}],"pageInfo":{"hasNextPage":false}}),
+    );
+    let report = checkbox_run(&engine, &config, now).await;
+    assert_eq!(
+        report.repositories[0].tooling,
+        [patchula_report::ToolingWarning {
+            rule: "merge-without-required-checks".into(),
+            detail: None,
+            branches: vec![
+                fake.prs.lock().unwrap()[0]["head"]["ref"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            ],
+            silenced: None,
+        }]
+    );
+    assert!(latest("/pulls").unwrap().contains(callout));
+    let dashboard = latest("/issues").unwrap();
+    assert!(dashboard.contains("## Tooling warnings\n"), "{dashboard}");
+    assert!(dashboard.contains("Open now: #"), "{dashboard}");
+    protection(
+        json!({"nodes":[{"type":"REQUIRED_STATUS_CHECKS","parameters":{"requiredStatusChecks":[{"context":"ci"}]}}],"pageInfo":{"hasNextPage":false}}),
+    );
+    let report = checkbox_run(&engine, &config, now).await;
+    assert!(report.repositories[0].tooling.is_empty());
+    let pr = fake.prs.lock().unwrap()[0]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(!pr.contains("[!CAUTION]"), "{pr}");
+    assert!(!latest("/issues").unwrap().contains("Tooling warnings"));
+    protection(Value::Null);
+    let report = checkbox_run(&engine, &config, now).await;
+    assert!(
+        report.repositories[0].tooling.is_empty(),
+        "unreadable protection never warns"
+    );
 }

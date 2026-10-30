@@ -34,6 +34,8 @@ pub struct Plan {
     pub maintenance: bool,
     /// The batch PR's items; `None` for every other plan.
     pub batch: Option<Vec<crate::batch::Item>>,
+    /// Tooling warnings shown on this PR.
+    pub tooling: Vec<crate::tooling::Callout>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Change {
@@ -401,6 +403,7 @@ fn build(
         deleted: BTreeSet::new(),
         maintenance: false,
         batch: None,
+        tooling: Vec::new(),
     })
 }
 

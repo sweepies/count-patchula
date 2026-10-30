@@ -408,6 +408,11 @@ impl Engine {
                         continue;
                     }
                 }
+                let branch = repo.default_branch.clone().expect("configured branch");
+                let evidence =
+                    patchula_update::tooling::Evidence::read(&work.snapshot, &branch, open);
+                repo.tooling =
+                    patchula_update::tooling::apply(&evidence, &config, &branch, &mut plans);
                 let restored = patchula_update::restore_inventory(
                     &self.cache,
                     repo,
@@ -2308,7 +2313,7 @@ impl Engine {
         let key = ExtractionKey {
             repo: repo.into(),
             default_branch_commit: commit,
-            config_hash: format!("extract-v10:{}", hash(&serde_json::to_vec(&config)?)),
+            config_hash: format!("extract-v11:{}", hash(&serde_json::to_vec(&config)?)),
         };
         let cached: CachedExtraction = if let Some(bytes) = self.cache.extraction_get(&key).await? {
             self.extraction_hits.fetch_add(1, Ordering::Relaxed);
@@ -2325,9 +2330,36 @@ impl Engine {
                 .filter(|e| e.kind == "blob")
                 .map(|e| e.path.clone())
                 .collect();
+            // Flux and Argo CD manifests are YAML anywhere in the tree, so the
+            // delivery warning reads every YAML file, unless the tree has more
+            // than it will take, when delivery stays unknown. Only a config
+            // that can merge on its own and hasn't silenced the warning pays
+            // for those reads.
+            let merges = config.defaults.merge
+                || config.security.apply.merge == Some(true)
+                || config.rules.iter().any(|r| r.apply.merge == Some(true));
+            let delivery = merges
+                && !config
+                    .warnings
+                    .quiet
+                    .contains_key(patchula_update::tooling::SECURITY_MERGE_WITHOUT_DELIVERY);
+            let manifests = entries
+                .iter()
+                .filter(|e| {
+                    e.kind == "blob"
+                        && patchula_update::tooling::manifest(&e.path)
+                        && !scanner.needs(&e.path)
+                })
+                .count();
+            let read_manifests = delivery && manifests <= patchula_update::tooling::MANIFEST_LIMIT;
             let selected: Vec<_> = entries
                 .into_iter()
-                .filter(|entry| entry.kind == "blob" && scanner.needs(&entry.path))
+                .filter(|entry| {
+                    entry.kind == "blob"
+                        && (scanner.needs(&entry.path)
+                            || patchula_update::tooling::reads(&entry.path)
+                            || (read_manifests && patchula_update::tooling::manifest(&entry.path)))
+                })
                 .collect();
             let blobs: BTreeMap<String, patchula_update::Blob> = stream::iter(selected)
                 .map(|entry| async move {
@@ -2606,6 +2638,7 @@ fn repository(repo: &str, status: Status, reason: Option<String>) -> Repository 
         skipped: Vec::new(),
         notices: Vec::new(),
         lookup_failures: Vec::new(),
+        tooling: Vec::new(),
         default_branch: None,
         commit: None,
     }

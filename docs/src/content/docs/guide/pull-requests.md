@@ -41,11 +41,12 @@ can change what the tool resolves.
 
 The title and commit message are
 `<commitPrefix> update <dependency> to <version>`, or
-`<commitPrefix> pin dependencies` for pin branches. The body opens with the
-advisories the branch fixes, if any, and for a pinned image's new digest with
-what the Count found comparing its old and new SBOMs: a warning when he can't
-tell whether the rebuild fixes anything, unless you silenced it with
-`security.quietImages`, or a note when he couldn't read an SBOM on this run
+`<commitPrefix> pin dependencies` for pin branches. The body opens with any
+[tooling warnings](/guide/auto-merge/#tooling-warnings) for a PR set to merge
+itself, then the advisories the branch fixes, if any, and for a pinned image's
+new digest with what the Count found comparing its old and new SBOMs: a warning
+when he can't tell whether the rebuild fixes anything, unless you silenced it
+with `security.quietImages`, or a note when he couldn't read an SBOM on this run
 (see [container image rebuilds](/guide/security/#container-image-rebuilds)). Then it
 holds a table of every update on the branch (package, change, type, file),
 release notes for each version in the range, any `bodyNotes` you configured,
