@@ -6,6 +6,7 @@ mod mise;
 mod nix;
 mod node;
 mod php;
+mod pin;
 mod process;
 mod python;
 mod ruby;
@@ -49,6 +50,8 @@ pub struct Job {
     pub package: Option<String>,
     pub current: Option<String>,
     pub target: Option<String>,
+    /// The manifest is not edited, so the tool must be told the exact version.
+    pub lock_only: bool,
 }
 fn directory(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(p, _)| p)
@@ -82,6 +85,7 @@ pub(crate) fn job(
                 package: Some(dep.name.clone()),
                 current: Some(dep.current.clone()),
                 target: update.new_version.clone().or(update.new_value.clone()),
+                lock_only: false,
             }));
         }
         // Node version files pin the runtime, which no lockfile records.
@@ -163,6 +167,7 @@ pub(crate) fn job(
                 package: Some(dep.name.clone()),
                 current: dep.digest.clone(),
                 target: update.new_digest.clone(),
+                lock_only: false,
             }));
         }
         // NuGet locks sit beside each project; a manifest under a directory
@@ -184,6 +189,7 @@ pub(crate) fn job(
                 package: None,
                 current: None,
                 target: None,
+                lock_only: false,
             }));
         }
         Manager::Gradle
@@ -197,6 +203,7 @@ pub(crate) fn job(
                 package: None,
                 current: None,
                 target: None,
+                lock_only: false,
             }));
         }
         // Gradle dependency locking writes per-configuration lockfiles that
@@ -270,6 +277,7 @@ pub(crate) fn job(
                 .or(update.new_value.clone())
                 .unwrap_or_else(|| dep.current.clone())
         }),
+        lock_only: targeted && update.new_value.is_none(),
     }))
 }
 
@@ -339,6 +347,7 @@ pub fn maintenance(
             package: None,
             current: None,
             target: None,
+            lock_only: false,
         });
     }
     if jobs.is_empty() {
@@ -981,6 +990,7 @@ impl Runner {
 
 /// One ecosystem tool invocation: the mise tools it needs, the binary to run
 /// and the arguments to pass.
+#[derive(Clone)]
 struct Invocation {
     tools: Vec<(String, String)>,
     bin: String,
@@ -1042,14 +1052,16 @@ fn validate_targets(
         {
             continue;
         }
-        let Some(target) = &change.value else {
-            continue;
+        // A lockfile-only change leaves the declaration as it was, so the lock
+        // alone has to show the target.
+        let declared = match (&change.value, &change.version) {
+            (Some(value), _) => value,
+            (None, Some(_)) => &change.current,
+            (None, None) => continue,
         };
-        let Some(dep) = extraction
-            .dependencies
-            .iter()
-            .find(|d| d.file == change.file && d.package == change.package && d.current == *target)
-        else {
+        let Some(dep) = extraction.dependencies.iter().find(|d| {
+            d.file == change.file && d.package == change.package && d.current == *declared
+        }) else {
             return Err(format!(
                 "tool did not retain requested target {} in {}",
                 change.package, change.file

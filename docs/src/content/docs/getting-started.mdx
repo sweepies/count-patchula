@@ -43,7 +43,8 @@ secrets. The steps below do the same by hand.
    ```
 
    That is a complete config; the rest comes from the schema's defaults: every
-   manager, exact pins, digest pins for actions and images, a 24-hour
+   manager, exact pins (ranges kept in Cargo, Python projects, Bundler and
+   Composer, whose lockfiles hold the version), digest pins for actions and images, a 24-hour
    release-age wait, one PR per update, and no auto-merge except for reference
    data such as CA bundles.
 

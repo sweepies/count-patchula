@@ -123,6 +123,8 @@ class Window {
 /// default except reference data, through the built-in rule below.
 class Policy {
   active: Boolean = true
+  /// `exact` pins every declaration. The built-in rules below set `preserve`
+  /// for Cargo, pyproject, Bundler and Composer.
   versions: VersionPolicy = "exact"
   /// Node LTS is opt-in; other sources retain stable selection by default.
   channel: ReleaseChannel = "stable"
@@ -296,11 +298,18 @@ managers: Listing<Manager> = new {
   "regex"
 }
 defaults: Policy = new {}
-/// Rules apply in order after `defaults`. The first one is built in: reference
-/// data (CA root bundles, time zone data, the public suffix list) is only useful
-/// while current, so its updates skip the release-age wait and schedule
-/// windows, get their own PR and merge once checks pass. Later rules can change
-/// that; assigning a new Listing to `rules` drops it.
+/// Rules apply in order after `defaults`. The first two are built in; assigning
+/// a new Listing to `rules` drops both.
+///
+/// 1. Reference data (CA root bundles, time zone data, the public suffix list)
+///    is only useful while current, so its updates skip the release-age wait
+///    and schedule windows, get their own PR and merge once checks pass.
+/// 2. Cargo, pyproject, Bundler and Composer keep one version per package and a
+///    lockfile, so their ranges are preserved and a release a range already
+///    allows moves the lockfile alone. The two rules set different fields, so
+///    their order does not matter; both come before yours.
+///
+/// Later rules can change either.
 rules: Listing<Rule> = new {
   new Rule {
     note = "Reference data: no wait, no window, its own PR, merged once checks pass."
@@ -311,6 +320,12 @@ rules: Listing<Rule> = new {
       group = ""
       merge = true
     }
+  }
+  new Rule {
+    note =
+      "One version per package plus a lockfile: keep ranges, so a pin cannot clash with another requirement on the same package, and move the lock for releases inside them."
+    select { managers = new Listing { "cargo"; "pyproject"; "bundler"; "composer" } }
+    apply { versions = "preserve" }
   }
 }
 files: Listing<FileSet> = new {}

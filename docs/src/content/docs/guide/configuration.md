@@ -78,8 +78,10 @@ The [schema](/reference/configuration/) is the complete list. In short, the Coun
 starts out cautious:
 
 - every supported manager is selected, each with its own file patterns;
-- versions are pinned exactly, and GitHub Actions and container images are
-  pinned to digests;
+- versions are pinned exactly, except in Cargo, pyproject, Bundler and Composer,
+  where a built-in rule keeps ranges and moves the lockfile for releases inside
+  them (see [version policies](/guide/versioning/#version-policies)); GitHub
+  Actions and container images are pinned to digests;
 - every update gets its own PR with the `dependencies` label and a
   `chore(deps):` commit prefix, and release notes are included;
 - nothing auto-merges, except [reference data](#reference-data) such as CA
@@ -149,7 +151,7 @@ lockfile is not an update type; it is configured under
 | Field | Effect |
 |---|---|
 | `active` | `false` stops updates for the selected dependencies |
-| `versions` | `exact` pins, `preserve` keeps and shifts ranges, `widen` extends ranges to include the new version |
+| `versions` | `exact` pins, `preserve` keeps and shifts ranges (and moves the lockfile alone for releases inside them), `widen` extends ranges to include the new version; the default is `exact`, with a built-in `preserve` rule for Cargo, pyproject, Bundler and Composer |
 | `channel` | `stable`, or `lts` for Node's long-term support line |
 | `digest` | `false` opts out of digest pinning |
 | `merge` | allow [auto-merge](/guide/auto-merge/) |
@@ -219,8 +221,9 @@ rules {
 ```
 
 :::caution
-Assigning `rules = new Listing { ... }` replaces the whole list, the built-in
-rule included.
+Assigning `rules = new Listing { ... }` replaces the whole list, both built-in
+rules included: this one and the `preserve` default for Cargo, pyproject,
+Bundler and Composer.
 :::
 
 Root certificates inside container images come from the image's

@@ -100,6 +100,21 @@ pub struct Dependency {
     pub extract: Option<String>,
 }
 impl Dependency {
+    /// The version a committed lockfile holds for a direct dependency whose
+    /// lock the Count can move to a chosen version: Cargo.lock, uv.lock,
+    /// poetry.lock, Gemfile.lock and composer.lock. A release inside the
+    /// declared range reaches such a dependency through its lockfile alone.
+    pub fn locked(&self) -> Option<&str> {
+        matches!(
+            (self.manager, self.source),
+            (Manager::Cargo, Source::Crates)
+                | (Manager::Pyproject, Source::Pypi)
+                | (Manager::Bundler, Source::Rubygems)
+                | (Manager::Composer, Source::Packagist)
+        )
+        .then_some(self.resolved.as_deref())
+        .flatten()
+    }
     /// The kinds rules select this dependency by: its own, plus
     /// `reference-data` for a package on the reference data list.
     pub fn kinds(&self) -> Vec<DependencyKind> {

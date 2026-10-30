@@ -97,7 +97,7 @@ when this list is not empty.
 
 | Field | |
 |---|---|
-| `newValue`, `newVersion`, `newDigest` | The target; at least one is set |
+| `newValue`, `newVersion`, `newDigest` | The target; at least one is set. A `null` `newValue` with a `newVersion` is a lockfile-only update: the declaration already allows the version, so only the lockfile changes |
 | `updateType` | `major`, `minor`, `patch`, `digest` or `pin` |
 | `group` | The group name from configuration, or null |
 | `policy` | Optional. The policy that applies: versions, wait, windows, merge, labels |

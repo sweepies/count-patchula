@@ -397,6 +397,8 @@ pub struct Current {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Update {
+    /// The new declaration. `None` with a `new_version` is a lockfile-only
+    /// update: the declaration already allows the version.
     pub new_value: Option<String>,
     pub new_version: Option<String>,
     pub new_digest: Option<String>,

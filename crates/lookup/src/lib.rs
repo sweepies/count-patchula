@@ -943,17 +943,26 @@ impl Evaluator {
                 // location metadata, while current/newValue describe the version.
                 value
             };
-            if (matches!(dep.manager, Manager::Cargo | Manager::Pyproject)
-                || (matches!(dep.manager, Manager::Terraform | Manager::Npm)
+            // A release the declared range already allows leaves the manifest
+            // alone. With a committed lockfile it still moves the lock to the
+            // target; without one there is nothing to change.
+            let in_range = new_value == dep.current;
+            let lock_only = in_range
+                && dep.locked().is_some()
+                && effective.policy.versions != VersionPolicy::Exact;
+            if in_range
+                && !lock_only
+                && (matches!(
+                    dep.manager,
+                    Manager::Cargo | Manager::Pyproject | Manager::Bundler | Manager::Composer
+                ) || (matches!(dep.manager, Manager::Terraform | Manager::Npm)
                     && dep.kind == DependencyKind::Toolchain))
-                && new_value == dep.current
             {
-                // A satisfying release does not edit the manifest. Lockfile
-                // maintenance is a separate, explicitly enabled operation.
+                // Lockfile maintenance is a separate, explicitly enabled operation.
                 continue;
             }
             let mut update = proposal(
-                Some(new_value),
+                (!lock_only).then_some(new_value),
                 Some(normalized),
                 if effective.digest
                     && (dep.manager == Manager::GithubActions || dep.tagged_action())

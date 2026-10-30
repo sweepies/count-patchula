@@ -10,7 +10,7 @@ with a config you understand.
 
 `config:recommended`, `:semanticCommits`, `:dependencyDashboard`, `:pinAllExceptPeerDependencies`,
 `helpers:pinGitHubActionDigests` and `docker:pinDigests` mostly describe what
-the Count does without being asked: exact pins, digest pins for actions and
+the Count does without being asked: exact pins (ranges kept where a lockfile holds the version), digest pins for actions and
 images, semantic commit prefixes and one PR per update. Turn the dashboard on
 and you are close.
 

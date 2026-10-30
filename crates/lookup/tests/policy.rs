@@ -108,7 +108,7 @@ fn satisfying_provider_constraints_and_cargo_floors_are_retained() {
         Some("1.0")
     );
     dep.current = "1.0".into();
-    dep.resolved = Some("1.0.0".into());
+    dep.resolved = None;
     assert!(eval.propose(&dep, &catalog(&["1.1.0"])).unwrap().is_empty());
 
     let eval = Evaluator::new(&config("benchmark-public")).unwrap();
@@ -846,7 +846,7 @@ fn cargo_noop_ranges_are_not_updates_and_both_breaking_tracks_survive() {
     dep.manager = Manager::Cargo;
     dep.source = Source::Crates;
     dep.current = "0.2".into();
-    dep.resolved = Some("0.2.3".into());
+    dep.resolved = None;
     let p = eval
         .propose(&dep, &catalog(&["0.2.4", "0.3.1", "1.2.3"]))
         .unwrap();
@@ -944,20 +944,22 @@ fn pyproject_pins_move_poetry_ranges_keep_form_and_satisfied_ranges_wait() {
         .filter_map(|p| p.new_value)
         .collect();
     assert_eq!(values, ["==0.6.9", "==0.7.1"]);
-    // A release inside an open range needs no manifest edit; lock maintenance
-    // refreshes it.
+    // A release inside an open range needs no manifest edit: with a lock it
+    // moves the lock, without one there is nothing to change.
     dep.current = ">=0.6".into();
     let mut preserve = cfg.clone();
     preserve.defaults.versions = patchula_config::VersionPolicy::Preserve;
     let eval = Evaluator::new(&preserve).unwrap();
     let open = eval.propose(&dep, &releases).unwrap();
-    assert!(
-        open.is_empty(),
-        "{:?}",
+    assert_eq!(
         open.iter()
-            .map(|p| (&p.new_value, &p.new_version, &p.update_type))
-            .collect::<Vec<_>>()
+            .map(|p| (&p.new_value, p.new_version.as_deref()))
+            .collect::<Vec<_>>(),
+        [(&None, Some("0.6.9")), (&None, Some("0.7.1"))]
     );
+    dep.resolved = None;
+    assert!(eval.propose(&dep, &releases).unwrap().is_empty());
+    dep.resolved = Some("0.6.0".into());
     dep.scheme = Scheme::Poetry;
     dep.current = "^0.6.0".into();
     let values: Vec<_> = eval
@@ -1310,4 +1312,218 @@ fn an_image_rebuild_is_secured_only_as_security_apply_allows() {
         "waitHours = 0; permitted = \"semver:<2\"",
         Some("3.0.0")
     ));
+}
+
+/// Cargo, pyproject, Bundler and Composer keep one version per package in a
+/// lockfile, so under `preserve` a release the declaration already allows moves
+/// that lock and leaves the manifest as it is.
+#[test]
+fn in_range_releases_are_lock_only_updates_when_a_lockfile_holds_the_version() {
+    let mut cfg = config("preserve-ranges");
+    cfg.defaults.wait_hours = 0;
+    let eval = Evaluator::new(&cfg).unwrap();
+    for (manager, source, scheme, current, locked, newer) in [
+        (
+            Manager::Cargo,
+            Source::Crates,
+            Scheme::Semver,
+            "1",
+            "1.39.0",
+            "1.40.0",
+        ),
+        (
+            Manager::Pyproject,
+            Source::Pypi,
+            Scheme::Pep440,
+            ">=2.28",
+            "2.28.0",
+            "2.32.3",
+        ),
+        (
+            Manager::Pyproject,
+            Source::Pypi,
+            Scheme::Poetry,
+            "^2.28",
+            "2.28.0",
+            "2.32.3",
+        ),
+        (
+            Manager::Bundler,
+            Source::Rubygems,
+            Scheme::Rubygems,
+            "~> 7.1",
+            "7.1.2",
+            "7.2.0",
+        ),
+        (
+            Manager::Composer,
+            Source::Packagist,
+            Scheme::Composer,
+            "^3.0",
+            "3.0.0",
+            "3.2.0",
+        ),
+    ] {
+        let mut dep = dependency("example");
+        dep.manager = manager;
+        dep.source = source;
+        dep.scheme = scheme;
+        dep.current = current.into();
+        dep.resolved = Some(locked.into());
+        let releases = catalog(&[locked, newer]);
+        let proposals = eval.propose(&dep, &releases).unwrap();
+        assert_eq!(proposals.len(), 1, "{manager:?}: {proposals:?}");
+        assert_eq!(proposals[0].new_value, None, "{manager:?}");
+        assert_eq!(proposals[0].new_version.as_deref(), Some(newer));
+        assert_eq!(proposals[0].update_type, "minor", "{manager:?}");
+        // The locked version is the baseline, not the range's floor: a lock
+        // already at the newest release has nothing to move to.
+        dep.resolved = Some(newer.into());
+        assert!(eval.propose(&dep, &releases).unwrap().is_empty());
+        // Without a committed lockfile there is nothing to change.
+        dep.resolved = None;
+        assert!(eval.propose(&dep, &releases).unwrap().is_empty());
+    }
+}
+
+#[test]
+fn lock_only_updates_keep_the_wait_the_permitted_filter_and_exact_policy() {
+    let mut cfg = config("preserve-ranges");
+    cfg.defaults.wait_hours = 24;
+    let eval = Evaluator::new(&cfg).unwrap();
+    let mut dep = dependency("tokio");
+    dep.manager = Manager::Cargo;
+    dep.source = Source::Crates;
+    dep.current = "1".into();
+    dep.resolved = Some("1.39.0".into());
+    let mut releases = catalog(&["1.39.0", "1.40.0", "1.41.0"]);
+    for (release, date) in releases.versions.iter_mut().zip([
+        "2026-09-01T00:00:00Z",
+        "2026-10-01T00:00:00Z",
+        "2026-10-15T00:00:00Z",
+    ]) {
+        release.published_at = Some(date.into());
+    }
+    // 1.41.0 is still inside the wait, so the lock moves to 1.40.0.
+    let result = eval
+        .evaluate_at(&dep, &releases, instant("2026-10-15T12:00:00Z"))
+        .unwrap();
+    assert_eq!(result.updates.len(), 1);
+    assert_eq!(result.updates[0].new_value, None);
+    assert_eq!(result.updates[0].new_version.as_deref(), Some("1.40.0"));
+    assert_eq!(result.held_back[0].version, "1.41.0");
+    // Exact policy still pins the declaration.
+    cfg.defaults.versions = patchula_config::VersionPolicy::Exact;
+    cfg.rules.retain(|rule| rule.apply.versions.is_none());
+    let exact = Evaluator::new(&cfg)
+        .unwrap()
+        .evaluate_at(&dep, &releases, instant("2026-10-15T12:00:00Z"))
+        .unwrap();
+    assert_eq!(exact.updates[0].new_value.as_deref(), Some("=1.40.0"));
+}
+
+/// Out of range, `preserve` shifts the declaration as before.
+#[test]
+fn out_of_range_releases_still_shift_the_declaration_under_preserve() {
+    let mut cfg = config("preserve-ranges");
+    cfg.defaults.wait_hours = 0;
+    let eval = Evaluator::new(&cfg).unwrap();
+    let mut dep = dependency("tokio");
+    dep.manager = Manager::Cargo;
+    dep.source = Source::Crates;
+    dep.current = "1".into();
+    dep.resolved = Some("1.39.0".into());
+    let proposals = eval
+        .propose(&dep, &catalog(&["1.39.0", "1.40.0", "2.1.0"]))
+        .unwrap();
+    let by_version = |v: &str| {
+        proposals
+            .iter()
+            .find(|p| p.new_version.as_deref() == Some(v))
+            .unwrap()
+            .new_value
+            .clone()
+    };
+    assert_eq!(by_version("1.40.0"), None);
+    assert_eq!(by_version("2.1.0").as_deref(), Some("2"));
+}
+
+/// The schema's second built-in rule makes ecosystems with one version per
+/// package and a lockfile preserve their ranges; pins stay the default
+/// elsewhere.
+#[test]
+fn cargo_pyproject_bundler_and_composer_preserve_by_default_and_the_rest_pin() {
+    let eval = Evaluator::new(&config("defaults")).unwrap();
+    for (manager, source, scheme, current, locked, newer, versions) in [
+        (
+            Manager::Cargo,
+            Source::Crates,
+            Scheme::Semver,
+            "1",
+            "1.39.0",
+            "1.40.0",
+            "preserve",
+        ),
+        (
+            Manager::Pyproject,
+            Source::Pypi,
+            Scheme::Pep440,
+            ">=2",
+            "2.0.0",
+            "2.1.0",
+            "preserve",
+        ),
+        (
+            Manager::Bundler,
+            Source::Rubygems,
+            Scheme::Rubygems,
+            "~> 7.1",
+            "7.1.0",
+            "7.2.0",
+            "preserve",
+        ),
+        (
+            Manager::Composer,
+            Source::Packagist,
+            Scheme::Composer,
+            "^3.0",
+            "3.0.0",
+            "3.1.0",
+            "preserve",
+        ),
+        (
+            Manager::Requirements,
+            Source::Pypi,
+            Scheme::Pep440,
+            "==2.0.0",
+            "2.0.0",
+            "2.1.0",
+            "exact",
+        ),
+        (
+            Manager::Npm,
+            Source::Npm,
+            Scheme::Semver,
+            "^2.0.0",
+            "2.0.0",
+            "2.1.0",
+            "exact",
+        ),
+    ] {
+        let mut dep = dependency("example");
+        dep.manager = manager;
+        dep.source = source;
+        dep.scheme = scheme;
+        dep.current = current.into();
+        dep.resolved = Some(locked.into());
+        let mut releases = catalog(&[locked, newer]);
+        releases.versions[1].published_at = Some("2020-01-01T00:00:00Z".into());
+        let proposals = eval.propose(&dep, &releases).unwrap();
+        assert_eq!(proposals.len(), 1, "{manager:?}");
+        assert_eq!(
+            proposals[0].policy.as_ref().unwrap().versions.as_deref(),
+            Some(versions),
+            "{manager:?}"
+        );
+    }
 }

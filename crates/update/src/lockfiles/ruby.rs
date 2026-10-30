@@ -1,5 +1,5 @@
 //! `Gemfile.lock` through `bundle lock --update`, with Ruby from mise.
-use super::*;
+use super::{pin::Pinned, *};
 
 /// `.ruby-version`, then the Gemfile's `ruby` directive, then the default.
 fn ruby_version(cwd: &Path, pinned: &str) -> String {
@@ -43,9 +43,9 @@ impl Runner {
             root,
             baseline,
             directory,
+            config,
             versions,
             maintenance,
-            ..
         } = context;
         let cwd = root.join(directory);
         let lock = node::join(directory, "Gemfile.lock");
@@ -56,27 +56,31 @@ impl Runner {
         }
         let home = driver.join("ruby");
         let path = |p: &str| home.join(p).to_string_lossy().into_owned();
-        self.tool(
-            driver,
-            Invocation {
-                tools: vec![(
-                    "ruby".into(),
-                    ruby_version(&cwd, &node::version(versions, "ruby")?),
-                )],
-                bin: "bundle".into(),
-                cwd: Some(cwd.clone()),
-                env: vec![
-                    // Repository .bundle/config never redirects the run.
-                    ("BUNDLE_APP_CONFIG".into(), path("app-config")),
-                    ("BUNDLE_USER_HOME".into(), path("bundle")),
-                    ("GEM_HOME".into(), path("gems")),
-                    ("BUNDLE_FROZEN".into(), "false".into()),
-                    ("BUNDLE_DEPLOYMENT".into(), "false".into()),
-                ],
-                args,
-            },
-        )
-        .await?;
+        let ruby = ruby_version(&cwd, &node::version(versions, "ruby")?);
+        let invocation = |args| Invocation {
+            tools: vec![("ruby".into(), ruby.clone())],
+            bin: "bundle".into(),
+            cwd: Some(cwd.clone()),
+            env: vec![
+                // Repository .bundle/config never redirects the run.
+                ("BUNDLE_APP_CONFIG".into(), path("app-config")),
+                ("BUNDLE_USER_HOME".into(), path("bundle")),
+                ("GEM_HOME".into(), path("gems")),
+                ("BUNDLE_FROZEN".into(), "false".into()),
+                ("BUNDLE_DEPLOYMENT".into(), "false".into()),
+            ],
+            args,
+        };
+        // Bundler moves a gem as far as its requirement allows and cannot be
+        // told a version, so a package whose declaration stays as it is has
+        // the requirement pinned for one resolution and restored for the next.
+        let pinned = Pinned::apply(root, directory, config, Manager::Bundler, jobs)?;
+        self.tool(driver, invocation(args)).await?;
+        if !pinned.is_empty() {
+            pinned.restore()?;
+            self.tool(driver, invocation(vec!["lock".to_string()]))
+                .await?;
+        }
         let before = baseline.get(&lock).map(|b| b.content.as_str());
         let after = std::fs::read_to_string(root.join(&lock)).ok();
         let manifest = node::join(directory, "Gemfile");
