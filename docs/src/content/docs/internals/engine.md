@@ -102,7 +102,9 @@ file or proposal changes.
 and a `beforeOid` lease on each branch. Unlike REST's unconditional force
 update, this atomically refuses a concurrent human push. The default branch is
 not leased: the writer checks the base head when it reads it, and a branch left
-behind by a base that moves afterwards is rebased on the next run. The ref
+behind by a base that moves afterwards is handled by `prs.rebase` on the next
+run. Cleanup rereads the default head just before deleting obsolete branches
+and deletes nothing if it moved. The ref
 update never names the default branch, because a no-op update of it is rejected
 by rulesets that require pull requests. A rejected update reports GitHub's
 GraphQL error messages. Writes never enter the read cache, and transport or server

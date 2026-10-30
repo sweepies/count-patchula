@@ -5,7 +5,9 @@ use patchula_github::Client;
 use patchula_report::ActionStatus;
 use serde_json::{Value, json};
 
-/// GitHub's Git Data GraphQL ref lease is atomic, including the base check.
+/// GitHub's Git Data GraphQL ref update, atomic across the branch refs it names.
+/// The default branch is never named: rulesets that require a pull request
+/// reject even a no-op update to it, so the base is checked when it is read.
 pub const REF_UPDATE: &str =
     "mutation($input:UpdateRefsInput!){updateRefs(input:$input){clientMutationId}}";
 
@@ -44,7 +46,7 @@ fn trailer<'a>(message: &'a str, key: &str) -> Option<&'a str> {
     let value = lines.next()?;
     lines.next().is_none().then_some(value)
 }
-fn ref_path(repo: &str, branch: &str) -> String {
+pub(crate) fn ref_path(repo: &str, branch: &str) -> String {
     let mut url = reqwest::Url::parse(&format!(
         "https://api.github.com/repos/{repo}/git/ref/heads/"
     ))
@@ -52,7 +54,7 @@ fn ref_path(repo: &str, branch: &str) -> String {
     url.path_segments_mut().unwrap().pop_if_empty().push(branch);
     url.path().into()
 }
-async fn fresh(client: &Client, path: &str) -> Result<Value, String> {
+pub(crate) async fn fresh(client: &Client, path: &str) -> Result<Value, String> {
     let response = client.get(path).await.map_err(|e| e.to_string())?;
     serde_json::from_slice(&response.body).map_err(|e| e.to_string())
 }

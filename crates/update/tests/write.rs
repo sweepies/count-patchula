@@ -2975,6 +2975,54 @@ async fn no_ref_update_names_the_default_branch() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn cleanup_deletes_nothing_once_the_default_branch_moves() {
+    let (p, snapshot) = make_plan("22.0.0");
+    let mut plans = vec![p];
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    patchula_update::apply_all(
+        &github,
+        &mut plans,
+        &snapshot,
+        "main",
+        Rebase::Behind,
+        false,
+    )
+    .await;
+    assert_eq!(plans[0].action.status, ActionStatus::Created);
+    {
+        let mut s = server.0.lock().unwrap();
+        let sha = s.refs[&format!("refs/heads/{}", plans[0].action.branch)].clone();
+        let commit = s.commits.get_mut(&sha).unwrap();
+        commit["message"] = json!(commit["message"].as_str().unwrap().replace(
+            "Patchula-Base: base",
+            "Patchula-Base: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ));
+        s.refs.insert(
+            "refs/heads/main".into(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+        );
+    }
+    let before = ref_update_names(&server).len();
+    let actions = patchula_update::cleanup(&github, "demo/app", "base", "main", &[], false)
+        .await
+        .unwrap();
+    assert!(actions.is_empty());
+    assert_eq!(ref_update_names(&server).len(), before);
+    // The same branch is deleted once the plans match the default branch again.
+    server
+        .0
+        .lock()
+        .unwrap()
+        .refs
+        .insert("refs/heads/main".into(), "base".into());
+    let actions = patchula_update::cleanup(&github, "demo/app", "base", "main", &[], false)
+        .await
+        .unwrap();
+    assert!(actions.iter().any(|a| a.status == ActionStatus::Deleted));
+}
+
+#[tokio::test(start_paused = true)]
 async fn generated_lockfile_additions_and_deletions_share_the_manifest_commit() {
     let (mut p, mut snapshot) = make_plan("22.0.0");
     let old = "obsolete checksum\n";

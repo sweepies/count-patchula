@@ -47,7 +47,8 @@ pub async fn owned(client: &Client, repo: &str, head: &str, actor: &str) -> Resu
 }
 
 /// Inspect all heads, regardless of naming, and remove obsolete owned branches
-/// with a lease on the branch head. Dry runs deliberately perform no API requests.
+/// with a lease on the branch head, once the default branch is confirmed not to
+/// have moved since it was read. Dry runs deliberately perform no API requests.
 pub async fn cleanup(
     client: &Client,
     repo: &str,
@@ -88,6 +89,13 @@ pub async fn cleanup(
         .map_err(|e| e.to_string())?;
     if metadata["default_branch"] != default_branch {
         return Err("default branch changed before cleanup; rerun".into());
+    }
+    // The deletions don't lease the default branch, so check here that the
+    // plans still describe it; if it moved, the next run cleans up instead.
+    let current =
+        crate::write::fresh(client, &crate::write::ref_path(repo, default_branch)).await?;
+    if current["object"]["sha"].as_str() != Some(base) {
+        return Ok(Vec::new());
     }
     let node = metadata["node_id"]
         .as_str()
