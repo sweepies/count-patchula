@@ -1438,7 +1438,7 @@ async fn cargo_lock_adds_a_semver_incompatible_entry_then_pins_the_target() {
     p.lock_jobs[0].current = Some("0.22.1".into());
     p.lock_jobs[0].target = Some("0.23.0".into());
     p.contents
-        .insert("Cargo.toml".into(), old.replace("'0.22'", "'=0.23.0'"));
+        .insert("Cargo.toml".into(), old.replace("'0.22'", "'0.23'"));
     p.action.files.push(FileAction {
         path: "Cargo.toml".into(),
         blob_sha: blob_sha(old),
@@ -1450,7 +1450,7 @@ async fn cargo_lock_adds_a_semver_incompatible_entry_then_pins_the_target() {
         file: "Cargo.toml".into(),
         current: "0.22".into(),
         current_version: None,
-        value: Some("=0.23.0".into()),
+        value: Some("0.23".into()),
         version: Some("0.23.0".into()),
         digest: None,
         kind: "major".into(),

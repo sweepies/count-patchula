@@ -10,7 +10,7 @@ commit. If the tool fails, nothing is published.
 
 | Lockfile | Tool | Command |
 |---|---|---|
-| `aube-lock.yaml`, `pnpm-lock.yaml` | aube | `aube install --lockfile-only --ignore-scripts` |
+| `aube-lock.yaml`, `pnpm-lock.yaml` | aube | `aube install --lockfile-only --ignore-scripts`, once per lockfile, with aube's `default-lockfile` set to that file's name |
 | `package-lock.json`, `npm-shrinkwrap.json` | aube, or npm | `npm install --package-lock-only --ignore-scripts` |
 | `yarn.lock` | Yarn Classic or Berry | `yarn install --ignore-scripts`, or `--mode=update-lockfile` |
 | `bun.lock` | Bun | `bun install --lockfile-only --ignore-scripts` |
