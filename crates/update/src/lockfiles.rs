@@ -678,32 +678,8 @@ impl Runner {
                 }
                 Ecosystem::Cargo => {
                     for job in jobs {
-                        let mut args = vec![
-                            "update".into(),
-                            "--manifest-path".into(),
-                            cwd.join("Cargo.toml").to_string_lossy().into_owned(),
-                        ];
-                        if let Some(package) = &job.package {
-                            args.extend([
-                                "-p".into(),
-                                format!("{}@{}", package, job.current.as_deref().unwrap_or("")),
-                                "--precise".into(),
-                                job.target.clone().ok_or("missing Cargo target")?,
-                            ]);
-                        } else if !plan.maintenance {
-                            args.push("--workspace".into());
-                        }
-                        self.tool(
-                            &driver,
-                            Invocation {
-                                tools: vec![("rust".into(), versions["rust"].clone())],
-                                bin: "cargo".into(),
-                                cwd: None,
-                                env: Vec::new(),
-                                args,
-                            },
-                        )
-                        .await?;
+                        self.cargo_update(&driver, &cwd, &versions["rust"], job, plan.maintenance)
+                            .await?;
                     }
                 }
                 Ecosystem::Go => {
@@ -837,6 +813,73 @@ impl Runner {
         if plan.action.files.is_empty() {
             plan.action.status = ActionStatus::Skipped;
             plan.action.reason = Some("lockfiles already current".into());
+        }
+        Ok(())
+    }
+    /// Moves Cargo.lock for one job. A package moves with `--precise` to the
+    /// exact target. A target across a semver-incompatible boundary is a second
+    /// lock entry beside the old one, which other crates may still require, so
+    /// `--precise` on the old entry cannot reach it; `--workspace` locks what
+    /// the edited manifests need and leaves every other package where it is.
+    async fn cargo_update(
+        &self,
+        driver: &Path,
+        cwd: &Path,
+        rust: &str,
+        job: &Job,
+        maintenance: bool,
+    ) -> Result<(), String> {
+        let update = |args: Vec<String>| {
+            let mut all = vec![
+                "update".into(),
+                "--manifest-path".into(),
+                cwd.join("Cargo.toml").to_string_lossy().into_owned(),
+            ];
+            all.extend(args);
+            self.tool(
+                driver,
+                Invocation {
+                    tools: vec![("rust".into(), rust.into())],
+                    bin: "cargo".into(),
+                    cwd: None,
+                    env: Vec::new(),
+                    args: all,
+                },
+            )
+        };
+        let Some(package) = &job.package else {
+            let args = if maintenance {
+                vec![]
+            } else {
+                vec!["--workspace".into()]
+            };
+            update(args).await?;
+            return Ok(());
+        };
+        let current = job.current.as_deref().unwrap_or("");
+        let target = job.target.as_deref().ok_or("missing Cargo target")?;
+        if !crosses_compatibility(current, target) {
+            update(vec![
+                "-p".into(),
+                format!("{package}@{current}"),
+                "--precise".into(),
+                target.into(),
+            ])
+            .await?;
+            return Ok(());
+        }
+        update(vec!["--workspace".into()]).await?;
+        // Cargo locks the newest release the manifests allow, which may be
+        // newer than the target; move that entry back to the target.
+        let lock = std::fs::read_to_string(cwd.join("Cargo.lock")).map_err(|e| e.to_string())?;
+        for locked in compatible_entries(&lock, package, target) {
+            update(vec![
+                "-p".into(),
+                format!("{package}@{locked}"),
+                "--precise".into(),
+                target.into(),
+            ])
+            .await?;
         }
         Ok(())
     }
@@ -1079,6 +1122,33 @@ fn versions(
         }
     }
     Ok(versions)
+}
+/// Whether Cargo treats `target` as incompatible with `current`: a different
+/// major version, or a different minor (or patch) one below 1.0. Cargo then
+/// keeps both in the lock.
+fn crosses_compatibility(current: &str, target: &str) -> bool {
+    use patchula_config::Update;
+    use patchula_versioning::{Ecosystem as Scheme, Versioning};
+    match (Scheme::Cargo.parse(current), Scheme::Cargo.parse(target)) {
+        (Ok(current), Ok(target)) => Scheme::Cargo.classify(&current, &target) == Update::Major,
+        _ => false,
+    }
+}
+/// The versions of `package` in a Cargo.lock that are compatible with `target`
+/// but are not it.
+fn compatible_entries(lock: &str, package: &str, target: &str) -> Vec<String> {
+    let Ok(lock) = toml_edit::Document::parse(lock) else {
+        return Vec::new();
+    };
+    lock.get("package")
+        .and_then(toml_edit::Item::as_array_of_tables)
+        .into_iter()
+        .flatten()
+        .filter(|entry| entry.get("name").and_then(toml_edit::Item::as_str) == Some(package))
+        .filter_map(|entry| entry.get("version")?.as_str())
+        .filter(|version| *version != target && !crosses_compatibility(version, target))
+        .map(str::to_owned)
+        .collect()
 }
 /// The Go to run: the newest of the pin and the edited `go.mod`'s `go` and
 /// `toolchain` directives. With GOTOOLCHAIN=local, an older Go refuses a

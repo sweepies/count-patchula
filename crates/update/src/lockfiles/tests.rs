@@ -1257,6 +1257,115 @@ async fn real_cargo_and_go_targeted_updates_retain_the_selected_manifest_and_loc
     }
 }
 
+/// Stands in for cargo as `cargo update` behaves when a crate crosses a
+/// semver-incompatible boundary: `--workspace` locks the newest release the
+/// edited manifest allows beside the old entry, which other crates still
+/// require, and `--precise` on the old entry cannot reach the new version.
+struct CargoFixture {
+    git: Arc<Fixture>,
+    calls: Mutex<Vec<Vec<String>>>,
+}
+impl Executor for CargoFixture {
+    fn run(
+        &self,
+        spec: CommandSpec,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+        if spec.args.iter().any(|arg| arg == "git") {
+            return self.git.run(spec);
+        }
+        Box::pin(async move {
+            let at = spec.args.iter().position(|arg| arg == "cargo").unwrap();
+            let args = spec.args[at + 1..].to_vec();
+            self.calls.lock().unwrap().push(args.clone());
+            let manifest =
+                Path::new(&args[args.iter().position(|a| a == "--manifest-path").unwrap() + 1]);
+            let lock = manifest.with_file_name("Cargo.lock");
+            let text = std::fs::read_to_string(&lock).unwrap();
+            let rest: Vec<_> = args.iter().skip(3).map(String::as_str).collect();
+            match rest.as_slice() {
+                ["--workspace"] => std::fs::write(
+                    &lock,
+                    format!("{text}[[package]]\nname = \"base64\"\nversion = \"0.23.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n"),
+                )
+                .unwrap(),
+                ["-p", "base64@0.23.1", "--precise", "0.23.0"] => {
+                    std::fs::write(&lock, text.replace("0.23.1", "0.23.0")).unwrap();
+                }
+                _ => {
+                    return Err("failed to select a version for the requirement `base64 = \"^0.22\"` required by package `other`".into());
+                }
+            }
+            Ok(Vec::new())
+        })
+    }
+}
+
+#[tokio::test]
+async fn cargo_lock_adds_a_semver_incompatible_entry_then_pins_the_target() {
+    let old = "[package]\nname='fixture'\nversion='1.0.0'\nedition='2024'\n[dependencies]\nbase64='0.22'\nother={path='other'}\n";
+    let files = BTreeMap::from([
+        ("Cargo.toml".to_string(), old.to_string()),
+        (
+            "Cargo.lock".into(),
+            "version = 4\n[[package]]\nname = \"base64\"\nversion = \"0.22.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n".into(),
+        ),
+    ]);
+    let executor = Arc::new(CargoFixture {
+        git: fixture(files.clone(), false, false),
+        calls: Mutex::new(Vec::new()),
+    });
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        .unwrap()
+        .unwrap();
+    p.maintenance = false;
+    p.lock_jobs[0].package = Some("base64".into());
+    p.lock_jobs[0].current = Some("0.22.1".into());
+    p.lock_jobs[0].target = Some("0.23.0".into());
+    p.contents
+        .insert("Cargo.toml".into(), old.replace("'0.22'", "'=0.23.0'"));
+    p.action.files.push(FileAction {
+        path: "Cargo.toml".into(),
+        blob_sha: blob_sha(old),
+        diff: String::new(),
+    });
+    p.changes.push(crate::Change {
+        source: "crates".into(),
+        package: "base64".into(),
+        file: "Cargo.toml".into(),
+        current: "0.22".into(),
+        current_version: None,
+        value: Some("=0.23.0".into()),
+        version: Some("0.23.0".into()),
+        digest: None,
+        kind: "major".into(),
+        merge: false,
+        labels: Vec::new(),
+        release_notes: false,
+        body_notes: Vec::new(),
+        advisories: Vec::new(),
+        image: None,
+    });
+    runner.prepare(&mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    let lock = &p.contents["Cargo.lock"];
+    assert!(lock.contains("version = \"0.22.1\""), "{lock}");
+    assert!(lock.contains("version = \"0.23.0\""), "{lock}");
+    let calls = executor.calls.lock().unwrap();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert!(calls[0].ends_with(&["--workspace".to_string()]));
+    assert!(calls[1].ends_with(&[
+        "-p".into(),
+        "base64@0.23.1".into(),
+        "--precise".into(),
+        "0.23.0".into()
+    ]));
+}
+
 #[test]
 fn provider_lock_drift_is_rejected_before_publication() {
     let mut files=BTreeMap::from([

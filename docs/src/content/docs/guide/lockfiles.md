@@ -26,6 +26,12 @@ commit. If the tool fails, nothing is published.
 | `flake.lock` | nix | `nix flake update <input>`, or `nix flake update` for maintenance |
 | `apm.lock.yaml` | APM | `apm lock`, or `apm lock --update` for maintenance |
 
+A Cargo update across a semver-incompatible boundary, such as `0.22` to `0.23`
+or `1.x` to `2.x`, adds a second entry beside the old one, because other crates
+may still require it. The Count runs `cargo update --workspace` for it, which
+locks what the edited manifests need and moves no other package, then pins the
+entry to the target with `--precise` if Cargo locked a newer release.
+
 Lifecycle scripts never run. A lockfile that does not change after an edit that
 changed recorded dependencies fails the branch, so a tool that says "up to date"
 without re-resolving cannot publish a stale lock. An edit that cannot affect the
