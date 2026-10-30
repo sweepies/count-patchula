@@ -22,7 +22,7 @@ jobs:
       # Reads the App's private key from Infisical over OIDC.
       id-token: write
     steps:
-      # The key lives in Infisical as patchula-app-private-key (project
+      # The key lives in Infisical as sweepies-ops-private-key (project
       # INFISICAL_PROJECT_ID, environment prod), read by the machine identity
       # INFISICAL_IDENTITY_ID, which must allow this repository's main branch.
       - uses: Infisical/secrets-action@d2e351f16c6ca20d17c85e6c992e04bdeb64e87d # v1.0.18
@@ -31,13 +31,13 @@ jobs:
           identity-id: ${{ vars.INFISICAL_IDENTITY_ID }}
           project-id: ${{ vars.INFISICAL_PROJECT_ID }}
           env-slug: prod
-          secret-name: patchula-app-private-key
+          secret-name: sweepies-ops-private-key
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         id: app
         with:
           client-id: ${{ vars.PATCHULA_CLIENT_ID }}
           # The Infisical action exports the secret under its own name.
-          private-key: ${{ env['patchula-app-private-key'] }}
+          private-key: ${{ env['sweepies-ops-private-key'] }}
           # The permissions the App is created with; see the server guide.
           permission-contents: write
           permission-pull-requests: write
