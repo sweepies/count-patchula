@@ -190,8 +190,12 @@ class Extractor {
 }
 
 class PullRequests {
-  /// Null means unlimited; positive integers set a limit. Zero is invalid.
-  concurrent: Int? = null
+  /// Open PRs at once. Updates past the limit wait for a PR to close; the
+  /// dashboard lists them. Security fixes never wait. Null means unlimited;
+  /// positive integers set a limit. Zero is invalid.
+  concurrent: Int? = 10
+  /// New PRs per hour. Null, the default, means unlimited; security fixes
+  /// never wait.
   perHour: Int? = null
   dashboard: Boolean = false
   branch: String = "patchula/"

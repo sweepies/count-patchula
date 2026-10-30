@@ -72,6 +72,8 @@ has the details):
 - A later rule replaces an earlier one's lists instead of merging them.
 - Empty `group` means separate PRs.
 - Zero is never "unlimited"; use `null`.
+- `concurrent` is 10 by default, so the first run on a neglected repository
+  opens ten PRs and lists the rest on the dashboard.
 
 ## A worked example
 

@@ -88,8 +88,9 @@ starts out cautious:
 - nothing auto-merges, except [reference data](#reference-data) such as CA
   root bundles, which also skips the release-age wait;
 - dated releases wait 24 hours before they are proposed;
-- there is no limit on open PRs or PRs per hour, no schedule window and no
-  dashboard;
+- at most 10 update PRs are open at once, with no limit per hour and no
+  schedule window; the rest wait for a slot and are listed on the dashboard,
+  and security fixes never wait;
 - branches start with `patchula/` and are rebased only when they conflict;
 - installed and vendored dependencies (`node_modules`, `bower_components`,
   `vendor`), `.git`, and test and example directories (`test`, `tests`,
@@ -235,7 +236,7 @@ those are not covered.
 
 ```pkl
 prs {
-  concurrent = 10        // open PRs at once; null is unlimited
+  concurrent = 10        // open PRs at once (10 by default); null is unlimited
   perHour = 4            // new PRs per hour; null is unlimited
   dashboard = true       // keep a Dependency Dashboard issue
   branch = "patchula/"   // branch prefix

@@ -55,7 +55,7 @@ missing, and behaviour that changes their pull requests. The
 ### Zero is not unlimited {#limits}
 
 - **Renovate:** `0` means unlimited for limits such as `prConcurrentLimit`
-- **The Count:** Limits are unlimited by default, `null` lifts one, and zero is rejected
+- **The Count:** `concurrent` is 10 by default and `perHour` is unlimited, `null` lifts a limit, and zero is rejected
 - **Why:** Zero meaning "unlimited" is easy to set by accident
 
 ### Branch and commit names {#branch-names}

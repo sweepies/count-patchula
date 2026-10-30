@@ -519,3 +519,55 @@ fn tooling_warnings_sit_between_known_vulnerabilities_and_images() {
     let text = dashboard::render(&repo, &[], &prs, Recheck::NextRun, None);
     assert!(!text.contains("Tooling warnings"), "{text}");
 }
+
+/// With `prs.concurrent` on by default, the updates that wait for a slot are
+/// on the dashboard, each with the limit and a box to open it now.
+#[test]
+fn updates_held_by_the_pr_limits_are_listed_with_their_reason_and_a_box() {
+    let plan = |package: &str, reason: &str| patchula_update::Plan {
+        action: patchula_report::BranchAction {
+            repository: "demo/app".into(),
+            branch: format!("patchula/{package}"),
+            base_commit: "a".repeat(40),
+            status: patchula_report::ActionStatus::Skipped,
+            reason: Some(reason.into()),
+            message: format!("chore(deps): update {package} to 2.0.0"),
+            previous_commit: None,
+            commit: None,
+            verified: None,
+            lockfile_pending: false,
+            files: Vec::new(),
+        },
+        contents: Default::default(),
+        identity: package.into(),
+        fingerprint: package.into(),
+        changes: Vec::new(),
+        retry: false,
+        tree: None,
+        cached_pr: None,
+        input_fingerprint: package.into(),
+        lock_jobs: Vec::new(),
+        lockfiles_ready: true,
+        deleted: Default::default(),
+        maintenance: false,
+        batch: None,
+        tooling: Vec::new(),
+    };
+    let plans = [
+        plan("left-pad", "prs.concurrent limit reached"),
+        plan("is-odd", "prs.perHour limit reached"),
+    ];
+    let text = dashboard::render(&repository(), &plans, &[], Recheck::NextRun, None);
+    let pending = &text[text.find("## Pending updates").unwrap()..];
+    for line in [
+        "Create it now anyway: chore(deps): update left-pad to 2.0.0 (prs.concurrent limit reached)",
+        "Create it now anyway: chore(deps): update is-odd to 2.0.0 (prs.perHour limit reached)",
+    ] {
+        let row = pending
+            .lines()
+            .find(|l| l.contains(line))
+            .unwrap_or_else(|| panic!("{line}: {text}"));
+        assert!(row.starts_with("- [ ] "), "{row}");
+    }
+}
+

@@ -104,9 +104,15 @@ warnings, so a file that failed to parse never makes its updates look obsolete.
 
 ## Limits and holds
 
-`concurrent` caps open PRs and `perHour` caps new ones. Updates beyond a limit,
-outside a schedule window, or still inside the release-age wait are held, and
-the dashboard shows each with the reason and a box to create it now.
+`concurrent` caps open PRs, at 10 by default, and `perHour` caps new ones, with
+no cap by default. Updates beyond a limit, outside a schedule window, or still
+inside the release-age wait are held, and the [dashboard](/guide/dashboard/)
+shows each with the reason and a box to create it now. A first run on a
+repository with many outdated dependencies opens ten PRs and lists the rest;
+as those merge or close, the next runs open more. Without the dashboard
+the held updates simply wait for a slot. Security fixes are exempt from both
+limits, and open PRs still count toward `concurrent`. `concurrent = null`
+removes the cap.
 
 ## Repeat runs
 
