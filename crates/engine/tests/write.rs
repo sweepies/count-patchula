@@ -843,18 +843,21 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
             .iter()
             .filter(|(_, _, b)| {
                 b["query"] == patchula_update::REF_UPDATE
-                    && b["variables"]["input"]["refUpdates"][1]["afterOid"]
+                    && b["variables"]["input"]["refUpdates"][0]["afterOid"]
                         == "0000000000000000000000000000000000000000"
             })
             .collect();
         assert_eq!(deletes.len(), usize::from(merges), "{case}");
         if let Some((_, _, body)) = deletes.first() {
             assert_eq!(
-                body["variables"]["input"]["refUpdates"][0]["beforeOid"],
-                "merged-base"
+                body["variables"]["input"]["refUpdates"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
             );
             assert_eq!(
-                body["variables"]["input"]["refUpdates"][1]["beforeOid"],
+                body["variables"]["input"]["refUpdates"][0]["beforeOid"],
                 "new-commit"
             );
         }

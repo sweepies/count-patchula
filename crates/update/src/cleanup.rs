@@ -47,7 +47,7 @@ pub async fn owned(client: &Client, repo: &str, head: &str, actor: &str) -> Resu
 }
 
 /// Inspect all heads, regardless of naming, and remove obsolete owned branches
-/// with an atomic head/base lease. Dry runs deliberately perform no API requests.
+/// with a lease on the branch head. Dry runs deliberately perform no API requests.
 pub async fn cleanup(
     client: &Client,
     repo: &str,
@@ -99,7 +99,7 @@ pub async fn cleanup(
         if !owned(client, repo, head, actor).await? {
             continue;
         }
-        delete_owned(client, node, default_branch, base, name, head).await?;
+        delete_owned(client, node, default_branch, name, head).await?;
         actions.push(BranchAction {
             repository: repo.into(),
             branch: name.into(),
@@ -121,7 +121,6 @@ pub async fn delete_owned(
     client: &Client,
     node: &str,
     default_branch: &str,
-    base: &str,
     branch: &str,
     head: &str,
 ) -> Result<(), String> {
@@ -129,7 +128,6 @@ pub async fn delete_owned(
         return Err("refusing to delete default branch".into());
     }
     let result = client.graphql(REF_UPDATE, json!({"input":{"repositoryId":node,"refUpdates":[
-        {"name":format!("refs/heads/{default_branch}"),"beforeOid":base,"afterOid":base,"force":false},
         {"name":format!("refs/heads/{branch}"),"beforeOid":head,"afterOid":"0000000000000000000000000000000000000000","force":true}
     ]}})).await.map_err(|e| e.to_string())?;
     if !result["updateRefs"].is_object() {

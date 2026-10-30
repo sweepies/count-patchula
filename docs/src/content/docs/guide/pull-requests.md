@@ -27,8 +27,10 @@ added to tell them apart.
 
 Every branch holds exactly one commit on top of its base, created through the
 GitHub API so GitHub signs it. Updating a branch replaces that commit. Writes
-use atomic ref leases on both the base and the branch, so a concurrent push
-makes the write fail instead of overwriting someone's work. A branch carrying
+use an atomic ref lease on the branch, so a concurrent push makes the write
+fail instead of overwriting someone's work. The base is checked when it is
+read, not leased: a branch left behind by a base that moves in between is
+rebased on the next run. A branch carrying
 commits that are not the Count's own verified commits is protected: he will not
 rebase it, update it or delete it.
 
@@ -67,8 +69,8 @@ it to undo. The [dashboard](/guide/dashboard/) lists closed targets with a box t
 recreate one.
 
 When an update is no longer needed (merged elsewhere, dependency removed,
-target superseded), its branch and PR are closed and deleted, with a lease so
-nothing unfamiliar is lost. Cleanup is skipped entirely in a run that reported
+target superseded), its branch and PR are closed and deleted, with a lease on
+the branch head so nothing unfamiliar is lost. Cleanup is skipped entirely in a run that reported
 warnings, so a file that failed to parse never makes its updates look obsolete.
 
 ## Limits and holds

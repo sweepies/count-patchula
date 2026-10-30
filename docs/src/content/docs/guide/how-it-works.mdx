@@ -27,8 +27,8 @@ One process takes a whole batch of repositories. A run goes like this:
    limits. Updates that share a group, or a lockfile, land on one branch.
 5. For each branch the Count edits the exact bytes of each
    declaration, runs the lockfile tool in a scratch tree when one is needed,
-   and creates a single commit through the API, which GitHub signs. Atomic ref
-   leases guard the base and the branch, and branches holding anyone else's
+   and creates a single commit through the API, which GitHub signs. An atomic ref
+   lease guards the branch, and branches holding anyone else's
    commits are left alone.
 6. A receipt records what was written. On the next run a matching
    receipt skips verification, tooling and PR reconciliation. An unchanged

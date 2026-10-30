@@ -203,8 +203,10 @@ pub async fn apply_all(
         .collect::<Vec<_>>()
         .await;
     if let Ok(base) = &base {
-        // Bound each atomic mutation to fifty refs, including the base lease.
-        for chunk in plans.chunks_mut(49) {
+        // Bound each atomic mutation to fifty branch refs. The default branch is
+        // never named: rulesets that require pull requests reject even a no-op
+        // update of it.
+        for chunk in plans.chunks_mut(50) {
             let eligible = |p: &Plan| {
                 pending.contains(&p.action.branch)
                     && matches!(
@@ -212,13 +214,11 @@ pub async fn apply_all(
                         ActionStatus::Created | ActionStatus::Updated | ActionStatus::Rebased
                     )
             };
-            let mut refs = vec![
-                json!({"name":format!("refs/heads/{}",base.default_branch),"beforeOid":base.commit,"afterOid":base.commit,"force":false}),
-            ];
+            let mut refs = Vec::new();
             for p in chunk.iter().filter(|p| eligible(p)) {
                 refs.push(json!({"name":format!("refs/heads/{}",p.action.branch),"beforeOid":p.action.previous_commit.as_deref().unwrap_or("0000000000000000000000000000000000000000"),"afterOid":p.action.commit,"force":true}));
             }
-            if refs.len() == 1 {
+            if refs.is_empty() {
                 continue;
             }
             let result = client
@@ -474,7 +474,6 @@ async fn apply_inner(
     if publish_ref {
         let zero = "0000000000000000000000000000000000000000";
         let published = client.graphql(REF_UPDATE, json!({"input":{"repositoryId":node_id,"refUpdates":[
-        {"name":format!("refs/heads/{default_branch}"),"beforeOid":plan.action.base_commit,"afterOid":plan.action.base_commit,"force":false},
         {"name":format!("refs/heads/{}",plan.action.branch),"beforeOid":old.as_deref().unwrap_or(zero),"afterOid":sha,"force":true}
     ]}})).await.map_err(|e| format!("atomic ref lease failed; branch may have changed, rerun: {e}"))?;
         if !published["updateRefs"].is_object() {
