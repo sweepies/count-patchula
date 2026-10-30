@@ -229,6 +229,7 @@ mod tests {
             release_notes: true,
             body_notes: Vec::new(),
             advisories: Vec::new(),
+            image: None,
         }
     }
     fn pr(number: u64, branch: &str, body: String) -> Value {

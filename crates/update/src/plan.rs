@@ -53,6 +53,9 @@ pub struct Change {
     /// Advisories affecting the current version that this change leaves behind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub advisories: Vec<patchula_report::Advisory>,
+    /// The image SBOM comparison, for a pinned image's new digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<patchula_report::ImageCheck>,
 }
 pub(crate) fn hash(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -379,6 +382,7 @@ fn build(
                     .filter(|a| u.fixes.contains(&a.id))
                     .cloned()
                     .collect(),
+                image: u.image.clone(),
             }
         })
         .collect();
@@ -683,6 +687,7 @@ pub fn batch_plan(
                 policy: None,
                 release_age: None,
                 fixes: Vec::new(),
+                image: None,
             },
         ));
     }

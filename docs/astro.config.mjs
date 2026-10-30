@@ -178,6 +178,7 @@ export default defineConfig({
             { label: "Engine", slug: "internals/engine" },
             { label: "SQLite cache", slug: "internals/cache" },
             { label: "GitHub client", slug: "internals/github-client" },
+            { label: "Image SBOM advisories", slug: "internals/image-sboms" },
             { label: "HTTP fixtures", slug: "internals/http-testing" },
           ],
         },

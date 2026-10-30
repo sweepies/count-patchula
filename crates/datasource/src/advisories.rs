@@ -148,6 +148,8 @@ impl From<Record> for Advisory {
 struct Batch {
     results: Vec<BatchResult>,
 }
+/// Advisory IDs and modification times per query, before their records.
+pub type AdvisoryListing = BTreeMap<AdvisoryQuery, Vec<(String, String)>>;
 #[derive(Deserialize)]
 struct BatchResult {
     #[serde(default)]
@@ -174,6 +176,16 @@ impl Client {
         &self,
         queries: &BTreeSet<AdvisoryQuery>,
     ) -> Result<BTreeMap<AdvisoryQuery, Vec<Arc<Advisory>>>> {
+        let listing = self.advisory_listing(queries).await?;
+        self.advisory_records(&listing, |_| true).await
+    }
+
+    /// The IDs and modification times of the advisories OSV lists for each
+    /// queried version, from batched queries alone.
+    pub async fn advisory_listing(
+        &self,
+        queries: &BTreeSet<AdvisoryQuery>,
+    ) -> Result<AdvisoryListing> {
         let mut listed = BTreeMap::<&AdvisoryQuery, Vec<Listed>>::new();
         let mut pending: Vec<(&AdvisoryQuery, Option<String>)> =
             queries.iter().map(|q| (q, None)).collect();
@@ -214,10 +226,32 @@ impl Client {
             }
             pending = next;
         }
-        let wanted: BTreeMap<String, String> = listed
+        Ok(queries
+            .iter()
+            .map(|query| {
+                let ids = listed
+                    .remove(query)
+                    .into_iter()
+                    .flatten()
+                    .map(|l| (l.id, l.modified))
+                    .collect();
+                (query.clone(), ids)
+            })
+            .collect())
+    }
+
+    /// The records of a listing's advisories that `wanted` selects, read from
+    /// the cache unless OSV says they changed. Withdrawn ones are left out.
+    pub async fn advisory_records(
+        &self,
+        listing: &AdvisoryListing,
+        wanted: impl Fn(&str) -> bool,
+    ) -> Result<BTreeMap<AdvisoryQuery, Vec<Arc<Advisory>>>> {
+        let wanted: BTreeMap<String, String> = listing
             .values()
             .flatten()
-            .map(|l| (l.id.clone(), l.modified.clone()))
+            .filter(|(id, _)| wanted(id))
+            .cloned()
             .collect();
         let records: BTreeMap<String, Option<Arc<Advisory>>> = stream::iter(wanted)
             .map(|(id, modified)| async move {
@@ -229,14 +263,12 @@ impl Client {
             .await
             .into_iter()
             .collect::<Result<_>>()?;
-        Ok(queries
+        Ok(listing
             .iter()
-            .map(|query| {
-                let mut found: Vec<_> = listed
-                    .get(query)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|l| records.get(l.id.as_str()).cloned().flatten())
+            .map(|(query, ids)| {
+                let mut found: Vec<_> = ids
+                    .iter()
+                    .filter_map(|(id, _)| records.get(id.as_str()).cloned().flatten())
                     .collect();
                 found.sort_by(|a, b| a.id.cmp(&b.id));
                 found.dedup_by(|a, b| a.id == b.id);

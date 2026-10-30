@@ -104,6 +104,16 @@ struct Host {
 }
 type Coalesced = Arc<tokio::sync::Mutex<Option<(Instant, Response)>>>;
 type Derive = fn(&[u8]) -> Result<Vec<u8>, Error>;
+/// How long a digest-addressed registry document stays fresh: ten years, so
+/// only the cache's size budget evicts it.
+const IMMUTABLE_SECS: u64 = 10 * 365 * 24 * 3600;
+/// How long a registry's 404 for a digest or a cosign tag is kept.
+const MISSING_SECS: i64 = 24 * 3600;
+
+/// A manifest or blob addressed by digest, which never changes.
+fn immutable(url: &Url) -> bool {
+    url.path().contains("/manifests/sha256:") || url.path().contains("/blobs/sha256:")
+}
 #[derive(Clone)]
 pub struct Cached(Arc<Inner>, bool);
 impl Cached {
@@ -486,7 +496,9 @@ impl Cached {
         let ttl = cached
             .as_ref()
             .and_then(|entry| {
-                let floor = if registry.is_some()
+                let floor = if registry.is_some() && immutable(&url) {
+                    IMMUTABLE_SECS
+                } else if registry.is_some()
                     && url.path().ends_with("/tags/list")
                     && entry.etag.is_none()
                     && entry.last_modified.is_none()
@@ -527,6 +539,9 @@ impl Cached {
             && !self.1
         {
             self.0.cache_hits.fetch_add(1, Ordering::Relaxed);
+            if entry.status == 404 {
+                return Err(Error::Status(404));
+            }
             let mut headers = header::HeaderMap::new();
             for (name, value) in &entry.headers {
                 headers.insert(
@@ -723,6 +738,29 @@ impl Cached {
             return Ok(response);
         }
         if !response.status.is_success() {
+            // A digest or cosign tag the registry lacks is asked about again
+            // a day later, not on every run.
+            if response.status == StatusCode::NOT_FOUND
+                && registry.is_some()
+                && (immutable(&url) || [".att", ".sbom"].iter().any(|s| url.path().ends_with(s)))
+            {
+                self.0
+                    .cache
+                    .http_put(
+                        &key,
+                        &HttpEntry {
+                            status: 404,
+                            etag: None,
+                            last_modified: None,
+                            headers: BTreeMap::new(),
+                            body: Vec::new(),
+                            fetched_at: now,
+                            expires_at: Some(now.saturating_add(MISSING_SECS)),
+                            cache_control: None,
+                        },
+                    )
+                    .await?;
+            }
             return Err(Error::Status(response.status.as_u16()));
         }
         if !not_modified && let Some((_, derive)) = derived {
@@ -749,16 +787,19 @@ impl Cached {
                 .map(str::to_owned)
         };
         let control = text("cache-control");
-        let uncacheable = control.as_ref().is_some_and(|c| {
-            c.split(',')
-                .any(|v| v.trim().eq_ignore_ascii_case("no-store"))
-        }) || text("vary").is_some_and(|v| {
-            v.split(',').any(|n| {
-                !["accept", "accept-encoding", "user-agent"]
-                    .iter()
-                    .any(|known| n.trim().eq_ignore_ascii_case(known))
-            })
-        });
+        // Bytes addressed by their digest are the same for everyone, so a
+        // registry's no-store or Vary cannot make them private.
+        let uncacheable = !(registry.is_some() && immutable(&url))
+            && (control.as_ref().is_some_and(|c| {
+                c.split(',')
+                    .any(|v| v.trim().eq_ignore_ascii_case("no-store"))
+            }) || text("vary").is_some_and(|v| {
+                v.split(',').any(|n| {
+                    !["accept", "accept-encoding", "user-agent"]
+                        .iter()
+                        .any(|known| n.trim().eq_ignore_ascii_case(known))
+                })
+            }));
         if uncacheable {
             self.0.cache.http_remove(&key).await?;
         } else {

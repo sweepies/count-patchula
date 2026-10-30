@@ -1241,6 +1241,7 @@ async fn real_cargo_and_go_targeted_updates_retain_the_selected_manifest_and_loc
             release_notes: false,
             body_notes: Vec::new(),
             advisories: Vec::new(),
+            image: None,
         });
         runner.prepare(&mut p, &mut snapshot, &config).await;
         assert_eq!(
@@ -1282,6 +1283,7 @@ fn provider_lock_drift_is_rejected_before_publication() {
         release_notes: false,
         body_notes: Vec::new(),
         advisories: Vec::new(),
+        image: None,
     });
     assert!(
         validate_targets(&p, &config, &files)
@@ -1479,6 +1481,7 @@ fn npm_change(value: &str) -> crate::plan::Change {
         release_notes: false,
         body_notes: Vec::new(),
         advisories: Vec::new(),
+        image: None,
     }
 }
 
@@ -1870,6 +1873,7 @@ fn chart_updates_with_a_committed_chart_lock_are_pending() {
         policy: None,
         release_age: None,
         fixes: Vec::new(),
+        image: None,
     };
     let unlocked = snapshot(&BTreeMap::from([("Chart.yaml".into(), chart.into())]));
     assert!(matches!(job(&deps[0], &update, &unlocked), Ok(None)));

@@ -239,6 +239,17 @@ class Security {
   /// `channel` would hold it back. `active` and the release-age wait from
   /// `apply` still count.
   lowestFix: Boolean = true
+  /// Compare the OS packages in a pinned image's old and new SBOMs through
+  /// OSV.dev, and mark a digest change that leaves an advisory behind as a
+  /// security update. Needs `advisories`.
+  images: Boolean = true
+  /// Image platforms compared, where both digests have them. An image with
+  /// none of them is compared on the first platform its index lists.
+  imagePlatforms: Listing<String> = new { "linux/amd64" }
+  /// Images whose "can't tell" warning is left off PRs, each with the reason.
+  /// Keys use the dependency pattern syntax. The dashboard lists them under
+  /// "Silenced".
+  quietImages: Mapping<String, String> = new {}
 }
 
 /// All first-release managers are selected unless a repository replaces this list.

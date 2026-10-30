@@ -150,6 +150,14 @@ See [reference data](/guide/configuration/#reference-data).
 
 See [security advisories](/guide/security/).
 
+### Image rebuild advisories {#image-advisories}
+
+- **Renovate:** Vulnerability alerts cover package ecosystems, not the OS packages inside an image
+- **The Count:** Compares a pinned image's old and new SBOMs through OSV.dev; a rebuild that leaves an advisory behind is a security update
+- **Why:** Rebuilds of a pinned tag are mostly OS security fixes, which otherwise look like any other digest change
+
+See [container image rebuilds](/guide/security/#container-image-rebuilds).
+
 ## Lockfiles
 
 ### aube for npm and pnpm {#node-lockfile-engine}

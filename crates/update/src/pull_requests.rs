@@ -849,6 +849,7 @@ impl Lifecycle {
 
     fn body_intent(&self, plan: &Plan) -> (String, String) {
         let mut text = security_section(&plan.changes);
+        text.push_str(&image_section(&plan.changes));
         text.push_str("| Package | Change | Type | File |\n| --- | --- | --- | --- |\n");
         if plan.maintenance {
             text.push_str(&format!(
@@ -1045,7 +1046,7 @@ impl Lifecycle {
 /// Advisories the changes leave behind, ahead of everything else in the body.
 fn security_section(changes: &[crate::Change]) -> String {
     let mut rows = BTreeSet::new();
-    for change in changes {
+    for change in changes.iter().filter(|c| c.image.is_none()) {
         for advisory in &change.advisories {
             let cves: Vec<_> = advisory
                 .aliases
@@ -1080,6 +1081,219 @@ fn security_section(changes: &[crate::Change]) -> String {
         append(&mut text, &row, 6_000);
     }
     text.push('\n');
+    text
+}
+/// What the Count found comparing each rebuilt image's old and new SBOMs:
+/// the advisories fixed, then one line per image he can't vouch for, then
+/// plain notes.
+fn image_section(changes: &[crate::Change]) -> String {
+    let mut rows = Vec::new();
+    let mut listed = BTreeSet::new();
+    let mut fixed_ids = BTreeSet::new();
+    let mut brings_in = Vec::new();
+    let mut brings_in_listed = BTreeSet::new();
+    let mut warnings = BTreeSet::new();
+    let mut notes = BTreeSet::new();
+    for change in changes {
+        let Some(check) = &change.image else {
+            continue;
+        };
+        let image = format!("`{}`", cell(&change.package));
+        let order = patchula_lookup::images::most_severe(check.fixed.iter().map(|f| f.id.as_str()));
+        for id in order {
+            fixed_ids.insert(id.to_owned());
+            let Some(advisory) = change.advisories.iter().find(|a| a.id == id) else {
+                listed.insert(id.to_owned());
+                continue;
+            };
+            for fixed in check.fixed.iter().filter(|f| f.id == id) {
+                let row = format!(
+                    "| [{}]({}) | {} | {} | {} | {} | {} |\n",
+                    cell(&fixed.id),
+                    safe(&advisory.url),
+                    cell(advisory.severity.as_deref().unwrap_or("unrated")),
+                    cell(&fixed.package),
+                    cell(&fixed.old),
+                    cell(fixed.new.as_deref().unwrap_or("removed")),
+                    cell(&fixed.platforms.join(", ")),
+                );
+                if !rows.contains(&row) {
+                    rows.push(row);
+                }
+            }
+        }
+        for id in &check.introduced {
+            match check.introduced_details.iter().find(|a| &a.id == id) {
+                Some(advisory) => {
+                    let shown = format!(
+                        "[{}]({}) ({})",
+                        cell(id),
+                        safe(&advisory.url),
+                        cell(advisory.severity.as_deref().unwrap_or("unrated"))
+                    );
+                    if !brings_in.contains(&shown) {
+                        brings_in.push(shown);
+                    }
+                }
+                None => {
+                    brings_in_listed.insert(id.clone());
+                }
+            }
+        }
+        let previous = change
+            .current
+            .split_once('@')
+            .map(|(_, digest)| digest.chars().take(14).collect::<String>())
+            .unwrap_or_default();
+        let warning = match check.state.as_str() {
+            "no-sbom" => format!(
+                "{image} publishes no SBOM for this image, and the Count doesn't open up image layers to look for himself. Treat it as an ordinary rebuild, or ask the publisher to attach an SBOM."
+            ),
+            "previous-unavailable" => format!(
+                "The previous {image} image (`{}…`) is no longer available from its registry, so he has nothing to compare the new one against. Some registries, quay.io among them, delete an image once its tag moves on.",
+                cell(&previous)
+            ),
+            "sbom-without-os" => format!(
+                "The SBOM for {image} lists no OS packages, and it was made by `{}`, which doesn't look for them. The image may have none, or the SBOM may leave them out.",
+                cell(check.detail.as_deref().unwrap_or("an unknown tool"))
+            ),
+            "os-not-covered" => format!(
+                "{image} is built on {}, and OSV.dev has no advisories for it.",
+                cell(check.os.as_deref().unwrap_or("an OS"))
+            ),
+            _ => String::new(),
+        };
+        if !warning.is_empty() {
+            if check.silenced.is_none() {
+                warnings.insert(warning);
+            }
+            continue;
+        }
+        let note = match check.state.as_str() {
+            "no-os-packages" => format!(
+                "According to its SBOM, {image} has no OS packages, so there is nothing at the OS level for a rebuild to fix."
+            ),
+            "unreadable" => format!(
+                "The Count couldn't read {image}'s SBOM on this run ({}). He'll try again on the next run.",
+                cell(check.detail.as_deref().unwrap_or("no answer"))
+            ),
+            _ if !check.fixed.is_empty() => String::new(),
+            _ => format!(
+                "The Count compared {image}'s old and new package lists. OSV.dev knows of no vulnerability that the new one fixes."
+            ),
+        };
+        if !note.is_empty() {
+            notes.insert(note);
+        }
+        if check.state == "partial-sources" {
+            notes.insert(format!(
+                "{image}'s SBOM doesn't say which source package its {} OS packages come from, so the Count checked them under their own names. Advisories filed under a different source name may be missing.",
+                check.packages
+            ));
+        }
+    }
+    let mut text = String::new();
+    if !rows.is_empty() {
+        let verified = fixed_ids.len() - listed.len();
+        text.push_str(&if listed.is_empty() {
+            format!(
+                "> [!IMPORTANT]\n> This rebuild fixes {verified} known vulnerabilit{} in the image's OS packages, according to OSV.dev. The Count does not care for anyone else drawing blood.\n\n",
+                if verified == 1 { "y" } else { "ies" }
+            )
+        } else {
+            format!(
+                "> [!IMPORTANT]\n> This rebuild fixes known vulnerabilities in the image's OS packages. The Count read OSV.dev's record for the {verified} below, and OSV.dev lists {} more that the new image no longer has. The Count does not care for anyone else drawing blood.\n\n",
+                listed.len()
+            )
+        });
+        text.push_str("| Advisory | Severity | Package | Old | New | Platforms |\n| --- | --- | --- | --- | --- | --- |\n");
+        for row in &rows {
+            append(&mut text, row, 8_000);
+        }
+        if !listed.is_empty() {
+            append(
+                &mut text,
+                &format!(
+                    "\nAnd {} more listed by OSV: {}.\n",
+                    listed.len(),
+                    id_links(&listed, 3_000)
+                ),
+                11_000,
+            );
+        }
+        let mut introduced = brings_in;
+        if !brings_in_listed.is_empty() {
+            let links = id_links(&brings_in_listed, 1_500);
+            introduced.push(if introduced.is_empty() {
+                format!(
+                    "{} advisor{} listed by OSV: {links}",
+                    brings_in_listed.len(),
+                    if brings_in_listed.len() == 1 {
+                        "y"
+                    } else {
+                        "ies"
+                    }
+                )
+            } else {
+                format!("and {} more listed by OSV: {links}", brings_in_listed.len())
+            });
+        }
+        if !introduced.is_empty() {
+            append(
+                &mut text,
+                &format!(
+                    "\nThe new image also brings in {}.\n",
+                    introduced.join("; ")
+                ),
+                13_000,
+            );
+        }
+        text.push('\n');
+    } else if !listed.is_empty() {
+        append(
+            &mut text,
+            &format!(
+                "OSV.dev lists {} advisor{} that the new image no longer has, but the Count read no record that confirms one, so he doesn't count this rebuild as a security fix: {}.\n\n",
+                listed.len(),
+                if listed.len() == 1 { "y" } else { "ies" },
+                id_links(&listed, 3_000)
+            ),
+            11_000,
+        );
+    }
+    if !warnings.is_empty() {
+        text.push_str(
+            "> [!WARNING]\n> **The Count can't tell whether this rebuild fixes any vulnerabilities.**\n",
+        );
+        for warning in warnings {
+            append(&mut text, &format!(">\n> {warning}\n"), 11_000);
+        }
+        text.push('\n');
+    }
+    for note in notes {
+        append(&mut text, &format!("{note}\n\n"), 12_000);
+    }
+    text
+}
+/// Advisory IDs as osv.dev links, as many as fit in `budget` bytes, with a
+/// count of the rest.
+fn id_links(ids: &BTreeSet<String>, budget: usize) -> String {
+    let ordered = patchula_lookup::images::most_severe(ids.iter().map(String::as_str));
+    let mut links = Vec::new();
+    let mut length = 0;
+    for id in &ordered {
+        let link = format!("[{}](https://osv.dev/vulnerability/{})", cell(id), safe(id));
+        if length + link.len() > budget {
+            break;
+        }
+        length += link.len() + 2;
+        links.push(link);
+    }
+    let rest = ordered.len() - links.len();
+    let mut text = links.join(", ");
+    if rest > 0 {
+        text.push_str(&format!(" and {rest} not listed here"));
+    }
     text
 }
 fn truncate(text: &str, limit: usize) -> String {
@@ -1132,6 +1346,7 @@ mod security_tests {
             release_notes: true,
             body_notes: Vec::new(),
             advisories: vec![advisory],
+            image: None,
         };
         let mut other = change.clone();
         other.file = "web/package.json".into();
@@ -1141,5 +1356,192 @@ mod security_tests {
         let mut plain = change;
         plain.advisories.clear();
         assert!(security_section(&[plain]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::image_section;
+    use patchula_report::{ImageAdvisory, ImageCheck};
+
+    fn change(package: &str, check: ImageCheck) -> crate::Change {
+        crate::Change {
+            source: "docker".into(),
+            package: package.into(),
+            file: "Dockerfile".into(),
+            current: format!("1.0@sha256:{}", "4c49fc0".repeat(9)),
+            current_version: None,
+            value: Some("1.0".into()),
+            version: Some("1.0".into()),
+            digest: Some(format!("sha256:{}", "b".repeat(64))),
+            kind: "digest".into(),
+            merge: false,
+            labels: Vec::new(),
+            release_notes: true,
+            body_notes: Vec::new(),
+            advisories: Vec::new(),
+            image: Some(check),
+        }
+    }
+    fn state(state: &str) -> ImageCheck {
+        ImageCheck {
+            state: state.into(),
+            ..ImageCheck::default()
+        }
+    }
+
+    #[test]
+    fn a_fixing_rebuild_lists_its_advisories_with_old_and_new_versions() {
+        let mut check = state("checked");
+        check.fixed = vec![
+            ImageAdvisory {
+                id: "DSA-1".into(),
+                package: "openssl".into(),
+                old: "3.0.1".into(),
+                new: Some("3.0.2".into()),
+                platforms: vec!["linux/amd64".into(), "linux/arm64".into()],
+            },
+            ImageAdvisory {
+                id: "DSA-2".into(),
+                package: "perl".into(),
+                old: "5.36".into(),
+                new: None,
+                platforms: vec!["linux/amd64".into()],
+            },
+        ];
+        check.introduced = vec!["DSA-3".into()];
+        let mut fixing = change("debian", check);
+        fixing.advisories = vec![
+            serde_json::from_value(serde_json::json!({
+                "id": "DSA-1", "severity": "high", "url": "https://osv.dev/vulnerability/DSA-1"
+            }))
+            .unwrap(),
+        ];
+        let text = image_section(&[fixing]);
+        assert!(text.starts_with("> [!IMPORTANT]\n> This rebuild fixes known vulnerabilities in the image's OS packages. The Count read OSV.dev's record for the 1 below, and OSV.dev lists 1 more that the new image no longer has."), "{text}");
+        assert!(text.contains("| [DSA-1](https://osv.dev/vulnerability/DSA-1) | high | openssl | 3.0.1 | 3.0.2 | linux/amd64, linux/arm64 |\n"), "{text}");
+        assert!(
+            text.contains(
+                "\nAnd 1 more listed by OSV: [DSA-2](https://osv.dev/vulnerability/DSA-2).\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("The new image also brings in 1 advisory listed by OSV: [DSA-3](https://osv.dev/vulnerability/DSA-3).\n"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("OSV.dev knows of no vulnerability"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn only_advisories_with_a_record_get_a_row_and_the_rest_are_counted_ids() {
+        let advisory = |id: &str, severity: &str| -> patchula_report::Advisory {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "severity": severity, "url": format!("https://osv.dev/vulnerability/{id}")
+            }))
+            .unwrap()
+        };
+        let mut check = state("checked");
+        check.fixed = (1..=8)
+            .map(|n| ImageAdvisory {
+                id: format!("DEBIAN-CVE-2025-{n}"),
+                package: "openssl".into(),
+                old: "3.0.1".into(),
+                new: Some("3.0.2".into()),
+                platforms: vec!["linux/amd64".into()],
+            })
+            .collect();
+        check.introduced = vec!["USN-9-1".into(), "UBUNTU-CVE-2025-7".into()];
+        check.introduced_details = vec![advisory("USN-9-1", "moderate")];
+        let mut fixing = change("debian", check);
+        fixing.advisories = (4..=8)
+            .map(|n| advisory(&format!("DEBIAN-CVE-2025-{n}"), "high"))
+            .collect();
+        let text = image_section(&[fixing]);
+        assert!(
+            text.contains(
+                "The Count read OSV.dev's record for the 5 below, and OSV.dev lists 3 more"
+            ),
+            "{text}"
+        );
+        assert_eq!(text.matches("| high | openssl |").count(), 5, "{text}");
+        assert!(
+            text.find("[DEBIAN-CVE-2025-8]").unwrap() < text.find("[DEBIAN-CVE-2025-4]").unwrap(),
+            "{text}"
+        );
+        assert!(text.contains("\nAnd 3 more listed by OSV: [DEBIAN-CVE-2025-3](https://osv.dev/vulnerability/DEBIAN-CVE-2025-3), [DEBIAN-CVE-2025-2](https://osv.dev/vulnerability/DEBIAN-CVE-2025-2), [DEBIAN-CVE-2025-1](https://osv.dev/vulnerability/DEBIAN-CVE-2025-1).\n"), "{text}");
+        assert!(text.contains("The new image also brings in [USN-9-1](https://osv.dev/vulnerability/USN-9-1) (moderate); and 1 more listed by OSV: [UBUNTU-CVE-2025-7](https://osv.dev/vulnerability/UBUNTU-CVE-2025-7).\n"), "{text}");
+    }
+
+    #[test]
+    fn a_rebuild_with_no_verified_record_claims_no_fix() {
+        let mut check = state("checked");
+        check.fixed = vec![ImageAdvisory {
+            id: "DSA-7".into(),
+            package: "openssl".into(),
+            old: "3.0.1".into(),
+            new: Some("3.0.2".into()),
+            platforms: vec!["linux/amd64".into()],
+        }];
+        let text = image_section(&[change("debian", check)]);
+        assert!(!text.contains("[!IMPORTANT]"), "{text}");
+        assert!(text.contains("OSV.dev lists 1 advisory that the new image no longer has, but the Count read no record that confirms one, so he doesn't count this rebuild as a security fix: [DSA-7](https://osv.dev/vulnerability/DSA-7)."), "{text}");
+    }
+
+    #[test]
+    fn each_image_gets_its_own_line_and_silenced_warnings_are_left_off() {
+        let mut ko = state("sbom-without-os");
+        ko.detail = Some("ko".into());
+        let mut silenced = state("no-sbom");
+        silenced.silenced = Some("scanned in CI".into());
+        let mut partial = state("partial-sources");
+        partial.packages = 131;
+        let mut unreadable = state("unreadable");
+        unreadable.detail = Some("registry rate limit reached; retry after 60 seconds".into());
+        let mut oracle = state("os-not-covered");
+        oracle.os = Some("ol 9".into());
+        let text = image_section(&[
+            change("quay.io/argoproj/argocd", state("no-sbom")),
+            change("ghcr.io/acme/api", ko),
+            change("ghcr.io/acme/internal", silenced),
+            change("debian", partial),
+            change("mysql", oracle),
+            change("ghcr.io/astral-sh/uv", state("no-os-packages")),
+            change("quay.io/old", state("previous-unavailable")),
+            change("alpine", unreadable),
+        ]);
+        assert_eq!(text.matches("[!WARNING]").count(), 1, "{text}");
+        assert!(
+            text.contains("> `quay.io/argoproj/argocd` publishes no SBOM for this image"),
+            "{text}"
+        );
+        assert!(
+            text.contains("made by `ko`, which doesn't look for them"),
+            "{text}"
+        );
+        assert!(
+            text.contains("> `mysql` is built on ol 9, and OSV.dev has no advisories for it."),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "The previous `quay.io/old` image (`sha256:4c49fc0…`) is no longer available"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("internal"), "{text}");
+        assert!(
+            text.contains("The Count compared `debian`'s old and new package lists."),
+            "{text}"
+        );
+        assert!(text.contains("its 131 OS packages come from"), "{text}");
+        assert!(
+            text.contains("According to its SBOM, `ghcr.io/astral-sh/uv` has no OS packages"),
+            "{text}"
+        );
+        assert!(text.contains("The Count couldn't read `alpine`'s SBOM on this run (registry rate limit reached; retry after 60 seconds)."), "{text}");
     }
 }

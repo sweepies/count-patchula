@@ -868,3 +868,133 @@ async fn manifest_heads_have_separate_validators_and_fall_back_only_when_needed(
         assert!(steps.0.lock().unwrap().is_empty());
     }
 }
+
+fn sha(text: &str) -> String {
+    use sha2::Digest as _;
+    let hex: String = sha2::Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    format!("sha256:{hex}")
+}
+
+#[tokio::test]
+async fn a_cosign_attestation_for_another_subject_is_ignored_for_the_sbom_tag() {
+    let child = format!("sha256:{}", "c".repeat(64));
+    let index = format!(
+        r#"{{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"{child}","size":1,"platform":{{"os":"linux","architecture":"amd64"}}}}]}}"#
+    );
+    let digest = sha(&index);
+    let statement = serde_json::json!({
+        "_type": "https://in-toto.io/Statement/v0.1",
+        "predicateType": "https://spdx.dev/Document",
+        "subject": [{"name": "other", "digest": {"sha256": "f".repeat(64)}}],
+        "predicate": {"spdxVersion": "SPDX-2.3", "creationInfo": {"creators": ["Tool: syft-v1.0.0"]}, "packages": []}
+    });
+    use base64::Engine as _;
+    let envelope = serde_json::json!({
+        "payloadType": "application/vnd.in-toto+json",
+        "payload": base64::engine::general_purpose::STANDARD.encode(statement.to_string()),
+        "signatures": []
+    })
+    .to_string();
+    let att = format!(
+        r#"{{"schemaVersion":2,"layers":[{{"mediaType":"application/vnd.dsse.envelope.v1+json","digest":"{}","size":1,"annotations":{{"predicateType":"https://spdx.dev/Document"}}}}]}}"#,
+        sha(&envelope)
+    );
+    let spdx = r#"{"spdxVersion":"SPDX-2.3","creationInfo":{"creators":["Tool: syft-v1.0.0"]},"packages":[{"name":"libssl3","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:deb/debian/libssl3@3.0.17-1~deb12u2?arch=amd64&distro=debian-12&upstream=openssl"}]}]}"#;
+    let sbom = format!(
+        r#"{{"schemaVersion":2,"layers":[{{"mediaType":"text/spdx+json","digest":"{}","size":1}}]}}"#,
+        sha(spdx)
+    );
+    let base = "https://ghcr.io/v2/spec/image";
+    let tag = |d: &str, suffix: &str| format!("{base}/manifests/{}{suffix}", d.replace(':', "-"));
+    let blob = |d: String| format!("{base}/blobs/{d}");
+    let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
+        (
+            format!("{base}/manifests/{digest}"),
+            response(200, &index, &[]),
+        ),
+        (tag(&child, ".att"), response(200, "", &[])),
+        (tag(&child, ".att"), response(200, &att, &[])),
+        (blob(sha(&envelope)), response(200, &envelope, &[])),
+        (tag(&digest, ".att"), response(404, "", &[])),
+        (tag(&child, ".sbom"), response(200, "", &[])),
+        (tag(&child, ".sbom"), response(200, &sbom, &[])),
+        (blob(sha(spdx)), response(200, spdx, &[])),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    let client = client(steps.clone(), dir.path()).await;
+    let found = client
+        .image_sbom("ghcr.io/spec/image", &digest, "linux/amd64")
+        .await
+        .unwrap();
+    let patchula_datasource::ImageSbom::Found(sbom) = found else {
+        panic!("{found:?}");
+    };
+    assert_eq!(sbom.source, patchula_datasource::SbomSource::CosignSbom);
+    assert_eq!(sbom.ecosystem.as_deref(), Some("Debian:12"));
+    assert!(
+        sbom.sources
+            .contains(&("openssl".into(), "3.0.17-1~deb12u2".into()))
+    );
+    assert!(steps.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_sbom_whose_bytes_do_not_match_its_digest_is_rejected() {
+    let child = format!("sha256:{}", "c".repeat(64));
+    let attestation = format!("sha256:{}", "d".repeat(64));
+    let index = format!(
+        r#"{{"manifests":[{{"digest":"{child}","platform":{{"os":"linux","architecture":"amd64"}}}},{{"digest":"{attestation}","platform":{{"os":"unknown","architecture":"unknown"}},"annotations":{{"vnd.docker.reference.type":"attestation-manifest","vnd.docker.reference.digest":"{child}"}}}}]}}"#
+    );
+    let digest = sha(&index);
+    let base = "https://ghcr.io/v2/spec/image";
+    let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
+        (
+            format!("{base}/manifests/{digest}"),
+            response(200, &index, &[]),
+        ),
+        (
+            format!("{base}/manifests/{attestation}"),
+            response(200, "{}", &[]),
+        ),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    let client = client(steps, dir.path()).await;
+    let error = client
+        .image_sbom("ghcr.io/spec/image", &digest, "linux/amd64")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, patchula_datasource::Error::Invalid),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn an_official_image_the_mirror_lacks_is_read_from_docker_hub() {
+    let index = r#"{"manifests":[{"digest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","platform":{"os":"linux","architecture":"s390x"}}]}"#;
+    let digest = sha(index);
+    let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
+        (
+            format!("https://mirror.gcr.io/v2/library/debian/manifests/{digest}"),
+            response(404, "", &[]),
+        ),
+        (
+            format!("https://registry-1.docker.io/v2/library/debian/manifests/{digest}"),
+            response(200, index, &[]),
+        ),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    let client = client(steps.clone(), dir.path()).await;
+    let found = client
+        .image_sbom("library/debian", &digest, "linux/amd64")
+        .await
+        .unwrap();
+    assert_eq!(
+        found,
+        patchula_datasource::ImageSbom::NoPlatform(Some("linux/s390x".into()))
+    );
+    assert!(steps.0.lock().unwrap().is_empty());
+}

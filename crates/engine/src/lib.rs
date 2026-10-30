@@ -1293,6 +1293,215 @@ impl Engine {
         let digest_time = micros(started);
         drop(phase);
         let started = Instant::now();
+        let phase = PhaseTrace::new("image");
+        let images_on = |config: &patchula_config::Config| {
+            self.advisories && config.security.advisories && config.security.images
+        };
+        // Every pinned image's current digest is read, so the dashboard shows a
+        // gap before the first rebuild; OSV is asked only about replacements.
+        let mut image_reads = BTreeSet::new();
+        let mut image_pairs = BTreeSet::new();
+        let mut image_replacements = BTreeSet::new();
+        let mut image_platforms = BTreeSet::new();
+        let mut image_deps = Vec::new();
+        for ((repo, eval), deps) in work.iter().zip(&evaluators).zip(&proposals) {
+            let (Some(eval), Some(config)) = (eval, &repo.config) else {
+                continue;
+            };
+            if !images_on(config) {
+                continue;
+            }
+            for (dep, evaluation) in repo.dependencies.iter().zip(deps) {
+                let Some(old) = dep.digest.as_ref() else {
+                    continue;
+                };
+                if !matches!(dep.source, Source::Docker | Source::Oci) || eval.ignored(dep) {
+                    continue;
+                }
+                let current = image_digests
+                    .get(&(dep.package.clone(), dep.current.clone()))
+                    .and_then(|r| r.as_ref().ok())
+                    .filter(|new| eval.digest_proposal(dep, new).is_some());
+                let tagged = evaluation
+                    .updates
+                    .iter()
+                    .filter(|p| eval.needs_digest(dep, p))
+                    .filter_map(|p| p.new_version.clone())
+                    .filter_map(|tag| image_digests.get(&(dep.package.clone(), tag)))
+                    .filter_map(|r| r.as_ref().ok());
+                let mut digests = vec![old.clone()];
+                for new in current.into_iter().chain(tagged).filter(|new| *new != old) {
+                    image_pairs.insert((dep.package.clone(), old.clone()));
+                    image_pairs.insert((dep.package.clone(), new.clone()));
+                    image_replacements.insert((dep.package.clone(), old.clone(), new.clone()));
+                    digests.push(new.clone());
+                }
+                image_platforms.extend(config.security.image_platforms.iter().cloned());
+                for digest in &digests {
+                    for platform in &config.security.image_platforms {
+                        image_reads.insert((dep.package.clone(), digest.clone(), platform.clone()));
+                    }
+                }
+                image_deps.push((
+                    dep.package.clone(),
+                    digests,
+                    &config.security.image_platforms,
+                ));
+            }
+        }
+        let read_sboms = |reads: BTreeSet<(String, String, String)>| {
+            stream::iter(reads)
+                .map(|(package, digest, platform)| async move {
+                    let result = self
+                        .sources
+                        .image_sbom(&package, &digest, &platform)
+                        .await
+                        .map_err(|e| e.to_string());
+                    ((package, digest, platform), result)
+                })
+                .buffer_unordered(16)
+                .collect::<BTreeMap<_, _>>()
+        };
+        let mut image_sboms = read_sboms(image_reads).await;
+        // An image with none of the configured platforms is read for the first
+        // platform its index lists, on every digest of the dependency.
+        let mut fallback_reads = BTreeSet::new();
+        for (package, digests, platforms) in &image_deps {
+            for digest in digests {
+                let side = platforms
+                    .iter()
+                    .filter_map(|platform| {
+                        let key = (package.clone(), digest.clone(), platform.clone());
+                        Some((platform.clone(), image_sboms.get(&key)?.clone()))
+                    })
+                    .collect();
+                let Some(platform) = patchula_lookup::images::fallback(&side) else {
+                    continue;
+                };
+                for digest in digests {
+                    let key = (package.clone(), digest.clone(), platform.clone());
+                    if !image_sboms.contains_key(&key) {
+                        fallback_reads.insert(key);
+                    }
+                }
+                image_platforms.insert(platform);
+            }
+        }
+        image_sboms.extend(read_sboms(fallback_reads).await);
+        let image_side = |package: &str, digest: &str, platforms: &[String]| {
+            platforms
+                .iter()
+                .filter_map(|platform| {
+                    let key = (package.to_owned(), digest.to_owned(), platform.clone());
+                    Some((platform.clone(), image_sboms.get(&key)?.clone()))
+                })
+                .collect::<patchula_lookup::images::Side>()
+        };
+        let image_queries: BTreeSet<_> = image_sboms
+            .iter()
+            .filter(|((package, digest, _), _)| {
+                image_pairs.contains(&(package.clone(), digest.clone()))
+            })
+            .filter_map(|(_, result)| match result {
+                Ok(patchula_datasource::ImageSbom::Found(sbom)) => Some(sbom.queries()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        // Only an advisory one side of a replacement has and the other lacks
+        // can be fixed or brought in, so only those records are read.
+        let listed_ids = |listing: &patchula_datasource::AdvisoryListing,
+                          package: &str,
+                          digest: &str,
+                          platform: &str| {
+            let key = (package.to_owned(), digest.to_owned(), platform.to_owned());
+            match image_sboms.get(&key) {
+                Some(Ok(patchula_datasource::ImageSbom::Found(sbom))) => sbom
+                    .queries()
+                    .iter()
+                    .filter_map(|q| listing.get(q))
+                    .flatten()
+                    .map(|(id, _)| id.clone())
+                    .collect(),
+                _ => BTreeSet::new(),
+            }
+        };
+        // Which advisories a rebuild leaves behind comes from the IDs alone, but
+        // only a record read in full marks it a security fix. The most severe
+        // few it fixes or brings in are read; when every fix read is
+        // withdrawn, the next ones are read in rank order until one isn't.
+        let read = async {
+            let listing = self.sources.advisory_listing(&image_queries).await?;
+            let mut fixes = Vec::new();
+            let mut wanted = BTreeSet::new();
+            for (package, old, new) in &image_replacements {
+                let (mut fixed, mut introduced) = (BTreeSet::new(), BTreeSet::new());
+                for platform in image_platforms.iter() {
+                    let before = listed_ids(&listing, package, old, platform);
+                    let after = listed_ids(&listing, package, new, platform);
+                    fixed.extend(before.difference(&after).cloned());
+                    introduced.extend(after.difference(&before).cloned());
+                }
+                let ranked = |ids: &BTreeSet<String>| -> Vec<String> {
+                    patchula_lookup::images::most_severe(ids.iter().map(String::as_str))
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect()
+                };
+                wanted.extend(
+                    ranked(&introduced)
+                        .into_iter()
+                        .take(patchula_lookup::images::SHOWN),
+                );
+                fixes.push(ranked(&fixed));
+            }
+            let mut found = patchula_lookup::images::Found::new();
+            let mut fetched = BTreeSet::<String>::new();
+            let mut verified = BTreeSet::<String>::new();
+            loop {
+                for ranked in &fixes {
+                    if ranked.iter().any(|id| verified.contains(id)) {
+                        continue;
+                    }
+                    wanted.extend(
+                        ranked
+                            .iter()
+                            .filter(|id| !fetched.contains(*id))
+                            .take(patchula_lookup::images::SHOWN)
+                            .cloned(),
+                    );
+                }
+                let batch: BTreeSet<String> = wanted.difference(&fetched).cloned().collect();
+                if batch.is_empty() {
+                    break;
+                }
+                let records = self
+                    .sources
+                    .advisory_records(&listing, |id| batch.contains(id))
+                    .await?;
+                for (query, advisories) in records {
+                    verified.extend(advisories.iter().map(|a| a.id.clone()));
+                    found.entry(query).or_default().extend(advisories);
+                }
+                fetched.extend(batch);
+            }
+            let mut listing = listing;
+            for ids in listing.values_mut() {
+                ids.retain(|(id, _)| !fetched.contains(id) || verified.contains(id));
+            }
+            Ok::<_, patchula_datasource::Error>((listing, found))
+        };
+        let ((image_listing, image_found), osv_failure) = if image_queries.is_empty() {
+            (Default::default(), None)
+        } else {
+            match read.await {
+                Ok(read) => (read, None),
+                Err(error) => (Default::default(), Some(format!("OSV.dev failed: {error}"))),
+            }
+        };
+        let image_time = micros(started);
+        drop(phase);
+        let started = Instant::now();
         let _phase = PhaseTrace::new("policy.report");
         for ((repo, eval), dep_proposals) in work.iter_mut().zip(&evaluators).zip(proposals) {
             let mut files: BTreeMap<String, Vec<ReportDependency>> = BTreeMap::new();
@@ -1382,6 +1591,84 @@ impl Engine {
                         }
                     }
                 }
+                let mut image_advisories = Vec::new();
+                let mut current_image = None;
+                if let (Some(eval), Some(config), Some(old)) = (eval, &repo.config, &dep.digest)
+                    && images_on(config)
+                    && matches!(dep.source, Source::Docker | Source::Oci)
+                    && !eval.ignored(dep)
+                {
+                    let configured = &config.security.image_platforms;
+                    let mut platforms = configured.clone();
+                    let digests = std::iter::once(old)
+                        .chain(proposals.iter().filter_map(|p| p.new_digest.as_ref()));
+                    for digest in digests {
+                        let side = image_side(&dep.package, digest, configured);
+                        if let Some(platform) = patchula_lookup::images::fallback(&side)
+                            && !platforms.contains(&platform)
+                        {
+                            platforms.push(platform);
+                        }
+                    }
+                    let platforms = &platforms;
+                    let before = image_side(&dep.package, old, platforms);
+                    let silenced = config
+                        .security
+                        .quiet_images
+                        .iter()
+                        .find(|(pattern, _)| {
+                            patchula_config::Patterns::compile(std::slice::from_ref(*pattern))
+                                .is_ok_and(|p| p.matches_any(&dep.package, &dep.name))
+                        })
+                        .map(|(_, reason)| reason.clone());
+                    let silence = |mut check: patchula_report::ImageCheck| {
+                        if patchula_lookup::images::warns(&check.state) {
+                            check.silenced = silenced.clone();
+                        }
+                        check
+                    };
+                    for proposal in &mut proposals {
+                        let Some(new) = proposal.new_digest.clone().filter(|new| new != old) else {
+                            continue;
+                        };
+                        let after = image_side(&dep.package, &new, platforms);
+                        let Some(mut check) = patchula_lookup::images::compare(
+                            (old, &before),
+                            (&new, &after),
+                            &image_listing,
+                        ) else {
+                            continue;
+                        };
+                        if let Some(failure) = &osv_failure
+                            && matches!(check.state.as_str(), "checked" | "partial-sources")
+                        {
+                            check.state = "unreadable".into();
+                            check.detail = Some(failure.clone());
+                        }
+                        let (verified, introduced) =
+                            patchula_lookup::images::advisories(&check, &image_found);
+                        if check.state != "unreadable" && !verified.is_empty() {
+                            proposal.fixes = check.fixed.iter().map(|f| f.id.clone()).collect();
+                            proposal.fixes.dedup();
+                            eval.secure(dep, proposal);
+                            let label = &config.security.label;
+                            if let Some(policy) = &mut proposal.policy
+                                && !label.is_empty()
+                                && !policy.labels.contains(label)
+                            {
+                                policy.labels.push(label.clone());
+                            }
+                            image_advisories.extend(verified);
+                        }
+                        if check.state != "unreadable" {
+                            check.introduced_details = introduced;
+                        }
+                        proposal.image = Some(silence(check));
+                    }
+                    current_image = patchula_lookup::images::image_state(&before).map(silence);
+                }
+                image_advisories.sort();
+                image_advisories.dedup();
                 let advisory = patchula_lookup::advisory_query(dep)
                     .and_then(|query| advisories.get(&query).map(|found| (query, found)))
                     .filter(|(_, found)| !found.is_empty());
@@ -1584,7 +1871,11 @@ impl Engine {
                             .map(|(query, found)| {
                                 patchula_lookup::report_advisories(dep, &query, found)
                             })
-                            .unwrap_or_default(),
+                            .unwrap_or_default()
+                            .into_iter()
+                            .chain(image_advisories)
+                            .collect(),
+                        image: current_image,
                     }),
                 };
                 files.entry(dep.file.clone()).or_default().push(value);
@@ -1627,6 +1918,7 @@ impl Engine {
                     ("lookup".into(), lookup_time),
                     ("policy".into(), policy_time),
                     ("digest".into(), digest_time),
+                    ("image".into(), image_time),
                     ("total".into(), micros(total)),
                 ]),
             }),

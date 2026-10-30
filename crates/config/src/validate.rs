@@ -174,6 +174,22 @@ impl Config {
             );
         }
         filter("security.apply.permitted", &self.security.apply.permitted)?;
+        for (i, platform) in self.security.image_platforms.iter().enumerate() {
+            let parts: Vec<_> = platform.split('/').collect();
+            if !(2..=3).contains(&parts.len()) || parts.iter().any(|p| p.is_empty()) {
+                return fail(
+                    &format!("security.imagePlatforms[{i}]"),
+                    "platform must be os/architecture or os/architecture/variant",
+                );
+            }
+        }
+        for (image, reason) in &self.security.quiet_images {
+            let field = format!("security.quietImages[{image}]");
+            pattern(&field, image)?;
+            if reason.trim().is_empty() {
+                return fail(&field, "give the reason this image's warning is silenced");
+            }
+        }
         if let Some(value) = &self.security.apply.windows {
             windows("security.apply.windows", value)?;
         }

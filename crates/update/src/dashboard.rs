@@ -522,6 +522,30 @@ pub fn render(
                             ),
                         ));
                 }
+                let reference = format!(
+                    "`{}:{}` in `{}`",
+                    safe(&dep.package),
+                    safe(dep.current.value.as_deref().unwrap_or("unknown")),
+                    safe(&file.path)
+                );
+                let previous = dep
+                    .updates
+                    .iter()
+                    .filter_map(|u| u.image.as_ref())
+                    .find(|check| check.state == "previous-unavailable");
+                for check in metadata.image.iter().chain(previous) {
+                    let row = match &check.silenced {
+                        Some(reason) => (
+                            IMAGES_SILENCED,
+                            format!("- {reference}: {}\n", safe(reason)),
+                        ),
+                        None => (IMAGES, format!("- {reference}: {}\n", image_gap(check))),
+                    };
+                    sections
+                        .entry(row.0.into())
+                        .or_default()
+                        .insert((None, row.1));
+                }
                 let catalog_age = metadata
                     .lookup
                     .as_ref()
@@ -666,10 +690,12 @@ pub fn render(
     sections.sort_by_key(|(section, _)| {
         let rank = if section == "Known vulnerabilities" {
             0
-        } else if section.starts_with("Open PRs: ") {
+        } else if section.starts_with(IMAGES) {
             1
+        } else if section.starts_with("Open PRs: ") {
+            2
         } else {
-            1 + match section.as_str() {
+            2 + match section.as_str() {
                 "Merged by the Count" => 1,
                 "Pending updates" => 2,
                 "Template updates" => 3,
@@ -681,8 +707,29 @@ pub fn render(
         };
         (rank, section.clone())
     });
+    let image_gaps = sections.iter().any(|(section, _)| section == IMAGES);
     for (section, rows) in sections {
-        let (start, end) = if let Some(label) = section.strip_prefix("Detected: ") {
+        let (start, end) = if section == IMAGES {
+            (
+                format!(
+                    "\n## {IMAGES}\n\nThese pinned images give the Count no usable package list, so he can't tell whether a new digest fixes vulnerabilities. He still proposes their updates.\n\n"
+                ),
+                "",
+            )
+        } else if section == IMAGES_SILENCED {
+            (
+                format!(
+                    "{}\n<details><summary>Silenced ({})</summary>\n\n",
+                    if image_gaps {
+                        String::new()
+                    } else {
+                        format!("\n## {IMAGES}\n")
+                    },
+                    rows.len()
+                ),
+                "</details>\n",
+            )
+        } else if let Some(label) = section.strip_prefix("Detected: ") {
             (
                 format!(
                     "\n<details>\n<summary>{label} ({} dependencies)</summary>\n\n",
@@ -707,6 +754,29 @@ pub fn render(
         text.push_str(end);
     }
     text
+}
+
+const IMAGES: &str = "Images the Count can't vouch for";
+const IMAGES_SILENCED: &str = "Images the Count can't vouch for: silenced";
+
+/// Why the Count can't vouch for an image, as a dashboard line.
+fn image_gap(check: &patchula_report::ImageCheck) -> String {
+    match check.state.as_str() {
+        "no-sbom" => "no SBOM published".into(),
+        "sbom-without-os" => format!(
+            "its SBOM (made by {}) lists no OS packages",
+            safe(check.detail.as_deref().unwrap_or("an unknown tool"))
+        ),
+        "os-not-covered" => match &check.os {
+            Some(os) => format!("{}, which OSV.dev doesn't cover", safe(os)),
+            None => "its OS isn't one OSV.dev covers".into(),
+        },
+        "previous-unavailable" => {
+            "the previous image is gone from its registry, so the open update can't be compared"
+                .into()
+        }
+        state => safe(state),
+    }
 }
 
 #[derive(Serialize, Deserialize)]

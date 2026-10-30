@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 mod advisories;
 pub use advisories::{advisory_query, affects, fixes, report_advisories};
+pub mod images;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use patchula_config::{
     Config, DependencyKind, Manager, Patterns, Policy, Rule, Scheme, Source, Update, VersionPolicy,
@@ -341,6 +342,18 @@ impl Evaluator {
                         | DependencyKind::Chart
                 ))
             && self.effective(dep, update).digest
+    }
+    /// Put an image rebuild under `security.apply` once its SBOMs show it
+    /// fixes an advisory.
+    pub fn secure(&self, dep: &Dependency, update: &mut Proposal) {
+        let mut effective = self.effective(dep, parse_update(&update.update_type));
+        effective.apply(
+            &self.config.security.apply,
+            self.security_permitted.as_ref(),
+        );
+        let secured = proposal(None, None, None, Update::Digest, &effective.policy);
+        update.policy = secured.policy;
+        update.group = secured.group;
     }
     pub fn digest_proposal(&self, dep: &Dependency, new_digest: &str) -> Option<Proposal> {
         if self.ignored(dep)
@@ -1104,6 +1117,7 @@ fn proposal(
         }),
         release_age: None,
         fixes: Vec::new(),
+        image: None,
     }
 }
 fn timestamp(value: DateTime<Utc>) -> String {

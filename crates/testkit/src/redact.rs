@@ -67,9 +67,18 @@ impl Redactor {
         static URLS: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
         let urls =
             URLS.get_or_init(|| Regex::new(r#"https?://[^\s<>\"\\]+"#).expect("static URL regex"));
+        // A URL with nothing to redact keeps its bytes, so a body checked
+        // against its digest still matches it.
         let text = urls.replace_all(text, |captures: &regex::Captures<'_>| {
             Url::parse(&captures[0])
-                .map(|url| self.url(&url))
+                .map(|url| {
+                    let redacted = self.url(&url);
+                    if redacted == url.as_str() {
+                        captures[0].to_owned()
+                    } else {
+                        redacted
+                    }
+                })
                 .unwrap_or_else(|_| MARKER.into())
         });
         self.pattern_text(&text)

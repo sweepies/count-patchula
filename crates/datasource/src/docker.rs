@@ -10,9 +10,9 @@ use tokio::sync::Mutex;
 
 type Token = Arc<Mutex<Option<(String, Instant)>>>;
 pub(super) type Tokens = Arc<Mutex<BTreeMap<String, Token>>>;
-const MANIFEST: &str = "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json";
+pub(crate) const MANIFEST: &str = "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json";
 
-fn validate_digest(digest: &str) -> Result<()> {
+pub(crate) fn validate_digest(digest: &str) -> Result<()> {
     if digest
         .strip_prefix("sha256:")
         .is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
@@ -57,7 +57,7 @@ fn compact_tags(body: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::Cach
     serde_json::to_vec(&page).map_err(|_| patchula_http::CacheError::Document)
 }
 
-pub(super) fn identity(package: &str) -> Result<(String, String)> {
+pub(crate) fn identity(package: &str) -> Result<(String, String)> {
     let package = package.strip_prefix("oci://").unwrap_or(package);
     let (first, rest) = package.split_once('/').unwrap_or((package, ""));
     let (host, path) = if first.contains('.') || first.contains(':') {
@@ -98,6 +98,8 @@ pub(super) fn identity(package: &str) -> Result<(String, String)> {
     Ok((host, path))
 }
 
+pub(crate) type Derive = fn(&[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError>;
+
 impl Client {
     async fn registry(
         &self,
@@ -106,6 +108,21 @@ impl Client {
         url: &str,
         accept: &str,
         method: Method,
+    ) -> Result<patchula_http::Response> {
+        self.registry_with(host, path, url, accept, method, None)
+            .await
+    }
+
+    /// A registry read whose blob body is derived by "derived" instead of
+    /// the default source-label compaction.
+    pub(crate) async fn registry_with(
+        &self,
+        host: &str,
+        path: &str,
+        url: &str,
+        accept: &str,
+        method: Method,
+        derived: Option<(&'static str, Derive)>,
     ) -> Result<patchula_http::Response> {
         let scope = format!("{host}/{path}");
         let authenticated = host == "registry-1.docker.io" && self.dockerhub_credentials.is_some();
@@ -134,7 +151,7 @@ impl Client {
             .map(|(v, _)| v.clone());
         drop(saved);
         let mut response = self
-            .registry_read(url, accept, bearer.as_deref(), method.clone())
+            .registry_read(url, accept, bearer.as_deref(), method.clone(), derived)
             .await?;
         if response.status == 401 {
             let mut saved_token = token.lock().await;
@@ -257,7 +274,9 @@ impl Client {
                 bearer
             };
             drop(saved_token);
-            response = self.registry_read(url, accept, Some(&next), method).await?;
+            response = self
+                .registry_read(url, accept, Some(&next), method, derived)
+                .await?;
             if response.status == 401 {
                 *token.lock().await = None;
                 self.cache.http_remove(&key).await?;
@@ -304,9 +323,16 @@ impl Client {
         accept: &str,
         token: Option<&str>,
         method: Method,
+        derived: Option<(&'static str, Derive)>,
     ) -> Result<patchula_http::Response> {
         if method == Method::HEAD {
             return Ok(self.http.registry_head(url, accept, token).await?);
+        }
+        if let Some((format, derive)) = derived {
+            return Ok(self
+                .http
+                .registry_get_derived(url, accept, token, format, derive)
+                .await?);
         }
         if Url::parse(url)
             .map_err(|_| Error::Invalid)?

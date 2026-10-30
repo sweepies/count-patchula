@@ -102,6 +102,7 @@ when this list is not empty.
 | `policy` | Optional. The policy that applies: versions, wait, windows, merge, labels |
 | `releaseAge` | Optional. `publishedAt` and the `evaluatedAt` it was judged against |
 | `fixes` | Optional. IDs of the current version's advisories that the target no longer has |
+| `image` | Optional. For a pinned image's new digest, the SBOM comparison: `state`, the compared `platforms`, the `sboms` read (`digest`, `source`, `generator`), `os`, `packages`, the `fixed` advisories with their `package`, `old` and `new` versions and `platforms`, `introduced` advisory IDs (most severe first), `introducedDetails` (OSV's records for up to five of them), `detail` and `silenced` |
 
 ## Dependency metadata
 
@@ -113,6 +114,7 @@ when this list is not empty.
 | `heldBack` | Updates waiting on release age, per update type, with when they become eligible |
 | `lookup` | When the lookup ran, disabled update types, and versions rejected as deprecated or yanked |
 | `tagDigests` | For GitHub Actions, the commit each proposed tag points at |
+| `image` | Optional. For a pinned image, the current digest's warning state, in the same shape as an update's `image` |
 | `advisories` | Optional. OSV advisories affecting the current version: `id`, `aliases` (CVE IDs among them), `severity`, `summary`, `url` and `fixedIn`, the lowest fixed release above the current one |
 | `stale` | Registry data used past its freshness because the registry was rate-limited, with the time it was fetched |
 

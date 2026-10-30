@@ -1,11 +1,13 @@
 //! Shared registry lookups with conditional GETs and incremental GitHub history.
 #![forbid(unsafe_code)]
 mod advisories;
-pub use advisories::{Advisory, AdvisoryQuery, Affected, Event, Range};
+pub use advisories::{Advisory, AdvisoryListing, AdvisoryQuery, Affected, Event, Range};
 mod compact;
 mod docker;
 mod forge;
 mod github;
+mod images;
+pub use images::{ImageSbom, Sbom, SbomSource};
 mod maven;
 mod mise;
 mod nix;
