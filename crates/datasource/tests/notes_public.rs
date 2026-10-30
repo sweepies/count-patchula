@@ -67,9 +67,9 @@ fn release_replay(inner: Arc<dyn Transport>, path: &Path, recording: bool) -> Ar
 
 #[tokio::test]
 async fn public_note_sources_and_release_range() {
-    let recording = std::env::var("PATCHULA_RECORD").as_deref() == Ok("1");
+    let recording = patchula_testkit::recording();
     let token = if recording {
-        std::env::var("GH_TOKEN").expect("recording requires GH_TOKEN")
+        std::env::var(patchula_testkit::GH_TOKEN_VAR).expect("recording requires GH_TOKEN")
     } else {
         "offline-public-token".into()
     };
@@ -158,9 +158,9 @@ async fn public_note_sources_and_release_range() {
 
 #[tokio::test]
 async fn public_sandbox_note_ranges() {
-    let recording = std::env::var("PATCHULA_RECORD").as_deref() == Ok("1");
+    let recording = patchula_testkit::recording();
     let token = if recording {
-        std::env::var("GH_TOKEN").expect("recording requires GH_TOKEN")
+        std::env::var(patchula_testkit::GH_TOKEN_VAR).expect("recording requires GH_TOKEN")
     } else {
         "offline-public-token".into()
     };
@@ -269,8 +269,12 @@ async fn public_sandbox_note_ranges() {
                 http.stats().requests
             );
             if recording {
-                std::fs::write(format!("/tmp/patchula-notes-{fixture}-{target}.txt"), text)
-                    .unwrap();
+                std::fs::write(
+                    std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+                        .join(format!("patchula-notes-{fixture}-{target}.txt")),
+                    text,
+                )
+                .unwrap();
             }
         }
     }

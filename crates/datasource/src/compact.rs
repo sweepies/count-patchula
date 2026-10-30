@@ -151,7 +151,7 @@ mod npm_tests {
             .as_array()
             .unwrap()
             .iter()
-            .filter(|v| v["deprecated"] == true)
+            .filter(|v| v["deprecated"].as_bool() == Some(true))
             .map(|v| v["version"].as_str().unwrap())
             .collect();
         assert_eq!(deprecated, ["1.2.0", "1.1.0"]);

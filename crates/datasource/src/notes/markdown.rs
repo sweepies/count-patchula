@@ -279,7 +279,7 @@ fn inline_destination(text: &str) -> Option<&str> {
                 ')' => {
                     depth -= 1;
                     if depth == 0 {
-                        return Some(&text[..i + 1]);
+                        return Some(&text[..=i]);
                     }
                 }
                 _ => {}

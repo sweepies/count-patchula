@@ -278,7 +278,7 @@ fn sgml_nodes(text: &str) -> Vec<Node> {
         let (name, attrs) = sgml_tag(tag.trim_end_matches('/').trim());
         if !sgml_element(&name) {
             // Not an element: keep the text, such as an address.
-            sgml_push_text(&mut stack, &mut root, &text[open..end + 1]);
+            sgml_push_text(&mut stack, &mut root, &text[open..=end]);
             continue;
         }
         if self_closing {
@@ -821,7 +821,7 @@ fn go_entries(text: &str) -> Vec<String> {
                 if depth == 1
                     && let Some(start) = entry.take()
                 {
-                    entries.push(text[start..index + 1].to_string());
+                    entries.push(text[start..=index].to_string());
                 }
                 index += 1;
             }
@@ -889,7 +889,7 @@ fn go_literal(text: &str) -> Option<(String, usize)> {
     match *bytes.first()? {
         b'`' => {
             let end = text[1..].find('`')?;
-            Some((text[1..1 + end].to_string(), end + 2))
+            Some((text[1..=end].to_string(), end + 2))
         }
         b'"' => {
             let mut value = String::new();
@@ -1357,10 +1357,7 @@ fn go_html_plain(nodes: &[GoHtml]) -> String {
 fn go_href(href: &str) -> String {
     // A target may be split across lines inside the tag. URLs carry no
     // whitespace, so it is dropped rather than kept.
-    let href: String = expand_entities(href)
-        .chars()
-        .filter(|character| !character.is_whitespace())
-        .collect();
+    let href: String = expand_entities(href).split_whitespace().collect();
     if href.starts_with("http://") || href.starts_with("https://") {
         return href;
     }

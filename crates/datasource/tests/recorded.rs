@@ -14,7 +14,7 @@ use std::{path::Path, sync::Arc};
 async fn refresh_public_npm_metadata() {
     use patchula_http::Transport;
     use patchula_testkit::{Cassette, Recorder};
-    assert_eq!(std::env::var("PATCHULA_RECORD").as_deref(), Ok("1"));
+    assert!(patchula_testkit::recording());
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
     for relative in ["datasource/public-sources.json", "engine/public-batch.json"] {
         let path = root.join(relative);
@@ -46,7 +46,7 @@ async fn refresh_public_npm_metadata() {
                 assert!(recorder.send(request).await.unwrap().status.is_success());
                 let fresh: Cassette =
                     serde_json::from_slice(&std::fs::read(&recorded).unwrap()).unwrap();
-                *interaction = fresh.interactions.last().unwrap().clone();
+                interaction.clone_from(fresh.interactions.last().unwrap());
             }
         }
         // Fresh aggregate registries no longer make these recorded warm reads.
@@ -62,9 +62,9 @@ async fn refresh_public_npm_metadata() {
 
 #[tokio::test]
 async fn public_sources_cold_and_conditional_warm() {
-    let token = if std::env::var("PATCHULA_RECORD").as_deref() == Ok("1") {
-        std::env::var("GH_TOKEN")
-            .or_else(|_| std::env::var("GITHUB_TOKEN"))
+    let token = if patchula_testkit::recording() {
+        std::env::var(patchula_testkit::GH_TOKEN_VAR)
+            .or_else(|_| std::env::var(patchula_testkit::GITHUB_TOKEN_VAR))
             .expect("recording needs token")
     } else {
         "offline-public-token".into()
@@ -137,7 +137,7 @@ async fn public_sources_cold_and_conditional_warm() {
         4,
         "warm GitHub has release and tag-release heads, one tag namespace and one ref read"
     );
-    if std::env::var("PATCHULA_RECORD").as_deref() != Ok("1") {
+    if !patchula_testkit::recording() {
         assert_eq!(after_g.not_modified - before_g.not_modified, 2);
     }
     assert!(

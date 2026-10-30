@@ -297,13 +297,24 @@ impl Transport for Recorder {
     }
 }
 
+/// Set to `1` to record fixtures from the network instead of replaying them.
+pub const RECORD_VAR: &str = "PATCHULA_RECORD";
+/// The GitHub token variables a recording run reads.
+pub const GH_TOKEN_VAR: &str = "GH_TOKEN";
+pub const GITHUB_TOKEN_VAR: &str = "GITHUB_TOKEN";
+
+/// Whether this run records fixtures from the network.
+pub fn recording() -> bool {
+    std::env::var(RECORD_VAR).as_deref() == Ok("1")
+}
+
 /// Lazy factory proves no network client is constructed in default replay mode.
 pub fn from_env(
     path: &Path,
     options: Options,
     network: impl FnOnce() -> Result<Arc<dyn Transport>, Error>,
 ) -> Result<Arc<dyn Transport>, Error> {
-    if std::env::var("PATCHULA_RECORD").as_deref() == Ok("1") {
+    if recording() {
         Ok(Arc::new(Recorder::new(
             path,
             options,
@@ -322,7 +333,7 @@ pub fn save(path: &Path, cassette: &Cassette, redactor: &Redactor) -> Result<(),
     let parent = path
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
+        .unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent).map_err(|_| failure("cannot create cassette directory"))?;
     let mut file = tempfile::NamedTempFile::new_in(parent)
         .map_err(|_| failure("cannot create cassette temporary file"))?;

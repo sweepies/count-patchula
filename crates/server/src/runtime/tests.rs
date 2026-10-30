@@ -560,7 +560,7 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
         .iter()
         .find(|event| event["message"] == "batch report skipped")
         .unwrap();
-    assert_eq!(skipped["discovery_only"], true);
+    assert_eq!(skipped["discovery_only"].as_bool(), Some(true));
     assert_eq!(skipped["repository_runs"], 0);
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
     let claims = cache.claim_batch(i64::MAX, 10).await.unwrap();
@@ -1128,7 +1128,7 @@ async fn stale_base_requeues_without_failure_and_real_errors_have_counts() {
             .find(|event| event["message"] == "batch finished")
             .unwrap();
         assert_eq!(finished["success"], !errors);
-        assert_eq!(finished["requeued"], true);
+        assert_eq!(finished["requeued"].as_bool(), Some(true));
         assert_eq!(state.cache.queue_len().await.unwrap(), 1);
         assert!(
             state

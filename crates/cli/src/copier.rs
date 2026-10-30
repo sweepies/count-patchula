@@ -75,7 +75,7 @@ pub fn update(
     let destination = answers
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
+        .unwrap_or_else(|| Path::new("."));
     let file = answers.file_name().ok_or("invalid answers file path")?;
     let mut command = Command::new(program);
     command.arg("update");

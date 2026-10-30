@@ -100,7 +100,7 @@ impl Settings {
     pub(crate) fn from_graphql(repo: &Value) -> Self {
         Self {
             repository_id: repo["id"].as_str().unwrap_or_default().into(),
-            native: repo["autoMergeAllowed"] == true,
+            native: repo["autoMergeAllowed"].as_bool() == Some(true),
             method: method(
                 repo,
                 [
@@ -109,13 +109,13 @@ impl Settings {
                     "rebaseMergeAllowed",
                 ],
             ),
-            delete_branch: repo["deleteBranchOnMerge"] == true,
+            delete_branch: repo["deleteBranchOnMerge"].as_bool() == Some(true),
         }
     }
     pub(crate) fn from_rest(repo: &Value) -> Self {
         Self {
             repository_id: repo["node_id"].as_str().unwrap_or_default().into(),
-            native: repo["allow_auto_merge"] == true,
+            native: repo["allow_auto_merge"].as_bool() == Some(true),
             method: method(
                 repo,
                 [
@@ -124,14 +124,14 @@ impl Settings {
                     "allow_rebase_merge",
                 ],
             ),
-            delete_branch: repo["delete_branch_on_merge"] == true,
+            delete_branch: repo["delete_branch_on_merge"].as_bool() == Some(true),
         }
     }
 }
 fn method(repo: &Value, keys: [&str; 3]) -> Option<String> {
     keys.into_iter()
         .zip(["squash", "merge", "rebase"])
-        .find_map(|(key, method)| (repo[key] == true).then(|| method.into()))
+        .find_map(|(key, method)| (repo[key].as_bool() == Some(true)).then(|| method.into()))
 }
 pub(crate) fn requested(plan: &Plan, config: &Config) -> bool {
     !plan.action.lockfile_pending
@@ -267,7 +267,9 @@ async fn one(
             "auto-merge blocked: ownership or receipt head changed".into(),
         ));
     }
-    if fresh["draft"] != false || fresh["mergeable"] != true || fresh["mergeable_state"] != "clean"
+    if fresh["draft"].as_bool() != Some(false)
+        || fresh["mergeable"].as_bool() != Some(true)
+        || fresh["mergeable_state"] != "clean"
     {
         return Ok((
             ActionStatus::Skipped,
@@ -285,8 +287,8 @@ async fn one(
     // normal merge API. No admin/bypass option, direct base write or force merge.
     let fresh = client.get_fresh(&path).await.map_err(|e| e.to_string())?;
     if !same_head(&fresh, pr, &inventory.actor, &repo.repository)
-        || fresh["draft"] != false
-        || fresh["mergeable"] != true
+        || fresh["draft"].as_bool() != Some(false)
+        || fresh["mergeable"].as_bool() != Some(true)
         || fresh["mergeable_state"] != "clean"
     {
         return Ok((
@@ -301,7 +303,7 @@ async fn one(
         )
         .await
         .map_err(|e| e.to_string())?;
-    if result["merged"] != true {
+    if result["merged"].as_bool() != Some(true) {
         return Ok((
             ActionStatus::Skipped,
             "auto-merge refused by GitHub; retry on a later run".into(),
@@ -414,7 +416,7 @@ pub fn dashboard_history(inventory: &Inventory, mut prs: Vec<Value>, plans: &[Pl
     }
     for pr in plans.iter().filter_map(|p| p.cached_pr.as_ref()) {
         if let Some(old) = prs.iter_mut().find(|p| p["number"] == pr["number"]) {
-            *old = pr.clone();
+            old.clone_from(pr);
         } else if !pr["merged_at"].is_null() {
             prs.push(pr.clone());
         }

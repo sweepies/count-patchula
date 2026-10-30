@@ -451,7 +451,7 @@ fn with_release_dates(mut tags: Catalog, releases: &Catalog) -> Catalog {
         .collect();
     for tag in &mut tags.versions {
         if let Some(date) = dates.get(tag.version.as_str()) {
-            tag.published_at = (*date).clone();
+            tag.published_at.clone_from(*date);
         }
     }
     tags

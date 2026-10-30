@@ -185,7 +185,7 @@ fn poetry_specifiers(alternative: &str) -> Result<String> {
             parts
                 .iter()
                 .position(|p| *p != 0)
-                .unwrap_or(parts.len() - 1)
+                .unwrap_or_else(|| parts.len() - 1)
         } else if parts.len() == 1 {
             0
         } else {

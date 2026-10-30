@@ -30,12 +30,10 @@ const LISTINGS: &[&[&str]] = &[
     &["nosuch:foo"],
 ];
 const BACKENDS: &[&str] = &["prettier"];
-const RECORD_VAR: &str = "PATCHULA_RECORD";
-const TOKEN_VAR: &str = "GH_TOKEN";
 
 #[tokio::test]
 async fn record_mise_listings() {
-    if std::env::var(RECORD_VAR).as_deref() != Ok("1") {
+    if !patchula_testkit::recording() {
         return;
     }
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/mise/listings.json");
@@ -54,7 +52,7 @@ async fn record_mise_listings() {
     let lookup = Runner::new(cache.path().join("cache.sqlite"), "")
         .with_executor(recorder)
         .mise_lookup();
-    let token = std::env::var(TOKEN_VAR).ok();
+    let token = std::env::var(patchula_testkit::GH_TOKEN_VAR).ok();
     for listing in LISTINGS {
         let result = lookup
             .ls_remote(&Query {

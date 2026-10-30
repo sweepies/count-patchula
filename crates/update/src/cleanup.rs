@@ -40,7 +40,7 @@ pub async fn owned(client: &Client, repo: &str, head: &str, actor: &str) -> Resu
             let message = c["commit"]["message"].as_str().unwrap_or("");
             c["author"]["login"] == actor
                 && (c["committer"]["login"] == actor || c["committer"]["login"] == "web-flow")
-                && c["commit"]["verification"]["verified"] == true
+                && c["commit"]["verification"]["verified"].as_bool() == Some(true)
                 && trailer(message, "Patchula: ") == Some("v1")
                 && trailer(message, "Patchula-Branch: ").is_some()
         }))

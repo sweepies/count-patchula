@@ -11,10 +11,10 @@ fn config() -> patchula_config::Config {
 }
 #[tokio::test]
 async fn public_multi_repo_report_cold_and_warm() {
-    let recording = std::env::var("PATCHULA_RECORD").as_deref() == Ok("1");
+    let recording = patchula_testkit::recording();
     let token = if recording {
-        std::env::var("GH_TOKEN")
-            .or_else(|_| std::env::var("GITHUB_TOKEN"))
+        std::env::var(patchula_testkit::GH_TOKEN_VAR)
+            .or_else(|_| std::env::var(patchula_testkit::GITHUB_TOKEN_VAR))
             .expect("recording requires token")
     } else {
         "offline-public".into()
@@ -127,7 +127,8 @@ async fn public_multi_repo_report_cold_and_warm() {
             panic!("JSON metadata")
         };
         assert_eq!(
-            value["data"]["repository"]["isPrivate"], false,
+            value["data"]["repository"]["isPrivate"].as_bool(),
+            Some(false),
             "only public repo recordings may be committed"
         );
     }

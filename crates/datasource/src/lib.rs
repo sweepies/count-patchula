@@ -335,7 +335,7 @@ impl Client {
         let mut missing = std::collections::HashSet::new();
         for version in &mut versions {
             if let Some(time) = known.get(&version.version) {
-                version.published_at = time.clone();
+                version.published_at.clone_from(time);
                 reached_known = true;
             } else if !reached_known && fetched < GO_DATED_RELEASES {
                 fetched += 1;

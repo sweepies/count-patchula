@@ -409,7 +409,7 @@ fn runners(
     else {
         return Ok(());
     };
-    let (version, suffix) = tail.split_once('-').map_or((tail, ""), |(v, s)| (v, s));
+    let (version, suffix) = tail.split_once('-').unwrap_or((tail, ""));
     if version != "latest" && !version.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
         return Ok(());
     }

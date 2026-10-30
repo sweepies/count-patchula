@@ -739,7 +739,7 @@ pub fn batch_plan(
         .expect("serializable plan")
         .as_bytes(),
     );
-    plan.input_fingerprint = plan.fingerprint.clone();
+    plan.input_fingerprint.clone_from(&plan.fingerprint);
     Ok(Some(plan))
 }
 

@@ -100,17 +100,17 @@ fn gitlab_releases(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::
             tag: r["tag_name"].as_str()?.into(),
             body: r["description"].as_str().unwrap_or("").into(),
             // An upcoming release is not published yet.
-            prerelease: r["upcoming_release"] == true,
+            prerelease: r["upcoming_release"].as_bool() == Some(true),
         })
     })
 }
 fn gitea_releases(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     compact(bytes, |r| {
-        (r["draft"] != true).then_some(())?;
+        (r["draft"].as_bool() != Some(true)).then_some(())?;
         Some(Release {
             tag: r["tag_name"].as_str()?.into(),
             body: r["body"].as_str().unwrap_or("").into(),
-            prerelease: r["prerelease"] == true,
+            prerelease: r["prerelease"].as_bool() == Some(true),
         })
     })
 }

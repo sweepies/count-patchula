@@ -214,7 +214,7 @@ impl Lifecycle {
             if let Some(pr) = &plan.cached_pr
                 && let Some(old) = self.prs.iter_mut().find(|p| p["number"] == pr["number"])
             {
-                *old = pr.clone();
+                old.clone_from(pr);
             }
         }
         self.actions
