@@ -23,6 +23,9 @@ inputs:
   version:
     description: Count Patchula version to run. Empty means the version of this action, or the latest release when the action is not used at a release tag.
     default: ""
+  binary:
+    description: The path to a patchula binary to run instead of installing a release, such as one built from source. Overrides version.
+    default: ""
   args:
     description: Extra arguments for `patchula run`, such as `--config-dir policy`, separated by spaces or newlines.
     default: ""
@@ -53,6 +56,7 @@ runs:
         INPUT_ALL_REPOS: ${{ inputs.all-repos }}
         INPUT_DRY_RUN: ${{ inputs.dry-run }}
         INPUT_VERSION: ${{ inputs.version }}
+        INPUT_BINARY: ${{ inputs.binary }}
         INPUT_ARGS: ${{ inputs.args }}
         ACTION_REF: ${{ github.action_ref }}
         # Lets mise list releases from GitHub itself when the version is
@@ -91,7 +95,11 @@ runs:
         if [ "$version" = latest ]; then
           export MISE_USE_VERSIONS_HOST=0
         fi
-        bin=$(cd "$RUNNER_TEMP" && MISE_MINIMUM_RELEASE_AGE=0 mise exec "packslip:sweepies/count-patchula@$version" -- sh -c 'command -v patchula')
+        if [ -n "$INPUT_BINARY" ]; then
+          bin=$(realpath "$INPUT_BINARY")
+        else
+          bin=$(cd "$RUNNER_TEMP" && MISE_MINIMUM_RELEASE_AGE=0 mise exec "packslip:sweepies/count-patchula@$version" -- sh -c 'command -v patchula')
+        fi
         # The version input can install any release. Releases up to 0.4.0 take
         # --cache as the SQLite file; later ones take the directory holding it.
         help=$("$bin" run --help)

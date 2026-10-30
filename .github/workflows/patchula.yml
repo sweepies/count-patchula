@@ -7,6 +7,11 @@ on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
+    inputs:
+      source:
+        description: Build the Count from this commit instead of running the latest release, to try unreleased changes before cutting a release
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -19,9 +24,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
+      # Checks out the source when building from it.
+      contents: read
       # Reads the App's private key from Infisical over OIDC.
       id-token: write
     steps:
+      - if: inputs.source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: inputs.source
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          install_args: rust
+          cache: false
+      - if: inputs.source
+        run: mise run build:cli
       # The key lives in Infisical as sweepies-ops-private-key (project
       # INFISICAL_PROJECT_ID, environment prod), read by the machine identity
       # INFISICAL_IDENTITY_ID, which must allow this repository's main branch.
@@ -45,6 +63,13 @@ jobs:
           permission-workflows: write
           permission-checks: read
           permission-statuses: read
-      - uses: sweepies/count-patchula@ac2e952dc4c403dae4516c550fe03db9f5a4f82b # v0.6.0
+      - if: ${{ !inputs.source }}
+        uses: sweepies/count-patchula@ac2e952dc4c403dae4516c550fe03db9f5a4f82b # v0.6.0
         with:
           token: ${{ steps.app.outputs.token }}
+      # The action from this commit, running the binary built above.
+      - if: inputs.source
+        uses: $/
+        with:
+          token: ${{ steps.app.outputs.token }}
+          binary: target/release/patchula
