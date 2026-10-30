@@ -227,8 +227,12 @@ pub(crate) fn job(
         Manager::Pyproject => {
             // Lockfiles of other Python tools sit beside the pyproject.toml
             // too; leaving one stale would publish a manifest that disagrees
-            // with it.
-            if let Some(lock) = nearest(&dep.file, &snapshot.paths, &python::UNSUPPORTED_LOCKS) {
+            // with it. The closest lockfile governs the project, so one above a
+            // supported lock does not hold it.
+            let supported = nearest(&dep.file, &snapshot.paths, &python::LOCKS);
+            if let Some(lock) = nearest(&dep.file, &snapshot.paths, &python::UNSUPPORTED_LOCKS)
+                .filter(|lock| supported.is_none_or(|root| lock.len() >= root.len()))
+            {
                 return Err(format!(
                     "unsupported lockfile format: {}",
                     python::UNSUPPORTED_LOCKS
@@ -237,7 +241,7 @@ pub(crate) fn job(
                         .unwrap_or(&"lockfile")
                 ));
             }
-            let Some(root) = nearest(&dep.file, &snapshot.paths, &python::LOCKS) else {
+            let Some(root) = supported else {
                 return Ok(None);
             };
             (Ecosystem::Python, root)
