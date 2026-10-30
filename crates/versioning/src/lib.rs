@@ -195,8 +195,11 @@ impl Versioning for Ecosystem {
             if !current.trim_start().starts_with(['[', '(']) || policy == VersionPolicy::Exact {
                 return Ok(target.into());
             }
-            return if self.matches(current, &parsed)? {
-                Ok(current.into())
+            if self.matches(current, &parsed)? {
+                return Ok(current.into());
+            }
+            return if policy == VersionPolicy::Widen {
+                maven::widen(current, target).ok_or_else(|| Error::Compound(current.into()))
             } else {
                 Err(Error::Compound(current.into()))
             };
@@ -398,6 +401,94 @@ mod tests {
             Ecosystem::Go
                 .parse("v0.0.0-20240101000000-abcdef123456")
                 .is_ok()
+        );
+    }
+    #[test]
+    fn widen_extends_where_the_syntax_can_express_it() {
+        use VersionPolicy::Widen;
+        for (scheme, old, new, expected) in [
+            (Ecosystem::Composer, "^1.2", "3.0.1", "^1.2 || ^3.0"),
+            (
+                Ecosystem::Composer,
+                "^1.2 || ^3.0",
+                "4.2.0",
+                "^1.2 || ^3.0 || ^4.2",
+            ),
+            (Ecosystem::Composer, "^0.3", "0.5.2", "^0.3 || ^0.5"),
+            (
+                Ecosystem::Composer,
+                ">=1.0 <2.0",
+                "3.1.0",
+                ">=1.0 <2.0 || ^3.1",
+            ),
+            (Ecosystem::Composer, "^1.2", "1.9.0", "^1.2"),
+            (Ecosystem::Poetry, "^1.2", "3.0.1", "^1.2 || ^3.0"),
+            (Ecosystem::Poetry, ">=1.2, <2", "2.4.0", ">=1.2, <2 || ^2.4"),
+            (Ecosystem::Poetry, "^0.2.3", "0.4.1", "^0.2.3 || ^0.4"),
+            (Ecosystem::Poetry, "^1.2", "1.9.0", "^1.2"),
+            (Ecosystem::Maven, "[1.0,2.0)", "3.1", "[1.0,3.1]"),
+            (Ecosystem::Maven, "(,2.0)", "2.5", "(,2.5]"),
+            (Ecosystem::Maven, "[1.0]", "1.5", "[1.0,1.5]"),
+            (Ecosystem::Maven, "[1.0,2.0)", "1.5", "[1.0,2.0)"),
+            (Ecosystem::Nuget, "[2.9.0,3.0)", "3.2.0", "[2.9.0,3.2.0]"),
+            (Ecosystem::Nuget, "(1.0,2.0]", "2.1.0", "(1.0,2.1.0]"),
+        ] {
+            let extended = scheme.new_range(old, new, Widen).unwrap();
+            assert_eq!(extended, expected, "{scheme:?} {old} -> {new}");
+            assert!(
+                scheme
+                    .matches(&extended, &scheme.parse(new).unwrap())
+                    .unwrap(),
+                "{scheme:?} {extended} must allow {new}"
+            );
+        }
+        // Several intervals have no one bound to move.
+        for scheme in [Ecosystem::Maven, Ecosystem::Nuget] {
+            assert!(scheme.new_range("(,1.0],[1.2,1.5)", "2.0", Widen).is_err());
+        }
+        // A single declared version has nothing to extend: these schemes write
+        // the same text under `widen` as under `preserve`.
+        for (scheme, old, new) in [
+            (Ecosystem::Rubygems, "~> 7.1", "8.0.2"),
+            (Ecosystem::Rubygems, ">= 1.2, < 2", "3.0.0"),
+            (Ecosystem::Docker, "3.20-alpine", "3.21-alpine"),
+            (Ecosystem::Go, "v1.2.3", "v1.3.0"),
+            (Ecosystem::Loose, "1.2.3", "1.3.0"),
+        ] {
+            assert_eq!(
+                scheme.new_range(old, new, Widen).ok(),
+                scheme.new_range(old, new, VersionPolicy::Preserve).ok(),
+                "{scheme:?} {old} -> {new}"
+            );
+        }
+    }
+
+    #[test]
+    fn shifted_ranges_keep_the_declared_precision() {
+        use VersionPolicy::Preserve;
+        for (scheme, old, new, expected) in [
+            (Ecosystem::Pep440, "~=2.28.1", "2.32.3", "~=2.32.3"),
+            (Ecosystem::Pep440, "<=2.28", "2.32.3", "<=2.32.3"),
+            (Ecosystem::Pep440, "~=2.28", "3.1.4", "~=3.1"),
+            (Ecosystem::Pep440, "~=2.28.1", "2.29.3", "~=2.29.3"),
+            (Ecosystem::Pep440, "==2.28", "2.32.3", "==2.32.3"),
+            (Ecosystem::Pep440, "~=2.28", "3.0.0rc1", "~=3.0.0rc1"),
+            (Ecosystem::Hashicorp, "~> 6.0", "7.1.2", "~> 7.1"),
+            (Ecosystem::Hashicorp, "~> 1.2.0", "1.3.4", "~> 1.3.4"),
+            (Ecosystem::Hashicorp, "= 1.2", "2.4.7", "= 2.4.7"),
+            (Ecosystem::Hashicorp, "~> 1", "2.4.7", "~> 2"),
+        ] {
+            assert_eq!(
+                scheme.new_range(old, new, Preserve).unwrap(),
+                expected,
+                "{scheme:?} {old} -> {new}"
+            );
+        }
+        // A bound the new version cannot satisfy is not rewritten by guessing.
+        assert!(
+            Ecosystem::Pep440
+                .new_range("<2", "3.1.4", Preserve)
+                .is_err()
         );
     }
 }

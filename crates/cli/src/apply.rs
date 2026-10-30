@@ -130,7 +130,8 @@ pub async fn command(
         .iter()
         .flat_map(|r| &r.notices)
         .filter(|n| {
-            (options.manager.is_empty() || options.manager.contains(&n.manager))
+            n.is_template()
+                && (options.manager.is_empty() || options.manager.contains(&n.manager))
                 && names.matches_any(&n.name, &n.package)
                 && types.is_empty()
         })

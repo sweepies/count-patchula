@@ -1719,6 +1719,28 @@ impl Engine {
                 proposals.sort();
                 proposals.dedup();
                 let mut held_back = evaluation.held_back;
+                // The lookup worked; only the declaration cannot be rewritten to allow
+                // the release, so it is a notice rather than a failure.
+                for missed in evaluation.not_proposed {
+                    repo.report.notices.push(patchula_report::Notice {
+                        manager: word(&dep.manager),
+                        path: dep.file.clone(),
+                        line: Some(dep.location.line),
+                        name: dep.name.clone(),
+                        package: dep.package.clone(),
+                        current: dep.current.clone(),
+                        compare_url: dep.resolved.as_deref().and_then(|resolved| {
+                            patchula_datasource::notes::compare_url(
+                                dep.source,
+                                &dep.package,
+                                resolved,
+                                &missed.version,
+                            )
+                        }),
+                        available: missed.version,
+                        reason: Some(missed.reason),
+                    });
+                }
                 if dep.manager == Manager::Copier {
                     // Only copier update applies a template: report the
                     // newest eligible tag and propose nothing to edit.
@@ -1747,6 +1769,7 @@ impl Engine {
                                 &available,
                             ),
                             available,
+                            reason: None,
                         });
                     }
                     proposals.clear();

@@ -19,6 +19,14 @@ pub type Result<T> = std::result::Result<T, String>;
 pub struct Evaluation {
     pub updates: Vec<Proposal>,
     pub held_back: Vec<HeldBack>,
+    /// Releases that were found and eligible, but whose declaration cannot be
+    /// rewritten to allow them without guessing.
+    pub not_proposed: Vec<NotProposed>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct NotProposed {
+    pub version: String,
+    pub reason: String,
 }
 enum FilterKind {
     Regex(Regex),
@@ -494,6 +502,7 @@ impl Evaluator {
             return Ok(Evaluation::default());
         }
         let mut held_back = Vec::new();
+        let mut not_proposed = Vec::new();
         let mut eligible = |version: &Version,
                             selected: &str,
                             kind: Update,
@@ -562,6 +571,7 @@ impl Evaluator {
                 return Ok(Evaluation {
                     updates: Vec::new(),
                     held_back,
+                    ..Default::default()
                 });
             }
             let mut update = proposal(None, None, Some(digest), Update::Digest, &effective.policy);
@@ -569,6 +579,7 @@ impl Evaluator {
             return Ok(Evaluation {
                 updates: vec![update],
                 held_back,
+                ..Default::default()
             });
         }
         let scheme = scheme(dep)?;
@@ -654,6 +665,7 @@ impl Evaluator {
                     return Ok(Evaluation {
                         updates: Vec::new(),
                         held_back: summarize(held_back, scheme),
+                        ..Default::default()
                     });
                 };
                 let mut update = proposal(
@@ -671,6 +683,7 @@ impl Evaluator {
                 return Ok(Evaluation {
                     updates: vec![update],
                     held_back: summarize(held_back, scheme),
+                    ..Default::default()
                 });
             }
             return Ok(Evaluation::default());
@@ -935,9 +948,21 @@ impl Evaluator {
                 {
                     dep.current.clone()
                 } else {
-                    scheme
-                        .new_range(&dep.current, &normalized, effective.policy.versions)
-                        .map_err(|e| e.to_string())?
+                    match scheme.new_range(&dep.current, &normalized, effective.policy.versions) {
+                        Ok(value) => value,
+                        // The lookup worked; the declaration is what cannot be edited.
+                        Err(patchula_versioning::Error::Compound(_)) => {
+                            not_proposed.push(NotProposed {
+                                version: normalized,
+                                reason: format!(
+                                    "the constraint `{}` cannot be rewritten to allow it without guessing",
+                                    dep.current
+                                ),
+                            });
+                            continue;
+                        }
+                        Err(e) => return Err(e.to_string()),
+                    }
                 };
                 // Preserve aliases and packageManager identity via extraction
                 // location metadata, while current/newValue describe the version.
@@ -1062,9 +1087,12 @@ impl Evaluator {
         });
         held_back.sort();
         held_back.dedup();
+        not_proposed.sort();
+        not_proposed.dedup();
         Ok(Evaluation {
             updates: result,
             held_back: summarize(held_back, scheme),
+            not_proposed,
         })
     }
 }

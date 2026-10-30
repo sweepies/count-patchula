@@ -232,14 +232,29 @@ pub struct Notice {
     /// The changes between the two versions, where the host has a compare page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compare_url: Option<String>,
+    /// Why the version is not proposed, when the Count looked it up and
+    /// could not write it into the declaration. Without one, the notice is a
+    /// template update that only `copier update` applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 impl Notice {
     /// One line in the Count's words, for summaries and the dashboard.
     pub fn text(&self) -> String {
-        format!(
-            "template {}: {} → {} available",
-            self.name, self.current, self.available
-        )
+        match &self.reason {
+            Some(reason) => format!(
+                "{} {} → {} available, not proposed: {reason}",
+                self.name, self.current, self.available
+            ),
+            None => format!(
+                "template {}: {} → {} available",
+                self.name, self.current, self.available
+            ),
+        }
+    }
+    /// Whether `copier update` applies it.
+    pub fn is_template(&self) -> bool {
+        self.reason.is_none()
     }
 }
 

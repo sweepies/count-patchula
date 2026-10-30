@@ -517,11 +517,15 @@ impl Model {
                 warnings.push((repo.repository.clone(), Warning::Note(warning.clone())));
             }
             for notice in &repo.notices {
-                templates.push(Template {
-                    repository: repo.repository.clone(),
-                    notice: notice.clone(),
-                    applied: false,
-                });
+                if notice.is_template() {
+                    templates.push(Template {
+                        repository: repo.repository.clone(),
+                        notice: notice.clone(),
+                        applied: false,
+                    });
+                } else {
+                    warnings.push((repo.repository.clone(), Warning::Note(notice.text())));
+                }
             }
             for failure in &repo.lookup_failures {
                 warnings.push((repo.repository.clone(), Warning::Failure(failure.clone())));

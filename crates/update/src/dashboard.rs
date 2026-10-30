@@ -695,22 +695,24 @@ pub fn render(
             .insert((Some(rank), row));
     }
     for notice in &repo.notices {
-        sections
-            .entry("Template updates".into())
-            .or_default()
-            .insert((
-                None,
-                format!(
-                    "- {} in {}; run copier update to apply it{}\n",
-                    safe(&notice.text()),
-                    safe(&notice.path),
-                    notice
-                        .compare_url
-                        .as_ref()
-                        .map(|url| format!(" ([compare]({}))", safe(url)))
-                        .unwrap_or_default()
-                ),
-            ));
+        let (section, action) = if notice.is_template() {
+            ("Template updates", "; run copier update to apply it")
+        } else {
+            ("Newer versions not proposed", "")
+        };
+        sections.entry(section.into()).or_default().insert((
+            None,
+            format!(
+                "- {} in {}{action}{}\n",
+                safe(&notice.text()),
+                safe(&notice.path),
+                notice
+                    .compare_url
+                    .as_ref()
+                    .map(|url| format!(" ([compare]({}))", safe(url)))
+                    .unwrap_or_default()
+            ),
+        ));
     }
     for warning in &repo.tooling {
         let open: Vec<_> = prs
@@ -788,7 +790,7 @@ pub fn render(
             3 + match section.as_str() {
                 "Merged by the Count" => 1,
                 "Pending updates" => 2,
-                "Template updates" => 3,
+                "Template updates" | "Newer versions not proposed" => 3,
                 "Updates you closed" => 4,
                 "Lookup warnings and errors" => 5,
                 "Report warnings" => 6,

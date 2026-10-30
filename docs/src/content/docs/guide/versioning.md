@@ -35,12 +35,33 @@ describes.
   Cargo allows compatible releases. Python writes `==`.
 - `preserve` leaves a range alone while it is still satisfied, and shifts
   simple caret, tilde and wildcard ranges when it is not (`^6.4` becomes `^7.1`).
-- `widen` extends the range to include the new version: a union for npm
-  (`^5 || ^7.0.0`) and a convex interval for Cargo, which cannot express
-  unions.
+- `widen` extends the range to include the new version, where the syntax can
+  express that (see below), and otherwise behaves as `preserve`.
 
-A compound range that cannot be rewritten without guessing (`>=1.0 <2.0`
-needing `3.0`) fails with a warning instead of inventing something.
+A constraint that cannot be rewritten to allow the new version without guessing
+(`>=1.0 <2.0` needing `3.0`, or a Bundler `">= 1, < 2"` needing 2) is not a
+failed lookup. The Count found the release; he just will not invent a
+declaration for it. The release is reported as a
+[notice](/reference/report/) with the reason, listed on the dashboard under
+"Newer versions not proposed", and the dependency's other updates go ahead.
+
+Under `preserve` a shifted range keeps the precision it was declared with:
+`~=2.28` becomes `~=3.1`, not `~=3.1.4`, and Terraform's `~> 6.0` becomes
+`~> 7.1`. A specifier that needs the whole version, such as `==2.28`, takes it.
+
+### What `widen` does per ecosystem
+
+| Ecosystem | `widen` |
+|---|---|
+| npm | adds an alternative: `^1.0.0 \|\| 2.0.0`; a peer range gets a caret alternative, `^5 \|\| ^7.0.0` |
+| Cargo | a convex interval keeping the original minimum, `>=1.2.3, <3.0.0`, because a Cargo requirement cannot be a union |
+| Composer | adds a `||` alternative covering the target: `^1.2 \|\| ^3.0` |
+| Poetry | adds a `||` alternative covering the target: `^1.2 \|\| ^3.0` |
+| PEP 440 (requirements, PEP 621, uv) | raises an upper bound, `<2` to `<=3.1.4`; other specifiers cannot be unions, so they shift as under `preserve` |
+| Terraform | as PEP 440: an upper bound is raised, anything else shifts as under `preserve` |
+| Maven, NuGet | a single interval takes the target as its inclusive upper bound, `[1.0,2.0)` to `[1.0,3.1]`; several intervals are not rewritten |
+| Bundler | as `preserve`: `,` only means "and", so a requirement cannot be extended |
+| Docker, Go, mise tools and toolchains | as `preserve`: a declaration is one version, so every policy writes the target |
 
 ### The default depends on the ecosystem
 

@@ -1300,7 +1300,11 @@ fn an_image_rebuild_is_secured_only_as_security_apply_allows() {
         // A fixed rebuild ships as a fix, like a package fix.
         assert_eq!(
             update.policy.as_ref().unwrap().commit_prefix,
-            if applied { "fix(deps):" } else { "chore(deps):" }
+            if applied {
+                "fix(deps):"
+            } else {
+                "chore(deps):"
+            }
         );
         applied
     };
@@ -1533,3 +1537,56 @@ fn cargo_pyproject_bundler_and_composer_preserve_by_default_and_the_rest_pin() {
     }
 }
 
+/// The lookup worked; the declaration is what cannot be rewritten. That is a
+/// release to report, not an error that drops the dependency's other updates.
+#[test]
+fn constraints_that_cannot_be_rewritten_are_reported_not_failed() {
+    let mut cfg = config("preserve-ranges");
+    cfg.defaults.wait_hours = 0;
+    let eval = Evaluator::new(&cfg).unwrap();
+    for (manager, source, scheme, current, locked) in [
+        (
+            Manager::Bundler,
+            Source::Rubygems,
+            Scheme::Rubygems,
+            ">= 1.2, < 2",
+            "1.5.0",
+        ),
+        (
+            Manager::Composer,
+            Source::Packagist,
+            Scheme::Composer,
+            "^1 | ^2",
+            "2.5.0",
+        ),
+    ] {
+        let mut dep = dependency("example");
+        dep.manager = manager;
+        dep.source = source;
+        dep.scheme = scheme;
+        dep.current = current.into();
+        dep.resolved = Some(locked.into());
+        let now = instant("2026-02-01T00:00:00Z");
+        let result = eval
+            .evaluate_at(&dep, &catalog(&[locked, "1.6.0", "3.0.0"]), now)
+            .unwrap_or_else(|e| panic!("{manager:?}: {e}"));
+        assert_eq!(
+            result
+                .not_proposed
+                .iter()
+                .map(|n| n.version.as_str())
+                .collect::<Vec<_>>(),
+            ["3.0.0"],
+            "{manager:?}"
+        );
+        assert!(result.not_proposed[0].reason.contains(current));
+        // The in-range release is still an update.
+        assert!(
+            result
+                .updates
+                .iter()
+                .all(|u| u.new_version.as_deref() != Some("3.0.0")),
+            "{manager:?}"
+        );
+    }
+}

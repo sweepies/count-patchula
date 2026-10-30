@@ -571,3 +571,22 @@ fn updates_held_by_the_pr_limits_are_listed_with_their_reason_and_a_box() {
     }
 }
 
+/// A newer version the Count looked up but cannot write into the declaration
+/// is listed with why, not as a template that copier could apply.
+#[test]
+fn newer_versions_that_cannot_be_proposed_are_listed_with_their_reason() {
+    let mut repo = repository();
+    repo.notices = serde_json::from_value(json!([{
+        "manager":"composer","path":"composer.json","line":4,"name":"acme/lib",
+        "package":"acme/lib","current":"^1 | ^2","available":"3.0.0",
+        "reason":"the constraint `^1 | ^2` cannot be rewritten to allow it without guessing"
+    }]))
+    .unwrap();
+    let text = dashboard::render(&repo, &[], &[], Recheck::NextRun, None);
+    assert!(!text.contains("copier"), "{text}");
+    let section = &text[text.find("## Newer versions not proposed").unwrap()..];
+    assert!(
+        section.contains("- acme/lib ^1 | ^2 → 3.0.0 available, not proposed: the constraint &#96;^1 | ^2&#96; cannot be rewritten to allow it without guessing in composer.json\n"),
+        "{section}"
+    );
+}

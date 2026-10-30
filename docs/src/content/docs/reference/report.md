@@ -42,7 +42,7 @@ too, so a new field means a new version.
 | `packageFiles` | Files with dependencies, each with a `path` and `dependencies` |
 | `warnings` | Optional. Files skipped, stale registry data and similar |
 | `skipped` | Optional. Declarations that are not read as versions, such as images built from variables: `manager`, `path`, `line`, `value` and `reason` |
-| `notices` | Optional. Newer versions that are reported and never proposed, such as a [Copier template](/guide/managers/#copier)'s tags: `manager`, `path`, `line`, `name`, `package`, `current`, `available`, and `compareUrl` when the host has a compare page |
+| `notices` | Optional. Newer versions that are reported and never proposed: a [Copier template](/guide/managers/#copier)'s tags, which only `copier update` applies, and a release whose declaration cannot be rewritten to allow it without guessing, such as a Composer `^1 \| ^2` needing 3.0. Each has `manager`, `path`, `line`, `name`, `package`, `current`, `available`, and `compareUrl` when the host has a compare page; the second kind also has a `reason` |
 | `lookupFailures` | Optional. Dependencies whose lookup failed; see [below](#lookup-failures) |
 | `tooling` | Optional. [Tooling warnings](/guide/auto-merge/#tooling-warnings) that hold on a live run, one per rule: `rule`, optional `detail` (`native` for `merge-without-ci`, `reviews-only` or `tagged-release`), the `branches` it applies to, and optional `silenced` with the reason from `warnings.quiet` |
 | `defaultBranch`, `commit` | Optional. The branch and commit that were read |

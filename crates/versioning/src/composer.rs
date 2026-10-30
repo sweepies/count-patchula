@@ -193,6 +193,26 @@ pub(super) fn new_range(current: &str, target: &str, policy: VersionPolicy) -> R
     if matches(current, &parsed)? {
         return Ok(current.into());
     }
+    if policy == VersionPolicy::Widen {
+        // `||` joins alternatives, so any constraint extends: `^1.2` and
+        // 3.0.1 become `^1.2 || ^3.0`.
+        let (numbers, rank, _) = key(target).ok_or_else(|| Error::Invalid(target.into()))?;
+        let caret = if rank != 4 {
+            format!("^{}", target.trim_start_matches(['v', 'V']))
+        } else if numbers[0] > 0 {
+            format!("^{}.{}", numbers[0], numbers[1])
+        } else if numbers[1] > 0 {
+            format!("^0.{}", numbers[1])
+        } else {
+            format!("^0.0.{}", numbers[2])
+        };
+        let out = format!("{} || {caret}", current.trim());
+        return if matches(&out, &parsed)? {
+            Ok(out)
+        } else {
+            Err(Error::Compound(current.into()))
+        };
+    }
     let text = current.trim();
     if text.contains(['|', ',', ' ', '*']) || text.starts_with(['<', '!']) {
         return Err(Error::Compound(current.into()));
