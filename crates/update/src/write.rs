@@ -5,7 +5,9 @@ use patchula_github::Client;
 use patchula_report::ActionStatus;
 use serde_json::{Value, json};
 
-/// GitHub's Git Data GraphQL ref lease is atomic, including the base check.
+/// GitHub's Git Data GraphQL ref update, atomic across the branch refs it names.
+/// The default branch is never named: rulesets that require a pull request
+/// reject even a no-op update to it, so the base is checked when it is read.
 pub const REF_UPDATE: &str =
     "mutation($input:UpdateRefsInput!){updateRefs(input:$input){clientMutationId}}";
 
@@ -44,7 +46,7 @@ fn trailer<'a>(message: &'a str, key: &str) -> Option<&'a str> {
     let value = lines.next()?;
     lines.next().is_none().then_some(value)
 }
-fn ref_path(repo: &str, branch: &str) -> String {
+pub(crate) fn ref_path(repo: &str, branch: &str) -> String {
     let mut url = reqwest::Url::parse(&format!(
         "https://api.github.com/repos/{repo}/git/ref/heads/"
     ))
@@ -52,7 +54,7 @@ fn ref_path(repo: &str, branch: &str) -> String {
     url.path_segments_mut().unwrap().pop_if_empty().push(branch);
     url.path().into()
 }
-async fn fresh(client: &Client, path: &str) -> Result<Value, String> {
+pub(crate) async fn fresh(client: &Client, path: &str) -> Result<Value, String> {
     let response = client.get(path).await.map_err(|e| e.to_string())?;
     serde_json::from_slice(&response.body).map_err(|e| e.to_string())
 }
@@ -203,8 +205,10 @@ pub async fn apply_all(
         .collect::<Vec<_>>()
         .await;
     if let Ok(base) = &base {
-        // Bound each atomic mutation to fifty refs, including the base lease.
-        for chunk in plans.chunks_mut(49) {
+        // Bound each atomic mutation to fifty branch refs. The default branch is
+        // never named: rulesets that require pull requests reject even a no-op
+        // update of it.
+        for chunk in plans.chunks_mut(50) {
             let eligible = |p: &Plan| {
                 pending.contains(&p.action.branch)
                     && matches!(
@@ -212,13 +216,11 @@ pub async fn apply_all(
                         ActionStatus::Created | ActionStatus::Updated | ActionStatus::Rebased
                     )
             };
-            let mut refs = vec![
-                json!({"name":format!("refs/heads/{}",base.default_branch),"beforeOid":base.commit,"afterOid":base.commit,"force":false}),
-            ];
+            let mut refs = Vec::new();
             for p in chunk.iter().filter(|p| eligible(p)) {
                 refs.push(json!({"name":format!("refs/heads/{}",p.action.branch),"beforeOid":p.action.previous_commit.as_deref().unwrap_or("0000000000000000000000000000000000000000"),"afterOid":p.action.commit,"force":true}));
             }
-            if refs.len() == 1 {
+            if refs.is_empty() {
                 continue;
             }
             let result = client
@@ -474,7 +476,6 @@ async fn apply_inner(
     if publish_ref {
         let zero = "0000000000000000000000000000000000000000";
         let published = client.graphql(REF_UPDATE, json!({"input":{"repositoryId":node_id,"refUpdates":[
-        {"name":format!("refs/heads/{default_branch}"),"beforeOid":plan.action.base_commit,"afterOid":plan.action.base_commit,"force":false},
         {"name":format!("refs/heads/{}",plan.action.branch),"beforeOid":old.as_deref().unwrap_or(zero),"afterOid":sha,"force":true}
     ]}})).await.map_err(|e| format!("atomic ref lease failed; branch may have changed, rerun: {e}"))?;
         if !published["updateRefs"].is_object() {

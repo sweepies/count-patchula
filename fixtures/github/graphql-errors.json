@@ -35,7 +35,11 @@
           "value": {
             "errors": [
               {
-                "message": "private response body",
+                "message": "Push blocked. Changes must be made through a pull request.",
+                "type": "FORBIDDEN"
+              },
+              {
+                "message": "Cannot update this protected ref.",
                 "type": "FORBIDDEN"
               }
             ]

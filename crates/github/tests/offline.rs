@@ -179,8 +179,21 @@ async fn graphql_errors_and_uncached_304s_fail_safely_and_rest_redirects_are_gov
         .graphql(QUERY, json!({"cursor":null}))
         .await
         .unwrap_err();
-    assert_eq!(error, Error::Graphql);
-    assert!(!format!("{error:?}").contains("private response body"));
+    assert_eq!(
+        error,
+        Error::Graphql(
+            "Push blocked. Changes must be made through a pull request.; \
+             Cannot update this protected ref."
+                .into()
+        )
+    );
+    assert_eq!(
+        error.to_string(),
+        "GitHub GraphQL returned errors: Push blocked. Changes must be made through a pull request.; \
+         Cannot update this protected ref."
+    );
+    let text = format!("{error:?}");
+    assert!(!text.contains("FORBIDDEN") && !text.contains(TOKEN) && !text.contains("simulated"));
     replay.assert_finished().unwrap();
     let (_directory, client, replay) = self::client("missing-body", Options::default()).await;
     assert_eq!(

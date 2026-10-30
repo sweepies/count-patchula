@@ -43,8 +43,10 @@ pub enum Error {
     RateLimit,
     #[error("GitHub response is invalid JSON")]
     Json,
-    #[error("GitHub GraphQL returned errors")]
-    Graphql,
+    /// Carries GitHub's `errors[].message` values, joined and truncated; empty
+    /// when GitHub sent none.
+    #[error("GitHub GraphQL returned errors{}", graphql_detail(.0))]
+    Graphql(String),
     #[error("GitHub pagination cursor/link is invalid, repeated or exceeds page budget")]
     Pagination,
     #[error("GitHub returned 304 without a cached body")]
@@ -603,12 +605,40 @@ impl Client {
             .get("errors")
             .is_some_and(|errors| !errors.as_array().is_some_and(Vec::is_empty))
         {
-            return Err(Error::Graphql);
+            return Err(Error::Graphql(graphql_messages(&json)));
         }
         json.get("data")
             .filter(|data| !data.is_null())
             .cloned()
-            .ok_or(Error::Graphql)
+            .ok_or_else(|| Error::Graphql(String::new()))
+    }
+}
+
+/// Longest GraphQL error text kept in `Error::Graphql`, in characters.
+const GRAPHQL_MESSAGE_LIMIT: usize = 300;
+
+/// GitHub's `errors[].message` values joined with "; ", cut to the limit.
+fn graphql_messages(response: &Value) -> String {
+    let messages: Vec<&str> = response["errors"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|error| error["message"].as_str())
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
+        .collect();
+    let joined = messages.join("; ");
+    match joined.char_indices().nth(GRAPHQL_MESSAGE_LIMIT) {
+        Some((end, _)) => format!("{}…", &joined[..end]),
+        None => joined,
+    }
+}
+
+fn graphql_detail(messages: &str) -> String {
+    if messages.is_empty() {
+        String::new()
+    } else {
+        format!(": {messages}")
     }
 }
 
@@ -683,5 +713,26 @@ fn cache_entry(response: &Response) -> HttpEntry {
         fetched_at,
         expires_at,
         cache_control,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn graphql_messages_are_joined_and_truncated() {
+        let response = json!({"errors":[{"message":"one"},{"type":"X"},{"message":" two "}]});
+        assert_eq!(graphql_messages(&response), "one; two");
+        let long = "é".repeat(GRAPHQL_MESSAGE_LIMIT + 50);
+        let cut = graphql_messages(&json!({"errors":[{"message":long}]}));
+        assert_eq!(cut.chars().count(), GRAPHQL_MESSAGE_LIMIT + 1);
+        assert!(cut.ends_with('…'));
+        assert_eq!(graphql_messages(&json!({"errors":[{}]})), "");
+        assert_eq!(
+            Error::Graphql(String::new()).to_string(),
+            "GitHub GraphQL returned errors"
+        );
     }
 }

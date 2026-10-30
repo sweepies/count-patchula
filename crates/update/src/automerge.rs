@@ -321,7 +321,6 @@ async fn one(
                 repo.default_branch
                     .as_deref()
                     .ok_or("missing default branch")?,
-                result["sha"].as_str().ok_or("missing merged base SHA")?,
                 pr["head"]["ref"].as_str().ok_or("missing head branch")?,
                 head,
             )

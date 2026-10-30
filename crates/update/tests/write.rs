@@ -2857,8 +2857,169 @@ async fn batch_ref_race_keeps_every_prepared_branch_unpublished() {
             .as_array()
             .unwrap()
             .len(),
-        3
+        2
     );
+    for p in &plans {
+        let reason = p.action.reason.as_deref().unwrap();
+        assert!(
+            reason.contains("atomic batch ref lease failed")
+                && reason.ends_with("GitHub GraphQL returned errors: reference changed"),
+            "{reason}"
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn single_branch_ref_failure_names_githubs_reason() {
+    let (mut p, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    server.0.lock().unwrap().race = true;
+    let github = client(server.clone()).await;
+    apply(&github, &mut p, &snapshot, "main", Rebase::Behind, false).await;
+    assert_eq!(p.action.status, ActionStatus::Error);
+    assert!(
+        p.action
+            .reason
+            .as_deref()
+            .unwrap()
+            .ends_with("GitHub GraphQL returned errors: reference changed"),
+        "{:?}",
+        p.action.reason
+    );
+}
+
+/// Every `updateRefs` input recorded by the fake, as lists of ref names.
+fn ref_update_names(server: &Fake) -> Vec<Vec<String>> {
+    server
+        .0
+        .lock()
+        .unwrap()
+        .writes
+        .iter()
+        .filter(|(_, b)| b["query"] == patchula_update::REF_UPDATE)
+        .map(|(_, b)| {
+            b["variables"]["input"]["refUpdates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["name"].as_str().unwrap().to_owned())
+                .collect()
+        })
+        .collect()
+}
+
+#[tokio::test(start_paused = true)]
+async fn no_ref_update_names_the_default_branch() {
+    // Rulesets that require pull requests reject even a no-op update of it.
+    let (mut single, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    apply(
+        &github,
+        &mut single,
+        &snapshot,
+        "main",
+        Rebase::Behind,
+        false,
+    )
+    .await;
+    assert_eq!(single.action.status, ActionStatus::Created);
+    let names = ref_update_names(&server);
+    assert_eq!(
+        names,
+        vec![vec![format!("refs/heads/{}", single.action.branch)]]
+    );
+
+    let (p, snapshot) = make_plan("22.0.0");
+    let (other, _) = make_plan("24.0.0");
+    let mut plans = vec![p, other];
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    patchula_update::apply_all(
+        &github,
+        &mut plans,
+        &snapshot,
+        "main",
+        Rebase::Behind,
+        false,
+    )
+    .await;
+    assert!(
+        plans
+            .iter()
+            .all(|p| p.action.status == ActionStatus::Created)
+    );
+    let names = ref_update_names(&server);
+    assert_eq!(names.len(), 1);
+    assert_eq!(names[0].len(), 2);
+    assert!(names[0].iter().all(|n| n != "refs/heads/main"));
+
+    // Deleting an obsolete owned branch.
+    let before = ref_update_names(&server).len();
+    {
+        let mut s = server.0.lock().unwrap();
+        let sha = s.refs[&format!("refs/heads/{}", plans[0].action.branch)].clone();
+        let commit = s.commits.get_mut(&sha).unwrap();
+        commit["message"] = json!(commit["message"].as_str().unwrap().replace(
+            "Patchula-Base: base",
+            "Patchula-Base: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ));
+    }
+    let actions = patchula_update::cleanup(&github, "demo/app", "base", "main", &[], false)
+        .await
+        .unwrap();
+    assert!(actions.iter().any(|a| a.status == ActionStatus::Deleted));
+    let names = ref_update_names(&server);
+    assert!(names.len() > before);
+    assert!(names.iter().flatten().all(|n| n != "refs/heads/main"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn cleanup_deletes_nothing_once_the_default_branch_moves() {
+    let (p, snapshot) = make_plan("22.0.0");
+    let mut plans = vec![p];
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    patchula_update::apply_all(
+        &github,
+        &mut plans,
+        &snapshot,
+        "main",
+        Rebase::Behind,
+        false,
+    )
+    .await;
+    assert_eq!(plans[0].action.status, ActionStatus::Created);
+    {
+        let mut s = server.0.lock().unwrap();
+        let sha = s.refs[&format!("refs/heads/{}", plans[0].action.branch)].clone();
+        let commit = s.commits.get_mut(&sha).unwrap();
+        commit["message"] = json!(commit["message"].as_str().unwrap().replace(
+            "Patchula-Base: base",
+            "Patchula-Base: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ));
+        s.refs.insert(
+            "refs/heads/main".into(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+        );
+    }
+    let before = ref_update_names(&server).len();
+    let actions = patchula_update::cleanup(&github, "demo/app", "base", "main", &[], false)
+        .await
+        .unwrap();
+    assert!(actions.is_empty());
+    assert_eq!(ref_update_names(&server).len(), before);
+    // The same branch is deleted once the plans match the default branch again.
+    server
+        .0
+        .lock()
+        .unwrap()
+        .refs
+        .insert("refs/heads/main".into(), "base".into());
+    let actions = patchula_update::cleanup(&github, "demo/app", "base", "main", &[], false)
+        .await
+        .unwrap();
+    assert!(actions.iter().any(|a| a.status == ActionStatus::Deleted));
 }
 
 #[tokio::test(start_paused = true)]
