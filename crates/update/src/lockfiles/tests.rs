@@ -2591,6 +2591,71 @@ fn a_vulnerable_transitive_crate_moves_through_its_lockfile_alone() {
     validate_targets(plan, &config, &files).unwrap();
 }
 
+#[test]
+fn a_lock_resolves_a_target_that_names_no_build_metadata() {
+    let lock = |version: &str| {
+        format!(
+            "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\n\n[[package]]\nname = \"zstd-sys\"\nversion = \"{version}\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n"
+        )
+    };
+    let manifest = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n";
+    let config = config();
+    let snapshot = snapshot(&BTreeMap::from([(
+        "Cargo.lock".into(),
+        lock("2.1.1+zstd.1.5.7"),
+    )]));
+    let mut plan = maintenance(&repo(), &config, &snapshot, None, monday())
+        .unwrap()
+        .unwrap();
+    plan.changes.push(crate::Change {
+        source: "crates".into(),
+        package: "zstd-sys".into(),
+        file: "Cargo.lock".into(),
+        current: "2.1.1+zstd.1.5.7".into(),
+        current_version: Some("2.1.1+zstd.1.5.7".into()),
+        value: None,
+        version: Some("2.1.2".into()),
+        digest: None,
+        kind: "patch".into(),
+        merge: false,
+        labels: Vec::new(),
+        release_notes: false,
+        body_notes: Vec::new(),
+        advisories: Vec::new(),
+        image: None,
+    });
+    let check = |plan: &Plan, version: &str| {
+        validate_targets(
+            plan,
+            &config,
+            &BTreeMap::from([
+                ("Cargo.toml".into(), manifest.into()),
+                ("Cargo.lock".into(), lock(version)),
+            ]),
+        )
+    };
+    check(&plan, "2.1.2+zstd.1.5.7").unwrap();
+    check(&plan, "2.1.2").unwrap();
+    assert!(
+        check(&plan, "2.1.1+zstd.1.5.7")
+            .unwrap_err()
+            .contains("did not resolve zstd-sys")
+    );
+    assert!(
+        check(&plan, "2.1.3+zstd.1.5.7")
+            .unwrap_err()
+            .contains("did not resolve zstd-sys")
+    );
+    // A request that names its build metadata means that build.
+    plan.changes[0].version = Some("2.1.2+zstd.1.5.7".into());
+    check(&plan, "2.1.2+zstd.1.5.7").unwrap();
+    assert!(
+        check(&plan, "2.1.2+zstd.1.5.8")
+            .unwrap_err()
+            .contains("did not resolve zstd-sys")
+    );
+}
+
 #[tokio::test]
 async fn real_cargo_moves_a_locked_package_without_a_manifest_change() {
     let manifest = "[package]\nname='fixture'\nversion='1.0.0'\nedition='2024'\n[dependencies]\noffline-patch-fixture='1'\n";

@@ -991,8 +991,12 @@ fn validate_targets(
                     .is_some_and(|packages| {
                         packages.iter().any(|p| {
                             p.get("name").and_then(toml_edit::Item::as_str) == Some(&change.package)
-                                && p.get("version").and_then(toml_edit::Item::as_str)
-                                    == change.version.as_deref()
+                                && p.get("version")
+                                    .and_then(toml_edit::Item::as_str)
+                                    .zip(change.version.as_deref())
+                                    .is_some_and(|(locked, requested)| {
+                                        same_release(locked, requested)
+                                    })
                         })
                     })
             });
@@ -1050,7 +1054,10 @@ fn validate_targets(
             ) || (dep.source == Source::Terraform
                 && dep.kind == patchula_config::DependencyKind::Provider))
             && let Some(version) = &change.version
-            && dep.resolved.as_deref() != Some(version)
+            && !dep
+                .resolved
+                .as_deref()
+                .is_some_and(|resolved| same_release(resolved, version))
         {
             return Err(format!(
                 "lockfile did not resolve {} to requested version {version}",
@@ -1123,6 +1130,12 @@ fn versions(
     }
     Ok(versions)
 }
+/// Whether a locked version is the requested one. SemVer build metadata does
+/// not order versions, so a request without it matches any build: the advisory
+/// for `zstd-sys` fixes `2.1.2`, which the lock records as `2.1.2+zstd.1.5.7`.
+fn same_release(locked: &str, requested: &str) -> bool {
+    locked == requested || (!requested.contains('+') && locked.split('+').next() == Some(requested))
+}
 /// Whether Cargo treats `target` as incompatible with `current`: a different
 /// major version, or a different minor (or patch) one below 1.0. Cargo then
 /// keeps both in the lock.
@@ -1146,7 +1159,7 @@ fn compatible_entries(lock: &str, package: &str, target: &str) -> Vec<String> {
         .flatten()
         .filter(|entry| entry.get("name").and_then(toml_edit::Item::as_str) == Some(package))
         .filter_map(|entry| entry.get("version")?.as_str())
-        .filter(|version| *version != target && !crosses_compatibility(version, target))
+        .filter(|version| !same_release(version, target) && !crosses_compatibility(version, target))
         .map(str::to_owned)
         .collect()
 }
