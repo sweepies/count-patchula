@@ -4871,3 +4871,58 @@ fn a_lock_only_cargo_update_without_a_committed_lock_has_no_job() {
             .is_some()
     );
 }
+
+/// A PR records each file once, but a workflow can use the same action in
+/// several jobs; the batch moves every one of them, as the PR did.
+#[test]
+fn a_batch_moves_every_declaration_of_a_dependency_in_a_file() {
+    let workflow = "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4.1.0\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4.1.0\n  c:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4.1.0\n";
+    let files = BTreeMap::from([(".github/workflows/ci.yml".to_string(), workflow.to_string())]);
+    let config = config();
+    let dependencies = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies
+        .into_iter()
+        .filter(|d| d.package == "actions/checkout")
+        .collect::<Vec<_>>();
+    assert_eq!(dependencies.len(), 3, "{dependencies:?}");
+    let source = serde_json::to_value(dependencies[0].source).unwrap();
+    let target = crate::plan::Change {
+        source: source.as_str().unwrap().into(),
+        package: dependencies[0].package.clone(),
+        file: ".github/workflows/ci.yml".into(),
+        current: dependencies[0].current.clone(),
+        current_version: None,
+        value: Some("v4.2.0".into()),
+        version: Some("4.2.0".into()),
+        digest: None,
+        kind: "minor".into(),
+        merge: false,
+        labels: Vec::new(),
+        release_notes: false,
+        body_notes: Vec::new(),
+        advisories: Vec::new(),
+        image: None,
+    };
+    let plan = crate::plan::batch_plan(
+        &repo(),
+        &config,
+        &dependencies,
+        &snapshot(&files),
+        &[target],
+        false,
+        None,
+        monday(),
+    )
+    .unwrap()
+    .expect("a batch plan");
+    let written = &plan.contents[".github/workflows/ci.yml"];
+    assert_eq!(
+        written.matches("actions/checkout@v4.2.0").count(),
+        3,
+        "{written}"
+    );
+    assert!(!written.contains("@v4.1.0"), "{written}");
+}

@@ -695,40 +695,55 @@ pub fn batch_plan(
                     .unwrap_or_default()
             )
         };
-        let Some(dep) = candidates
+        // A target names its file once, but the file can declare the dependency
+        // several times, such as one action in many jobs; every declaration
+        // the PR moved moves in the batch too.
+        let matching: Vec<_> = candidates
             .iter()
-            .find(|d| current(d) == target.current)
-            .or_else(|| candidates.first())
-        else {
-            continue;
-        };
-        // A lockfile-only target is complete once the lock holds its version.
-        let applied = if target.value.is_none() && target.digest.is_none() {
-            target.version.as_deref().is_none_or(|v| {
-                dep.resolved
-                    .as_deref()
-                    .is_some_and(|locked| crate::lockfiles::same_release(locked, v))
-            })
+            .copied()
+            .filter(|d| current(d) == target.current)
+            .collect();
+        let deps = if matching.is_empty() {
+            candidates.first().copied().into_iter().collect()
         } else {
-            target.value.as_deref().is_none_or(|v| v == dep.current) && target.digest == dep.digest
+            matching
         };
-        if applied {
-            continue;
+        for dep in deps {
+            if pending
+                .iter()
+                .any(|(held, _): &(&Dependency, Update)| std::ptr::eq(*held, dep))
+            {
+                continue;
+            }
+            // A lockfile-only target is complete once the lock holds its version.
+            let applied = if target.value.is_none() && target.digest.is_none() {
+                target.version.as_deref().is_none_or(|v| {
+                    dep.resolved
+                        .as_deref()
+                        .is_some_and(|locked| crate::lockfiles::same_release(locked, v))
+                })
+            } else {
+                target.value.as_deref().is_none_or(|v| v == dep.current)
+                    && target.digest == dep.digest
+            };
+            if applied {
+                continue;
+            }
+            pending.push((
+                dep,
+                Update {
+                    new_value: target.value.clone(),
+                    new_version: target.version.clone(),
+                    new_digest: target.digest.clone(),
+                    update_type: target.kind.clone(),
+                    group: None,
+                    policy: None,
+                    release_age: None,
+                    fixes: Vec::new(),
+                    image: target.image.clone(),
+                },
+            ));
         }
-        pending.push((
-            *dep,
-            Update {
-                new_value: target.value.clone(),
-                new_version: target.version.clone(),
-                new_digest: target.digest.clone(),
-                update_type: target.kind.clone(),
-                group: None,
-                policy: None,
-                release_age: None,
-                fixes: Vec::new(),
-                image: target.image.clone(),
-            },
-        ));
     }
     if pending.is_empty() {
         return Ok(None);
