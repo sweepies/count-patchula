@@ -8,6 +8,7 @@ mod edit;
 pub use actions::replacement as action_replacement;
 pub use actions::runner_replacement;
 pub use edit::{Edit, apply, edits};
+pub use mise::included_files;
 mod cargo;
 mod composer;
 mod custom;
@@ -98,7 +99,14 @@ pub struct Dependency {
     pub source: Source,
     pub scheme: Scheme,
     pub extract: Option<String>,
+    /// The mise config that includes this file as a TOML task file.
+    pub included_by: Option<String>,
 }
+/// A key as one token of a JSON Pointer, which escapes `~` and `/`.
+pub(crate) fn pointer_token(key: &str) -> String {
+    key.replace('~', "~0").replace('/', "~1")
+}
+
 impl Dependency {
     /// The version a committed lockfile holds for a direct dependency whose
     /// lock the Count can move to a chosen version: Cargo.lock, uv.lock,
@@ -400,6 +408,16 @@ impl Scanner {
             }
         }
         let repos = yaml::repositories(&documents);
+        let task_files = if self.config.managers.contains(&Manager::Mise) {
+            mise::task_files(
+                files
+                    .iter()
+                    .filter(|(path, _)| self.selected(Manager::Mise, path)),
+                files,
+            )
+        } else {
+            BTreeMap::new()
+        };
         // package.json shared by npm/bun is scanned once, preferring bun only
         // when npm is disabled. Lockfiles provide resolution, never transitive deps.
         let node = if self.config.managers.contains(&Manager::Npm) {
@@ -421,7 +439,12 @@ impl Scanner {
             } else if self.selected(Manager::GithubActions, path) {
                 actions::extract(path, text)
             } else if self.selected(Manager::Mise, path) {
-                mise::extract(path, text, &mut result.skipped)
+                mise::extract(
+                    path,
+                    text,
+                    task_files.get(path).map(String::as_str),
+                    &mut result.skipped,
+                )
             } else if self.selected(Manager::Cargo, path)
                 && (path.ends_with("rust-toolchain") || path.ends_with("rust-toolchain.toml"))
             {

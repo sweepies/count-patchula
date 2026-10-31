@@ -170,6 +170,7 @@ fn dependency(
         source,
         scheme: Scheme::Loose,
         extract: None,
+        included_by: None,
     }))
 }
 

@@ -86,6 +86,7 @@ impl<'a> Scan<'a> {
             source,
             scheme: Scheme::Semver,
             extract: None,
+            included_by: None,
         });
         Ok(())
     }
@@ -174,6 +175,7 @@ pub(super) fn extract(
                 source: Source::GithubReleases,
                 scheme: Scheme::Loose,
                 extract: None,
+                included_by: None,
             });
         }
     }

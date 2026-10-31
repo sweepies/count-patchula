@@ -96,6 +96,132 @@ fn requests(spec: &toml_edit::Item) -> BTreeSet<String> {
     }
 }
 
+/// One version a declaration requests, with the options it asks mise for.
+struct Request {
+    version: String,
+    options: BTreeMap<String, toml_edit::Value>,
+}
+
+/// What a declaration requests, or `None` for a form that is not a version
+/// string, a table with a string `version`, or an array of those.
+fn request_list(spec: &toml_edit::Item) -> Option<Vec<Request>> {
+    fn table(table: &dyn toml_edit::TableLike, out: &mut Vec<Request>) -> Option<()> {
+        out.push(Request {
+            version: table.get("version")?.as_str()?.to_owned(),
+            options: table
+                .iter()
+                .filter(|(key, _)| *key != "version")
+                .map(|(key, value)| Some((key.to_owned(), value.as_value()?.clone())))
+                .collect::<Option<_>>()?,
+        });
+        Some(())
+    }
+    fn each(value: &toml_edit::Value, out: &mut Vec<Request>) -> Option<()> {
+        if let Some(version) = value.as_str() {
+            out.push(Request {
+                version: version.to_owned(),
+                options: BTreeMap::new(),
+            });
+            Some(())
+        } else if let Some(values) = value.as_array() {
+            values.iter().try_for_each(|value| each(value, out))
+        } else {
+            table(value.as_inline_table()?, out)
+        }
+    }
+    let mut out = Vec::new();
+    match spec.as_value() {
+        Some(value) => each(value, &mut out)?,
+        None => table(spec.as_table_like()?, &mut out)?,
+    }
+    Some(out)
+}
+
+/// The options every request in `requests` shares, compared as parsed values so
+/// quoting and spacing do not matter, or `None` when they differ among them.
+fn shared_options(requests: &[Request]) -> Option<BTreeMap<String, Value>> {
+    let parsed = |request: &Request| -> BTreeMap<String, Value> {
+        request
+            .options
+            .iter()
+            .map(|(key, option)| (key.clone(), value(option)))
+            .collect()
+    };
+    let first = parsed(requests.first()?);
+    requests
+        .iter()
+        .all(|request| parsed(request) == first)
+        .then_some(first)
+}
+
+/// A tool a task installs again, merged into its declaration in the
+/// configuration. mise locks one version with other options as an entry of its
+/// own, which one declaration cannot express, so options must agree; another
+/// version with the same options is requested beside the first, as a string
+/// or, with options, as one table per version. `None` leaves it as declared.
+fn merged(
+    name: &str,
+    declared: &toml_edit::Item,
+    task: &toml_edit::Item,
+) -> Result<Option<toml_edit::Item>, String> {
+    let (Some(mut all), Some(more)) = (request_list(declared), request_list(task)) else {
+        return Err(format!(
+            "{name} has a declaration the Count cannot compare with a task's"
+        ));
+    };
+    let (Some(options), Some(other)) = (shared_options(&all), shared_options(&more)) else {
+        return Err(format!(
+            "{name} is declared with several sets of options, beside a task that declares it too"
+        ));
+    };
+    if options != other {
+        return Err(format!(
+            "{name} is declared with different options by a task and elsewhere"
+        ));
+    }
+    let known = all.len();
+    for request in more {
+        if !all.iter().any(|known| known.version == request.version) {
+            all.push(request);
+        }
+    }
+    if all.len() == known {
+        return Ok(None);
+    }
+    let mut array = toml_edit::Array::new();
+    for request in &all {
+        if request.options.is_empty() {
+            array.push(request.version.as_str());
+        } else {
+            let mut table = toml_edit::InlineTable::new();
+            table.insert("version", request.version.as_str().into());
+            for (key, option) in &request.options {
+                let mut option = option.clone();
+                option.decor_mut().clear();
+                table.insert(key, option);
+            }
+            array.push(table);
+        }
+    }
+    Ok(Some(toml_edit::value(array)))
+}
+
+/// The selected tools a task installs for itself.
+fn task_declarations(
+    task: &toml_edit::Item,
+    selected: &BTreeSet<String>,
+    out: &mut Vec<(String, toml_edit::Item)>,
+) {
+    if let Some(declarations) = task.get("tools").and_then(toml_edit::Item::as_table_like) {
+        out.extend(
+            declarations
+                .iter()
+                .filter(|(name, _)| selected.contains(*name))
+                .map(|(name, spec)| (name.to_owned(), spec.clone())),
+        );
+    }
+}
+
 impl Runner {
     pub(super) async fn mise_lock(
         &self,
@@ -128,6 +254,8 @@ impl Runner {
         let work = driver.join(format!("mise-lock-{}", hash(directory.as_bytes())));
         std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
         let mut tools = toml_edit::Table::new();
+        let mut task_tools = Vec::new();
+        let mut includes: Vec<&str> = Vec::new();
         let mut paths: Vec<_> = baseline
             .keys()
             .filter(|path| {
@@ -169,6 +297,57 @@ impl Runner {
                         .filter(|(name, _)| selected.contains(*name))
                     {
                         tools.insert(name, spec.clone());
+                    }
+                }
+                for task in doc
+                    .get("tasks")
+                    .and_then(toml_edit::Item::as_table_like)
+                    .into_iter()
+                    .flat_map(|tasks| tasks.iter().map(|(_, task)| task))
+                {
+                    task_declarations(task, &selected, &mut task_tools);
+                }
+                // TOML task files the configuration includes, by file, glob or
+                // directory, hold tasks as top-level tables.
+                for include in doc
+                    .get("task_config")
+                    .and_then(|config| config.get("includes"))
+                    .and_then(toml_edit::Item::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(toml_edit::Value::as_str)
+                {
+                    includes.extend(patchula_manager::included_files(
+                        super::directory(path),
+                        include,
+                        baseline.keys().map(String::as_str),
+                    ));
+                }
+            }
+        }
+        includes.sort_unstable();
+        includes.dedup();
+        for include in includes {
+            // A task file the update leaves alone is not checked out.
+            let text = match std::fs::read_to_string(root.join(include)) {
+                Ok(text) => text,
+                Err(_) => baseline[include].content.clone(),
+            };
+            let doc = toml_edit::Document::parse(text).map_err(|e| e.to_string())?;
+            for (_, task) in doc.iter() {
+                task_declarations(task, &selected, &mut task_tools);
+            }
+        }
+        // A tool a task installs is locked beside the tools the configuration
+        // installs.
+        for (name, spec) in task_tools {
+            match tools.get(&name) {
+                None => {
+                    tools.insert(&name, spec);
+                }
+                Some(declared) => {
+                    if let Some(item) = merged(&name, declared, &spec)? {
+                        tools[name.as_str()] = item;
                     }
                 }
             }

@@ -30,9 +30,6 @@ const SERVER: &[&str] = &[
 /// A ref under a YAML anchor may serve several projects, whose tags differ.
 const SHARED: &str = "the ref is shared through a YAML anchor, so no one project's tags apply";
 
-fn escape(key: &str) -> String {
-    key.replace('~', "~0").replace('/', "~1")
-}
 fn commit(reference: &str) -> bool {
     reference.len() == 40 && reference.bytes().all(|b| b.is_ascii_hexdigit())
 }
@@ -168,6 +165,7 @@ impl Scan<'_> {
             source: Source::ForgeTags,
             scheme: Scheme::Loose,
             extract: None,
+            included_by: None,
         });
     }
     fn project(&mut self, entry: &Value, pointer: &str, host: &str) {
@@ -215,6 +213,7 @@ impl Scan<'_> {
             source: Source::ForgeTags,
             scheme: Scheme::Loose,
             extract: None,
+            included_by: None,
         });
     }
     /// `include` holds one entry or a list; plain strings are local or remote files.
@@ -269,7 +268,7 @@ pub(super) fn extract(
                 && !KEYWORDS.contains(&key)
                 && value.is_mapping()
             {
-                scan.job(value, &format!("/{doc}/{}", escape(key)));
+                scan.job(value, &format!("/{doc}/{}", pointer_token(key)));
             }
         }
     }

@@ -292,6 +292,7 @@ fn walk(
                     source: Source::Crates,
                     scheme: Scheme::Semver,
                     extract: None,
+                    included_by: None,
                 });
             }
         } else if let Some(table) = item.as_table_like() {
