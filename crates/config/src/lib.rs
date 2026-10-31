@@ -229,19 +229,24 @@ pub fn problem(path: &Path, source: &str, field: &str, message: &str) -> miette:
     // properties have no source map after evaluation; never invent their location.
     let leaf = field.rsplit('.').next().unwrap_or(field);
     let leaf = leaf.split('[').next().unwrap_or(leaf);
-    let assignments: Vec<_> = source
-        .match_indices(leaf)
-        .filter(|(offset, _)| {
-            let before = &source[..*offset];
-            let after = &source[*offset + leaf.len()..];
-            before
-                .chars()
-                .next_back()
-                .is_none_or(|c| !c.is_alphanumeric() && c != '_')
-                && after.trim_start().starts_with(['=', ':', '{'])
-        })
-        .collect();
-    let span = if !leaf.is_empty() && assignments.len() == 1 {
+    // No name, nothing to find: an empty pattern would match at every byte.
+    let assignments: Vec<_> = if leaf.is_empty() {
+        Vec::new()
+    } else {
+        source
+            .match_indices(leaf)
+            .filter(|(offset, _)| {
+                let before = &source[..*offset];
+                let after = &source[*offset + leaf.len()..];
+                before
+                    .chars()
+                    .next_back()
+                    .is_none_or(|c| !c.is_alphanumeric() && c != '_')
+                    && after.trim_start().starts_with(['=', ':', '{'])
+            })
+            .collect()
+    };
+    let span = if assignments.len() == 1 {
         Some((assignments[0].0, leaf.len()).into())
     } else {
         None
