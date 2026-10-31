@@ -33,6 +33,7 @@ pub(super) fn extract(
                         add(
                             path,
                             text,
+                            "",
                             name,
                             version,
                             offset + start..offset + start + version.len(),
@@ -48,20 +49,61 @@ pub(super) fn extract(
     } else {
         let doc = Document::parse(text).map_err(|e| e.to_string())?;
         if let Some(tools) = doc.get("tools").and_then(|v| v.as_table_like()) {
-            for (name, item) in tools.iter() {
-                if let Some(value) = item.as_value() {
-                    collect(path, text, name, value, &mut out, skipped);
-                } else if let Some(value) = item.get("version").and_then(|v| v.as_value()) {
-                    collect(path, text, name, value, &mut out, skipped);
-                }
+            tools_in(path, text, tools, "", &mut out, skipped);
+        }
+        // A task's own tools: `[tasks.<name>]` in a config file, and a
+        // top-level `[<name>]` in an included task file, which is written
+        // without the `tasks.` prefix.
+        if let Some(tasks) = doc.get("tasks").and_then(|v| v.as_table_like()) {
+            for (task, item) in tasks.iter() {
+                task_tools(
+                    path,
+                    text,
+                    item,
+                    &format!("/tasks/{task}"),
+                    &mut out,
+                    skipped,
+                );
             }
+        }
+        for (task, item) in doc.iter().filter(|(k, _)| !matches!(*k, "tools" | "tasks")) {
+            task_tools(path, text, item, &format!("/{task}"), &mut out, skipped);
         }
     }
     Ok(out)
 }
+fn task_tools(
+    path: &str,
+    text: &str,
+    task: &toml_edit::Item,
+    prefix: &str,
+    out: &mut Vec<Dependency>,
+    skipped: &mut Vec<Skipped>,
+) {
+    if let Some(tools) = task.get("tools").and_then(|v| v.as_table_like()) {
+        tools_in(path, text, tools, prefix, out, skipped);
+    }
+}
+fn tools_in(
+    path: &str,
+    text: &str,
+    tools: &dyn toml_edit::TableLike,
+    prefix: &str,
+    out: &mut Vec<Dependency>,
+    skipped: &mut Vec<Skipped>,
+) {
+    for (name, item) in tools.iter() {
+        if let Some(value) = item.as_value() {
+            collect(path, text, prefix, name, value, out, skipped);
+        } else if let Some(value) = item.get("version").and_then(|v| v.as_value()) {
+            collect(path, text, prefix, name, value, out, skipped);
+        }
+    }
+}
 fn collect(
     path: &str,
     text: &str,
+    prefix: &str,
     name: &str,
     value: &Value,
     out: &mut Vec<Dependency>,
@@ -70,24 +112,26 @@ fn collect(
     match value {
         Value::String(v) => {
             let span = value.span().expect("immutable parser retains spans");
-            add(path, text, name, v.value(), span, out, skipped);
+            add(path, text, prefix, name, v.value(), span, out, skipped);
         }
         Value::Array(values) => {
             for value in values.iter() {
-                collect(path, text, name, value, out, skipped);
+                collect(path, text, prefix, name, value, out, skipped);
             }
         }
         Value::InlineTable(table) => {
             if let Some(value) = table.get("version") {
-                collect(path, text, name, value, out, skipped);
+                collect(path, text, prefix, name, value, out, skipped);
             }
         }
         _ => {}
     }
 }
+#[allow(clippy::too_many_arguments)]
 fn add(
     path: &str,
     text: &str,
+    prefix: &str,
     name: &str,
     version: &str,
     span: std::ops::Range<usize>,
@@ -129,7 +173,7 @@ fn add(
     out.push(Dependency {
         manager: Manager::Mise,
         file: path.into(),
-        location: Location::new(text, start, end, format!("/tools/{name}")),
+        location: Location::new(text, start, end, format!("{prefix}/tools/{name}")),
         name: name.into(),
         package: name.into(),
         kind: DependencyKind::Tool,

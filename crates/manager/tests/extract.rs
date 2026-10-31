@@ -2070,3 +2070,62 @@ fn mise_http_and_s3_tools_are_skipped_because_they_list_no_versions() {
         ]
     );
 }
+
+/// mise installs a task's `tools` for that task only, in a config file under
+/// `[tasks.<name>]` and in an included task file as a top-level `[<name>]`.
+#[test]
+fn mise_task_tools_are_extracted_from_config_and_included_task_files() {
+    let mut config = config();
+    config.managers = vec![Manager::Mise];
+    config.files = vec![patchula_config::FileSet {
+        manager: Manager::Mise,
+        paths: vec!["mise.toml".into(), "tasks.toml".into()],
+    }];
+    let files = Files::from([
+        (
+            "mise.toml".into(),
+            "[tools]\njq = \"1.7.1\"\n[tasks.lint]\nrun = \"hk check\"\ntools.hk = \"1.2.0\"\n[tasks.test]\ntools = { python = \"3.14.8\", uv = { version = \"0.13.1\" } }\n[tasks.plain]\nrun = \"true\"\n[tasks]\nshort = \"echo hi\"\n".into(),
+        ),
+        (
+            "tasks.toml".into(),
+            "short = \"echo hi\"\n[build]\nrun = \"cargo build\"\n[\"test:tools\".tools]\naube = \"2.8.1\"\n\"http:php[url=https://example.com/{{version}}.tar.gz]\" = \"8.5.8\"\n".into(),
+        ),
+    ]);
+    let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+    let found: Vec<_> = extraction
+        .dependencies
+        .iter()
+        .map(|d| {
+            (
+                d.file.as_str(),
+                d.name.as_str(),
+                d.current.as_str(),
+                d.location.pointer.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("mise.toml", "jq", "1.7.1", "/tools/jq"),
+            ("mise.toml", "hk", "1.2.0", "/tasks/lint/tools/hk"),
+            ("mise.toml", "python", "3.14.8", "/tasks/test/tools/python"),
+            ("mise.toml", "uv", "0.13.1", "/tasks/test/tools/uv"),
+            ("tasks.toml", "aube", "2.8.1", "/test:tools/tools/aube"),
+        ]
+    );
+    for dep in &extraction.dependencies {
+        assert_eq!(
+            files[&dep.file][dep.location.start..dep.location.end].trim_matches('"'),
+            dep.current
+        );
+    }
+    assert_eq!(
+        extraction
+            .skipped
+            .iter()
+            .map(|s| (s.file.as_str(), s.line))
+            .collect::<Vec<_>>(),
+        [("tasks.toml", Some(6))]
+    );
+}

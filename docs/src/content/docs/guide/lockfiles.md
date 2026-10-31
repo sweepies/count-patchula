@@ -32,6 +32,11 @@ own, and with none beside it the Count updates the manifest alone. Tools with no
 platform entries, such as `rust`, lock for the platforms the rest of the
 lockfile records.
 
+Tools a task installs for itself are locked with the rest: those under
+`[tasks.<name>]`, and those in a TOML task file listed in `task_config.includes`
+that the update changes. A tool declared both ways with different versions is
+locked for each; with options in one of them, the lock is refused.
+
 A Cargo update across a semver-incompatible boundary, such as `0.22` to `0.23`
 or `1.x` to `2.x`, adds a second entry beside the old one, because other crates
 may still require it. The Count runs `cargo update --workspace` for it, which

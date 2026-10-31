@@ -59,7 +59,9 @@ run = "cargo test --locked -p patchula-update --lib --no-fail-fast -- lockfiles:
 
 # The lockfile engines these tests run, matching
 # crates/update/src/lockfiles/defaults.toml. Task-scoped so a development
-# `mise install` does not fetch them. A unit test keeps the two equal.
+# `mise install` does not fetch them. The Count moves a tool here and in
+# defaults.toml on one branch (patchula.pkl), and a unit test keeps the two
+# equal.
 ["test:tools".tools]
 aube = "2.8.1"
 bun = "1.4.3"

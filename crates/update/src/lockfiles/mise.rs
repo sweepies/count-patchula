@@ -96,6 +96,34 @@ fn requests(spec: &toml_edit::Item) -> BTreeSet<String> {
     }
 }
 
+/// The versions of a plain declaration: one string, or an array of them.
+fn plain(spec: &toml_edit::Item) -> Option<Vec<String>> {
+    let value = spec.as_value()?;
+    match value.as_array() {
+        Some(versions) => versions
+            .iter()
+            .map(|v| v.as_str().map(str::to_owned))
+            .collect(),
+        None => value.as_str().map(|v| vec![v.to_owned()]),
+    }
+}
+
+/// The selected tools a task installs for itself.
+fn task_declarations(
+    task: &toml_edit::Item,
+    selected: &BTreeSet<String>,
+    out: &mut Vec<(String, toml_edit::Item)>,
+) {
+    if let Some(declarations) = task.get("tools").and_then(toml_edit::Item::as_table_like) {
+        out.extend(
+            declarations
+                .iter()
+                .filter(|(name, _)| selected.contains(*name))
+                .map(|(name, spec)| (name.to_owned(), spec.clone())),
+        );
+    }
+}
+
 impl Runner {
     pub(super) async fn mise_lock(
         &self,
@@ -128,6 +156,8 @@ impl Runner {
         let work = driver.join(format!("mise-lock-{}", hash(directory.as_bytes())));
         std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
         let mut tools = toml_edit::Table::new();
+        let mut task_tools = Vec::new();
+        let mut includes = Vec::new();
         let mut paths: Vec<_> = baseline
             .keys()
             .filter(|path| {
@@ -170,6 +200,61 @@ impl Runner {
                     {
                         tools.insert(name, spec.clone());
                     }
+                }
+                for task in doc
+                    .get("tasks")
+                    .and_then(toml_edit::Item::as_table_like)
+                    .into_iter()
+                    .flat_map(|tasks| tasks.iter().map(|(_, task)| task))
+                {
+                    task_declarations(task, &selected, &mut task_tools);
+                }
+                // A TOML task file the configuration includes holds tasks as
+                // top-level tables.
+                for include in doc
+                    .get("task_config")
+                    .and_then(|config| config.get("includes"))
+                    .and_then(toml_edit::Item::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(toml_edit::Value::as_str)
+                    .filter(|include| include.ends_with(".toml"))
+                {
+                    includes.push(node::join(super::directory(path), include));
+                }
+            }
+        }
+        for include in includes
+            .iter()
+            .filter(|include| baseline.contains_key(*include))
+        {
+            let text = std::fs::read_to_string(root.join(include)).map_err(|e| e.to_string())?;
+            let doc = toml_edit::Document::parse(text).map_err(|e| e.to_string())?;
+            for (_, task) in doc.iter() {
+                task_declarations(task, &selected, &mut task_tools);
+            }
+        }
+        // A tool a task installs is locked beside the tools the configuration
+        // installs; a version both declare is one request.
+        for (name, spec) in task_tools {
+            match tools.get(&name) {
+                None => {
+                    tools.insert(&name, spec);
+                }
+                Some(declared) if requests(declared).is_superset(&requests(&spec)) => {}
+                Some(declared) => {
+                    let (Some(mut versions), Some(more)) = (plain(declared), plain(&spec)) else {
+                        return Err(format!(
+                            "{name} has options and is also declared by a task with another version"
+                        ));
+                    };
+                    for version in more {
+                        if !versions.contains(&version) {
+                            versions.push(version);
+                        }
+                    }
+                    tools[name.as_str()] =
+                        toml_edit::value(versions.into_iter().collect::<toml_edit::Array>());
                 }
             }
         }

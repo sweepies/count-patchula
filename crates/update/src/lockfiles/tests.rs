@@ -3,6 +3,28 @@ use patchula_http::{Exchange, Transport};
 use patchula_process::CommandSpec;
 use std::{future::Future, pin::Pin, sync::Mutex};
 
+/// What `defaults.toml` pins for a tool, which a repository without its own pin
+/// gets. A defaults bump must not need a test edit, so expectations ask here.
+fn default_version(tool: &str) -> String {
+    tool_defaults().unwrap()["tools"][tool]
+        .as_str()
+        .unwrap_or_else(|| panic!("defaults.toml pins no {tool}"))
+        .to_owned()
+}
+fn default_spec(tool: &str) -> String {
+    format!("{tool}@{}", default_version(tool))
+}
+/// The Yarn Berry release `defaults.toml` pins.
+fn berry() -> String {
+    tool_defaults().unwrap()["yarn"]["berry"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+fn berry_spec() -> String {
+    format!("yarn@{}", berry())
+}
+
 struct Fixture {
     files: BTreeMap<String, String>,
     fail: bool,
@@ -285,9 +307,10 @@ async fn apm_locks_use_the_lock_only_command() {
             &["apm", "lock"]
         };
         assert!(
-            recorded(&calls)
+            recorded(&calls).iter().any(|(specs, args)| specs
                 .iter()
-                .any(|(specs, args)| specs.iter().any(|s| s == "apm@0.35.0") && args == expected),
+                .any(|s| *s == default_spec("apm"))
+                && args == expected),
             "{calls:?}"
         );
         if error {
@@ -451,7 +474,7 @@ async fn tool_failure_is_reported_without_api_writes_or_partial_scratch_files() 
 #[tokio::test]
 async fn all_tools_are_targeted_scrubbed_and_versions_are_read_without_loading_repository_env() {
     let files=BTreeMap::from([
-        ("mise.toml".into(),"[tools]\nbun = '1.4.3'\nnode = { version = '24.21.0' }\n[env]\nSHOULD_NOT_RUN = '{{exec(command=\"false\")}}'\n".into()),
+        ("mise.toml".into(),"[tools]\nbun = '1.2.5'\nnode = { version = '20.11.0' }\n[env]\nSHOULD_NOT_RUN = '{{exec(command=\"false\")}}'\n".into()),
         ("package.json".into(),"{}\n".into()),("bun.lock".into(),"{}\n".into()),("package-lock.json".into(),"{}\n".into()),
         ("Cargo.toml".into(),"[package]\nname='fixture'\nversion='1.0.0'\n".into()),("Cargo.lock".into(),"version = 4\n".into()),
         ("go.mod".into(),"module example.com/fixture\ngo 1.22\n".into()),("go.sum".into(),"\n".into()),
@@ -487,10 +510,11 @@ async fn all_tools_are_targeted_scrubbed_and_versions_are_read_without_loading_r
     assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
     assert!(p.lockfiles_ready);
     assert_eq!(p.action.files.len(), 5);
+    let aube = default_spec("aube");
     let calls = executor.calls.lock().unwrap();
     for sequence in [
-        vec!["bun@1.4.3", "--", "bun"],
-        vec!["aube@2.8.1", "--", "aube", "-C"],
+        vec!["bun@1.2.5", "--", "bun"],
+        vec![aube.as_str(), "--", "aube", "-C"],
         vec!["-p", "serde@1.0.200", "--precise", "1.0.229"],
         vec!["get", "example.com/mod@v1.1.0"],
         vec!["mod", "tidy"],
@@ -507,7 +531,7 @@ async fn all_tools_are_targeted_scrubbed_and_versions_are_read_without_loading_r
     assert!(
         !calls
             .iter()
-            .any(|args| args.windows(2).any(|w| w == ["node@24.21.0", "--"])),
+            .any(|args| args.windows(2).any(|w| w == ["node@20.11.0", "--"])),
         "native npm must not run for an npm lock"
     );
 }
@@ -566,24 +590,23 @@ async fn node_lockfiles_use_aube_yarn_and_bun_by_lockfile_format() {
     let calls = executor.calls.lock().unwrap();
     let commands = recorded(&calls);
     assert!(
-        commands
-            .iter()
-            .any(|(specs, command)| specs.as_slice() == ["aube@2.8.1"]
+        commands.iter().any(
+            |(specs, command)| specs.as_slice() == [default_spec("aube")]
                 && starts(command, &["aube", "-C"])
-                && contains(command, &["install", "--lockfile-only", "--ignore-scripts"])),
+                && contains(command, &["install", "--lockfile-only", "--ignore-scripts"])
+        ),
         "missing aube command {commands:?}"
     );
     assert!(
-        commands.iter().any(
-            |(specs, command)| specs.as_slice() == ["node@24.21.0", "yarn@4.18.1"]
-                && starts(command, &["yarn", "install", "--mode=update-lockfile"])
-        ),
+        commands.iter().any(|(specs, command)| specs.as_slice()
+            == [default_spec("node"), berry_spec()]
+            && starts(command, &["yarn", "install", "--mode=update-lockfile"])),
         "missing yarn command {commands:?}"
     );
     assert!(
         commands
             .iter()
-            .any(|(specs, command)| specs.as_slice() == ["bun@1.4.3"]
+            .any(|(specs, command)| specs.as_slice() == [default_spec("bun")]
                 && starts(command, &["bun", "install", "--cwd"])
                 && contains(command, &["--lockfile-only", "--ignore-scripts"])),
         "missing bun command {commands:?}"
@@ -592,7 +615,7 @@ async fn node_lockfiles_use_aube_yarn_and_bun_by_lockfile_format() {
     assert_eq!(
         commands
             .iter()
-            .filter(|(specs, _)| specs.as_slice() == ["aube@2.8.1"])
+            .filter(|(specs, _)| specs.as_slice() == [default_spec("aube")])
             .count(),
         2,
         "one aube call per pnpm and npm lock"
@@ -622,9 +645,8 @@ async fn the_npm_engine_setting_restores_native_npm_for_npm_locks() {
     let calls = executor.calls.lock().unwrap();
     let commands = recorded(&calls);
     assert!(
-        commands
-            .iter()
-            .any(|(specs, command)| specs.as_slice() == ["node@24.21.0"]
+        commands.iter().any(
+            |(specs, command)| specs.as_slice() == [default_spec("node")]
                 && starts(command, &["npm", "install", "--prefix"])
                 && contains(
                     command,
@@ -634,15 +656,16 @@ async fn the_npm_engine_setting_restores_native_npm_for_npm_locks() {
                         "--no-audit",
                         "--no-fund"
                     ]
-                )),
+                )
+        ),
         "missing npm command {commands:?}"
     );
     // pnpm keeps aube whatever the npm engine says.
     assert!(
-        commands
-            .iter()
-            .any(|(specs, command)| specs.as_slice() == ["aube@2.8.1"]
-                && starts(command, &["aube", "-C"])),
+        commands.iter().any(
+            |(specs, command)| specs.as_slice() == [default_spec("aube")]
+                && starts(command, &["aube", "-C"])
+        ),
         "pnpm must keep aube {commands:?}"
     );
 }
@@ -828,7 +851,7 @@ async fn aube_lock_yaml_is_regenerated_in_place_beside_other_lockfiles() {
         assert_eq!(
             recorded(&calls)
                 .iter()
-                .filter(|(specs, _)| specs.as_slice() == ["aube@2.8.1"])
+                .filter(|(specs, _)| specs.as_slice() == [default_spec("aube")])
                 .count(),
             locks.len(),
             "one aube call per lockfile"
@@ -891,35 +914,35 @@ async fn maintenance_refreshes_node_lockfiles_within_the_manifest_ranges() {
     let calls = executor.calls.lock().unwrap();
     let commands = recorded(&calls);
     assert!(
-        commands
-            .iter()
-            .any(|(specs, command)| specs.as_slice() == ["aube@2.8.1"]
+        commands.iter().any(
+            |(specs, command)| specs.as_slice() == [default_spec("aube")]
                 && starts(command, &["aube", "-C"])
                 && contains(
                     command,
                     &["update", "--lockfile-only", "--no-save", "--ignore-scripts"]
-                )),
+                )
+        ),
         "missing aube maintenance command {commands:?}"
     );
     assert!(
-        commands
-            .iter()
-            .any(|(specs, command)| specs.as_slice() == ["node@24.21.0"]
+        commands.iter().any(
+            |(specs, command)| specs.as_slice() == [default_spec("node")]
                 && starts(command, &["npm", "update", "--prefix"])
-                && contains(command, &["--package-lock-only", "--ignore-scripts"])),
+                && contains(command, &["--package-lock-only", "--ignore-scripts"])
+        ),
         "missing npm maintenance command {commands:?}"
     );
     // Yarn Classic has no lock-only refresh; it reinstalls without scripts.
     assert!(
         commands.iter().any(|(specs, command)| specs.as_slice()
-            == ["node@24.21.0", "yarn@1.22.22"]
+            == [default_spec("node"), default_spec("yarn")]
             && starts(command, &["yarn", "install", "--ignore-scripts"])),
         "missing yarn command {commands:?}"
     );
     assert!(
         commands
             .iter()
-            .any(|(specs, command)| specs.as_slice() == ["bun@1.4.3"]
+            .any(|(specs, command)| specs.as_slice() == [default_spec("bun")]
                 && starts(command, &["bun", "install", "--cwd"])
                 && contains(command, &["--lockfile-only", "--ignore-scripts"])),
         "missing bun command {commands:?}"
@@ -978,21 +1001,21 @@ async fn real_aube_rewrites_pnpm_and_npm_locks_in_place() {
             "pnpm-lock.yaml",
             "lockfileVersion: '9.0'\n",
             local,
-            "aube@2.8.1",
+            default_spec("aube"),
             "local-fixture",
         ),
         (
             "package-lock.json",
             npm_seed,
             local,
-            "aube@2.8.1",
+            default_spec("aube"),
             "local-fixture",
         ),
         (
             "package-lock.json",
             npm_seed,
             plain,
-            "aube@2.8.1",
+            default_spec("aube"),
             "lockfileVersion",
         ),
     ] {
@@ -1033,7 +1056,9 @@ async fn real_aube_rewrites_pnpm_and_npm_locks_in_place() {
         let calls = executor.calls.lock().unwrap();
         let commands = recorded(&calls);
         assert!(
-            commands.iter().any(|(specs, _)| specs.as_slice() == [tool]),
+            commands
+                .iter()
+                .any(|(specs, _)| specs.as_slice() == [tool.clone()]),
             "{leaf}: expected {tool} in {commands:?}"
         );
     }
@@ -1084,7 +1109,7 @@ async fn real_aube_regenerates_a_stale_aube_lock_that_aube_ci_accepts() {
         runner.tool(
             &driver,
             Invocation {
-                tools: vec![("aube".into(), "2.8.1".into())],
+                tools: vec![("aube".into(), default_version("aube"))],
                 bin: "aube".into(),
                 cwd: None,
                 env: Vec::new(),
@@ -1184,7 +1209,7 @@ async fn process_output_is_bounded_and_tool_timeout_terminates_the_process() {
     );
     assert!(started.elapsed() < std::time::Duration::from_secs(3));
     let mut spec = runner.command(&driver);
-    spec.args.extend(["exec".into(),"bun@1.4.3".into(),"--".into(),"bun".into(),"-e".into(),"process.stdout.write('x'.repeat(100000)); process.stderr.write('y'.repeat(100000)); process.exit(2)".into()]);
+    spec.args.extend(["exec".into(),default_spec("bun"),"--".into(),"bun".into(),"-e".into(),"process.stdout.write('x'.repeat(100000)); process.stderr.write('y'.repeat(100000)); process.exit(2)".into()]);
     spec.env.insert("MISE_AUTO_INSTALL".into(), "false".into());
     spec.env
         .insert("MISE_EXEC_AUTO_INSTALL".into(), "false".into());
@@ -1718,7 +1743,7 @@ impl Executor for MiseFixture {
             assert!(
                 spec.args
                     .iter()
-                    .any(|arg| arg == "aqua:jdx/mise@2026.10.11")
+                    .any(|arg| *arg == format!("aqua:jdx/mise@{}", pinned_mise()))
             );
             let work =
                 Path::new(&spec.args[spec.args.iter().position(|arg| arg == "--cd").unwrap() + 1]);
@@ -2427,13 +2452,13 @@ async fn python_locks_use_uv_and_poetry_with_the_project_interpreter() {
     for (lock, tool, command, python) in [
         (
             "uv.lock",
-            "uv@0.13.1",
+            default_spec("uv"),
             &["uv", "lock", "--directory"][..],
-            "python@3.12.4",
+            "python@3.12.4".to_string(),
         ),
         (
             "poetry.lock",
-            "poetry@2.5.1",
+            default_spec("poetry"),
             &[
                 "poetry",
                 "lock",
@@ -2441,7 +2466,7 @@ async fn python_locks_use_uv_and_poetry_with_the_project_interpreter() {
                 "--no-plugins",
                 "--directory",
             ][..],
-            "python@3.14.8",
+            default_spec("python"),
         ),
     ] {
         let mut files = BTreeMap::from([
@@ -2481,9 +2506,9 @@ async fn python_locks_use_uv_and_poetry_with_the_project_interpreter() {
         let commands = recorded(&calls);
         let (specs, args) = commands
             .iter()
-            .find(|(specs, _)| specs.iter().any(|s| s == tool))
+            .find(|(specs, _)| specs.iter().any(|s| s == &tool))
             .unwrap_or_else(|| panic!("{lock}: {commands:?}"));
-        assert!(specs.iter().any(|s| s == python), "{lock}: {specs:?}");
+        assert!(specs.iter().any(|s| s == &python), "{lock}: {specs:?}");
         assert!(starts(args, command), "{lock}: {args:?}");
         if lock == "uv.lock" {
             assert!(contains(args, &["--upgrade-package", "ruff"]), "{args:?}");
@@ -2544,21 +2569,24 @@ async fn real_uv_and_poetry_regenerate_python_locks() {
             "uv.lock",
             project.to_string(),
             "version = 1\nrequires-python = \">=3.9\"\n",
-            "uv@0.13.1",
+            default_spec("uv"),
             "name = \"fixture\"",
         ),
         (
             "poetry.lock",
             format!("{project}[tool.poetry]\npackage-mode = false\n"),
             "[metadata]\nlock-version = \"2.1\"\npython-versions = \">=3.9\"\ncontent-hash = \"0\"\n",
-            "poetry@2.5.1",
+            default_spec("poetry"),
             "python-versions = \">=3.12\"",
         ),
     ] {
         let files = BTreeMap::from([
             ("pyproject.toml".to_string(), manifest),
             (lock.to_string(), seed.to_string()),
-            (".python-version".to_string(), "3.14.8\n".to_string()),
+            (
+                ".python-version".to_string(),
+                format!("{}\n", default_version("python")),
+            ),
         ]);
         let executor = fixture(files.clone(), false, true);
         let temp = tempfile::tempdir().unwrap();
@@ -2585,8 +2613,8 @@ async fn real_uv_and_poetry_regenerate_python_locks() {
         assert!(
             recorded(&calls)
                 .iter()
-                .any(|(specs, _)| specs.iter().any(|s| s == tool)
-                    && specs.iter().any(|s| s == "python@3.14.8")),
+                .any(|(specs, _)| specs.iter().any(|s| s == &tool)
+                    && specs.iter().any(|s| *s == default_spec("python"))),
             "{lock}"
         );
     }
@@ -2764,19 +2792,19 @@ async fn tool_store_prunes_unused_versions_and_prewarms_defaults() {
     assert_eq!(runner.tools(), temp.path().join("tools"));
     runner.record_use(&[
         ("node".into(), "20.0.0".into()),
-        ("uv".into(), "0.13.1".into()),
+        ("uv".into(), default_version("uv")),
     ]);
     runner.record_use(&[("bun".into(), "1.3.0".into())]);
     // Age the node and uv records past the window.
     let path = runner.tools().join("patchula-usage.json");
     let mut usage: BTreeMap<String, i64> =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    for spec in ["node@20.0.0", "uv@0.13.1"] {
-        usage.insert(spec.into(), 0);
+    for spec in ["node@20.0.0".to_string(), default_spec("uv")] {
+        usage.insert(spec, 0);
     }
     std::fs::write(&path, serde_json::to_vec(&usage).unwrap()).unwrap();
     let pruned = runner.prune(30).await.unwrap();
-    assert_eq!(pruned, ["node@20.0.0"], "uv 0.13.1 is a pinned default");
+    assert_eq!(pruned, ["node@20.0.0"], "uv is a pinned default");
     let calls = recorder.0.lock().unwrap().clone();
     assert!(
         calls
@@ -2788,12 +2816,9 @@ async fn tool_store_prunes_unused_versions_and_prewarms_defaults() {
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert!(remaining.contains_key("bun@1.3.0") && !remaining.contains_key("node@20.0.0"));
     let installed = runner.prewarm().await.unwrap();
-    assert!(
-        installed.contains(&"uv@0.13.1".to_string())
-            && installed.contains(&"yarn@4.18.1".to_string())
-    );
+    assert!(installed.contains(&default_spec("uv")) && installed.contains(&berry_spec()));
     assert!(!installed.iter().any(|s| s.starts_with("rust@")));
-    assert!(installed.contains(&"aqua:jdx/mise@2026.10.11".to_string()));
+    assert!(installed.contains(&format!("aqua:jdx/mise@{}", pinned_mise())));
 }
 
 /// A version the user already has is hard-linked into the store instead of
@@ -2967,7 +2992,7 @@ async fn real_bundler_relocks_offline() {
     let files = BTreeMap::from([
         ("Gemfile".to_string(), "source \"https://rubygems.org\"\n".to_string()),
         ("Gemfile.lock".to_string(), "GEM\n  remote: https://rubygems.org/\n  specs:\n\nPLATFORMS\n  ruby\n\nDEPENDENCIES\n\nBUNDLED WITH\n   2.6.9\n".to_string()),
-        (".ruby-version".to_string(), "3.4.11\n".to_string()),
+        (".ruby-version".to_string(), format!("{}\n", default_version("ruby"))),
     ]);
     let executor = fixture(files.clone(), false, true);
     let temp = tempfile::tempdir().unwrap();
@@ -2988,12 +3013,10 @@ async fn real_bundler_relocks_offline() {
         p.action
     );
     let calls = executor.calls.lock().unwrap();
-    assert!(
-        recorded(&calls)
-            .iter()
-            .any(|(specs, args)| specs.iter().any(|s| s == "ruby@3.4.11")
-                && starts(args, &["bundle", "lock", "--update"]))
-    );
+    assert!(recorded(&calls).iter().any(|(specs, args)| {
+        specs.iter().any(|s| *s == default_spec("ruby"))
+            && starts(args, &["bundle", "lock", "--update"])
+    }));
 }
 
 /// composer.lock runs Composer under static PHP by default, or mise's
@@ -3013,9 +3036,13 @@ async fn composer_locks_use_static_or_compiled_php() {
     for (setting, php) in [
         (
             "",
-            php::tools(patchula_config::PhpBuild::Static, "8.5.8", "2.10.3")[0]
-                .0
-                .clone(),
+            php::tools(
+                patchula_config::PhpBuild::Static,
+                &default_version("php"),
+                &default_version("composer"),
+            )[0]
+            .0
+            .clone(),
         ),
         ("php = \"compiled\"", "php".to_string()),
     ] {
@@ -3031,21 +3058,24 @@ async fn composer_locks_use_static_or_compiled_php() {
         runner.prepare(&mut p, &mut snapshot, &config).await;
         let calls = executor.calls.lock().unwrap();
         assert!(
-            recorded(&calls)
-                .iter()
-                .any(|(specs, args)| specs.contains(&format!("{php}@8.5.8"))
-                    && starts(args, &["composer", "update", "--no-install"])
-                    && contains(
-                        args,
-                        &["--ignore-platform-req=ext-*", "--ignore-platform-req=lib-*"]
-                    )),
+            recorded(&calls).iter().any(|(specs, args)| specs
+                .contains(&format!("{php}@{}", default_version("php")))
+                && starts(args, &["composer", "update", "--no-install"])
+                && contains(
+                    args,
+                    &["--ignore-platform-req=ext-*", "--ignore-platform-req=lib-*"]
+                )),
             "{setting}: {calls:?}"
         );
     }
     assert!(
-        php::tools(patchula_config::PhpBuild::Static, "8.5.8", "2.10.3")[0]
-            .0
-            .starts_with("http:php[url=https://dl.static-php.dev/")
+        php::tools(
+            patchula_config::PhpBuild::Static,
+            &default_version("php"),
+            &default_version("composer"),
+        )[0]
+        .0
+        .starts_with("http:php[url=https://dl.static-php.dev/")
     );
 }
 
@@ -4925,4 +4955,72 @@ fn a_batch_moves_every_declaration_of_a_dependency_in_a_file() {
         "{written}"
     );
     assert!(!written.contains("@v4.1.0"), "{written}");
+}
+
+/// A tool a task installs is locked with the others, whether the task is in
+/// mise.toml or in a TOML task file it includes, and a version declared in
+/// both places is one request.
+#[tokio::test]
+async fn mise_lock_follows_the_tools_tasks_install() {
+    let old = "[task_config]\nincludes = ['tasks.toml']\n[tools]\nbun = '1.4.3'\n[tasks.lint]\ntools = { node = '22.0.0' }\n";
+    let old_tasks = "[fmt]\ntools = { node = '22.0.0' }\n";
+    let files = BTreeMap::from([
+        ("mise.toml".to_string(), old.to_string()),
+        ("tasks.toml".into(), old_tasks.to_string()),
+        (
+            "mise.lock".into(),
+            include_str!("fixtures/mise.lock").into(),
+        ),
+    ]);
+    let spy = Arc::new(ConfigSpy {
+        inner: Arc::new(MiseFixture {
+            git: fixture(files.clone(), false, false),
+            fault: "",
+            calls: Mutex::new(Vec::new()),
+        }),
+        configs: Mutex::new(Vec::new()),
+    });
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(spy.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let dep = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies
+        .into_iter()
+        .find(|d| d.name == "node")
+        .unwrap();
+    assert_eq!(dep.location.pointer, "/tasks/lint/tools/node");
+    let update = Update {
+        new_version: Some("24.0.0".into()),
+        new_value: Some("24.0.0".into()),
+        ..serde_json::from_value(serde_json::json!({"updateType":"major"})).unwrap()
+    };
+    let job = job(&dep, &update, &snapshot).unwrap().unwrap();
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        .unwrap()
+        .unwrap();
+    p.maintenance = false;
+    p.lock_jobs = vec![job];
+    for (path, old) in [("mise.toml", old), ("tasks.toml", old_tasks)] {
+        p.contents
+            .insert(path.into(), old.replace("22.0.0", "24.0.0"));
+        p.action.files.push(FileAction {
+            path: path.into(),
+            blob_sha: blob_sha(old),
+            diff: String::new(),
+        });
+    }
+    runner.prepare(&mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert!(p.contents["mise.lock"].contains("version = \"24.0.0\""));
+    let configs = spy.configs.lock().unwrap();
+    assert_eq!(configs.len(), 1);
+    assert_eq!(
+        configs[0].split_whitespace().collect::<Vec<_>>(),
+        ["[tools]", "node", "=", "'24.0.0'"]
+    );
 }
