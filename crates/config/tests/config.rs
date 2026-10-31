@@ -451,10 +451,22 @@ fn the_repositorys_own_config_sets_nothing() {
         serde_json::to_value(load(&path).unwrap()).unwrap()
     );
     let text = std::fs::read_to_string(workspace().join("patchula.pkl")).unwrap();
-    assert!(
-        text.lines()
-            .filter(|line| !line.trim().is_empty() && !line.starts_with("//"))
-            .eq(["amends \"PatchulaConfig.pkl\""]),
-        "{text}"
+    assert_eq!(significant_lines(&text), ["amends \"PatchulaConfig.pkl\""]);
+    // Indented comments and blank lines change nothing either.
+    assert_eq!(
+        significant_lines("  // note\n\n\t// another\namends \"PatchulaConfig.pkl\"\n   \n"),
+        ["amends \"PatchulaConfig.pkl\""]
     );
+    assert_eq!(
+        significant_lines("amends \"PatchulaConfig.pkl\"\n  // ok\nprs { dashboard = false }\n"),
+        ["amends \"PatchulaConfig.pkl\"", "prs { dashboard = false }"]
+    );
+}
+
+/// A config's lines that are neither blank nor comments.
+fn significant_lines(text: &str) -> Vec<&str> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("//"))
+        .collect()
 }

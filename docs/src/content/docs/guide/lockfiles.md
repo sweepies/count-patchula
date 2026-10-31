@@ -62,17 +62,21 @@ one. Where aube reads several, `aube-lock.yaml` wins over `pnpm-lock.yaml`.
 ## In-range updates {#in-range-updates}
 
 A release that a manifest's range already allows needs no manifest edit. For
-Cargo, Python projects (uv and Poetry), Bundler and Composer the default
+Cargo, `pyproject.toml` (uv and Poetry), Bundler and Composer the default
 [version policy](/guide/versioning/#version-policies) is `preserve`, so such a
-release becomes a lockfile-only update: the PR changes the lockfile and
-nothing else, and moves just that package to the chosen version.
+release becomes a lockfile-only update: the PR changes the lockfile and no
+manifest, and moves that package to the chosen version. The lock may also
+contain the transitive changes the new version needs, which Composer resolves
+with `--with-all-dependencies --minimal-changes`.
 
 - Cargo, uv and Composer are told the exact version on the command line.
 - Poetry and Bundler cannot be. For those the Count pins the declaration to the
   target for one resolution, restores the manifest, and resolves again, which
   keeps the locked version and writes the original constraint back into the
   lock. The manifest in the PR is untouched.
-- The version the update starts from is the one the lockfile records, and the
+- The version the update starts from is the one the lockfile records for the
+  manifest's own dependency (for Cargo, the dependency edge of the manifest's
+  package, not another version of the same crate locked for a dependent), and the
   new lock must record the target or nothing is published.
 - Without a committed lockfile there is nothing to change, so the release is
   not an update. npm and Bun have no such command, so they only get this when

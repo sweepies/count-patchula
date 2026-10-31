@@ -39,6 +39,10 @@ test = "2.0"
             "Cargo.lock".into(),
             r#"version = 4
 [[package]]
+name = "app"
+version = "0.1.0"
+dependencies = ["actual 0.3.9"]
+[[package]]
 name = "actual"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -339,4 +343,58 @@ fn generated_flux_bundle_and_configmap_image_variables_are_concrete_dependencies
             .any(|d| d.manager == Manager::HelmValues && d.package == "example/controller")
     );
     assert!(deps.iter().all(|d| d.package != "arbitrary"));
+}
+
+/// The same crate can be locked twice: for the manifest, and for a dependent
+/// that needs another version a wide requirement also matches. Only the
+/// manifest's own dependency edge says which one is its locked version.
+#[test]
+fn a_cargo_dependency_resolves_through_its_own_lock_edge_not_a_transitive_instance() {
+    let lock = |edge: &str| {
+        format!(
+            r#"version = 4
+[[package]]
+name = "app"
+version = "0.1.0"
+dependencies = ["{edge}", "dependent"]
+[[package]]
+name = "dependent"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = ["shared 0.22.1"]
+[[package]]
+name = "shared"
+version = "0.21.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+[[package]]
+name = "shared"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+"#
+        )
+    };
+    let manifest = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n[dependencies]\nshared = \">=0.21\"\ndependent = \"2\"\n";
+    for (edge, expected) in [("shared 0.21.7", "0.21.7"), ("shared 0.22.1", "0.22.1")] {
+        let files = Files::from([
+            ("Cargo.toml".into(), manifest.into()),
+            ("Cargo.lock".into(), lock(edge)),
+        ]);
+        let deps = extract(&files);
+        let shared = deps.iter().find(|d| d.name == "shared").unwrap();
+        assert_eq!(shared.resolved.as_deref(), Some(expected), "{edge}");
+        assert_eq!(shared.locked(), Some(expected));
+    }
+    // A manifest the lock does not know has no locked version at all.
+    let files = Files::from([
+        (
+            "Cargo.toml".into(),
+            manifest.replace("name = \"app\"", "name = \"other\""),
+        ),
+        ("Cargo.lock".into(), lock("shared 0.21.7")),
+    ]);
+    let deps = extract(&files);
+    assert_eq!(
+        deps.iter().find(|d| d.name == "shared").unwrap().resolved,
+        None
+    );
 }

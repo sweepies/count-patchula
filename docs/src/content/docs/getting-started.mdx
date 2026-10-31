@@ -41,11 +41,12 @@ secrets. The steps below do the same by hand.
    ```
 
    That is a complete config; everything comes from the schema's defaults: every
-   manager, exact pins (ranges kept in Cargo, Python projects, Bundler and
-   Composer, whose lockfiles hold the version), digest pins for actions and images, a 24-hour
-   release-age wait, one PR per update with at most ten open at once, a dependency
-   dashboard issue, and no auto-merge except for reference data such as CA
-   bundles.
+   manager, exact pins (ranges kept for Cargo, `pyproject.toml`, Bundler and
+   Composer, whose lockfiles hold the version; `requirements.txt`, npm and Bun
+   stay exact), digest pins for actions and images, a 24-hour release-age wait,
+   one PR per update with at most ten ordinary ones open at once (security fixes
+   are not held back by that limit), a dependency dashboard issue, and no
+   auto-merge except for reference data such as CA bundles.
 
    <Aside type="tip">
    You don't need to commit `PatchulaConfig.pkl`; the Count supplies it. Vendor
@@ -89,8 +90,9 @@ secrets. The steps below do the same by hand.
    patchula run acme/my-app
    ```
 
-   The first run opens one PR per update, up to ten at once, and a
-   Dependency Dashboard issue that lists the rest. Lockfiles are regenerated with the real tools,
+   The first run opens one PR per update, up to ten ordinary ones at once (security
+   fixes are exempt from that limit), and a Dependency Dashboard issue that lists
+   the rest. Lockfiles are regenerated with the real tools,
    which mise installs on first use. A repeat run on an unchanged repository
    costs one GraphQL query.
 

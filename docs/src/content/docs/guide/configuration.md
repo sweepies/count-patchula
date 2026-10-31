@@ -87,9 +87,11 @@ starts out cautious:
 - nothing auto-merges, except [reference data](#reference-data) such as CA
   root bundles, which also skips the release-age wait;
 - dated releases wait 24 hours before they are proposed;
-- at most 10 update PRs are open at once, with no limit per hour and no
-  schedule window; the rest wait for a slot and are listed on the dashboard,
-  and security fixes never wait;
+- at most 10 ordinary update PRs are open at once, with no limit per hour and
+  no schedule window; the rest wait for a slot and are listed on the
+  dashboard. [Security fixes](/guide/security/#security-updates-go-first) skip
+  both limits, though `security.apply` can still hold them, with `active`,
+  `waitHours` or `windows`, so the total can pass 10;
 - a dependency dashboard issue is kept up to date, and `prs { dashboard = false }`
   turns it off;
 - branches start with `patchula/` and are rebased only when they conflict;

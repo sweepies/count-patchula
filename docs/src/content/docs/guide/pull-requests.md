@@ -105,14 +105,20 @@ warnings, so a file that failed to parse never makes its updates look obsolete.
 ## Limits and holds
 
 `concurrent` caps open PRs, at 10 by default, and `perHour` caps new ones, with
-no cap by default. Updates beyond a limit, outside a schedule window, or still
-inside the release-age wait are held, and the [dashboard](/guide/dashboard/)
-shows each with the reason and a box to create it now. A first run on a
-repository with many outdated dependencies opens ten PRs and lists the rest;
-as those merge or close, the next runs open more. Without the dashboard
-the held updates simply wait for a slot. Security fixes are exempt from both
-limits, and open PRs still count toward `concurrent`. `concurrent = null`
-removes the cap.
+no cap by default. An update beyond a limit waits for a slot, and one outside a
+schedule window or still inside the release-age wait waits until that hold
+clears. The [dashboard](/guide/dashboard/) shows each held update with the
+reason and a box to create it now; without the dashboard the updates wait
+silently. A first run on a repository with many outdated dependencies opens ten
+ordinary PRs and lists the rest; as those merge or close, the next runs open
+more.
+
+Security fixes skip both limits: a security PR is never held for a slot, and
+`concurrent` does not stop it, so the total can pass 10. It still counts toward
+`concurrent` and `perHour`, though, so a security PR can use up the slot or the
+hour that an ordinary update would have taken. `security.apply` can still hold a
+fix by other means, such as `active`, `waitHours` or `windows`.
+`concurrent = null` removes the cap.
 
 ## Repeat runs
 

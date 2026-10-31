@@ -10,7 +10,7 @@ with a config you understand.
 
 `config:recommended`, `:semanticCommits`, `:dependencyDashboard`, `:pinAllExceptPeerDependencies`,
 `helpers:pinGitHubActionDigests` and `docker:pinDigests` mostly describe what
-the Count does without being asked: exact pins (ranges kept where a lockfile holds the version), digest pins for actions and
+the Count does without being asked: exact pins (Cargo, `pyproject.toml`, Bundler and Composer default to `preserve` instead, and move the lockfile for releases a range already allows), digest pins for actions and
 images, semantic commit prefixes, the dependency dashboard and one PR per
 update. A config with nothing in it is close.
 
@@ -71,7 +71,8 @@ has the details):
 - Empty `group` means separate PRs.
 - Zero is never "unlimited"; use `null`.
 - `concurrent` is 10 by default, so the first run on a neglected repository
-  opens ten PRs and lists the rest on the dashboard.
+  opens ten ordinary PRs and lists the rest on the dashboard. Security fixes are
+  not held back by the limit, so a first run can open more than ten.
 
 ## A worked example
 

@@ -65,17 +65,47 @@ pub(super) fn extract(
     if let Some((_, lock)) = lock
         && let Some(packages) = lock.get("package").and_then(Item::as_array_of_tables)
     {
+        // The lock records what a package depends on. Only the dependency
+        // edges of this manifest's own package (or, for a virtual workspace
+        // root, of every member) say which locked version is the declaration's:
+        // the same crate may also be locked for a transitive dependent, at
+        // another version a wide requirement would match too.
+        let package = doc
+            .get("package")
+            .and_then(|p| p.get("name"))
+            .and_then(Item::as_str);
+        let members: Vec<_> = packages
+            .iter()
+            .filter(|p| p.get("source").is_none())
+            .filter(|p| package.is_none_or(|name| named(p) == Some(name)))
+            .collect();
         for dep in &mut out {
-            let mut candidates: Vec<_> = packages
+            let mut candidates: Vec<_> = members
                 .iter()
-                .filter(|p| p.get("name").and_then(Item::as_str) == Some(&dep.package))
-                .filter(|p| {
-                    p.get("source").and_then(Item::as_str).is_some_and(|s| {
-                        s.starts_with("registry+https://github.com/rust-lang/crates.io-index")
-                            || s.starts_with("sparse+https://index.crates.io/")
+                .filter_map(|member| member.get("dependencies")?.as_array())
+                .flatten()
+                .filter_map(|edge| {
+                    // `name`, `name version` or `name version (source)`.
+                    let mut words = edge.as_str()?.split_whitespace();
+                    if words.next()? != dep.package {
+                        return None;
+                    }
+                    match words.next() {
+                        Some(version) => Some(version),
+                        None => packages
+                            .iter()
+                            .find(|p| named(p) == Some(&dep.package) && registry(p))?
+                            .get("version")?
+                            .as_str(),
+                    }
+                })
+                .filter(|version| {
+                    packages.iter().any(|p| {
+                        named(p) == Some(&dep.package)
+                            && registry(p)
+                            && p.get("version").and_then(Item::as_str) == Some(version)
                     })
                 })
-                .filter_map(|p| p.get("version").and_then(Item::as_str))
                 .filter_map(|v| Some((Ecosystem::Cargo.parse(v).ok()?, v)))
                 .filter(|(v, _)| Ecosystem::Cargo.matches(&dep.current, v).unwrap_or(false))
                 .collect();
@@ -84,6 +114,17 @@ pub(super) fn extract(
         }
     }
     Ok(out)
+}
+/// A lock entry's crate name.
+fn named(p: &toml_edit::Table) -> Option<&str> {
+    p.get("name").and_then(Item::as_str)
+}
+/// Whether a lock entry comes from the crates.io registry.
+fn registry(p: &toml_edit::Table) -> bool {
+    p.get("source").and_then(Item::as_str).is_some_and(|s| {
+        s.starts_with("registry+https://github.com/rust-lang/crates.io-index")
+            || s.starts_with("sparse+https://index.crates.io/")
+    })
 }
 fn walk(
     path: &str,

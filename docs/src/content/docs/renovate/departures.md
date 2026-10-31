@@ -19,7 +19,7 @@ missing, and behaviour that changes their pull requests. The
 ### No presets; explicit defaults {#explicit-defaults}
 
 - **Renovate:** Most of a typical config comes from presets such as `config:recommended`
-- **The Count:** No presets. The schema's defaults are exact versions (ranges kept for Cargo, pyproject, Bundler and Composer, where a lockfile holds the version), digest pins for actions and images, manual merges, one PR per update, release notes, a dependency label and a semantic commit prefix
+- **The Count:** No presets. The schema's defaults are exact versions, except that Cargo, `pyproject.toml`, Bundler and Composer default to `preserve` (a release a range already allows moves the committed lockfile and leaves the manifest alone), digest pins for actions and images, manual merges, one PR per update, release notes, a dependency label and a semantic commit prefix
 - **Why:** Every default is visible in the schema, so a config says exactly what it changes
 
 ### Default excluded paths {#default-exclude}

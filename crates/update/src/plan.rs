@@ -686,10 +686,11 @@ pub fn batch_plan(
         };
         // A lockfile-only target is complete once the lock holds its version.
         let applied = if target.value.is_none() && target.digest.is_none() {
-            target
-                .version
-                .as_deref()
-                .is_none_or(|v| dep.resolved.as_deref() == Some(v))
+            target.version.as_deref().is_none_or(|v| {
+                dep.resolved
+                    .as_deref()
+                    .is_some_and(|locked| crate::lockfiles::same_release(locked, v))
+            })
         } else {
             target.value.as_deref().is_none_or(|v| v == dep.current) && target.digest == dep.digest
         };

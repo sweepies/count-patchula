@@ -1421,6 +1421,31 @@ fn lock_only_updates_keep_the_wait_the_permitted_filter_and_exact_policy() {
     assert_eq!(result.updates[0].new_value, None);
     assert_eq!(result.updates[0].new_version.as_deref(), Some("1.40.0"));
     assert_eq!(result.held_back[0].version, "1.41.0");
+    // `permitted` filters a lock-only release like any other: 1.41.0 and 1.42.0
+    // are neither proposed nor held back, and 1.40.0 stays.
+    let mut filtered = cfg.clone();
+    filtered.defaults.permitted = Some("semver:<1.41.0".into());
+    let mut later = releases.clone();
+    later.versions.push(patchula_datasource::Version {
+        version: "1.42.0".into(),
+        published_at: Some("2026-10-15T11:00:00Z".into()),
+        digest: None,
+        deprecated: false,
+        yanked: false,
+    });
+    let result = Evaluator::new(&filtered)
+        .unwrap()
+        .evaluate_at(&dep, &later, instant("2026-10-15T12:00:00Z"))
+        .unwrap();
+    assert_eq!(
+        result
+            .updates
+            .iter()
+            .map(|u| (u.new_value.as_deref(), u.new_version.as_deref()))
+            .collect::<Vec<_>>(),
+        [(None, Some("1.40.0"))]
+    );
+    assert!(result.held_back.is_empty(), "{:?}", result.held_back);
     // Exact policy still pins the declaration.
     cfg.defaults.versions = patchula_config::VersionPolicy::Exact;
     cfg.rules.retain(|rule| rule.apply.versions.is_none());
@@ -1587,6 +1612,122 @@ fn constraints_that_cannot_be_rewritten_are_reported_not_failed() {
                 .iter()
                 .all(|u| u.new_version.as_deref() != Some("3.0.0")),
             "{manager:?}"
+        );
+    }
+}
+
+/// When the newest release of a track needs a rewrite the Count will not guess,
+/// the older release of the same track that the declaration allows is still
+/// proposed, and only the newest is reported.
+#[test]
+fn an_unrewritable_newest_release_does_not_hide_an_older_one_the_range_allows() {
+    let mut cfg = config("preserve-ranges");
+    cfg.defaults.wait_hours = 0;
+    let eval = Evaluator::new(&cfg).unwrap();
+    let mut dep = dependency("example");
+    dep.manager = Manager::Composer;
+    dep.source = Source::Packagist;
+    dep.scheme = Scheme::Composer;
+    dep.current = ">=1.4.0 <1.4.5".into();
+    dep.resolved = Some("1.4.0".into());
+    let result = eval
+        .evaluate_at(
+            &dep,
+            &catalog(&["1.4.0", "1.4.3", "1.4.4", "1.4.5"]),
+            instant("2026-02-01T00:00:00Z"),
+        )
+        .unwrap();
+    assert_eq!(
+        result
+            .updates
+            .iter()
+            .map(|u| (u.new_value.as_deref(), u.new_version.as_deref()))
+            .collect::<Vec<_>>(),
+        [(None, Some("1.4.4"))]
+    );
+    assert_eq!(
+        result
+            .not_proposed
+            .iter()
+            .map(|n| n.version.as_str())
+            .collect::<Vec<_>>(),
+        ["1.4.5"]
+    );
+}
+
+/// A Maven or NuGet interval has no resolved version, so it starts at its first
+/// bound: `widen` extends its upper bound, `preserve` reports the release it
+/// cannot reach, and a release the interval already allows is not an update.
+#[test]
+fn bracketed_intervals_start_at_their_first_bound_and_widen() {
+    let mut cfg = config("preserve-ranges");
+    cfg.defaults.wait_hours = 0;
+    let now = instant("2026-02-01T00:00:00Z");
+    for (manager, source, scheme, current, versions, widened) in [
+        (
+            Manager::Maven,
+            Source::Maven,
+            Scheme::Maven,
+            "[1.0,2.0)",
+            ["1.0", "1.5", "3.1"],
+            "[1.0,3.1]",
+        ),
+        (
+            Manager::Maven,
+            Source::Maven,
+            Scheme::Maven,
+            "(,2.0)",
+            ["1.0", "1.5", "3.1"],
+            "(,3.1]",
+        ),
+        (
+            Manager::Nuget,
+            Source::Nuget,
+            Scheme::Nuget,
+            "[1.0.0,2.0.0)",
+            ["1.0.0", "1.5.0", "3.1.0"],
+            "[1.0.0,3.1.0]",
+        ),
+    ] {
+        let mut dep = dependency("example");
+        dep.manager = manager;
+        dep.source = source;
+        dep.scheme = scheme;
+        dep.current = current.into();
+        dep.resolved = None;
+        let releases = catalog(&versions);
+        cfg.defaults.versions = patchula_config::VersionPolicy::Widen;
+        let widen = Evaluator::new(&cfg)
+            .unwrap()
+            .evaluate_at(&dep, &releases, now)
+            .unwrap_or_else(|e| panic!("{current}: {e}"));
+        assert_eq!(
+            widen
+                .updates
+                .iter()
+                .map(|u| (u.new_value.as_deref(), u.new_version.as_deref()))
+                .collect::<Vec<_>>(),
+            [(Some(widened), Some(versions[2]))],
+            "{current}"
+        );
+        cfg.defaults.versions = patchula_config::VersionPolicy::Preserve;
+        let preserve = Evaluator::new(&cfg)
+            .unwrap()
+            .evaluate_at(&dep, &releases, now)
+            .unwrap();
+        assert!(
+            preserve.updates.is_empty(),
+            "{current}: {:?}",
+            preserve.updates
+        );
+        assert_eq!(
+            preserve
+                .not_proposed
+                .iter()
+                .map(|n| n.version.as_str())
+                .collect::<Vec<_>>(),
+            [versions[2]],
+            "{current}"
         );
     }
 }

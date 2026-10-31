@@ -200,10 +200,13 @@ fn poetry_specifiers(alternative: &str) -> Result<String> {
             continue;
         };
         // Bounds come from the release segment; prerelease suffixes stay in the floor.
-        let parts = pep440_rs::Version::from_str(body)
-            .map_err(|_| invalid())?
-            .release()
-            .to_vec();
+        let floor = pep440_rs::Version::from_str(body).map_err(|_| invalid())?;
+        let parts = floor.release().to_vec();
+        // An epoch outranks every release, so the ceiling carries it too.
+        let epoch = match floor.epoch() {
+            0 => String::new(),
+            epoch => format!("{epoch}!"),
+        };
         if parts.is_empty() || parts.len() > 3 {
             return Err(invalid());
         }
@@ -225,7 +228,7 @@ fn poetry_specifiers(alternative: &str) -> Result<String> {
             .collect::<Vec<_>>()
             .join(".");
         out.push(format!(">={body}"));
-        out.push(format!("<{upper}"));
+        out.push(format!("<{epoch}{upper}"));
     }
     Ok(out.join(","))
 }
@@ -238,6 +241,10 @@ fn poetry_widen(current: &str, target: &str, parsed: &Parsed) -> Result<String> 
     let plain =
         !release.is_pre() && !release.is_post() && !release.is_dev() && release.local().is_empty();
     let numbers = release.release();
+    let epoch = match release.epoch() {
+        0 => String::new(),
+        epoch => format!("{epoch}!"),
+    };
     let (major, minor, patch) = (
         numbers[0],
         numbers.get(1).copied().unwrap_or(0),
@@ -246,11 +253,11 @@ fn poetry_widen(current: &str, target: &str, parsed: &Parsed) -> Result<String> 
     let caret = if !plain {
         format!("^{target}")
     } else if major > 0 {
-        format!("^{major}.{minor}")
+        format!("^{epoch}{major}.{minor}")
     } else if minor > 0 {
-        format!("^0.{minor}")
+        format!("^{epoch}0.{minor}")
     } else {
-        format!("^0.0.{patch}")
+        format!("^{epoch}0.0.{patch}")
     };
     let out = format!("{} || {caret}", current.trim());
     if !Ecosystem::Poetry.matches(&out, parsed)? {
@@ -275,11 +282,16 @@ fn poetry_range(current: &str, target: &str, parsed: &Parsed) -> Result<String> 
     let plain =
         !release.is_pre() && !release.is_post() && !release.is_dev() && release.local().is_empty();
     let version = if plain && release.release().len() >= precision && !body.contains('*') {
-        release.release()[..precision]
-            .iter()
-            .map(u64::to_string)
-            .collect::<Vec<_>>()
-            .join(".")
+        let epoch = match release.epoch() {
+            0 => String::new(),
+            epoch => format!("{epoch}!"),
+        };
+        epoch
+            + &release.release()[..precision]
+                .iter()
+                .map(u64::to_string)
+                .collect::<Vec<_>>()
+                .join(".")
     } else {
         target.to_string()
     };

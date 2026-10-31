@@ -714,8 +714,25 @@ impl Evaluator {
                     | Ecosystem::Poetry
                     | Ecosystem::Composer
                     | Ecosystem::Rubygems
+                    | Ecosystem::Maven
+                    | Ecosystem::Nuget
             ) {
                 return None;
+            }
+            // A bracketed interval starts at its first bound that names a
+            // version: `[1.0,2.0)` at 1.0, `(,2.0)` at 2.0.
+            if matches!(scheme, Ecosystem::Maven | Ecosystem::Nuget)
+                && current.trim_start().starts_with(['[', '('])
+            {
+                let first = current
+                    .trim_start()
+                    .trim_start_matches(['[', '('])
+                    .split([']', ')'])
+                    .next()?
+                    .split(',')
+                    .map(str::trim)
+                    .find(|bound| !bound.is_empty())?;
+                return scheme.parse(first).ok();
             }
             // A range's lowest version only classifies the update; it is never
             // reported as what is installed. `^5.4 || ^6.0` and `>=1.0 <2.0`
@@ -764,6 +781,9 @@ impl Evaluator {
         let mut fix_candidates: Vec<(Parsed, &Version, String, Update, usize)> = Vec::new();
         let mut best: Vec<(Parsed, &Version, String, Update, &Effective<'_>)> =
             Vec::with_capacity(3);
+        // Eligible releases a track's best displaced, kept in case its declaration
+        // cannot be rewritten for the best one.
+        let mut alternates: Vec<(Parsed, &Version, String, Update, &Effective<'_>)> = Vec::new();
         for version in &catalog.versions {
             if version.yanked || version.deprecated {
                 continue;
@@ -861,8 +881,11 @@ impl Evaluator {
                             == Ecosystem::Npm.classify(&baseline, &parsed)
                 }
             }) {
-                if candidate_order(scheme, &parsed, version, &existing.0, existing.1).is_gt() {
-                    *existing = (parsed, version, normalized, kind, effective);
+                let candidate = (parsed, version, normalized, kind, effective);
+                if candidate_order(scheme, &candidate.0, version, &existing.0, existing.1).is_gt() {
+                    alternates.push(std::mem::replace(existing, candidate));
+                } else {
+                    alternates.push(candidate);
                 }
             } else {
                 best.push((parsed, version, normalized, kind, effective));
@@ -898,110 +921,143 @@ impl Evaluator {
             }
         }
         let mut result = Vec::with_capacity(best.len() + 1);
-        for (_, version, normalized, kind, effective) in best {
-            let new_value = if dep.manager == Manager::GithubActions {
-                action_value(
-                    &dep.current,
-                    if dep.kind == DependencyKind::Tool {
-                        &normalized
-                    } else {
-                        &version.version
-                    },
-                )
-            } else if dep.exact_tag_ref() {
-                version.version.clone()
-            } else {
-                let value = if dep.manager == Manager::Npm
-                    && dep.kind == DependencyKind::Peer
-                    && effective.policy.versions == VersionPolicy::Widen
-                {
-                    if scheme
-                        .matches(
-                            &dep.current,
-                            &scheme.parse(&normalized).map_err(|e| e.to_string())?,
-                        )
-                        .unwrap_or(false)
+        // Each track's best release, then the lower ones it displaced, newest first.
+        let chains: Vec<Vec<_>> = best
+            .into_iter()
+            .map(|top| {
+                let mut lower: Vec<_> = alternates
+                    .iter()
+                    .filter(|alt| {
+                        if alt.3 == Update::Pin {
+                            top.3 == Update::Pin
+                        } else {
+                            top.3 != Update::Pin
+                                && Ecosystem::Npm.classify(&baseline, &top.0)
+                                    == Ecosystem::Npm.classify(&baseline, &alt.0)
+                        }
+                    })
+                    .filter(|alt| candidate_order(scheme, &alt.0, alt.1, &top.0, top.1).is_lt())
+                    .cloned()
+                    .collect();
+                lower.sort_by(|a, b| candidate_order(scheme, &b.0, b.1, &a.0, a.1));
+                std::iter::once(top).chain(lower).collect()
+            })
+            .collect();
+        'tracks: for chain in chains {
+            let mut reported = false;
+            for (_, version, normalized, kind, effective) in chain {
+                let new_value = if dep.manager == Manager::GithubActions {
+                    action_value(
+                        &dep.current,
+                        if dep.kind == DependencyKind::Tool {
+                            &normalized
+                        } else {
+                            &version.version
+                        },
+                    )
+                } else if dep.exact_tag_ref() {
+                    version.version.clone()
+                } else {
+                    let value = if dep.manager == Manager::Npm
+                        && dep.kind == DependencyKind::Peer
+                        && effective.policy.versions == VersionPolicy::Widen
+                    {
+                        if scheme
+                            .matches(
+                                &dep.current,
+                                &scheme.parse(&normalized).map_err(|e| e.to_string())?,
+                            )
+                            .unwrap_or(false)
+                        {
+                            dep.current.clone()
+                        } else {
+                            let target = scheme.parse(&normalized).map_err(|e| e.to_string())?;
+                            let minor = if target.0.major == 0 {
+                                target.0.minor
+                            } else {
+                                0
+                            };
+                            let patch = if target.0.major == 0 && minor == 0 {
+                                target.0.patch
+                            } else {
+                                0
+                            };
+                            format!("{} || ^{}.{}.{}", dep.current, target.0.major, minor, patch)
+                        }
+                    } else if dep.manager == Manager::Terraform
+                        && dep.kind == DependencyKind::Provider
+                        && scheme
+                            .matches(
+                                &dep.current,
+                                &scheme.parse(&normalized).map_err(|e| e.to_string())?,
+                            )
+                            .unwrap_or(false)
                     {
                         dep.current.clone()
                     } else {
-                        let target = scheme.parse(&normalized).map_err(|e| e.to_string())?;
-                        let minor = if target.0.major == 0 {
-                            target.0.minor
-                        } else {
-                            0
-                        };
-                        let patch = if target.0.major == 0 && minor == 0 {
-                            target.0.patch
-                        } else {
-                            0
-                        };
-                        format!("{} || ^{}.{}.{}", dep.current, target.0.major, minor, patch)
-                    }
-                } else if dep.manager == Manager::Terraform
-                    && dep.kind == DependencyKind::Provider
-                    && scheme
-                        .matches(
-                            &dep.current,
-                            &scheme.parse(&normalized).map_err(|e| e.to_string())?,
-                        )
-                        .unwrap_or(false)
-                {
-                    dep.current.clone()
-                } else {
-                    match scheme.new_range(&dep.current, &normalized, effective.policy.versions) {
-                        Ok(value) => value,
-                        // The lookup worked; the declaration is what cannot be edited.
-                        Err(patchula_versioning::Error::Compound(_)) => {
-                            not_proposed.push(NotProposed {
-                                version: normalized,
-                                reason: format!(
-                                    "the constraint `{}` cannot be rewritten to allow it without guessing",
-                                    dep.current
-                                ),
-                            });
-                            continue;
+                        match scheme.new_range(&dep.current, &normalized, effective.policy.versions)
+                        {
+                            Ok(value) => value,
+                            // The lookup worked; the declaration is what cannot be edited.
+                            Err(patchula_versioning::Error::Compound(_)) => {
+                                // Report the newest release once, then try the older
+                                // ones the same track displaced.
+                                if !reported {
+                                    reported = true;
+                                    not_proposed.push(NotProposed {
+                                    version: normalized,
+                                    reason: format!(
+                                        "the constraint `{}` cannot be rewritten to allow it without guessing",
+                                        dep.current
+                                    ),
+                                });
+                                }
+                                continue;
+                            }
+                            Err(e) => return Err(e.to_string()),
                         }
-                        Err(e) => return Err(e.to_string()),
-                    }
+                    };
+                    // Preserve aliases and packageManager identity via extraction
+                    // location metadata, while current/newValue describe the version.
+                    value
                 };
-                // Preserve aliases and packageManager identity via extraction
-                // location metadata, while current/newValue describe the version.
-                value
-            };
-            // A release the declared range already allows leaves the manifest
-            // alone. With a committed lockfile it still moves the lock to the
-            // target; without one there is nothing to change.
-            let in_range = new_value == dep.current;
-            let lock_only = in_range
-                && dep.locked().is_some()
-                && effective.policy.versions != VersionPolicy::Exact;
-            if in_range
-                && !lock_only
-                && (matches!(
-                    dep.manager,
-                    Manager::Cargo | Manager::Pyproject | Manager::Bundler | Manager::Composer
-                ) || (matches!(dep.manager, Manager::Terraform | Manager::Npm)
-                    && dep.kind == DependencyKind::Toolchain))
-            {
-                // Lockfile maintenance is a separate, explicitly enabled operation.
-                continue;
-            }
-            let mut update = proposal(
-                (!lock_only).then_some(new_value),
-                Some(normalized),
-                if effective.digest
-                    && (dep.manager == Manager::GithubActions || dep.tagged_action())
+                // A release the declared range already allows leaves the manifest
+                // alone. With a committed lockfile it still moves the lock to the
+                // target; without one there is nothing to change.
+                let in_range = new_value == dep.current;
+                let lock_only = in_range
+                    && dep.locked().is_some()
+                    && effective.policy.versions != VersionPolicy::Exact;
+                if in_range
+                    && !lock_only
+                    && (matches!(
+                        dep.manager,
+                        Manager::Cargo | Manager::Pyproject | Manager::Bundler | Manager::Composer
+                    ) || matches!(scheme, Ecosystem::Maven | Ecosystem::Nuget)
+                        || (matches!(dep.manager, Manager::Terraform | Manager::Npm)
+                            && dep.kind == DependencyKind::Toolchain))
                 {
-                    version.digest.clone()
-                } else {
-                    None
-                },
-                kind,
-                &effective.policy,
-            );
-            update.release_age = release_age(version, now);
-            update.fixes = fixes(update.new_version.as_deref().unwrap_or_default());
-            result.push(update);
+                    // Lockfile maintenance is a separate, explicitly enabled operation.
+                    continue 'tracks;
+                }
+                let mut update = proposal(
+                    (!lock_only).then_some(new_value),
+                    Some(normalized),
+                    if effective.digest
+                        && (dep.manager == Manager::GithubActions || dep.tagged_action())
+                    {
+                        version.digest.clone()
+                    } else {
+                        None
+                    },
+                    kind,
+                    &effective.policy,
+                );
+                update.release_age = release_age(version, now);
+                update.fixes = fixes(update.new_version.as_deref().unwrap_or_default());
+                result.push(update);
+                break;
+            }
         }
         if scheme == Ecosystem::Npm
             && self.effective(dep, Update::Pin).policy.versions == VersionPolicy::Exact

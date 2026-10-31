@@ -40,9 +40,9 @@ In order:
    at most 10 lines) in a collapsed block. The full output stays in the CLI log
    and the JSON report;
 6. template updates, which have no PR or checkbox
-   ([Copier](/guide/managers/#copier)), and newer versions that are not
-   proposed because their declaration cannot be rewritten to allow them without
-   guessing, with the reason ("Newer versions not proposed");
+   ([Copier](/guide/managers/#copier)), and, under "Newer versions not proposed",
+   releases whose declaration cannot be rewritten to allow them without
+   guessing, each with the specific constraint that blocks it;
 7. updates you closed ("Updates you closed"), with the target that was
    suppressed, and updates "Batched by the Count";
 8. lookup warnings and sources served from stale cache: one box per failing

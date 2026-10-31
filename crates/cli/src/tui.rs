@@ -524,7 +524,10 @@ impl Model {
                         applied: false,
                     });
                 } else {
-                    warnings.push((repo.repository.clone(), Warning::Note(notice.text())));
+                    warnings.push((
+                        repo.repository.clone(),
+                        Warning::Note(format!("{} ({})", notice.text(), notice.path)),
+                    ));
                 }
             }
             for failure in &repo.lookup_failures {
@@ -1960,7 +1963,7 @@ mod tests {
             })
             .collect();
         serde_json::from_value(serde_json::json!({
-            "schemaVersion": 3,
+            "schemaVersion": 4,
             "repositories": [{"repository": "local/app", "status": "complete",
                 "packageFiles": [{"path": "package.json", "dependencies": dependencies}]}]
         }))
@@ -2068,6 +2071,40 @@ mod tests {
         let written = std::fs::read_to_string(dir.path().join("package.json")).unwrap();
         assert_eq!(written, manifest.replace("3.22.0", "4.1.0"));
         assert!(model.updates[0].applied && !model.updates[0].selected);
+    }
+
+    /// A release the Count could not write into a declaration is a warning that
+    /// names the file, so a dependency declared in two manifests can be told apart,
+    /// and it is never a template for copier.
+    #[test]
+    fn notices_with_a_reason_are_warnings_that_name_their_file() {
+        let mut report = report(&[("zod", "3.22.0", "4.1.0", "major")]);
+        report.repositories[0].notices = serde_json::from_value(serde_json::json!([
+            {"manager":"composer","path":"a/composer.json","line":3,"name":"acme/lib","package":"acme/lib","current":"^1 | ^2","available":"3.0.0","reason":"not rewritable"},
+            {"manager":"composer","path":"b/composer.json","line":3,"name":"acme/lib","package":"acme/lib","current":"^1 | ^2","available":"3.0.0","reason":"not rewritable"}
+        ]))
+        .unwrap();
+        let model = Model::new(&report, Origin::GitHub);
+        assert!(model.templates.is_empty());
+        let notes: Vec<_> = model
+            .warnings
+            .iter()
+            .filter_map(|(_, warning)| match warning {
+                Warning::Note(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        for path in ["a/composer.json", "b/composer.json"] {
+            assert!(
+                notes.contains(
+                    &format!(
+                        "acme/lib ^1 | ^2 → 3.0.0 available, not proposed: not rewritable ({path})"
+                    )
+                    .as_str()
+                ),
+                "{notes:?}"
+            );
+        }
     }
 
     #[test]

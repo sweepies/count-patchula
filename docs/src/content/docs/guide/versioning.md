@@ -55,13 +55,14 @@ Under `preserve` a shifted range keeps the precision it was declared with:
 |---|---|
 | npm | adds an alternative: `^1.0.0 \|\| 2.0.0`; a peer range gets a caret alternative, `^5 \|\| ^7.0.0` |
 | Cargo | a convex interval keeping the original minimum, `>=1.2.3, <3.0.0`, because a Cargo requirement cannot be a union |
-| Composer | adds a `||` alternative covering the target: `^1.2 \|\| ^3.0` |
-| Poetry | adds a `||` alternative covering the target: `^1.2 \|\| ^3.0` |
-| PEP 440 (requirements, PEP 621, uv) | raises an upper bound, `<2` to `<=3.1.4`; other specifiers cannot be unions, so they shift as under `preserve` |
-| Terraform | as PEP 440: an upper bound is raised, anything else shifts as under `preserve` |
+| Composer | adds an alternative covering the target: `^1.2 \|\| ^3.0` |
+| Poetry | adds an alternative covering the target: `^1.2 \|\| ^3.0` |
+| PEP 440 (requirements, PEP 621, uv) | a declaration that is a single upper-bound clause is raised, `<2` to `<=3.1.4`; a compound one such as `>=1, <2` is reported as a notice instead, and other single specifiers cannot be unions, so they shift as under `preserve` |
+| Terraform | as PEP 440: a single upper-bound clause is raised, anything else shifts as under `preserve` |
 | Maven, NuGet | a single interval takes the target as its inclusive upper bound, `[1.0,2.0)` to `[1.0,3.1]`; several intervals are not rewritten |
 | Bundler | as `preserve`: `,` only means "and", so a requirement cannot be extended |
-| Docker, Go, mise tools and toolchains | as `preserve`: a declaration is one version, so every policy writes the target |
+| Docker, Go, mise tools and single-version toolchain pins | as `preserve`: a declaration is one version, so every policy writes the target |
+| Ranged toolchain constraints (`engines.node`, Terraform `required_version`) | `preserve` leaves them alone, since widening a supported runtime range needs compatibility evidence the Count does not have |
 
 ### The default depends on the ecosystem
 

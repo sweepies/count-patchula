@@ -223,11 +223,19 @@ pub(crate) fn job(
         {
             return Ok(None);
         }
-        Manager::Cargo => (
-            Ecosystem::Cargo,
-            nearest(&dep.file, &snapshot.paths, &["Cargo.lock"])
-                .unwrap_or_else(|| directory(&dep.file)),
-        ),
+        Manager::Cargo => {
+            let lock = nearest(&dep.file, &snapshot.paths, &["Cargo.lock"]);
+            // A release the declaration already allows changes the lock and
+            // nothing else; with no committed lock there is nothing to change,
+            // and cargo would publish one it generated.
+            if lock.is_none() && update.new_value.is_none() {
+                return Ok(None);
+            }
+            (
+                Ecosystem::Cargo,
+                lock.unwrap_or_else(|| directory(&dep.file)),
+            )
+        }
         Manager::Go => (Ecosystem::Go, directory(&dep.file)),
         // `.python-version` pins the interpreter, which no lockfile records.
         Manager::Pyproject if dep.file.ends_with(".python-version") => return Ok(None),
@@ -1171,7 +1179,7 @@ fn versions(
 /// Whether a locked version is the requested one. SemVer build metadata does
 /// not order versions, so a request without it matches any build: the advisory
 /// for `zstd-sys` fixes `2.1.2`, which the lock records as `2.1.2+zstd.1.5.7`.
-fn same_release(locked: &str, requested: &str) -> bool {
+pub(crate) fn same_release(locked: &str, requested: &str) -> bool {
     locked == requested || (!requested.contains('+') && locked.split('+').next() == Some(requested))
 }
 /// Whether Cargo treats `target` as incompatible with `current`: a different

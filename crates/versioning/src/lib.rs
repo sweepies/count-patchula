@@ -198,10 +198,15 @@ impl Versioning for Ecosystem {
             if self.matches(current, &parsed)? {
                 return Ok(current.into());
             }
-            return if policy == VersionPolicy::Widen {
-                maven::widen(current, target).ok_or_else(|| Error::Compound(current.into()))
-            } else {
-                Err(Error::Compound(current.into()))
+            // The widened interval has to allow the target: a target below the
+            // lower bound is not reached by moving the upper one.
+            return match maven::widen(current, target) {
+                Some(widened)
+                    if policy == VersionPolicy::Widen && self.matches(&widened, &parsed)? =>
+                {
+                    Ok(widened)
+                }
+                _ => Err(Error::Compound(current.into())),
             };
         }
         if matches!(
@@ -442,6 +447,13 @@ mod tests {
                 "{scheme:?} {extended} must allow {new}"
             );
         }
+        // A target below the lower bound is not reached by moving the upper one.
+        for (scheme, old, new) in [
+            (Ecosystem::Maven, "[2.0,3.0)", "1.5"),
+            (Ecosystem::Nuget, "[2.0.0,3.0.0)", "1.5.0"),
+        ] {
+            assert!(scheme.new_range(old, new, Widen).is_err(), "{old} -> {new}");
+        }
         // Several intervals have no one bound to move.
         for scheme in [Ecosystem::Maven, Ecosystem::Nuget] {
             assert!(scheme.new_range("(,1.0],[1.2,1.5)", "2.0", Widen).is_err());
@@ -461,6 +473,35 @@ mod tests {
                 "{scheme:?} {old} -> {new}"
             );
         }
+    }
+
+    /// An epoch outranks every release, so an alternative or a ceiling that leaves
+    /// it out would exclude the target it was written for.
+    #[test]
+    fn poetry_ranges_carry_the_epoch_of_their_target() {
+        let poetry = Ecosystem::Poetry;
+        let target = poetry.parse("1!2.4.0").unwrap();
+        for (old, policy, expected) in [
+            ("^1.2", VersionPolicy::Widen, "^1.2 || ^1!2.4"),
+            ("^1!2.0", VersionPolicy::Preserve, "^1!2.0"),
+            ("^0!1.2", VersionPolicy::Preserve, "^1!2.4"),
+        ] {
+            let out = poetry.new_range(old, "1!2.4.0", policy).unwrap();
+            assert_eq!(out, expected, "{old}");
+            assert!(poetry.matches(&out, &target).unwrap(), "{out}");
+        }
+        // A caret on an epoch version is bounded inside that epoch.
+        assert!(poetry.matches("^1!2.0", &target).unwrap());
+        assert!(
+            !poetry
+                .matches("^1!2.0", &poetry.parse("1!3.0.0").unwrap())
+                .unwrap()
+        );
+        assert!(
+            !poetry
+                .matches("^1!2.0", &poetry.parse("2.4.0").unwrap())
+                .unwrap()
+        );
     }
 
     #[test]

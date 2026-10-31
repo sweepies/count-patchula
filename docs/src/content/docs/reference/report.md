@@ -6,7 +6,7 @@ whole batch. This page describes schema version 3.
 
 ```json
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "repositories": [{
     "repository": "owner/repo",
     "status": "complete",
@@ -30,7 +30,9 @@ whole batch. This page describes schema version 3.
 ```
 
 Readers should reject any other `schemaVersion`. Unknown fields are rejected
-too, so a new field means a new version.
+too, so a new field means a new version. Version 4 added the `reason` of a
+notice that is not a template update; version 3 added an image rebuild's
+`image` check.
 
 ## Repositories
 
@@ -97,7 +99,7 @@ when this list is not empty.
 
 | Field | |
 |---|---|
-| `newValue`, `newVersion`, `newDigest` | The target; at least one is set. A `null` `newValue` with a `newVersion` is a lockfile-only update: the declaration already allows the version, so only the lockfile changes |
+| `newValue`, `newVersion`, `newDigest` | The target; at least one is set. A `null` `newValue` with a `newVersion` is a lockfile-only update: only a lockfile changes. For a direct dependency that is a release its declaration already allows; a transitive package, which has no declaration, moves the same way |
 | `updateType` | `major`, `minor`, `patch`, `digest` or `pin` |
 | `group` | The group name from configuration, or null |
 | `policy` | Optional. The policy that applies: versions, wait, windows, merge, labels |
