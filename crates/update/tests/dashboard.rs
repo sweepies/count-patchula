@@ -16,9 +16,9 @@ fn repository() -> Repository {
 }
 #[test]
 fn a_held_update_says_when_it_becomes_eligible_and_not_when_its_catalog_was_fetched() {
-    // Whether a catalog is reused changes from run to run; the dashboard must
-    // not, or an unchanged repository would rewrite it on every run.
-    for reused in [true, false] {
+    // Whether a catalog is reused, and when it was fetched, change from run to
+    // run; the dashboard must not, or an unchanged repository would rewrite it.
+    let render = |fetched: &str, reused: bool| {
         let mut repo = repository();
         let metadata = repo.package_files[0].dependencies[0]
             .metadata
@@ -27,16 +27,27 @@ fn a_held_update_says_when_it_becomes_eligible_and_not_when_its_catalog_was_fetc
         metadata.lookup = Some(
             serde_json::from_value(json!({
                 "evaluatedAt":"2026-10-15T12:00:00Z", "disabledUpdates":[], "rejected":[],
-                "catalog":{"fetchedAt":"2026-10-15T09:00:00Z", "reused":reused}
+                "catalog":{"fetchedAt":fetched, "reused":reused}
             }))
             .unwrap(),
         );
-        let text = dashboard::render(&repo, &[], &[], Recheck::NextRun, None);
-        assert!(text.contains("; eligible 16 Oct 00:00 UTC) <!--"), "{text}");
-        assert!(
-            !text.contains("catalog fetched") && !text.contains("2026-10-15T09"),
-            "{text}"
-        );
+        dashboard::render(&repo, &[], &[], Recheck::NextRun, None)
+    };
+    let first = render("2026-10-15T09:00:00Z", false);
+    assert!(
+        first.contains("; eligible 16 Oct 00:00 UTC) <!--"),
+        "{first}"
+    );
+    assert!(
+        !first.contains("catalog fetched") && !first.contains("2026-10-15T09"),
+        "{first}"
+    );
+    for (fetched, reused) in [
+        ("2026-10-15T09:00:00Z", true),
+        ("2026-10-16T23:59:59.999Z", true),
+        ("2026-10-15 09:00", false),
+    ] {
+        assert_eq!(render(fetched, reused), first, "{fetched} {reused}");
     }
 }
 #[test]

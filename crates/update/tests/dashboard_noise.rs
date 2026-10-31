@@ -455,3 +455,42 @@ fn held_updates_read_as_dates_and_name_the_package_in_code() {
         assert!(!line.contains(dropped), "{line}");
     }
 }
+
+#[test]
+fn advisory_ids_and_aliases_cannot_mention_anyone() {
+    let mut repo = repository();
+    repo.package_files[0].dependencies[0]
+        .metadata
+        .as_mut()
+        .unwrap()
+        .advisories = serde_json::from_value(json!([
+        {"id":"GHSA-@evilid","aliases":["CVE-2026-1 @evilalias","&commat;evilentity"],
+         "url":"https://osv.dev/vulnerability/GHSA-x"}
+    ]))
+    .unwrap();
+    let text = render_with(&repo);
+    assert_eq!(mention(&text), None, "{text}");
+    for forged in ["@evilid", "@evilalias", "&commat;", "@evilentity"] {
+        assert!(!text.contains(forged), "{forged}\n{text}");
+    }
+}
+
+#[test]
+fn equally_severe_packages_are_ordered_by_name() {
+    let mut repo = repository();
+    for dep in &mut repo.package_files[0].dependencies {
+        for advisory in &mut dep.metadata.as_mut().unwrap().advisories {
+            advisory.severity = Some("high".into());
+        }
+    }
+    let text = render_with(&repo);
+    let order: Vec<_> = [
+        "`crypto-bigint`",
+        "`ctutils`",
+        "`unsafe-libyaml`",
+        "`zstd-safe`",
+    ]
+    .map(|name| text.find(&format!("**high**: {name}")).unwrap())
+    .into();
+    assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}\n{text}");
+}

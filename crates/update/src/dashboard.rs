@@ -1034,14 +1034,14 @@ impl Vulnerable<'_> {
                 .join("; ")
         };
         let link = |advisory: &patchula_report::Advisory| {
-            format!("[{}]({})", escape(&advisory.id), url(&advisory.url))
+            format!("[{}]({})", safe(&advisory.id), url(&advisory.url))
         };
         let aliases = |advisory: &patchula_report::Advisory| {
             let cves: Vec<_> = advisory
                 .aliases
                 .iter()
                 .filter(|a| a.starts_with("CVE-"))
-                .map(|a| escape(a))
+                .map(|a| safe(a))
                 .collect();
             if cves.is_empty() {
                 String::new()

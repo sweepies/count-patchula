@@ -86,9 +86,11 @@ fn classify(line: &str) -> Line<'_> {
 }
 fn decisive(line: &str) -> bool {
     let line = line.to_ascii_lowercase();
-    ["error", "fatal", "npm err", "panic", "traceback", "failed"]
-        .iter()
-        .any(|start| line.starts_with(start))
+    // Rust prints "thread 'main' panicked at", which doesn't start with a keyword.
+    line.contains("panicked at")
+        || ["error", "fatal", "npm err", "panic", "traceback", "failed"]
+            .iter()
+            .any(|start| line.starts_with(start))
 }
 fn cut(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit {
@@ -127,7 +129,8 @@ fn excerpt(output: &str) -> Option<String> {
     if text.is_empty() {
         return None;
     }
-    Some(inert(&cut(text, DETAIL_CHARS)))
+    // Neutralise first: it lengthens text, and the cap is on what is shown.
+    Some(cut(&inert(text), DETAIL_CHARS))
 }
 
 /// Splits a failure reason, such as a lockfile tool's whole output, into a
@@ -285,6 +288,31 @@ required by package `jsonwebtoken v10.4.0`\n\
         assert!(
             !all.contains("@jdx") && !all.contains("@org") && !all.contains("#12"),
             "{all}"
+        );
+    }
+
+    #[test]
+    fn a_rust_panic_after_many_lines_is_the_excerpts_start() {
+        let mut output = String::from("tool: exit status: 101: ");
+        for n in 0..14 {
+            output.push_str(&format!("warning: unused variable {n}\n"));
+        }
+        output.push_str("thread 'main' panicked at src/main.rs:3:5:\nboom\nstack backtrace:\n");
+        let detail = failure(&output).detail.unwrap();
+        assert!(detail.starts_with("thread 'main' panicked at"), "{detail}");
+        assert!(detail.contains("boom"));
+    }
+
+    #[test]
+    fn the_cap_counts_the_neutralised_text() {
+        let mentions = "error: @a1 @a2 @a3 https://github.com/o/r/issues/1 ".repeat(40);
+        let detail = failure(&format!("x: exit status: 2: {mentions}"))
+            .detail
+            .unwrap();
+        assert!(
+            detail.chars().count() <= DETAIL_CHARS + 1,
+            "{}",
+            detail.chars().count()
         );
     }
 

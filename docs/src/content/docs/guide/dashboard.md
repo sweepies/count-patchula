@@ -15,8 +15,9 @@ closes the issue; turning it on again opens a new one.
 In order:
 
 1. known vulnerabilities, most severe first: one line per package and version
-   that lists every file it appears in, with its advisories as links (and
-   their summaries collapsed when there are several), and the fix once: the
+   that lists the first five files it appears in (and a count of the rest),
+   with its advisories as links (and their summaries collapsed when there are
+   several), and the fix once: the
    open PR that fixes it, "fixed in X, not proposed", or "no fixed release
    yet". A severity shows only when the advisory database rates it (see
    [security advisories](/guide/security/));
