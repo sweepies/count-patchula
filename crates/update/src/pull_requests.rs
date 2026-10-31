@@ -68,18 +68,17 @@ fn body(pr: &Value) -> &str {
 const START: &str = "<!-- patchula-begin -->";
 
 /// A body split by the Count's markers: the text before his section, the
-/// section itself, and the text after it. A body with no start marker (one
-/// written before it existed) is his from its first byte.
+/// section itself, and the text after it. His section starts at the last start
+/// marker before his ownership marker: text others wrote above it may quote the
+/// marker, but his own section cannot hold one, because rendered upstream text
+/// never keeps an HTML comment. A body with no start marker (one written before
+/// it existed) is his from its first byte.
 fn regions(body: &str) -> Option<(&str, &str, &str)> {
     marker(body)?;
     let (before, rest) = body.split_once(MARKER)?;
     let (json, _) = rest.split_once(" -->")?;
     let end = before.len() + MARKER.len() + json.len() + " -->".len();
-    let start = if before.matches(START).count() == 1 {
-        before.find(START).unwrap_or(0)
-    } else {
-        0
-    };
+    let start = before.rfind(START).unwrap_or(0);
     Some((&body[..start], &body[start..end], &body[end..]))
 }
 /// The Count's rendering between whatever the PR's body has right now before
@@ -1814,6 +1813,17 @@ mod foreign_text_tests {
         );
         let merged = with_foreign(stale, &fresh);
         assert_eq!(merged, fresh);
+    }
+
+    #[test]
+    fn text_above_that_quotes_the_start_marker_is_kept() {
+        let quoted = format!("Someone pasted `{START}` here.\n\n");
+        let current = format!("{quoted}{}{BLOCK}", section("old\n"));
+        let rewritten = with_foreign(section("new\n"), &current);
+        assert!(rewritten.starts_with(&quoted), "{rewritten}");
+        assert!(rewritten.contains("new\n") && !rewritten.contains("old\n"));
+        assert!(rewritten.ends_with(BLOCK));
+        assert_eq!(with_foreign(section("new\n"), &rewritten), rewritten);
     }
 
     #[test]
