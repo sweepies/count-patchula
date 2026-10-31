@@ -658,7 +658,7 @@ const SHORT_BYTES: usize = 600;
 fn summary_text(version: &str) -> String {
     version
         .chars()
-        .filter(|c| c.is_alphanumeric() || ".+-_~^:/".contains(*c))
+        .filter(|c| c.is_alphanumeric() || ".+-_~^:/!".contains(*c))
         .take(40)
         .collect()
 }

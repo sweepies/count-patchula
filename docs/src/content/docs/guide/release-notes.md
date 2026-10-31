@@ -67,11 +67,13 @@ notes.
 The table, any `bodyNotes` and the checkboxes stay outside the fold.
 
 A package that runs out of room is cut where a block ends, between paragraphs,
-list items or headings, and never inside a link, a code span or a code block;
-a fence or `<details>` that upstream left open is closed. The package then gets
-one notice, linking to upstream's release history: either "the Count left some
-release notes out", or, when upstream's own history couldn't be read in full,
-"these release notes may be incomplete".
+list items or headings, and not inside a link, a code span or a code block; a
+fence or `<details>` that upstream left open is closed. When a single paragraph
+is bigger than the room left, the cut falls at the last line end that leaves no
+code span or link label open, and when not even that fits the release is left
+out. The package then gets one notice, linking to upstream's release history:
+either "the Count left some release notes out", or, when upstream's own history
+couldn't be read in full, "these release notes may be incomplete".
 
 Two edits keep upstream text from making noise:
 

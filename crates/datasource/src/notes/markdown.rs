@@ -18,9 +18,10 @@ pub fn inert(text: &str) -> String {
         )
         .expect("GitHub reference URLs")
     });
-    // `&#64;` renders as a mention too, so it is read as the `@` it stands for.
+    // `&#64;`, `&#x40;` and `&commat;` render as mentions too, so each is read
+    // as the `@` it stands for.
     static AT_ENTITY: LazyLock<regex::Regex> =
-        LazyLock::new(|| regex::Regex::new(r"(?i)&#(?:0*64|x0*40);").expect("@ entity"));
+        LazyLock::new(|| regex::Regex::new(r"(?i)&(?:#(?:0*64|x0*40)|commat);").expect("@ entity"));
     let text = AT_ENTITY.replace_all(text, "@");
     let text = REFERENCES.replace_all(&text, |c: &regex::Captures| without_backlink(&c[0]));
     let mut output = String::with_capacity(text.len());
@@ -370,7 +371,15 @@ fn without_backlink(url: &str) -> String {
 
 /// An opening or closing code fence: its character and length.
 fn fence(line: &str) -> Option<(char, usize, &str)> {
-    let line = line.trim_start_matches(' ');
+    static LIST_MARKER: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"^(?:[-+*]|[0-9]{1,9}[.)])[ \t]+").expect("list marker")
+    });
+    // A fence may sit in a block quote or a list item, as in `sanitise`.
+    let mut line = line.trim_start_matches([' ', '\t']);
+    while let Some(quoted) = line.strip_prefix('>') {
+        line = quoted.trim_start_matches([' ', '\t']);
+    }
+    let line = LIST_MARKER.find(line).map_or(line, |m| &line[m.end()..]);
     let ch = line.chars().next().filter(|c| matches!(c, '`' | '~'))?;
     let count = line.chars().take_while(|c| *c == ch).count();
     (count >= 3).then(|| (ch, count, &line[count..]))
@@ -446,6 +455,32 @@ pub(super) fn demote_headings(text: &str, top: usize) -> String {
     output
 }
 
+/// A line with its inline code spans blanked, so a tag shown in code isn't a
+/// tag. A backtick run that never closes is literal text.
+fn without_code_spans(line: &str) -> String {
+    let mut output = String::with_capacity(line.len());
+    let mut open = None::<(usize, usize)>;
+    let mut offset = 0;
+    while let Some(at) = line[offset..].find('`') {
+        let start = offset + at;
+        let run = line[start..].bytes().take_while(|b| *b == b'`').count();
+        match open {
+            None => {
+                output.push_str(&line[offset..start]);
+                open = Some((start, run));
+            }
+            Some((_, size)) if size == run => open = None,
+            Some(_) => {}
+        }
+        offset = start + run;
+    }
+    match open {
+        None => output.push_str(&line[offset..]),
+        Some((start, _)) => output.push_str(&line[start..]),
+    }
+    output
+}
+
 /// Closes what the end of `text` leaves open: a code fence, then every
 /// `<details>`, so a cut can't swallow what follows it.
 pub(super) fn close_open_blocks(text: &str) -> String {
@@ -461,7 +496,7 @@ pub(super) fn close_open_blocks(text: &str) -> String {
                 open = None;
             }
             (None, _) => {
-                let lower = line.to_ascii_lowercase();
+                let lower = without_code_spans(line).to_ascii_lowercase();
                 details += lower.matches("<details").count() as i32;
                 details -= lower.matches("</details>").count() as i32;
             }

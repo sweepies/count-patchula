@@ -1641,8 +1641,8 @@ fn inert_text_has_no_mention_or_issue_reference_left_for_github_to_read() {
     for (text, expected) in [
         ("mise by @jdx", "mise by @\u{200d}jdx"),
         (
-            "&#64;jdx &#x40;jdx &#0064;jdx",
-            "@\u{200d}jdx @\u{200d}jdx @\u{200d}jdx",
+            "&#64;jdx &#x40;jdx &#0064;jdx &commat;jdx",
+            "@\u{200d}jdx @\u{200d}jdx @\u{200d}jdx @\u{200d}jdx",
         ),
         ("(@alice, @org/team)", "(@\u{200d}alice, @\u{200d}org/team)"),
         (
@@ -1923,4 +1923,50 @@ fn one_oversized_paragraph_is_cut_at_a_line_end_outside_links_and_code_spans() {
     );
     let (kept, _) = fit(text, 30);
     assert!(kept.trim().is_empty(), "{kept:?}");
+}
+
+#[test]
+fn a_tag_shown_in_code_is_not_an_open_or_closing_tag() {
+    for text in [
+        "Wrap it in `<details>` to fold.\n",
+        "Close with `</details>` when done.\n",
+        "A lone ` and <details> in prose is a tag\n",
+    ] {
+        let (kept, whole) = fit(text, 10_000);
+        assert!(whole);
+        let opened = kept.matches("<details>").count();
+        let closed = kept.matches("</details>").count();
+        // Only a tag outside code is balanced.
+        let expected = usize::from(text.starts_with("A lone"));
+        assert_eq!(
+            closed - usize::from(text.contains("`</details>`")),
+            expected,
+            "{kept}"
+        );
+        assert!(opened <= 1);
+    }
+}
+
+#[test]
+fn headings_inside_a_list_items_fence_are_not_demoted() {
+    let body =
+        "- ```rust\n  ### not a heading\n  ```\n\n> ```\n> ### nor this\n> ```\n\n### Real\n";
+    let text = upstream(vec![("4.156.0", body)]).render("wrangler", 12_000);
+    assert!(
+        text.contains("  ### not a heading\n") && text.contains("> ### nor this\n"),
+        "{text}"
+    );
+    assert!(text.contains("\n##### Real\n"), "{text}");
+}
+
+#[test]
+fn an_epoch_survives_in_the_range_summary() {
+    let mut notes = upstream(vec![("1!0.2", CHANGES), ("1!0.3", CHANGES)]);
+    notes.from = "1!0.1".into();
+    notes.to = "1!0.3".into();
+    let text = notes.render("pkg", 12_000);
+    assert!(
+        text.contains("<summary>Release notes: 1!0.1 → 1!0.3 (2 releases)</summary>"),
+        "{text}"
+    );
 }
