@@ -479,9 +479,12 @@ impl Lifecycle {
                 plan.retry |= checked(pr);
                 continue;
             }
-            // Security updates never queue behind ordinary ones.
+            // Security updates never queue behind ordinary ones. Nor does the
+            // batch PR: it replaces the open PRs it carries, which still count
+            // until it exists, so holding it would keep them open for good.
             let bypass = controls.create.contains(&key)
                 || controls.recreate.contains(&key)
+                || plan.batch.is_some()
                 || plan.changes.iter().any(|c| !c.advisories.is_empty());
             if !bypass && config.prs.concurrent.is_some_and(|n| active >= n) {
                 limit(plan, "prs.concurrent limit reached");

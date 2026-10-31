@@ -1942,6 +1942,29 @@ async fn batching_moves_updates_into_one_pr_and_never_suppresses_them() {
     assert_eq!(open[0]["head"]["ref"], branch.as_str());
 }
 
+/// The batch PR replaces the PRs it carries, which count toward
+/// `prs.concurrent` until it exists; at the limit it is still created.
+#[tokio::test(start_paused = true)]
+async fn a_batch_is_created_at_the_concurrent_limit() {
+    let fake = Arc::new(Fake::new(false));
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    let mut config = checkbox_config();
+    config.prs.concurrent = Some(1);
+    let now = chrono::Utc::now();
+    checkbox_run(&engine, &config, now).await;
+    let update = open_prs(&fake);
+    assert_eq!(update.len(), 1);
+    let number = update[0]["number"].as_u64().unwrap();
+    tick_pr(&fake, number, "patchula-batch-add");
+    checkbox_run(&engine, &config, now).await;
+    let open = open_prs(&fake);
+    assert_eq!(open.len(), 1, "{open:?}");
+    assert_eq!(open[0]["head"]["ref"], "patchula/batch");
+}
+
 #[tokio::test(start_paused = true)]
 async fn tooling_warnings_reach_the_pr_and_dashboard_and_clear_with_the_condition() {
     let fake = Arc::new(Fake::new(false));

@@ -128,6 +128,9 @@ it can leave less room for the ordinary updates that follow.
 `security.apply` can still hold a fix by other means, such as `active`,
 `waitHours` or `windows`. `concurrent = null` removes the cap.
 
+The batch PR skips both checks too. It replaces the PRs it carries, which close
+once it is open, so it never adds to the number of open PRs.
+
 ## Repeat runs
 
 After a successful write the Count stores a receipt: the commit and tree, the
