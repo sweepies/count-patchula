@@ -118,8 +118,19 @@ fn declaring_packages<'a>(
             .filter_map(|v| v.as_str())
             .collect()
     };
+    // Cargo's `**` also matches the directory it follows, so `crates/**` covers
+    // `crates` itself; globset's needs one more component, so that directory is
+    // matched on its own too.
     let compile = |key: &str| -> Vec<globset::GlobMatcher> {
-        patterns(key).into_iter().filter_map(glob).collect()
+        patterns(key)
+            .into_iter()
+            .flat_map(|pattern| {
+                let pattern = pattern.trim_start_matches("./").trim_end_matches('/');
+                [Some(pattern), pattern.strip_suffix("/**")]
+            })
+            .flatten()
+            .filter_map(glob)
+            .collect()
     };
     let (members, excluded) = (compile("members"), compile("exclude"));
     for (path, member) in files {
@@ -303,6 +314,7 @@ mod tests {
             ("crates/*", "crates", false),
             ("./crates/*/", "crates/app", true),
             ("crates/**", "crates/app/sub", true),
+            ("crates/**/lib", "crates/lib", true),
             ("crates/**/lib", "crates/a/b/lib", true),
             ("crates/a?p", "crates/app", true),
             ("crates/a?p", "crates/ap", false),

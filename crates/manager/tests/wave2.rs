@@ -488,6 +488,48 @@ dependencies = [
     );
 }
 
+/// Cargo's `**` matches the directory it follows as well, so `crates/**`
+/// makes a package at `crates/Cargo.toml` a member.
+#[test]
+fn a_trailing_double_star_member_glob_includes_its_own_directory() {
+    let files = Files::from([
+        (
+            "Cargo.toml".into(),
+            "[workspace]\nmembers = [\"crates/**\"]\n\n[workspace.dependencies]\nshared = \">=0.21\"\n".into(),
+        ),
+        (
+            "crates/Cargo.toml".into(),
+            "[package]\nname = \"core\"\nversion = \"0.1.0\"\n\n[dependencies]\nshared.workspace = true\n".into(),
+        ),
+        (
+            "Cargo.lock".into(),
+            format!(
+                r#"version = 4
+
+[[package]]
+name = "core"
+version = "0.1.0"
+dependencies = [
+ "shared",
+]
+
+[[package]]
+name = "shared"
+version = "0.21.7"
+source = "{REGISTRY}"
+checksum = "1111111111111111111111111111111111111111111111111111111111111111"
+"#
+            ),
+        ),
+    ]);
+    let deps = extract(&files);
+    let root = deps
+        .iter()
+        .find(|d| d.name == "shared" && d.file == "Cargo.toml")
+        .unwrap_or_else(|| panic!("{deps:?}"));
+    assert_eq!(root.resolved.as_deref(), Some("0.21.7"));
+}
+
 /// The same crate at the same version can be locked from crates.io and from
 /// git, and the edge names its source then. A git dependency under another
 /// name is not the crates.io dependency's locked version.
