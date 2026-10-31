@@ -119,7 +119,8 @@ pub fn load(path: &Path) -> miette::Result<Config> {
     let source = std::fs::read_to_string(&path)
         .into_diagnostic()
         .wrap_err_with(|| format!("cannot read config {}", path.display()))?;
-    let json = evaluate_local(&path, SCHEMA_NAME, SCHEMA)?;
+    let json = evaluate_local(&path, SCHEMA_NAME, SCHEMA)
+        .map_err(|error| evaluation_problem(&path, &source, error))?;
     decode(&path, &source, json)
 }
 
@@ -172,6 +173,21 @@ pub fn evaluate_local(
         files.insert(virtual_path, text);
     }
     virtual_files::evaluate_modules(&absolute.to_string_lossy(), files, true)
+}
+
+/// An evaluation error that points at no source, such as Pkl's type check of a
+/// property, names the file and the property like the Count's own problems do.
+/// One that already shows its source, such as a syntax error, stays as it is.
+fn evaluation_problem(path: &Path, source: &str, error: miette::Report) -> miette::Report {
+    if error.source_code().is_some() {
+        return error;
+    }
+    let message = error.to_string();
+    let field = message
+        .split_once("property '")
+        .and_then(|(_, rest)| rest.split_once('\''))
+        .map_or("", |(name, _)| name);
+    problem(path, source, field, &message)
 }
 
 fn decode(path: &Path, source: &str, json: serde_json::Value) -> miette::Result<Config> {
