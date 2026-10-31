@@ -75,7 +75,11 @@ pub(crate) fn job(
         Manager::Mise => {
             // A lockfile records the configuration beside it and above it, never
             // below: a nested mise.toml is locked by a mise.lock of its own.
-            let root = directory(&dep.file);
+            // A task file is locked with the config that includes it.
+            let root = dep
+                .included_by
+                .as_deref()
+                .map_or_else(|| directory(&dep.file), directory);
             if !snapshot.paths.contains(&node::join(root, "mise.lock")) {
                 return Ok(None);
             }

@@ -271,6 +271,7 @@ pub(super) fn extract(
             source: Source::Nix,
             scheme: Scheme::Loose,
             extract: None,
+            included_by: None,
         });
     }
     Ok(out)

@@ -2084,7 +2084,7 @@ fn mise_task_tools_are_extracted_from_config_and_included_task_files() {
     let files = Files::from([
         (
             "mise.toml".into(),
-            "[tools]\njq = \"1.7.1\"\n[tasks.lint]\nrun = \"hk check\"\ntools.hk = \"1.2.0\"\n[tasks.test]\ntools = { python = \"3.14.8\", uv = { version = \"0.13.1\" } }\n[tasks.plain]\nrun = \"true\"\n[tasks]\nshort = \"echo hi\"\n".into(),
+            "[task_config]\nincludes = [\"tasks.toml\"]\n[tools]\njq = \"1.7.1\"\n[tasks.lint]\nrun = \"hk check\"\ntools.hk = \"1.2.0\"\n[tasks.test]\ntools = { python = \"3.14.8\", uv = { version = \"0.13.1\" } }\n[tasks.plain]\nrun = \"true\"\n[tasks]\nshort = \"echo hi\"\n".into(),
         ),
         (
             "tasks.toml".into(),
@@ -2127,5 +2127,118 @@ fn mise_task_tools_are_extracted_from_config_and_included_task_files() {
             .map(|s| (s.file.as_str(), s.line))
             .collect::<Vec<_>>(),
         [("tasks.toml", Some(6))]
+    );
+}
+
+fn mise_files(paths: &[&str]) -> patchula_config::Config {
+    let mut config = config();
+    config.managers = vec![Manager::Mise];
+    config.files = vec![patchula_config::FileSet {
+        manager: Manager::Mise,
+        paths: paths.iter().map(|p| (*p).into()).collect(),
+    }];
+    config
+}
+
+/// In a task file every top-level table is a task, whatever its name; a file no
+/// config includes is read as a config.
+#[test]
+fn mise_task_files_are_found_by_what_includes_them_not_by_their_names() {
+    let config = mise_files(&["mise.toml", "tasks/**/*.toml", "scripts/*.toml"]);
+    let files = Files::from([
+        (
+            "mise.toml".into(),
+            "[task_config]\nincludes = [\"tasks/*.toml\", \"scripts\"]\n".into(),
+        ),
+        (
+            "tasks/ci.toml".into(),
+            "[tools]\nrun = \"echo\"\ntools = { jq = \"1.7.1\" }\n[lint]\ntools = { bun = \"1.4.3\" }\n".into(),
+        ),
+        (
+            "scripts/more.toml".into(),
+            "[tasks]\ntools = { go = \"1.27.2\" }\n".into(),
+        ),
+        // The glob stops at one level, so this file is nobody's task file.
+        ("tasks/deep/own.toml".into(), "[tools]\nnode = \"26.0.0\"\n".into()),
+    ]);
+    let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+    let found: Vec<_> = extraction
+        .dependencies
+        .iter()
+        .map(|d| {
+            (
+                d.file.as_str(),
+                d.name.as_str(),
+                d.location.pointer.as_str(),
+                d.included_by.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            (
+                "scripts/more.toml",
+                "go",
+                "/tasks/tools/go",
+                Some("mise.toml")
+            ),
+            ("tasks/ci.toml", "jq", "/tools/tools/jq", Some("mise.toml")),
+            ("tasks/ci.toml", "bun", "/lint/tools/bun", Some("mise.toml")),
+            ("tasks/deep/own.toml", "node", "/tools/node", None),
+        ]
+    );
+}
+
+/// An include reaches a file, a glob's matches or a directory's TOML files at
+/// any depth, from the including file's directory, and never leaves the
+/// repository.
+#[test]
+fn mise_includes_resolve_from_the_including_directory_inside_the_repository() {
+    let paths = [
+        "tasks.toml",
+        "sub/tasks.toml",
+        "sub/deep/more.toml",
+        "sub/notes.md",
+        "other/a.toml",
+        "other/nested/b.toml",
+    ];
+    let found = |directory: &str, include: &str| {
+        patchula_manager::included_files(directory, include, paths.iter().copied())
+    };
+    assert_eq!(found("", "tasks.toml"), ["tasks.toml"]);
+    assert_eq!(found("", "./sub/../tasks.toml"), ["tasks.toml"]);
+    assert_eq!(found("sub", "../tasks.toml"), ["tasks.toml"]);
+    assert_eq!(found("", "sub"), ["sub/tasks.toml", "sub/deep/more.toml"]);
+    assert_eq!(found("", "sub/*.toml"), ["sub/tasks.toml"]);
+    assert_eq!(
+        found("", "other/**/*.toml"),
+        ["other/a.toml", "other/nested/b.toml"]
+    );
+    assert!(found("", "../tasks.toml").is_empty());
+    assert!(found("sub", "../../tasks.toml").is_empty());
+    assert!(found("", "/tasks.toml").is_empty());
+}
+
+/// Task and tool names are JSON Pointer tokens, so `/` and `~` are escaped.
+#[test]
+fn mise_pointers_escape_slashes_and_tildes_in_names() {
+    let config = mise_files(&["mise.toml"]);
+    let files = Files::from([(
+        "mise.toml".into(),
+        "[tools]\n\"github:org/tool\" = \"1.0.0\"\n[tasks.\"a/b~c\"]\ntools = { \"github:org/other\" = \"2.0.0\" }\n".into(),
+    )]);
+    let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+    let pointers: Vec<_> = extraction
+        .dependencies
+        .iter()
+        .map(|d| d.location.pointer.as_str())
+        .collect();
+    assert_eq!(
+        pointers,
+        [
+            "/tools/github:org~1tool",
+            "/tasks/a~1b~0c/tools/github:org~1other"
+        ]
     );
 }

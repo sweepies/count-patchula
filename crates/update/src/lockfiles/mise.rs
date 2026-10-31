@@ -108,6 +108,16 @@ fn plain(spec: &toml_edit::Item) -> Option<Vec<String>> {
     }
 }
 
+/// What a declaration asks for besides versions.
+fn options(spec: &toml_edit::Item) -> BTreeMap<String, String> {
+    spec.as_table_like()
+        .into_iter()
+        .flat_map(|table| table.iter())
+        .filter(|(key, _)| *key != "version")
+        .map(|(key, value)| (key.to_owned(), value.to_string().trim().to_owned()))
+        .collect()
+}
+
 /// The selected tools a task installs for itself.
 fn task_declarations(
     task: &toml_edit::Item,
@@ -157,7 +167,7 @@ impl Runner {
         std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
         let mut tools = toml_edit::Table::new();
         let mut task_tools = Vec::new();
-        let mut includes = Vec::new();
+        let mut includes: Vec<&str> = Vec::new();
         let mut paths: Vec<_> = baseline
             .keys()
             .filter(|path| {
@@ -209,8 +219,8 @@ impl Runner {
                 {
                     task_declarations(task, &selected, &mut task_tools);
                 }
-                // A TOML task file the configuration includes holds tasks as
-                // top-level tables.
+                // TOML task files the configuration includes, by file, glob or
+                // directory, hold tasks as top-level tables.
                 for include in doc
                     .get("task_config")
                     .and_then(|config| config.get("includes"))
@@ -218,28 +228,41 @@ impl Runner {
                     .into_iter()
                     .flatten()
                     .filter_map(toml_edit::Value::as_str)
-                    .filter(|include| include.ends_with(".toml"))
                 {
-                    includes.push(node::join(super::directory(path), include));
+                    includes.extend(patchula_manager::included_files(
+                        super::directory(path),
+                        include,
+                        baseline.keys().map(String::as_str),
+                    ));
                 }
             }
         }
-        for include in includes
-            .iter()
-            .filter(|include| baseline.contains_key(*include))
-        {
-            let text = std::fs::read_to_string(root.join(include)).map_err(|e| e.to_string())?;
+        includes.sort_unstable();
+        includes.dedup();
+        for include in includes {
+            // A task file the update leaves alone is not checked out.
+            let text = match std::fs::read_to_string(root.join(include)) {
+                Ok(text) => text,
+                Err(_) => baseline[include].content.clone(),
+            };
             let doc = toml_edit::Document::parse(text).map_err(|e| e.to_string())?;
             for (_, task) in doc.iter() {
                 task_declarations(task, &selected, &mut task_tools);
             }
         }
         // A tool a task installs is locked beside the tools the configuration
-        // installs; a version both declare is one request.
+        // installs. mise locks one version with other options as an entry of
+        // its own, which one declaration here cannot express, so that is
+        // refused; the same options with another version are both requested.
         for (name, spec) in task_tools {
             match tools.get(&name) {
                 None => {
                     tools.insert(&name, spec);
+                }
+                Some(declared) if options(declared) != options(&spec) => {
+                    return Err(format!(
+                        "{name} is declared with different options by a task and elsewhere"
+                    ));
                 }
                 Some(declared) if requests(declared).is_superset(&requests(&spec)) => {}
                 Some(declared) => {

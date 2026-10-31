@@ -169,6 +169,7 @@ fn add(
         source: Source::Terraform,
         scheme: Scheme::Hashicorp,
         extract: None,
+        included_by: None,
     });
 }
 

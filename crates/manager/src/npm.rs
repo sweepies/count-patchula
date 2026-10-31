@@ -147,6 +147,7 @@ pub(super) fn extract(
             },
             scheme: Scheme::Semver,
             extract: None,
+            included_by: None,
         });
     }
     if let Some(version) = object
@@ -166,6 +167,7 @@ pub(super) fn extract(
             source: Source::Mise,
             scheme: Scheme::Semver,
             extract: None,
+            included_by: None,
         });
     }
     for dep in &mut deps {
@@ -220,6 +222,7 @@ fn collect(
                 source: Source::Npm,
                 scheme: Scheme::Semver,
                 extract: None,
+                included_by: None,
             });
         } else if nested && let Some(object) = prop.value.as_object() {
             collect(path, text, manager, object, kind, &ptr, true, deps);
@@ -344,6 +347,7 @@ pub(super) fn catalogs(
                 source: Source::Npm,
                 scheme: Scheme::Semver,
                 extract: None,
+                included_by: None,
             });
         }
     }
@@ -378,5 +382,6 @@ pub(super) fn node_version(path: &str, text: &str, manager: Manager) -> Vec<Depe
         source: Source::Mise,
         scheme: Scheme::Loose,
         extract: None,
+        included_by: None,
     }]
 }

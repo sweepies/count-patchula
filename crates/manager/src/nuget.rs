@@ -28,6 +28,7 @@ fn package(
         source: Source::Nuget,
         scheme: Scheme::Nuget,
         extract: None,
+        included_by: None,
     }
 }
 /// MSBuild properties, floating versions and empty values are not pins.
@@ -199,6 +200,7 @@ fn sdk(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
         source,
         scheme: Scheme::Loose,
         extract,
+        included_by: None,
     }])
 }
 

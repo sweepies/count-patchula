@@ -29,6 +29,7 @@ fn dependency(name: &str) -> Dependency {
         source: Source::Npm,
         scheme: Scheme::Semver,
         extract: None,
+        included_by: None,
     }
 }
 fn catalog(values: &[&str]) -> Catalog {

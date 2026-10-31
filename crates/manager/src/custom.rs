@@ -60,6 +60,7 @@ pub(super) fn extract(
                     source,
                     scheme,
                     extract: extractor.extract.clone(),
+                    included_by: None,
                 });
             }
         }

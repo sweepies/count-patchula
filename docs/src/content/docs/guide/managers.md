@@ -112,10 +112,30 @@ are not updated.
 ## mise
 
 Strings, arrays, version tables and `.tool-versions`. A task's own `tools`
-are read too: under `[tasks.<name>]` in `mise.toml`, and in a TOML task file
-(mise's `task_config.includes`), where each task is a top-level table. A task
-file is not found by name; add its path to the `mise` entry in
-[`files`](/guide/configuration/#choosing-files-and-managers). The Count asks mise
+are read too: under `[tasks.<name>]` in `mise.toml` and `.mise.toml`, and in a
+TOML task file that one of those configs includes with `task_config.includes`,
+by file, glob (`tasks/*.toml`) or directory (its TOML files at any depth). In a
+task file every top-level table is a task, so a table named `tools` is a task,
+not the tool section. The Count finds a task file through the config that
+includes it, but only reads files in the `mise` entry of
+[`files`](/guide/configuration/#choosing-files-and-managers). That entry
+replaces the defaults, so keep them when you add the task file:
+
+```pkl
+files {
+  new FileSet {
+    manager = "mise"
+    paths {
+      "**/mise.toml"
+      "**/.mise.toml"
+      "**/.tool-versions"
+      "tasks.toml"
+    }
+  }
+}
+```
+
+The Count asks mise
 itself for each tool's versions (`mise ls-remote --json`), so a tool is found
 wherever mise finds it: a short registry name such as `jq`, or an identifier for
 any backend that reads release metadata (`aqua`, `github`, `gitlab`,

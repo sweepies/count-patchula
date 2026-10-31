@@ -38,6 +38,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
             source: Source::Pypi,
             scheme: Scheme::Pep440,
             extract: None,
+            included_by: None,
         });
     }
     Ok(out)

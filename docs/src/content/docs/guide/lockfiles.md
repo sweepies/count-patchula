@@ -33,9 +33,12 @@ platform entries, such as `rust`, lock for the platforms the rest of the
 lockfile records.
 
 Tools a task installs for itself are locked with the rest: those under
-`[tasks.<name>]`, and those in a TOML task file listed in `task_config.includes`
-that the update changes. A tool declared both ways with different versions is
-locked for each; with options in one of them, the lock is refused.
+`[tasks.<name>]` in `mise.toml` or `.mise.toml`, and those in a TOML task file the
+config includes with `task_config.includes`. The `mise.lock` beside the config
+that includes a task file locks it, wherever the task file is. A tool declared
+with different versions is locked at each. mise locks the same version with
+different options as a separate entry, which the Count cannot write, so that
+update fails with a message saying so.
 
 A Cargo update across a semver-incompatible boundary, such as `0.22` to `0.23`
 or `1.x` to `2.x`, adds a second entry beside the old one, because other crates

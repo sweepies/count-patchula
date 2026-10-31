@@ -55,6 +55,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
             source,
             scheme: Scheme::Loose,
             extract: None,
+            included_by: None,
         });
     }
     Ok(out)

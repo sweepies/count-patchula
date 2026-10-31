@@ -5024,3 +5024,166 @@ async fn mise_lock_follows_the_tools_tasks_install() {
         ["[tools]", "node", "=", "'24.0.0'"]
     );
 }
+
+/// A fixture of one config beside its lockfile and a tool only a task file
+/// declares, the config reaching the task file with `include`.
+async fn lock_task_file_tool(
+    config_path: &str,
+    include: &str,
+    task_file: &str,
+    lock_path: &str,
+) -> (Plan, BranchAction) {
+    let task = "[fmt]\ntools = { node = '22.0.0' }\n";
+    let manifest = format!("[task_config]\nincludes = ['{include}']\n");
+    let files = BTreeMap::from([
+        (config_path.to_string(), manifest),
+        (task_file.into(), task.to_string()),
+        (lock_path.into(), include_str!("fixtures/mise.lock").into()),
+    ]);
+    let executor = Arc::new(MiseFixture {
+        git: fixture(files.clone(), false, false),
+        fault: "",
+        calls: Mutex::new(Vec::new()),
+    });
+    let temp = tempfile::tempdir().unwrap();
+    let runner =
+        Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
+    let mut snapshot = snapshot(&files);
+    let mut config = config();
+    config.files = vec![patchula_config::FileSet {
+        manager: Manager::Mise,
+        paths: vec![config_path.into(), task_file.into()],
+    }];
+    let dep = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies
+        .into_iter()
+        .find(|d| d.name == "node")
+        .unwrap();
+    assert_eq!(dep.file, task_file);
+    assert_eq!(dep.included_by.as_deref(), Some(config_path));
+    let update = Update {
+        new_version: Some("24.0.0".into()),
+        new_value: Some("24.0.0".into()),
+        ..serde_json::from_value(serde_json::json!({"updateType":"major"})).unwrap()
+    };
+    let job = job(&dep, &update, &snapshot).unwrap().expect("a lock job");
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        .unwrap()
+        .unwrap();
+    p.maintenance = false;
+    p.lock_jobs = vec![job];
+    p.contents
+        .insert(task_file.into(), task.replace("22.0.0", "24.0.0"));
+    p.action.files.push(FileAction {
+        path: task_file.into(),
+        blob_sha: blob_sha(task),
+        diff: String::new(),
+    });
+    runner.prepare(&mut p, &mut snapshot, &config).await;
+    let action = p.action.clone();
+    (p, action)
+}
+
+/// The config that includes a task file owns its lock, wherever the task file
+/// is, and a tool only the task file declares is locked. Includes can reach a
+/// file with a parent path, a glob or a directory.
+#[tokio::test]
+async fn mise_lock_follows_task_files_found_by_path_glob_or_directory() {
+    for (config, include, task_file, lock) in [
+        ("mise.toml", "tasks.toml", "tasks.toml", "mise.lock"),
+        (
+            "sub/mise.toml",
+            "../tasks.toml",
+            "tasks.toml",
+            "sub/mise.lock",
+        ),
+        (
+            "sub/mise.toml",
+            "../tasks/*.toml",
+            "tasks/shared.toml",
+            "sub/mise.lock",
+        ),
+        (
+            "mise.toml",
+            "scripts",
+            "scripts/deep/more.toml",
+            "mise.lock",
+        ),
+        ("mise.toml", "sub/tasks.toml", "sub/tasks.toml", "mise.lock"),
+    ] {
+        let (p, action) = lock_task_file_tool(config, include, task_file, lock).await;
+        assert_eq!(
+            action.status,
+            ActionStatus::Planned,
+            "{config} includes {include}: {action:?}"
+        );
+        assert!(
+            p.contents[lock].contains("version = \"24.0.0\""),
+            "{config} includes {include}"
+        );
+    }
+}
+
+/// mise locks one version with other options as an entry of its own, which a
+/// single declaration cannot say, so the conflict is reported.
+#[tokio::test]
+async fn mise_lock_refuses_a_task_that_declares_a_tool_with_other_options() {
+    let old = "[tools]\nnode = { version = '22.0.0', os = ['linux'] }\n[tasks.lint]\ntools = { node = '22.0.0' }\n";
+    let files = BTreeMap::from([
+        ("mise.toml".to_string(), old.to_string()),
+        (
+            "mise.lock".into(),
+            include_str!("fixtures/mise.lock").into(),
+        ),
+    ]);
+    let executor = Arc::new(MiseFixture {
+        git: fixture(files.clone(), false, false),
+        fault: "",
+        calls: Mutex::new(Vec::new()),
+    });
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let dep = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies
+        .into_iter()
+        .find(|d| d.name == "node" && d.location.pointer == "/tools/node")
+        .unwrap();
+    let update = Update {
+        new_version: Some("24.0.0".into()),
+        new_value: Some("24.0.0".into()),
+        ..serde_json::from_value(serde_json::json!({"updateType":"major"})).unwrap()
+    };
+    let job = job(&dep, &update, &snapshot).unwrap().unwrap();
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        .unwrap()
+        .unwrap();
+    p.maintenance = false;
+    p.lock_jobs = vec![job];
+    p.contents
+        .insert("mise.toml".into(), old.replace("22.0.0", "24.0.0"));
+    p.action.files.push(FileAction {
+        path: "mise.toml".into(),
+        blob_sha: blob_sha(old),
+        diff: String::new(),
+    });
+    runner.prepare(&mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+    assert!(
+        p.action
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("different options")),
+        "{:?}",
+        p.action
+    );
+    assert!(!p.contents.contains_key("mise.lock"));
+}
