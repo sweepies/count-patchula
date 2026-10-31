@@ -124,8 +124,8 @@ pinned defaults apply:
 | aube | 2.8.1 |
 | Yarn | 1.22.22 (Classic), 4.18.1 (Berry) |
 | Bun | 1.4.3 |
-| Rust | 1.99.0 |
-| Go | 1.27.2 |
+| Rust | 1.99.1 |
+| Go | 1.27.3 |
 | Terraform | 1.14.7 |
 | Python, uv, Poetry | 3.14.8, 0.13.1, 2.5.1 |
 | .NET SDK | 9.0.319 |

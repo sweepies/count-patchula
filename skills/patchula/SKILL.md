@@ -27,7 +27,7 @@ rules {
 ```
 
 Validate every change before committing it. `config check` exits 2 on an
-invalid config and names the file and line:
+invalid config and names the file and field:
 
 ```sh
 patchula config check .
@@ -77,8 +77,10 @@ https://count-patchula.sweepy.dev/guide/apply/.
 Field meanings are in https://count-patchula.sweepy.dev/reference/report/.
 
 An update that is missing usually has a reason in policy: the 24-hour release
-age wait (`metadata.heldBack`), a rule with `active = false`, or a `permitted`
-filter. See https://count-patchula.sweepy.dev/guide/lookup-policy/.
+age wait (`metadata.heldBack`), a rule with `active = false`, a `permitted`
+filter, a PR limit, or a schedule window. The dashboard lists each held update
+with its reason. See https://count-patchula.sweepy.dev/guide/lookup-policy/ and
+https://count-patchula.sweepy.dev/guide/dashboard/.
 
 ## Pull requests
 

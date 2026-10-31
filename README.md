@@ -63,11 +63,13 @@ token or toolchain of your own.
   Kubernetes, Kustomize, Flux, Helm, Terraform, Python, Maven, Gradle, .NET,
   Ruby, PHP, pre-commit, devcontainers, Woodpecker CI, GitLab CI, Nix flakes, APM,
   and your own regexes, plus notices for new Copier template versions.
-- Typed configuration in [Pkl](https://pkl-lang.org). A typo is an error with a
-  line number, not a silently ignored key.
-- Careful defaults: exact pins, digest-pinned actions and images, a 24-hour
-  release-age wait, and nothing auto-merges until you say so, except CA root
-  bundles and other reference data, which are only useful while current.
+- Typed configuration in [Pkl](https://pkl-lang.org). A typo is an error that
+  names the file and field, not a silently ignored key.
+- Careful defaults: exact pins, except in Cargo, pyproject, Bundler and Composer
+  where ranges are kept and the lockfile moves; digest-pinned actions and
+  images; a 24-hour release-age wait; and nothing auto-merges until you say so,
+  except CA root bundles and other reference data, which are only useful while
+  current.
 - A batch PR you fill by ticking a box on any update PR, keeping the version
   you reviewed.
 - A dependency dashboard, schedule windows, PR limits, grouping, auto-merge

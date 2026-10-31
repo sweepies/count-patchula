@@ -113,6 +113,7 @@ export default defineConfig({
             { label: "Getting started", slug: "getting-started" },
             { label: "Installation", slug: "installation" },
             { label: "How it works", slug: "guide/how-it-works" },
+            { label: "For coding agents", slug: "agents" },
           ],
         },
         {
