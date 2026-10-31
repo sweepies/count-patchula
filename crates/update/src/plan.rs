@@ -529,6 +529,27 @@ fn proposal_order(dep: &Dependency, a: &Update, b: &Update) -> std::cmp::Orderin
     }
     value(a).cmp(&value(b))
 }
+/// A batch target the dependency has already moved past, such as an update
+/// whose PR was ticked into the batch after a later batch carried a newer
+/// release. Writing it would go backwards, so it is dropped.
+fn superseded(dep: &Dependency, target: &Change) -> bool {
+    use patchula_versioning::Versioning;
+    let Some(version) = target.version.as_deref() else {
+        return false;
+    };
+    let current = if target.value.is_none() && target.digest.is_none() {
+        dep.resolved.as_deref()
+    } else {
+        Some(dep.current.as_str())
+    };
+    let (Some(current), Ok(scheme)) = (current, patchula_lookup::scheme(dep)) else {
+        return false;
+    };
+    match (scheme.parse(version), scheme.parse(current)) {
+        (Ok(target), Ok(current)) => scheme.order(&target, &current).is_lt(),
+        _ => false,
+    }
+}
 /// One update per occurrence of a dependency. A `0.x` crate's in-range release
 /// and its next minor share a branch line, so both can reach one branch; only
 /// the higher can be written, and it contains the other.
@@ -726,7 +747,7 @@ pub fn batch_plan(
                 target.value.as_deref().is_none_or(|v| v == dep.current)
                     && target.digest == dep.digest
             };
-            if applied {
+            if applied || superseded(dep, target) {
                 continue;
             }
             pending.push((

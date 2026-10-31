@@ -5283,3 +5283,55 @@ async fn mise_lock_requests_every_version_of_a_declaration_with_options() {
         ]
     );
 }
+
+/// A target the dependency has already moved past is dropped, never written
+/// backwards: node 24.22.2 ticked into the batch after a batch took node to
+/// 26.13.0 must not take it back down.
+#[test]
+fn a_batch_drops_a_target_older_than_the_current_version() {
+    let files = BTreeMap::from([(
+        "mise.toml".to_string(),
+        "[tools]\nnode = \"26.13.0\"\n".to_string(),
+    )]);
+    let config = config();
+    let dependencies = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies;
+    let source = serde_json::to_value(dependencies[0].source).unwrap();
+    let target = |version: &str| crate::plan::Change {
+        source: source.as_str().unwrap().into(),
+        package: dependencies[0].package.clone(),
+        file: "mise.toml".into(),
+        current: "24.21.0".into(),
+        current_version: None,
+        value: Some(version.into()),
+        version: Some(version.into()),
+        digest: None,
+        kind: "minor".into(),
+        merge: false,
+        labels: Vec::new(),
+        release_notes: false,
+        body_notes: Vec::new(),
+        advisories: Vec::new(),
+        image: None,
+    };
+    let batch = |version: &str| {
+        crate::plan::batch_plan(
+            &repo(),
+            &config,
+            &dependencies,
+            &snapshot(&files),
+            &[target(version)],
+            false,
+            None,
+            monday(),
+        )
+        .unwrap()
+    };
+    assert!(batch("24.22.2").is_none());
+    assert!(batch("26.13.0").is_none());
+    let newer = batch("26.14.0").expect("a newer target is still batched");
+    assert!(newer.contents["mise.toml"].contains("26.14.0"));
+}
