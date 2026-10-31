@@ -2166,7 +2166,7 @@ dependencies = [
 name = "patchula-cli"
 version = "0.6.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "clx",
  "console",
@@ -2217,7 +2217,7 @@ dependencies = [
 name = "patchula-datasource"
 version = "0.6.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "futures-util",
  "patchula-cache",
@@ -2243,7 +2243,7 @@ dependencies = [
 name = "patchula-engine"
 version = "0.6.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "futures-util",
  "patchula-cache",
@@ -2292,7 +2292,7 @@ dependencies = [
 name = "patchula-http"
 version = "0.6.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "httpdate",
  "patchula-cache",
  "percent-encoding",
@@ -2355,7 +2355,7 @@ dependencies = [
 name = "patchula-process"
 version = "0.6.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "rustix",
  "tokio",
 ]
@@ -2423,7 +2423,7 @@ dependencies = [
 name = "patchula-update"
 version = "0.6.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "chrono-tz",
  "cron",

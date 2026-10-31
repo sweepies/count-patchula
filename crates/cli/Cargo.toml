@@ -40,7 +40,7 @@ textwrap = "0.16.4"
 [dev-dependencies]
 patchula-testkit = { path = "../testkit" }
 tempfile = "3"
-base64 = "0.22"
+base64 = "0.23"
 sha2 = "0.11.1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tokio = { workspace = true, features = ["test-util"] }
