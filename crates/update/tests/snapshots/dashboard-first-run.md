@@ -1,8 +1,8 @@
 <!-- patchula-dashboard:v1 -->
 
-The Count keeps watch over this repository's dependencies. Tick a box and he will see to it on the next run.
+[The Count](https://count-patchula.sweepy.dev) keeps watch over this repository's dependencies. Tick a box and he will see to it on the next run.
 
-- [ ] Ask the Count to re-check this repository <!-- patchula-action:{"action":"recheck","target":"TARGET"} -->
+- [ ] Re-check this repository <!-- patchula-action:{"action":"recheck","target":"TARGET"} -->
 
 ## Known vulnerabilities
 
@@ -61,7 +61,7 @@ The Count keeps watch over this repository's dependencies. Tick a box and he wil
   - Lookup failed (crates, not-found): registry HTTP 404
 
 <details>
-<summary>Every dependency the Count found (10 in 7 files)</summary>
+<summary>Every dependency found (10 in 7 files)</summary>
 
 <details>
 <summary>cargo / Cargo.lock (4 dependencies)</summary>

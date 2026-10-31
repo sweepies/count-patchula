@@ -390,17 +390,14 @@ pub fn render(
     let mut sections = BTreeMap::<String, BTreeSet<(Option<u64>, String)>>::new();
     for pr in prs.iter().filter(|p| !p["merged_at"].is_null()) {
         if let Some(number) = pr["number"].as_u64() {
-            sections
-                .entry("Merged by the Count".into())
-                .or_default()
-                .insert((
-                    Some(number),
-                    format!(
-                        "- #{number}: {} — {}\n",
-                        safe(pr["title"].as_str().unwrap_or("Update dependencies")),
-                        safe(pr["patchula_merge"].as_str().unwrap_or("merged"))
-                    ),
-                ));
+            sections.entry("Merged".into()).or_default().insert((
+                Some(number),
+                format!(
+                    "- #{number}: {} — {}\n",
+                    safe(pr["title"].as_str().unwrap_or("Update dependencies")),
+                    safe(pr["patchula_merge"].as_str().unwrap_or("merged"))
+                ),
+            ));
         }
     }
     for pr in prs.iter().filter(|p| {
@@ -455,7 +452,7 @@ pub fn render(
         } else if plan.action.reason.as_deref() == Some(crate::batch::BATCHED_REASON) {
             // The batch PR is listed with the open PRs; these are its items.
             sections
-                .entry("Batched by the Count".into())
+                .entry("Batched".into())
                 .or_default()
                 .insert((None, format!("- {}\n", titled(plan))));
         } else if plan.action.reason.as_deref() == Some(crate::pull_requests::CLOSED_BY_OWNER) {
@@ -770,10 +767,10 @@ pub fn render(
         .map(|url| format!("{}\n", crate::advertise::marker(url)))
         .unwrap_or_default();
     let mut text = format!(
-        "{MARKER}\n{advertised}\nThe Count keeps watch over this repository's dependencies. Tick a box and he will see to it {timing}.\n\n"
+        "{MARKER}\n{advertised}\n[The Count](https://count-patchula.sweepy.dev) keeps watch over this repository's dependencies. Tick a box and he will see to it {timing}.\n\n"
     );
     text.push_str(&checkbox(
-        "Ask the Count to re-check this repository",
+        "Re-check this repository",
         Action::Recheck(hash(repo.repository.as_bytes())),
     ));
     let mut sections: Vec<_> = sections.into_iter().collect();
@@ -788,7 +785,7 @@ pub fn render(
             3
         } else {
             3 + match section.as_str() {
-                "Merged by the Count" => 1,
+                "Merged" => 1,
                 "Pending updates" => 2,
                 "Template updates" | "Newer versions not proposed" => 3,
                 "Updates you closed" => 4,
@@ -810,7 +807,7 @@ pub fn render(
         if section.starts_with("Detected: ") && !outer {
             // One line stands for every file's list.
             text.push_str(&format!(
-                "\n<details>\n<summary>Every dependency the Count found ({} in {} {})</summary>\n",
+                "\n<details>\n<summary>Every dependency found ({} in {} {})</summary>\n",
                 detected.1,
                 detected.0,
                 if detected.0 == 1 { "file" } else { "files" }
@@ -820,7 +817,7 @@ pub fn render(
         let (start, end) = if section == TOOLING {
             (
                 format!(
-                    "\n## {TOOLING}\n\nThese settings let updates merge on their own, and the Count's checks of this repository's CI, branch protection and delivery found a gap behind them.\n\n"
+                    "\n## {TOOLING}\n\nThese settings let updates merge on their own, and checks of this repository's CI, branch protection and delivery found a gap behind them.\n\n"
                 ),
                 "",
             )

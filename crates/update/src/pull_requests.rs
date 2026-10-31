@@ -646,7 +646,7 @@ impl Lifecycle {
             client
                 .post(
                     &format!("repos/{}/issues/{target}/comments", self.repo),
-                    json!({"body":format!("Batched by the Count into #{number}. Tick this update's box there to bring it back.")}),
+                    json!({"body":format!("Moved to the batch PR #{number}. Tick this update's box there to bring it back.")}),
                 )
                 .await
                 .map_err(|e| e.to_string())?;
@@ -961,7 +961,7 @@ impl Lifecycle {
             })
             .collect();
         let inputs = (
-            "notes-render-v5",
+            "notes-render-v6",
             &text,
             ranges,
             self.recheck,
@@ -1006,7 +1006,7 @@ impl Lifecycle {
         let targets = crate::batch::hidden_marker(crate::batch::TARGETS, &plan.changes);
         let controls = if plan.batch.is_none() && !plan.maintenance && targets.len() <= 12_000 {
             format!(
-                "- [ ] Add to the Count's batch PR. This one closes and the update moves there. {}\n{targets}\n",
+                "- [ ] Add to the batch PR. This one closes and the update moves there. {}\n{targets}\n",
                 crate::batch::ADD,
             )
         } else {
@@ -1016,7 +1016,7 @@ impl Lifecycle {
         let mut releases = BTreeSet::new();
         for change in &plan.changes {
             if releases.len() >= 8 || text.len() + reserve > BODY_LIMIT - 2500 {
-                text.push_str("\nThe Count ran out of room for more release notes. The source repositories have the rest.\n");
+                text.push_str("\nOut of room for more release notes. The source repositories have the rest.\n");
                 break;
             }
             if change.kind == "pin" || !change.release_notes {
@@ -1076,7 +1076,7 @@ impl Lifecycle {
             Recheck::NextRun => "on the next run",
         };
         text.push_str(&format!(
-            "\n- [ ] Tick this and the Count will look at it again {timing}. {RECHECK}\n"
+            "\n- [ ] Tick to re-check this PR {timing}. {RECHECK}\n"
         ));
         text.push_str(&controls);
         text.push('\n');

@@ -64,7 +64,7 @@ pub async fn command(
                 2,
                 miette::miette!(
                     help = "the managers are listed at https://count-patchula.sweepy.dev/guide/managers/",
-                    "--manager {manager} is not a manager the Count knows"
+                    "--manager {manager} is not a known manager"
                 ),
             )
         })?;

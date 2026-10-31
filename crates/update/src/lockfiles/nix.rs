@@ -210,7 +210,7 @@ impl Runner {
             .iter()
             .find(|name| !before_inputs.contains_key(**name) || refused.contains(*name))
         {
-            return Err(format!("flake input {name} cannot be updated by the Count"));
+            return Err(format!("flake input {name} cannot be updated"));
         }
         // nix fetches what flake.nix declares, not what the lock holds, so the
         // declared inputs are checked before it runs. Restricted evaluation

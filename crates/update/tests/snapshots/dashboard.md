@@ -1,8 +1,8 @@
 <!-- patchula-dashboard:v1 -->
 
-The Count keeps watch over this repository's dependencies. Tick a box and he will see to it on the next run.
+[The Count](https://count-patchula.sweepy.dev) keeps watch over this repository's dependencies. Tick a box and he will see to it on the next run.
 
-- [ ] Ask the Count to re-check this repository <!-- patchula-action:{"action":"recheck","target":"REPOSITORY"} -->
+- [ ] Re-check this repository <!-- patchula-action:{"action":"recheck","target":"REPOSITORY"} -->
 
 ## Pending updates
 
@@ -19,7 +19,7 @@ The Count keeps watch over this repository's dependencies. Tick a box and he wil
 - the cache was warmed by an earlier run
 
 <details>
-<summary>Every dependency the Count found (1 in 1 file)</summary>
+<summary>Every dependency found (1 in 1 file)</summary>
 
 <details>
 <summary>npm / package.json (1 dependency)</summary>
