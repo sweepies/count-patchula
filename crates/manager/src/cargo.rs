@@ -118,7 +118,10 @@ fn declaring_packages<'a>(
             .filter_map(|v| v.as_str())
             .collect()
     };
-    let (members, excluded) = (patterns("members"), patterns("exclude"));
+    let compile = |key: &str| -> Vec<globset::GlobMatcher> {
+        patterns(key).into_iter().filter_map(glob).collect()
+    };
+    let (members, excluded) = (compile("members"), compile("exclude"));
     for (path, member) in files {
         let Some(directory) = path
             .strip_prefix(base)
@@ -126,8 +129,8 @@ fn declaring_packages<'a>(
         else {
             continue;
         };
-        if members.iter().any(|pattern| glob(pattern, directory))
-            && !excluded.iter().any(|pattern| glob(pattern, directory))
+        if members.iter().any(|pattern| pattern.is_match(directory))
+            && !excluded.iter().any(|pattern| pattern.is_match(directory))
             && let Some(name) = package(member)
         {
             names.insert(name);
@@ -135,24 +138,17 @@ fn declaring_packages<'a>(
     }
     names
 }
-/// Cargo's member globs: `*` and `?` inside a path segment.
-fn glob(pattern: &str, path: &str) -> bool {
-    fn segment(pattern: &[u8], text: &[u8]) -> bool {
-        match pattern.split_first() {
-            None => text.is_empty(),
-            Some((b'*', rest)) => (0..=text.len()).any(|n| segment(rest, &text[n..])),
-            Some((b'?', rest)) => !text.is_empty() && segment(rest, &text[1..]),
-            Some((c, rest)) => text.first() == Some(c) && segment(rest, &text[1..]),
-        }
-    }
+/// Cargo's member globs, which it reads as paths: `*` and `?` stop at a `/`, `**`
+/// crosses directories, and `[abc]` picks a character. globset compiles them to
+/// an automaton, so a hostile pattern in `members` costs time linear in the
+/// path, not exponential. A pattern that does not compile matches nothing.
+fn glob(pattern: &str) -> Option<globset::GlobMatcher> {
     let pattern = pattern.trim_start_matches("./").trim_end_matches('/');
-    let (pattern, path): (Vec<_>, Vec<_>) =
-        (pattern.split('/').collect(), path.split('/').collect());
-    pattern.len() == path.len()
-        && pattern
-            .iter()
-            .zip(&path)
-            .all(|(p, t)| segment(p.as_bytes(), t.as_bytes()))
+    globset::GlobBuilder::new(pattern)
+        .literal_separator(true)
+        .build()
+        .ok()
+        .map(|glob| glob.compile_matcher())
 }
 /// The locked version a dependency edge names, when it is a crates.io release
 /// of `package`. An edge is `name`, `name version` or `name version (source)`;
@@ -290,5 +286,54 @@ fn walk(
         } else if let Some(table) = item.as_table_like() {
             walk(path, text, table, &next, workspace, out, skipped);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::glob;
+
+    /// Cargo reads `members` as path globs: `*` and `?` stop at `/`, `**`
+    /// crosses directories.
+    #[test]
+    fn member_globs_follow_cargos_path_semantics() {
+        for (pattern, path, expected) in [
+            ("crates/*", "crates/app", true),
+            ("crates/*", "crates/app/sub", false),
+            ("crates/*", "crates", false),
+            ("./crates/*/", "crates/app", true),
+            ("crates/**", "crates/app/sub", true),
+            ("crates/**/lib", "crates/a/b/lib", true),
+            ("crates/a?p", "crates/app", true),
+            ("crates/a?p", "crates/ap", false),
+            ("crates/[ab]pp", "crates/bpp", true),
+            ("crates/[!ab]pp", "crates/bpp", false),
+            ("*", "app", true),
+            ("*", "crates/app", false),
+            ("app", "app", true),
+            ("app", "application", false),
+        ] {
+            let matched = glob(pattern).is_some_and(|glob| glob.is_match(path));
+            assert_eq!(matched, expected, "{pattern} against {path}");
+        }
+        assert!(glob("crates/[").is_none());
+    }
+
+    /// The repository controls `members`, so matching must not take exponential
+    /// time in the number of stars; this finishes at once, and would not
+    /// backtracking over every split.
+    #[test]
+    fn a_hostile_member_glob_matches_in_linear_time() {
+        let pattern = "*a".repeat(60) + "*b";
+        let path = "a".repeat(200);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let matched = glob(&pattern).is_some_and(|glob| glob.is_match(&path));
+            let _ = sender.send(matched);
+        });
+        let matched = receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("matching a hostile glob timed out");
+        assert!(!matched);
     }
 }

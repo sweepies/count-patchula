@@ -108,7 +108,9 @@ warnings, so a file that failed to parse never makes its updates look obsolete.
 the last hour, with no cap by default. An update that is held waits for the
 condition that holds it, and no other:
 
-- a limit: until a slot is free, when a PR merges or closes or the hour moves on;
+- `concurrent`: until an open PR merges or closes, which frees a slot at once;
+- `perHour`: until the PRs created in the last hour age out. A PR still counts
+  after it merges or closes, so merging or closing it frees no hourly capacity;
 - a schedule window: until the next window opens;
 - the release-age wait: until the release is old enough.
 
@@ -119,9 +121,10 @@ lists the rest, and later runs open more as slots free up.
 
 A security fix skips the `concurrent` and `perHour` checks: it is opened even
 when ten PRs are open or the hourly cap is reached, so the total can pass 10.
-Skipping the check does not take it out of the count. Once open it is one of the
-open PRs for `concurrent`, and one of the PRs created this hour for `perHour`,
-so it can leave less room for the ordinary updates that follow.
+Skipping the check does not take it out of the count. While it is open it is one
+of the open PRs for `concurrent`, and for the hour after it is created it is one
+of the PRs created in the last hour for `perHour`, even once merged or closed, so
+it can leave less room for the ordinary updates that follow.
 `security.apply` can still hold a fix by other means, such as `active`,
 `waitHours` or `windows`. `concurrent = null` removes the cap.
 

@@ -572,3 +572,76 @@ source = "{git}"
         None
     );
 }
+
+/// `members` comes from the repository, so a pattern built to make a matcher
+/// backtrack must not stall the scan. It runs under a timeout.
+#[test]
+fn a_hostile_members_glob_does_not_stall_extraction() {
+    let hostile = "*a".repeat(60) + "*b";
+    let directory = "a".repeat(200);
+    let files = Files::from([
+        (
+            "Cargo.toml".into(),
+            format!(
+                "[workspace]\nmembers = [\"{hostile}\", \"crates/*\"]\n\n[workspace.dependencies]\nshared = \"0.21\"\n"
+            ),
+        ),
+        (
+            format!("{directory}/Cargo.toml"),
+            "[package]\nname = \"a\"\nversion = \"0.1.0\"\n\n[dependencies]\nshared = \"0.21\"\n".into(),
+        ),
+        (
+            "crates/app/Cargo.toml".into(),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nshared.workspace = true\n".into(),
+        ),
+        (
+            "Cargo.lock".into(),
+            format!(
+                "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"shared\"]\n\n[[package]]\nname = \"shared\"\nversion = \"0.21.7\"\nsource = \"{REGISTRY}\"\n"
+            ),
+        ),
+    ]);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(extract(&files));
+    });
+    let deps = receiver
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .expect("extraction stalled on a hostile members glob");
+    // The ordinary pattern still finds its member.
+    let root = deps
+        .iter()
+        .find(|d| d.name == "shared" && d.file == "Cargo.toml")
+        .unwrap();
+    assert_eq!(root.resolved.as_deref(), Some("0.21.7"));
+}
+
+/// A workspace root with its own `[package]` is a declaring package even when no
+/// member manifest is scanned; a virtual root with none has no locked version.
+#[test]
+fn a_workspace_root_with_a_package_counts_it_without_any_member_manifest() {
+    let lock = format!(
+        "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"shared\"]\n\n[[package]]\nname = \"shared\"\nversion = \"0.21.7\"\nsource = \"{REGISTRY}\"\n"
+    );
+    let resolved = |manifest: &str| {
+        let files = Files::from([
+            ("Cargo.toml".into(), manifest.into()),
+            ("Cargo.lock".into(), lock.clone()),
+        ]);
+        extract(&files)
+            .into_iter()
+            .find(|d| d.name == "shared")
+            .unwrap()
+            .resolved
+    };
+    assert_eq!(
+        resolved("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[workspace]\nmembers = [\"crates/*\"]\n\n[dependencies]\nshared = \"0.21\"\n").as_deref(),
+        Some("0.21.7")
+    );
+    assert_eq!(
+        resolved(
+            "[workspace]\nmembers = [\"crates/*\"]\n\n[workspace.dependencies]\nshared = \"0.21\"\n"
+        ),
+        None
+    );
+}

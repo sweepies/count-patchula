@@ -80,8 +80,10 @@ with `--with-all-dependencies --minimal-changes`.
   same crate locked for a dependent, a path dependency outside the workspace or
   a git dependency), and the
   new lock must record the target or nothing is published. A workspace root's
-  members are read from the manifests in the scan; with none of them there, its
-  dependencies have no locked version and get no lock-only update.
+  members are read from the manifests in the scan. A virtual root (a
+  `[workspace]` with no `[package]`) with none of them there has no locked
+  version for its dependencies and gets no lock-only update; a root with its own
+  `[package]` always counts that package's dependencies, members or not.
 - Without a committed lockfile there is nothing to change, so the release is
   not an update. npm and Bun have no such command, so they only get this when
   the scheduled refresh below runs.
