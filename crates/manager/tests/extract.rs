@@ -2256,6 +2256,8 @@ fn mise_includes_of_the_repository_root_reach_every_task_file_below_it() {
         "sub/mise.toml",
         "sub/deep/more.toml",
         "sub/.hidden.toml",
+        ".hidden/tasks.toml",
+        "sub/.private/deep.toml",
         "README.md",
     ];
     let found = |directory: &str, include: &str| {
@@ -2266,6 +2268,8 @@ fn mise_includes_of_the_repository_root_reach_every_task_file_below_it() {
     assert_eq!(found("", "./"), everything);
     assert_eq!(found("sub", ".."), everything);
     assert_eq!(found("sub", "./deep"), ["sub/deep/more.toml"]);
+    // A hidden directory is skipped like a hidden file, unless it is the include.
+    assert_eq!(found("", ".hidden"), [".hidden/tasks.toml"]);
     // Naming a file asks for that file, whatever it is called.
     assert_eq!(found("", "mise.local.toml"), ["mise.local.toml"]);
 }

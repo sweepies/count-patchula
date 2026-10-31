@@ -58,9 +58,12 @@ pub fn included_files<'a>(
     let (Some(file), Some(directory)) = (matcher(&pattern), matcher(&below)) else {
         return Vec::new();
     };
+    // mise's walk prunes hidden directories as well as hidden files.
     let configuration = |path: &str| {
         let leaf = path.rsplit('/').next().unwrap_or(path);
-        leaf.starts_with('.') || matches!(leaf, "mise.toml" | "mise.local.toml")
+        let below = path.strip_prefix(pattern.as_str()).unwrap_or(path);
+        below.split('/').any(|part| part.starts_with('.'))
+            || matches!(leaf, "mise.toml" | "mise.local.toml")
     };
     paths
         .filter(|path| {
