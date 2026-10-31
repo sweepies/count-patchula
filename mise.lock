@@ -684,9 +684,9 @@ url = "https://github.com/jdx/ruby/releases/download/3.4.11-2/ruby-3.4.11.macos.
 provenance = "github-attestations"
 
 [[tools.rust]]
-version = "1.99.0"
+version = "1.99.1"
 backend = "core:rust"
-specifiers = ["1.99.0"]
+specifiers = ["1.99.1"]
 
 [tools.rust.options]
 components = "clippy,rustfmt"
