@@ -3145,15 +3145,18 @@ fn a_python_lockfile_nothing_regenerates_holds_the_update() {
     // The locks beside or above `packages/app/pyproject.toml`; the closest
     // governs it, and an unsupported one beside a supported one still holds.
     for (locks, held) in [
-        (vec!["packages/app/pdm.lock"], true),
-        (vec!["packages/app/pylock.toml"], true),
-        (vec!["packages/app/Pipfile.lock"], true),
-        (vec!["packages/app/uv.lock"], false),
-        (vec!["packages/app/uv.lock", "packages/app/pdm.lock"], true),
-        (vec!["Pipfile.lock", "packages/app/uv.lock"], false),
-        (vec!["pdm.lock", "packages/app/poetry.lock"], false),
-        (vec!["uv.lock", "packages/app/pdm.lock"], true),
-        (vec!["pdm.lock"], true),
+        (vec!["packages/app/pdm.lock"], Some("pdm.lock")),
+        (vec!["packages/app/pylock.toml"], Some("pylock.toml")),
+        (vec!["packages/app/Pipfile.lock"], Some("Pipfile.lock")),
+        (vec!["packages/app/uv.lock"], None),
+        (
+            vec!["packages/app/uv.lock", "packages/app/pdm.lock"],
+            Some("pdm.lock"),
+        ),
+        (vec!["Pipfile.lock", "packages/app/uv.lock"], None),
+        (vec!["pdm.lock", "packages/app/poetry.lock"], None),
+        (vec!["uv.lock", "packages/app/pdm.lock"], Some("pdm.lock")),
+        (vec!["pdm.lock"], Some("pdm.lock")),
     ] {
         let mut files = BTreeMap::from([(
             "packages/app/pyproject.toml".to_string(),
@@ -3169,13 +3172,11 @@ fn a_python_lockfile_nothing_regenerates_holds_the_update() {
             .dependencies
             .remove(0);
         let result = job(&dep, &update, &snapshot(&files));
-        if held {
-            assert!(
-                result
-                    .as_ref()
-                    .unwrap_err()
-                    .starts_with("unsupported lockfile format"),
-                "{locks:?}: {result:?}"
+        if let Some(lock) = held {
+            assert_eq!(
+                result.as_ref().unwrap_err(),
+                &format!("unsupported lockfile format: {lock}"),
+                "{locks:?}"
             );
         } else {
             assert!(result.unwrap().is_some(), "{locks:?}");
