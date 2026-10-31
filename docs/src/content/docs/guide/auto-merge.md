@@ -27,11 +27,15 @@ methods the repository allows), pinned to the exact head commit. GitHub then
 merges once its required checks pass. A permission failure stays an error; it
 is never taken as licence to merge some other way.
 
-GitHub offers auto-merge only on a PR that cannot be merged yet. In a repository
-with no required checks or reviews a new PR is already mergeable, and GitHub
-answers "is in clean status". That is not an error: the PR is treated as if
-native auto-merge were off, and the Count merges it himself on a later run,
-under all the conditions in the next section.
+GitHub offers auto-merge only on a PR that cannot be merged yet. In a
+repository where no required check or review stands in the way, a PR is
+mergeable at once: its merge state is `CLEAN`, `UNSTABLE` (only non-required
+checks are failing or still running) or `HAS_HOOKS`, and GitHub refuses with
+"Pull request is in `<state>` status". That is not an error: the PR is treated
+as if native auto-merge were off, and the Count merges it himself on a later
+run, under all the conditions in the next section. That includes GitHub
+reporting the PR `clean`, so an `UNSTABLE` or `HAS_HOOKS` PR waits. Any other
+refusal, such as `dirty`, is still an error.
 
 ## When native auto-merge is off
 
