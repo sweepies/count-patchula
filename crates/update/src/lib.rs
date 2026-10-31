@@ -6,6 +6,7 @@ pub mod batch;
 mod cleanup;
 pub mod dashboard;
 mod receipts;
+pub mod text;
 pub use cleanup::{cleanup, delete_owned, owned};
 pub use receipts::{
     INVENTORY_QUERY, Inventory, restore_inventory, restore_unchanged, save_receipts,

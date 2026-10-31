@@ -1,0 +1,26 @@
+cargo: exit exit status: 101:  mise by @jdx – installing 1 tool
+mise rust@1.99.0 info: downloading installer
+mise rust@1.99.0 warn: it looks like you have an existing rustup settings file at:
+mise rust@1.99.0 warn: /home/runner/.rustup/settings.toml
+mise rust@1.99.0 error: $HOME differs from euid-obtained home directory: you may be using sudo
+mise rust@1.99.0 error: $HOME directory: /home/runner/work/_temp/patchula/worktrees/run-SdTzSl/driver/home
+mise rust@1.99.0 error: euid-obtained home directory: /home/runner
+mise rust@1.99.0 info: profile set to default
+mise rust@1.99.0 info: default host tuple is x86_64-unknown-linux-gnu
+mise rust@1.99.0 info: skipping toolchain installation
+mise rust@1.99.0 Rust is installed now. Great!
+mise rust@1.99.0 cargo:rerun-if-env-changed=CC_x86_64-unknown-linux-gnu
+mise rust@1.99.0 info: syncing channel updates for 1.99.0-x86_64-unknown-linux-gnu
+mise rust@1.99.0 info: downloading 6 components
+mise ███████████░░░░░ 0/1 · 3.0s   rust@1.99.0  Downloading rustup-init  3.0s  30/30 kB · 10 kB/smise ███████████░░░░░ 0/1 · 6.0s   rust@1.99.0  Downloading rustup-init  6.0s  30/30 kB · 10 kB/smise ███████████░░░░░ 0/1 · 9.0s   rust@1.99.0  Downloading rustup-init  9.0s  30/30 kB · 10 kB/smise ███████████░░░░░ 0/1 · 12.0s   rust@1.99.0  Downloading rustup-init  12.0s  30/30 kB · 10 kB/s
+mise rust@1.99.0   1.99.0-x86_64-unknown-linux-gnu installed - rustc 1.99.0 (b940084d7 2026-09-28)
+mise ✓ rust@1.99.0  13.2s
+mise ████████████████ 1/1 · installed 1 tool in 13.2s
+    Updating crates.io index
+[1m[31merror[0m[1m:[0m failed to select a version for the requirement `base64 = "^0.22"`
+candidate versions found which didn't match: 0.23.1
+location searched: crates.io index
+required by package `jsonwebtoken v10.4.0`
+    ... which satisfies dependency `jsonwebtoken = "^10"` (locked to 10.4.0) of package `patchula-github v0.6.0 (/home/runner/work/_temp/patchula/worktrees/run-SdTzSl/tree/crates/github)`
+    ... which satisfies path dependency `patchula-github` (locked to 0.6.0) of package `patchula-engine v0.6.0 (/home/runner/work/_temp/patchula/worktrees/run-SdTzSl/tree/crates/engine)`
+    ... which satisfies path dependency `patchula-engine` (locked to 0.6.0) of package `patchula-cli v0.6.0 (/home/runner/work/_temp/patchula/worktrees/run-SdTzSl/tree/crates/cli)`

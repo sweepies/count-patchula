@@ -137,7 +137,7 @@ impl Engine {
         let mut forced = BTreeSet::new();
         for repo in work {
             let controls = &repo.controls;
-            let mut dependencies = controls.retry.clone();
+            let mut dependencies = BTreeSet::new();
             let mut all = controls.recheck;
             if !controls.branches.is_empty()
                 || !controls.create.is_empty()
@@ -179,7 +179,13 @@ impl Engine {
                 }
             }
             for dep in &repo.dependencies {
-                if all || dependencies.contains(&patchula_update::dashboard::extracted_key(dep)) {
+                // A retry box covers the package in every file that declares it.
+                if all
+                    || dependencies.contains(&patchula_update::dashboard::extracted_key(dep))
+                    || controls
+                        .retry
+                        .contains(&patchula_update::dashboard::extracted_retry_key(dep))
+                {
                     forced.insert(self.catalog_key(dep, repo.config.as_ref()));
                 }
             }

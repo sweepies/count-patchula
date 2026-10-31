@@ -9,7 +9,8 @@ use super::*;
 pub use adapters::{parse_go_history, parse_release_sgml};
 pub use changelog::{Section, parse_changelog};
 use forge::{compare_link, releases_url};
-pub use markdown::{Links, sanitise};
+use markdown::demote_headings;
+pub use markdown::{Links, fit, inert, sanitise};
 use patchula_cache::ExtractionKey;
 use patchula_versioning::Parsed;
 pub(crate) use releases::BodyCache;
@@ -44,6 +45,9 @@ fn compact_mirror(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::C
 
 #[derive(Clone, Debug, Default)]
 pub struct Notes {
+    /// The version the project is on, and the one it moves to.
+    pub from: String,
+    pub to: String,
     pub source: Option<Repository>,
     pub sections: Vec<Section>,
     pub compare: Option<String>,
@@ -403,6 +407,8 @@ impl Client {
         target: &str,
     ) -> Result<Notes> {
         let mut notes = Notes {
+            from: current.into(),
+            to: target.into(),
             source: self
                 .notes_source_repository(source, package, target)
                 .await?,
@@ -641,6 +647,22 @@ pub fn truncate(text: &str, limit: usize) -> &str {
     &text[..end]
 }
 
+/// Upstream's top heading level inside a version's notes: the package is
+/// `###` and each version `####`.
+const NOTE_HEADINGS: usize = 5;
+/// A single release this short stays expanded: at most this many lines and bytes.
+const SHORT_LINES: usize = 8;
+const SHORT_BYTES: usize = 600;
+
+/// A version inside a summary line: plain text, whatever the project calls it.
+fn summary_text(version: &str) -> String {
+    version
+        .chars()
+        .filter(|c| c.is_alphanumeric() || ".+-_~^:/!".contains(*c))
+        .take(40)
+        .collect()
+}
+
 impl Notes {
     /// Includes the source/compare links even when no upstream text is published.
     /// Budgets count UTF-8 bytes, a conservative bound on GitHub's character cap.
@@ -692,58 +714,85 @@ impl Notes {
         if self.sections.is_empty() {
             text.push_str("No upstream release text or changelog sections found for this range.\n");
         }
-        let mut details = false;
-        let mut truncated = self.incomplete;
-        let reserve = 1200;
-        for (i, section) in self.sections.iter().enumerate() {
+        // Room for the summary, the closing tag and the notice.
+        let reserve = 700;
+        let mut releases = String::new();
+        let mut shown = 0;
+        let mut trimmed = false;
+        let mut unreadable = false;
+        for section in &self.sections {
             if section.link.len() > 512 {
-                truncated = true;
+                unreadable = true;
                 continue;
             }
-            if i == 3 {
-                if text.len() + reserve + 80 > limit {
-                    truncated = true;
-                    break;
-                }
-                text.push_str("<details>\n<summary>Older releases</summary>\n\n");
-                details = true;
-            }
             let heading = format!("#### [{}]({})\n\n", section.version, section.link);
-            let body = sanitise(&section.body, links);
-            if text.len() + heading.len() + reserve >= limit {
-                truncated = true;
+            let room = limit.saturating_sub(text.len() + releases.len() + reserve);
+            if heading.len() + 40 > room {
+                trimmed = true;
                 break;
             }
-            text.push_str(&heading);
-            let available = limit.saturating_sub(text.len() + reserve);
-            text.push_str(truncate(&body, available));
-            text.push_str("\n\n");
-            if body.len() > available {
-                // Close a possibly cut fenced block before the explicit notice.
-                if text.lines().filter(|line| line.starts_with("```")).count() % 2 != 0 {
-                    text.push_str("\n```\n");
-                }
-                if text.lines().filter(|line| line.starts_with("~~~")).count() % 2 != 0 {
-                    text.push_str("\n~~~\n");
-                }
+            // Upstream headings sit under the version heading.
+            let body = demote_headings(&sanitise(&section.body, links), NOTE_HEADINGS);
+            let (body, whole) = fit(&body, room - heading.len());
+            if body.trim().is_empty() && !section.body.trim().is_empty() {
+                // Not even its first block fits; a bare heading says nothing.
+                trimmed = true;
+                break;
+            }
+            releases.push_str(&heading);
+            releases.push_str(&body);
+            releases.push('\n');
+            shown += 1;
+            if !whole {
+                trimmed = true;
+                break;
+            }
+        }
+        if shown > 0 {
+            let total = self.sections.len();
+            // One short release is shorter than its own fold.
+            let short = shown == total
+                && total == 1
+                && releases.lines().count() <= SHORT_LINES
+                && releases.len() <= SHORT_BYTES;
+            if short {
+                text.push_str(&releases);
+            } else {
+                let range = if self.from.is_empty() || self.to.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        ": {} → {}",
+                        summary_text(&self.from),
+                        summary_text(&self.to)
+                    )
+                };
+                let count = if shown == total {
+                    format!(
+                        "{shown} {}",
+                        if shown == 1 { "release" } else { "releases" }
+                    )
+                } else {
+                    format!("{shown} of {total} releases")
+                };
                 text.push_str(&format!(
-                    "Release notes truncated; [read the full notes]({}).\n\n",
-                    section.link
+                    "<details>\n<summary>Release notes{range} ({count})</summary>\n\n{releases}</details>\n"
                 ));
-                truncated = true;
-                break;
             }
         }
-        if details {
-            text.push_str("</details>\n\n");
-        }
-        if truncated {
+        // One notice: either the Count left text out, or upstream's own
+        // history couldn't be read in full.
+        let history = source
+            .forge
+            .as_ref()
+            .map_or_else(|| format!("{}/releases", source.url), releases_url);
+        if trimmed {
             text.push_str(&format!(
-                "Release notes truncated or incomplete; [view upstream history]({}).\n",
-                source
-                    .forge
-                    .as_ref()
-                    .map_or_else(|| format!("{}/releases", source.url), releases_url)
+                "\nThe Count left some release notes out to keep this description short; [read them all]({history}).\n"
+            ));
+        } else if self.incomplete || unreadable {
+            text.push_str(&format!(
+                "\nThese release notes may be incomplete; [see upstream's history]({history}).\n"
             ));
         }
         if text.len() > limit {

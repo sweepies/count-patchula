@@ -62,6 +62,48 @@ pub fn update_key(plan: &Plan) -> String {
 fn body(pr: &Value) -> &str {
     pr["body"].as_str().unwrap_or("")
 }
+/// Opens the part of the description the Count writes. His ownership marker
+/// closes it. Whatever else the description holds, before or after, belongs to
+/// someone else: a person, or a tool that edits descriptions.
+const START: &str = "<!-- patchula-begin -->";
+
+/// A body split by the Count's markers: the text before his section, the
+/// section itself, and the text after it. His section starts at the last start
+/// marker before his ownership marker: text others wrote above it may quote the
+/// marker, but his own section cannot hold one, because rendered upstream text
+/// never keeps an HTML comment. A body with no start marker (one written before
+/// it existed) is his from its first byte.
+fn regions(body: &str) -> Option<(&str, &str, &str)> {
+    marker(body)?;
+    let (before, rest) = body.split_once(MARKER)?;
+    let (json, _) = rest.split_once(" -->")?;
+    let end = before.len() + MARKER.len() + json.len() + " -->".len();
+    let start = before.rfind(START).unwrap_or(0);
+    Some((&body[..start], &body[start..end], &body[end..]))
+}
+/// The Count's rendering between whatever the PR's body has right now before
+/// and after his section. Only the section of `text` is used, so a text that
+/// was itself taken from an existing body, or from an older read, never
+/// doubles or loses what others wrote, and a body he leaves alone comes out
+/// byte for byte the same. A foreign edit inside his section is overwritten.
+fn with_foreign(text: String, current: &str) -> String {
+    let (Some((_, section, _)), Some((before, _, after))) = (regions(&text), regions(current))
+    else {
+        return text;
+    };
+    if before.len() + section.len() + after.len() > FOREIGN_LIMIT {
+        tracing::warn!(
+            foreign = before.len() + after.len(),
+            "text others wrote in a PR body no longer fits beside the Count's own; dropped"
+        );
+        return format!("{section}\n");
+    }
+    format!("{before}{section}{after}")
+}
+/// GitHub's pull request body limit (65,536 characters), with room to spare.
+/// The Count's own section stays within `BODY_LIMIT`, so more than 30,000
+/// bytes of other people's text fit beside it.
+const FOREIGN_LIMIT: usize = 65_000;
 pub(crate) fn body_hash(text: &str) -> String {
     // GitHub may return CRLF for a body published with LF. Compare the same
     // content hash as write receipts, without treating transport newlines as edits.
@@ -364,7 +406,7 @@ impl Lifecycle {
             if current["commit"]["sha"] != base {
                 return Err("base moved before obsolete PR closure; rerun".into());
             }
-            let mut text = truncate(body(&fresh), BODY_LIMIT - 100);
+            let mut text = truncate(body(&fresh), FOREIGN_LIMIT - 100);
             text.push_str("\n\n");
             text.push_str(OBSOLETE);
             client
@@ -605,7 +647,7 @@ impl Lifecycle {
                 )
                 .await
                 .map_err(|e| e.to_string())?;
-            let mut text = truncate(body(&fresh), BODY_LIMIT - 100);
+            let mut text = truncate(body(&fresh), FOREIGN_LIMIT - 100);
             text.push_str("\n\n");
             text.push_str(crate::batch::BATCHED);
             let closed = client
@@ -724,6 +766,8 @@ impl Lifecycle {
                 tokio::time::sleep(std::time::Duration::from_millis(100 << attempt)).await;
                 attempt += 1;
             };
+            // Keep what others wrote as of this read, not the inventory's.
+            let text = with_foreign(text, body(&fresh));
             if fresh["title"] == title
                 && body_hash(body(&fresh)) == body_hash(&text)
                 && fresh["base"]["ref"] == self.base
@@ -914,7 +958,7 @@ impl Lifecycle {
             })
             .collect();
         let inputs = (
-            "notes-render-v4",
+            "notes-render-v5",
             &text,
             ranges,
             self.recheck,
@@ -1010,10 +1054,11 @@ impl Lifecycle {
         if let Some(permits) = self.branch_permits.get(&plan.action.branch) {
             let marker = crate::dashboard::permit_marker(permits);
             // Keep policy evidence with the PR even if its local cache is lost.
-            text = truncate(
+            text = patchula_datasource::notes::fit(
                 &text,
                 BODY_LIMIT.saturating_sub(marker.len() + reserve + 1000),
-            );
+            )
+            .0;
             text.push('\n');
             text.push_str(&marker);
         }
@@ -1040,8 +1085,8 @@ impl Lifecycle {
         text.push_str(MARKER);
         text.push_str(&serde_json::to_string(&m).expect("marker"));
         text.push_str(" -->\n");
-        debug_assert!(text.len() <= BODY_LIMIT);
-        text
+        debug_assert!(text.len() + START.len() < BODY_LIMIT);
+        format!("{START}\n{text}")
     }
 }
 /// One caution per tooling warning on this PR, ahead of everything else.
@@ -1086,7 +1131,7 @@ fn security_section(changes: &[crate::Change]) -> String {
                 },
                 cell(advisory.severity.as_deref().unwrap_or("unrated")),
                 cell(&change.package),
-                cell(advisory.summary.as_deref().unwrap_or("")),
+                prose_cell(advisory.summary.as_deref().unwrap_or("")),
             ));
         }
     }
@@ -1340,11 +1385,17 @@ fn code(text: &str) -> String {
     };
     format!("{fence}{pad}{text}{pad}{fence}")
 }
+/// A table cell of generated text: package names, versions, files. Those are
+/// data and stay as they are.
 fn cell(text: &str) -> String {
     truncate(
         &safe(text).replace('|', "\\|").replace(['\n', '\r'], " "),
         240,
     )
+}
+/// A table cell of third-party prose, such as an advisory summary.
+fn prose_cell(text: &str) -> String {
+    cell(&crate::text::inert(text))
 }
 fn append(text: &mut String, addition: &str, limit: usize) {
     let remaining = limit.saturating_sub(text.len());
@@ -1390,6 +1441,50 @@ mod security_tests {
         let mut plain = change;
         plain.advisories.clear();
         assert!(security_section(&[plain]).is_empty());
+    }
+
+    #[test]
+    fn advisory_text_and_package_names_never_mention_anyone() {
+        let advisory: patchula_report::Advisory = serde_json::from_value(serde_json::json!({
+            "id":"GHSA-x","severity":"high",
+            "summary":"Reported by @mallory, see #12 and https://github.com/a/b/issues/3",
+            "url":"https://osv.dev/vulnerability/GHSA-x"
+        }))
+        .unwrap();
+        let change = crate::Change {
+            source: "npm".into(),
+            package: "@scope/pkg".into(),
+            file: "package.json".into(),
+            current: "1.0.0".into(),
+            current_version: None,
+            value: Some("1.0.1".into()),
+            version: Some("1.0.1".into()),
+            digest: None,
+            kind: "patch".into(),
+            merge: false,
+            labels: Vec::new(),
+            release_notes: true,
+            body_notes: vec!["Held for @mallory".into()],
+            advisories: vec![advisory],
+            image: None,
+        };
+        let text = security_section(&[change]);
+        for forged in ["@mallory", " #12", "//github.com/a/b/issues/3"] {
+            assert!(!text.contains(forged), "{forged}: {text}");
+        }
+        assert!(text.contains("@\u{200d}mallory"), "{text}");
+        // Package names are data, not prose.
+        assert!(text.contains("| @scope/pkg |"), "{text}");
+        assert!(super::prose_cell("@mallory").contains("@\u{200d}mallory"));
+        assert!(
+            crate::batch::render(&[crate::batch::Item {
+                origin: "a".repeat(64),
+                number: Some(1),
+                title: "update @mallory/pkg".into(),
+                targets: vec![],
+            }])
+            .contains("update @\u{200d}mallory/pkg")
+        );
     }
 }
 
@@ -1643,5 +1738,109 @@ mod tooling_tests {
         );
         assert!(narrower.contains("> **Merging this fix doesn't ship it.** It will merge on its own, and nothing runs when `main` changes. The only workflow here that could deliver it runs on tags or releases, so it ships only if you cut one.\n"), "{narrower}");
         assert!(tooling_section(&[]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod foreign_text_tests {
+    use super::{FOREIGN_LIMIT, MARKER, START, body_hash, regions, with_foreign};
+
+    /// What the Count writes: his section, opened by the start marker and
+    /// closed by the ownership marker.
+    fn section(table: &str) -> String {
+        format!(
+            "{START}\n{table}{MARKER}{{\"version\":1,\"identity\":\"{}\",\"update\":\"{}\"}} -->\n",
+            "a".repeat(64),
+            "b".repeat(64)
+        )
+    }
+    /// A block some other tool or person added to the description.
+    const BLOCK: &str = "<!-- tool:summary:start -->\nA generated summary, with a [link](https://example.org/x) and @someone.\n<!-- tool:summary:end -->";
+
+    #[test]
+    fn the_section_is_what_the_counts_markers_enclose() {
+        let body = format!("Intro by a person.\n\n{}\n\n{BLOCK}", section("table\n"));
+        let (before, middle, after) = regions(&body).unwrap();
+        assert_eq!(before, "Intro by a person.\n\n");
+        assert_eq!(middle, section("table\n").trim_end());
+        assert_eq!(after, format!("\n\n\n{BLOCK}"));
+        // An older body has no start marker: all of it up to his marker is his.
+        let legacy = format!(
+            "table\n{MARKER}{{\"version\":1,\"identity\":\"{}\",\"update\":\"{}\"}} -->\nrest",
+            "a".repeat(64),
+            "b".repeat(64)
+        );
+        assert_eq!(regions(&legacy).unwrap().0, "");
+        assert!(regions("no markers at all").is_none());
+    }
+
+    #[test]
+    fn text_before_and_after_the_section_survives_rewrites_exactly_once() {
+        for current in [
+            format!("{}{BLOCK}", section("old\n")),
+            format!("{BLOCK}\n\n{}", section("old\n")),
+            format!("{BLOCK}\n\n{}\n\n{BLOCK} again", section("old\n")),
+        ] {
+            let rewritten = with_foreign(section("new\n"), &current);
+            assert!(
+                rewritten.contains("new\n") && !rewritten.contains("old\n"),
+                "{rewritten}"
+            );
+            assert_eq!(rewritten.matches(START).count(), 1);
+            assert_eq!(rewritten.matches(MARKER).count(), 1);
+            assert_eq!(
+                rewritten.matches("tool:summary:start").count(),
+                current.matches("tool:summary:start").count()
+            );
+            // Rendering again over the result is a fixed point.
+            assert_eq!(with_foreign(section("new\n"), &rewritten), rewritten);
+            // So is taking the existing body as the text, as an unchanged publish does.
+            assert_eq!(with_foreign(current.clone(), &current), current);
+            assert_eq!(
+                body_hash(&with_foreign(current.clone(), &current)),
+                body_hash(&current)
+            );
+        }
+    }
+
+    #[test]
+    fn what_others_wrote_comes_from_the_latest_read_not_an_older_one() {
+        let stale = format!("{}{BLOCK}", section("t\n"));
+        // The block was rewritten in place, and another was prepended, since.
+        let fresh = format!(
+            "Added later.\n\n{}<!-- tool:summary:start -->\nrewritten\n<!-- tool:summary:end -->",
+            section("t\n")
+        );
+        let merged = with_foreign(stale, &fresh);
+        assert_eq!(merged, fresh);
+    }
+
+    #[test]
+    fn text_above_that_quotes_the_start_marker_is_kept() {
+        let quoted = format!("Someone pasted `{START}` here.\n\n");
+        let current = format!("{quoted}{}{BLOCK}", section("old\n"));
+        let rewritten = with_foreign(section("new\n"), &current);
+        assert!(rewritten.starts_with(&quoted), "{rewritten}");
+        assert!(rewritten.contains("new\n") && !rewritten.contains("old\n"));
+        assert!(rewritten.ends_with(BLOCK));
+        assert_eq!(with_foreign(section("new\n"), &rewritten), rewritten);
+    }
+
+    #[test]
+    fn an_edit_inside_the_section_loses_to_the_counts_rewrite() {
+        let edited = section("table\nsomeone typed here\n");
+        let merged = with_foreign(section("table\n"), &format!("{edited}{BLOCK}"));
+        assert!(!merged.contains("someone typed here"), "{merged}");
+        assert!(merged.ends_with(BLOCK));
+    }
+
+    #[test]
+    fn a_large_amount_of_foreign_text_fits_and_an_excessive_amount_is_dropped() {
+        let big = format!("\n\n{}", "x".repeat(30_000));
+        let kept = with_foreign(section("t\n"), &format!("{}{big}", section("o\n")));
+        assert!(kept.ends_with(&big));
+        let huge = format!("\n\n{}", "x".repeat(FOREIGN_LIMIT));
+        let dropped = with_foreign(section("t\n"), &format!("{}{huge}", section("o\n")));
+        assert_eq!(dropped, format!("{}\n", section("t\n").trim_end()));
     }
 }

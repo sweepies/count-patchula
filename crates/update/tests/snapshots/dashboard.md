@@ -6,21 +6,26 @@ The Count keeps watch over this repository's dependencies. Tick a box and he wil
 
 ## Pending updates
 
-- [ ] Create it now anyway: fixture → 2.0.0 (npm, package.json; eligible at 2026-10-16T00:00:00Z) <!-- patchula-action:{"action":"create","target":"HELD_UPDATE"} -->
+- [ ] Create it now anyway: `fixture` → 2.0.0 (npm, `package.json`; eligible 16 Oct 00:00 UTC) <!-- patchula-action:{"action":"create","target":"HELD_UPDATE"} -->
 
 ## Lookup warnings and errors
 
-- [ ] Try that lookup again: fixture (npm, package.json) <!-- patchula-action:{"action":"retry","target":"DEPENDENCY"} -->
-  - Stale/rate-limited catalog (cached at Unix 123)
+- [ ] Try that lookup again: `fixture` (npm, `package.json`) <!-- patchula-action:{"action":"retry","target":"RETRY"} -->
+  - Stale or rate-limited `catalog`, cached 1 Jan 1970 00:02 UTC
   - fixture: cached after rate limiting
 
 ## Report warnings
 
-- fixture: cached after rate limiting
+- the cache was warmed by an earlier run
 
 <details>
-<summary>npm / package.json (1 dependencies)</summary>
+<summary>Every dependency the Count found (1 in 1 file)</summary>
 
-- fixture: 1.0.0
+<details>
+<summary>npm / package.json (1 dependency)</summary>
+
+- `fixture`: 1.0.0
+
+</details>
 
 </details>

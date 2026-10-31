@@ -192,7 +192,7 @@ pub(crate) fn render(items: &[Item]) -> String {
         "\nBatched by the Count. Tick an item to send it back to its own pull request; closing this pull request sends every item back.\n\n",
     );
     for item in items {
-        let title = item.title.replace(['\n', '\r', '<', '>', '`'], " ");
+        let title = crate::text::inert(&item.title.replace(['\n', '\r', '<', '>', '`'], " "));
         let from = item
             .number
             .map(|n| format!(" (from #{n})"))

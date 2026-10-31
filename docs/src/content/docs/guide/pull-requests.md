@@ -52,8 +52,9 @@ when he can't tell whether the rebuild fixes anything, unless you silenced it
 with `security.quietImages`, or a note when he couldn't read an SBOM on this run
 (see [container image rebuilds](/guide/security/#container-image-rebuilds)). Then it
 holds a table of every update on the branch (package, change, type, file),
-release notes for each version in the range, any `bodyNotes` you configured,
-and two checkboxes:
+the release notes for each package, folded into a collapsed block per
+dependency (see [release notes](/guide/release-notes/#how-notes-are-rendered)),
+any `bodyNotes` you configured, and two checkboxes:
 
 - re-check, which forces the branch through verification and regeneration on
   the next run, or straight away under the [server](/guide/server/);
@@ -61,6 +62,30 @@ and two checkboxes:
 
 The Count reads hidden markers, not visible text, so editing the wording does
 not confuse him. Labels come from `labels`, `dependencies` by default.
+
+### What the Count owns in the description
+
+The Count owns the part of the description between his start marker
+(`<!-- patchula-begin -->`, the first line he writes) and his ownership marker
+(`<!-- patchula:… -->`, the last). The rest of the description is left alone: a
+person's note above it, or a block that a summary or linking tool added or
+rewrote in place, before or after. Whenever he writes the body he keeps that
+text exactly as it is on GitHub at that moment. When nothing he renders has
+changed he doesn't write the body at all, whatever else it holds, so repeated
+runs leave it as it is.
+
+If someone or something edits text *inside* his part, his next rewrite wins for
+that part. Descriptions written before the start marker existed are his from
+their first byte, once.
+
+The body limit is GitHub's 65,536 characters. His part stays under 32,000
+bytes, so about 30,000 bytes of other text fit beside it. Past 65,000 bytes in
+all, the Count drops the text around his part rather than fail.
+
+Advisory summaries, batch item titles and release-note prose are made inert:
+mentions get a zero-width joiner, and links to GitHub issues go through
+`redirect.github.com`. Package names in the table and your `bodyNotes` stay
+exactly as they are.
 
 ## Closing a PR
 

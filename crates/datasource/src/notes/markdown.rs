@@ -1,5 +1,47 @@
-//! Preserve upstream Markdown while preventing mention and backlink notifications.
+//! Keep upstream text from mentioning anyone or linking back to an issue.
 use std::{collections::BTreeSet, sync::LazyLock};
+
+/// Follows `@` and `#` so GitHub no longer reads a mention or an issue
+/// reference there. Unlike `&#64;`, which GitHub still renders as a mention,
+/// it is invisible and survives in the stored text.
+const JOINER: char = '\u{200d}';
+
+/// Plain upstream text (tool output, registry errors, advisory summaries,
+/// titles) made harmless in GitHub Markdown: `@name` mentions and `#123`
+/// references get a joiner after the sigil, and links to GitHub issues, pull
+/// requests, discussions and commits go through `redirect.github.com`, which
+/// leaves no backlink. Prose that keeps its Markdown goes through `sanitise`.
+pub fn inert(text: &str) -> String {
+    static REFERENCES: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(
+            r#"(?i)https?://github\.com/[^/\s]+/[^/\s]+/(?:issues|pull|discussions|commit|commits)/[^\s<>()\[\]"']+"#,
+        )
+        .expect("GitHub reference URLs")
+    });
+    // `&#64;`, `&#x40;` and `&commat;` render as mentions too, so each is read
+    // as the `@` it stands for.
+    static AT_ENTITY: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"(?i)&(?:#(?:0*64|x0*40)|commat);").expect("@ entity"));
+    let text = AT_ENTITY.replace_all(text, "@");
+    let text = REFERENCES.replace_all(&text, |c: &regex::Captures| without_backlink(&c[0]));
+    let mut output = String::with_capacity(text.len());
+    let mut previous = None::<char>;
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        output.push(ch);
+        let next = chars.peek().copied();
+        let mention = ch == '@'
+            && next.is_some_and(char::is_alphanumeric)
+            && previous.is_none_or(|p| !p.is_alphanumeric() && p != '_');
+        let reference =
+            ch == '#' && next.is_some_and(|n| n.is_ascii_digit()) && previous != Some('&');
+        if mention || reference {
+            output.push(JOINER);
+        }
+        previous = Some(ch);
+    }
+    output
+}
 
 /// Only upstream prose passes through this function. Generated tables, package
 /// names, source links and ownership markers must never be mention-neutralised.
@@ -232,7 +274,8 @@ pub fn sanitise(text: &str, links: Links<'_>) -> String {
                     && !email_suffix
                     && !following.starts_with(['@', '+'])
                 {
-                    output.push_str("@\u{200d}");
+                    output.push('@');
+                    output.push(JOINER);
                     output.push_str(mention.as_str());
                 } else {
                     output.push_str(token);
@@ -324,4 +367,201 @@ fn without_backlink(url: &str) -> String {
     } else {
         url.into()
     }
+}
+
+/// An opening or closing code fence: its character and length.
+fn fence(line: &str) -> Option<(char, usize, &str)> {
+    static LIST_MARKER: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"^(?:[-+*]|[0-9]{1,9}[.)])[ \t]+").expect("list marker")
+    });
+    // A fence may sit in a block quote or a list item, as in `sanitise`.
+    let mut line = line.trim_start_matches([' ', '\t']);
+    while let Some(quoted) = line.strip_prefix('>') {
+        line = quoted.trim_start_matches([' ', '\t']);
+    }
+    let line = LIST_MARKER.find(line).map_or(line, |m| &line[m.end()..]);
+    let ch = line.chars().next().filter(|c| matches!(c, '`' | '~'))?;
+    let count = line.chars().take_while(|c| *c == ch).count();
+    (count >= 3).then(|| (ch, count, &line[count..]))
+}
+
+/// An ATX heading's level, if the line is one.
+fn heading(line: &str) -> Option<usize> {
+    let indent = line.len() - line.trim_start_matches(' ').len();
+    let rest = line[indent..].trim_end_matches(['\n', '\r']);
+    let level = rest.bytes().take_while(|b| *b == b'#').count();
+    (indent <= 3
+        && (1..=6).contains(&level)
+        && (rest.len() == level || rest[level..].starts_with([' ', '\t'])))
+    .then_some(level)
+}
+
+fn list_item(line: &str) -> bool {
+    static MARKER: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"^ {0,1}(?:[-+*]|[0-9]{1,9}[.)])[ \t]").expect("list marker")
+    });
+    MARKER.is_match(line)
+}
+
+/// Lines with the fence state in force at their start.
+fn lines_with_fences(text: &str) -> Vec<(usize, &str, bool)> {
+    let mut open = None::<(char, usize)>;
+    let mut lines = Vec::new();
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        let in_fence = open.is_some();
+        lines.push((offset, line, in_fence));
+        match (open, fence(line.trim_end_matches('\n'))) {
+            (None, Some((ch, count, _))) => open = Some((ch, count)),
+            (Some((kind, size)), Some((ch, count, rest)))
+                if kind == ch && count >= size && rest.trim().is_empty() =>
+            {
+                open = None;
+            }
+            _ => {}
+        }
+        offset += line.len();
+    }
+    lines
+}
+
+/// Shifts upstream headings down so the shallowest sits at `top`, under the
+/// Count's own package and version headings. Headings in code stay as they are.
+pub(super) fn demote_headings(text: &str, top: usize) -> String {
+    let lines = lines_with_fences(text);
+    let shallowest = lines
+        .iter()
+        .filter(|(_, _, fenced)| !fenced)
+        .filter_map(|(_, line, _)| heading(line))
+        .min();
+    let Some(shift) = shallowest
+        .map(|level| top.saturating_sub(level))
+        .filter(|s| *s > 0)
+    else {
+        return text.into();
+    };
+    let mut output = String::with_capacity(text.len() + lines.len() * shift);
+    for (_, line, fenced) in lines {
+        match heading(line).filter(|_| !fenced) {
+            Some(level) => {
+                let indent = line.len() - line.trim_start_matches(' ').len();
+                output.push_str(&line[..indent]);
+                output.push_str(&"#".repeat((level + shift).min(6)));
+                output.push_str(&line[indent + level..]);
+            }
+            None => output.push_str(line),
+        }
+    }
+    output
+}
+
+/// A line with its inline code spans blanked, so a tag shown in code isn't a
+/// tag. A backtick run that never closes is literal text.
+fn without_code_spans(line: &str) -> String {
+    let mut output = String::with_capacity(line.len());
+    let mut open = None::<(usize, usize)>;
+    let mut offset = 0;
+    while let Some(at) = line[offset..].find('`') {
+        let start = offset + at;
+        let run = line[start..].bytes().take_while(|b| *b == b'`').count();
+        match open {
+            None => {
+                output.push_str(&line[offset..start]);
+                open = Some((start, run));
+            }
+            Some((_, size)) if size == run => open = None,
+            Some(_) => {}
+        }
+        offset = start + run;
+    }
+    match open {
+        None => output.push_str(&line[offset..]),
+        Some((start, _)) => output.push_str(&line[start..]),
+    }
+    output
+}
+
+/// Closes what the end of `text` leaves open: a code fence, then every
+/// `<details>`, so a cut can't swallow what follows it.
+pub(super) fn close_open_blocks(text: &str) -> String {
+    let mut output = text.trim_end().to_owned();
+    let mut open = None::<(char, usize)>;
+    let mut details = 0_i32;
+    for line in output.lines() {
+        match (open, fence(line)) {
+            (None, Some((ch, count, _))) => open = Some((ch, count)),
+            (Some((kind, size)), Some((ch, count, rest)))
+                if kind == ch && count >= size && rest.trim().is_empty() =>
+            {
+                open = None;
+            }
+            (None, _) => {
+                let lower = without_code_spans(line).to_ascii_lowercase();
+                details += lower.matches("<details").count() as i32;
+                details -= lower.matches("</details>").count() as i32;
+            }
+            _ => {}
+        }
+    }
+    if let Some((ch, count)) = open {
+        output.push('\n');
+        output.push_str(&ch.to_string().repeat(count));
+    }
+    for _ in 0..details.max(0) {
+        output.push_str("\n</details>");
+    }
+    output.push('\n');
+    output
+}
+
+/// The longest prefix of `text`, at most `limit` bytes, that ends where a
+/// block does: never inside a paragraph (and so never inside a link or code
+/// span), a code fence or after a heading with nothing under it. Anything open
+/// at the end is closed. The flag says whether all of `text` fit.
+pub fn fit(text: &str, limit: usize) -> (String, bool) {
+    if text.len() <= limit {
+        return (close_open_blocks(text), true);
+    }
+    let lines = lines_with_fences(text);
+    let mut cut = 0;
+    let mut previous_heading = false;
+    let mut previous_blank = true;
+    for (offset, line, fenced) in &lines {
+        if *offset > limit {
+            break;
+        }
+        let blank = line.trim().is_empty();
+        let starts_block = !fenced
+            && !blank
+            && (previous_blank
+                || heading(line).is_some()
+                || list_item(line)
+                || fence(line).is_some());
+        if starts_block && !previous_heading {
+            cut = *offset;
+        }
+        if !blank {
+            previous_heading = !fenced && heading(line).is_some();
+        }
+        previous_blank = blank && !fenced;
+    }
+    if cut == 0 {
+        // One block bigger than the room: settle for the last line end that
+        // leaves no code span or link label open.
+        for (offset, line, fenced) in lines.iter().rev() {
+            let end = offset + line.len();
+            if end > limit || *fenced || line.trim().is_empty() {
+                continue;
+            }
+            let prefix = &text[..end];
+            if prefix.matches('`').count().is_multiple_of(2)
+                && prefix.matches('[').count() == prefix.matches(']').count()
+                && heading(line).is_none()
+            {
+                cut = end;
+                break;
+            }
+        }
+    }
+    (close_open_blocks(&text[..cut]), false)
 }
