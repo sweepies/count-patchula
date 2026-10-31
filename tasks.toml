@@ -101,7 +101,7 @@ run = ["cargo test --workspace --locked", "mise run fixtures:check"]
 ["release:notes"]
 description = "Rewrite a published GitHub release's notes with communique; needs ANTHROPIC_API_KEY (Infisical, environment prod)"
 usage = 'arg "<tag>" help="Release tag, such as v0.1.0"'
-tools = { communique = "1.6.1" }
+tools = { communique = "1.8.0" }
 run = 'communique generate "${usage_tag?}" --github-release'
 
 # The documentation site. Node and aube are task-scoped, like the test-only
