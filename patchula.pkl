@@ -1,3 +1,29 @@
 // Count Patchula keeps his own repository up to date, through
 // .github/workflows/patchula.yml.
 amends "PatchulaConfig.pkl"
+
+// defaults.toml lists the tools his lockfile jobs install by default, in
+// mise's own format, so mise reads it beside the usual mise files. A tool that
+// is in mise.toml too moves in both on one branch.
+files {
+  new FileSet {
+    manager = "mise"
+    paths {
+      "**/mise.toml"
+      "**/.mise.toml"
+      "**/.tool-versions"
+      "crates/update/src/lockfiles/defaults.toml"
+    }
+  }
+}
+
+rules {
+  new Rule {
+    note = "Classic Yarn stays on 1.x; Yarn Berry is pinned on its own line below it."
+    select {
+      files { "crates/update/src/lockfiles/defaults.toml" }
+      packages { "yarn" }
+    }
+    apply { permitted = "semver:^1" }
+  }
+}
