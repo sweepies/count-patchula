@@ -47,7 +47,7 @@ jobs:
         with:
           client-id: ${{ vars.PATCHULA_CLIENT_ID }}
           private-key: ${{ secrets.PATCHULA_APP_PRIVATE_KEY }}
-      - uses: sweepies/count-patchula@v0.6.0
+      - uses: sweepies/count-patchula@v0.6.1
         with:
           token: ${{ steps.app.outputs.token }}
 ```
@@ -91,7 +91,7 @@ jobs:
           private-key: ${{ secrets.PATCHULA_APP_PRIVATE_KEY }}
           # Every repository the App is installed on in this organization.
           owner: ${{ github.repository_owner }}
-      - uses: sweepies/count-patchula@v0.6.0
+      - uses: sweepies/count-patchula@v0.6.1
         with:
           token: ${{ steps.app.outputs.token }}
           all-repos: "true"
@@ -122,7 +122,7 @@ build these files on one organization module.
 | `repositories` | this repository | `owner/repo` names, separated by spaces or newlines |
 | `all-repos` | `false` | Every repository the token can reach |
 | `dry-run` | `false` | Print planned branches and diffs without writing |
-| `version` | the action's version, or the latest release when the action is not used at a release tag | The Count version to install, such as `0.6.0` |
+| `version` | the action's version, or the latest release when the action is not used at a release tag | The Count version to install, such as `0.6.1` |
 | `binary` | | The path to a `patchula` binary to run instead of installing a release, such as one built from source to try unreleased changes. Overrides `version` |
 | `args` | | Extra `patchula run` arguments, such as `--config-dir policy` |
 

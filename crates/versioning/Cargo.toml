@@ -12,6 +12,6 @@ workspace = true
 [dependencies]
 pep440_rs = "0.7.3"
 nodejs-semver = "7.0.0"
-patchula-config = { version = "0.6.0", path = "../config" }
+patchula-config = { version = "0.6.1", path = "../config" }
 semver = "1.0.28"
 thiserror.workspace = true
