@@ -176,18 +176,15 @@ pub fn evaluate_local(
 }
 
 /// An evaluation error that points at no source, such as Pkl's type check of a
-/// property, names the file and the property like the Count's own problems do.
-/// One that already shows its source, such as a syntax error, stays as it is.
+/// property, names the file like the Count's own problems do. Its message names
+/// the property but not its path, so no assignment is highlighted: one of the
+/// same name elsewhere could be the wrong one. An error that already shows its
+/// source, such as a syntax error, stays as it is.
 fn evaluation_problem(path: &Path, source: &str, error: miette::Report) -> miette::Report {
     if error.source_code().is_some() {
         return error;
     }
-    let message = error.to_string();
-    let field = message
-        .split_once("property '")
-        .and_then(|(_, rest)| rest.split_once('\''))
-        .map_or("", |(name, _)| name);
-    problem(path, source, field, &message)
+    problem(path, source, "", &error.to_string())
 }
 
 fn decode(path: &Path, source: &str, json: serde_json::Value) -> miette::Result<Config> {
