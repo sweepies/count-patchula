@@ -69,8 +69,8 @@ yarn = "4.18.1"
 python = "3.15.2"
 uv = "0.13.1"
 poetry = "2.5.1"
-dotnet = "10.0.403"
-ruby = "4.0.9"
+dotnet = "9.0.320"
+ruby = "3.4.12"
 apm = "0.35.0"
 "http:php[url=https://dl.static-php.dev/static-php-cli/common/php-{{version}}-cli-linux-x86_64.tar.gz]" = "8.5.8"
 "http:composer[url=https://getcomposer.org/download/{{version}}/composer.phar,bin=composer]" = "2.10.3"
@@ -109,7 +109,7 @@ run = 'communique generate "${usage_tag?}" --github-release'
 ["docs:install"]
 description = "Install the documentation site's packages from its lockfile"
 dir = "docs"
-tools = { node = "26.13.0", aube = "2.8.4" }
+tools = { node = "24.22.2", aube = "2.8.4" }
 run = "aube ci"
 
 ["docs:dev"]
