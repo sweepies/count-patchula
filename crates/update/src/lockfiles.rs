@@ -70,9 +70,12 @@ pub(crate) fn job(
 ) -> Result<Option<Job>, String> {
     let (ecosystem, root) = match dep.manager {
         Manager::Mise => {
-            let Some(root) = nearest(&dep.file, &snapshot.paths, &["mise.lock"]) else {
+            // A lockfile records the configuration beside it and above it, never
+            // below: a nested mise.toml is locked by a mise.lock of its own.
+            let root = directory(&dep.file);
+            if !snapshot.paths.contains(&node::join(root, "mise.lock")) {
                 return Ok(None);
-            };
+            }
             return Ok(Some(Job {
                 ecosystem: Ecosystem::Mise,
                 directory: root.into(),
@@ -97,6 +100,7 @@ pub(crate) fn job(
                 &[
                     "package-lock.json",
                     "npm-shrinkwrap.json",
+                    "aube-lock.yaml",
                     "bun.lock",
                     "bun.lockb",
                     "pnpm-lock.yaml",
@@ -221,7 +225,23 @@ pub(crate) fn job(
         // `.python-version` pins the interpreter, which no lockfile records.
         Manager::Pyproject if dep.file.ends_with(".python-version") => return Ok(None),
         Manager::Pyproject => {
-            let Some(root) = nearest(&dep.file, &snapshot.paths, &python::LOCKS) else {
+            // Lockfiles of other Python tools sit beside the pyproject.toml
+            // too; leaving one stale would publish a manifest that disagrees
+            // with it. The closest lockfile governs the project, so one above a
+            // supported lock does not hold it.
+            let supported = nearest(&dep.file, &snapshot.paths, &python::LOCKS);
+            if let Some(lock) = nearest(&dep.file, &snapshot.paths, &python::UNSUPPORTED_LOCKS)
+                .filter(|lock| supported.is_none_or(|root| lock.len() >= root.len()))
+            {
+                return Err(format!(
+                    "unsupported lockfile format: {}",
+                    python::UNSUPPORTED_LOCKS
+                        .iter()
+                        .find(|leaf| snapshot.paths.contains(&node::join(lock, leaf)))
+                        .unwrap_or(&"lockfile")
+                ));
+            }
+            let Some(root) = supported else {
                 return Ok(None);
             };
             (Ecosystem::Python, root)
@@ -272,6 +292,7 @@ pub fn maintenance(
         let ecosystem = match leaf {
             "package-lock.json"
             | "npm-shrinkwrap.json"
+            | "aube-lock.yaml"
             | "bun.lock"
             | "pnpm-lock.yaml"
             | "yarn.lock"
@@ -678,32 +699,8 @@ impl Runner {
                 }
                 Ecosystem::Cargo => {
                     for job in jobs {
-                        let mut args = vec![
-                            "update".into(),
-                            "--manifest-path".into(),
-                            cwd.join("Cargo.toml").to_string_lossy().into_owned(),
-                        ];
-                        if let Some(package) = &job.package {
-                            args.extend([
-                                "-p".into(),
-                                format!("{}@{}", package, job.current.as_deref().unwrap_or("")),
-                                "--precise".into(),
-                                job.target.clone().ok_or("missing Cargo target")?,
-                            ]);
-                        } else if !plan.maintenance {
-                            args.push("--workspace".into());
-                        }
-                        self.tool(
-                            &driver,
-                            Invocation {
-                                tools: vec![("rust".into(), versions["rust"].clone())],
-                                bin: "cargo".into(),
-                                cwd: None,
-                                env: Vec::new(),
-                                args,
-                            },
-                        )
-                        .await?;
+                        self.cargo_update(&driver, &cwd, &versions["rust"], job, plan.maintenance)
+                            .await?;
                     }
                 }
                 Ecosystem::Go => {
@@ -840,6 +837,73 @@ impl Runner {
         }
         Ok(())
     }
+    /// Moves Cargo.lock for one job. A package moves with `--precise` to the
+    /// exact target. A target across a semver-incompatible boundary is a second
+    /// lock entry beside the old one, which other crates may still require, so
+    /// `--precise` on the old entry cannot reach it; `--workspace` locks what
+    /// the edited manifests need and leaves every other package where it is.
+    async fn cargo_update(
+        &self,
+        driver: &Path,
+        cwd: &Path,
+        rust: &str,
+        job: &Job,
+        maintenance: bool,
+    ) -> Result<(), String> {
+        let update = |args: Vec<String>| {
+            let mut all = vec![
+                "update".into(),
+                "--manifest-path".into(),
+                cwd.join("Cargo.toml").to_string_lossy().into_owned(),
+            ];
+            all.extend(args);
+            self.tool(
+                driver,
+                Invocation {
+                    tools: vec![("rust".into(), rust.into())],
+                    bin: "cargo".into(),
+                    cwd: None,
+                    env: Vec::new(),
+                    args: all,
+                },
+            )
+        };
+        let Some(package) = &job.package else {
+            let args = if maintenance {
+                vec![]
+            } else {
+                vec!["--workspace".into()]
+            };
+            update(args).await?;
+            return Ok(());
+        };
+        let current = job.current.as_deref().unwrap_or("");
+        let target = job.target.as_deref().ok_or("missing Cargo target")?;
+        if !crosses_compatibility(current, target) {
+            update(vec![
+                "-p".into(),
+                format!("{package}@{current}"),
+                "--precise".into(),
+                target.into(),
+            ])
+            .await?;
+            return Ok(());
+        }
+        update(vec!["--workspace".into()]).await?;
+        // Cargo locks the newest release the manifests allow, which may be
+        // newer than the target; move that entry back to the target.
+        let lock = std::fs::read_to_string(cwd.join("Cargo.lock")).map_err(|e| e.to_string())?;
+        for locked in compatible_entries(&lock, package, target) {
+            update(vec![
+                "-p".into(),
+                format!("{package}@{locked}"),
+                "--precise".into(),
+                target.into(),
+            ])
+            .await?;
+        }
+        Ok(())
+    }
     async fn tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, String> {
         let mut spec = self.command(driver);
         // A first use installs the tool inside this call, from scratch.
@@ -948,8 +1012,12 @@ fn validate_targets(
                     .is_some_and(|packages| {
                         packages.iter().any(|p| {
                             p.get("name").and_then(toml_edit::Item::as_str) == Some(&change.package)
-                                && p.get("version").and_then(toml_edit::Item::as_str)
-                                    == change.version.as_deref()
+                                && p.get("version")
+                                    .and_then(toml_edit::Item::as_str)
+                                    .zip(change.version.as_deref())
+                                    .is_some_and(|(locked, requested)| {
+                                        same_release(locked, requested)
+                                    })
                         })
                     })
             });
@@ -987,13 +1055,18 @@ fn validate_targets(
                 change.package, change.file
             ));
         };
-        // pnpm and Yarn locks are not read back, so the unchanged-lockfile rule
+        // pnpm and Yarn locks are not read back (aube-lock.yaml is), so the unchanged-lockfile rule
         // checks them instead. Every lock this runner reads must prove the target.
         let unread = matches!(dep.manager, Manager::Npm | Manager::Bun)
             && nearest(&change.file, &paths, &node::LOCKS).is_some_and(|dir| {
-                !["package-lock.json", "npm-shrinkwrap.json", "bun.lock"]
-                    .iter()
-                    .any(|leaf| paths.contains(&node::join(dir, leaf)))
+                ![
+                    "package-lock.json",
+                    "npm-shrinkwrap.json",
+                    "bun.lock",
+                    "aube-lock.yaml",
+                ]
+                .iter()
+                .any(|leaf| paths.contains(&node::join(dir, leaf)))
             });
         if !unread
             && (matches!(
@@ -1007,7 +1080,10 @@ fn validate_targets(
             ) || (dep.source == Source::Terraform
                 && dep.kind == patchula_config::DependencyKind::Provider))
             && let Some(version) = &change.version
-            && dep.resolved.as_deref() != Some(version)
+            && !dep
+                .resolved
+                .as_deref()
+                .is_some_and(|resolved| same_release(resolved, version))
         {
             return Err(format!(
                 "lockfile did not resolve {} to requested version {version}",
@@ -1080,6 +1156,39 @@ fn versions(
     }
     Ok(versions)
 }
+/// Whether a locked version is the requested one. SemVer build metadata does
+/// not order versions, so a request without it matches any build: the advisory
+/// for `zstd-sys` fixes `2.1.2`, which the lock records as `2.1.2+zstd.1.5.7`.
+fn same_release(locked: &str, requested: &str) -> bool {
+    locked == requested || (!requested.contains('+') && locked.split('+').next() == Some(requested))
+}
+/// Whether Cargo treats `target` as incompatible with `current`: a different
+/// major version, or a different minor (or patch) one below 1.0. Cargo then
+/// keeps both in the lock.
+fn crosses_compatibility(current: &str, target: &str) -> bool {
+    use patchula_config::Update;
+    use patchula_versioning::{Ecosystem as Scheme, Versioning};
+    match (Scheme::Cargo.parse(current), Scheme::Cargo.parse(target)) {
+        (Ok(current), Ok(target)) => Scheme::Cargo.classify(&current, &target) == Update::Major,
+        _ => false,
+    }
+}
+/// The versions of `package` in a Cargo.lock that are compatible with `target`
+/// but are not it.
+fn compatible_entries(lock: &str, package: &str, target: &str) -> Vec<String> {
+    let Ok(lock) = toml_edit::Document::parse(lock) else {
+        return Vec::new();
+    };
+    lock.get("package")
+        .and_then(toml_edit::Item::as_array_of_tables)
+        .into_iter()
+        .flatten()
+        .filter(|entry| entry.get("name").and_then(toml_edit::Item::as_str) == Some(package))
+        .filter_map(|entry| entry.get("version")?.as_str())
+        .filter(|version| !same_release(version, target) && !crosses_compatibility(version, target))
+        .map(str::to_owned)
+        .collect()
+}
 /// The Go to run: the newest of the pin and the edited `go.mod`'s `go` and
 /// `toolchain` directives. With GOTOOLCHAIN=local, an older Go refuses a
 /// module that requires a newer one, which an update itself may introduce.
@@ -1117,6 +1226,7 @@ fn writable(path: &str) -> bool {
         "package.json"
             | "package-lock.json"
             | "npm-shrinkwrap.json"
+            | "aube-lock.yaml"
             | "pnpm-lock.yaml"
             | "yarn.lock"
             | "bun.lock"

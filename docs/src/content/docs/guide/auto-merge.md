@@ -27,6 +27,12 @@ methods the repository allows), pinned to the exact head commit. GitHub then
 merges once its required checks pass. A permission failure stays an error; it
 is never taken as licence to merge some other way.
 
+GitHub offers auto-merge only on a PR that cannot be merged yet. In a repository
+with no required checks or reviews a new PR is already mergeable, and GitHub
+answers "is in clean status". That is not an error: the PR is treated as if
+native auto-merge were off, and the Count merges it himself on a later run,
+under all the conditions in the next section.
+
 ## When native auto-merge is off
 
 The Count merges by himself, but only on a later run, and only when all of this

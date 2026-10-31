@@ -75,6 +75,27 @@ fn platforms(entries: &Value) -> BTreeSet<String> {
         .collect()
 }
 
+/// The version requests a tool declaration makes, which mise records as the
+/// `specifiers` of the lock entries it resolves.
+fn requests(spec: &toml_edit::Item) -> BTreeSet<String> {
+    fn value(spec: &toml_edit::Value) -> Vec<String> {
+        if let Some(request) = spec.as_str() {
+            vec![request.into()]
+        } else if let Some(requests) = spec.as_array() {
+            requests.iter().flat_map(value).collect()
+        } else {
+            spec.as_inline_table()
+                .and_then(|table| table.get("version"))
+                .map(value)
+                .unwrap_or_default()
+        }
+    }
+    match spec.as_value() {
+        Some(spec) => value(spec).into_iter().collect(),
+        None => spec.get("version").map(requests).unwrap_or_default(),
+    }
+}
+
 impl Runner {
     pub(super) async fn mise_lock(
         &self,
@@ -113,7 +134,8 @@ impl Runner {
                 matches!(
                     path.rsplit('/').next(),
                     Some("mise.toml" | ".mise.toml" | ".tool-versions")
-                ) && (under(path, directory) || under(directory, super::directory(path)))
+                ) && (super::directory(path) == directory.as_str()
+                    || under(directory, super::directory(path)))
             })
             .collect();
         paths.sort_by_key(|path| path.len());
@@ -162,12 +184,14 @@ impl Runner {
         }
         std::fs::write(work.join("mise.toml"), &sanitized).map_err(|e| e.to_string())?;
         std::fs::write(work.join("mise.lock"), original).map_err(|e| e.to_string())?;
-        let existing_platforms: BTreeSet<_> = selected
+        let mut existing_platforms: BTreeSet<_> = selected
             .iter()
             .flat_map(|name| platforms(&before["tools"][name]))
             .collect();
+        // Some tools, such as core:rust, record no platform entries. They lock
+        // for the platforms the rest of the lockfile records.
         if existing_platforms.is_empty() {
-            return Err("mise.lock has no existing platforms to preserve".into());
+            existing_platforms = old_tools.values().flat_map(platforms).collect();
         }
         let defaults =
             toml_edit::Document::parse(include_str!("defaults.toml")).map_err(|e| e.to_string())?;
@@ -186,9 +210,14 @@ impl Runner {
             "--cd".into(),
             work.to_string_lossy().into_owned(),
             "lock".into(),
-            "--platform".into(),
-            existing_platforms.into_iter().collect::<Vec<_>>().join(","),
         ]);
+        // A lockfile without any platform entry has none to preserve.
+        if !existing_platforms.is_empty() {
+            command.args.extend([
+                "--platform".into(),
+                existing_platforms.into_iter().collect::<Vec<_>>().join(","),
+            ]);
+        }
         if maintenance {
             command.args.extend([
                 "--bump".into(),
@@ -221,6 +250,22 @@ impl Runner {
                 .as_array()
                 .filter(|entries| !entries.is_empty())
                 .ok_or("mise lock removed a selected tool")?;
+            // The lock must answer the request the manifest makes: `latest` or
+            // `24` for `2.10.0` means a declaration other than the edited one
+            // was locked, and `mise` would call the lock out of date.
+            let declared = requests(&doc["tools"][name.as_str()]);
+            let recorded: BTreeSet<String> = entries
+                .iter()
+                .filter_map(|entry| entry["specifiers"].as_array())
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect();
+            if !declared.is_empty() && recorded != declared {
+                return Err(format!(
+                    "mise lock recorded the requests {recorded:?} for {name}, not the manifest's {declared:?}"
+                ));
+            }
             if !platforms(&before["tools"][name]).is_subset(&platforms(&after["tools"][name])) {
                 return Err(format!("mise lock dropped an existing platform for {name}"));
             }

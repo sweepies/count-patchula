@@ -785,6 +785,7 @@ impl Lifecycle {
                 !plan.changes.is_empty() && plan.changes.iter().all(|c| c.merge)
             };
         let enabled = !pr["auto_merge"].is_null();
+        let mut native = enabled;
         if merge && !enabled {
             if self.merge_settings.is_none() {
                 let meta = client
@@ -800,16 +801,16 @@ impl Lifecycle {
                     .as_ref()
                     .ok_or("repository has no enabled merge method")?;
                 let id = pr["node_id"].as_str().ok_or("missing PR node ID")?;
-                let result = client
-                    .graphql(
-                        ENABLE_AUTO_MERGE,
-                        json!({"input":{"pullRequestId":id,"mergeMethod":method.to_uppercase(),"expectedHeadOid":plan.action.commit}}),
-                    )
-                    .await
-                    .map_err(|e| e.to_string())?;
-                if !result["enablePullRequestAutoMerge"]["pullRequest"].is_object() {
-                    return Err("GitHub did not acknowledge native auto-merge".into());
-                }
+                // A PR that is already mergeable cannot take auto-merge; the
+                // Count's own merge handles it on a later run.
+                native = crate::automerge::enable_native(
+                    client,
+                    &json!(id),
+                    method,
+                    &json!(plan.action.commit),
+                )
+                .await?
+                    == crate::automerge::Native::Enabled;
             }
         } else if !merge && enabled {
             let id = pr["node_id"].as_str().ok_or("missing PR node ID")?;
@@ -818,13 +819,12 @@ impl Lifecycle {
                 .await
                 .map_err(|e| e.to_string())?;
         }
-        pr["auto_merge"] =
-            if merge && (enabled || self.merge_settings.as_ref().is_some_and(|s| s.native)) {
-                json!({"enabled":true})
-            } else {
-                Value::Null
-            };
-        if merge && self.merge_settings.as_ref().is_some_and(|s| !s.native) {
+        pr["auto_merge"] = if merge && native {
+            json!({"enabled":true})
+        } else {
+            Value::Null
+        };
+        if merge && !native {
             pr["patchula_merge"] = json!(
                 "auto-merge waiting for a later run with a verified receipt and passing checks"
             );

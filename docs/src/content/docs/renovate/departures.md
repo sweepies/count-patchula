@@ -171,5 +171,5 @@ See [container image rebuilds](/guide/security/#container-image-rebuilds).
 ### aube for npm and pnpm {#node-lockfile-engine}
 
 - **Renovate:** Regenerates npm and pnpm locks with npm and pnpm
-- **The Count:** Regenerates `pnpm-lock.yaml`, `package-lock.json` and `npm-shrinkwrap.json` with aube; `lockfiles.npmEngine = "npm"` restores native npm for npm lockfiles
+- **The Count:** Regenerates `aube-lock.yaml`, `pnpm-lock.yaml`, `package-lock.json` and `npm-shrinkwrap.json` with aube; `lockfiles.npmEngine = "npm"` restores native npm for npm lockfiles
 - **Why:** Lockfile updates are 10 to 20 times faster; [why aube](/guide/lockfiles/#why-aube-for-npm-and-pnpm) lists how its output differs from npm's

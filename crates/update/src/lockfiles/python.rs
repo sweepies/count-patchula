@@ -4,6 +4,9 @@ use super::*;
 /// Lockfile names the Python ecosystem regenerates in place.
 pub(super) const LOCKS: [&str; 2] = ["uv.lock", "poetry.lock"];
 
+/// Lockfiles of other Python tools, which nothing here regenerates.
+pub(super) const UNSUPPORTED_LOCKS: [&str; 3] = ["pdm.lock", "pylock.toml", "Pipfile.lock"];
+
 /// The interpreter both tools resolve against: the nearest `.python-version`,
 /// otherwise the repository mise pin or the runner default.
 fn python(

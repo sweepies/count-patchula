@@ -2,7 +2,8 @@
 use super::*;
 
 /// Lockfile names the Node ecosystem regenerates in place.
-pub(super) const LOCKS: [&str; 5] = [
+pub(super) const LOCKS: [&str; 6] = [
+    "aube-lock.yaml",
     "bun.lock",
     "npm-shrinkwrap.json",
     "package-lock.json",
@@ -16,7 +17,7 @@ const CATALOGS: [&str; 2] = ["pnpm-workspace.yaml", ".yarnrc.yml"];
 /// The tool that owns a Node lockfile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Engine {
-    /// aube reads and writes pnpm and npm lockfiles in place.
+    /// aube reads and writes `aube-lock.yaml`, pnpm and npm lockfiles in place.
     Aube,
     /// Bun keeps `bun.lock` in Bun's own format.
     Bun,
@@ -27,11 +28,11 @@ pub(super) enum Engine {
 }
 
 impl Engine {
-    /// pnpm and Yarn locks have a single owner; npm locks follow the repository setting.
+    /// aube, pnpm and Yarn locks have a single owner; npm locks follow the repository setting.
     fn for_lock(leaf: &str, config: &Config) -> Engine {
         match leaf {
             "bun.lock" => Engine::Bun,
-            "pnpm-lock.yaml" => Engine::Aube,
+            "aube-lock.yaml" | "pnpm-lock.yaml" => Engine::Aube,
             "yarn.lock" => Engine::Yarn,
             _ => match config.lockfiles.npm_engine {
                 NpmEngine::Aube => Engine::Aube,
@@ -180,7 +181,12 @@ impl Runner {
             if !cwd.join(leaf).is_file() {
                 return Err(format!("tool did not produce {leaf}"));
             }
-            if engine == Engine::Aube && cwd.join("aube-lock.yaml").exists() {
+            // aube writes its own lockfile when it is not told which one to keep.
+            if engine == Engine::Aube
+                && leaf != "aube-lock.yaml"
+                && cwd.join("aube-lock.yaml").exists()
+                && !baseline.contains_key(&join(directory, "aube-lock.yaml"))
+            {
                 return Err("aube wrote aube-lock.yaml instead of the existing lockfile".into());
             }
             if !maintenance && self.lock_unchanged(baseline, root, directory, leaf) {

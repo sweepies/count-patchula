@@ -250,6 +250,7 @@ impl Scanner {
                     leaf,
                     "package.json"
                         | "package-lock.json"
+                        | "aube-lock.yaml"
                         | "bun.lock"
                         | "pnpm-workspace.yaml"
                         | ".yarnrc.yml"
@@ -497,7 +498,11 @@ impl Scanner {
                 }));
         }
         result.locked = locked::cargo(files, &cargo, &result.dependencies);
-        if node == Manager::Npm && self.config.managers.contains(&Manager::Npm) {
+        let npm = node == Manager::Npm && self.config.managers.contains(&Manager::Npm);
+        result
+            .locked
+            .extend(locked::aube(files, &mut result.dependencies, node, npm)?);
+        if npm {
             result
                 .locked
                 .extend(locked::npm(files, &locks, &result.dependencies));

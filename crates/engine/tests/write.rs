@@ -28,6 +28,8 @@ struct Fake {
     change_head_on_checks: std::sync::atomic::AtomicBool,
     merge_refused: std::sync::atomic::AtomicBool,
     deletion_race: std::sync::atomic::AtomicBool,
+    /// GitHub refuses native auto-merge for a PR it finds mergeable already.
+    auto_merge_clean: std::sync::atomic::AtomicBool,
 }
 
 struct Rotating(std::sync::atomic::AtomicUsize);
@@ -102,7 +104,7 @@ impl Fake {
         ]),lock,lock_name:"bun.lockb",writes:Default::default(),prs:Default::default(),issues:Default::default(),requests:Default::default(),latency:Default::default(),close_on_read:Default::default(),catalog:Mutex::new(json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}}})),fail_lookup:Default::default(),
         merge_settings: Mutex::new(json!({"id":"repo-id","autoMergeAllowed":false,"squashMergeAllowed":true,"mergeCommitAllowed":true,"rebaseMergeAllowed":true,"deleteBranchOnMerge":false})),
         checks: Mutex::new(vec![json!({"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"})]),
-        change_head_on_checks: Default::default(), merge_refused: Default::default(), deletion_race: Default::default(),
+        change_head_on_checks: Default::default(), merge_refused: Default::default(), deletion_race: Default::default(), auto_merge_clean: Default::default(),
     }
     }
     fn tree(&self) -> Value {
@@ -205,6 +207,17 @@ impl Transport for Fake {
                     assert_eq!(body["variables"]["input"]["expectedHeadOid"], "new-commit");
                 }
                 self.writes.lock().unwrap().push((path.into(), body));
+                let refused = enabled
+                    && self
+                        .auto_merge_clean
+                        .load(std::sync::atomic::Ordering::Relaxed);
+                if refused {
+                    return Box::pin(std::future::ready(Ok(Response {
+                        status: reqwest::StatusCode::OK,
+                        headers: Default::default(),
+                        body: serde_json::to_vec(&json!({"data":{"enablePullRequestAutoMerge":null},"errors":[{"type":"UNPROCESSABLE","message":"Pull request Pull request is in clean status"}]})).unwrap(),
+                    })));
+                }
                 for pr in self.prs.lock().unwrap().iter_mut() {
                     pr["auto_merge"] = if enabled {
                         json!({"enabled":true})
@@ -725,6 +738,89 @@ async fn an_advertised_server_is_hidden_in_the_pr_and_the_dashboard() {
 }
 
 struct FailTools;
+
+/// GitHub offers native auto-merge only on a PR that cannot be merged yet, so
+/// a repository without required checks answers "is in clean status". That is
+/// not an error, and no licence to merge: the Count's own merge takes over on a
+/// later run, behind the same check gate.
+#[tokio::test(start_paused = true)]
+async fn a_pr_github_already_finds_clean_is_merged_by_the_count_only_after_checks_pass() {
+    for checks_pass in [true, false] {
+        let fake = Fake::new(false);
+        *fake.merge_settings.lock().unwrap() = json!({"id":"repo-id","autoMergeAllowed":true,"squashMergeAllowed":true,"mergeCommitAllowed":true,"rebaseMergeAllowed":true,"deleteBranchOnMerge":false});
+        fake.auto_merge_clean
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        if !checks_pass {
+            fake.checks.lock().unwrap().clear();
+        }
+        let fake = Arc::new(fake);
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+            .unwrap()
+            .with_versions_host(false);
+        let mut config = checkbox_config();
+        config.defaults.merge = true;
+        let now = "2026-10-15T12:00:00Z".parse().unwrap();
+        let first = checkbox_run(&engine, &config, now).await;
+        let branch = &first.actions.unwrap().branches[0];
+        assert_eq!(branch.status, ActionStatus::Created, "{branch:?}");
+        let enables = |fake: &Fake| {
+            fake.writes
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, b)| {
+                    b["query"]
+                        .as_str()
+                        .is_some_and(|q| q.contains("enablePullRequestAutoMerge"))
+                })
+                .count()
+        };
+        assert_eq!(enables(&fake), 1, "GitHub is asked once");
+        assert!(fake.prs.lock().unwrap()[0]["auto_merge"].is_null());
+        assert!(
+            !fake
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(_, path, body)| path.ends_with("/merge")
+                    || body["query"] == patchula_update::automerge::CHECKS_QUERY),
+            "a new PR waits for a later run"
+        );
+        fake.requests.lock().unwrap().clear();
+        let report = engine
+            .run_at(
+                Options {
+                    repositories: vec!["demo/sandbox".into()],
+                    config: Some(config.clone()),
+                    ..Default::default()
+                },
+                false,
+                false,
+                now,
+            )
+            .await
+            .unwrap();
+        let actions = &report.actions.as_ref().unwrap().pull_requests;
+        assert!(
+            actions.iter().all(|a| a.status != ActionStatus::Error),
+            "{actions:?}"
+        );
+        assert_eq!(
+            actions.iter().any(|a| a.status == ActionStatus::Merged),
+            checks_pass,
+            "{actions:?}"
+        );
+        let merged = fake
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, path, _)| path.ends_with("/merge"));
+        assert_eq!(merged, checks_pass);
+    }
+}
 
 #[tokio::test(start_paused = true)]
 async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_check() {

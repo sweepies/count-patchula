@@ -1128,6 +1128,16 @@ fn unsupported_lockfile_plans_skip_and_opt_in_marks_manifest_only_updates() {
         .pop()
         .unwrap();
         assert!(p.action.lockfile_pending);
+        if !allow {
+            assert!(
+                p.action
+                    .reason
+                    .as_deref()
+                    .is_some_and(|r| r.starts_with("lockfile pending: unsupported lockfile format")),
+                "{:?}",
+                p.action.reason
+            );
+        }
         assert_eq!(
             p.action.status,
             if allow {
@@ -1167,7 +1177,7 @@ fn pnpm_and_yarn_locks_are_supported_and_never_pending() {
             content: text.into(),
         },
     )]);
-    for lock in ["pnpm-lock.yaml", "yarn.lock"] {
+    for lock in ["pnpm-lock.yaml", "yarn.lock", "aube-lock.yaml"] {
         snapshot.paths.remove("bun.lock");
         snapshot.paths.insert(lock.into());
         for allow in [false, true] {
@@ -1192,6 +1202,7 @@ fn pnpm_and_yarn_locks_are_supported_and_never_pending() {
                 "{lock}"
             );
         }
+        snapshot.paths.remove(lock);
     }
 }
 
