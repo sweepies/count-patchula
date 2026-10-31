@@ -529,6 +529,32 @@ fn proposal_order(dep: &Dependency, a: &Update, b: &Update) -> std::cmp::Orderin
     }
     value(a).cmp(&value(b))
 }
+/// A batch target the dependency has already moved past, such as an update
+/// whose PR was ticked into the batch after a later batch carried a newer
+/// release. Writing it would go backwards, so it is dropped.
+fn superseded(dep: &Dependency, target: &Change) -> bool {
+    use patchula_versioning::Versioning;
+    let Some(version) = target.version.as_deref() else {
+        return false;
+    };
+    let Ok(scheme) = patchula_lookup::scheme(dep) else {
+        return false;
+    };
+    let Ok(wanted) = scheme.parse(version) else {
+        return false;
+    };
+    // The locked version is what is installed; a ranged declaration such as
+    // `^2.0.0` names no single version, so the declared value only counts when
+    // it is one. A lockfile-only target is measured against the lock alone.
+    let lock_only = target.value.is_none() && target.digest.is_none();
+    let declared = (!lock_only).then_some(dep.current.as_str());
+    dep.resolved
+        .as_deref()
+        .into_iter()
+        .chain(declared)
+        .filter_map(|current| scheme.parse(current).ok())
+        .any(|current| scheme.order(&wanted, &current).is_lt())
+}
 /// One update per occurrence of a dependency. A `0.x` crate's in-range release
 /// and its next minor share a branch line, so both can reach one branch; only
 /// the higher can be written, and it contains the other.
@@ -726,7 +752,7 @@ pub fn batch_plan(
                 target.value.as_deref().is_none_or(|v| v == dep.current)
                     && target.digest == dep.digest
             };
-            if applied {
+            if applied || superseded(dep, target) {
                 continue;
             }
             pending.push((
