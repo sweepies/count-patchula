@@ -63,14 +63,14 @@ run = "cargo test --locked -p patchula-update --lib --no-fail-fast -- lockfiles:
 # defaults.toml on one branch (patchula.pkl), and a unit test keeps the two
 # equal.
 ["test:tools".tools]
-aube = "2.8.1"
-bun = "1.4.3"
+aube = "2.8.4"
+bun = "1.4.4"
 yarn = "4.18.1"
-python = "3.14.8"
+python = "3.15.2"
 uv = "0.13.1"
 poetry = "2.5.1"
-dotnet = "9.0.319"
-ruby = "3.4.11"
+dotnet = "10.0.403"
+ruby = "4.0.9"
 apm = "0.35.0"
 "http:php[url=https://dl.static-php.dev/static-php-cli/common/php-{{version}}-cli-linux-x86_64.tar.gz]" = "8.5.8"
 "http:composer[url=https://getcomposer.org/download/{{version}}/composer.phar,bin=composer]" = "2.10.3"
@@ -101,7 +101,7 @@ run = ["cargo test --workspace --locked", "mise run fixtures:check"]
 ["release:notes"]
 description = "Rewrite a published GitHub release's notes with communique; needs ANTHROPIC_API_KEY (Infisical, environment prod)"
 usage = 'arg "<tag>" help="Release tag, such as v0.1.0"'
-tools = { communique = "1.6.1" }
+tools = { communique = "1.8.0" }
 run = 'communique generate "${usage_tag?}" --github-release'
 
 # The documentation site. Node and aube are task-scoped, like the test-only
@@ -109,21 +109,21 @@ run = 'communique generate "${usage_tag?}" --github-release'
 ["docs:install"]
 description = "Install the documentation site's packages from its lockfile"
 dir = "docs"
-tools = { node = "24.21.0", aube = "2.8.1" }
+tools = { node = "26.13.0", aube = "2.8.4" }
 run = "aube ci"
 
 ["docs:dev"]
 description = "Serve the documentation site with live reload"
 depends = ["docs:install"]
 dir = "docs"
-tools = { node = "24.21.0", aube = "2.8.1" }
+tools = { node = "26.13.0", aube = "2.8.4" }
 run = "aube run dev"
 
 ["docs:build"]
 description = "Build the documentation site into docs/dist"
 depends = ["docs:install"]
 dir = "docs"
-tools = { node = "24.21.0", aube = "2.8.1" }
+tools = { node = "26.13.0", aube = "2.8.4" }
 sources = ["src/**/*", "public/**/*", "astro.config.mjs", "package.json", "aube-lock.yaml", "tsconfig.json"]
 outputs = ["dist/**/*"]
 run = "aube run build"
@@ -132,14 +132,14 @@ run = "aube run build"
 description = "Deploy the built site to Cloudflare Workers; needs CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID"
 depends = ["docs:build"]
 dir = "docs"
-tools = { node = "24.21.0", aube = "2.8.1" }
+tools = { node = "26.13.0", aube = "2.8.4" }
 run = "aube exec wrangler deploy"
 
 ["docs:upload"]
 description = "Upload the built site as a Cloudflare preview version, without deploying it; Workers Builds runs this for pull request branches"
 depends = ["docs:build"]
 dir = "docs"
-tools = { node = "24.21.0", aube = "2.8.1" }
+tools = { node = "26.13.0", aube = "2.8.4" }
 run = "aube exec wrangler versions upload"
 
 ["corpus:snapshot"]
