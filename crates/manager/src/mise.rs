@@ -20,8 +20,10 @@ const UNLISTED: &[(&str, &str)] = &[
 
 /// The TOML files in `paths` that `include` names for a config in `directory`.
 /// mise accepts a file, a glob such as `tasks/*.toml`, or a directory, whose
-/// TOML files at any depth are task files. A path that leaves the repository
-/// names nothing.
+/// TOML files at any depth are task files, and `.` is the repository root. A
+/// directory walk skips what mise reads as configuration: hidden files and
+/// `mise.toml` or `mise.local.toml`. A path that leaves the repository names
+/// nothing.
 pub fn included_files<'a>(
     directory: &str,
     include: &str,
@@ -41,6 +43,11 @@ pub fn included_files<'a>(
         }
     }
     let pattern = parts.join("/");
+    let below = if pattern.is_empty() {
+        "**".to_owned()
+    } else {
+        format!("{pattern}/**")
+    };
     let matcher = |glob: &str| {
         globset::GlobBuilder::new(glob)
             .literal_separator(true)
@@ -48,12 +55,19 @@ pub fn included_files<'a>(
             .ok()
             .map(|glob| glob.compile_matcher())
     };
-    let (Some(file), Some(directory)) = (matcher(&pattern), matcher(&format!("{pattern}/**")))
-    else {
+    let (Some(file), Some(directory)) = (matcher(&pattern), matcher(&below)) else {
         return Vec::new();
     };
+    let configuration = |path: &str| {
+        let leaf = path.rsplit('/').next().unwrap_or(path);
+        leaf.starts_with('.') || matches!(leaf, "mise.toml" | "mise.local.toml")
+    };
     paths
-        .filter(|path| path.ends_with(".toml") && (file.is_match(path) || directory.is_match(path)))
+        .filter(|path| {
+            path.ends_with(".toml")
+                && (*path == pattern
+                    || ((file.is_match(path) || directory.is_match(path)) && !configuration(path)))
+        })
         .collect()
 }
 

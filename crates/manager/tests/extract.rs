@@ -2242,3 +2242,30 @@ fn mise_pointers_escape_slashes_and_tildes_in_names() {
         ]
     );
 }
+
+/// `.` and `./` include the repository root like any directory, at any depth,
+/// except what mise reads as configuration: `mise.toml`, `mise.local.toml` and
+/// hidden files.
+#[test]
+fn mise_includes_of_the_repository_root_reach_every_task_file_below_it() {
+    let paths = [
+        "mise.toml",
+        ".mise.toml",
+        "mise.local.toml",
+        "tasks.toml",
+        "sub/mise.toml",
+        "sub/deep/more.toml",
+        "sub/.hidden.toml",
+        "README.md",
+    ];
+    let found = |directory: &str, include: &str| {
+        patchula_manager::included_files(directory, include, paths.iter().copied())
+    };
+    let everything = ["tasks.toml", "sub/deep/more.toml"];
+    assert_eq!(found("", "."), everything);
+    assert_eq!(found("", "./"), everything);
+    assert_eq!(found("sub", ".."), everything);
+    assert_eq!(found("sub", "./deep"), ["sub/deep/more.toml"]);
+    // Naming a file asks for that file, whatever it is called.
+    assert_eq!(found("", "mise.local.toml"), ["mise.local.toml"]);
+}

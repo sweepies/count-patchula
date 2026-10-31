@@ -5187,3 +5187,99 @@ async fn mise_lock_refuses_a_task_that_declares_a_tool_with_other_options() {
     );
     assert!(!p.contents.contains_key("mise.lock"));
 }
+
+/// Locks `node` in `/tools/node` of `old` after it moves from 22.0.0 to
+/// 24.0.0, returning the plan and the tool configuration mise was given.
+async fn lock_node_declared_twice(old: &str, lock: String) -> (Plan, Vec<String>) {
+    let files = BTreeMap::from([
+        ("mise.toml".to_string(), old.to_string()),
+        ("mise.lock".into(), lock),
+    ]);
+    let spy = Arc::new(ConfigSpy {
+        inner: Arc::new(MiseFixture {
+            git: fixture(files.clone(), false, false),
+            fault: "",
+            calls: Mutex::new(Vec::new()),
+        }),
+        configs: Mutex::new(Vec::new()),
+    });
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(spy.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let dep = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies
+        .into_iter()
+        .find(|d| d.name == "node" && d.location.pointer == "/tools/node")
+        .unwrap();
+    let update = Update {
+        new_version: Some("24.0.0".into()),
+        new_value: Some("24.0.0".into()),
+        ..serde_json::from_value(serde_json::json!({"updateType":"major"})).unwrap()
+    };
+    let job = job(&dep, &update, &snapshot).unwrap().unwrap();
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        .unwrap()
+        .unwrap();
+    p.maintenance = false;
+    p.lock_jobs = vec![job];
+    p.contents
+        .insert("mise.toml".into(), old.replace("22.0.0", "24.0.0"));
+    p.action.files.push(FileAction {
+        path: "mise.toml".into(),
+        blob_sha: blob_sha(old),
+        diff: String::new(),
+    });
+    runner.prepare(&mut p, &mut snapshot, &config).await;
+    let configs = spy.configs.lock().unwrap().clone();
+    (p, configs)
+}
+
+/// Options are compared as parsed values: quoting and spacing do not make two
+/// declarations differ.
+#[tokio::test]
+async fn mise_lock_compares_task_options_as_values_not_text() {
+    let old = "[tools]\nnode = { version = '22.0.0', os = ['linux','macos'] }\n[tasks.lint]\ntools = { node = { os = [ \"linux\", \"macos\" ], version = \"22.0.0\" } }\n";
+    let (p, configs) =
+        lock_node_declared_twice(old, include_str!("fixtures/mise.lock").into()).await;
+    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert_eq!(configs.len(), 1);
+}
+
+/// A tool with options that a task requests at another version is locked at
+/// both, as one table per version, the way a string declaration is.
+#[tokio::test]
+async fn mise_lock_requests_every_version_of_a_declaration_with_options() {
+    let second = "[[tools.node]]\nversion = \"20.0.0\"\nbackend = \"core:node\"\nspecifiers = [\"20.0.0\"]\n[tools.node.\"platforms.linux-x64\"]\nurl = \"https://example.invalid/node/20.0.0/linux.tar.gz\"\nchecksum = \"sha256:3333333333333333333333333333333333333333333333333333333333333333\"\n[tools.node.\"platforms.macos-arm64\"]\nurl = \"https://example.invalid/node/20.0.0/macos.tar.gz\"\nchecksum = \"sha256:4444444444444444444444444444444444444444444444444444444444444444\"\n";
+    let old = "[tools]\nnode = { version = '22.0.0', os = ['linux'] }\n[tasks.old]\ntools = { node = { version = '20.0.0', os = ['linux'] } }\n";
+    let (p, configs) = lock_node_declared_twice(
+        old,
+        format!("{}\n{second}", include_str!("fixtures/mise.lock")),
+    )
+    .await;
+    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert_eq!(configs.len(), 1);
+    let config: toml_edit::Document<String> = configs[0].parse().unwrap();
+    let node = config["tools"]["node"].as_array().unwrap();
+    let requested: Vec<_> = node
+        .iter()
+        .map(|entry| {
+            let entry = entry.as_inline_table().unwrap();
+            (
+                entry.get("version").unwrap().as_str().unwrap().to_owned(),
+                entry.get("os").unwrap().to_string().trim().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        requested,
+        [
+            ("24.0.0".to_owned(), "[\"linux\"]".to_owned()),
+            ("20.0.0".to_owned(), "[\"linux\"]".to_owned())
+        ]
+    );
+}
