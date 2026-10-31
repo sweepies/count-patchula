@@ -904,29 +904,28 @@ impl Runner {
         // Address what the lock holds now: an earlier job or the workspace
         // update may have moved the entry this job was planned against.
         let lock = std::fs::read_to_string(cwd.join("Cargo.lock")).map_err(|e| e.to_string())?;
-        let locked = locked_versions(&lock, package);
-        if locked.iter().any(|version| same_release(version, target)) {
+        let locked = crates_io_entries(&lock, package);
+        if locked
+            .iter()
+            .any(|(version, _)| same_release(version, target))
+        {
             return Ok(());
         }
         // Cargo keeps one entry per compatibility range, so this is the one
-        // entry that can still move to the target.
-        let mut movable: Vec<_> = locked
+        // crates.io entry that can still move to the target. A git or other
+        // registry copy of the name is another package, and the source in the
+        // spec keeps an equal name and version from being ambiguous.
+        let mut movable: Vec<String> = locked
             .iter()
-            .filter(|version| !crosses_compatibility(version, target))
-            .cloned()
+            .filter(|(version, _)| !crosses_compatibility(version, target))
+            .map(|(version, source)| format!("{source}#{package}@{version}"))
             .collect();
         if movable.is_empty() && !crossing {
             // Nothing matches; let cargo name the package it cannot find.
-            movable.push(current.into());
+            movable.push(format!("{package}@{current}"));
         }
-        for version in movable {
-            update(vec![
-                "-p".into(),
-                format!("{package}@{version}"),
-                "--precise".into(),
-                target.into(),
-            ])
-            .await?;
+        for spec in movable {
+            update(vec!["-p".into(), spec, "--precise".into(), target.into()]).await?;
         }
         Ok(())
     }
@@ -1039,6 +1038,7 @@ fn validate_targets(
                     .is_some_and(|packages| {
                         packages.iter().any(|p| {
                             p.get("name").and_then(toml_edit::Item::as_str) == Some(&change.package)
+                                && crates_io(p).is_some()
                                 && p.get("version")
                                     .and_then(toml_edit::Item::as_str)
                                     .zip(change.version.as_deref())
@@ -1202,8 +1202,20 @@ fn crosses_compatibility(current: &str, target: &str) -> bool {
         _ => false,
     }
 }
-/// The versions of `package` a Cargo.lock records.
-fn locked_versions(lock: &str, package: &str) -> Vec<String> {
+/// The source a Cargo.lock entry records when it comes from crates.io.
+fn crates_io(entry: &toml_edit::Table) -> Option<&str> {
+    entry
+        .get("source")
+        .and_then(toml_edit::Item::as_str)
+        .filter(|source| {
+            source.starts_with("registry+https://github.com/rust-lang/crates.io-index")
+                || source.starts_with("sparse+https://index.crates.io/")
+        })
+}
+/// The version and source of each crates.io entry for `package` in a
+/// Cargo.lock. A git or other registry package of the same name is another
+/// package.
+fn crates_io_entries(lock: &str, package: &str) -> Vec<(String, String)> {
     let Ok(lock) = toml_edit::Document::parse(lock) else {
         return Vec::new();
     };
@@ -1212,8 +1224,12 @@ fn locked_versions(lock: &str, package: &str) -> Vec<String> {
         .into_iter()
         .flatten()
         .filter(|entry| entry.get("name").and_then(toml_edit::Item::as_str) == Some(package))
-        .filter_map(|entry| entry.get("version")?.as_str())
-        .map(str::to_owned)
+        .filter_map(|entry| {
+            Some((
+                entry.get("version")?.as_str()?.to_owned(),
+                crates_io(entry)?.to_owned(),
+            ))
+        })
         .collect()
 }
 /// The Go to run: the newest of the pin and the edited `go.mod`'s `go` and
