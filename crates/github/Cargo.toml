@@ -19,7 +19,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 sha2 = "0.11.1"
 httpdate = "1"
-jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto", "use_pem"] }
+jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto", "use_pem"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [dev-dependencies]

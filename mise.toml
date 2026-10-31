@@ -1,17 +1,17 @@
 [tools]
 rust = { version = "1.99.0", profile = "minimal", components = "clippy,rustfmt", mr_boxington = true }
-mr-boxington = "1.24.0"
+mr-boxington = "1.29.0"
 usage = "7.0.1"
 tak = "0.0.15"
 zig = "0.17.0"
 # File tasks with real logic are nu scripts.
 nu = "0.116.1"
-node = "24.21.0"
-go = "1.27.2"
+node = "24.22.2"
+go = "1.27.3"
 # hk runs the linters in hk.pkl from the git hooks and from CI.
-hk = "2.9.0"
+hk = "2.10.0"
 pkl = "0.32.2"
-jactionlint = "2.2.0"
+jactionlint = "2.4.0"
 betterleaks = "1.9.0"
 zizmor = "1.31.1"
 # nu-lint publishes Linux builds only, on Codeberg; macOS builds it from crates.io.
