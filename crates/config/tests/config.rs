@@ -62,7 +62,7 @@ fn the_starter_config_is_the_schema_defaults_on_disk_or_off() {
 }
 
 #[test]
-fn defaults_are_explicit_safe_and_unlimited() {
+fn defaults_are_explicit_and_safe() {
     let (_directory, path) = fixture("");
     let config = load(&path).unwrap();
     assert!(config.defaults.action_digests && config.defaults.image_digests);
@@ -73,8 +73,11 @@ fn defaults_are_explicit_safe_and_unlimited() {
         patchula_config::ReleaseChannel::Stable
     );
     assert_eq!(config.defaults.wait_hours, 24);
-    assert_eq!(config.prs.concurrent, None);
+    // Ten open PRs at once keeps a first run from opening everything; no hourly
+    // cap. `null` lifts a limit.
+    assert_eq!(config.prs.concurrent, Some(10));
     assert_eq!(config.prs.per_hour, None);
+    assert!(config.prs.dashboard);
     assert!(config.managers.contains(&Manager::GithubActions));
 }
 
@@ -428,4 +431,42 @@ fn tooling_warnings_are_silenced_by_rule_and_only_with_a_reason() {
         let flat = |text: &str| text.replace(|c: char| c.is_whitespace() || c == '│', "");
         assert!(flat(&error).contains(&flat(expected)), "{body}: {error}");
     }
+}
+
+#[test]
+fn the_concurrent_pr_limit_can_be_lifted_with_null() {
+    let (_directory, path) = fixture("prs { concurrent = null }");
+    assert_eq!(load(&path).unwrap().prs.concurrent, None);
+    let (_directory, path) = fixture("prs { concurrent = 3 }");
+    assert_eq!(load(&path).unwrap().prs.concurrent, Some(3));
+}
+
+/// The Count keeps his own repository on the schema's defaults alone: the
+/// dashboard, 10 open PRs and preserved Cargo ranges all come from the schema.
+#[test]
+fn the_repositorys_own_config_sets_nothing() {
+    let (_directory, path) = fixture("");
+    assert_eq!(
+        serde_json::to_value(load(&workspace().join("patchula.pkl")).unwrap()).unwrap(),
+        serde_json::to_value(load(&path).unwrap()).unwrap()
+    );
+    let text = std::fs::read_to_string(workspace().join("patchula.pkl")).unwrap();
+    assert_eq!(significant_lines(&text), ["amends \"PatchulaConfig.pkl\""]);
+    // Indented comments and blank lines change nothing either.
+    assert_eq!(
+        significant_lines("  // note\n\n\t// another\namends \"PatchulaConfig.pkl\"\n   \n"),
+        ["amends \"PatchulaConfig.pkl\""]
+    );
+    assert_eq!(
+        significant_lines("amends \"PatchulaConfig.pkl\"\n  // ok\nprs { dashboard = false }\n"),
+        ["amends \"PatchulaConfig.pkl\"", "prs { dashboard = false }"]
+    );
+}
+
+/// A config's lines that are neither blank nor comments.
+fn significant_lines(text: &str) -> Vec<&str> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("//"))
+        .collect()
 }

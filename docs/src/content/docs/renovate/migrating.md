@@ -10,15 +10,13 @@ with a config you understand.
 
 `config:recommended`, `:semanticCommits`, `:dependencyDashboard`, `:pinAllExceptPeerDependencies`,
 `helpers:pinGitHubActionDigests` and `docker:pinDigests` mostly describe what
-the Count does without being asked: exact pins, digest pins for actions and
-images, semantic commit prefixes and one PR per update. Turn the dashboard on
-and you are close.
+the Count does without being asked: exact pins (Cargo, `pyproject.toml`, Bundler and Composer default to `preserve` instead, and move the lockfile for releases a range already allows), digest pins for actions and
+images, semantic commit prefixes, the dependency dashboard and one PR per
+update. A config with nothing in it is close.
 
 ```pkl
 // patchula.pkl
 amends "PatchulaConfig.pkl"
-
-prs { dashboard = true }
 ```
 
 Read through the [defaults](/guide/configuration/#defaults) and keep what you
@@ -57,7 +55,7 @@ differ from Renovate's, such as the 24-hour release-age wait and exact npm pins.
 | `prConcurrentLimit`, `prHourlyLimit` | `prs { concurrent; perHour }` |
 | `branchPrefix` | `prs { branch }` |
 | `rebaseWhen` | `prs { rebase = "conflicts" \| "behind" }` |
-| `dependencyDashboard` | `prs { dashboard = true }` |
+| `dependencyDashboard` | `prs { dashboard = false }` turns off the dashboard, which is on by default |
 | `lockFileMaintenance` | `lockfiles { refresh = true }` |
 | `postUpdateOptions: ["gomodTidy"]` | `lockfiles { tidyGo = true }` |
 | `customManagers` (regex) | `extractors` |
@@ -72,6 +70,9 @@ has the details):
 - A later rule replaces an earlier one's lists instead of merging them.
 - Empty `group` means separate PRs.
 - Zero is never "unlimited"; use `null`.
+- `concurrent` is 10 by default, so the first run on a neglected repository
+  opens ten ordinary PRs and lists the rest on the dashboard. Security fixes are
+  not held back by the limit, so a first run can open more than ten.
 
 ## A worked example
 

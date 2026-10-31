@@ -251,6 +251,23 @@ pub(super) fn matches(range: &str, version: &Parsed) -> Result<bool> {
     intervals(range, current, order)
 }
 
+/// A single interval extended to include `target`: its upper bound becomes the
+/// target, inclusive, as Cargo's convex interval does. A set of intervals has
+/// no one bound to move.
+pub(super) fn widen(range: &str, target: &str) -> Option<String> {
+    let range = range.trim();
+    let body = range.strip_prefix(['[', '('])?.strip_suffix([']', ')'])?;
+    if body.contains(['[', '(', ']', ')']) {
+        return None;
+    }
+    let low = match body.split_once(',') {
+        Some((low, _)) => low.trim(),
+        None => body.trim(),
+    };
+    let open = &range[..1];
+    Some(format!("{open}{low},{target}]"))
+}
+
 /// Interval sets such as `[1.0,2.0)` or `(,1.0],[1.2,)`, shared with NuGet.
 pub(super) fn intervals(
     range: &str,

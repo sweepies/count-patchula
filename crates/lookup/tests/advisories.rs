@@ -341,6 +341,7 @@ fn a_fix_skips_the_release_age_wait_and_group_but_other_releases_still_wait() {
         assert_eq!(update.group, None);
         let policy = update.policy.as_ref().unwrap();
         assert_eq!(policy.wait_hours, 0);
+        assert_eq!(policy.commit_prefix, "fix(deps):");
         assert!(policy.windows.is_empty());
     }
     assert!(secure.held_back.is_empty());
@@ -448,7 +449,9 @@ fn lockfile_only_crates_get_the_lowest_compatible_fix() {
     assert_eq!(fix.new_version.as_deref(), Some("0.3.23"));
     assert_eq!(fix.new_value, None);
     assert_eq!(fix.fixes, ["GHSA-test"]);
-    assert_eq!(fix.policy.unwrap().wait_hours, 0);
+    let policy = fix.policy.as_ref().unwrap();
+    assert_eq!(policy.wait_hours, 0);
+    assert_eq!(policy.commit_prefix, "fix(deps):");
     // Only a breaking release fixes it: the lock cannot get there alone.
     assert!(eval.transitive_fix(&dep, (&q, &found[1..])).is_none());
     // npm locks cannot be moved to an exact version of one package.

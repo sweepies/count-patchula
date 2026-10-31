@@ -135,11 +135,15 @@ pub async fn command(
                 && types.is_empty()
         })
         .collect();
+    // Only a template is something copier applies; the other notices are
+    // releases the Count could not write into a declaration, and are only reported.
+    let (template_notices, other_notices): (Vec<_>, Vec<_>) =
+        notices.iter().copied().partition(|n| n.is_template());
     // Copier needs a clean tree, so it runs first, and the other edits are
     // planned against what it left.
     let (templates, moved) = if options.copier {
         templates(
-            &notices,
+            &template_notices,
             &dir,
             "copier",
             options.copier_defaults,
@@ -228,18 +232,31 @@ pub async fn command(
     );
     if options.copier {
         if !templates.is_empty() {
-            style.heading(&mut text, 0, "Copier", notices.len(), Paint::Accent);
+            style.heading(
+                &mut text,
+                0,
+                "Copier",
+                template_notices.len(),
+                Paint::Accent,
+            );
             for line in templates.lines() {
                 style.wrap(&mut text, 2, line, Paint::Plain);
             }
         }
     } else {
-        crate::output::notices(&mut text, style, 0, "Template updates", &notices);
+        crate::output::notices(&mut text, style, 0, "Template updates", &template_notices);
     }
+    crate::output::notices(
+        &mut text,
+        style,
+        0,
+        "Newer versions not proposed",
+        &other_notices,
+    );
     crate::output::failures(&mut text, style, 0, &failures);
     crate::output::warnings(&mut text, style, 0, &warnings);
     let mut notes = Vec::new();
-    if !options.copier && !notices.is_empty() {
+    if !options.copier && !template_notices.is_empty() {
         notes.push(
             "Only copier applies template updates; patchula apply --copier runs it for them."
                 .to_owned(),

@@ -1584,6 +1584,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
                 package: None,
                 current: None,
                 target: None,
+                lock_only: false,
             });
             p.lockfiles_ready = true;
         }

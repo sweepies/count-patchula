@@ -63,6 +63,13 @@ impl Runner {
             args.extend(packages.iter().cloned());
             // Only the transitive changes the requested versions need.
             args.extend(["--with-all-dependencies".into(), "--minimal-changes".into()]);
+            // A declaration left as it is gets its version as a temporary
+            // constraint for this run, which composer.json never records.
+            for job in jobs.iter().filter(|j| j.lock_only) {
+                if let (Some(package), Some(target)) = (&job.package, &job.target) {
+                    args.extend(["--with".into(), format!("{package}:{target}")]);
+                }
+            }
         }
         args.extend(
             [

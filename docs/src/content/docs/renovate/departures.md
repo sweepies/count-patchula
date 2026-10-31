@@ -19,7 +19,7 @@ missing, and behaviour that changes their pull requests. The
 ### No presets; explicit defaults {#explicit-defaults}
 
 - **Renovate:** Most of a typical config comes from presets such as `config:recommended`
-- **The Count:** No presets. The schema's defaults are exact versions, digest pins for actions and images, manual merges, one PR per update, release notes, a dependency label and a semantic commit prefix
+- **The Count:** No presets. The schema's defaults are exact versions, except that Cargo, `pyproject.toml`, Bundler and Composer default to `preserve` (a release a range already allows moves the committed lockfile and leaves the manifest alone), digest pins for actions and images, manual merges, one PR per update, release notes, a dependency label and a semantic commit prefix
 - **Why:** Every default is visible in the schema, so a config says exactly what it changes
 
 ### Default excluded paths {#default-exclude}
@@ -55,13 +55,13 @@ missing, and behaviour that changes their pull requests. The
 ### Zero is not unlimited {#limits}
 
 - **Renovate:** `0` means unlimited for limits such as `prConcurrentLimit`
-- **The Count:** Limits are unlimited by default, `null` lifts one, and zero is rejected
+- **The Count:** `concurrent` is 10 by default and `perHour` is unlimited, `null` lifts a limit, and zero is rejected
 - **Why:** Zero meaning "unlimited" is easy to set by accident
 
 ### Branch and commit names {#branch-names}
 
 - **Renovate:** `renovate/` branch prefix; `semanticCommits` switches the commit style
-- **The Count:** `patchula/` branch prefix and a `chore(deps):` commit prefix, both overridable
+- **The Count:** `patchula/` branch prefix and a `chore(deps):` commit prefix (`fix(deps):` for security fixes, so release tooling ships them), both overridable
 - **Why:** His own identity and predictable messages
 
 ## How the Count runs

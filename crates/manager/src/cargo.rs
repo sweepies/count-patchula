@@ -1,5 +1,6 @@
 use crate::*;
 use patchula_versioning::{Ecosystem, Versioning};
+use std::collections::BTreeSet;
 use toml_edit::{Document, Item};
 
 pub(super) fn documents(files: &Files) -> Result<BTreeMap<&str, Document<&str>>, String> {
@@ -65,17 +66,23 @@ pub(super) fn extract(
     if let Some((_, lock)) = lock
         && let Some(packages) = lock.get("package").and_then(Item::as_array_of_tables)
     {
+        // The lock records what a package depends on. Only the dependency
+        // edges of the packages that declare this manifest's dependencies say
+        // which locked version is the declaration's: the same crate may also be
+        // locked for a transitive dependent, or a path dependency outside the
+        // workspace, at another version a wide requirement would match too.
+        let declaring = declaring_packages(files, doc, base);
+        let members: Vec<_> = packages
+            .iter()
+            .filter(|p| p.get("source").is_none())
+            .filter(|p| named(p).is_some_and(|name| declaring.contains(name)))
+            .collect();
         for dep in &mut out {
-            let mut candidates: Vec<_> = packages
+            let mut candidates: Vec<_> = members
                 .iter()
-                .filter(|p| p.get("name").and_then(Item::as_str) == Some(&dep.package))
-                .filter(|p| {
-                    p.get("source").and_then(Item::as_str).is_some_and(|s| {
-                        s.starts_with("registry+https://github.com/rust-lang/crates.io-index")
-                            || s.starts_with("sparse+https://index.crates.io/")
-                    })
-                })
-                .filter_map(|p| p.get("version").and_then(Item::as_str))
+                .filter_map(|member| member.get("dependencies")?.as_array())
+                .flatten()
+                .filter_map(|edge| registry_edge(packages, edge.as_str()?, &dep.package))
                 .filter_map(|v| Some((Ecosystem::Cargo.parse(v).ok()?, v)))
                 .filter(|(v, _)| Ecosystem::Cargo.matches(&dep.current, v).unwrap_or(false))
                 .collect();
@@ -84,6 +91,108 @@ pub(super) fn extract(
         }
     }
     Ok(out)
+}
+/// The names of the lock packages whose dependency edges belong to this
+/// manifest's declarations: its own package, and for a workspace root also
+/// every member. A path dependency that is not a member is not one of them.
+fn declaring_packages<'a>(
+    files: &'a BTreeMap<&str, Document<&str>>,
+    doc: &'a Document<&str>,
+    base: &str,
+) -> BTreeSet<&'a str> {
+    let package = |doc: &'a Document<&str>| {
+        doc.get("package")
+            .and_then(|p| p.get("name"))
+            .and_then(Item::as_str)
+    };
+    let mut names: BTreeSet<&str> = package(doc).into_iter().collect();
+    let Some(workspace) = doc.get("workspace") else {
+        return names;
+    };
+    let patterns = |key: &str| -> Vec<&str> {
+        workspace
+            .get(key)
+            .and_then(Item::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_str())
+            .collect()
+    };
+    // Cargo's `**` also matches the directory it follows, so `crates/**` covers
+    // `crates` itself; globset's needs one more component, so that directory is
+    // matched on its own too.
+    let compile = |key: &str| -> Vec<globset::GlobMatcher> {
+        patterns(key)
+            .into_iter()
+            .flat_map(|pattern| {
+                let pattern = pattern.trim_start_matches("./").trim_end_matches('/');
+                [Some(pattern), pattern.strip_suffix("/**")]
+            })
+            .flatten()
+            .filter_map(glob)
+            .collect()
+    };
+    let (members, excluded) = (compile("members"), compile("exclude"));
+    for (path, member) in files {
+        let Some(directory) = path
+            .strip_prefix(base)
+            .and_then(|rest| rest.strip_suffix("/Cargo.toml"))
+        else {
+            continue;
+        };
+        if members.iter().any(|pattern| pattern.is_match(directory))
+            && !excluded.iter().any(|pattern| pattern.is_match(directory))
+            && let Some(name) = package(member)
+        {
+            names.insert(name);
+        }
+    }
+    names
+}
+/// Cargo's member globs, which it reads as paths: `*` and `?` stop at a `/`, `**`
+/// crosses directories, and `[abc]` picks a character. globset compiles them to
+/// an automaton, so a hostile pattern in `members` costs time linear in the
+/// path, not exponential. A pattern that does not compile matches nothing.
+fn glob(pattern: &str) -> Option<globset::GlobMatcher> {
+    let pattern = pattern.trim_start_matches("./").trim_end_matches('/');
+    globset::GlobBuilder::new(pattern)
+        .literal_separator(true)
+        .build()
+        .ok()
+        .map(|glob| glob.compile_matcher())
+}
+/// The locked version a dependency edge names, when it is a crates.io release
+/// of `package`. An edge is `name`, `name version` or `name version (source)`;
+/// the source is kept, because a git dependency can be the same crate at the
+/// same version.
+fn registry_edge<'a>(
+    packages: &'a toml_edit::ArrayOfTables,
+    edge: &str,
+    package: &str,
+) -> Option<&'a str> {
+    let mut words = edge.split_whitespace();
+    if words.next()? != package {
+        return None;
+    }
+    let version = words.next();
+    let source = words.next().map(|s| s.trim_matches(['(', ')']));
+    packages
+        .iter()
+        .filter(|p| named(p) == Some(package) && registry(p))
+        .filter(|p| version.is_none_or(|v| p.get("version").and_then(Item::as_str) == Some(v)))
+        .filter(|p| source.is_none_or(|s| p.get("source").and_then(Item::as_str) == Some(s)))
+        .find_map(|p| p.get("version")?.as_str())
+}
+/// A lock entry's crate name.
+fn named(p: &toml_edit::Table) -> Option<&str> {
+    p.get("name").and_then(Item::as_str)
+}
+/// Whether a lock entry comes from the crates.io registry.
+fn registry(p: &toml_edit::Table) -> bool {
+    p.get("source").and_then(Item::as_str).is_some_and(|s| {
+        s.starts_with("registry+https://github.com/rust-lang/crates.io-index")
+            || s.starts_with("sparse+https://index.crates.io/")
+    })
 }
 fn walk(
     path: &str,
@@ -188,5 +297,55 @@ fn walk(
         } else if let Some(table) = item.as_table_like() {
             walk(path, text, table, &next, workspace, out, skipped);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::glob;
+
+    /// Cargo reads `members` as path globs: `*` and `?` stop at `/`, `**`
+    /// crosses directories.
+    #[test]
+    fn member_globs_follow_cargos_path_semantics() {
+        for (pattern, path, expected) in [
+            ("crates/*", "crates/app", true),
+            ("crates/*", "crates/app/sub", false),
+            ("crates/*", "crates", false),
+            ("./crates/*/", "crates/app", true),
+            ("crates/**", "crates/app/sub", true),
+            ("crates/**/lib", "crates/lib", true),
+            ("crates/**/lib", "crates/a/b/lib", true),
+            ("crates/a?p", "crates/app", true),
+            ("crates/a?p", "crates/ap", false),
+            ("crates/[ab]pp", "crates/bpp", true),
+            ("crates/[!ab]pp", "crates/bpp", false),
+            ("*", "app", true),
+            ("*", "crates/app", false),
+            ("app", "app", true),
+            ("app", "application", false),
+        ] {
+            let matched = glob(pattern).is_some_and(|glob| glob.is_match(path));
+            assert_eq!(matched, expected, "{pattern} against {path}");
+        }
+        assert!(glob("crates/[").is_none());
+    }
+
+    /// The repository controls `members`, so matching must not take exponential
+    /// time in the number of stars; this finishes at once, and would not
+    /// backtracking over every split.
+    #[test]
+    fn a_hostile_member_glob_matches_in_linear_time() {
+        let pattern = "*a".repeat(60) + "*b";
+        let path = "a".repeat(200);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let matched = glob(&pattern).is_some_and(|glob| glob.is_match(&path));
+            let _ = sender.send(matched);
+        });
+        let matched = receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("matching a hostile glob timed out");
+        assert!(!matched);
     }
 }

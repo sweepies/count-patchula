@@ -204,11 +204,14 @@ pub fn plan(
     Ok(plans)
 }
 
-/// A package recorded only in a lockfile, which its tool alone can move: a
-/// transitive package, or a flake input that nix relocks.
-fn lock_only(dep: &Dependency) -> bool {
+/// An update that changes a lockfile and no manifest: a package recorded only
+/// in a lockfile, which its tool alone can move (a transitive package, or a
+/// flake input that nix relocks), or a release a direct dependency's declared
+/// range already allows, which has no `newValue`.
+fn lock_only(dep: &Dependency, update: &Update) -> bool {
     dep.kind == patchula_config::DependencyKind::Transitive
         || dep.manager == patchula_config::Manager::Nix
+        || (update.new_value.is_none() && update.new_version.is_some())
 }
 
 /// One branch plan from its items: edits, lock jobs, message and changes.
@@ -231,6 +234,9 @@ fn build(
     let mut lock_jobs = BTreeSet::new();
     let mut prefixes = BTreeSet::new();
     let mut titles = BTreeSet::new();
+    // A branch with a security fix is named for it: the occurrences that do not
+    // need the fix move to the same version in the same commit.
+    let secure = items.iter().any(|item| !item.update.fixes.is_empty());
     for item in items {
         let dep = item.dep;
         let update = item.update;
@@ -241,7 +247,9 @@ fn build(
             ));
         }
         if let Some(policy) = &update.policy {
-            prefixes.insert(policy.commit_prefix.clone());
+            if !secure || !update.fixes.is_empty() {
+                prefixes.insert(policy.commit_prefix.clone());
+            }
             if !in_window(&policy.windows, since, now) {
                 reason = Some("outside the configured update windows".into());
             }
@@ -266,7 +274,7 @@ fn build(
                 .unwrap_or(value)
         ));
         // A lockfile-only package changes through its lockfile tool alone.
-        if lock_only(dep) {
+        if lock_only(dep, update) {
             continue;
         }
         let Some(blob) = snapshot.files.get(&dep.file) else {
@@ -313,11 +321,11 @@ fn build(
             Err(error) => reason = Some(format!("{path}: {error}")),
         }
     }
-    let transitive = items.iter().all(|item| lock_only(item.dep));
-    if transitive && lock_jobs.iter().any(|job| job.target.is_none()) {
+    let lockfile_only = items.iter().all(|item| lock_only(item.dep, item.update));
+    if lockfile_only && lock_jobs.iter().any(|job| job.target.is_none()) {
         reason = Some("no lockfile tool can move this package to an exact version".into());
     }
-    if contents.is_empty() && reason.is_none() && !(transitive && !lock_jobs.is_empty()) {
+    if contents.is_empty() && reason.is_none() && !(lockfile_only && !lock_jobs.is_empty()) {
         reason = Some(
             "no editable manifest change: the declaration already allows the target, or is inherited from its workspace root"
                 .into(),
@@ -676,8 +684,16 @@ pub fn batch_plan(
         else {
             continue;
         };
-        let applied =
-            target.value.as_deref().is_none_or(|v| v == dep.current) && target.digest == dep.digest;
+        // A lockfile-only target is complete once the lock holds its version.
+        let applied = if target.value.is_none() && target.digest.is_none() {
+            target.version.as_deref().is_none_or(|v| {
+                dep.resolved
+                    .as_deref()
+                    .is_some_and(|locked| crate::lockfiles::same_release(locked, v))
+            })
+        } else {
+            target.value.as_deref().is_none_or(|v| v == dep.current) && target.digest == dep.digest
+        };
         if applied {
             continue;
         }

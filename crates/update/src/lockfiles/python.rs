@@ -1,5 +1,5 @@
 //! Python lockfiles: `uv lock` for `uv.lock` and `poetry lock` for `poetry.lock`.
-use super::*;
+use super::{pin::Pinned, *};
 
 /// Lockfile names the Python ecosystem regenerates in place.
 pub(super) const LOCKS: [&str; 2] = ["uv.lock", "poetry.lock"];
@@ -42,9 +42,9 @@ impl Runner {
             root,
             baseline,
             directory,
+            config,
             versions,
             maintenance,
-            ..
         } = context;
         let cwd = root.join(directory);
         let python = python(baseline, directory, versions)?;
@@ -62,8 +62,17 @@ impl Runner {
                 if maintenance {
                     args.push("--upgrade".into());
                 }
-                for package in &packages {
-                    args.extend(["--upgrade-package".into(), package.clone()]);
+                // A declaration left as it is gets the exact version, so the
+                // lock cannot move past it.
+                for job in jobs.iter().filter(|j| j.package.is_some()) {
+                    let package = job.package.as_deref().unwrap_or_default();
+                    args.extend([
+                        "--upgrade-package".into(),
+                        match (job.lock_only, &job.target) {
+                            (true, Some(target)) => format!("{package}=={target}"),
+                            _ => package.into(),
+                        },
+                    ]);
                 }
                 Invocation {
                     tools: vec![
@@ -106,7 +115,19 @@ impl Runner {
                     args,
                 }
             };
-            self.tool(driver, invocation).await?;
+            // Poetry moves a package as far as its constraint allows and cannot be
+            // told a version, so a package whose declaration stays as it is has
+            // the constraint pinned for one resolution and restored for the next.
+            let pinned = if leaf == "poetry.lock" {
+                Pinned::apply(root, directory, config, Manager::Pyproject, jobs)?
+            } else {
+                Pinned::none(root)
+            };
+            self.tool(driver, invocation.clone()).await?;
+            if !pinned.is_empty() {
+                pinned.restore()?;
+                self.tool(driver, invocation).await?;
+            }
             if !cwd.join(leaf).is_file() {
                 return Err(format!("tool did not produce {leaf}"));
             }

@@ -17,11 +17,11 @@ commit. If the tool fails, nothing is published.
 | `Cargo.lock` | Cargo | `cargo update -p <crate>@<old> --precise <target>` |
 | `go.sum` | Go | `go get <module>@<target>`, then `go mod download` or `go mod tidy` |
 | `.terraform.lock.hcl` | Terraform | `terraform providers lock` |
-| `uv.lock` | uv | `uv lock --upgrade-package <package>` |
+| `uv.lock` | uv | `uv lock --upgrade-package <package>`, or `<package>==<target>` for a [lockfile-only update](#in-range-updates) |
 | `poetry.lock` | Poetry | `poetry lock --no-plugins` |
 | `packages.lock.json` | dotnet | `dotnet restore --force-evaluate` |
 | `Gemfile.lock` | Bundler | `bundle lock --update <gems>` |
-| `composer.lock` | Composer | `composer update <packages> --with-all-dependencies --minimal-changes --no-install --no-scripts --no-plugins` |
+| `composer.lock` | Composer | `composer update <packages> --with-all-dependencies --minimal-changes --no-install --no-scripts --no-plugins`, plus `--with <package>:<target>` for a lockfile-only update |
 | `mise.lock` | mise | `mise lock` with the lockfile's recorded platforms |
 | `flake.lock` | nix | `nix flake update <input>`, or `nix flake update` for maintenance |
 | `apm.lock.yaml` | APM | `apm lock`, or `apm lock --update` for maintenance |
@@ -58,6 +58,35 @@ aube keeps its own `aube-lock.yaml`, in pnpm's v9 format, beside the manifest.
 The Count regenerates a committed one in place. When it sits beside another
 lockfile he regenerates both, each by name, and never lets aube start a new
 one. Where aube reads several, `aube-lock.yaml` wins over `pnpm-lock.yaml`.
+
+## In-range updates {#in-range-updates}
+
+A release that a manifest's range already allows needs no manifest edit. For
+Cargo, `pyproject.toml` (uv and Poetry), Bundler and Composer the default
+[version policy](/guide/versioning/#version-policies) is `preserve`, so such a
+release becomes a lockfile-only update: the PR changes the lockfile and no
+manifest, and moves that package to the chosen version. The lock may also
+contain the transitive changes the new version needs, which Composer resolves
+with `--with-all-dependencies --minimal-changes`.
+
+- Cargo, uv and Composer are told the exact version on the command line.
+- Poetry and Bundler cannot be. For those the Count pins the declaration to the
+  target for one resolution, restores the manifest, and resolves again, which
+  keeps the locked version and writes the original constraint back into the
+  lock. The manifest in the PR is untouched.
+- The version the update starts from is the one the lockfile records for the
+  manifest's own dependency (for Cargo, the crates.io edge of the manifest's
+  package, or of every member for a workspace root; not another version of the
+  same crate locked for a dependent, a path dependency outside the workspace or
+  a git dependency), and the
+  new lock must record the target or nothing is published. A workspace root's
+  members are read from the manifests in the scan. A virtual root (a
+  `[workspace]` with no `[package]`) with none of them there has no locked
+  version for its dependencies and gets no lock-only update; a root with its own
+  `[package]` always counts that package's dependencies, members or not.
+- Without a committed lockfile there is nothing to change, so the release is
+  not an update. npm and Bun have no such command, so they only get this when
+  the scheduled refresh below runs.
 
 ## Why aube for npm and pnpm
 

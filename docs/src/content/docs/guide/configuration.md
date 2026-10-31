@@ -26,8 +26,7 @@ committed `patchula.pkl`.
 amends "PatchulaConfig.pkl"
 
 prs {
-  dashboard = true
-  concurrent = 10
+  concurrent = 5
 }
 defaults {
   labels { "dependencies"; "bot" }
@@ -64,7 +63,7 @@ defaults { releaseNotes = false }
 // patchula.pkl
 amends "org.pkl"
 
-prs { dashboard = true }
+prs { perHour = 2 }
 ```
 
 Local `import` works too. Remote imports, package imports, environment
@@ -78,15 +77,23 @@ The [schema](/reference/configuration/) is the complete list. In short, the Coun
 starts out cautious:
 
 - every supported manager is selected, each with its own file patterns;
-- versions are pinned exactly, and GitHub Actions and container images are
-  pinned to digests;
+- versions are pinned exactly, except in Cargo, pyproject, Bundler and Composer,
+  where a built-in rule keeps ranges and moves the lockfile for releases inside
+  them (see [version policies](/guide/versioning/#version-policies)); GitHub
+  Actions and container images are pinned to digests;
 - every update gets its own PR with the `dependencies` label and a
-  `chore(deps):` commit prefix, and release notes are included;
+  `chore(deps):` commit prefix (`fix(deps):` for [security fixes](/guide/security/#security-updates-go-first)),
+  and release notes are included;
 - nothing auto-merges, except [reference data](#reference-data) such as CA
   root bundles, which also skips the release-age wait;
 - dated releases wait 24 hours before they are proposed;
-- there is no limit on open PRs or PRs per hour, no schedule window and no
-  dashboard;
+- at most 10 ordinary update PRs are open at once, with no limit per hour and
+  no schedule window; the rest wait for a slot and are listed on the
+  dashboard. [Security fixes](/guide/security/#security-updates-go-first) skip
+  both limits, though `security.apply` can still hold them, with `active`,
+  `waitHours` or `windows`, so the total can pass 10;
+- a dependency dashboard issue is kept up to date, and `prs { dashboard = false }`
+  turns it off;
 - branches start with `patchula/` and are rebased only when they conflict;
 - installed and vendored dependencies (`node_modules`, `bower_components`,
   `vendor`), `.git`, and test and example directories (`test`, `tests`,
@@ -149,7 +156,7 @@ lockfile is not an update type; it is configured under
 | Field | Effect |
 |---|---|
 | `active` | `false` stops updates for the selected dependencies |
-| `versions` | `exact` pins, `preserve` keeps and shifts ranges, `widen` extends ranges to include the new version |
+| `versions` | `exact` pins, `preserve` keeps and shifts ranges (and moves the lockfile alone for releases inside them), `widen` extends ranges to include the new version; the default is `exact`, with a built-in `preserve` rule for Cargo, pyproject, Bundler and Composer |
 | `channel` | `stable`, or `lts` for Node's long-term support line |
 | `digest` | `false` opts out of digest pinning |
 | `merge` | allow [auto-merge](/guide/auto-merge/) |
@@ -219,8 +226,9 @@ rules {
 ```
 
 :::caution
-Assigning `rules = new Listing { ... }` replaces the whole list, the built-in
-rule included.
+Assigning `rules = new Listing { ... }` replaces the whole list, both built-in
+rules included: this one and the `preserve` default for Cargo, pyproject,
+Bundler and Composer.
 :::
 
 Root certificates inside container images come from the image's
@@ -231,9 +239,9 @@ those are not covered.
 
 ```pkl
 prs {
-  concurrent = 10        // open PRs at once; null is unlimited
-  perHour = 4            // new PRs per hour; null is unlimited
-  dashboard = true       // keep a Dependency Dashboard issue
+  concurrent = 10        // open PRs at once (10 by default); null is unlimited
+  perHour = 4            // new PRs per hour; null (the default) is unlimited
+  dashboard = true       // keep a Dependency Dashboard issue (on by default)
   branch = "patchula/"   // branch prefix
   rebase = "behind"      // rebase whenever the base moves, not only on conflict
   batchMerge = false     // let the batch PR auto-merge

@@ -958,3 +958,106 @@ fn cache_flag_names_a_directory() {
         directory.path()
     );
 }
+
+/// A release the Count could not write into a declaration is reported by
+/// `patchula apply`, in the text and in the JSON, and is never handed to copier.
+#[tokio::test]
+async fn apply_reports_notices_that_are_not_templates() {
+    use patchula_testkit::{Body, Cassette, Interaction, RecordedRequest, RecordedResponse};
+    let tree = tempfile::tempdir().unwrap();
+    for (path, content) in [
+        (
+            "patchula.pkl",
+            "amends \"PatchulaConfig.pkl\"\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"composer\" }\n",
+        ),
+        ("composer.json", r#"{"require":{"acme/lib":"^1 | ^2"}}"#),
+        (
+            "composer.lock",
+            r#"{"packages":[{"name":"acme/lib","version":"2.5.0"}]}"#,
+        ),
+    ] {
+        std::fs::write(tree.path().join(path), content).unwrap();
+    }
+    let packagist = Interaction {
+        request: RecordedRequest {
+            method: "GET".into(),
+            url: "https://repo.packagist.org/p2/acme/lib.json".into(),
+            headers: [("accept".to_owned(), vec!["application/json".to_owned()])].into(),
+            body: Body::Text("".into()),
+        },
+        response: RecordedResponse {
+            status: 200,
+            headers: Default::default(),
+            body: Body::Json(json!({"packages": {"acme/lib": [
+                {"version": "3.0.0", "time": "2025-12-01T00:00:00+00:00"},
+                {"version": "2.5.0", "time": "2025-11-01T00:00:00+00:00"}
+            ]}})),
+        },
+    };
+    // One lookup for each of the two runs below.
+    let cassette = Cassette {
+        schema_version: 1,
+        provenance: "Simulated from the Packagist p2 metadata format".into(),
+        interactions: vec![packagist.clone(), packagist],
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let cassette_path = scratch.path().join("notices.json");
+    patchula_testkit::save(&cassette_path, &cassette, &Default::default()).unwrap();
+    let transport = patchula_testkit::from_env(&cassette_path, Default::default(), || {
+        Ok(Arc::new(patchula_http::Network::new()?))
+    })
+    .unwrap();
+    let cache = scratch.path().join("cache");
+    let services = Services {
+        token: Some("offline".into()),
+        transport: Some(transport),
+        dir: Some(tree.path().to_owned()),
+        ..Services::default()
+    };
+    let apply = async |args: &[&str]| {
+        let mut words = vec![
+            OsStr::new("apply"),
+            OsStr::new("--cache"),
+            cache.as_os_str(),
+        ];
+        words.extend(args.iter().map(OsStr::new));
+        let app = App::parse_from(&words).unwrap();
+        let Some(super::Command::Apply(options)) = &app.command else {
+            panic!("apply")
+        };
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = super::apply::command(
+            &app,
+            options,
+            &services,
+            &mut out,
+            &mut err,
+            &super::output::Style::PLAIN,
+        )
+        .await
+        .unwrap();
+        (
+            code,
+            String::from_utf8(out).unwrap(),
+            String::from_utf8(err).unwrap(),
+        )
+    };
+    let (_, _, err) = apply(&["--check"]).await;
+    assert!(err.contains("Newer versions not proposed (1)"), "{err}");
+    assert!(
+        err.contains("acme/lib ^1 | ^2 → 3.0.0 available, not proposed: the constraint `^1 | ^2` cannot be rewritten"),
+        "{err}"
+    );
+    assert!(!err.contains("Template updates"), "{err}");
+    assert!(!err.contains("copier"), "{err}");
+    let (_, out, _) = apply(&["--check", "--json"]).await;
+    let result: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(result["notices"][0]["available"], "3.0.0");
+    assert!(
+        result["notices"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("without guessing"),
+        "{result}"
+    );
+}

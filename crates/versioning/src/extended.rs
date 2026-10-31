@@ -131,7 +131,11 @@ pub(super) fn new_range(
         return Ok(exact);
     }
     if scheme == Ecosystem::Poetry {
-        return poetry_range(current, target, &parsed);
+        return if policy == VersionPolicy::Widen {
+            poetry_widen(current, target, &parsed)
+        } else {
+            poetry_range(current, target, &parsed)
+        };
     }
     let clauses = current.split(',').collect::<Vec<_>>();
     if clauses.len() != 1 {
@@ -144,7 +148,29 @@ pub(super) fn new_range(
     if policy == VersionPolicy::Widen && matches!(operator, "<" | "<=") {
         return Ok(format!("<={target}"));
     }
-    Ok(format!("{operator}{target}"))
+    // Keep the precision the declaration had: `>=2.28` shifts to `>=2.32`, not
+    // `>=2.32.3`.
+    let body = current[n..].trim();
+    let precision = body.split('.').count();
+    let shortened = (!body.contains('*')
+        && target.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+        && target.split('.').count() >= precision)
+        .then(|| {
+            target
+                .split('.')
+                .take(precision)
+                .collect::<Vec<_>>()
+                .join(".")
+        });
+    // `==2.32` does not match 2.32.3, so an operator that needs the full
+    // version gets it.
+    for version in shortened.iter().map(String::as_str).chain([target]) {
+        let out = format!("{}{version}", &current[..n]);
+        if scheme.matches(&out, &parsed)? {
+            return Ok(out);
+        }
+    }
+    Err(Error::Compound(current.into()))
 }
 
 /// One Poetry alternative (comma-separated clauses) as PEP 440 specifiers.
@@ -174,10 +200,13 @@ fn poetry_specifiers(alternative: &str) -> Result<String> {
             continue;
         };
         // Bounds come from the release segment; prerelease suffixes stay in the floor.
-        let parts = pep440_rs::Version::from_str(body)
-            .map_err(|_| invalid())?
-            .release()
-            .to_vec();
+        let floor = pep440_rs::Version::from_str(body).map_err(|_| invalid())?;
+        let parts = floor.release().to_vec();
+        // An epoch outranks every release, so the ceiling carries it too.
+        let epoch = match floor.epoch() {
+            0 => String::new(),
+            epoch => format!("{epoch}!"),
+        };
         if parts.is_empty() || parts.len() > 3 {
             return Err(invalid());
         }
@@ -199,9 +228,42 @@ fn poetry_specifiers(alternative: &str) -> Result<String> {
             .collect::<Vec<_>>()
             .join(".");
         out.push(format!(">={body}"));
-        out.push(format!("<{upper}"));
+        out.push(format!("<{epoch}{upper}"));
     }
     Ok(out.join(","))
+}
+
+/// Add an alternative that covers the target to the constraint, which `||`
+/// allows: `^1.2` and 3.0.1 become `^1.2 || ^3.0`. Any constraint can be
+/// extended this way.
+fn poetry_widen(current: &str, target: &str, parsed: &Parsed) -> Result<String> {
+    let release = parsed.1.as_ref().expect("PEP parsed version");
+    let plain =
+        !release.is_pre() && !release.is_post() && !release.is_dev() && release.local().is_empty();
+    let numbers = release.release();
+    let epoch = match release.epoch() {
+        0 => String::new(),
+        epoch => format!("{epoch}!"),
+    };
+    let (major, minor, patch) = (
+        numbers[0],
+        numbers.get(1).copied().unwrap_or(0),
+        numbers.get(2).copied().unwrap_or(0),
+    );
+    let caret = if !plain {
+        format!("^{target}")
+    } else if major > 0 {
+        format!("^{epoch}{major}.{minor}")
+    } else if minor > 0 {
+        format!("^{epoch}0.{minor}")
+    } else {
+        format!("^{epoch}0.0.{patch}")
+    };
+    let out = format!("{} || {caret}", current.trim());
+    if !Ecosystem::Poetry.matches(&out, parsed)? {
+        return Err(Error::Compound(current.into()));
+    }
+    Ok(out)
 }
 
 /// Keep a single caret, tilde, comparison or exact constraint's operator and
@@ -220,11 +282,16 @@ fn poetry_range(current: &str, target: &str, parsed: &Parsed) -> Result<String> 
     let plain =
         !release.is_pre() && !release.is_post() && !release.is_dev() && release.local().is_empty();
     let version = if plain && release.release().len() >= precision && !body.contains('*') {
-        release.release()[..precision]
-            .iter()
-            .map(u64::to_string)
-            .collect::<Vec<_>>()
-            .join(".")
+        let epoch = match release.epoch() {
+            0 => String::new(),
+            epoch => format!("{epoch}!"),
+        };
+        epoch
+            + &release.release()[..precision]
+                .iter()
+                .map(u64::to_string)
+                .collect::<Vec<_>>()
+                .join(".")
     } else {
         target.to_string()
     };

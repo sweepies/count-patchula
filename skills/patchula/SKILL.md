@@ -18,7 +18,6 @@ Count skips it. Configs are
 ```pkl
 amends "PatchulaConfig.pkl"
 
-prs { dashboard = true }
 rules {
   new Rule {
     select { updates { "patch" } }

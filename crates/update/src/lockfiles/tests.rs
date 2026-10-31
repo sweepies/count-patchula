@@ -9,6 +9,11 @@ struct Fixture {
     real: bool,
     leaf: Option<String>,
     calls: Mutex<Vec<Vec<String>>>,
+    /// A manifest whose content is recorded at every tool call.
+    watch: Option<String>,
+    watched: Mutex<Vec<String>>,
+    /// What a tool writes to its lockfile; a placeholder when `None`.
+    lock: Option<String>,
 }
 impl Executor for Fixture {
     fn run(
@@ -82,6 +87,17 @@ impl Executor for Fixture {
             assert_eq!(spec.env[std::ffi::OsStr::new("MISE_NO_CONFIG")], "1");
             assert_eq!(spec.env[std::ffi::OsStr::new("MISE_NO_ENV")], "1");
             assert_eq!(spec.env[std::ffi::OsStr::new("MISE_NO_HOOKS")], "1");
+            if let Some(path) = self
+                .watch
+                .as_ref()
+                .filter(|_| invocation(&spec.args).is_some())
+            {
+                let tree = spec.cwd.parent().unwrap().join("tree");
+                self.watched
+                    .lock()
+                    .unwrap()
+                    .push(std::fs::read_to_string(tree.join(path)).unwrap_or_default());
+            }
             if self.real {
                 let crates: Vec<_> = [
                     ("offline-registry-fixture", ["1.0.0", "2.0.0"]),
@@ -189,7 +205,11 @@ impl Executor for Fixture {
             } else {
                 "bun.lock".into()
             };
-            write(&root, &leaf, "fixture deterministic lock\n").unwrap();
+            let lock = self
+                .lock
+                .as_deref()
+                .unwrap_or("fixture deterministic lock\n");
+            write(&root, &leaf, lock).unwrap();
             Ok(Vec::new())
         })
     }
@@ -325,6 +345,9 @@ fn fixture_with(
         real,
         leaf,
         calls: Mutex::new(Vec::new()),
+        watch: None,
+        watched: Mutex::new(Vec::new()),
+        lock: None,
     })
 }
 fn repo() -> Repository {
@@ -1394,9 +1417,13 @@ impl Executor for CargoFixture {
             let text = std::fs::read_to_string(&lock).unwrap();
             let rest: Vec<_> = args.iter().skip(3).map(String::as_str).collect();
             match rest.as_slice() {
+                // Cargo points the manifest's package at the new entry.
                 ["--workspace"] => std::fs::write(
                     &lock,
-                    format!("{text}[[package]]\nname = \"base64\"\nversion = \"0.23.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n"),
+                    format!(
+                        "{}[[package]]\nname = \"base64\"\nversion = \"0.23.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n",
+                        text.replace("\"base64 0.22.1\"", "\"base64 0.23.1\"")
+                    ),
                 )
                 .unwrap(),
                 ["-p", "base64@0.23.1", "--precise", "0.23.0"] => {
@@ -1418,7 +1445,7 @@ async fn cargo_lock_adds_a_semver_incompatible_entry_then_pins_the_target() {
         ("Cargo.toml".to_string(), old.to_string()),
         (
             "Cargo.lock".into(),
-            "version = 4\n[[package]]\nname = \"base64\"\nversion = \"0.22.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n".into(),
+            "version = 4\n[[package]]\nname = \"fixture\"\nversion = \"1.0.0\"\ndependencies = [\"base64 0.22.1\"]\n[[package]]\nname = \"base64\"\nversion = \"0.22.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n".into(),
         ),
     ]);
     let executor = Arc::new(CargoFixture {
@@ -2296,6 +2323,7 @@ async fn python_locks_use_uv_and_poetry_with_the_project_interpreter() {
             package: Some("ruff".into()),
             current: Some("0.6.0".into()),
             target: Some("0.6.9".into()),
+            lock_only: false,
         }];
         p.contents.insert(
             "pyproject.toml".into(),
@@ -2345,6 +2373,7 @@ async fn an_unchanged_python_lock_after_a_targeted_upgrade_fails() {
         package: Some("ruff".into()),
         current: Some("0.6.0".into()),
         target: Some("0.6.9".into()),
+        lock_only: false,
     }];
     runner.prepare(&mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
@@ -2768,6 +2797,7 @@ async fn real_dotnet_restore_regenerates_packages_lock_json() {
         package: None,
         current: None,
         target: None,
+        lock_only: false,
     }];
     runner.prepare(&mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
@@ -3055,6 +3085,7 @@ fn a_vulnerable_transitive_crate_moves_through_its_lockfile_alone() {
             package: Some("time".into()),
             current: Some("0.3.20".into()),
             target: Some("0.3.23".into()),
+            lock_only: true,
         }]
     );
     assert_eq!(plan.changes[0].advisories[0].id, "RUSTSEC-2023-0071");
@@ -3925,5 +3956,629 @@ fn dotnet_restore_passes_on_invariant_globalization() {
         !dotnet::restore_env(packages, None)
             .iter()
             .any(|(key, _)| key == "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT")
+    );
+}
+
+/// One in-range update of a direct dependency, as the report carries it: no
+/// `newValue`, because the declaration stays as it is.
+fn lock_only_plan(
+    manager: &str,
+    source: &str,
+    files: &BTreeMap<String, String>,
+    manifest: &str,
+    name: &str,
+    current: &str,
+    target: &str,
+) -> (Plan, Vec<patchula_manager::Dependency>) {
+    let config = config();
+    let extraction = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(files)
+        .unwrap();
+    let dep = extraction
+        .dependencies
+        .iter()
+        .find(|d| d.package == name)
+        .unwrap_or_else(|| panic!("{name} not extracted: {:?}", extraction.dependencies));
+    let mut repository = repo();
+    repository.package_files = serde_json::from_value(serde_json::json!([{
+        "path": manifest,
+        "dependencies": [{
+            "manager": manager, "name": dep.name, "package": dep.package,
+            "current": {"value": dep.current, "version": dep.resolved, "digest": null},
+            "updates": [{"newValue": null, "newVersion": target, "newDigest": null,
+                "updateType": "minor", "group": null}],
+            "metadata": {"source": source, "kinds": ["production"], "locations": []}
+        }]
+    }]))
+    .unwrap();
+    let mut plans = crate::plan(
+        &repository,
+        &config,
+        &extraction.dependencies,
+        &snapshot(files),
+        false,
+        None,
+        monday(),
+    )
+    .unwrap();
+    assert_eq!(plans.len(), 1);
+    assert_eq!(current, dep.resolved.as_deref().unwrap());
+    (plans.remove(0), extraction.dependencies)
+}
+
+fn cargo_lock(version: &str) -> String {
+    format!(
+        "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"tokio\"]\n\n[[package]]\nname = \"tokio\"\nversion = \"{version}\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n"
+    )
+}
+
+/// `tokio = "1"` locked at 1.39.0 reaches 1.40.0 through Cargo.lock alone.
+#[test]
+fn an_in_range_release_moves_a_direct_crate_through_its_lockfile_alone() {
+    let manifest =
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ntokio = \"1\"\n";
+    let mut files = BTreeMap::from([
+        ("Cargo.toml".to_string(), manifest.to_string()),
+        ("Cargo.lock".to_string(), cargo_lock("1.39.0")),
+    ]);
+    let (plan, _) = lock_only_plan(
+        "cargo",
+        "crates",
+        &files,
+        "Cargo.toml",
+        "tokio",
+        "1.39.0",
+        "1.40.0",
+    );
+    assert_eq!(
+        plan.action.status,
+        ActionStatus::Planned,
+        "{:?}",
+        plan.action
+    );
+    assert!(plan.contents.is_empty(), "the manifest is left alone");
+    assert_eq!(plan.action.message, "chore(deps): update tokio to 1.40.0");
+    assert_eq!(plan.action.branch, "patchula/tokio-1.x");
+    assert_eq!(
+        plan.lock_jobs,
+        [Job {
+            ecosystem: Ecosystem::Cargo,
+            directory: String::new(),
+            package: Some("tokio".into()),
+            current: Some("1.39.0".into()),
+            target: Some("1.40.0".into()),
+            lock_only: true,
+        }]
+    );
+    assert_eq!(plan.changes[0].value, None);
+    // The lock has to show the target afterwards, whatever the tool did.
+    let config = config();
+    assert!(
+        validate_targets(&plan, &config, &files)
+            .unwrap_err()
+            .contains("did not resolve tokio")
+    );
+    files.insert("Cargo.lock".into(), cargo_lock("1.40.0"));
+    validate_targets(&plan, &config, &files).unwrap();
+}
+
+/// Bundler, Composer and Poetry lock-only updates, with the lock they start from.
+/// Manager, source, files, manifest, package, locked version and ecosystem.
+type LockOnlyCase = (
+    &'static str,
+    &'static str,
+    BTreeMap<String, String>,
+    &'static str,
+    &'static str,
+    &'static str,
+    Ecosystem,
+);
+fn lock_only_cases() -> Vec<LockOnlyCase> {
+    vec![
+        (
+            "bundler",
+            "rubygems",
+            BTreeMap::from([
+                (
+                    "Gemfile".to_string(),
+                    "source \"https://rubygems.org\"\ngem \"rake\", \"~> 13.0\"\n".to_string(),
+                ),
+                (
+                    "Gemfile.lock".to_string(),
+                    "GEM\n  remote: https://rubygems.org/\n  specs:\n    rake (13.0.6)\n\nPLATFORMS\n  ruby\n\nDEPENDENCIES\n  rake (~> 13.0)\n".to_string(),
+                ),
+            ]),
+            "Gemfile",
+            "rake",
+            "13.0.6",
+            Ecosystem::Ruby,
+        ),
+        (
+            "composer",
+            "packagist",
+            BTreeMap::from([
+                (
+                    "composer.json".to_string(),
+                    "{\"require\": {\"psr/log\": \"^3.0\"}}\n".to_string(),
+                ),
+                (
+                    "composer.lock".to_string(),
+                    "{\"packages\": [{\"name\": \"psr/log\", \"version\": \"3.0.0\"}]}\n".to_string(),
+                ),
+            ]),
+            "composer.json",
+            "psr/log",
+            "3.0.0",
+            Ecosystem::Php,
+        ),
+        (
+            "pyproject",
+            "pypi",
+            BTreeMap::from([
+                (
+                    "pyproject.toml".to_string(),
+                    "[project]\nname = \"app\"\ndependencies = [\"six>=1.15\"]\n".to_string(),
+                ),
+                (
+                    "uv.lock".to_string(),
+                    "version = 1\n\n[[package]]\nname = \"six\"\nversion = \"1.15.0\"\n".to_string(),
+                ),
+            ]),
+            "pyproject.toml",
+            "six",
+            "1.15.0",
+            Ecosystem::Python,
+        ),
+        (
+            "pyproject",
+            "pypi",
+            BTreeMap::from([
+                (
+                    "pyproject.toml".to_string(),
+                    "[project]\nname = \"app\"\ndependencies = [\"six>=1.15\"]\n".to_string(),
+                ),
+                (
+                    "poetry.lock".to_string(),
+                    "[[package]]\nname = \"six\"\nversion = \"1.15.0\"\n".to_string(),
+                ),
+            ]),
+            "pyproject.toml",
+            "six",
+            "1.15.0",
+            Ecosystem::Python,
+        ),
+    ]
+}
+
+#[test]
+fn an_in_range_release_is_a_lock_only_plan_for_bundler_composer_and_pyproject() {
+    for (manager, source, files, manifest, package, locked, ecosystem) in lock_only_cases() {
+        // A release inside each declared range: `~> 13.0`, `^3.0` and `>=1.15`.
+        let target = match ecosystem {
+            Ecosystem::Ruby => "13.2.1",
+            Ecosystem::Php => "3.0.2",
+            _ => "1.17.0",
+        };
+        let (plan, dependencies) =
+            lock_only_plan(manager, source, &files, manifest, package, locked, target);
+        {
+            use patchula_versioning::Versioning;
+            let dep = &dependencies[0];
+            let scheme = patchula_lookup::scheme(dep).unwrap();
+            assert!(
+                scheme
+                    .matches(&dep.current, &scheme.parse(target).unwrap())
+                    .unwrap(),
+                "{manager}: {target} is outside {}",
+                dep.current
+            );
+        }
+        assert_eq!(
+            plan.action.status,
+            ActionStatus::Planned,
+            "{manager}: {:?}",
+            plan.action
+        );
+        assert!(plan.contents.is_empty(), "{manager}");
+        assert_eq!(
+            plan.action.message,
+            format!("chore(deps): update {package} to {target}"),
+            "{manager}"
+        );
+        assert_eq!(
+            plan.lock_jobs,
+            [Job {
+                ecosystem,
+                directory: String::new(),
+                package: Some(dependencies[0].package.clone()),
+                current: Some(locked.into()),
+                target: Some(target.into()),
+                lock_only: true,
+            }],
+            "{manager}"
+        );
+    }
+}
+
+/// With no lockfile committed, the same update has no job and so no branch.
+#[test]
+fn a_lock_only_update_without_a_committed_lockfile_plans_nothing_to_do() {
+    let files = BTreeMap::from([(
+        "Gemfile".to_string(),
+        "source \"https://rubygems.org\"\ngem \"rake\", \"~> 13.0\"\n".to_string(),
+    )]);
+    let config = config();
+    let extraction = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap();
+    assert_eq!(extraction.dependencies[0].locked(), None);
+    let update = patchula_report::Update {
+        new_value: None,
+        new_version: Some("13.2.1".into()),
+        new_digest: None,
+        update_type: "minor".into(),
+        group: None,
+        policy: None,
+        release_age: None,
+        fixes: Vec::new(),
+        image: None,
+    };
+    assert_eq!(
+        job(&extraction.dependencies[0], &update, &snapshot(&files)),
+        Ok(None)
+    );
+}
+
+/// What a tool writes to a lock that records `version` of `package`.
+fn lock_recording(lock: &str, package: &str, version: &str) -> String {
+    match lock {
+        "Gemfile.lock" => format!(
+            "GEM\n  remote: https://rubygems.org/\n  specs:\n    {package} ({version})\n\nPLATFORMS\n  ruby\n\nDEPENDENCIES\n  {package}\n"
+        ),
+        "composer.lock" => {
+            format!("{{\"packages\": [{{\"name\": \"{package}\", \"version\": \"{version}\"}}]}}\n")
+        }
+        _ => format!("version = 1\n\n[[package]]\nname = \"{package}\"\nversion = \"{version}\"\n"),
+    }
+}
+
+/// Each tool is told the exact version of a package whose declaration stays as
+/// it is. Bundler and Poetry cannot be told, so they resolve once against a
+/// transient exact pin and again against the restored manifest. The new lock
+/// has to record the target, and a lock that still holds the old version fails
+/// the branch.
+#[tokio::test]
+async fn lock_only_jobs_reach_their_exact_target_in_every_lockfile_tool() {
+    for (index, (manager, source, files, manifest, package, locked, ecosystem)) in
+        lock_only_cases().into_iter().enumerate()
+    {
+        let lock = files.keys().find(|k| k.ends_with(".lock")).unwrap().clone();
+        let target = match ecosystem {
+            Ecosystem::Ruby => "13.2.1",
+            Ecosystem::Php => "3.0.1",
+            _ => "1.16.0",
+        };
+        let config = config();
+        let extracted = patchula_manager::Scanner::new(&config)
+            .unwrap()
+            .extract(&files)
+            .unwrap()
+            .dependencies;
+        let dep = extracted.iter().find(|d| d.package == package).unwrap();
+        for fresh in [true, false] {
+            let executor = Arc::new(Fixture {
+                files: files.clone(),
+                fail: false,
+                real: false,
+                leaf: Some(lock.clone()),
+                calls: Mutex::new(Vec::new()),
+                watch: Some(manifest.into()),
+                watched: Mutex::new(Vec::new()),
+                lock: Some(lock_recording(
+                    &lock,
+                    package,
+                    if fresh { target } else { locked },
+                )),
+            });
+            let temp = tempfile::tempdir().unwrap();
+            let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+                .with_executor(executor.clone());
+            let mut snapshot = snapshot(&files);
+            let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+                .unwrap()
+                .unwrap();
+            p.maintenance = false;
+            p.lock_jobs = vec![Job {
+                ecosystem,
+                directory: String::new(),
+                package: Some(dep.package.clone()),
+                current: Some(locked.into()),
+                target: Some(target.into()),
+                lock_only: true,
+            }];
+            p.changes = vec![crate::plan::Change {
+                source: source.into(),
+                package: dep.package.clone(),
+                file: manifest.into(),
+                current: dep.current.clone(),
+                current_version: Some(locked.into()),
+                value: None,
+                version: Some(target.into()),
+                digest: None,
+                kind: "minor".into(),
+                merge: false,
+                labels: Vec::new(),
+                release_notes: false,
+                body_notes: Vec::new(),
+                advisories: Vec::new(),
+                image: None,
+            }];
+            runner.prepare(&mut p, &mut snapshot, &config).await;
+            if !fresh {
+                assert_eq!(p.action.status, ActionStatus::Error, "{manager}");
+                assert!(
+                    p.action
+                        .reason
+                        .as_deref()
+                        // A lock the tool left as it was is stale too.
+                        .is_some_and(
+                            |r| r.contains("did not resolve") || r.contains("did not change")
+                        ),
+                    "{manager}: {:?}",
+                    p.action
+                );
+                continue;
+            }
+            assert_eq!(
+                p.action.status,
+                ActionStatus::Planned,
+                "{index} {manager}: {:?}",
+                p.action
+            );
+            assert!(
+                !p.contents.contains_key(manifest),
+                "{index} {manager}: the declaration is never rewritten"
+            );
+            assert!(p.contents[&lock].contains(target), "{manager}");
+            let calls = executor.calls.lock().unwrap();
+            let tool_calls: Vec<_> = recorded(&calls)
+                .into_iter()
+                .map(|(_, args)| args)
+                .filter(|args| args[0] != "git")
+                .collect();
+            let seen = executor.watched.lock().unwrap();
+            let original = &files[manifest];
+            match (ecosystem, lock.as_str()) {
+                (Ecosystem::Ruby, _) => {
+                    assert_eq!(tool_calls.len(), 2, "{tool_calls:?}");
+                    assert!(starts(
+                        &tool_calls[0],
+                        &["bundle", "lock", "--update", package]
+                    ));
+                    assert_eq!(tool_calls[1], ["bundle", "lock"]);
+                    assert!(
+                        seen[0].contains(&format!("gem \"rake\", \"{target}\"")),
+                        "{}",
+                        seen[0]
+                    );
+                    assert_eq!(&seen[1], original);
+                }
+                (Ecosystem::Php, _) => {
+                    assert_eq!(tool_calls.len(), 1, "{tool_calls:?}");
+                    assert!(contains(
+                        &tool_calls[0],
+                        &["--with", &format!("{package}:{target}")]
+                    ));
+                    assert_eq!(&seen[0], original);
+                }
+                (Ecosystem::Python, "uv.lock") => {
+                    assert_eq!(tool_calls.len(), 1, "{tool_calls:?}");
+                    assert!(contains(
+                        &tool_calls[0],
+                        &["--upgrade-package", &format!("{package}=={target}")]
+                    ));
+                    assert_eq!(&seen[0], original);
+                }
+                (Ecosystem::Python, _) => {
+                    assert_eq!(tool_calls.len(), 2, "{tool_calls:?}");
+                    assert!(tool_calls.iter().all(|c| starts(c, &["poetry", "lock"])));
+                    assert!(seen[0].contains(&format!("six=={target}")), "{}", seen[0]);
+                    assert_eq!(&seen[1], original);
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+}
+
+/// A branch that carries a security fix takes that fix's commit prefix, even
+/// when another occurrence of the package moves to the same version without
+/// needing the fix.
+#[test]
+fn a_branch_with_a_security_fix_takes_its_commit_prefix() {
+    let manifest = |name: &str| {
+        format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n\n[dependencies]\ntokio = \"1.0\"\n"
+        )
+    };
+    let files = BTreeMap::from([
+        ("a/Cargo.toml".to_string(), manifest("a")),
+        ("b/Cargo.toml".to_string(), manifest("b")),
+    ]);
+    let config = config();
+    let extraction = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap();
+    let update = |prefix: &str, fixes: serde_json::Value| {
+        serde_json::json!({"newValue": "=1.40.0", "newVersion": "1.40.0", "newDigest": null,
+            "updateType": "minor", "group": null, "fixes": fixes,
+            "policy": {"waitHours": 0, "windows": [], "merge": false,
+                "labels": ["dependencies"], "commitPrefix": prefix,
+                "releaseNotes": true, "bodyNotes": []}})
+    };
+    let file = |path: &str, update: serde_json::Value| {
+        serde_json::json!({"path": path, "dependencies": [{
+            "manager": "cargo", "name": "tokio", "package": "tokio",
+            "current": {"value": "1.0", "version": null, "digest": null},
+            "updates": [update],
+            "metadata": {"source": "crates", "kinds": ["production"], "locations": []}
+        }]})
+    };
+    for (vulnerable, plain, expected) in [
+        (
+            "fix(deps):",
+            "chore(deps):",
+            "fix(deps): update tokio to 1.40.0 [security]",
+        ),
+        (
+            "fix(deps):",
+            "fix(deps):",
+            "fix(deps): update tokio to 1.40.0 [security]",
+        ),
+    ] {
+        let mut repository = repo();
+        repository.package_files = serde_json::from_value(serde_json::json!([
+            file(
+                "a/Cargo.toml",
+                update(vulnerable, serde_json::json!(["GHSA-test"]))
+            ),
+            file("b/Cargo.toml", update(plain, serde_json::json!([]))),
+        ]))
+        .unwrap();
+        let plans = crate::plan(
+            &repository,
+            &config,
+            &extraction.dependencies,
+            &snapshot(&files),
+            false,
+            None,
+            monday(),
+        )
+        .unwrap();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(
+            plans[0].action.status,
+            ActionStatus::Planned,
+            "{:?}",
+            plans[0].action
+        );
+        assert_eq!(plans[0].action.message, expected);
+    }
+}
+
+fn cargo_change(package: &str, current: &str, version: &str) -> crate::plan::Change {
+    crate::plan::Change {
+        source: "crates".into(),
+        package: package.into(),
+        file: "Cargo.toml".into(),
+        current: current.into(),
+        current_version: None,
+        value: None,
+        version: Some(version.into()),
+        digest: None,
+        kind: "patch".into(),
+        merge: false,
+        labels: Vec::new(),
+        release_notes: false,
+        body_notes: Vec::new(),
+        advisories: Vec::new(),
+        image: None,
+    }
+}
+
+/// A lock that already records the target, whatever build metadata its release
+/// carries, has nothing left to do: `zstd-sys` 2.1.2 is locked as
+/// `2.1.2+zstd.1.5.7`.
+#[test]
+fn a_batched_lock_only_target_is_complete_once_the_lock_holds_the_release() {
+    let files = BTreeMap::from([
+        (
+            "Cargo.toml".to_string(),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nzstd-sys = \"2\"\n"
+                .to_string(),
+        ),
+        (
+            "Cargo.lock".to_string(),
+            "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"zstd-sys\"]\n\n[[package]]\nname = \"zstd-sys\"\nversion = \"2.1.2+zstd.1.5.7\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n"
+                .to_string(),
+        ),
+    ]);
+    let config = config();
+    let dependencies = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies;
+    assert_eq!(
+        dependencies[0].resolved.as_deref(),
+        Some("2.1.2+zstd.1.5.7")
+    );
+    let batch = |version: &str| {
+        crate::plan::batch_plan(
+            &repo(),
+            &config,
+            &dependencies,
+            &snapshot(&files),
+            &[cargo_change("zstd-sys", "2", version)],
+            false,
+            None,
+            monday(),
+        )
+        .unwrap()
+    };
+    assert!(batch("2.1.2").is_none());
+    assert!(batch("2.1.2+zstd.1.5.7").is_none());
+    assert!(batch("2.1.3").is_some());
+}
+
+/// With no Cargo.lock committed, a release the range already allows changes
+/// nothing; cargo would otherwise generate a lock and publish it.
+#[test]
+fn a_lock_only_cargo_update_without_a_committed_lock_has_no_job() {
+    let files = BTreeMap::from([(
+        "Cargo.toml".to_string(),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ntokio = \"1\"\n"
+            .to_string(),
+    )]);
+    let config = config();
+    let dependencies = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies;
+    let update = |value: Option<&str>| patchula_report::Update {
+        new_value: value.map(Into::into),
+        new_version: Some("1.40.0".into()),
+        new_digest: None,
+        update_type: "minor".into(),
+        group: None,
+        policy: None,
+        release_age: None,
+        fixes: Vec::new(),
+        image: None,
+    };
+    assert_eq!(
+        job(&dependencies[0], &update(None), &snapshot(&files)),
+        Ok(None)
+    );
+    // A manifest edit still regenerates the lock beside it.
+    assert!(
+        job(
+            &dependencies[0],
+            &update(Some("=1.40.0")),
+            &snapshot(&files)
+        )
+        .unwrap()
+        .is_some()
+    );
+    let mut with_lock = files.clone();
+    with_lock.insert("Cargo.lock".into(), cargo_lock("1.39.0"));
+    assert!(
+        job(&dependencies[0], &update(None), &snapshot(&with_lock))
+            .unwrap()
+            .is_some()
     );
 }

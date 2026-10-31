@@ -109,7 +109,7 @@ fn report() -> Report {
         dependency("tokio", json!([])),
     ]}]);
     serde_json::from_value(json!({
-        "schemaVersion": 3,
+        "schemaVersion": 4,
         "repositories": [app, repository("acme/secret"), repository("acme/broken"),
             repository("acme/late"), repository("acme/stranger")],
         "actions": {"schemaVersion": 1, "dryRun": false,

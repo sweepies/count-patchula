@@ -6,7 +6,7 @@ whole batch. This page describes schema version 3.
 
 ```json
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "repositories": [{
     "repository": "owner/repo",
     "status": "complete",
@@ -30,7 +30,9 @@ whole batch. This page describes schema version 3.
 ```
 
 Readers should reject any other `schemaVersion`. Unknown fields are rejected
-too, so a new field means a new version.
+too, so a new field means a new version. Version 4 added the `reason` of a
+notice that is not a template update; version 3 added an image rebuild's
+`image` check.
 
 ## Repositories
 
@@ -42,7 +44,7 @@ too, so a new field means a new version.
 | `packageFiles` | Files with dependencies, each with a `path` and `dependencies` |
 | `warnings` | Optional. Files skipped, stale registry data and similar |
 | `skipped` | Optional. Declarations that are not read as versions, such as images built from variables: `manager`, `path`, `line`, `value` and `reason` |
-| `notices` | Optional. Newer versions that are reported and never proposed, such as a [Copier template](/guide/managers/#copier)'s tags: `manager`, `path`, `line`, `name`, `package`, `current`, `available`, and `compareUrl` when the host has a compare page |
+| `notices` | Optional. Newer versions that are reported and never proposed: a [Copier template](/guide/managers/#copier)'s tags, which only `copier update` applies, and a release whose declaration cannot be rewritten to allow it without guessing, such as a Composer `^1 \| ^2` needing 3.0. Each has `manager`, `path`, `line`, `name`, `package`, `current`, `available`, and `compareUrl` when the host has a compare page; the second kind also has a `reason` |
 | `lookupFailures` | Optional. Dependencies whose lookup failed; see [below](#lookup-failures) |
 | `tooling` | Optional. [Tooling warnings](/guide/auto-merge/#tooling-warnings) that hold on a live run, one per rule: `rule`, optional `detail` (`native` for `merge-without-ci`, `reviews-only` or `tagged-release`), the `branches` it applies to, and optional `silenced` with the reason from `warnings.quiet` |
 | `defaultBranch`, `commit` | Optional. The branch and commit that were read |
@@ -97,7 +99,7 @@ when this list is not empty.
 
 | Field | |
 |---|---|
-| `newValue`, `newVersion`, `newDigest` | The target; at least one is set |
+| `newValue`, `newVersion`, `newDigest` | The target; at least one is set. A `null` `newValue` with a `newVersion` is a lockfile-only update: only a lockfile changes. For a direct dependency that is a release its declaration already allows; a transitive package, which has no declaration, moves the same way |
 | `updateType` | `major`, `minor`, `patch`, `digest` or `pin` |
 | `group` | The group name from configuration, or null |
 | `policy` | Optional. The policy that applies: versions, wait, windows, merge, labels |
