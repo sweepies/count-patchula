@@ -129,7 +129,10 @@ it can leave less room for the ordinary updates that follow.
 `waitHours` or `windows`. `concurrent = null` removes the cap.
 
 The batch PR skips both checks too. It replaces the PRs it carries, which close
-once it is open, so it never adds to the number of open PRs.
+once it is open, so it never adds to the number of open PRs. Like a security
+fix it is still counted: it is one of the PRs created in the last hour for
+`perHour` for an hour after it opens, and the PRs it closes keep counting there
+until their own hour is up.
 
 ## Repeat runs
 
