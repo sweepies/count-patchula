@@ -44,7 +44,7 @@ In order:
    releases whose declaration cannot be rewritten to allow them without
    guessing, each with the specific constraint that blocks it;
 7. updates you closed ("Updates you closed"), with the target that was
-   suppressed, and updates "Batched by the Count";
+   suppressed, and updates "Batched";
 8. lookup warnings and sources served from stale cache: one box per failing
    package and source, listing every file that declares it. Ticking it
    retries the lookup for all of them;

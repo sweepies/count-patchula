@@ -816,7 +816,10 @@ async fn apply_is_always_local_and_validates_its_filters() {
         (&["acme/app"][..], "takes no repository"),
         (&["--all-repos"], "takes no --all-repos"),
         (&["--remote"], "drop --remote"),
-        (&["--manager", "npn"], "--manager npn is not a manager"),
+        (
+            &["--manager", "npn"],
+            "--manager npn is not a known manager",
+        ),
         (&["--dependency", "regex:("], "--dependency"),
     ] {
         let mut words = vec!["apply"];

@@ -499,7 +499,7 @@ fn tooling_warnings_sit_between_known_vulnerabilities_and_images() {
     assert!(known < section && section < images, "{text}");
     assert!(text.find("## Pending updates").unwrap() > images, "{text}");
     for line in [
-        "These settings let updates merge on their own, and the Count's checks of this repository's CI, branch protection and delivery found a gap behind them.\n\n",
+        "These settings let updates merge on their own, and checks of this repository's CI, branch protection and delivery found a gap behind them.\n\n",
         "- **Nothing requires checks before GitHub merges.** `main` requires a review but no status checks. Open now: #412.\n",
         "- **Security fixes merge, but nothing ships them.** Fixes merge on their own, and no workflow runs when `main` changes. Open now: #412.\n",
         "<details><summary>Silenced (1)</summary>\n\n- `merge-without-ci`: \"CI runs in Buildkite, reporting to another org\" Open now: #412.\n</details>\n",
