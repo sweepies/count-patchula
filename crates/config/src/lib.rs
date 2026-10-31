@@ -119,7 +119,8 @@ pub fn load(path: &Path) -> miette::Result<Config> {
     let source = std::fs::read_to_string(&path)
         .into_diagnostic()
         .wrap_err_with(|| format!("cannot read config {}", path.display()))?;
-    let json = evaluate_local(&path, SCHEMA_NAME, SCHEMA)?;
+    let json = evaluate_local(&path, SCHEMA_NAME, SCHEMA)
+        .map_err(|error| evaluation_problem(&path, &source, error))?;
     decode(&path, &source, json)
 }
 
@@ -174,6 +175,18 @@ pub fn evaluate_local(
     virtual_files::evaluate_modules(&absolute.to_string_lossy(), files, true)
 }
 
+/// An evaluation error that points at no source, such as Pkl's type check of a
+/// property, names the file like the Count's own problems do. Its message names
+/// the property but not its path, so no assignment is highlighted: one of the
+/// same name elsewhere could be the wrong one. An error that already shows its
+/// source, such as a syntax error, stays as it is.
+fn evaluation_problem(path: &Path, source: &str, error: miette::Report) -> miette::Report {
+    if error.source_code().is_some() {
+        return error;
+    }
+    problem(path, source, "", &error.to_string())
+}
+
 fn decode(path: &Path, source: &str, json: serde_json::Value) -> miette::Result<Config> {
     let config: Config = serde_path_to_error::deserialize(json).map_err(|error| {
         let mut field = error.path().to_string();
@@ -216,19 +229,24 @@ pub fn problem(path: &Path, source: &str, field: &str, message: &str) -> miette:
     // properties have no source map after evaluation; never invent their location.
     let leaf = field.rsplit('.').next().unwrap_or(field);
     let leaf = leaf.split('[').next().unwrap_or(leaf);
-    let assignments: Vec<_> = source
-        .match_indices(leaf)
-        .filter(|(offset, _)| {
-            let before = &source[..*offset];
-            let after = &source[*offset + leaf.len()..];
-            before
-                .chars()
-                .next_back()
-                .is_none_or(|c| !c.is_alphanumeric() && c != '_')
-                && after.trim_start().starts_with(['=', ':', '{'])
-        })
-        .collect();
-    let span = if !leaf.is_empty() && assignments.len() == 1 {
+    // No name, nothing to find: an empty pattern would match at every byte.
+    let assignments: Vec<_> = if leaf.is_empty() {
+        Vec::new()
+    } else {
+        source
+            .match_indices(leaf)
+            .filter(|(offset, _)| {
+                let before = &source[..*offset];
+                let after = &source[*offset + leaf.len()..];
+                before
+                    .chars()
+                    .next_back()
+                    .is_none_or(|c| !c.is_alphanumeric() && c != '_')
+                    && after.trim_start().starts_with(['=', ':', '{'])
+            })
+            .collect()
+    };
+    let span = if assignments.len() == 1 {
         Some((assignments[0].0, leaf.len()).into())
     } else {
         None
