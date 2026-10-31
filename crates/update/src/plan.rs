@@ -537,18 +537,23 @@ fn superseded(dep: &Dependency, target: &Change) -> bool {
     let Some(version) = target.version.as_deref() else {
         return false;
     };
-    let current = if target.value.is_none() && target.digest.is_none() {
-        dep.resolved.as_deref()
-    } else {
-        Some(dep.current.as_str())
-    };
-    let (Some(current), Ok(scheme)) = (current, patchula_lookup::scheme(dep)) else {
+    let Ok(scheme) = patchula_lookup::scheme(dep) else {
         return false;
     };
-    match (scheme.parse(version), scheme.parse(current)) {
-        (Ok(target), Ok(current)) => scheme.order(&target, &current).is_lt(),
-        _ => false,
-    }
+    let Ok(wanted) = scheme.parse(version) else {
+        return false;
+    };
+    // The locked version is what is installed; a ranged declaration such as
+    // `^2.0.0` names no single version, so the declared value only counts when
+    // it is one. A lockfile-only target is measured against the lock alone.
+    let lock_only = target.value.is_none() && target.digest.is_none();
+    let declared = (!lock_only).then_some(dep.current.as_str());
+    dep.resolved
+        .as_deref()
+        .into_iter()
+        .chain(declared)
+        .filter_map(|current| scheme.parse(current).ok())
+        .any(|current| scheme.order(&wanted, &current).is_lt())
 }
 /// One update per occurrence of a dependency. A `0.x` crate's in-range release
 /// and its next minor share a branch line, so both can reach one branch; only
