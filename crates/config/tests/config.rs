@@ -468,8 +468,8 @@ fn the_repositorys_own_config_keeps_the_schema_policy() {
     assert_eq!(&rules[..built_in.len()], built_in.as_slice());
     // Classic Yarn stays on 1.x in the default tools, and the test:tools task's
     // Yarn Berry pin is left alone.
-    let [classic, berry] = &rules[built_in.len()..] else {
-        panic!("two rules after the built-in ones: {rules:?}");
+    let [classic, unlisted, berry] = &rules[built_in.len()..] else {
+        panic!("three rules after the built-in ones: {rules:?}");
     };
     assert_eq!(classic["select"]["packages"], serde_json::json!(["yarn"]));
     assert_eq!(
@@ -477,6 +477,16 @@ fn the_repositorys_own_config_keeps_the_schema_policy() {
         serde_json::json!(["crates/update/src/lockfiles/defaults.toml"])
     );
     assert_eq!(classic["apply"]["permitted"], "semver:^1");
+    // Tools installed outside mise's registry are never looked up there.
+    assert_eq!(
+        unlisted["select"]["packages"],
+        serde_json::json!(["mise", "php", "composer"])
+    );
+    assert_eq!(
+        unlisted["select"]["files"],
+        serde_json::json!(["crates/update/src/lockfiles/defaults.toml"])
+    );
+    assert_eq!(unlisted["apply"]["active"].as_bool(), Some(false));
     assert_eq!(berry["select"]["packages"], serde_json::json!(["yarn"]));
     assert_eq!(berry["select"]["files"], serde_json::json!(["tasks.toml"]));
     assert_eq!(berry["apply"]["active"].as_bool(), Some(false));

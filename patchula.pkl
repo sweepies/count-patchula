@@ -31,6 +31,15 @@ rules {
   }
   new Rule {
     note =
+      "mise, php and composer are installed outside mise's registry: mise itself, a static PHP build and Composer's own download. mise cannot look them up by these names, so they move by hand."
+    select {
+      files { "crates/update/src/lockfiles/defaults.toml" }
+      packages { "mise"; "php"; "composer" }
+    }
+    apply { active = false }
+  }
+  new Rule {
+    note =
       "The test:tools task pins Yarn Berry, which defaults.toml keeps under [yarn] where the Count does not read it. It moves by hand, with that line."
     select {
       files { "tasks.toml" }
