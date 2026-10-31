@@ -441,32 +441,32 @@ fn the_concurrent_pr_limit_can_be_lifted_with_null() {
     assert_eq!(load(&path).unwrap().prs.concurrent, Some(3));
 }
 
-/// The Count keeps his own repository on the schema's defaults alone: the
-/// dashboard, 10 open PRs and preserved Cargo ranges all come from the schema.
+/// The Count keeps his own repository on the schema's policy: the dashboard, 10
+/// open PRs and preserved Cargo ranges all come from the schema. His config only
+/// adds the lockfile jobs' default tools to the mise manager's files, and a rule
+/// for them after the built-in rules.
 #[test]
-fn the_repositorys_own_config_sets_nothing() {
+fn the_repositorys_own_config_keeps_the_schema_policy() {
     let (_directory, path) = fixture("");
-    assert_eq!(
-        serde_json::to_value(load(&workspace().join("patchula.pkl")).unwrap()).unwrap(),
-        serde_json::to_value(load(&path).unwrap()).unwrap()
+    let mut own = serde_json::to_value(load(&workspace().join("patchula.pkl")).unwrap()).unwrap();
+    let mut defaults = serde_json::to_value(load(&path).unwrap()).unwrap();
+    let files = own["files"].take();
+    assert_eq!(files[0]["manager"], "mise", "{files}");
+    assert!(
+        files[0]["paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p == "crates/update/src/lockfiles/defaults.toml"),
+        "{files}"
     );
-    let text = std::fs::read_to_string(workspace().join("patchula.pkl")).unwrap();
-    assert_eq!(significant_lines(&text), ["amends \"PatchulaConfig.pkl\""]);
-    // Indented comments and blank lines change nothing either.
+    defaults["files"].take();
+    let rules = own["rules"].take();
+    let built_in = defaults["rules"].take();
+    let built_in = built_in.as_array().unwrap();
     assert_eq!(
-        significant_lines("  // note\n\n\t// another\namends \"PatchulaConfig.pkl\"\n   \n"),
-        ["amends \"PatchulaConfig.pkl\""]
+        &rules.as_array().unwrap()[..built_in.len()],
+        built_in.as_slice()
     );
-    assert_eq!(
-        significant_lines("amends \"PatchulaConfig.pkl\"\n  // ok\nprs { dashboard = false }\n"),
-        ["amends \"PatchulaConfig.pkl\"", "prs { dashboard = false }"]
-    );
-}
-
-/// A config's lines that are neither blank nor comments.
-fn significant_lines(text: &str) -> Vec<&str> {
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with("//"))
-        .collect()
+    assert_eq!(own, defaults);
 }
