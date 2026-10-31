@@ -1,6 +1,6 @@
 [tools]
 rust = { version = "1.99.0", profile = "minimal", components = "clippy,rustfmt", mr_boxington = true }
-mr-boxington = "1.24.0"
+mr-boxington = "1.29.0"
 usage = "7.0.1"
 tak = "0.0.15"
 zig = "0.17.0"
