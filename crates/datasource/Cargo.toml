@@ -10,7 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-base64 = "0.22"
+base64 = "0.23"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 serde_yaml_ng = "0.10.0"
 patchula-mise = { path = "../mise" }
