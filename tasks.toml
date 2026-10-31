@@ -63,7 +63,7 @@ run = "cargo test --locked -p patchula-update --lib --no-fail-fast -- lockfiles:
 # defaults.toml on one branch (patchula.pkl), and a unit test keeps the two
 # equal.
 ["test:tools".tools]
-aube = "2.8.1"
+aube = "2.8.4"
 bun = "1.4.3"
 yarn = "4.18.1"
 python = "3.14.8"
@@ -109,21 +109,21 @@ run = 'communique generate "${usage_tag?}" --github-release'
 ["docs:install"]
 description = "Install the documentation site's packages from its lockfile"
 dir = "docs"
-tools = { node = "24.21.0", aube = "2.8.1" }
+tools = { node = "24.21.0", aube = "2.8.4" }
 run = "aube ci"
 
 ["docs:dev"]
 description = "Serve the documentation site with live reload"
 depends = ["docs:install"]
 dir = "docs"
-tools = { node = "24.21.0", aube = "2.8.1" }
+tools = { node = "24.21.0", aube = "2.8.4" }
 run = "aube run dev"
 
 ["docs:build"]
 description = "Build the documentation site into docs/dist"
 depends = ["docs:install"]
 dir = "docs"
-tools = { node = "24.21.0", aube = "2.8.1" }
+tools = { node = "24.21.0", aube = "2.8.4" }
 sources = ["src/**/*", "public/**/*", "astro.config.mjs", "package.json", "aube-lock.yaml", "tsconfig.json"]
 outputs = ["dist/**/*"]
 run = "aube run build"
@@ -132,14 +132,14 @@ run = "aube run build"
 description = "Deploy the built site to Cloudflare Workers; needs CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID"
 depends = ["docs:build"]
 dir = "docs"
-tools = { node = "24.21.0", aube = "2.8.1" }
+tools = { node = "24.21.0", aube = "2.8.4" }
 run = "aube exec wrangler deploy"
 
 ["docs:upload"]
 description = "Upload the built site as a Cloudflare preview version, without deploying it; Workers Builds runs this for pull request branches"
 depends = ["docs:build"]
 dir = "docs"
-tools = { node = "24.21.0", aube = "2.8.1" }
+tools = { node = "24.21.0", aube = "2.8.4" }
 run = "aube exec wrangler versions upload"
 
 ["corpus:snapshot"]
