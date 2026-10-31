@@ -27,7 +27,8 @@ rules {
 ```
 
 Validate every change before committing it. `config check` exits 2 on an
-invalid config and names the file and field:
+invalid config; a field error names the file and field, and a syntax error
+shows the file and location:
 
 ```sh
 patchula config check .

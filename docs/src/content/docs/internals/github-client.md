@@ -27,8 +27,8 @@ decompression, a 10-second connect, 30-second read and 60-second total request
 timeout, and a 90-second idle pool timeout. User-Agent is
 `patchula/<workspace version>`. Automatic retries are off so the governor owns
 request accounting, and automatic redirects are off too: a REST GET follows
-redirects itself, up to five, HTTPS only. A redirect to another origin has its
-credentials stripped, and one with embedded credentials or a loop is refused.
+same-origin redirects itself, at most ten requests in all. Cross-origin URLs
+and URLs with embedded credentials are rejected before the token is sent.
 `api_url` can select another HTTPS API root, and GraphQL resolves as
 `graphql` relative to it, so an Enterprise deployment whose GraphQL root is
 elsewhere is not supported yet.
