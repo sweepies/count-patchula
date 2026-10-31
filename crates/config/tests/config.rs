@@ -464,9 +464,17 @@ fn the_repositorys_own_config_keeps_the_schema_policy() {
     let rules = own["rules"].take();
     let built_in = defaults["rules"].take();
     let built_in = built_in.as_array().unwrap();
+    let rules = rules.as_array().unwrap();
+    assert_eq!(&rules[..built_in.len()], built_in.as_slice());
+    // Classic Yarn stays on 1.x in the default tools.
+    let [yarn] = &rules[built_in.len()..] else {
+        panic!("one rule after the built-in ones: {rules:?}");
+    };
+    assert_eq!(yarn["select"]["packages"], serde_json::json!(["yarn"]));
     assert_eq!(
-        &rules.as_array().unwrap()[..built_in.len()],
-        built_in.as_slice()
+        yarn["select"]["files"],
+        serde_json::json!(["crates/update/src/lockfiles/defaults.toml"])
     );
+    assert_eq!(yarn["apply"]["permitted"], "semver:^1");
     assert_eq!(own, defaults);
 }
