@@ -1,7 +1,7 @@
 [tools]
 rust = { version = "1.99.1", profile = "minimal", components = "clippy,rustfmt", mr_boxington = true }
 mr-boxington = "1.29.0"
-usage = "7.0.1"
+usage = "7.1.3"
 tak = "0.0.15"
 zig = "0.17.0"
 # File tasks with real logic are nu scripts.
