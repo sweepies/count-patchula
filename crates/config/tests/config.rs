@@ -479,7 +479,7 @@ fn the_repositorys_own_config_keeps_the_schema_policy() {
     assert_eq!(classic["apply"]["permitted"], "semver:^1");
     assert_eq!(berry["select"]["packages"], serde_json::json!(["yarn"]));
     assert_eq!(berry["select"]["files"], serde_json::json!(["tasks.toml"]));
-    assert_eq!(berry["apply"]["active"], false);
+    assert_eq!(berry["apply"]["active"].as_bool(), Some(false));
     assert!(
         files[0]["paths"]
             .as_array()
