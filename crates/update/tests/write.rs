@@ -1150,6 +1150,92 @@ fn unsupported_lockfile_plans_skip_and_opt_in_marks_manifest_only_updates() {
     }
 }
 
+/// A `0.x` crate's in-range release and its next minor share a branch line, so
+/// both reach one branch. Only the higher is written, and it is the only lock
+/// job: the lower would address an entry the higher has already replaced.
+#[test]
+fn a_zero_x_crates_in_range_release_yields_to_its_next_minor() {
+    let (config, mut repo, _, mut snapshot) = setup("22.0.0", true);
+    let manifest = "[package]\nname = 'app'\nversion = '0.1.0'\nedition = '2021'\n\n[dependencies]\nhcl-edit = \"0.9.7\"\n";
+    let lock = "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"hcl-edit\"]\n\n[[package]]\nname = \"hcl-edit\"\nversion = \"0.9.7\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
+    let mut config = config;
+    config.managers = vec![Manager::Cargo];
+    let files = Files::from([
+        ("Cargo.toml".into(), manifest.into()),
+        ("Cargo.lock".into(), lock.into()),
+    ]);
+    let deps = Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies;
+    let d = &deps[0];
+    assert_eq!(d.resolved.as_deref(), Some("0.9.7"));
+    snapshot.paths = files.keys().cloned().collect();
+    snapshot.files = files
+        .iter()
+        .map(|(path, content)| {
+            (
+                path.clone(),
+                Blob {
+                    sha: blob_sha(content),
+                    mode: "100644".into(),
+                    content: content.clone(),
+                },
+            )
+        })
+        .collect();
+    repo.package_files[0].path = "Cargo.toml".into();
+    let r = &mut repo.package_files[0].dependencies[0];
+    r.manager = "cargo".into();
+    r.name.clone_from(&d.name);
+    r.package.clone_from(&d.package);
+    r.current.value = Some(d.current.clone());
+    r.current.version = Some("0.9.7".into());
+    let template = r.updates[0].clone();
+    // The lookup reports the in-range patch (lock only) and the next minor.
+    r.updates = vec![
+        Update {
+            new_value: None,
+            new_version: Some("0.9.9".into()),
+            update_type: "patch".into(),
+            ..template.clone()
+        },
+        Update {
+            new_value: Some("0.10.0".into()),
+            new_version: Some("0.10.0".into()),
+            update_type: "major".into(),
+            ..template
+        },
+    ];
+    let plans = plan(
+        &repo,
+        &config,
+        &deps,
+        &snapshot,
+        false,
+        None,
+        chrono::Utc::now(),
+    )
+    .unwrap();
+    assert_eq!(
+        plans.len(),
+        1,
+        "{:?}",
+        plans.iter().map(|p| &p.action.branch).collect::<Vec<_>>()
+    );
+    let p = &plans[0];
+    assert_eq!(p.changes.len(), 1);
+    assert_eq!(p.changes[0].version.as_deref(), Some("0.10.0"));
+    assert_eq!(p.lock_jobs.len(), 1, "{:?}", p.lock_jobs);
+    assert_eq!(p.lock_jobs[0].target.as_deref(), Some("0.10.0"));
+    assert!(
+        p.action.message.ends_with("update hcl-edit to 0.10.0"),
+        "{}",
+        p.action.message
+    );
+}
+
 #[test]
 fn pnpm_and_yarn_locks_are_supported_and_never_pending() {
     let (config, mut repo, _, mut snapshot) = setup("22.0.0", true);

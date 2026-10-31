@@ -854,8 +854,9 @@ impl Runner {
         }
         Ok(())
     }
-    /// Moves Cargo.lock for one job. A package moves with `--precise` to the
-    /// exact target. A target across a semver-incompatible boundary is a second
+    /// Moves Cargo.lock for one job, against the lock as it stands: a job whose
+    /// target is already locked has nothing to do. A package moves with
+    /// `--precise` to the exact target. A target across a semver-incompatible boundary is a second
     /// lock entry beside the old one, which other crates may still require, so
     /// `--precise` on the old entry cannot reach it; `--workspace` locks what
     /// the edited manifests need and leaves every other package where it is.
@@ -896,24 +897,32 @@ impl Runner {
         };
         let current = job.current.as_deref().unwrap_or("");
         let target = job.target.as_deref().ok_or("missing Cargo target")?;
-        if !crosses_compatibility(current, target) {
-            update(vec![
-                "-p".into(),
-                format!("{package}@{current}"),
-                "--precise".into(),
-                target.into(),
-            ])
-            .await?;
+        let crossing = crosses_compatibility(current, target);
+        if crossing {
+            update(vec!["--workspace".into()]).await?;
+        }
+        // Address what the lock holds now: an earlier job or the workspace
+        // update may have moved the entry this job was planned against.
+        let lock = std::fs::read_to_string(cwd.join("Cargo.lock")).map_err(|e| e.to_string())?;
+        let locked = locked_versions(&lock, package);
+        if locked.iter().any(|version| same_release(version, target)) {
             return Ok(());
         }
-        update(vec!["--workspace".into()]).await?;
-        // Cargo locks the newest release the manifests allow, which may be
-        // newer than the target; move that entry back to the target.
-        let lock = std::fs::read_to_string(cwd.join("Cargo.lock")).map_err(|e| e.to_string())?;
-        for locked in compatible_entries(&lock, package, target) {
+        // Cargo keeps one entry per compatibility range, so this is the one
+        // entry that can still move to the target.
+        let mut movable: Vec<_> = locked
+            .iter()
+            .filter(|version| !crosses_compatibility(version, target))
+            .cloned()
+            .collect();
+        if movable.is_empty() && !crossing {
+            // Nothing matches; let cargo name the package it cannot find.
+            movable.push(current.into());
+        }
+        for version in movable {
             update(vec![
                 "-p".into(),
-                format!("{package}@{locked}"),
+                format!("{package}@{version}"),
                 "--precise".into(),
                 target.into(),
             ])
@@ -1193,9 +1202,8 @@ fn crosses_compatibility(current: &str, target: &str) -> bool {
         _ => false,
     }
 }
-/// The versions of `package` in a Cargo.lock that are compatible with `target`
-/// but are not it.
-fn compatible_entries(lock: &str, package: &str, target: &str) -> Vec<String> {
+/// The versions of `package` a Cargo.lock records.
+fn locked_versions(lock: &str, package: &str) -> Vec<String> {
     let Ok(lock) = toml_edit::Document::parse(lock) else {
         return Vec::new();
     };
@@ -1205,7 +1213,6 @@ fn compatible_entries(lock: &str, package: &str, target: &str) -> Vec<String> {
         .flatten()
         .filter(|entry| entry.get("name").and_then(toml_edit::Item::as_str) == Some(package))
         .filter_map(|entry| entry.get("version")?.as_str())
-        .filter(|version| !same_release(version, target) && !crosses_compatibility(version, target))
         .map(str::to_owned)
         .collect()
 }

@@ -1438,6 +1438,141 @@ impl Executor for CargoFixture {
     }
 }
 
+/// Cargo as far as `cargo update` goes here: the lock is one package at one
+/// version, `--workspace` locks `newest`, and `-p` names an entry the lock
+/// still holds or fails as cargo does.
+struct HeldLock {
+    newest: &'static str,
+    calls: Mutex<Vec<Vec<String>>>,
+}
+impl Executor for HeldLock {
+    fn run(
+        &self,
+        spec: CommandSpec,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+        Box::pin(async move {
+            let at = spec.args.iter().position(|arg| arg == "cargo").unwrap();
+            let args = spec.args[at + 1..].to_vec();
+            self.calls.lock().unwrap().push(args.clone());
+            let manifest =
+                Path::new(&args[args.iter().position(|a| a == "--manifest-path").unwrap() + 1]);
+            let path = manifest.with_file_name("Cargo.lock");
+            let lock = std::fs::read_to_string(&path).unwrap();
+            let held = lock
+                .lines()
+                .find_map(|l| l.strip_prefix("version = \""))
+                .and_then(|v| v.strip_suffix('"'))
+                .unwrap()
+                .to_owned();
+            match args
+                .iter()
+                .skip(3)
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .as_slice()
+            {
+                ["--workspace"] => std::fs::write(&path, lock.replace(&held, self.newest)).unwrap(),
+                ["-p", spec, "--precise", target] => {
+                    if *spec != format!("hcl-edit@{held}") {
+                        return Err(format!(
+                            "error: package ID specification `{spec}` did not match any packages\nhelp: there are similar package ID specifications:\n\n  hcl-edit@{held}"
+                        ));
+                    }
+                    std::fs::write(&path, lock.replace(&held, target)).unwrap();
+                }
+                other => panic!("unexpected {other:?}"),
+            }
+            Ok(Vec::new())
+        })
+    }
+}
+
+/// Each Cargo job reads the lock as it stands: an entry another job or the
+/// workspace update already moved is addressed by what it is now, and a target
+/// already locked needs no command.
+#[tokio::test]
+async fn cargo_jobs_address_the_lock_as_it_stands() {
+    // (locked, newest after --workspace, current, target, commands, locked after)
+    for (locked, newest, current, target, expected, after) in [
+        // The workspace update moved 0.9.7 to 0.10.0, the target itself.
+        (
+            "0.9.7",
+            "0.10.0",
+            "0.9.7",
+            "0.10.0",
+            vec!["--workspace"],
+            "0.10.0",
+        ),
+        // ... or past it, and the entry it left is the one to move back.
+        (
+            "0.9.7",
+            "0.10.1",
+            "0.9.7",
+            "0.10.0",
+            vec!["--workspace", "-p hcl-edit@0.10.1 --precise 0.10.0"],
+            "0.10.0",
+        ),
+        // An earlier job already locked this job's target.
+        ("0.9.9", "0.9.9", "0.9.7", "0.9.9", vec![], "0.9.9"),
+        // An earlier job moved this job's entry somewhere else in its range.
+        (
+            "0.9.8",
+            "0.9.8",
+            "0.9.7",
+            "0.9.9",
+            vec!["-p hcl-edit@0.9.8 --precise 0.9.9"],
+            "0.9.9",
+        ),
+        (
+            "0.9.7",
+            "0.9.7",
+            "0.9.7",
+            "0.9.9",
+            vec!["-p hcl-edit@0.9.7 --precise 0.9.9"],
+            "0.9.9",
+        ),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let cwd = temp.path().join("tree");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(
+            cwd.join("Cargo.lock"),
+            format!("version = 4\n\n[[package]]\nname = \"hcl-edit\"\nversion = \"{locked}\"\n"),
+        )
+        .unwrap();
+        let executor = Arc::new(HeldLock {
+            newest,
+            calls: Mutex::new(Vec::new()),
+        });
+        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+            .with_executor(executor.clone());
+        let driver = temp.path().join("driver");
+        std::fs::create_dir_all(&driver).unwrap();
+        let job = Job {
+            ecosystem: Ecosystem::Cargo,
+            directory: String::new(),
+            package: Some("hcl-edit".into()),
+            current: Some(current.into()),
+            target: Some(target.into()),
+            lock_only: false,
+        };
+        runner
+            .cargo_update(&driver, &cwd, "1.99.0", &job, false)
+            .await
+            .unwrap_or_else(|e| panic!("{locked} -> {target}: {e}"));
+        let commands: Vec<_> = executor
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|args| args.iter().skip(3).cloned().collect::<Vec<_>>().join(" "))
+            .collect();
+        assert_eq!(commands, expected, "{locked} -> {target}");
+        let lock = std::fs::read_to_string(cwd.join("Cargo.lock")).unwrap();
+        assert!(lock.contains(&format!("version = \"{after}\"")), "{lock}");
+    }
+}
+
 #[tokio::test]
 async fn cargo_lock_adds_a_semver_incompatible_entry_then_pins_the_target() {
     let old = "[package]\nname='fixture'\nversion='1.0.0'\nedition='2024'\n[dependencies]\nbase64='0.22'\nother={path='other'}\n";
