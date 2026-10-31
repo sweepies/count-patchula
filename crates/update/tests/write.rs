@@ -2335,6 +2335,110 @@ async fn generated_tables_policy_text_and_markers_do_not_gain_joiners() {
     assert_eq!(body.matches("<!-- patchula-content:").count(), 1);
 }
 
+const FOREIGN: &str = "<!-- tool:summary:start -->\nA generated summary, with a [link](https://example.org/x) and @someone.\n<!-- tool:summary:end -->";
+
+/// How many times the Count patched the body of PR 1.
+fn body_patches(server: &Fake) -> usize {
+    server
+        .0
+        .lock()
+        .unwrap()
+        .requests
+        .iter()
+        .filter(|(method, path)| method == "PATCH" && path == "/repos/demo/app/pulls/1")
+        .count()
+}
+
+#[tokio::test(start_paused = true)]
+async fn text_others_wrote_in_the_description_is_left_alone_and_never_doubled() {
+    let (config, repo) = pr_config();
+    let (mut p, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    let changes = p.changes.clone();
+    let publish = |retry: bool| {
+        let (mut next, _) = make_plan("22.0.0");
+        next.changes.clone_from(&changes);
+        next.retry = retry;
+        let (github, repo, config, snapshot) = (&github, &repo, &config, &snapshot);
+        async move {
+            pr_cycle(
+                github,
+                repo,
+                config,
+                std::slice::from_mut(&mut next),
+                snapshot,
+            )
+            .await;
+        }
+    };
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut p),
+        &snapshot,
+    )
+    .await;
+    let own = server.0.lock().unwrap().prs[&1]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(own.starts_with("<!-- patchula-begin -->\n"), "{own}");
+    // Appended, prepended, and both.
+    for (before, after) in [
+        (String::new(), format!("\n\n{FOREIGN}")),
+        (format!("{FOREIGN}\n\n"), String::new()),
+        (
+            "Hello from a person.\n\n".to_owned(),
+            format!("\n\n{FOREIGN}"),
+        ),
+    ] {
+        let edited = format!("{before}{own}{after}");
+        server.0.lock().unwrap().prs.get_mut(&1).unwrap()["body"] = json!(edited);
+        // No change in content: nothing is patched, three publishes over.
+        server.0.lock().unwrap().requests.clear();
+        for _ in 0..3 {
+            publish(false).await;
+            let s = server.0.lock().unwrap();
+            assert_eq!(s.prs[&1]["body"].as_str().unwrap(), edited);
+        }
+        assert_eq!(body_patches(&server), 0);
+        // A rewrite (a re-check re-renders the body) keeps the same text, once.
+        for _ in 0..2 {
+            publish(true).await;
+            let s = server.0.lock().unwrap();
+            let now = s.prs[&1]["body"].as_str().unwrap();
+            assert_eq!(
+                now.matches("tool:summary:start").count(),
+                usize::from(edited.contains(FOREIGN)),
+                "{now}"
+            );
+            assert_eq!(
+                now.matches("Hello from a person.").count(),
+                usize::from(edited.contains("Hello"))
+            );
+            assert!(now.starts_with(&before) && now.ends_with(&after), "{now}");
+            assert_eq!(now.matches("<!-- patchula-begin -->").count(), 1);
+        }
+        // Whatever is edited back to what the Count wrote is stable again.
+        server.0.lock().unwrap().prs.get_mut(&1).unwrap()["body"] = json!(own);
+        publish(true).await;
+    }
+    // A tool rewrites its own block in place between runs: the latest text stays.
+    let rewritten =
+        format!("{own}\n\n<!-- tool:summary:start -->\nrewritten\n<!-- tool:summary:end -->");
+    server.0.lock().unwrap().prs.get_mut(&1).unwrap()["body"] = json!(rewritten);
+    publish(true).await;
+    let s = server.0.lock().unwrap();
+    assert!(
+        s.prs[&1]["body"]
+            .as_str()
+            .unwrap()
+            .ends_with("rewritten\n<!-- tool:summary:end -->")
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn rechecks_refresh_notes_but_only_patch_changed_body_hashes() {
     for origin in ["repository", "pr"] {

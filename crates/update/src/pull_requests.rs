@@ -62,30 +62,49 @@ pub fn update_key(plan: &Plan) -> String {
 fn body(pr: &Value) -> &str {
     pr["body"].as_str().unwrap_or("")
 }
-/// What another tool (a review bot's summary, say) appended after the Count's
-/// ownership marker, which is the last thing he writes.
-fn appended(body: &str) -> &str {
-    if marker(body).is_none() {
-        return "";
-    }
-    body.split_once(MARKER)
-        .and_then(|(_, rest)| rest.split_once(" -->"))
-        .map(|(_, tail)| tail)
-        .filter(|tail| !tail.trim().is_empty())
-        .unwrap_or("")
+/// Opens the part of the description the Count writes. His ownership marker
+/// closes it. Whatever else the description holds, before or after, belongs to
+/// someone else: a person, or a tool that edits descriptions.
+const START: &str = "<!-- patchula-begin -->";
+
+/// A body split by the Count's markers: the text before his section, the
+/// section itself, and the text after it. A body with no start marker (one
+/// written before it existed) is his from its first byte.
+fn regions(body: &str) -> Option<(&str, &str, &str)> {
+    marker(body)?;
+    let (before, rest) = body.split_once(MARKER)?;
+    let (json, _) = rest.split_once(" -->")?;
+    let end = before.len() + MARKER.len() + json.len() + " -->".len();
+    let start = if before.matches(START).count() == 1 {
+        before.find(START).unwrap_or(0)
+    } else {
+        0
+    };
+    Some((&body[..start], &body[start..end], &body[end..]))
 }
-/// A freshly rendered body, followed by what the PR's current body carries
-/// after the ownership marker, so a rewrite does not lose it. A body the Count
-/// left alone already has it, so it never differs.
-fn with_appended(text: String, current: &str) -> String {
-    let tail = appended(current);
-    if tail.is_empty() || text.len() + tail.len() > APPENDED_LIMIT {
+/// The Count's rendering between whatever the PR's body has right now before
+/// and after his section. Only the section of `text` is used, so a text that
+/// was itself taken from an existing body, or from an older read, never
+/// doubles or loses what others wrote, and a body he leaves alone comes out
+/// byte for byte the same. A foreign edit inside his section is overwritten.
+fn with_foreign(text: String, current: &str) -> String {
+    let (Some((_, section, _)), Some((before, _, after))) = (regions(&text), regions(current))
+    else {
         return text;
+    };
+    if before.len() + section.len() + after.len() > FOREIGN_LIMIT {
+        tracing::warn!(
+            foreign = before.len() + after.len(),
+            "text others wrote in a PR body no longer fits beside the Count's own; dropped"
+        );
+        return format!("{section}\n");
     }
-    format!("{}{tail}", text.trim_end_matches('\n'))
+    format!("{before}{section}{after}")
 }
-/// GitHub's pull request body limit, with room to spare.
-const APPENDED_LIMIT: usize = 65_000;
+/// GitHub's pull request body limit (65,536 characters), with room to spare.
+/// The Count's own section stays within `BODY_LIMIT`, so more than 30,000
+/// bytes of other people's text fit beside it.
+const FOREIGN_LIMIT: usize = 65_000;
 pub(crate) fn body_hash(text: &str) -> String {
     // GitHub may return CRLF for a body published with LF. Compare the same
     // content hash as write receipts, without treating transport newlines as edits.
@@ -388,7 +407,7 @@ impl Lifecycle {
             if current["commit"]["sha"] != base {
                 return Err("base moved before obsolete PR closure; rerun".into());
             }
-            let mut text = truncate(body(&fresh), BODY_LIMIT - 100);
+            let mut text = truncate(body(&fresh), FOREIGN_LIMIT - 100);
             text.push_str("\n\n");
             text.push_str(OBSOLETE);
             client
@@ -629,7 +648,7 @@ impl Lifecycle {
                 )
                 .await
                 .map_err(|e| e.to_string())?;
-            let mut text = truncate(body(&fresh), BODY_LIMIT - 100);
+            let mut text = truncate(body(&fresh), FOREIGN_LIMIT - 100);
             text.push_str("\n\n");
             text.push_str(crate::batch::BATCHED);
             let closed = client
@@ -697,7 +716,6 @@ impl Lifecycle {
             })
             .cloned();
         let text = self.render(sources, plan, existing.as_ref()).await;
-        let text = with_appended(text, existing.as_ref().map_or("", body));
         let title = truncate(&plan.action.message.replace(['\n', '\r'], " "), 250);
         let path = format!("repos/{}/pulls", self.repo);
         let (mut pr, status) = if let Some(pr) = existing {
@@ -749,6 +767,8 @@ impl Lifecycle {
                 tokio::time::sleep(std::time::Duration::from_millis(100 << attempt)).await;
                 attempt += 1;
             };
+            // Keep what others wrote as of this read, not the inventory's.
+            let text = with_foreign(text, body(&fresh));
             if fresh["title"] == title
                 && body_hash(body(&fresh)) == body_hash(&text)
                 && fresh["base"]["ref"] == self.base
@@ -1066,8 +1086,8 @@ impl Lifecycle {
         text.push_str(MARKER);
         text.push_str(&serde_json::to_string(&m).expect("marker"));
         text.push_str(" -->\n");
-        debug_assert!(text.len() <= BODY_LIMIT);
-        text
+        debug_assert!(text.len() + START.len() < BODY_LIMIT);
+        format!("{START}\n{text}")
     }
 }
 /// One caution per tooling warning on this PR, ahead of everything else.
@@ -1723,35 +1743,94 @@ mod tooling_tests {
 }
 
 #[cfg(test)]
-mod appended_tests {
-    use super::{MARKER, appended, body_hash, with_appended};
+mod foreign_text_tests {
+    use super::{FOREIGN_LIMIT, MARKER, START, body_hash, regions, with_foreign};
 
-    fn owned(rendered: &str) -> String {
+    /// What the Count writes: his section, opened by the start marker and
+    /// closed by the ownership marker.
+    fn section(table: &str) -> String {
         format!(
-            "{rendered}{MARKER}{{\"version\":1,\"identity\":\"{}\",\"update\":\"{}\"}} -->\n",
+            "{START}\n{table}{MARKER}{{\"version\":1,\"identity\":\"{}\",\"update\":\"{}\"}} -->\n",
             "a".repeat(64),
             "b".repeat(64)
         )
     }
-    const CUBIC: &str = "\n\n<!-- This is an auto-generated description by cubic. -->\n<a href=\"https://www.cubic.dev/pr/o/r/pull/1\">Review</a>\n<!-- End of auto-generated description by cubic. -->";
+    /// A block some other tool or person added to the description.
+    const BLOCK: &str = "<!-- tool:summary:start -->\nA generated summary, with a [link](https://example.org/x) and @someone.\n<!-- tool:summary:end -->";
 
     #[test]
-    fn text_a_bot_appends_after_the_marker_survives_a_rewrite_and_a_second_one_is_stable() {
-        let current = format!("{}{CUBIC}", owned("old table\n"));
-        assert!(appended(&current).contains("auto-generated description by cubic"));
-        let rewritten = with_appended(owned("new table\n"), &current);
-        assert!(rewritten.starts_with("new table\n"), "{rewritten}");
-        assert!(
-            rewritten.ends_with("End of auto-generated description by cubic. -->"),
-            "{rewritten}"
+    fn the_section_is_what_the_counts_markers_enclose() {
+        let body = format!("Intro by a person.\n\n{}\n\n{BLOCK}", section("table\n"));
+        let (before, middle, after) = regions(&body).unwrap();
+        assert_eq!(before, "Intro by a person.\n\n");
+        assert_eq!(middle, section("table\n").trim_end());
+        assert_eq!(after, format!("\n\n\n{BLOCK}"));
+        // An older body has no start marker: all of it up to his marker is his.
+        let legacy = format!(
+            "table\n{MARKER}{{\"version\":1,\"identity\":\"{}\",\"update\":\"{}\"}} -->\nrest",
+            "a".repeat(64),
+            "b".repeat(64)
         );
-        assert_eq!(rewritten.matches(MARKER).count(), 1);
-        // The next run renders the same and finds the same body.
-        let again = with_appended(owned("new table\n"), &rewritten);
-        assert_eq!(body_hash(&again), body_hash(&rewritten));
-        // A body with nothing appended is what the Count rendered.
-        assert_eq!(with_appended(owned("t\n"), &owned("old\n")), owned("t\n"));
-        // Text before a missing or forged marker is not trusted as an appendix.
-        assert_eq!(appended("no marker here\n\nbot text"), "");
+        assert_eq!(regions(&legacy).unwrap().0, "");
+        assert!(regions("no markers at all").is_none());
+    }
+
+    #[test]
+    fn text_before_and_after_the_section_survives_rewrites_exactly_once() {
+        for current in [
+            format!("{}{BLOCK}", section("old\n")),
+            format!("{BLOCK}\n\n{}", section("old\n")),
+            format!("{BLOCK}\n\n{}\n\n{BLOCK} again", section("old\n")),
+        ] {
+            let rewritten = with_foreign(section("new\n"), &current);
+            assert!(
+                rewritten.contains("new\n") && !rewritten.contains("old\n"),
+                "{rewritten}"
+            );
+            assert_eq!(rewritten.matches(START).count(), 1);
+            assert_eq!(rewritten.matches(MARKER).count(), 1);
+            assert_eq!(
+                rewritten.matches("tool:summary:start").count(),
+                current.matches("tool:summary:start").count()
+            );
+            // Rendering again over the result is a fixed point.
+            assert_eq!(with_foreign(section("new\n"), &rewritten), rewritten);
+            // So is taking the existing body as the text, as an unchanged publish does.
+            assert_eq!(with_foreign(current.clone(), &current), current);
+            assert_eq!(
+                body_hash(&with_foreign(current.clone(), &current)),
+                body_hash(&current)
+            );
+        }
+    }
+
+    #[test]
+    fn what_others_wrote_comes_from_the_latest_read_not_an_older_one() {
+        let stale = format!("{}{BLOCK}", section("t\n"));
+        // The block was rewritten in place, and another was prepended, since.
+        let fresh = format!(
+            "Added later.\n\n{}<!-- tool:summary:start -->\nrewritten\n<!-- tool:summary:end -->",
+            section("t\n")
+        );
+        let merged = with_foreign(stale, &fresh);
+        assert_eq!(merged, fresh);
+    }
+
+    #[test]
+    fn an_edit_inside_the_section_loses_to_the_counts_rewrite() {
+        let edited = section("table\nsomeone typed here\n");
+        let merged = with_foreign(section("table\n"), &format!("{edited}{BLOCK}"));
+        assert!(!merged.contains("someone typed here"), "{merged}");
+        assert!(merged.ends_with(BLOCK));
+    }
+
+    #[test]
+    fn a_large_amount_of_foreign_text_fits_and_an_excessive_amount_is_dropped() {
+        let big = format!("\n\n{}", "x".repeat(30_000));
+        let kept = with_foreign(section("t\n"), &format!("{}{big}", section("o\n")));
+        assert!(kept.ends_with(&big));
+        let huge = format!("\n\n{}", "x".repeat(FOREIGN_LIMIT));
+        let dropped = with_foreign(section("t\n"), &format!("{}{huge}", section("o\n")));
+        assert_eq!(dropped, format!("{}\n", section("t\n").trim_end()));
     }
 }

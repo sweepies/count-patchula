@@ -61,13 +61,31 @@ any `bodyNotes` you configured, and two checkboxes:
 - add to the batch, which moves the update into the [batch PR](/guide/batch/).
 
 The Count reads hidden markers, not visible text, so editing the wording does
-not confuse him. Text another tool, such as a review bot, appends after his
-ownership marker is kept: a body he leaves alone keeps it, and one he rewrites
-carries it over.
+not confuse him. Labels come from `labels`, `dependencies` by default.
 
-Nothing third-party in a body can mention anyone: advisory summaries, package
-names, titles and release notes get a zero-width joiner after `@`, and links to
-GitHub issues go through `redirect.github.com`. Labels come from `labels`, `dependencies` by default.
+### What the Count owns in the description
+
+The Count owns the part of the description between his start marker
+(`<!-- patchula-begin -->`, the first line he writes) and his ownership marker
+(`<!-- patchula:… -->`, the last). The rest of the description is left alone: a
+person's note above it, or a block that a summary or linking tool added or
+rewrote in place, before or after. Whenever he writes the body he keeps that
+text exactly as it is on GitHub at that moment. When nothing he renders has
+changed he doesn't write the body at all, whatever else it holds, so repeated
+runs leave it as it is.
+
+If someone or something edits text *inside* his part, his next rewrite wins for
+that part. Descriptions written before the start marker existed are his from
+their first byte, once.
+
+The body limit is GitHub's 65,536 characters. His part stays under 32,000
+bytes, so about 30,000 bytes of other text fit beside it. Past 65,000 bytes in
+all, the Count drops the text around his part rather than fail.
+
+Advisory summaries, batch item titles and release-note prose are made inert:
+mentions get a zero-width joiner, and links to GitHub issues go through
+`redirect.github.com`. Package names in the table and your `bodyNotes` stay
+exactly as they are.
 
 ## Closing a PR
 
