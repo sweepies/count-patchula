@@ -104,21 +104,26 @@ warnings, so a file that failed to parse never makes its updates look obsolete.
 
 ## Limits and holds
 
-`concurrent` caps open PRs, at 10 by default, and `perHour` caps new ones, with
-no cap by default. An update beyond a limit waits for a slot, and one outside a
-schedule window or still inside the release-age wait waits until that hold
-clears. The [dashboard](/guide/dashboard/) shows each held update with the
-reason and a box to create it now; without the dashboard the updates wait
-silently. A first run on a repository with many outdated dependencies opens ten
-ordinary PRs and lists the rest; as those merge or close, the next runs open
-more.
+`concurrent` caps open PRs, at 10 by default, and `perHour` caps PRs created in
+the last hour, with no cap by default. An update that is held waits for the
+condition that holds it, and no other:
 
-Security fixes skip both limits: a security PR is never held for a slot, and
-`concurrent` does not stop it, so the total can pass 10. It still counts toward
-`concurrent` and `perHour`, though, so a security PR can use up the slot or the
-hour that an ordinary update would have taken. `security.apply` can still hold a
-fix by other means, such as `active`, `waitHours` or `windows`.
-`concurrent = null` removes the cap.
+- a limit: until a slot is free, when a PR merges or closes or the hour moves on;
+- a schedule window: until the next window opens;
+- the release-age wait: until the release is old enough.
+
+The [dashboard](/guide/dashboard/) shows each held update with its reason and a
+box to create it now; without the dashboard the updates wait silently. A first
+run on a repository with many outdated dependencies opens ten ordinary PRs and
+lists the rest, and later runs open more as slots free up.
+
+A security fix skips the `concurrent` and `perHour` checks: it is opened even
+when ten PRs are open or the hourly cap is reached, so the total can pass 10.
+Skipping the check does not take it out of the count. Once open it is one of the
+open PRs for `concurrent`, and one of the PRs created this hour for `perHour`,
+so it can leave less room for the ordinary updates that follow.
+`security.apply` can still hold a fix by other means, such as `active`,
+`waitHours` or `windows`. `concurrent = null` removes the cap.
 
 ## Repeat runs
 

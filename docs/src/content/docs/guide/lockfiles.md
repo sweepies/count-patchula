@@ -75,9 +75,13 @@ with `--with-all-dependencies --minimal-changes`.
   keeps the locked version and writes the original constraint back into the
   lock. The manifest in the PR is untouched.
 - The version the update starts from is the one the lockfile records for the
-  manifest's own dependency (for Cargo, the dependency edge of the manifest's
-  package, not another version of the same crate locked for a dependent), and the
-  new lock must record the target or nothing is published.
+  manifest's own dependency (for Cargo, the crates.io edge of the manifest's
+  package, or of every member for a workspace root; not another version of the
+  same crate locked for a dependent, a path dependency outside the workspace or
+  a git dependency), and the
+  new lock must record the target or nothing is published. A workspace root's
+  members are read from the manifests in the scan; with none of them there, its
+  dependencies have no locked version and get no lock-only update.
 - Without a committed lockfile there is nothing to change, so the release is
   not an update. npm and Bun have no such command, so they only get this when
   the scheduled refresh below runs.

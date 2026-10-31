@@ -1,5 +1,6 @@
 use crate::*;
 use patchula_versioning::{Ecosystem, Versioning};
+use std::collections::BTreeSet;
 use toml_edit::{Document, Item};
 
 pub(super) fn documents(files: &Files) -> Result<BTreeMap<&str, Document<&str>>, String> {
@@ -66,46 +67,22 @@ pub(super) fn extract(
         && let Some(packages) = lock.get("package").and_then(Item::as_array_of_tables)
     {
         // The lock records what a package depends on. Only the dependency
-        // edges of this manifest's own package (or, for a virtual workspace
-        // root, of every member) say which locked version is the declaration's:
-        // the same crate may also be locked for a transitive dependent, at
-        // another version a wide requirement would match too.
-        let package = doc
-            .get("package")
-            .and_then(|p| p.get("name"))
-            .and_then(Item::as_str);
+        // edges of the packages that declare this manifest's dependencies say
+        // which locked version is the declaration's: the same crate may also be
+        // locked for a transitive dependent, or a path dependency outside the
+        // workspace, at another version a wide requirement would match too.
+        let declaring = declaring_packages(files, doc, base);
         let members: Vec<_> = packages
             .iter()
             .filter(|p| p.get("source").is_none())
-            .filter(|p| package.is_none_or(|name| named(p) == Some(name)))
+            .filter(|p| named(p).is_some_and(|name| declaring.contains(name)))
             .collect();
         for dep in &mut out {
             let mut candidates: Vec<_> = members
                 .iter()
                 .filter_map(|member| member.get("dependencies")?.as_array())
                 .flatten()
-                .filter_map(|edge| {
-                    // `name`, `name version` or `name version (source)`.
-                    let mut words = edge.as_str()?.split_whitespace();
-                    if words.next()? != dep.package {
-                        return None;
-                    }
-                    match words.next() {
-                        Some(version) => Some(version),
-                        None => packages
-                            .iter()
-                            .find(|p| named(p) == Some(&dep.package) && registry(p))?
-                            .get("version")?
-                            .as_str(),
-                    }
-                })
-                .filter(|version| {
-                    packages.iter().any(|p| {
-                        named(p) == Some(&dep.package)
-                            && registry(p)
-                            && p.get("version").and_then(Item::as_str) == Some(version)
-                    })
-                })
+                .filter_map(|edge| registry_edge(packages, edge.as_str()?, &dep.package))
                 .filter_map(|v| Some((Ecosystem::Cargo.parse(v).ok()?, v)))
                 .filter(|(v, _)| Ecosystem::Cargo.matches(&dep.current, v).unwrap_or(false))
                 .collect();
@@ -114,6 +91,90 @@ pub(super) fn extract(
         }
     }
     Ok(out)
+}
+/// The names of the lock packages whose dependency edges belong to this
+/// manifest's declarations: its own package, and for a workspace root also
+/// every member. A path dependency that is not a member is not one of them.
+fn declaring_packages<'a>(
+    files: &'a BTreeMap<&str, Document<&str>>,
+    doc: &'a Document<&str>,
+    base: &str,
+) -> BTreeSet<&'a str> {
+    let package = |doc: &'a Document<&str>| {
+        doc.get("package")
+            .and_then(|p| p.get("name"))
+            .and_then(Item::as_str)
+    };
+    let mut names: BTreeSet<&str> = package(doc).into_iter().collect();
+    let Some(workspace) = doc.get("workspace") else {
+        return names;
+    };
+    let patterns = |key: &str| -> Vec<&str> {
+        workspace
+            .get(key)
+            .and_then(Item::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_str())
+            .collect()
+    };
+    let (members, excluded) = (patterns("members"), patterns("exclude"));
+    for (path, member) in files {
+        let Some(directory) = path
+            .strip_prefix(base)
+            .and_then(|rest| rest.strip_suffix("/Cargo.toml"))
+        else {
+            continue;
+        };
+        if members.iter().any(|pattern| glob(pattern, directory))
+            && !excluded.iter().any(|pattern| glob(pattern, directory))
+            && let Some(name) = package(member)
+        {
+            names.insert(name);
+        }
+    }
+    names
+}
+/// Cargo's member globs: `*` and `?` inside a path segment.
+fn glob(pattern: &str, path: &str) -> bool {
+    fn segment(pattern: &[u8], text: &[u8]) -> bool {
+        match pattern.split_first() {
+            None => text.is_empty(),
+            Some((b'*', rest)) => (0..=text.len()).any(|n| segment(rest, &text[n..])),
+            Some((b'?', rest)) => !text.is_empty() && segment(rest, &text[1..]),
+            Some((c, rest)) => text.first() == Some(c) && segment(rest, &text[1..]),
+        }
+    }
+    let pattern = pattern.trim_start_matches("./").trim_end_matches('/');
+    let (pattern, path): (Vec<_>, Vec<_>) =
+        (pattern.split('/').collect(), path.split('/').collect());
+    pattern.len() == path.len()
+        && pattern
+            .iter()
+            .zip(&path)
+            .all(|(p, t)| segment(p.as_bytes(), t.as_bytes()))
+}
+/// The locked version a dependency edge names, when it is a crates.io release
+/// of `package`. An edge is `name`, `name version` or `name version (source)`;
+/// the source is kept, because a git dependency can be the same crate at the
+/// same version.
+fn registry_edge<'a>(
+    packages: &'a toml_edit::ArrayOfTables,
+    edge: &str,
+    package: &str,
+) -> Option<&'a str> {
+    let mut words = edge.split_whitespace();
+    if words.next()? != package {
+        return None;
+    }
+    let version = words.next();
+    let source = words.next().map(|s| s.trim_matches(['(', ')']));
+    packages
+        .iter()
+        .filter(|p| named(p) == Some(package) && registry(p))
+        .filter(|p| version.is_none_or(|v| p.get("version").and_then(Item::as_str) == Some(v)))
+        .filter(|p| source.is_none_or(|s| p.get("source").and_then(Item::as_str) == Some(s)))
+        .find_map(|p| p.get("version")?.as_str())
 }
 /// A lock entry's crate name.
 fn named(p: &toml_edit::Table) -> Option<&str> {
