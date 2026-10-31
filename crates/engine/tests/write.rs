@@ -29,7 +29,7 @@ struct Fake {
     merge_refused: std::sync::atomic::AtomicBool,
     deletion_race: std::sync::atomic::AtomicBool,
     /// GitHub refuses native auto-merge for a PR it finds mergeable already.
-    auto_merge_clean: std::sync::atomic::AtomicBool,
+    auto_merge_refusal: Mutex<Option<String>>,
 }
 
 struct Rotating(std::sync::atomic::AtomicUsize);
@@ -104,7 +104,7 @@ impl Fake {
         ]),lock,lock_name:"bun.lockb",writes:Default::default(),prs:Default::default(),issues:Default::default(),requests:Default::default(),latency:Default::default(),close_on_read:Default::default(),catalog:Mutex::new(json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}}})),fail_lookup:Default::default(),
         merge_settings: Mutex::new(json!({"id":"repo-id","autoMergeAllowed":false,"squashMergeAllowed":true,"mergeCommitAllowed":true,"rebaseMergeAllowed":true,"deleteBranchOnMerge":false})),
         checks: Mutex::new(vec![json!({"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"})]),
-        change_head_on_checks: Default::default(), merge_refused: Default::default(), deletion_race: Default::default(), auto_merge_clean: Default::default(),
+        change_head_on_checks: Default::default(), merge_refused: Default::default(), deletion_race: Default::default(), auto_merge_refusal: Default::default(),
     }
     }
     fn tree(&self) -> Value {
@@ -207,15 +207,12 @@ impl Transport for Fake {
                     assert_eq!(body["variables"]["input"]["expectedHeadOid"], "new-commit");
                 }
                 self.writes.lock().unwrap().push((path.into(), body));
-                let refused = enabled
-                    && self
-                        .auto_merge_clean
-                        .load(std::sync::atomic::Ordering::Relaxed);
-                if refused {
+                let refusal = self.auto_merge_refusal.lock().unwrap().clone();
+                if let Some(refusal) = refusal.filter(|_| enabled) {
                     return Box::pin(std::future::ready(Ok(Response {
                         status: reqwest::StatusCode::OK,
                         headers: Default::default(),
-                        body: serde_json::to_vec(&json!({"data":{"enablePullRequestAutoMerge":null},"errors":[{"type":"UNPROCESSABLE","message":"Pull request Pull request is in clean status"}]})).unwrap(),
+                        body: serde_json::to_vec(&json!({"data":{"enablePullRequestAutoMerge":null},"errors":[{"type":"UNPROCESSABLE","message":refusal}]})).unwrap(),
                     })));
                 }
                 for pr in self.prs.lock().unwrap().iter_mut() {
@@ -740,18 +737,29 @@ async fn an_advertised_server_is_hidden_in_the_pr_and_the_dashboard() {
 struct FailTools;
 
 /// GitHub offers native auto-merge only on a PR that cannot be merged yet, so
-/// a repository without required checks answers "is in clean status". That is
-/// not an error, and no licence to merge: the Count's own merge takes over on a
-/// later run, behind the same check gate.
+/// a PR whose merge state is CLEAN, UNSTABLE (non-required checks failing or
+/// pending) or HAS_HOOKS is refused with "is in <state> status". That is not an
+/// error, and no licence to merge: the Count's own merge takes over on a later
+/// run, behind the same state and check gate. Other states stay errors.
 #[tokio::test(start_paused = true)]
-async fn a_pr_github_already_finds_clean_is_merged_by_the_count_only_after_checks_pass() {
-    for checks_pass in [true, false] {
+async fn a_pr_github_finds_mergeable_now_is_merged_by_the_count_only_when_clean_and_green() {
+    // (state in the refusal, state of the PR on the next run, checks, merges)
+    for (refusal, state, checks, merges) in [
+        ("clean", "clean", "none", false),
+        ("clean", "clean", "pass", true),
+        ("unstable", "unstable", "fail", false),
+        ("unstable", "clean", "pass", true),
+        ("has_hooks", "has_hooks", "pass", false),
+        ("dirty", "dirty", "pass", false),
+    ] {
         let fake = Fake::new(false);
         *fake.merge_settings.lock().unwrap() = json!({"id":"repo-id","autoMergeAllowed":true,"squashMergeAllowed":true,"mergeCommitAllowed":true,"rebaseMergeAllowed":true,"deleteBranchOnMerge":false});
-        fake.auto_merge_clean
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-        if !checks_pass {
-            fake.checks.lock().unwrap().clear();
+        *fake.auto_merge_refusal.lock().unwrap() =
+            Some(format!("Pull request Pull request is in {refusal} status"));
+        match checks {
+            "none" => fake.checks.lock().unwrap().clear(),
+            "fail" => fake.checks.lock().unwrap()[0]["conclusion"] = json!("FAILURE"),
+            _ => {}
         }
         let fake = Arc::new(fake);
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
@@ -761,22 +769,49 @@ async fn a_pr_github_already_finds_clean_is_merged_by_the_count_only_after_check
         let mut config = checkbox_config();
         config.defaults.merge = true;
         let now = "2026-10-15T12:00:00Z".parse().unwrap();
-        let first = checkbox_run(&engine, &config, now).await;
-        let branch = &first.actions.unwrap().branches[0];
-        assert_eq!(branch.status, ActionStatus::Created, "{branch:?}");
-        let enables = |fake: &Fake| {
-            fake.writes
-                .lock()
-                .unwrap()
+        let first = engine
+            .run_at(
+                Options {
+                    repositories: vec!["demo/sandbox".into()],
+                    config: Some(config.clone()),
+                    ..Default::default()
+                },
+                false,
+                false,
+                now,
+            )
+            .await
+            .unwrap();
+        let actions = first.actions.unwrap();
+        // The refusal of a state that is not mergeable now is still an error.
+        assert_eq!(
+            actions
+                .pull_requests
                 .iter()
-                .filter(|(_, b)| {
-                    b["query"]
-                        .as_str()
-                        .is_some_and(|q| q.contains("enablePullRequestAutoMerge"))
-                })
-                .count()
-        };
-        assert_eq!(enables(&fake), 1, "GitHub is asked once");
+                .any(|a| a.status == ActionStatus::Error),
+            refusal == "dirty",
+            "{refusal}: {actions:?}"
+        );
+        if refusal == "dirty" {
+            continue;
+        }
+        assert_eq!(
+            actions.branches[0].status,
+            ActionStatus::Created,
+            "{refusal}"
+        );
+        let enables = fake
+            .writes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, b)| {
+                b["query"]
+                    .as_str()
+                    .is_some_and(|q| q.contains("enablePullRequestAutoMerge"))
+            })
+            .count();
+        assert_eq!(enables, 1, "{refusal}: GitHub is asked once");
         assert!(fake.prs.lock().unwrap()[0]["auto_merge"].is_null());
         assert!(
             !fake
@@ -786,8 +821,9 @@ async fn a_pr_github_already_finds_clean_is_merged_by_the_count_only_after_check
                 .iter()
                 .any(|(_, path, body)| path.ends_with("/merge")
                     || body["query"] == patchula_update::automerge::CHECKS_QUERY),
-            "a new PR waits for a later run"
+            "{refusal}: a new PR waits for a later run"
         );
+        fake.prs.lock().unwrap()[0]["mergeable_state"] = json!(state);
         fake.requests.lock().unwrap().clear();
         let report = engine
             .run_at(
@@ -805,12 +841,12 @@ async fn a_pr_github_already_finds_clean_is_merged_by_the_count_only_after_check
         let actions = &report.actions.as_ref().unwrap().pull_requests;
         assert!(
             actions.iter().all(|a| a.status != ActionStatus::Error),
-            "{actions:?}"
+            "{refusal}: {actions:?}"
         );
         assert_eq!(
             actions.iter().any(|a| a.status == ActionStatus::Merged),
-            checks_pass,
-            "{actions:?}"
+            merges,
+            "{refusal}/{state}/{checks}: {actions:?}"
         );
         let merged = fake
             .requests
@@ -818,7 +854,7 @@ async fn a_pr_github_already_finds_clean_is_merged_by_the_count_only_after_check
             .unwrap()
             .iter()
             .any(|(_, path, _)| path.ends_with("/merge"));
-        assert_eq!(merged, checks_pass);
+        assert_eq!(merged, merges, "{refusal}/{state}/{checks}");
     }
 }
 

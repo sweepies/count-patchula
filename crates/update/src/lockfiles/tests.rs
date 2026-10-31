@@ -1426,7 +1426,7 @@ impl Executor for CargoFixture {
                     ),
                 )
                 .unwrap(),
-                ["-p", "base64@0.23.1", "--precise", "0.23.0"] => {
+                ["-p", "registry+https://github.com/rust-lang/crates.io-index#base64@0.23.1", "--precise", "0.23.0"] => {
                     std::fs::write(&lock, text.replace("0.23.1", "0.23.0")).unwrap();
                 }
                 _ => {
@@ -1435,6 +1435,153 @@ impl Executor for CargoFixture {
             }
             Ok(Vec::new())
         })
+    }
+}
+
+/// Cargo as far as `cargo update` goes here: the lock is one package at one
+/// version, `--workspace` locks `newest`, and `-p` names an entry the lock
+/// still holds or fails as cargo does.
+struct HeldLock {
+    newest: &'static str,
+    calls: Mutex<Vec<Vec<String>>>,
+}
+impl Executor for HeldLock {
+    fn run(
+        &self,
+        spec: CommandSpec,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+        Box::pin(async move {
+            let at = spec.args.iter().position(|arg| arg == "cargo").unwrap();
+            let args = spec.args[at + 1..].to_vec();
+            self.calls.lock().unwrap().push(args.clone());
+            let manifest =
+                Path::new(&args[args.iter().position(|a| a == "--manifest-path").unwrap() + 1]);
+            let path = manifest.with_file_name("Cargo.lock");
+            let lock = std::fs::read_to_string(&path).unwrap();
+            let held = lock
+                .lines()
+                .find_map(|l| l.strip_prefix("version = \""))
+                .and_then(|v| v.strip_suffix('"'))
+                .unwrap()
+                .to_owned();
+            match args
+                .iter()
+                .skip(3)
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .as_slice()
+            {
+                ["--workspace"] => std::fs::write(&path, lock.replace(&held, self.newest)).unwrap(),
+                ["-p", spec, "--precise", target] => {
+                    if *spec != format!("hcl-edit@{held}")
+                        && *spec
+                            != format!(
+                                "registry+https://github.com/rust-lang/crates.io-index#hcl-edit@{held}"
+                            )
+                    {
+                        return Err(format!(
+                            "error: package ID specification `{spec}` did not match any packages\nhelp: there are similar package ID specifications:\n\n  hcl-edit@{held}"
+                        ));
+                    }
+                    std::fs::write(&path, lock.replace(&held, target)).unwrap();
+                }
+                other => panic!("unexpected {other:?}"),
+            }
+            Ok(Vec::new())
+        })
+    }
+}
+
+/// Each Cargo job reads the lock as it stands: an entry another job or the
+/// workspace update already moved is addressed by what it is now, and a target
+/// already locked needs no command.
+#[tokio::test]
+async fn cargo_jobs_address_the_lock_as_it_stands() {
+    // (locked, newest after --workspace, current, target, commands, locked after)
+    for (locked, newest, current, target, expected, after) in [
+        // The workspace update moved 0.9.7 to 0.10.0, the target itself.
+        (
+            "0.9.7",
+            "0.10.0",
+            "0.9.7",
+            "0.10.0",
+            vec!["--workspace"],
+            "0.10.0",
+        ),
+        // ... or past it, and the entry it left is the one to move back.
+        (
+            "0.9.7",
+            "0.10.1",
+            "0.9.7",
+            "0.10.0",
+            vec![
+                "--workspace",
+                "-p registry+https://github.com/rust-lang/crates.io-index#hcl-edit@0.10.1 --precise 0.10.0",
+            ],
+            "0.10.0",
+        ),
+        // An earlier job already locked this job's target.
+        ("0.9.9", "0.9.9", "0.9.7", "0.9.9", vec![], "0.9.9"),
+        // An earlier job moved this job's entry somewhere else in its range.
+        (
+            "0.9.8",
+            "0.9.8",
+            "0.9.7",
+            "0.9.9",
+            vec![
+                "-p registry+https://github.com/rust-lang/crates.io-index#hcl-edit@0.9.8 --precise 0.9.9",
+            ],
+            "0.9.9",
+        ),
+        (
+            "0.9.7",
+            "0.9.7",
+            "0.9.7",
+            "0.9.9",
+            vec![
+                "-p registry+https://github.com/rust-lang/crates.io-index#hcl-edit@0.9.7 --precise 0.9.9",
+            ],
+            "0.9.9",
+        ),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let cwd = temp.path().join("tree");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(
+            cwd.join("Cargo.lock"),
+            format!("version = 4\n\n[[package]]\nname = \"hcl-edit\"\nversion = \"{locked}\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n"),
+        )
+        .unwrap();
+        let executor = Arc::new(HeldLock {
+            newest,
+            calls: Mutex::new(Vec::new()),
+        });
+        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+            .with_executor(executor.clone());
+        let driver = temp.path().join("driver");
+        std::fs::create_dir_all(&driver).unwrap();
+        let job = Job {
+            ecosystem: Ecosystem::Cargo,
+            directory: String::new(),
+            package: Some("hcl-edit".into()),
+            current: Some(current.into()),
+            target: Some(target.into()),
+            lock_only: false,
+        };
+        runner
+            .cargo_update(&driver, &cwd, "1.99.0", &job, false)
+            .await
+            .unwrap_or_else(|e| panic!("{locked} -> {target}: {e}"));
+        let commands: Vec<_> = executor
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|args| args.iter().skip(3).cloned().collect::<Vec<_>>().join(" "))
+            .collect();
+        assert_eq!(commands, expected, "{locked} -> {target}");
+        let lock = std::fs::read_to_string(cwd.join("Cargo.lock")).unwrap();
+        assert!(lock.contains(&format!("version = \"{after}\"")), "{lock}");
     }
 }
 
@@ -1498,7 +1645,7 @@ async fn cargo_lock_adds_a_semver_incompatible_entry_then_pins_the_target() {
     assert!(calls[0].ends_with(&["--workspace".to_string()]));
     assert!(calls[1].ends_with(&[
         "-p".into(),
-        "base64@0.23.1".into(),
+        "registry+https://github.com/rust-lang/crates.io-index#base64@0.23.1".into(),
         "--precise".into(),
         "0.23.0".into()
     ]));
@@ -3161,6 +3308,148 @@ fn a_lock_resolves_a_target_that_names_no_build_metadata() {
             .unwrap_err()
             .contains("did not resolve zstd-sys")
     );
+    // A Git copy of the name at the target is another package: the crates.io
+    // entry still has to be there.
+    plan.changes[0].version = Some("2.1.2".into());
+    let both = |registry: &str| {
+        BTreeMap::from([
+            ("Cargo.toml".to_string(), manifest.to_string()),
+            (
+                "Cargo.lock".to_string(),
+                format!(
+                    "{}\n[[package]]\nname = \"zstd-sys\"\nversion = \"2.1.2\"\nsource = \"git+https://example.invalid/zstd-sys?branch=main#abc\"\n",
+                    lock(registry)
+                ),
+            ),
+        ])
+    };
+    let error = validate_targets(&plan, &config, &both("2.1.1+zstd.1.5.7")).unwrap_err();
+    assert!(error.contains("did not resolve zstd-sys"), "{error}");
+    validate_targets(&plan, &config, &both("2.1.2+zstd.1.5.7")).unwrap();
+}
+
+const CRATES_IO: &str = "registry+https://github.com/rust-lang/crates.io-index";
+const GIT_COPY: &str = "git+https://example.invalid/hcl-edit?branch=main#abc";
+
+/// Cargo as far as `cargo update -p … --precise` goes with several sources:
+/// a bare `name@version` that matches more than one entry is ambiguous, and
+/// `source#name@version` names one.
+struct SourcedLock {
+    calls: Mutex<Vec<String>>,
+}
+impl Executor for SourcedLock {
+    fn run(
+        &self,
+        spec: CommandSpec,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+        Box::pin(async move {
+            let at = spec.args.iter().position(|arg| arg == "cargo").unwrap();
+            let args = spec.args[at + 1..].to_vec();
+            let manifest =
+                Path::new(&args[args.iter().position(|a| a == "--manifest-path").unwrap() + 1]);
+            let path = manifest.with_file_name("Cargo.lock");
+            let words: Vec<&str> = args.iter().map(String::as_str).collect();
+            let [.., "-p", id, "--precise", target] = words.as_slice() else {
+                panic!("unexpected {args:?}");
+            };
+            self.calls.lock().unwrap().push((*id).to_owned());
+            let mut lock: toml_edit::DocumentMut =
+                std::fs::read_to_string(&path).unwrap().parse().unwrap();
+            let (source, rest) = id
+                .split_once('#')
+                .map_or((None, *id), |(s, r)| (Some(s), r));
+            let (name, version) = rest.split_once('@').unwrap();
+            let packages = lock["package"].as_array_of_tables_mut().unwrap();
+            let matching: Vec<_> = packages
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| {
+                    p["name"].as_str() == Some(name)
+                        && p["version"].as_str() == Some(version)
+                        && source.is_none_or(|s| p["source"].as_str() == Some(s))
+                })
+                .map(|(n, _)| n)
+                .collect();
+            match matching.as_slice() {
+                [] => {
+                    return Err(format!(
+                        "package ID specification `{id}` did not match any packages"
+                    ));
+                }
+                [n] => packages.get_mut(*n).unwrap()["version"] = toml_edit::value(*target),
+                _ => {
+                    return Err(format!(
+                        "There are multiple `{name}` packages in your project, and the specification `{id}` is ambiguous."
+                    ));
+                }
+            }
+            std::fs::write(&path, lock.to_string()).unwrap();
+            Ok(Vec::new())
+        })
+    }
+}
+
+/// A Git or other-registry package of the same name is not the crates.io
+/// package a job moves: at the target's version it must not make the job look
+/// done, in the target's range it must not be moved, and at the job's own
+/// version it must not make the spec ambiguous.
+#[tokio::test]
+async fn cargo_jobs_move_only_the_crates_io_entry_of_their_package() {
+    // (git copy's version, the registry entry's version, the registry's id)
+    for (git, registry) in [("0.9.9", "0.9.7"), ("0.9.8", "0.9.7"), ("0.9.7", "0.9.7")] {
+        let temp = tempfile::tempdir().unwrap();
+        let cwd = temp.path().join("tree");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let entry = |version: &str, source: &str| {
+            format!(
+                "[[package]]\nname = \"hcl-edit\"\nversion = \"{version}\"\nsource = \"{source}\"\n\n"
+            )
+        };
+        std::fs::write(
+            cwd.join("Cargo.lock"),
+            format!(
+                "version = 4\n\n{}{}",
+                entry(git, GIT_COPY),
+                entry(registry, CRATES_IO)
+            ),
+        )
+        .unwrap();
+        let executor = Arc::new(SourcedLock {
+            calls: Mutex::new(Vec::new()),
+        });
+        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+            .with_executor(executor.clone());
+        let driver = temp.path().join("driver");
+        std::fs::create_dir_all(&driver).unwrap();
+        let job = Job {
+            ecosystem: Ecosystem::Cargo,
+            directory: String::new(),
+            package: Some("hcl-edit".into()),
+            current: Some(registry.into()),
+            target: Some("0.9.9".into()),
+            lock_only: false,
+        };
+        runner
+            .cargo_update(&driver, &cwd, "1.99.0", &job, false)
+            .await
+            .unwrap_or_else(|e| panic!("git {git}, crates.io {registry}: {e}"));
+        assert_eq!(
+            *executor.calls.lock().unwrap(),
+            [format!("{CRATES_IO}#hcl-edit@{registry}")],
+            "git {git}"
+        );
+        let lock = std::fs::read_to_string(cwd.join("Cargo.lock")).unwrap();
+        let versions: Vec<_> = crates_io_entries(&lock, "hcl-edit");
+        assert_eq!(
+            versions,
+            [("0.9.9".to_owned(), CRATES_IO.to_owned())],
+            "git {git}"
+        );
+        assert!(
+            lock.contains(&format!("version = \"{git}\"\nsource = \"{GIT_COPY}\"")),
+            "{lock}"
+        );
+    }
 }
 
 /// A lockfile of a tool nothing here runs holds the update rather than

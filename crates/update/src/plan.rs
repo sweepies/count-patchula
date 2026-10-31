@@ -175,6 +175,7 @@ pub fn plan(
     let mut names = BTreeSet::new();
     let mut plans = Vec::new();
     for (identity, (mut label, items)) in groups {
+        let items = superseding(items);
         if labels[&label] > 1 {
             let managers: BTreeSet<_> = items.iter().map(|i| manager_slug(i.dep)).collect();
             label = format!(
@@ -527,6 +528,23 @@ fn proposal_order(dep: &Dependency, a: &Update, b: &Update) -> std::cmp::Orderin
         return scheme.order(&a, &b);
     }
     value(a).cmp(&value(b))
+}
+/// One update per occurrence of a dependency. A `0.x` crate's in-range release
+/// and its next minor share a branch line, so both can reach one branch; only
+/// the higher can be written, and it contains the other.
+fn superseding(items: Vec<Item<'_>>) -> Vec<Item<'_>> {
+    let mut kept: Vec<Item<'_>> = Vec::new();
+    for item in items {
+        match kept.iter_mut().find(|k| std::ptr::eq(k.dep, item.dep)) {
+            Some(held) => {
+                if proposal_order(item.dep, held.update, item.update).is_lt() {
+                    *held = item;
+                }
+            }
+            None => kept.push(item),
+        }
+    }
+    kept
 }
 /// The branch an update belongs to, as its identity and name label. `snapshot`
 /// is `None` when lockfile-pending branches are allowed; otherwise a pin joins

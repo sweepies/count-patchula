@@ -236,10 +236,25 @@ pub(crate) enum Native {
     /// review stands in the way, so there is nothing for auto-merge to wait for.
     AlreadyMergeable,
 }
+/// Whether GitHub's refusal says the PR is already mergeable. It names the PR's
+/// `MergeStateStatus` ("Pull request is in unstable status"). CLEAN (checks
+/// pass), UNSTABLE (only non-required checks fail or are pending) and HAS_HOOKS
+/// (pre-receive hooks) all mean nothing required stands in the way, which is
+/// what `gh pr merge --auto` also takes for mergeable now. BLOCKED, BEHIND and
+/// DIRTY are other states: auto-merge can wait for the first two, and the last
+/// is a real refusal.
+fn already_mergeable(message: &str) -> bool {
+    message.match_indices(" is in ").any(|(at, found)| {
+        let rest = &message[at + found.len()..];
+        rest.split_once(" status").is_some_and(|(state, _)| {
+            ["clean", "unstable", "has_hooks"].contains(&state.to_ascii_lowercase().as_str())
+        })
+    })
+}
 /// Turns on GitHub's auto-merge for a PR, pinned to its head commit. GitHub
-/// offers auto-merge only on a PR that cannot be merged yet, and answers one
-/// that can with an "is in clean status" error. That answer is not a failure,
-/// and does not entitle anything to merge: the caller's own merge rules apply.
+/// offers auto-merge only on a PR that cannot be merged yet, and refuses one
+/// that is mergeable now. That refusal is not a failure, and does not entitle
+/// anything to merge: the caller's own merge rules apply.
 pub(crate) async fn enable_native(
     client: &Client,
     id: &Value,
@@ -255,7 +270,7 @@ pub(crate) async fn enable_native(
             Ok(Native::Enabled)
         }
         Ok(_) => Err("GitHub did not acknowledge native auto-merge".into()),
-        Err(patchula_github::Error::Graphql(message)) if message.contains("is in clean status") => {
+        Err(patchula_github::Error::Graphql(message)) if already_mergeable(&message) => {
             Ok(Native::AlreadyMergeable)
         }
         Err(error) => Err(error.to_string()),
@@ -455,4 +470,38 @@ pub fn dashboard_history(inventory: &Inventory, mut prs: Vec<Value>, plans: &[Pl
         }
     }
     prs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::already_mergeable;
+
+    /// GitHub's refusal names the PR's merge state; only the states in which
+    /// nothing required blocks the merge mean "mergeable now".
+    #[test]
+    fn a_refusal_naming_a_mergeable_state_is_not_an_error() {
+        for state in [
+            "clean",
+            "unstable",
+            "has_hooks",
+            "CLEAN",
+            "UNSTABLE",
+            "HAS_HOOKS",
+        ] {
+            assert!(
+                already_mergeable(&format!("Pull request Pull request is in {state} status")),
+                "{state}"
+            );
+        }
+        assert!(already_mergeable("one; Pull request is in unstable status"));
+        for message in [
+            "Pull request Pull request is in dirty status",
+            "Pull request is in unknown status",
+            "Pull request is in clean",
+            "Auto merge is not allowed for this repository",
+            "",
+        ] {
+            assert!(!already_mergeable(message), "{message}");
+        }
+    }
 }
