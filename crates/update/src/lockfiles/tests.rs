@@ -2349,6 +2349,35 @@ fn lockfile_engine_pins_match_the_repository_mise_tasks() {
     }
 }
 
+/// The guide's default-pin table tracks `defaults.toml`, so a bump cannot
+/// leave the documented defaults stale.
+#[test]
+fn the_lockfile_guide_lists_the_engine_tool_defaults() {
+    let guide = include_str!("../../../../docs/src/content/docs/guide/lockfiles.md");
+    let start = guide
+        .find("## Which tool version")
+        .expect("the guide has a tool version section");
+    let section = &guide[start..];
+    let section = &section[..section.find("### PHP").expect("PHP follows the table")];
+    let defaults = tool_defaults().unwrap();
+    for (tool, version) in defaults["tools"].as_table().unwrap() {
+        if tool == "mise" {
+            // The guide lists the defaults repositories inherit, not mise.
+            continue;
+        }
+        let version = version.as_str().unwrap();
+        assert!(
+            section.contains(version),
+            "the table does not list {tool} {version}"
+        );
+    }
+    let berry = defaults["yarn"]["berry"].as_str().unwrap();
+    assert!(
+        section.contains(berry),
+        "the table does not list Yarn Berry {berry}"
+    );
+}
+
 /// Yarn never runs a committed release, plugins or credential interpolations.
 #[test]
 fn yarnrc_keeps_settings_but_drops_repository_code_and_credentials() {
