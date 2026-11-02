@@ -1,5 +1,6 @@
 ---
 title: "HTTP fixtures"
+description: "How Count Patchula's tests replay recorded HTTP cassettes offline, and how to record and check new fixtures."
 ---
 Production code accepts a `patchula_http::Transport`, which takes a reqwest
 `Request` built with `Request::new`, so building a request needs no client.

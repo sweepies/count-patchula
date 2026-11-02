@@ -1,5 +1,6 @@
 ---
 title: "Managers"
+description: "Every package manager Count Patchula supports, the files each one reads, and the lockfiles it regenerates."
 ---
 A manager finds dependencies in one kind of file and knows how to edit them.
 Every manager is on by default; `managers` in your config replaces the list,

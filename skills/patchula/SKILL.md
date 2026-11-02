@@ -7,7 +7,9 @@ description: Configure and run Count Patchula, the dependency update bot for Git
 
 Count Patchula reads a repository's manifests, looks up newer versions, and
 opens one pull request per update with the lockfile regenerated. The CLI is
-`patchula`. Full documentation: https://count-patchula.sweepy.dev
+`patchula`. Full documentation: https://count-patchula.sweepy.dev, indexed for
+agents at https://count-patchula.sweepy.dev/llms.txt. Every page is served as
+Markdown to a request with `Accept: text/markdown`.
 
 ## Configure a repository
 

@@ -1,5 +1,6 @@
 ---
 title: "Release notes"
+description: "How update PRs gather release notes and changelogs for every version between the current and proposed one."
 ---
 Every update PR carries the release notes for each version between what you
 have and what it proposes, newest first. `defaults { releaseNotes = false }`

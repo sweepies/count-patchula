@@ -1,5 +1,6 @@
 ---
 title: "JSON report"
+description: "The JSON report printed by patchula lookup --json and patchula run --json: repositories, dependencies, updates and lookup failures."
 ---
 `patchula lookup --json` and `patchula run --json` print one report for the
 whole batch. This page describes schema version 4.

@@ -1,4 +1,7 @@
+# Content signals (https://contentsignals.org): the docs may be used for
+# search, as input to AI answers and agents, and for AI training.
 User-agent: *
+Content-Signal: search=yes, ai-input=yes, ai-train=yes
 Allow: /
 
 Sitemap: https://count-patchula.sweepy.dev/sitemap-index.xml

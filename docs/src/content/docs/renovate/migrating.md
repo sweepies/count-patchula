@@ -1,5 +1,6 @@
 ---
 title: "Migrating a config"
+description: "Translate a renovate.json into a patchula.pkl by hand: presets that are already defaults, and the equivalent of common rules."
 ---
 There is no converter. A `renovate.json` is usually a handful of presets and a
 few rules, and most of those presets turn out to be the Count's defaults

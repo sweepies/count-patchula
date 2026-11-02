@@ -1,5 +1,6 @@
 ---
 title: "Departures from Renovate"
+description: "Where Count Patchula differs from Renovate in ways a Renovate user would trip over: config, defaults, missing features and PR behaviour."
 ---
 The Count is an independent project, not a Renovate clone, and he does many
 things his own way. This page lists only the differences a Renovate user is

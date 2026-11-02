@@ -1,5 +1,6 @@
 ---
 title: "SQLite cache"
+description: "How the SQLite cache is laid out: HTTP entries, releases and extractions, registry tokens, host limits and freshness floors."
 ---
 `patchula-cache` uses rusqlite 0.41 with bundled SQLite, so the system
 SQLite's version and features never matter. HTTP bodies are stored with Zstd

@@ -1,5 +1,6 @@
 ---
 title: "Release age and channels"
+description: "How the Count picks the version to propose: update classes, the release-age wait, prereleases, ranges and Node release channels."
 ---
 For each dependency and each update class (major, minor, patch), the Count
 proposes the newest version that is permitted, not deprecated, not yanked and

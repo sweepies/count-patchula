@@ -1,5 +1,6 @@
 ---
 title: "Batching"
+description: "Collect reviewed updates into one batch pull request by ticking a checkbox, then merge them together."
 ---
 The batch PR lets a reviewer, human or agent, collect the updates it has judged
 safe into one pull request, then merge that.

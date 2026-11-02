@@ -1,5 +1,6 @@
 ---
 title: "Versioning"
+description: "The version schemes Count Patchula understands (semver, Docker, PEP 440, Poetry and others) and how each sorts, matches and rewrites ranges."
 ---
 Each dependency has a version scheme. It decides how versions sort, which update
 class a change belongs to, whether a version satisfies a range, and how a range

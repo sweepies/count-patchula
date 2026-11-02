@@ -1,8 +1,10 @@
-// Count Patchula's site: Astro Starlight output served as Workers static assets.
+// Count Patchula's site: Astro Starlight output served as Workers static assets,
+// with worker.js in front of the pages to serve their Markdown copies.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "count-patchula",
   "compatibility_date": "2026-10-21",
+  "main": "./worker.js",
   // Production is served only on count-patchula.sweepy.dev, so search engines
   // see one copy. Preview URLs, on workers.dev, still serve each branch's
   // uploaded version under its own alias.
@@ -11,6 +13,10 @@
   "preview_urls": true,
   "assets": {
     "directory": "./dist",
+    "binding": "ASSETS",
+    // Only pages can be negotiated, so hashed bundles and the search index
+    // skip the Worker.
+    "run_worker_first": ["/*", "!/_astro/*", "!/pagefind/*"],
     "not_found_handling": "404-page",
     // Astro writes every page as dir/index.html and Starlight links to it as
     // /dir/, so /dir redirects to /dir/.

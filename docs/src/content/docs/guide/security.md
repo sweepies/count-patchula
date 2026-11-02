@@ -1,5 +1,6 @@
 ---
 title: "Security advisories"
+description: "How the Count checks dependencies against OSV.dev, marks security updates, and checks container image rebuilds for fixed OS packages."
 ---
 The Count checks every dependency he can identify exactly against
 [OSV.dev](https://osv.dev), the open vulnerability database that collects the
