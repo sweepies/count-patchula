@@ -243,7 +243,7 @@ export default defineConfig({
             {
               label: "Reference",
               paths: ["reference/**"],
-              description: "the CLI, configuration and server schemas, environment variables and JSON report",
+              description: "the CLI, the configuration and settings schemas, environment variables and the JSON report",
             },
             {
               label: "Coming from Renovate",
