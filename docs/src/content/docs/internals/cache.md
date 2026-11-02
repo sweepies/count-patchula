@@ -1,7 +1,7 @@
 ---
 title: "SQLite cache"
 ---
-`patchula-cache` uses rusqlite 0.40 with bundled SQLite, so the system
+`patchula-cache` uses rusqlite 0.41 with bundled SQLite, so the system
 SQLite's version and features never matter. HTTP bodies are stored with Zstd
 level 3.
 

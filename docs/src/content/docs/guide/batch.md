@@ -22,7 +22,7 @@ one replaces the dependency's item in the batch.
 There is one batch per repository and base branch. It applies every item's edit
 to the current base, and regenerates lockfiles once for the whole set, so a batch
 of eight npm updates runs aube once, not eight times. Items whose targets the
-base already satisfies drop out.
+base already meets, or has since moved past, drop out.
 
 ## Taking things out
 

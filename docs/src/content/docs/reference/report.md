@@ -115,7 +115,7 @@ when this list is not empty.
 | `locations` | Byte offsets, line, column and a pointer into the file |
 | `resolution` | How `current.version` was found: `declared`, `lockfile`, `pinned-commit`, `floating-ref`, `release-line` or `supported-range` |
 | `heldBack` | Updates waiting on release age, per update type, with when they become eligible |
-| `lookup` | When the lookup ran, disabled update types, and versions rejected as deprecated or yanked |
+| `lookup` | When the lookup ran, whether a stored catalog view was reused (`catalog` with `fetchedAt` and `reused`), disabled update types, and versions rejected as deprecated or yanked |
 | `tagDigests` | For GitHub Actions, the commit each proposed tag points at |
 | `image` | Optional. For a pinned image, the current digest's warning state, in the same shape as an update's `image` |
 | `advisories` | Optional. OSV advisories affecting the current version: `id`, `aliases` (CVE IDs among them), `severity`, `summary`, `url` and `fixedIn`, the lowest fixed release above the current one |

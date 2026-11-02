@@ -13,19 +13,19 @@ quoting, comments and formatting.
 |---|---|---|
 | `npm` | `package.json`, `pnpm-workspace.yaml` and `.yarnrc.yml` catalogs, `.nvmrc`, `.node-version` | `package-lock.json`, `npm-shrinkwrap.json`, `aube-lock.yaml`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock` |
 | `bun` | `package.json` when `npm` is off | `bun.lock` |
-| `github-actions` | `.github/workflows/*.yml`, `.forgejo/workflows/*.yml`, `.gitea/workflows/*.yml`, `action.yml` | |
+| `github-actions` | `.github/workflows/*.yml`, `.forgejo/workflows/*.yml`, `.gitea/workflows/*.yml` (each also `.yaml`), `action.yml`, `action.yaml` | |
 | `mise` | `mise.toml`, `.mise.toml`, `.tool-versions` | `mise.lock` |
 | `cargo` | `Cargo.toml`, `rust-toolchain`, `rust-toolchain.toml` | `Cargo.lock` |
 | `go` | `go.mod` | `go.sum` |
-| `dockerfile` | `Dockerfile`, `Dockerfile.*`, `*.Dockerfile` | |
-| `compose` | `compose*.yml`, `docker-compose*.yml` | |
-| `kubernetes` | Kubernetes manifests (`*.yaml`) | |
-| `kustomize` | `kustomization.yaml` | |
+| `dockerfile` | `Dockerfile`, `Dockerfile.*`, `*.Dockerfile`, `*.dockerfile` | |
+| `compose` | `compose*.yml`, `docker-compose*.yml` (each also `.yaml`) | |
+| `kubernetes` | Kubernetes manifests (`*.yaml`, `*.yml`) | |
+| `kustomize` | `kustomization.yaml`, `kustomization.yml`, `Kustomization` | |
 | `flux` | Flux `HelmRepository`, `HelmRelease`, `OCIRepository` | |
-| `helm-values` | `values*.yaml` | |
+| `helm-values` | `values*.yaml`, `values*.yml` | |
 | `helm` | `Chart.yaml` | not yet: `Chart.lock` holds the update |
 | `terraform` | `*.tf`, `.terraform-version` | `.terraform.lock.hcl` |
-| `requirements` | `requirements*.txt`, `requirements*.in`, `requirements/*.txt` | |
+| `requirements` | `requirements*.txt`, `requirements*.in`, `requirements/*.txt`, `requirements/*.in` | |
 | `pyproject` | `pyproject.toml`, `.python-version` | `uv.lock`, `poetry.lock` |
 | `pre-commit` | `.pre-commit-config.yaml` | |
 | `devcontainer` | `devcontainer.json`, `.devcontainer.json` | |
