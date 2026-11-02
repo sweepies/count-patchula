@@ -512,7 +512,7 @@ impl Engines {
         }
         if let std::collections::btree_map::Entry::Vacant(entry) = engines.entry(id) {
             let mut http = settings.http_options();
-            http.credentials = key.1.clone();
+            http.credentials.clone_from(&key.1);
             let engine = Engine::with_credentials(
                 self.app.installation(id),
                 self.cache.clone(),
