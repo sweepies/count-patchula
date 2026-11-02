@@ -74,6 +74,8 @@ async fn installation_and_caller_token_batches_match_and_token_rotation_keeps_re
         server_cache,
         4,
         Arc::new(Authenticated(server_fake.clone())),
+        Default::default(),
+        Default::default(),
     )
     .unwrap()
     .with_recheck(patchula_engine::Recheck::Now);

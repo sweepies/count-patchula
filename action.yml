@@ -26,6 +26,9 @@ inputs:
   binary:
     description: The path to a patchula binary to run instead of installing a release, such as one built from source. Overrides version.
     default: ""
+  settings:
+    description: Path to an operator settings file (amending PatchulaSettings.pkl) for HTTP limits and other operator settings. The action does not check out the repository, so check it out first when the file lives there. Empty falls back to PATCHULA_SETTINGS, then ~/.config/patchula/settings.pkl, then the defaults.
+    default: ""
   args:
     description: Extra arguments for `patchula run`, such as `--config-dir policy`, separated by spaces or newlines.
     default: ""
@@ -58,6 +61,7 @@ runs:
         INPUT_VERSION: ${{ inputs.version }}
         INPUT_BINARY: ${{ inputs.binary }}
         INPUT_ARGS: ${{ inputs.args }}
+        INPUT_SETTINGS: ${{ inputs.settings }}
         ACTION_REF: ${{ github.action_ref }}
         # Lets mise list releases from GitHub itself when the version is
         # "latest"; the public versions mirror can lag behind a new release.
@@ -84,6 +88,9 @@ runs:
           args+=("${repositories[@]}")
         else
           args+=("$GITHUB_REPOSITORY")
+        fi
+        if [ -n "$INPUT_SETTINGS" ]; then
+          args+=(--settings "$INPUT_SETTINGS")
         fi
         if [ -n "${INPUT_ARGS//[[:space:]]/}" ]; then
           read -r -d '' -a extra <<< "$INPUT_ARGS" || true

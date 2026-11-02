@@ -89,7 +89,7 @@ async fn recorded() -> Cache {
 fn settings(extra: &str) -> Settings {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.pkl");
-    std::fs::write(&path, format!("amends \"PatchulaServer.pkl\"\n{extra}\n")).unwrap();
+    std::fs::write(&path, format!("amends \"PatchulaSettings.pkl\"\n{extra}\n")).unwrap();
     Settings::load(&path).unwrap()
 }
 
@@ -274,7 +274,9 @@ async fn settings_hide_repositories_or_the_whole_api() {
     let cache = recorded().await;
     let only = routes(Public {
         cache: cache.clone(),
-        settings: Reload::new(settings("allowedRepositories { \"acme/other\" }")),
+        settings: Reload::new(settings(
+            "server { allowedRepositories { \"acme/other\" } }",
+        )),
     });
     let (.., list) = get(&only, "/api/v1/repositories").await;
     assert_eq!(list["repositories"], json!([]));
@@ -283,7 +285,7 @@ async fn settings_hide_repositories_or_the_whole_api() {
 
     let off = routes(Public {
         cache,
-        settings: Reload::new(settings("publicApi = false")),
+        settings: Reload::new(settings("server { publicApi = false }")),
     });
     for path in ["/api/v1/repositories", "/api/v1/repositories/acme/app"] {
         let (status, _, error) = get(&off, path).await;

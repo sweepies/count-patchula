@@ -28,6 +28,6 @@ pipeline:
       install -Dm755 unpacked/bin/patchula ${{targets.destdir}}/usr/bin/patchula
       install -Dm644 unpacked/LICENSE ${{targets.destdir}}/usr/share/doc/patchula/LICENSE
       # The settings serve needs. Mount a file over it, or point
-      # PATCHULA_SERVER_SETTINGS elsewhere, to configure the server.
+      # PATCHULA_SETTINGS elsewhere, to configure the server.
       mkdir -p ${{targets.destdir}}/etc/patchula
-      echo 'amends "PatchulaServer.pkl"' > ${{targets.destdir}}/etc/patchula/server.pkl
+      echo 'amends "PatchulaSettings.pkl"' > ${{targets.destdir}}/etc/patchula/settings.pkl

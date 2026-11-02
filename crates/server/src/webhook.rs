@@ -238,7 +238,7 @@ pub async fn receive(
             Some(delivery.into()),
             work,
             chrono::Utc::now().timestamp_millis(),
-            settings.coalescing_ms as i64,
+            settings.server.coalescing_ms as i64,
         )
         .await;
     let outcome = match result {
@@ -360,12 +360,14 @@ pub(crate) fn ignored_reason(
         return "not allowlisted";
     };
     let enabled = match event {
-        "push" => settings.triggers.push,
-        "issues" => settings.triggers.dashboard,
-        "pull_request" if payload["action"] == "closed" => settings.triggers.pull_request_closed,
-        "pull_request" => settings.triggers.pull_request_edited,
-        "installation" | "installation_repositories" => settings.triggers.installation,
-        "check_suite" | "check_run" => settings.triggers.checks,
+        "push" => settings.server.triggers.push,
+        "issues" => settings.server.triggers.dashboard,
+        "pull_request" if payload["action"] == "closed" => {
+            settings.server.triggers.pull_request_closed
+        }
+        "pull_request" => settings.server.triggers.pull_request_edited,
+        "installation" | "installation_repositories" => settings.server.triggers.installation,
+        "check_suite" | "check_run" => settings.server.triggers.checks,
         _ => return "unrelated event or action",
     };
     if !enabled {
@@ -402,7 +404,7 @@ pub fn classify(event: &str, payload: &Value, settings: &Settings, bot: &str) ->
         return Vec::new();
     };
     let action = payload["action"].as_str().unwrap_or("");
-    if settings.triggers.installation
+    if settings.server.triggers.installation
         && ((event == "installation" && action == "created")
             || (event == "installation_repositories" && action == "added"))
     {
@@ -429,7 +431,7 @@ pub fn classify(event: &str, payload: &Value, settings: &Settings, bot: &str) ->
         return Vec::new();
     };
     if matches!(event, "check_suite" | "check_run")
-        && settings.triggers.checks
+        && settings.server.triggers.checks
         && action == "completed"
     {
         // Abbreviated GitHub check records omit author/body and may use a custom
@@ -466,12 +468,12 @@ pub fn classify(event: &str, payload: &Value, settings: &Settings, bot: &str) ->
     let pr = &payload["pull_request"];
     let owned = patchula_update::pull_requests::owned_pr(pr, bot, repo);
     let trigger = match event {
-        "push" if settings.triggers.push => {
+        "push" if settings.server.triggers.push => {
             let branch = payload["repository"]["default_branch"].as_str();
             !payload["deleted"].as_bool().unwrap_or(false)
                 && branch.is_some_and(|b| payload["ref"] == format!("refs/heads/{b}"))
         }
-        "issues" if settings.triggers.dashboard && action == "edited" => {
+        "issues" if settings.server.triggers.dashboard && action == "edited" => {
             let after = issue["body"].as_str().unwrap_or("");
             issue["user"]["login"] == bot
                 && after.contains(patchula_update::dashboard::MARKER)
@@ -480,8 +482,8 @@ pub fn classify(event: &str, payload: &Value, settings: &Settings, bot: &str) ->
                 })
         }
         "pull_request" if owned => {
-            (settings.triggers.pull_request_closed && action == "closed")
-                || (settings.triggers.pull_request_edited
+            (settings.server.triggers.pull_request_closed && action == "closed")
+                || (settings.server.triggers.pull_request_edited
                     && action == "edited"
                     && before.is_some_and(|before| {
                         patchula_update::pull_requests::controls_edited(

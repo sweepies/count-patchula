@@ -27,6 +27,7 @@ const LOG_VAR: &str = "PATCHULA_LOG";
 /// A lookup or apply finished, but some dependencies' lookups failed.
 const LOOKUP_FAILED: u8 = 4;
 const RECHECK_VAR: &str = "PATCHULA_RECHECK";
+const SETTINGS_VAR: &str = "PATCHULA_SETTINGS";
 const DOCKERHUB_USERNAME_VAR: &str = "PATCHULA_DOCKERHUB_USERNAME";
 const DOCKERHUB_TOKEN_VAR: &str = "PATCHULA_DOCKERHUB_TOKEN";
 const MISE_DATA_VAR: &str = "MISE_DATA_DIR";
@@ -269,15 +270,15 @@ async fn auth_command(
         .map_err(|e| (1, miette::miette!("{e}")))
 }
 
-/// `patchula config ...`: print or validate configuration and server settings.
+/// `patchula config ...`: print or validate configuration and operator settings.
 fn config_command(app: &App, config: &cli::Config) -> Result<u8, (u8, miette::Report)> {
     match &config.command {
-        ConfigCommand::ServerSchema => {
+        ConfigCommand::SettingsSchema => {
             write!(io::stdout().lock(), "{}", patchula_server::settings::SCHEMA)
                 .map(|_| 0)
                 .map_err(|e| (1, miette::miette!("{e}")))
         }
-        ConfigCommand::CheckServer(check) => {
+        ConfigCommand::CheckSettings(check) => {
             patchula_server::settings::Settings::load(&check.path).map_err(|e| (2, e))?;
             writeln!(
                 io::stdout().lock(),
@@ -286,7 +287,7 @@ fn config_command(app: &App, config: &cli::Config) -> Result<u8, (u8, miette::Re
                     serde_json::json!({"schemaVersion":1,"valid":true,"path":check.path})
                         .to_string()
                 } else {
-                    format!("Valid server settings: {}", check.path.display())
+                    format!("Valid settings: {}", check.path.display())
                 }
             )
             .map(|_| 0)
@@ -549,45 +550,64 @@ async fn remote_report(
     remote::report(services, server, repositories, mode).await
 }
 
-/// HTTP settings from the lookup flags.
-fn http_options(options: &cli::Scan) -> Result<patchula_http::Options, (u8, miette::Report)> {
-    let mut http_options = patchula_http::Options {
-        registry_freshness_secs: options.registry_freshness_secs,
-        go_freshness_secs: options.go_freshness_secs,
-        ..Default::default()
+/// Operator settings: `--settings`, then `PATCHULA_SETTINGS`, then
+/// `patchula/settings.pkl` in the user config directory when it exists, else
+/// the schema's defaults.
+fn settings(scan: &cli::Scan) -> Result<patchula_server::settings::Settings, (u8, miette::Report)> {
+    use patchula_server::settings::Settings;
+    let explicit = scan
+        .settings
+        .clone()
+        .or_else(|| std::env::var_os(SETTINGS_VAR).map(std::path::PathBuf::from));
+    let path = match explicit {
+        Some(path) => path,
+        None => match user_settings() {
+            Some(path) if path.is_file() => path,
+            _ => return Ok(Settings::default()),
+        },
     };
-    for setting in &options.host_concurrency {
-        let (host, limit) = setting
-            .split_once('=')
-            .and_then(|(host, limit)| limit.parse::<usize>().ok().map(|limit| (host, limit)))
-            .ok_or_else(|| {
-                (
-                    2,
-                    miette::miette!("host-concurrency must be HOST=LIMIT (1..100)"),
-                )
-            })?;
-        http_options.host_concurrency.insert(host.to_owned(), limit);
-    }
-    http_options.validate().map_err(|_| {
-        (
-            2,
-            miette::miette!("host-concurrency requires a lowercase hostname and limit 1..100"),
-        )
-    })?;
-    Ok(http_options)
+    Settings::load(&path).map_err(|e| (2, e))
 }
 
-/// The checkbox wording: `--recheck`, then `PATCHULA_RECHECK` for runs.
-fn recheck(app: &App, run: bool) -> Result<patchula_engine::Recheck, (u8, miette::Report)> {
+/// `patchula/settings.pkl` under an absolute `XDG_CONFIG_HOME`, else `~/.config`.
+fn user_settings() -> Option<std::path::PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+        .or_else(|| {
+            std::env::var_os(HOME_VAR).map(|home| std::path::PathBuf::from(home).join(".config"))
+        })
+        .map(|dir| dir.join("patchula").join("settings.pkl"))
+}
+
+/// The checkbox wording: `--recheck`, then for runs `PATCHULA_RECHECK` and the
+/// settings file; `next-run` otherwise.
+fn recheck(
+    app: &App,
+    run: bool,
+    settings: &patchula_server::settings::Settings,
+) -> Result<patchula_engine::Recheck, (u8, miette::Report)> {
+    let wording = |value: &str| match value {
+        "now" => Some(patchula_engine::Recheck::Now),
+        "next-run" => Some(patchula_engine::Recheck::NextRun),
+        _ => None,
+    };
     Ok(match app.recheck {
         Some(cli::Recheck::Now) => patchula_engine::Recheck::Now,
         Some(cli::Recheck::NextRun) => patchula_engine::Recheck::NextRun,
-        None if run => match std::env::var(RECHECK_VAR).as_deref() {
-            Ok("now") => patchula_engine::Recheck::Now,
-            Ok("next-run") | Err(std::env::VarError::NotPresent) => {
-                patchula_engine::Recheck::NextRun
-            }
-            _ => {
+        None if run => match std::env::var(RECHECK_VAR) {
+            Ok(value) => wording(&value).ok_or_else(|| {
+                (
+                    2,
+                    miette::miette!("PATCHULA_RECHECK must be now or next-run"),
+                )
+            })?,
+            Err(std::env::VarError::NotPresent) => settings
+                .recheck
+                .as_deref()
+                .and_then(wording)
+                .unwrap_or(patchula_engine::Recheck::NextRun),
+            Err(_) => {
                 return Err((
                     2,
                     miette::miette!("PATCHULA_RECHECK must be now or next-run"),
@@ -711,6 +731,7 @@ async fn source(
     let writes = run.is_some_and(|run| !run.dry_run);
     let local_only = [
         (options.scan.config.is_some(), "--config"),
+        (options.scan.settings.is_some(), "--settings"),
         (options.config_dir.is_some(), "--config-dir"),
         (options.scan.default_config, "--default-config"),
         (options.all_repos, "--all-repos"),
@@ -1085,7 +1106,7 @@ async fn report(
 ) -> Result<(patchula_report::Report, Read), (u8, miette::Report)> {
     use patchula_engine::{Engine, Options};
     let scan = &options.scan;
-    if scan.concurrency == 0 || scan.concurrency > 100 {
+    if scan.concurrency.is_some_and(|n| n == 0 || n > 100) {
         return Err((2, miette::miette!("concurrency must be 1..100")));
     }
     let (repositories, local, config) = match source(app, options, run, services).await? {
@@ -1108,8 +1129,9 @@ async fn report(
         }
         Source::Local(dir, config) => (Vec::new(), Some(dir), config.map(|config| *config)),
     };
-    let http_options = http_options(scan)?;
-    let recheck = recheck(app, run.is_some())?;
+    let settings = settings(scan)?;
+    let concurrency = scan.concurrency.unwrap_or(settings.concurrency);
+    let recheck = recheck(app, run.is_some(), &settings)?;
     let spinner = progress::Spinner::start(app.color);
     let token = services
         .token()
@@ -1127,11 +1149,16 @@ async fn report(
     let transport = services
         .transport()
         .map_err(|e| (1, miette::miette!("{e}")))?;
-    let mut engine =
-        Engine::with_http_options(&token, cache, scan.concurrency, transport, http_options)
-            .map_err(|e| (1, miette::miette!("{e}")))?
-            .with_recheck(recheck)
-            .with_advisories();
+    let mut engine = Engine::with_http_options(
+        &token,
+        cache,
+        concurrency,
+        transport,
+        settings.http_options(),
+    )
+    .map_err(|e| (1, miette::miette!("{e}")))?
+    .with_recheck(recheck)
+    .with_advisories();
     if let Some(spinner) = &spinner {
         engine = engine.with_progress(spinner.clone());
     }

@@ -1,0 +1,56 @@
+/// Operator settings, read by the CLI and by `patchula serve`. Secrets are
+/// deliberately absent.
+module PatchulaSettings
+
+/// Repositories scanned at once, 1 to 100. `--concurrency` overrides it.
+concurrency: Int = 8
+/// The checkbox wording. null means `now` in the server and `next-run` in the
+/// CLI; flags and environment take precedence.
+recheck: "now" | "next-run"? = null
+http: Http = new {}
+/// Only `patchula serve` reads this section.
+server: Server = new {}
+
+class Http {
+  /// HTTP requests in flight per host, 1 to 100.
+  defaultHostConcurrency: Int = 16
+  /// Per-host overrides of `defaultHostConcurrency`, keyed by lowercase hostname.
+  hostConcurrency: Mapping<String, Int> = new {}
+  /// Freshness seconds for OCI tag lists without validators; 0 uses upstream
+  /// policy.
+  registryFreshnessSecs: Int = 3600
+  /// Minimum freshness seconds for Go proxy lists and latest; 0 uses upstream
+  /// policy.
+  goFreshnessSecs: Int = 3600
+}
+
+class Server {
+  triggers: Triggers = new {}
+  sweepCron: String? = "0 0 * * * *"
+  sweepTimezone: String = "UTC"
+  batchSize: Int = 32
+  coalescingMs: Int = 1000
+  /// null emits the versioned report as a structured log event.
+  reportDirectory: String? = null
+  /// Empty lists allow all installations/repositories the App can access.
+  allowedInstallations: Listing<Int> = new {}
+  allowedRepositories: Listing<String> = new {}
+  /// Hide this server's URL in the PRs and dashboard the Count writes, so
+  /// `patchula` in a checkout can offer to run there.
+  advertise: Boolean = true
+  /// The https URL to advertise. null uses the App's webhook URL without its
+  /// /webhook path.
+  publicUrl: String? = null
+  /// Serve /api/v1/repositories, which shows anyone what the Count last saw of
+  /// each public repository he runs.
+  publicApi: Boolean = true
+}
+
+class Triggers {
+  push: Boolean = true
+  dashboard: Boolean = true
+  pullRequestEdited: Boolean = true
+  pullRequestClosed: Boolean = true
+  installation: Boolean = true
+  checks: Boolean = true
+}

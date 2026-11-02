@@ -134,7 +134,11 @@ fn app() -> Arc<App> {
 async fn api(runner: Arc<Recorder>, client_id: Option<&str>, settings: &str) -> Router {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("server.pkl");
-    std::fs::write(&path, format!("amends \"PatchulaServer.pkl\"\n{settings}")).unwrap();
+    std::fs::write(
+        &path,
+        format!("amends \"PatchulaSettings.pkl\"\n{settings}"),
+    )
+    .unwrap();
     routes(Api::new(Parts {
         app: app(),
         client_id: client_id.map(str::to_owned),
@@ -233,7 +237,7 @@ async fn rejections_name_the_reason() {
     let router = api(
         runner.clone(),
         Some("client"),
-        "allowedRepositories {\n  \"acme/app\"\n  \"other-org/app\"\n}\n",
+        "server {\n  allowedRepositories {\n    \"acme/app\"\n    \"other-org/app\"\n  }\n}\n",
     )
     .await;
     let run = |repos: Value| json!({"mode": "run", "repositories": repos});
@@ -333,7 +337,7 @@ async fn drain_waits_for_runs_in_progress() {
     });
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("server.pkl");
-    std::fs::write(&path, "amends \"PatchulaServer.pkl\"\n").unwrap();
+    std::fs::write(&path, "amends \"PatchulaSettings.pkl\"\n").unwrap();
     let api = Api::new(Parts {
         app: app(),
         client_id: Some("client".into()),

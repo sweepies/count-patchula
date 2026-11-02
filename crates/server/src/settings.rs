@@ -1,22 +1,39 @@
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeMap,
     path::{Path, PathBuf},
     str::FromStr,
     sync::{Arc, RwLock},
 };
 
-pub const SCHEMA: &str = include_str!("../../../PatchulaServer.pkl");
+pub const SCHEMA: &str = include_str!("../../../PatchulaSettings.pkl");
 
+/// Operator settings shared by the CLI and the server; `server` is read only by
+/// `patchula serve`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Settings {
+    pub concurrency: usize,
+    pub recheck: Option<String>,
+    pub http: Http,
+    pub server: Server,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Http {
+    pub default_host_concurrency: usize,
+    pub host_concurrency: BTreeMap<String, usize>,
+    pub registry_freshness_secs: u64,
+    pub go_freshness_secs: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Server {
     pub triggers: Triggers,
     pub sweep_cron: Option<String>,
     pub sweep_timezone: String,
-    pub concurrency: usize,
     pub batch_size: usize,
     pub coalescing_ms: u64,
-    pub recheck: Option<String>,
     pub report_directory: Option<PathBuf>,
     pub allowed_installations: Vec<u64>,
     pub allowed_repositories: Vec<String>,
@@ -34,6 +51,42 @@ pub struct Triggers {
     pub installation: bool,
     pub checks: bool,
 }
+impl Default for Settings {
+    /// The schema's defaults, for a CLI run without a settings file. A test
+    /// checks them against `PatchulaSettings.pkl`.
+    fn default() -> Self {
+        Self {
+            concurrency: 8,
+            recheck: None,
+            http: Http {
+                default_host_concurrency: 16,
+                host_concurrency: BTreeMap::new(),
+                registry_freshness_secs: 3600,
+                go_freshness_secs: 3600,
+            },
+            server: Server {
+                triggers: Triggers {
+                    push: true,
+                    dashboard: true,
+                    pull_request_edited: true,
+                    pull_request_closed: true,
+                    installation: true,
+                    checks: true,
+                },
+                sweep_cron: Some("0 0 * * * *".into()),
+                sweep_timezone: "UTC".into(),
+                batch_size: 32,
+                coalescing_ms: 1000,
+                report_directory: None,
+                allowed_installations: Vec::new(),
+                allowed_repositories: Vec::new(),
+                advertise: true,
+                public_url: None,
+                public_api: true,
+            },
+        }
+    }
+}
 impl Settings {
     pub fn load(path: &Path) -> miette::Result<Self> {
         Self::load_diagnostic(path).map_err(sanitize_diagnostic)
@@ -42,8 +95,8 @@ impl Settings {
         use miette::{IntoDiagnostic, WrapErr};
         let source = std::fs::read_to_string(path)
             .into_diagnostic()
-            .wrap_err_with(|| format!("cannot read server settings {}", path.display()))?;
-        let value = patchula_config::evaluate_local(path, "PatchulaServer.pkl", SCHEMA)?;
+            .wrap_err_with(|| format!("cannot read settings {}", path.display()))?;
+        let value = patchula_config::evaluate_local(path, "PatchulaSettings.pkl", SCHEMA)?;
         let settings: Self = serde_path_to_error::deserialize(value).map_err(|error| {
             patchula_config::problem(path, &source, &error.path().to_string(), &error.to_string())
         })?;
@@ -57,17 +110,6 @@ impl Settings {
         if !(1..=100).contains(&self.concurrency) {
             return Err("concurrency must be 1..100");
         }
-        if !(1..=1000).contains(&self.batch_size) {
-            return Err("batchSize must be 1..1000");
-        }
-        if self.coalescing_ms > 60_000 {
-            return Err("coalescingMs must be 0..60000");
-        }
-        if let Some(cron) = &self.sweep_cron {
-            patchula_config::schedule(cron, true)
-                .map_err(|_| "sweepCron must be valid (six or seven fields)")?;
-        }
-        chrono_tz::Tz::from_str(&self.sweep_timezone).map_err(|_| "sweepTimezone must be valid")?;
         if self
             .recheck
             .as_deref()
@@ -75,28 +117,47 @@ impl Settings {
         {
             return Err("recheck must be now or next-run");
         }
-        if self
+        if !(1..=100).contains(&self.http.default_host_concurrency) {
+            return Err("defaultHostConcurrency must be 1..100");
+        }
+        self.http_options()
+            .validate()
+            .map_err(|_| "hostConcurrency needs lowercase hostnames and limits 1..100")?;
+        let server = &self.server;
+        if !(1..=1000).contains(&server.batch_size) {
+            return Err("batchSize must be 1..1000");
+        }
+        if server.coalescing_ms > 60_000 {
+            return Err("coalescingMs must be 0..60000");
+        }
+        if let Some(cron) = &server.sweep_cron {
+            patchula_config::schedule(cron, true)
+                .map_err(|_| "sweepCron must be valid (six or seven fields)")?;
+        }
+        chrono_tz::Tz::from_str(&server.sweep_timezone)
+            .map_err(|_| "sweepTimezone must be valid")?;
+        if server
             .report_directory
             .as_ref()
             .is_some_and(|p| p.as_os_str().is_empty())
         {
             return Err("reportDirectory must be nonempty");
         }
-        if self
+        if server
             .allowed_installations
             .iter()
             .any(|id| *id == 0 || *id > i64::MAX as u64)
         {
             return Err("allowedInstallations IDs must be positive");
         }
-        if self
+        if server
             .allowed_repositories
             .iter()
             .any(|repo| !valid_repo(repo))
         {
             return Err("allowedRepositories entries must be owner/repo");
         }
-        if self
+        if server
             .public_url
             .as_deref()
             .is_some_and(|url| public_url(url).is_none())
@@ -105,30 +166,50 @@ impl Settings {
         }
         Ok(())
     }
+    /// The HTTP client settings.
+    pub fn http_options(&self) -> patchula_http::Options {
+        patchula_http::Options {
+            default_host_concurrency: self.http.default_host_concurrency,
+            host_concurrency: self.http.host_concurrency.clone(),
+            registry_freshness_secs: self.http.registry_freshness_secs,
+            go_freshness_secs: self.http.go_freshness_secs,
+            ..Default::default()
+        }
+    }
+    /// The installation GitHub client settings. It keeps the client's own
+    /// lower default unless `http.hostConcurrency` sets api.github.com.
+    pub fn github_options(&self) -> patchula_github::Options {
+        let defaults = patchula_github::Options::default();
+        patchula_github::Options {
+            concurrency: self
+                .http
+                .host_concurrency
+                .get("api.github.com")
+                .copied()
+                .unwrap_or(defaults.concurrency),
+            ..defaults
+        }
+    }
     /// The URL to hide in what the Count writes: `publicUrl`, else the one
     /// derived from the App's webhook URL.
     pub fn advertised(&self, derived: Option<&str>) -> Option<String> {
-        if !self.advertise {
+        if !self.server.advertise {
             return None;
         }
-        match &self.public_url {
+        match &self.server.public_url {
             Some(url) => public_url(url),
             None => derived.map(str::to_owned),
         }
     }
     pub fn installation_allowed(&self, id: u64) -> bool {
-        id > 0
-            && id <= i64::MAX as u64
-            && (self.allowed_installations.is_empty() || self.allowed_installations.contains(&id))
+        let allowed = &self.server.allowed_installations;
+        id > 0 && id <= i64::MAX as u64 && (allowed.is_empty() || allowed.contains(&id))
     }
     pub fn allows(&self, id: u64, repo: &str) -> bool {
+        let allowed = &self.server.allowed_repositories;
         self.installation_allowed(id)
             && valid_repo(repo)
-            && (self.allowed_repositories.is_empty()
-                || self
-                    .allowed_repositories
-                    .iter()
-                    .any(|allowed| allowed.eq_ignore_ascii_case(repo)))
+            && (allowed.is_empty() || allowed.iter().any(|a| a.eq_ignore_ascii_case(repo)))
     }
     pub fn recheck(&self, override_wording: Option<&str>) -> patchula_engine::Recheck {
         match override_wording.or(self.recheck.as_deref()) {
@@ -178,7 +259,7 @@ fn sanitize_diagnostic(error: miette::Report) -> miette::Report {
         }
     }
     let src = miette::NamedSource::new(
-        contents.name().unwrap_or("server settings"),
+        contents.name().unwrap_or("settings"),
         String::from_utf8(masked).expect("masked UTF-8"),
     );
     miette::Report::new(SettingsDiagnostic {
@@ -234,14 +315,14 @@ impl Reload {
         match result {
             Ok(settings) => {
                 if !state.valid || settings != state.settings {
-                    tracing::info!(target: "patchula_server", "server settings loaded");
+                    tracing::info!(target: "patchula_server", "settings loaded");
                 }
                 state.settings = settings;
                 state.valid = true;
             }
             Err(_) => {
                 if state.valid {
-                    tracing::error!(target: "patchula_server", "server settings rejected; keeping last good settings; run config check-server for diagnostics");
+                    tracing::error!(target: "patchula_server", "settings rejected; keeping last good settings; run config check-settings for diagnostics");
                 }
                 state.valid = false;
             }
@@ -276,13 +357,17 @@ mod tests {
     #[test]
     fn local_absolute_imports_bundled_schema_and_diagnostics() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("server.pkl");
+        let path = dir.path().join("settings.pkl");
         let parent = dir.path().join("parent.pkl");
-        std::fs::write(&parent, "amends \"PatchulaServer.pkl\"\nconcurrency = 3\n").unwrap();
+        std::fs::write(
+            &parent,
+            "amends \"PatchulaSettings.pkl\"\nconcurrency = 3\n",
+        )
+        .unwrap();
         std::fs::write(&path, format!("amends \"{}\"\n", parent.display())).unwrap();
         assert_eq!(Settings::load(&path).unwrap().concurrency, 3);
         // An absolute schema path works both with a real file and bundled fallback.
-        let schema = dir.path().join("PatchulaServer.pkl");
+        let schema = dir.path().join("PatchulaSettings.pkl");
         for vendored in [false, true] {
             if vendored {
                 std::fs::write(&schema, SCHEMA).unwrap();
@@ -298,11 +383,11 @@ mod tests {
             "concurrency = 0",
             "concurrency =",
             "unknownSetting = true",
-            "sweepCron = \"invalid\"",
+            "server { sweepCron = \"invalid\" }",
         ] {
-            std::fs::write(&path, format!("amends \"PatchulaServer.pkl\"\n{body}\n")).unwrap();
+            std::fs::write(&path, format!("amends \"PatchulaSettings.pkl\"\n{body}\n")).unwrap();
             let diagnostic = format!("{:?}", Settings::load(&path).unwrap_err());
-            assert!(diagnostic.contains("server.pkl"), "{diagnostic}");
+            assert!(diagnostic.contains("settings.pkl"), "{diagnostic}");
             assert!(
                 diagnostic.contains('╭'),
                 "missing source span: {diagnostic}"
@@ -313,9 +398,9 @@ mod tests {
     #[test]
     fn the_advertised_url_comes_from_public_url_or_the_webhook() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("server.pkl");
+        let path = dir.path().join("settings.pkl");
         let load = |body: &str| {
-            std::fs::write(&path, format!("amends \"PatchulaServer.pkl\"\n{body}\n")).unwrap();
+            std::fs::write(&path, format!("amends \"PatchulaSettings.pkl\"\n{body}\n")).unwrap();
             Settings::load(&path)
         };
         let derived = from_webhook("https://patchula.acme.dev/count/webhook?x=1");
@@ -325,30 +410,35 @@ mod tests {
         let defaults = load("").unwrap();
         assert_eq!(defaults.advertised(derived.as_deref()), derived);
         assert_eq!(defaults.advertised(None), None);
-        let explicit = load("publicUrl = \"https://count.acme.dev/\"").unwrap();
+        let explicit = load("server { publicUrl = \"https://count.acme.dev/\" }").unwrap();
         assert_eq!(
             explicit.advertised(derived.as_deref()).as_deref(),
             Some("https://count.acme.dev")
         );
-        let off = load("advertise = false\npublicUrl = \"https://count.acme.dev\"").unwrap();
+        let off =
+            load("server {\n  advertise = false\n  publicUrl = \"https://count.acme.dev\"\n}")
+                .unwrap();
         assert_eq!(off.advertised(derived.as_deref()), None);
         for bad in [
             "http://count.acme.dev",
             "https://count.acme.dev/?a=b",
             "count",
         ] {
-            assert!(load(&format!("publicUrl = \"{bad}\"")).is_err(), "{bad}");
+            assert!(
+                load(&format!("server {{ publicUrl = \"{bad}\" }}")).is_err(),
+                "{bad}"
+            );
         }
     }
     #[test]
     fn reload_keeps_last_good_settings_and_recovers() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("server.pkl");
-        let source = "amends \"PatchulaServer.pkl\"\nconcurrency = 3\n";
+        let path = dir.path().join("settings.pkl");
+        let source = "amends \"PatchulaSettings.pkl\"\nconcurrency = 3\n";
         std::fs::write(&path, source).unwrap();
         let settings = Settings::load(&path).unwrap();
         let reload = Reload::new(settings);
-        std::fs::write(&path, "amends \"PatchulaServer.pkl\"\nconcurrency = 0\n").unwrap();
+        std::fs::write(&path, "amends \"PatchulaSettings.pkl\"\nconcurrency = 0\n").unwrap();
         reload.refresh(&path);
         assert!(!reload.valid());
         assert_eq!(reload.current().concurrency, 3);
@@ -358,9 +448,34 @@ mod tests {
         assert_eq!(reload.current().concurrency, 5);
         std::fs::write(
             &path,
-            "amends \"PatchulaServer.pkl\"\nwebhookSecret = \"forbidden\"\n",
+            "amends \"PatchulaSettings.pkl\"\nwebhookSecret = \"forbidden\"\n",
         )
         .unwrap();
         assert!(Settings::load(&path).is_err());
+    }
+    #[test]
+    fn defaults_match_the_schema_and_http_settings_are_validated() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.pkl");
+        let load = |body: &str| {
+            std::fs::write(&path, format!("amends \"PatchulaSettings.pkl\"\n{body}\n")).unwrap();
+            Settings::load(&path)
+        };
+        assert_eq!(load("").unwrap(), Settings::default());
+        let http = load(
+            "http {\n  hostConcurrency { [\"api.github.com\"] = 8 }\n  goFreshnessSecs = 0\n}",
+        )
+        .unwrap()
+        .http_options();
+        assert_eq!(http.host_limit("api.github.com"), 8);
+        assert_eq!(http.host_limit("registry.npmjs.org"), 16);
+        assert_eq!(http.go_freshness_secs, 0);
+        for bad in [
+            "http { hostConcurrency { [\"API.github.com\"] = 8 } }",
+            "http { hostConcurrency { [\"api.github.com\"] = 0 } }",
+            "http { defaultHostConcurrency = 101 }",
+        ] {
+            assert!(load(bad).is_err(), "{bad}");
+        }
     }
 }

@@ -65,7 +65,7 @@ Examples:
     $ patchula apply --manager github-actions
 
     Run the GitHub App webhook server
-    $ patchula serve --settings server.pkl
+    $ patchula serve --settings settings.pkl
 
 Run 'patchula <command> --help' for more information on a command.
 
@@ -82,63 +82,58 @@ dependency's lookup failed, so its updates are unknown. 4 takes precedence over
 Usage: patchula apply [FLAGS]
 
 Flags:
-      --cache <DIR>               Cache directory, shared by every checkout.
-                                  Default: `patchula` in the user cache
-                                  directory (`~/Library/Caches` on macOS, else
-                                  `XDG_CACHE_HOME` or `~/.cache`).
-      --concurrency <N>           Maximum concurrent repository scans (1–100);
-                                  HTTP limits are per host.
-                                  (default: 8)
-      --host-concurrency <HOST=LIMIT>  Override a host's HTTP limit (1–100);
-                                  repeat per host. Default: 16.
-      --registry-freshness-secs <SECS>  Freshness seconds for OCI tag lists
-                                  without validators; 0 uses upstream
-                                  policy.
-                                  (default: 3600)
-      --go-freshness-secs <SECS>  Minimum freshness seconds for Go proxy
-                                  lists/latest; 0 uses upstream policy.
-                                  (default: 3600)
-      --config <FILE>             Local Pkl override applied to every selected
-                                  repository.
-      --default-config            Use the Count's defaults when the working tree
-                                  has no `patchula.pkl`, instead of asking.
-                                  Conflicts with `--config` and `--config-dir`.
-      --manager <MANAGER>         Only updates from this manager, such as
-                                  github-actions; repeat for more.
-      --dependency <PATTERN>      Only dependencies matching this name or
-                                  package, with config's `glob:`, `regex:` and
-                                  `!`; repeat for more.
-      --type <TYPE>               Only updates of this type; repeat for more.
-                                  [possible values: major, minor, patch, pin,
-                                  digest]
-      --dry-run                   Print the unified diff of what would be
-                                  written, and write nothing.
-      --check                     Write nothing; exit 3 if any selected update
-                                  is waiting, or 4 if a lookup failed.
-      --copier                    Also run your own `copier update` for each
-                                  selected template, before the other updates.
+      --cache <DIR>           Cache directory, shared by every checkout.
+                              Default: `patchula` in the user cache directory
+                              (`~/Library/Caches` on macOS, else
+                              `XDG_CACHE_HOME` or `~/.cache`).
+      --settings <FILE>       Operator settings file; also PATCHULA_SETTINGS.
+                              Default: `patchula/settings.pkl` in the user
+                              config directory (`XDG_CONFIG_HOME` or
+                              `~/.config`), when it exists. Keeps the run on
+                              this machine; a server uses its own settings.
+      --concurrency <N>       Maximum concurrent repository scans (1–100),
+                              overriding the settings file; HTTP limits are per
+                              host. Default: 8.
+      --config <FILE>         Local Pkl override applied to every selected
+                              repository.
+      --default-config        Use the Count's defaults when the working tree has
+                              no `patchula.pkl`, instead of asking. Conflicts
+                              with `--config` and `--config-dir`.
+      --manager <MANAGER>     Only updates from this manager, such as
+                              github-actions; repeat for more.
+      --dependency <PATTERN>  Only dependencies matching this name or package,
+                              with config's `glob:`, `regex:` and `!`; repeat
+                              for more.
+      --type <TYPE>           Only updates of this type; repeat for more.
+                              [possible values: major, minor, patch, pin,
+                              digest]
+      --dry-run               Print the unified diff of what would be written,
+                              and write nothing.
+      --check                 Write nothing; exit 3 if any selected update is
+                              waiting, or 4 if a lookup failed.
+      --copier                Also run your own `copier update` for each
+                              selected template, before the other updates.
 
-                                  The template's code runs on this machine as
-                                  you. The tree must be clean, the Count never
-                                  passes `--trust`, and copier asks its
-                                  questions on the terminal.
-      --copier-defaults           With `--copier`, take the defaults for
-                                  questions copier would ask, for use without a
-                                  terminal.
-  -h, --help                      Print help
+                              The template's code runs on this machine as you.
+                              The tree must be clean, the Count never passes
+                              `--trust`, and copier asks its questions on the
+                              terminal.
+      --copier-defaults       With `--copier`, take the defaults for questions
+                              copier would ask, for use without a terminal.
+  -h, --help                  Print help
 
 Global flags:
-      --recheck <WHEN>            When a ticked checkbox says it takes effect;
-                                  also PATCHULA_RECHECK. Default: now in the
-                                  server, next-run in the CLI.
-                                  [possible values: now, next-run]
-  -v, --verbose                   Show request counts and phase timings after a
-                                  batch; repeat for debug logs.
-      --color <WHEN>              Control ANSI colors in diagnostics.
-                                  [possible values: auto, always, never]
-                                  (default: auto)
-      --json                      Emit command results and errors as JSON;
-                                  configs stay Pkl.
+      --recheck <WHEN>        When a ticked checkbox says it takes effect; also
+                              PATCHULA_RECHECK. Default: now in the server,
+                              next-run in the CLI.
+                              [possible values: now, next-run]
+  -v, --verbose               Show request counts and phase timings after a
+                              batch; repeat for debug logs.
+      --color <WHEN>          Control ANSI colors in diagnostics.
+                              [possible values: auto, always, never]
+                              (default: auto)
+      --json                  Emit command results and errors as JSON; configs
+                              stay Pkl.
 
 Examples:
     Write every available update here
@@ -244,13 +239,13 @@ Inspect and validate Pkl configuration.
 Usage: patchula config <SUBCOMMAND>
 
 Commands:
-  check          Validate a Pkl config file or discover one in a repository
-                 directory.
-  check-server   Validate an operator Pkl server settings file without
-                 credentials or network.
-  schema         Print the bundled PatchulaConfig.pkl schema as Pkl source.
-  server-schema  Print the bundled PatchulaServer.pkl operator schema.
-  help           Print this message or the help of the given subcommand(s)
+  check            Validate a Pkl config file or discover one in a repository
+                   directory.
+  check-settings   Validate an operator settings file without credentials or
+                   network.
+  schema           Print the bundled PatchulaConfig.pkl schema as Pkl source.
+  settings-schema  Print the bundled PatchulaSettings.pkl operator schema.
+  help             Print this message or the help of the given subcommand(s)
 
 Flags:
   -h, --help            Print help
@@ -279,7 +274,7 @@ Examples:
     $ patchula config schema > PatchulaConfig.pkl
 
     Check operator settings
-    $ patchula config check-server server.pkl
+    $ patchula config check-settings settings.pkl
 
 Run 'patchula <command> --help' for more information on a command.
 
@@ -332,10 +327,10 @@ Global flags:
 
 Run 'patchula <command> --help' for more information on a command.
 
-==> patchula config server-schema --help
-Print the bundled PatchulaServer.pkl operator schema.
+==> patchula config settings-schema --help
+Print the bundled PatchulaSettings.pkl operator schema.
 
-Usage: patchula config server-schema
+Usage: patchula config settings-schema
 
 Flags:
   -h, --help            Print help
@@ -355,13 +350,13 @@ Global flags:
 
 Run 'patchula <command> --help' for more information on a command.
 
-==> patchula config check-server --help
-Validate an operator Pkl server settings file without credentials or network.
+==> patchula config check-settings --help
+Validate an operator settings file without credentials or network.
 
-Usage: patchula config check-server <PATH>
+Usage: patchula config check-settings <PATH>
 
 Arguments:
-  <PATH>  Server settings file to check.
+  <PATH>  Settings file to check.
 
 Flags:
   -h, --help            Print help
@@ -392,55 +387,49 @@ Arguments:
                  for the checkout here.
 
 Flags:
-      --all-repos                 Process every repository the token can reach
-                                  instead of naming them.
-      --cache <DIR>               Cache directory, shared by every checkout.
-                                  Default: `patchula` in the user cache
-                                  directory (`~/Library/Caches` on macOS, else
-                                  `XDG_CACHE_HOME` or `~/.cache`).
-      --concurrency <N>           Maximum concurrent repository scans (1–100);
-                                  HTTP limits are per host.
-                                  (default: 8)
-      --host-concurrency <HOST=LIMIT>  Override a host's HTTP limit (1–100);
-                                  repeat per host. Default: 16.
-      --registry-freshness-secs <SECS>  Freshness seconds for OCI tag lists
-                                  without validators; 0 uses upstream
-                                  policy.
-                                  (default: 3600)
-      --go-freshness-secs <SECS>  Minimum freshness seconds for Go proxy
-                                  lists/latest; 0 uses upstream policy.
-                                  (default: 3600)
-      --config <FILE>             Local Pkl override applied to every selected
-                                  repository.
-      --default-config            Use the Count's defaults when the working tree
-                                  has no `patchula.pkl`, instead of asking.
-                                  Conflicts with `--config` and `--config-dir`.
-      --config-dir <DIR>          Per-repository overrides:
-                                  `DIR/<owner>/<name>.pkl`, then
-                                  `DIR/<name>.pkl`; other repositories use their
-                                  own `patchula.pkl`, or are skipped without
-                                  one. Conflicts with `--config`.
-      --remote                    Run on a Count Patchula server
-                                  (PATCHULA_SERVER, or the one found for this
-                                  checkout) with its credentials and caches;
-                                  local config, cache and HTTP flags don't
-                                  apply.
-      --here                      Run on this machine, even if you chose to run
-                                  this checkout on a server.
-  -h, --help                      Print help
+      --all-repos         Process every repository the token can reach instead
+                          of naming them.
+      --cache <DIR>       Cache directory, shared by every checkout. Default:
+                          `patchula` in the user cache directory
+                          (`~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or
+                          `~/.cache`).
+      --settings <FILE>   Operator settings file; also PATCHULA_SETTINGS.
+                          Default: `patchula/settings.pkl` in the user config
+                          directory (`XDG_CONFIG_HOME` or `~/.config`), when it
+                          exists. Keeps the run on this machine; a server uses
+                          its own settings.
+      --concurrency <N>   Maximum concurrent repository scans (1–100),
+                          overriding the settings file; HTTP limits are per
+                          host. Default: 8.
+      --config <FILE>     Local Pkl override applied to every selected
+                          repository.
+      --default-config    Use the Count's defaults when the working tree has no
+                          `patchula.pkl`, instead of asking. Conflicts with
+                          `--config` and `--config-dir`.
+      --config-dir <DIR>  Per-repository overrides: `DIR/<owner>/<name>.pkl`,
+                          then `DIR/<name>.pkl`; other repositories use their
+                          own `patchula.pkl`, or are skipped without one.
+                          Conflicts with `--config`.
+      --remote            Run on a Count Patchula server (PATCHULA_SERVER, or
+                          the one found for this checkout) with its credentials
+                          and caches; local config, cache and HTTP flags don't
+                          apply.
+      --here              Run on this machine, even if you chose to run this
+                          checkout on a server.
+  -h, --help              Print help
 
 Global flags:
-      --recheck <WHEN>            When a ticked checkbox says it takes effect;
-                                  also PATCHULA_RECHECK. Default: now in the
-                                  server, next-run in the CLI.
-                                  [possible values: now, next-run]
-  -v, --verbose                   Show request counts and phase timings after a
-                                  batch; repeat for debug logs.
-      --color <WHEN>              Control ANSI colors in diagnostics.
-                                  [possible values: auto, always, never]
-                                  (default: auto)
-      --json                      Emit command results and errors as JSON;
-                                  configs stay Pkl.
+      --recheck <WHEN>    When a ticked checkbox says it takes effect; also
+                          PATCHULA_RECHECK. Default: now in the server, next-run
+                          in the CLI.
+                          [possible values: now, next-run]
+  -v, --verbose           Show request counts and phase timings after a batch;
+                          repeat for debug logs.
+      --color <WHEN>      Control ANSI colors in diagnostics.
+                          [possible values: auto, always, never]
+                          (default: auto)
+      --json              Emit command results and errors as JSON; configs stay
+                          Pkl.
 
 Examples:
     Report updates for the checkout here
@@ -476,60 +465,55 @@ Arguments:
                  for the checkout here.
 
 Flags:
-      --all-repos                 Process every repository the token can reach
-                                  instead of naming them.
-      --cache <DIR>               Cache directory, shared by every checkout.
-                                  Default: `patchula` in the user cache
-                                  directory (`~/Library/Caches` on macOS, else
-                                  `XDG_CACHE_HOME` or `~/.cache`).
-      --concurrency <N>           Maximum concurrent repository scans (1–100);
-                                  HTTP limits are per host.
-                                  (default: 8)
-      --host-concurrency <HOST=LIMIT>  Override a host's HTTP limit (1–100);
-                                  repeat per host. Default: 16.
-      --registry-freshness-secs <SECS>  Freshness seconds for OCI tag lists
-                                  without validators; 0 uses upstream
-                                  policy.
-                                  (default: 3600)
-      --go-freshness-secs <SECS>  Minimum freshness seconds for Go proxy
-                                  lists/latest; 0 uses upstream policy.
-                                  (default: 3600)
-      --config <FILE>             Local Pkl override applied to every selected
-                                  repository.
-      --default-config            Use the Count's defaults when the working tree
-                                  has no `patchula.pkl`, instead of asking.
-                                  Conflicts with `--config` and `--config-dir`.
-      --config-dir <DIR>          Per-repository overrides:
-                                  `DIR/<owner>/<name>.pkl`, then
-                                  `DIR/<name>.pkl`; other repositories use their
-                                  own `patchula.pkl`, or are skipped without
-                                  one. Conflicts with `--config`.
-      --remote                    Run on a Count Patchula server
-                                  (PATCHULA_SERVER, or the one found for this
-                                  checkout) with its credentials and caches;
-                                  local config, cache and HTTP flags don't
-                                  apply.
-      --here                      Run on this machine, even if you chose to run
-                                  this checkout on a server.
-      --dry-run                   Print planned branches, files and unified
-                                  diffs without writing to GitHub.
-      --allow-lockfile-pending    For testing: write manifest-only branches for
-                                  binary `bun.lockb` lockfiles, which can't be
-                                  regenerated.
-  -h, --help                      Print help
+      --all-repos               Process every repository the token can reach
+                                instead of naming them.
+      --cache <DIR>             Cache directory, shared by every checkout.
+                                Default: `patchula` in the user cache directory
+                                (`~/Library/Caches` on macOS, else
+                                `XDG_CACHE_HOME` or `~/.cache`).
+      --settings <FILE>         Operator settings file; also PATCHULA_SETTINGS.
+                                Default: `patchula/settings.pkl` in the user
+                                config directory (`XDG_CONFIG_HOME` or
+                                `~/.config`), when it exists. Keeps the run on
+                                this machine; a server uses its own settings.
+      --concurrency <N>         Maximum concurrent repository scans (1–100),
+                                overriding the settings file; HTTP limits are
+                                per host. Default: 8.
+      --config <FILE>           Local Pkl override applied to every selected
+                                repository.
+      --default-config          Use the Count's defaults when the working tree
+                                has no `patchula.pkl`, instead of asking.
+                                Conflicts with `--config` and `--config-dir`.
+      --config-dir <DIR>        Per-repository overrides:
+                                `DIR/<owner>/<name>.pkl`, then `DIR/<name>.pkl`;
+                                other repositories use their own `patchula.pkl`,
+                                or are skipped without one. Conflicts with
+                                `--config`.
+      --remote                  Run on a Count Patchula server (PATCHULA_SERVER,
+                                or the one found for this checkout) with its
+                                credentials and caches; local config, cache and
+                                HTTP flags don't apply.
+      --here                    Run on this machine, even if you chose to run
+                                this checkout on a server.
+      --dry-run                 Print planned branches, files and unified diffs
+                                without writing to GitHub.
+      --allow-lockfile-pending  For testing: write manifest-only branches for
+                                binary `bun.lockb` lockfiles, which can't be
+                                regenerated.
+  -h, --help                    Print help
 
 Global flags:
-      --recheck <WHEN>            When a ticked checkbox says it takes effect;
-                                  also PATCHULA_RECHECK. Default: now in the
-                                  server, next-run in the CLI.
-                                  [possible values: now, next-run]
-  -v, --verbose                   Show request counts and phase timings after a
-                                  batch; repeat for debug logs.
-      --color <WHEN>              Control ANSI colors in diagnostics.
-                                  [possible values: auto, always, never]
-                                  (default: auto)
-      --json                      Emit command results and errors as JSON;
-                                  configs stay Pkl.
+      --recheck <WHEN>          When a ticked checkbox says it takes effect;
+                                also PATCHULA_RECHECK. Default: now in the
+                                server, next-run in the CLI.
+                                [possible values: now, next-run]
+  -v, --verbose                 Show request counts and phase timings after a
+                                batch; repeat for debug logs.
+      --color <WHEN>            Control ANSI colors in diagnostics.
+                                [possible values: auto, always, never]
+                                (default: auto)
+      --json                    Emit command results and errors as JSON; configs
+                                stay Pkl.
 
 Examples:
     Plan branches and diffs from this tree
@@ -549,8 +533,8 @@ Run the API-only GitHub App webhook server.
 Usage: patchula serve [FLAGS]
 
 Flags:
-      --settings <FILE>           Operator Pkl settings file; also
-                                  PATCHULA_SERVER_SETTINGS.
+      --settings <FILE>           Operator settings file; also
+                                  PATCHULA_SETTINGS.
       --listen <ADDR>             Server bind address; also PATCHULA_LISTEN
                                   (default 127.0.0.1:8080).
       --cache <DIR>               Server cache and queue directory; also
@@ -581,10 +565,10 @@ Global flags:
 
 Examples:
     Serve with operator settings
-    $ patchula serve --settings server.pkl
+    $ patchula serve --settings settings.pkl
 
     Listen on every interface
-    $ patchula serve --settings server.pkl --listen 0.0.0.0:8080
+    $ patchula serve --settings settings.pkl --listen 0.0.0.0:8080
 
 Run 'patchula <command> --help' for more information on a command.
 
@@ -689,57 +673,51 @@ Arguments:
                  for the checkout here.
 
 Flags:
-      --all-repos                 Process every repository the token can reach
-                                  instead of naming them.
-      --cache <DIR>               Cache directory, shared by every checkout.
-                                  Default: `patchula` in the user cache
-                                  directory (`~/Library/Caches` on macOS, else
-                                  `XDG_CACHE_HOME` or `~/.cache`).
-      --concurrency <N>           Maximum concurrent repository scans (1–100);
-                                  HTTP limits are per host.
-                                  (default: 8)
-      --host-concurrency <HOST=LIMIT>  Override a host's HTTP limit (1–100);
-                                  repeat per host. Default: 16.
-      --registry-freshness-secs <SECS>  Freshness seconds for OCI tag lists
-                                  without validators; 0 uses upstream
-                                  policy.
-                                  (default: 3600)
-      --go-freshness-secs <SECS>  Minimum freshness seconds for Go proxy
-                                  lists/latest; 0 uses upstream policy.
-                                  (default: 3600)
-      --config <FILE>             Local Pkl override applied to every selected
-                                  repository.
-      --default-config            Use the Count's defaults when the working tree
-                                  has no `patchula.pkl`, instead of asking.
-                                  Conflicts with `--config` and `--config-dir`.
-      --config-dir <DIR>          Per-repository overrides:
-                                  `DIR/<owner>/<name>.pkl`, then
-                                  `DIR/<name>.pkl`; other repositories use their
-                                  own `patchula.pkl`, or are skipped without
-                                  one. Conflicts with `--config`.
-      --remote                    Run on a Count Patchula server
-                                  (PATCHULA_SERVER, or the one found for this
-                                  checkout) with its credentials and caches;
-                                  local config, cache and HTTP flags don't
-                                  apply.
-      --here                      Run on this machine, even if you chose to run
-                                  this checkout on a server.
-      --once                      Print a plain-text snapshot of the updates and
-                                  exit, for pipes and CI logs.
-  -h, --help                      Print help
+      --all-repos         Process every repository the token can reach instead
+                          of naming them.
+      --cache <DIR>       Cache directory, shared by every checkout. Default:
+                          `patchula` in the user cache directory
+                          (`~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or
+                          `~/.cache`).
+      --settings <FILE>   Operator settings file; also PATCHULA_SETTINGS.
+                          Default: `patchula/settings.pkl` in the user config
+                          directory (`XDG_CONFIG_HOME` or `~/.config`), when it
+                          exists. Keeps the run on this machine; a server uses
+                          its own settings.
+      --concurrency <N>   Maximum concurrent repository scans (1–100),
+                          overriding the settings file; HTTP limits are per
+                          host. Default: 8.
+      --config <FILE>     Local Pkl override applied to every selected
+                          repository.
+      --default-config    Use the Count's defaults when the working tree has no
+                          `patchula.pkl`, instead of asking. Conflicts with
+                          `--config` and `--config-dir`.
+      --config-dir <DIR>  Per-repository overrides: `DIR/<owner>/<name>.pkl`,
+                          then `DIR/<name>.pkl`; other repositories use their
+                          own `patchula.pkl`, or are skipped without one.
+                          Conflicts with `--config`.
+      --remote            Run on a Count Patchula server (PATCHULA_SERVER, or
+                          the one found for this checkout) with its credentials
+                          and caches; local config, cache and HTTP flags don't
+                          apply.
+      --here              Run on this machine, even if you chose to run this
+                          checkout on a server.
+      --once              Print a plain-text snapshot of the updates and exit,
+                          for pipes and CI logs.
+  -h, --help              Print help
 
 Global flags:
-      --recheck <WHEN>            When a ticked checkbox says it takes effect;
-                                  also PATCHULA_RECHECK. Default: now in the
-                                  server, next-run in the CLI.
-                                  [possible values: now, next-run]
-  -v, --verbose                   Show request counts and phase timings after a
-                                  batch; repeat for debug logs.
-      --color <WHEN>              Control ANSI colors in diagnostics.
-                                  [possible values: auto, always, never]
-                                  (default: auto)
-      --json                      Emit command results and errors as JSON;
-                                  configs stay Pkl.
+      --recheck <WHEN>    When a ticked checkbox says it takes effect; also
+                          PATCHULA_RECHECK. Default: now in the server, next-run
+                          in the CLI.
+                          [possible values: now, next-run]
+  -v, --verbose           Show request counts and phase timings after a batch;
+                          repeat for debug logs.
+      --color <WHEN>      Control ANSI colors in diagnostics.
+                          [possible values: auto, always, never]
+                          (default: auto)
+      --json              Emit command results and errors as JSON; configs stay
+                          Pkl.
 
 Examples:
     Pick updates and apply them here

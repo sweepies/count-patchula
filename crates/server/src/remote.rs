@@ -473,7 +473,7 @@ impl Api {
         let client = Client::with_credentials(
             self.0.app.installation(installation),
             self.0.cache.clone(),
-            patchula_github::Options::default(),
+            self.0.settings.current().github_options(),
             self.0.transport.clone(),
         )
         .map_err(|_| {

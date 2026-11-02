@@ -357,7 +357,7 @@ fn unavailable() -> Reject {
 impl Public {
     fn enabled(&self) -> Result<crate::settings::Settings, Reject> {
         let settings = self.settings.current();
-        if !settings.public_api {
+        if !settings.server.public_api {
             return Err(Reject(
                 StatusCode::NOT_FOUND,
                 "disabled",

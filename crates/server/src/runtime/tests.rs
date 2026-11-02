@@ -179,7 +179,7 @@ async fn webhook_logs_one_decision_per_delivery_without_sensitive_data() {
         assert_eq!(logs.events().last().unwrap()["reason"], "own-bot ignored");
         value["sender"]["login"] = json!("human");
         let mut settings = state.settings.current();
-        settings.triggers.push = false;
+        settings.server.triggers.push = false;
         let disabled = router_for_settings(&state, settings.clone());
         disabled
             .oneshot(request(
@@ -190,8 +190,8 @@ async fn webhook_logs_one_decision_per_delivery_without_sensitive_data() {
             .await
             .unwrap();
         assert_eq!(logs.events().last().unwrap()["reason"], "trigger disabled");
-        settings.triggers.push = true;
-        settings.allowed_repositories = vec!["other/repo".into()];
+        settings.server.triggers.push = true;
+        settings.server.allowed_repositories = vec!["other/repo".into()];
         router_for_settings(&state, settings)
             .oneshot(request(
                 serde_json::to_vec(&value).unwrap(),
@@ -343,7 +343,7 @@ async fn repository_and_org_webhooks_resolve_installations_and_ping_does_no_work
     state.cache.finish_work(claims, true, 0, 0).await.unwrap();
     // Apply installation and repository allowlists after resolution, including cache hits.
     let mut denied = state.settings.current();
-    denied.allowed_installations = vec![2];
+    denied.server.allowed_installations = vec![2];
     router_for_settings(&state, denied)
         .oneshot(request(
             serde_json::to_vec(&value).unwrap(),
@@ -360,7 +360,7 @@ async fn repository_and_org_webhooks_resolve_installations_and_ping_does_no_work
         "installation-resolved"
     );
     let mut denied = state.settings.current();
-    denied.allowed_repositories = vec!["other/repo".into()];
+    denied.server.allowed_repositories = vec!["other/repo".into()];
     router_for_settings(&state, denied)
         .oneshot(request(
             serde_json::to_vec(&value).unwrap(),
@@ -548,7 +548,7 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
         signs_in: false,
     };
     let mut settings = settings();
-    settings.report_directory = Some(directory.path().to_owned());
+    settings.server.report_directory = Some(directory.path().to_owned());
     let attribution = Attribution::reason("startup discovery");
     runner
         .run(&[Work::repository(1, "")], &settings, &attribution)
@@ -810,7 +810,11 @@ impl Transport for DiscoveryAndMissingRepository {
 fn settings() -> Settings {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.pkl");
-    std::fs::write(&path, "amends \"PatchulaServer.pkl\"\ncoalescingMs = 0\n").unwrap();
+    std::fs::write(
+        &path,
+        "amends \"PatchulaSettings.pkl\"\nserver { coalescingMs = 0 }\n",
+    )
+    .unwrap();
     Settings::load(&path).unwrap()
 }
 async fn state() -> Webhook {
@@ -961,17 +965,17 @@ fn every_trigger_and_switch_and_filters() {
             "{event}"
         );
         let mut value = serde_json::to_value(&settings).unwrap();
-        value["triggers"][switch] = json!(false);
+        value["server"]["triggers"][switch] = json!(false);
         let disabled: Settings = serde_json::from_value(value).unwrap();
         assert!(
             crate::webhook::classify(event, &payload, &disabled, "patchula[bot]").is_empty(),
             "{event} disabled"
         );
         let mut filtered = settings.clone();
-        filtered.allowed_installations = vec![2];
+        filtered.server.allowed_installations = vec![2];
         assert!(crate::webhook::classify(event, &payload, &filtered, "patchula[bot]").is_empty());
-        filtered.allowed_installations.clear();
-        filtered.allowed_repositories = vec!["other/repo".into()];
+        filtered.server.allowed_installations.clear();
+        filtered.server.allowed_repositories = vec!["other/repo".into()];
         assert!(crate::webhook::classify(event, &payload, &filtered, "patchula[bot]").is_empty());
         let mut own = payload.clone();
         own["sender"]["login"] = json!("patchula[bot]");
@@ -1243,8 +1247,8 @@ async fn sigterm_during_batch_retains_unfinished_work() {
 #[test]
 fn cron_obeys_timezone_and_can_be_disabled() {
     let mut settings = settings();
-    settings.sweep_cron = Some("0 0 9 * * *".into());
-    settings.sweep_timezone = "America/New_York".into();
+    settings.server.sweep_cron = Some("0 0 9 * * *".into());
+    settings.server.sweep_timezone = "America/New_York".into();
     let now = chrono::DateTime::parse_from_rfc3339("2026-10-15T12:00:00Z")
         .unwrap()
         .with_timezone(&Utc);
@@ -1252,7 +1256,7 @@ fn cron_obeys_timezone_and_can_be_disabled() {
         sweep_after(&settings, now).unwrap().to_rfc3339(),
         "2026-10-15T13:00:00+00:00"
     );
-    settings.sweep_cron = None;
+    settings.server.sweep_cron = None;
     assert!(sweep_after(&settings, now).is_none());
 }
 #[tokio::test]

@@ -147,17 +147,20 @@ impl Engine {
         cache: Cache,
         concurrency: usize,
         transport: Arc<dyn Transport>,
+        http_options: patchula_http::Options,
+        github_options: GithubOptions,
     ) -> Result<Self> {
-        let mut engine = Self::with_transport(
+        let mut engine = Self::with_http_options(
             "installation",
             cache.clone(),
             concurrency,
             transport.clone(),
+            http_options,
         )?;
         engine.github = Github::with_credentials(
             credentials.clone(),
             cache.clone(),
-            GithubOptions::default(),
+            github_options,
             transport,
         )?;
         engine.sources = Sources::new(engine.github.clone(), engine.http.clone(), cache.clone());

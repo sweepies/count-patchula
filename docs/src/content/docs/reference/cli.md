@@ -46,7 +46,7 @@ patchula apply --manager github-actions
 Run the GitHub App webhook server
 
 ```sh
-patchula serve --settings server.pkl
+patchula serve --settings settings.pkl
 ```
 
 - **Usage:** `patchula [FLAGS] [SUBCOMMAND]`
@@ -80,10 +80,8 @@ Exit codes: 0 = nothing selected is left to apply; 1 = runtime error; 2 = usage 
 | Flag | Description | Default |
 | --- | --- | --- |
 | `--cache <DIR>` | Cache directory, shared by every checkout. Default: `patchula` in the user cache directory (`~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or `~/.cache`). |  |
-| `--concurrency <N>` | Maximum concurrent repository scans (1–100); HTTP limits are per host. | `8` |
-| `--host-concurrency <HOST=LIMIT>` | Override a host's HTTP limit (1–100); repeat per host. Default: 16. |  |
-| `--registry-freshness-secs <SECS>` | Freshness seconds for OCI tag lists without validators; 0 uses upstream policy. | `3600` |
-| `--go-freshness-secs <SECS>` | Minimum freshness seconds for Go proxy lists/latest; 0 uses upstream policy. | `3600` |
+| `--settings <FILE>` | Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists. Keeps the run on this machine; a server uses its own settings. |  |
+| `--concurrency <N>` | Maximum concurrent repository scans (1–100), overriding the settings file; HTTP limits are per host. Default: 8. |  |
 | `--config <FILE>` | Local Pkl override applied to every selected repository. |  |
 | `--default-config` | Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking. Conflicts with `--config` and `--config-dir`. |  |
 | `--manager <MANAGER>` | Only updates from this manager, such as github-actions; repeat for more. |  |
@@ -208,7 +206,7 @@ patchula config schema > PatchulaConfig.pkl
 Check operator settings
 
 ```sh
-patchula config check-server server.pkl
+patchula config check-settings settings.pkl
 ```
 
 ## `patchula config check`
@@ -241,11 +239,11 @@ Print the bundled PatchulaConfig.pkl schema as Pkl source.
 | --- | --- | --- |
 | `-h --help` | Print help |  |
 
-## `patchula config server-schema`
+## `patchula config settings-schema`
 
-- **Usage:** `patchula config server-schema`
+- **Usage:** `patchula config settings-schema`
 
-Print the bundled PatchulaServer.pkl operator schema.
+Print the bundled PatchulaSettings.pkl operator schema.
 
 ### Flags
 
@@ -253,17 +251,17 @@ Print the bundled PatchulaServer.pkl operator schema.
 | --- | --- | --- |
 | `-h --help` | Print help |  |
 
-## `patchula config check-server`
+## `patchula config check-settings`
 
-- **Usage:** `patchula config check-server <PATH>`
+- **Usage:** `patchula config check-settings <PATH>`
 
-Validate an operator Pkl server settings file without credentials or network.
+Validate an operator settings file without credentials or network.
 
 ### Arguments
 
 | Argument | Description | Default |
 | --- | --- | --- |
-| `<PATH>` | Server settings file to check. |  |
+| `<PATH>` | Settings file to check. |  |
 
 ### Flags
 
@@ -289,10 +287,8 @@ Report available updates without writing; with no repository, reads the working 
 | --- | --- | --- |
 | `--all-repos` | Process every repository the token can reach instead of naming them. |  |
 | `--cache <DIR>` | Cache directory, shared by every checkout. Default: `patchula` in the user cache directory (`~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or `~/.cache`). |  |
-| `--concurrency <N>` | Maximum concurrent repository scans (1–100); HTTP limits are per host. | `8` |
-| `--host-concurrency <HOST=LIMIT>` | Override a host's HTTP limit (1–100); repeat per host. Default: 16. |  |
-| `--registry-freshness-secs <SECS>` | Freshness seconds for OCI tag lists without validators; 0 uses upstream policy. | `3600` |
-| `--go-freshness-secs <SECS>` | Minimum freshness seconds for Go proxy lists/latest; 0 uses upstream policy. | `3600` |
+| `--settings <FILE>` | Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists. Keeps the run on this machine; a server uses its own settings. |  |
+| `--concurrency <N>` | Maximum concurrent repository scans (1–100), overriding the settings file; HTTP limits are per host. Default: 8. |  |
 | `--config <FILE>` | Local Pkl override applied to every selected repository. |  |
 | `--default-config` | Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking. Conflicts with `--config` and `--config-dir`. |  |
 | `--config-dir <DIR>` | Per-repository overrides: `DIR/<owner>/<name>.pkl`, then `DIR/<name>.pkl`; other repositories use their own `patchula.pkl`, or are skipped without one. Conflicts with `--config`. |  |
@@ -348,10 +344,8 @@ Failed lookups are reported but the run still exits 0, since it keeps the pull r
 | --- | --- | --- |
 | `--all-repos` | Process every repository the token can reach instead of naming them. |  |
 | `--cache <DIR>` | Cache directory, shared by every checkout. Default: `patchula` in the user cache directory (`~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or `~/.cache`). |  |
-| `--concurrency <N>` | Maximum concurrent repository scans (1–100); HTTP limits are per host. | `8` |
-| `--host-concurrency <HOST=LIMIT>` | Override a host's HTTP limit (1–100); repeat per host. Default: 16. |  |
-| `--registry-freshness-secs <SECS>` | Freshness seconds for OCI tag lists without validators; 0 uses upstream policy. | `3600` |
-| `--go-freshness-secs <SECS>` | Minimum freshness seconds for Go proxy lists/latest; 0 uses upstream policy. | `3600` |
+| `--settings <FILE>` | Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists. Keeps the run on this machine; a server uses its own settings. |  |
+| `--concurrency <N>` | Maximum concurrent repository scans (1–100), overriding the settings file; HTTP limits are per host. Default: 8. |  |
 | `--config <FILE>` | Local Pkl override applied to every selected repository. |  |
 | `--default-config` | Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking. Conflicts with `--config` and `--config-dir`. |  |
 | `--config-dir <DIR>` | Per-repository overrides: `DIR/<owner>/<name>.pkl`, then `DIR/<name>.pkl`; other repositories use their own `patchula.pkl`, or are skipped without one. Conflicts with `--config`. |  |
@@ -391,7 +385,7 @@ Run the API-only GitHub App webhook server.
 
 | Flag | Description | Default |
 | --- | --- | --- |
-| `--settings <FILE>` | Operator Pkl settings file; also PATCHULA_SERVER_SETTINGS. |  |
+| `--settings <FILE>` | Operator settings file; also PATCHULA_SETTINGS. |  |
 | `--listen <ADDR>` | Server bind address; also PATCHULA_LISTEN (default 127.0.0.1:8080). |  |
 | `--cache <DIR>` | Server cache and queue directory; also PATCHULA_SERVER_CACHE. Default: `patchula/server` in the user cache directory. |  |
 | `--app-id <ID>` | GitHub App ID; also PATCHULA_APP_ID. |  |
@@ -405,13 +399,13 @@ Run the API-only GitHub App webhook server.
 Serve with operator settings
 
 ```sh
-patchula serve --settings server.pkl
+patchula serve --settings settings.pkl
 ```
 
 Listen on every interface
 
 ```sh
-patchula serve --settings server.pkl --listen 0.0.0.0:8080
+patchula serve --settings settings.pkl --listen 0.0.0.0:8080
 ```
 
 ## `patchula tools`
@@ -485,10 +479,8 @@ Browse dependencies and updates in the terminal; with no repository, apply selec
 | --- | --- | --- |
 | `--all-repos` | Process every repository the token can reach instead of naming them. |  |
 | `--cache <DIR>` | Cache directory, shared by every checkout. Default: `patchula` in the user cache directory (`~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or `~/.cache`). |  |
-| `--concurrency <N>` | Maximum concurrent repository scans (1–100); HTTP limits are per host. | `8` |
-| `--host-concurrency <HOST=LIMIT>` | Override a host's HTTP limit (1–100); repeat per host. Default: 16. |  |
-| `--registry-freshness-secs <SECS>` | Freshness seconds for OCI tag lists without validators; 0 uses upstream policy. | `3600` |
-| `--go-freshness-secs <SECS>` | Minimum freshness seconds for Go proxy lists/latest; 0 uses upstream policy. | `3600` |
+| `--settings <FILE>` | Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists. Keeps the run on this machine; a server uses its own settings. |  |
+| `--concurrency <N>` | Maximum concurrent repository scans (1–100), overriding the settings file; HTTP limits are per host. Default: 8. |  |
 | `--config <FILE>` | Local Pkl override applied to every selected repository. |  |
 | `--default-config` | Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking. Conflicts with `--config` and `--config-dir`. |  |
 | `--config-dir <DIR>` | Per-repository overrides: `DIR/<owner>/<name>.pkl`, then `DIR/<name>.pkl`; other repositories use their own `patchula.pkl`, or are skipped without one. Conflicts with `--config`. |  |
