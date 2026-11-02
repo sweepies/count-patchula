@@ -569,11 +569,11 @@ fn settings(scan: &cli::Scan) -> Result<patchula_server::settings::Settings, (u8
     Settings::load(&path).map_err(|e| (2, e))
 }
 
-/// `patchula/settings.pkl` under `XDG_CONFIG_HOME`, else `~/.config`.
+/// `patchula/settings.pkl` under an absolute `XDG_CONFIG_HOME`, else `~/.config`.
 fn user_settings() -> Option<std::path::PathBuf> {
     std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|dir| !dir.is_empty())
         .map(std::path::PathBuf::from)
+        .filter(|dir| dir.is_absolute())
         .or_else(|| {
             std::env::var_os(HOME_VAR).map(|home| std::path::PathBuf::from(home).join(".config"))
         })
@@ -731,6 +731,7 @@ async fn source(
     let writes = run.is_some_and(|run| !run.dry_run);
     let local_only = [
         (options.scan.config.is_some(), "--config"),
+        (options.scan.settings.is_some(), "--settings"),
         (options.config_dir.is_some(), "--config-dir"),
         (options.scan.default_config, "--default-config"),
         (options.all_repos, "--all-repos"),

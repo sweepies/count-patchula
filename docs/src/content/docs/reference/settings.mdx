@@ -7,15 +7,17 @@ import schema from "../../../../../PatchulaSettings.pkl?raw";
 
 Operator settings, in a Pkl file that amends the bundled `PatchulaSettings.pkl`.
 The CLI (`run`, `lookup`, `apply`, `tui`) and [`patchula serve`](/guide/server/)
-read the same file; only the server reads the `server` section, and the CLI
-ignores it. Print the schema with `patchula config settings-schema` and check a
-file with `patchula config check-settings <path>`. Secrets are never settings.
+read the same file. Only the server uses the `server` section, but the CLI
+still checks the whole file, so an invalid server value stops CLI commands
+too. Print the schema with `patchula config settings-schema` and check a file
+with `patchula config check-settings <path>`. Secrets are never settings.
 
 The CLI takes `--settings`, then `PATCHULA_SETTINGS`, then
-`patchula/settings.pkl` in the user config directory (`XDG_CONFIG_HOME`, else
-`~/.config`) when it exists, and the defaults below otherwise. `serve` needs
-`--settings` or `PATCHULA_SETTINGS`. With `--remote`, the server's settings
-apply and the local file is not read.
+`patchula/settings.pkl` in the user config directory (an absolute
+`XDG_CONFIG_HOME`, else `~/.config`) when it exists, and the defaults below
+otherwise. `serve` needs `--settings` or `PATCHULA_SETTINGS`. A run on a server
+uses the server's settings and never reads the local file; `--settings` keeps a
+run on this machine and cannot be combined with `--remote`.
 
 ```pkl
 amends "PatchulaSettings.pkl"
@@ -53,7 +55,7 @@ default.
 | `sweepCron` | `String?` | `"0 0 * * * *"` | six-field cron with seconds; `null` turns sweeps off |
 | `sweepTimezone` | `String` | `"UTC"` | IANA timezone for the sweep |
 | `batchSize` | `Int` | `32` | queue entries per batch, 1 to 1000 |
-| `coalescingMs` | `Int` | `1000` | how long the first event waits for company, 0 to 60000 |
+| `coalescingMs` | `Int` | `1000` | how long the first event waits for related events, 0 to 60000 |
 | `reportDirectory` | `String?` | `null` | write each report to a file here instead of logging it |
 | `allowedInstallations` | `Listing<Int>` | any | installation IDs to serve |
 | `allowedRepositories` | `Listing<String>` | any | `owner/repo` names to serve, case-insensitive |

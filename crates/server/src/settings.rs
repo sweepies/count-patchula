@@ -117,9 +117,12 @@ impl Settings {
         {
             return Err("recheck must be now or next-run");
         }
+        if !(1..=100).contains(&self.http.default_host_concurrency) {
+            return Err("defaultHostConcurrency must be 1..100");
+        }
         self.http_options()
             .validate()
-            .map_err(|_| "hostConcurrency needs lowercase hostnames and limits 1..100; defaultHostConcurrency must be 1..100")?;
+            .map_err(|_| "hostConcurrency needs lowercase hostnames and limits 1..100")?;
         let server = &self.server;
         if !(1..=1000).contains(&server.batch_size) {
             return Err("batchSize must be 1..1000");
@@ -171,6 +174,20 @@ impl Settings {
             registry_freshness_secs: self.http.registry_freshness_secs,
             go_freshness_secs: self.http.go_freshness_secs,
             ..Default::default()
+        }
+    }
+    /// The installation GitHub client settings. It keeps the client's own
+    /// lower default unless `http.hostConcurrency` sets api.github.com.
+    pub fn github_options(&self) -> patchula_github::Options {
+        let defaults = patchula_github::Options::default();
+        patchula_github::Options {
+            concurrency: self
+                .http
+                .host_concurrency
+                .get("api.github.com")
+                .copied()
+                .unwrap_or(defaults.concurrency),
+            ..defaults
         }
     }
     /// The URL to hide in what the Count writes: `publicUrl`, else the one

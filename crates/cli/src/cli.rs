@@ -344,7 +344,8 @@ pub struct Scan {
     #[usage(long, value_name = "DIR")]
     pub cache: Option<PathBuf>,
     /// Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the
-    /// user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists.
+    /// user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists. Keeps the run on
+    /// this machine; a server uses its own settings.
     #[usage(long, value_name = "FILE")]
     pub settings: Option<PathBuf>,
     /// Maximum concurrent repository scans (1–100), overriding the settings file; HTTP limits

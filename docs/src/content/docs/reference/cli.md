@@ -80,7 +80,7 @@ Exit codes: 0 = nothing selected is left to apply; 1 = runtime error; 2 = usage 
 | Flag | Description | Default |
 | --- | --- | --- |
 | `--cache <DIR>` | Cache directory, shared by every checkout. Default: `patchula` in the user cache directory (`~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or `~/.cache`). |  |
-| `--settings <FILE>` | Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists. |  |
+| `--settings <FILE>` | Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists. Keeps the run on this machine; a server uses its own settings. |  |
 | `--concurrency <N>` | Maximum concurrent repository scans (1–100), overriding the settings file; HTTP limits are per host. Default: 8. |  |
 | `--config <FILE>` | Local Pkl override applied to every selected repository. |  |
 | `--default-config` | Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking. Conflicts with `--config` and `--config-dir`. |  |
@@ -287,7 +287,7 @@ Report available updates without writing; with no repository, reads the working 
 | --- | --- | --- |
 | `--all-repos` | Process every repository the token can reach instead of naming them. |  |
 | `--cache <DIR>` | Cache directory, shared by every checkout. Default: `patchula` in the user cache directory (`~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or `~/.cache`). |  |
-| `--settings <FILE>` | Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists. |  |
+| `--settings <FILE>` | Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists. Keeps the run on this machine; a server uses its own settings. |  |
 | `--concurrency <N>` | Maximum concurrent repository scans (1–100), overriding the settings file; HTTP limits are per host. Default: 8. |  |
 | `--config <FILE>` | Local Pkl override applied to every selected repository. |  |
 | `--default-config` | Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking. Conflicts with `--config` and `--config-dir`. |  |
@@ -344,7 +344,7 @@ Failed lookups are reported but the run still exits 0, since it keeps the pull r
 | --- | --- | --- |
 | `--all-repos` | Process every repository the token can reach instead of naming them. |  |
 | `--cache <DIR>` | Cache directory, shared by every checkout. Default: `patchula` in the user cache directory (`~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or `~/.cache`). |  |
-| `--settings <FILE>` | Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists. |  |
+| `--settings <FILE>` | Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists. Keeps the run on this machine; a server uses its own settings. |  |
 | `--concurrency <N>` | Maximum concurrent repository scans (1–100), overriding the settings file; HTTP limits are per host. Default: 8. |  |
 | `--config <FILE>` | Local Pkl override applied to every selected repository. |  |
 | `--default-config` | Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking. Conflicts with `--config` and `--config-dir`. |  |
@@ -479,7 +479,7 @@ Browse dependencies and updates in the terminal; with no repository, apply selec
 | --- | --- | --- |
 | `--all-repos` | Process every repository the token can reach instead of naming them. |  |
 | `--cache <DIR>` | Cache directory, shared by every checkout. Default: `patchula` in the user cache directory (`~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or `~/.cache`). |  |
-| `--settings <FILE>` | Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists. |  |
+| `--settings <FILE>` | Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists. Keeps the run on this machine; a server uses its own settings. |  |
 | `--concurrency <N>` | Maximum concurrent repository scans (1–100), overriding the settings file; HTTP limits are per host. Default: 8. |  |
 | `--config <FILE>` | Local Pkl override applied to every selected repository. |  |
 | `--default-config` | Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking. Conflicts with `--config` and `--config-dir`. |  |

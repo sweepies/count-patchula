@@ -148,18 +148,8 @@ impl Engine {
         concurrency: usize,
         transport: Arc<dyn Transport>,
         http_options: patchula_http::Options,
+        github_options: GithubOptions,
     ) -> Result<Self> {
-        // An installation keeps the GitHub client's own lower default unless
-        // the operator sets a limit for api.github.com.
-        let defaults = GithubOptions::default();
-        let github_options = GithubOptions {
-            concurrency: http_options
-                .host_concurrency
-                .get("api.github.com")
-                .copied()
-                .unwrap_or(defaults.concurrency),
-            ..defaults
-        };
         let mut engine = Self::with_http_options(
             "installation",
             cache.clone(),

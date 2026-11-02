@@ -559,6 +559,17 @@ fn no_repository_reads_the_working_tree_and_a_real_run_needs_it_pushed() {
     );
     refused(
         dir,
+        &[
+            "lookup",
+            "--settings",
+            "settings.pkl",
+            "--remote",
+            "demo/app",
+        ],
+        "--settings only works on this machine",
+    );
+    refused(
+        dir,
         &["lookup", "--config-dir", "policy"],
         "--config-dir picks config",
     );

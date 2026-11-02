@@ -124,7 +124,7 @@ build these files on one organization module.
 | `dry-run` | `false` | Print planned branches and diffs without writing |
 | `version` | the action's version, or the latest release when the action is not used at a release tag | The Count version to install, such as `0.6.1` |
 | `binary` | | The path to a `patchula` binary to run instead of installing a release, such as one built from source to try unreleased changes. Overrides `version` |
-| `settings` | | The path to an operator [settings](/reference/settings/) file in the checkout, for HTTP limits and other operator settings |
+| `settings` | | The path to an operator [settings](/reference/settings/) file, for HTTP limits and other operator settings. The action does not check out your repository, so add `actions/checkout` before it when the file lives there. Empty falls back to `PATCHULA_SETTINGS`, then `~/.config/patchula/settings.pkl`, then the defaults |
 | `args` | | Extra `patchula run` arguments, such as `--config-dir policy` |
 
 The cache, with HTTP validators, write receipts and the lockfile tools, is

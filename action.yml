@@ -27,7 +27,7 @@ inputs:
     description: The path to a patchula binary to run instead of installing a release, such as one built from source. Overrides version.
     default: ""
   settings:
-    description: Path to an operator settings file (amending PatchulaSettings.pkl) for HTTP limits and other operator settings. Empty uses the defaults.
+    description: Path to an operator settings file (amending PatchulaSettings.pkl) for HTTP limits and other operator settings. The action does not check out the repository, so check it out first when the file lives there. Empty falls back to PATCHULA_SETTINGS, then ~/.config/patchula/settings.pkl, then the defaults.
     default: ""
   args:
     description: Extra arguments for `patchula run`, such as `--config-dir policy`, separated by spaces or newlines.

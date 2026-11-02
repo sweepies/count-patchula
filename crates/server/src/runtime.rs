@@ -335,7 +335,7 @@ impl Batch for Engines {
                 let client = Client::with_credentials(
                     credentials.clone(),
                     self.cache.clone(),
-                    patchula_github::Options::default(),
+                    settings.github_options(),
                     self.transport.clone(),
                 )
                 .map_err(|_| Error("cannot create installation client"))?;
@@ -392,7 +392,7 @@ impl Batch for Engines {
             let client = Client::with_credentials(
                 credentials.clone(),
                 self.cache.clone(),
-                patchula_github::Options::default(),
+                settings.github_options(),
                 self.transport.clone(),
             )
             .map_err(|_| Error("cannot create check-event client"))?;
@@ -511,6 +511,7 @@ impl Engines {
                 settings.concurrency,
                 self.transport.clone(),
                 settings.http_options(),
+                settings.github_options(),
             )
             .map_err(|_| Error("cannot create batch engine"))?
             .with_advisories();
@@ -574,7 +575,7 @@ impl crate::remote::Runner for Engines {
                 if let Ok(client) = Client::with_credentials(
                     self.app.installation(installation),
                     self.cache.clone(),
-                    patchula_github::Options::default(),
+                    settings.github_options(),
                     self.transport.clone(),
                 ) {
                     crate::public::record(
