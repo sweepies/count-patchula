@@ -8,7 +8,8 @@ export default {
     const url = new URL(request.url);
     if (url.pathname.endsWith("/") && prefersMarkdown(request.headers.get("Accept"))) {
       const markdown = await env.ASSETS.fetch(new URL(`${url.pathname}index.md`, url), request);
-      if (markdown.ok) {
+      // A 304 answers a conditional request for the Markdown copy itself.
+      if (markdown.ok || markdown.status === 304) {
         const response = negotiated(markdown);
         response.headers.set("Content-Type", "text/markdown; charset=utf-8");
         return response;

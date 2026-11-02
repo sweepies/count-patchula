@@ -1,6 +1,6 @@
 ---
 title: "Batch engine"
-description: "How the engine reads repositories, looks up updates, builds the report and exit codes, and writes branches."
+description: "How the engine reads repositories, looks up updates, builds the report and writes branches."
 ---
 `patchula-engine::Engine` takes a token, the shared SQLite cache, a
 concurrency cap and a transport. The CLI builds one network pool; tests inject
