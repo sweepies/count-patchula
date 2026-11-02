@@ -164,7 +164,7 @@ export default defineConfig({
           items: [
             { label: "CLI commands", slug: "reference/cli" },
             { label: "Configuration schema", slug: "reference/configuration" },
-            { label: "Server settings", slug: "reference/server-settings" },
+            { label: "Settings", slug: "reference/settings" },
             { label: "Environment variables", slug: "reference/environment" },
             { label: "JSON report", slug: "reference/report" },
           ],

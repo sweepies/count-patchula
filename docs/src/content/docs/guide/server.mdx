@@ -35,29 +35,34 @@ App's own webhook URL, using the same secret.
 
 ## Settings
 
-Operator settings are a Pkl file that amends the bundled `PatchulaServer.pkl`.
-They are separate from repository configs, which amend `PatchulaConfig.pkl`.
+Operator settings are a Pkl file that amends the bundled `PatchulaSettings.pkl`,
+the same file the CLI reads. They are separate from repository configs, which
+amend `PatchulaConfig.pkl`. Only the server reads the `server` section.
 
 ```pkl
-// /etc/patchula/server.pkl
-amends "PatchulaServer.pkl"
+// /etc/patchula/settings.pkl
+amends "PatchulaSettings.pkl"
 
-allowedInstallations { 123456 }
-allowedRepositories { "acme/my-app" }
-sweepCron = "0 0 * * * *"   // hourly; six fields, seconds first
-reportDirectory = "/var/lib/patchula/reports"
+concurrency = 8
+server {
+  allowedInstallations { 123456 }
+  allowedRepositories { "acme/my-app" }
+  sweepCron = "0 0 * * * *"   // hourly; six fields, seconds first
+  reportDirectory = "/var/lib/patchula/reports"
+}
 ```
 
 ```sh
-patchula config server-schema           # print the schema
-patchula config check-server /etc/patchula/server.pkl
+patchula config settings-schema           # print the schema
+patchula config check-settings /etc/patchula/settings.pkl
 ```
 
 Empty allowlists allow everything the App can see. The file is re-read about
 once a second. An invalid edit keeps the last good settings, logs a sanitised
 error and makes `/readyz` fail until it is fixed; a running batch keeps the
-snapshot it started with. Every setting is in the [server settings
-reference](/reference/server-settings/).
+snapshot it started with. A change to the `http` section takes effect at each
+installation's next batch. Every setting is in the [settings
+reference](/reference/settings/).
 
 ## Credentials and startup
 
@@ -65,7 +70,7 @@ reference](/reference/server-settings/).
 export PATCHULA_APP_ID=12345
 export PATCHULA_APP_PRIVATE_KEY_FILE=/etc/patchula/app.pem
 export PATCHULA_WEBHOOK_SECRET_FILE=/etc/patchula/webhook-secret
-export PATCHULA_SERVER_SETTINGS=/etc/patchula/server.pkl
+export PATCHULA_SETTINGS=/etc/patchula/settings.pkl
 export PATCHULA_SERVER_CACHE=/var/lib/patchula
 patchula serve
 ```
@@ -154,15 +159,15 @@ token, including personal access tokens and other Apps' tokens.
 Each repository in the request must:
 
 - have the App installed, in the same installation as the others, and be
-  allowed by the server settings;
+  allowed by the server's settings;
 - let you push. Read access is not enough, because on a public repository
   everyone has it.
 
 A server runs one request per user at a time, and a real run shares the queue's
 engine, so it never races a webhook batch. The repository's own `patchula.pkl`
 applies; `--config`, `--config-dir`, `--default-config`, `--all-repos`,
-`--allow-lockfile-pending` and `--recheck` only work locally, and the cache and
-HTTP flags are ignored. A run in progress at shutdown finishes within the
+`--allow-lockfile-pending` and `--recheck` only work locally, and `--cache`,
+`--concurrency` and your local settings file are ignored. A run in progress at shutdown finishes within the
 shutdown deadline.
 
 ### Found from a checkout
@@ -314,14 +319,14 @@ must be writable by user 10001.
 | Variable | Image default |
 |---|---|
 | `PATCHULA_LISTEN` | `0.0.0.0:8080` |
-| `PATCHULA_SERVER_SETTINGS` | `/etc/patchula/server.pkl`, which only amends `PatchulaServer.pkl` |
+| `PATCHULA_SETTINGS` | `/etc/patchula/settings.pkl`, which only amends `PatchulaSettings.pkl` |
 | `PATCHULA_SERVER_CACHE` | `/var/lib/patchula` |
 | `PATCHULA_TOOLS_DIR` | `/var/lib/patchula/tools` |
 | `RUSTUP_HOME` | `/var/lib/patchula/rustup` |
 | `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT` | `1` |
 
 The credentials have no default. Mount your [settings](#settings) file over
-`/etc/patchula/server.pkl`, or point `PATCHULA_SERVER_SETTINGS` at another path.
+`/etc/patchula/settings.pkl`, or point `PATCHULA_SETTINGS` at another path.
 
 ```sh
 docker run --detach --name patchula \
@@ -330,7 +335,7 @@ docker run --detach --name patchula \
   --health-cmd 'curl --fail --silent --output /dev/null http://127.0.0.1:8080/healthz' \
   --health-start-period 30s \
   --volume patchula:/var/lib/patchula \
-  --volume /etc/patchula/server.pkl:/etc/patchula/server.pkl:ro \
+  --volume /etc/patchula/settings.pkl:/etc/patchula/settings.pkl:ro \
   --volume /etc/patchula/app.pem:/run/secrets/app.pem:ro \
   --volume /etc/patchula/webhook-secret:/run/secrets/webhook-secret:ro \
   --env PATCHULA_APP_ID=12345 \
@@ -476,7 +481,7 @@ WorkingDirectory=/var/lib/patchula
 EnvironmentFile=/etc/patchula/environment
 LoadCredential=app.pem:/etc/patchula/app.pem
 LoadCredential=webhook-secret:/etc/patchula/webhook-secret
-ExecStart=/usr/local/bin/patchula serve --settings /etc/patchula/server.pkl --cache /var/lib/patchula --private-key-file %d/app.pem --webhook-secret-file %d/webhook-secret --shutdown-timeout-secs 60
+ExecStart=/usr/local/bin/patchula serve --settings /etc/patchula/settings.pkl --cache /var/lib/patchula --private-key-file %d/app.pem --webhook-secret-file %d/webhook-secret --shutdown-timeout-secs 60
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=75

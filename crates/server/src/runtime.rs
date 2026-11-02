@@ -129,7 +129,7 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
     };
     let current = settings.current();
     if client_id.is_some()
-        && current.advertise
+        && current.server.advertise
         && current.advertised(derived_url.as_deref()).is_none()
     {
         tracing::warn!(target: "patchula_server", "the App's webhook URL does not end in /webhook; set publicUrl to advertise this server");
@@ -309,7 +309,7 @@ struct Engines {
     app: Arc<App>,
     transport: Arc<dyn Transport>,
     cache: Cache,
-    engines: Mutex<BTreeMap<u64, Engine>>,
+    engines: Mutex<BTreeMap<u64, (crate::settings::Http, Engine)>>,
     recheck: Option<String>,
     bot_login: String,
     /// The server URL from the App's webhook URL, for `advertise`.
@@ -377,7 +377,7 @@ impl Batch for Engines {
                         None,
                         repos,
                         Utc::now().timestamp_millis(),
-                        settings.coalescing_ms as i64,
+                        settings.server.coalescing_ms as i64,
                         attribution.clone(),
                     )
                     .await
@@ -469,7 +469,7 @@ impl Batch for Engines {
                     actions: None,
                 },
             };
-            output_report(&report, settings.report_directory.as_deref()).await?;
+            output_report(&report, settings.server.report_directory.as_deref()).await?;
             let mut outcome = BatchOutcome::report(&report);
             if result.is_err() {
                 outcome.error_kinds.insert("engine-error", 1);
@@ -489,19 +489,28 @@ impl Engines {
             )
         }
     }
-    /// The installation's engine, created on first use and set to the current settings.
+    /// The installation's engine, created on first use and set to the current
+    /// settings. A change to the `http` settings replaces it, since its clients
+    /// are built from them.
     fn engine<'a>(
         &self,
-        engines: &'a mut BTreeMap<u64, Engine>,
+        engines: &'a mut BTreeMap<u64, (crate::settings::Http, Engine)>,
         id: u64,
         settings: &Settings,
     ) -> Result<&'a mut Engine, Error> {
+        if engines
+            .get(&id)
+            .is_some_and(|(http, _)| *http != settings.http)
+        {
+            engines.remove(&id);
+        }
         if let std::collections::btree_map::Entry::Vacant(entry) = engines.entry(id) {
             let mut engine = Engine::with_credentials(
                 self.app.installation(id),
                 self.cache.clone(),
                 settings.concurrency,
                 self.transport.clone(),
+                settings.http_options(),
             )
             .map_err(|_| Error("cannot create batch engine"))?
             .with_advisories();
@@ -515,9 +524,9 @@ impl Engines {
                 }
                 _ => return Err(Error("set both Docker Hub credentials to nonempty values")),
             }
-            entry.insert(engine);
+            entry.insert((settings.http.clone(), engine));
         }
-        let engine = engines.get_mut(&id).expect("installation engine");
+        let (_, engine) = engines.get_mut(&id).expect("installation engine");
         engine
             .set_batch_options(
                 settings.concurrency,
@@ -580,7 +589,7 @@ impl crate::remote::Runner for Engines {
                     .await;
                 }
                 tracing::info!(target: "patchula_server", installation, user = login, "remote run report");
-                output_report(&report, settings.report_directory.as_deref())
+                output_report(&report, settings.server.report_directory.as_deref())
                     .await
                     .map_err(|e| e.0)?;
             }
@@ -641,7 +650,7 @@ async fn worker(
         }
         let settings = settings.current();
         let claims = cache
-            .claim_batch(Utc::now().timestamp_millis(), settings.batch_size)
+            .claim_batch(Utc::now().timestamp_millis(), settings.server.batch_size)
             .await
             .map_err(|_| Error("queue claim failed"))?;
         if claims.is_empty() {
@@ -681,7 +690,7 @@ async fn worker(
                 !outcome.retry(),
                 Utc::now().timestamp_millis(),
                 if !outcome.retry() {
-                    settings.coalescing_ms as i64
+                    settings.server.coalescing_ms as i64
                 } else {
                     60_000
                 },
@@ -773,15 +782,18 @@ async fn maintenance(
     // installations straight away.
     let mut next_sweep = sweep_after(&settings.current(), Utc::now());
     let mut schedule = (
-        settings.current().sweep_cron,
-        settings.current().sweep_timezone,
+        settings.current().server.sweep_cron,
+        settings.current().server.sweep_timezone,
     );
     loop {
         if *stop.borrow() {
             break;
         }
         let current = settings.current();
-        let new_schedule = (current.sweep_cron.clone(), current.sweep_timezone.clone());
+        let new_schedule = (
+            current.server.sweep_cron.clone(),
+            current.server.sweep_timezone.clone(),
+        );
         if new_schedule != schedule {
             next_sweep = sweep_after(&current, Utc::now());
             schedule = new_schedule;
@@ -819,7 +831,7 @@ async fn maintenance(
                                 .map(|id| Work::repository(id, String::default()))
                                 .collect(),
                             Utc::now().timestamp_millis(),
-                            current.coalescing_ms as i64,
+                            current.server.coalescing_ms as i64,
                             Attribution::reason("sweep"),
                         )
                         .await
@@ -871,8 +883,8 @@ async fn check_candidate(client: &Client, work: &Work, bot: &str) -> Result<bool
     Ok(false)
 }
 fn sweep_after(settings: &Settings, now: chrono::DateTime<Utc>) -> Option<chrono::DateTime<Utc>> {
-    let schedule = patchula_config::schedule(settings.sweep_cron.as_deref()?, true).ok()?;
-    let tz = chrono_tz::Tz::from_str(&settings.sweep_timezone).ok()?;
+    let schedule = patchula_config::schedule(settings.server.sweep_cron.as_deref()?, true).ok()?;
+    let tz = chrono_tz::Tz::from_str(&settings.server.sweep_timezone).ok()?;
     schedule
         .after(&now.with_timezone(&tz))
         .next()

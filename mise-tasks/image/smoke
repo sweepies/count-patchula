@@ -66,7 +66,7 @@ def main [--arch: string = "amd64"] {
   check "a volume at /var/lib/patchula" ($config.Volumes has "/var/lib/patchula")
   check "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1" ("DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1" in $config.Env)
   check "annotations" ($annotations."org.opencontainers.image.source" == "https://github.com/sweepies/count-patchula" and $annotations."org.opencontainers.image.licenses" == "MIT" and $annotations."org.opencontainers.image.revision" == (^git rev-parse HEAD | str trim))
-  check "config check-server" ((^docker run --rm $image config check-server /etc/patchula/server.pkl | complete).exit_code == 0)
+  check "config check-settings" ((^docker run --rm $image config check-settings /etc/patchula/settings.pkl | complete).exit_code == 0)
   check "git over https with the image's CA bundle" ((run-in $image $platform git ls-remote --heads https://github.com/sweepies/count-patchula main).exit_code == 0)
 
   let work = mktemp -d -t patchula-smoke.XXXXXX

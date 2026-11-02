@@ -28,8 +28,8 @@ manager, and rules can select by it.
 Every response is stored with its validators, and every repeat request is
 conditional. Unauthenticated registries honour their declared `max-age`. Go proxy
 lists and validator-free OCI tag pages get a one-hour local freshness floor
-(`--go-freshness-secs`, `--registry-freshness-secs`; `0` restores upstream
-behaviour), because those endpoints would otherwise be read on every run.
+(`http.goFreshnessSecs` and `http.registryFreshnessSecs` in the
+[settings](/reference/settings/); `0` restores upstream behaviour), because those endpoints would otherwise be read on every run.
 
 GitHub histories are read in pieces:
 

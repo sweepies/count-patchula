@@ -26,7 +26,7 @@ fn help_version_and_bundled_schema() {
         String::from_utf8(output.stdout).unwrap(),
         patchula_config::SCHEMA
     );
-    let output = cli(&["config", "server-schema"]);
+    let output = cli(&["config", "settings-schema"]);
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
@@ -47,8 +47,8 @@ fn help_pages_match_the_snapshot() {
         &["config"],
         &["config", "check"],
         &["config", "schema"],
-        &["config", "server-schema"],
-        &["config", "check-server"],
+        &["config", "settings-schema"],
+        &["config", "check-settings"],
         &["lookup"],
         &["run"],
         &["serve"],
@@ -129,8 +129,8 @@ fn help_is_plain_when_piped_or_refused_colour_and_styled_when_forced() {
 fn operator_settings_are_checked_offline_and_secret_diagnostics_are_sanitized() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("server.pkl");
-    std::fs::write(&path, "amends \"PatchulaServer.pkl\"\nconcurrency = 2\n").unwrap();
-    let output = cli(&["config", "check-server", path.to_str().unwrap(), "--json"]);
+    std::fs::write(&path, "amends \"PatchulaSettings.pkl\"\nconcurrency = 2\n").unwrap();
+    let output = cli(&["config", "check-settings", path.to_str().unwrap(), "--json"]);
     assert!(output.status.success());
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["valid"],
@@ -138,12 +138,57 @@ fn operator_settings_are_checked_offline_and_secret_diagnostics_are_sanitized() 
     );
     std::fs::write(
         &path,
-        "amends \"PatchulaServer.pkl\"\nprivateKey = \"do-not-echo-test-secret\"\n",
+        "amends \"PatchulaSettings.pkl\"\nprivateKey = \"do-not-echo-test-secret\"\n",
     )
     .unwrap();
-    let output = cli(&["config", "check-server", path.to_str().unwrap()]);
+    let output = cli(&["config", "check-settings", path.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(2));
     assert!(!String::from_utf8_lossy(&output.stderr).contains("do-not-echo-test-secret"));
+}
+
+#[test]
+fn local_commands_read_settings_from_the_flag_the_environment_and_the_config_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let invalid = "amends \"PatchulaSettings.pkl\"\nhttp { defaultHostConcurrency = 0 }\n";
+    let flagged = dir.path().join("flagged.pkl");
+    std::fs::write(&flagged, invalid).unwrap();
+    let user = dir.path().join("config/patchula/settings.pkl");
+    std::fs::create_dir_all(user.parent().unwrap()).unwrap();
+    std::fs::write(&user, invalid).unwrap();
+    // Each source is read before a token is needed, so an invalid file stops
+    // the lookup offline with its own diagnostic.
+    let lookup = |args: &[&str], env: Option<(&str, &std::path::Path)>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_patchula"));
+        command
+            .arg("lookup")
+            .args(args)
+            .arg("acme/app")
+            .env("XDG_CONFIG_HOME", dir.path().join("empty"))
+            .env("GH_CONFIG_DIR", SIGNED_OUT_GH)
+            .env_remove("PATCHULA_SETTINGS")
+            .env_remove("PATCHULA_TOKEN")
+            .env_remove("GITHUB_TOKEN")
+            .env_remove("GH_TOKEN");
+        if let Some((name, value)) = env {
+            command.env(name, value);
+        }
+        command.output().unwrap()
+    };
+    for output in [
+        lookup(&["--settings", flagged.to_str().unwrap()], None),
+        lookup(&[], Some(("PATCHULA_SETTINGS", &flagged))),
+        lookup(&[], Some(("XDG_CONFIG_HOME", &dir.path().join("config")))),
+    ] {
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("defaultHostConcurrency"),
+            "{output:?}"
+        );
+    }
+    // Without any settings file the defaults apply and the lookup goes on to
+    // need a token.
+    let output = lookup(&[], None);
+    assert_ne!(output.status.code(), Some(2), "{output:?}");
 }
 
 #[test]
@@ -152,10 +197,10 @@ fn settings_diagnostics_reach_check_and_server_startup() {
     let settings = dir.path().join("server.pkl");
     std::fs::write(
         &settings,
-        "amends \"PatchulaServer.pkl\"\nconcurrency = 0\n",
+        "amends \"PatchulaSettings.pkl\"\nconcurrency = 0\n",
     )
     .unwrap();
-    let checked = cli(&["config", "check-server", settings.to_str().unwrap()]);
+    let checked = cli(&["config", "check-settings", settings.to_str().unwrap()]);
     assert_eq!(checked.status.code(), Some(2));
     let diagnostic = String::from_utf8(checked.stderr).unwrap();
     assert!(diagnostic.contains("server.pkl") && diagnostic.contains("concurrency"));
@@ -190,7 +235,7 @@ fn settings_diagnostics_reach_check_and_server_startup() {
 fn server_startup_errors_are_json_and_never_echo_secret_values() {
     let dir = tempfile::tempdir().unwrap();
     let settings = dir.path().join("server.pkl");
-    std::fs::write(&settings, "amends \"PatchulaServer.pkl\"\n").unwrap();
+    std::fs::write(&settings, "amends \"PatchulaSettings.pkl\"\n").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_patchula"))
         .args([
             "serve",

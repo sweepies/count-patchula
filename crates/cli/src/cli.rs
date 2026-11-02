@@ -58,7 +58,7 @@ pub const PALETTE: Palette = Palette::DEFAULT
         help = "Write only GitHub Actions updates"
     ),
     example(
-        "patchula serve --settings server.pkl",
+        "patchula serve --settings settings.pkl",
         help = "Run the GitHub App webhook server"
     )
 )]
@@ -131,7 +131,7 @@ pub enum Command {
             help = "Save the schema for your editor"
         ),
         example(
-            "patchula config check-server server.pkl",
+            "patchula config check-settings settings.pkl",
             help = "Check operator settings"
         )
     )]
@@ -176,11 +176,11 @@ pub enum Command {
     /// Run the API-only GitHub App webhook server.
     #[usage(
         example(
-            "patchula serve --settings server.pkl",
+            "patchula serve --settings settings.pkl",
             help = "Serve with operator settings"
         ),
         example(
-            "patchula serve --settings server.pkl --listen 0.0.0.0:8080",
+            "patchula serve --settings settings.pkl --listen 0.0.0.0:8080",
             help = "Listen on every interface"
         )
     )]
@@ -232,7 +232,7 @@ pub struct AuthServer {
 
 #[derive(Args)]
 pub struct Serve {
-    /// Operator Pkl settings file; also PATCHULA_SERVER_SETTINGS.
+    /// Operator settings file; also PATCHULA_SETTINGS.
     #[usage(long, value_name = "FILE")]
     pub settings: Option<PathBuf>,
     /// Server bind address; also PATCHULA_LISTEN (default 127.0.0.1:8080).
@@ -343,18 +343,14 @@ pub struct Scan {
     /// (`~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or `~/.cache`).
     #[usage(long, value_name = "DIR")]
     pub cache: Option<PathBuf>,
-    /// Maximum concurrent repository scans (1–100); HTTP limits are per host.
-    #[usage(long, value_name = "N", default = "8")]
-    pub concurrency: usize,
-    /// Override a host's HTTP limit (1–100); repeat per host. Default: 16.
-    #[usage(long, value_name = "HOST=LIMIT")]
-    pub host_concurrency: Vec<String>,
-    /// Freshness seconds for OCI tag lists without validators; 0 uses upstream policy.
-    #[usage(long, value_name = "SECS", default = "3600")]
-    pub registry_freshness_secs: u64,
-    /// Minimum freshness seconds for Go proxy lists/latest; 0 uses upstream policy.
-    #[usage(long, value_name = "SECS", default = "3600")]
-    pub go_freshness_secs: u64,
+    /// Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the
+    /// user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists.
+    #[usage(long, value_name = "FILE")]
+    pub settings: Option<PathBuf>,
+    /// Maximum concurrent repository scans (1–100), overriding the settings file; HTTP limits
+    /// are per host. Default: 8.
+    #[usage(long, value_name = "N")]
+    pub concurrency: Option<usize>,
     /// Local Pkl override applied to every selected repository.
     #[usage(long, value_name = "FILE")]
     pub config: Option<PathBuf>,
@@ -421,10 +417,10 @@ pub enum ConfigCommand {
     Check(Check),
     /// Print the bundled PatchulaConfig.pkl schema as Pkl source.
     Schema,
-    /// Print the bundled PatchulaServer.pkl operator schema.
-    ServerSchema,
-    /// Validate an operator Pkl server settings file without credentials or network.
-    CheckServer(CheckServer),
+    /// Print the bundled PatchulaSettings.pkl operator schema.
+    SettingsSchema,
+    /// Validate an operator settings file without credentials or network.
+    CheckSettings(CheckSettings),
 }
 
 #[derive(Args)]
@@ -434,8 +430,8 @@ pub struct Check {
 }
 
 #[derive(Args)]
-pub struct CheckServer {
-    /// Server settings file to check.
+pub struct CheckSettings {
+    /// Settings file to check.
     pub path: PathBuf,
 }
 
@@ -477,7 +473,7 @@ mod tests {
             &[
                 "serve",
                 "--settings",
-                "/operator/server.pkl",
+                "/operator/settings.pkl",
                 "--recheck",
                 "next-run",
             ]
@@ -489,7 +485,7 @@ mod tests {
         };
         assert_eq!(
             serve.settings.as_deref(),
-            Some(std::path::Path::new("/operator/server.pkl"))
+            Some(std::path::Path::new("/operator/settings.pkl"))
         );
         assert_eq!(app.recheck, Some(Recheck::NextRun));
         let app =
@@ -529,7 +525,7 @@ mod tests {
             panic!("lookup")
         };
         assert_eq!(options.repositories, vec!["acme/runner"]);
-        assert_eq!(options.scan.concurrency, 4);
+        assert_eq!(options.scan.concurrency, Some(4));
         let app = App::parse_from(&[std::ffi::OsStr::new("lookup")]).unwrap();
         let Some(Command::Lookup(options)) = app.command else {
             panic!("lookup")
@@ -538,15 +534,11 @@ mod tests {
     }
 
     #[test]
-    fn host_limits_repeat_without_consuming_repositories() {
+    fn settings_file_and_concurrency_are_optional() {
         let words = [
             "lookup",
-            "--host-concurrency",
-            "api.github.com=32",
-            "--host-concurrency",
-            "ghcr.io=8",
-            "--go-freshness-secs",
-            "0",
+            "--settings",
+            "/operator/settings.pkl",
             "owner/repo",
         ]
         .map(std::ffi::OsStr::new);
@@ -556,10 +548,10 @@ mod tests {
         };
         assert_eq!(options.repositories, ["owner/repo"]);
         assert_eq!(
-            options.scan.host_concurrency,
-            ["api.github.com=32", "ghcr.io=8"]
+            options.scan.settings.as_deref(),
+            Some(std::path::Path::new("/operator/settings.pkl"))
         );
-        assert_eq!(options.scan.go_freshness_secs, 0);
+        assert_eq!(options.scan.concurrency, None);
     }
 
     #[test]

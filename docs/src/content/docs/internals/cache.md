@@ -85,12 +85,13 @@ must initialise tracing for the warnings to show.
 
 ## Host limits
 
-- `--concurrency` sets repository scan parallelism (default 8).
-- Registry requests use per-host semaphores, 16 each by default, independent of
-  repository work. `--host-concurrency api.github.com=8` overrides one host;
-  repeat it for others. Limits must be 1–100.
+- `concurrency` in the [settings](/reference/settings/), or `--concurrency`,
+  sets repository scan parallelism (default 8).
+- Registry requests use per-host semaphores, `http.defaultHostConcurrency`
+  (16) each, independent of repository work. `http.hostConcurrency` overrides
+  single hosts, such as `["api.github.com"] = 8`. Limits must be 1–100.
 - GitHub REST and GraphQL share one governor, sized by the `api.github.com`
-  host limit. That is below GitHub's 100 simultaneous requests, but does not
+  host limit. The server keeps 4 unless `api.github.com` is set. That is below GitHub's 100 simultaneous requests, but does not
   by itself avoid its point and CPU
   [secondary limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#about-secondary-rate-limits).
 - The shared reqwest pool keeps up to 32 idle connections per host.
@@ -103,14 +104,14 @@ must initialise tracing for the warnings to show.
 
 ## Freshness floors
 
-Two flags keep validator-free catalogs from being downloaded on every run. The
+Two settings keep validator-free catalogs from being downloaded on every run. The
 user-facing summary is in [sources](/guide/sources/#fetching-less).
 
-- `--registry-freshness-secs 3600` applies to OCI `tags/list` pages with
+- `http.registryFreshnessSecs` (3600) applies to OCI `tags/list` pages with
   neither ETag nor Last-Modified. After expiry every page is fetched again, so
   additions, deletions and retargeting anywhere are seen. Manifest and tag
   digests keep their upstream policy.
-- `--go-freshness-secs 3600` applies to public `proxy.golang.org` `@v/list`
+- `http.goFreshnessSecs` (3600) applies to public `proxy.golang.org` `@v/list`
   and `@latest`, even when the upstream max-age is shorter. `.info` documents
   keep the upstream policy.
 

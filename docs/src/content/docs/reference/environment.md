@@ -6,11 +6,12 @@ title: "Environment variables"
 | `PATCHULA_TOKEN` | `lookup`, `run`, `apply`, `tui` | GitHub token; falls back to `GITHUB_TOKEN`, then `GH_TOKEN`, then `gh auth token --hostname github.com` |
 | `PATCHULA_LOG` | all | log level: `error`, `warn` (the CLI default), `info` (the server default), `debug` or `trace`; `-vv` means `debug` |
 | `PATCHULA_RECHECK` | `run`, server | `now` or `next-run`: when a ticked checkbox says it takes effect |
+| `PATCHULA_SETTINGS` | `lookup`, `run`, `apply`, `tui`, server | the operator [settings](/reference/settings/) file |
 | `PATCHULA_TOOLS_DIR` | `run`, `tools`, server | the tool store, holding the lockfile tools, the pinned mise that lists `mise` tools, and the mise packslip installs when there is none on `PATH`; default `tools/` in the cache directory |
 | `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT` | lockfiles | passed on to `dotnet restore`, whose environment otherwise starts empty; the container image sets `1` because it has no ICU |
 | `XDG_CACHE_HOME` | local commands, server | the user cache directory on Linux and other non-macOS systems, holding `patchula/` (the server's default is `patchula/server`); default `~/.cache`. macOS uses `~/Library/Caches` |
 | `PATCHULA_SERVER` | `lookup`, `run`, `tui`, `auth` | the [server](/guide/server/#run-from-your-machine) URL for `--remote`, and for `auth` without `--server` |
-| `XDG_CONFIG_HOME` | `lookup`, `run`, `tui`, `auth` | where the server sign-ins (`patchula/servers.json`) and per-repository server choices (`patchula/repositories.json`) are stored; default `~/.config` |
+| `XDG_CONFIG_HOME` | `lookup`, `run`, `apply`, `tui`, `auth` | where the default operator settings (`patchula/settings.pkl`), the server sign-ins (`patchula/servers.json`) and per-repository server choices (`patchula/repositories.json`) live; default `~/.config` |
 | `PATCHULA_DOCKERHUB_USERNAME` | lookups | Docker Hub user for authenticated pulls; set with the token |
 | `PATCHULA_DOCKERHUB_TOKEN` | lookups | Docker Hub access token |
 | `PATCHULA_APP_ID` | server | GitHub App ID |
@@ -18,7 +19,6 @@ title: "Environment variables"
 | `PATCHULA_APP_PRIVATE_KEY` | server | the PEM itself, instead of a file |
 | `PATCHULA_WEBHOOK_SECRET_FILE` | server | path to the webhook secret |
 | `PATCHULA_WEBHOOK_SECRET` | server | the webhook secret itself, instead of a file |
-| `PATCHULA_SERVER_SETTINGS` | server | the operator settings file |
 | `PATCHULA_SERVER_CACHE` | server | the server's cache and queue directory |
 | `PATCHULA_LISTEN` | server | bind address; default `127.0.0.1:8080` |
 | `PATCHULA_SHUTDOWN_TIMEOUT_SECS` | server | drain deadline on SIGTERM, 1 to 3600; default 60 |

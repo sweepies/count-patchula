@@ -44,8 +44,8 @@ pub async fn run(app: &App, serve: &Serve) -> Result<u8> {
     let settings = serve
         .settings
         .clone()
-        .or(env("PATCHULA_SERVER_SETTINGS")?.map(PathBuf::from))
-        .ok_or_else(|| invalid("serve requires --settings or PATCHULA_SERVER_SETTINGS"))?;
+        .or(env("PATCHULA_SETTINGS")?.map(PathBuf::from))
+        .ok_or_else(|| invalid("serve requires --settings or PATCHULA_SETTINGS"))?;
     let listen = serve.listen.map(Ok).unwrap_or_else(|| {
         env("PATCHULA_LISTEN")?
             .unwrap_or_else(|| "127.0.0.1:8080".into())
