@@ -163,7 +163,7 @@ Renovate's other schemes, including `regex` versioning, `node`, `debian`,
 | `vulnerabilityAlerts`, `osvVulnerabilityAlerts` | OSV.dev [advisories](/guide/security/), on by default |
 | none, for OS packages in images | [image rebuild advisories](/guide/security/#container-image-rebuilds): a new digest is compared with the old through their SBOMs and OSV.dev |
 | JSONata managers, custom datasources | none |
-| `hostRules`, private registries | none; tool environments are scrubbed |
+| `hostRules`, private registries | operator [`registries`](/guide/sources/#private-registries) with basic or bearer credentials, for lookups from Helm, OCI and Docker registries, Maven and GitLab or Gitea; not in repository configs, and lockfile tools get none |
 | `postUpgradeTasks` | none, on purpose |
 | `gitAuthor` | none; commits are made through the API and signed by GitHub |
 | Merge confidence, abandonment detection, replacement PRs, draft PRs | none |

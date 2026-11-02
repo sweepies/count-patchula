@@ -16,7 +16,47 @@ pub struct Settings {
     pub concurrency: usize,
     pub recheck: Option<String>,
     pub http: Http,
+    pub registries: BTreeMap<String, Registry>,
     pub server: Server,
+}
+/// A private registry entry. It names where its secret lives, never the secret.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Registry {
+    pub auth: RegistryAuth,
+    pub username: Option<String>,
+    pub secret: Secret,
+    pub allowed_installations: Vec<u64>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RegistryAuth {
+    Basic,
+    Bearer,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Secret {
+    pub env: Option<String>,
+    pub file: Option<PathBuf>,
+}
+impl Secret {
+    /// The secret's value. Errors name where it should be, never what it is.
+    fn read(&self) -> Result<String, String> {
+        let value = match (&self.env, &self.file) {
+            (Some(name), None) => std::env::var(name)
+                .map_err(|_| format!("environment variable {name} is not set or not UTF-8"))?,
+            (None, Some(path)) => std::fs::read_to_string(path)
+                .map_err(|_| format!("cannot read {}", path.display()))?
+                .trim_end_matches(['\r', '\n'])
+                .to_owned(),
+            _ => return Err("secret needs exactly one of env and file".into()),
+        };
+        if value.is_empty() {
+            return Err("secret is empty".into());
+        }
+        Ok(value)
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -64,6 +104,7 @@ impl Default for Settings {
                 registry_freshness_secs: 3600,
                 go_freshness_secs: 3600,
             },
+            registries: BTreeMap::new(),
             server: Server {
                 triggers: Triggers {
                     push: true,
@@ -116,6 +157,37 @@ impl Settings {
             .is_some_and(|r| !matches!(r, "now" | "next-run"))
         {
             return Err("recheck must be now or next-run");
+        }
+        for (prefix, registry) in &self.registries {
+            let probe = patchula_http::Auth::Bearer {
+                token: "probe".into(),
+            };
+            if patchula_http::Credential::new(prefix, probe).is_none() {
+                return Err(
+                    "registries keys must be https URL prefixes without a user, query or fragment",
+                );
+            }
+            match (registry.auth, registry.username.as_deref()) {
+                (RegistryAuth::Basic, Some(name)) if !name.is_empty() && !name.contains(':') => {}
+                (RegistryAuth::Bearer, None) => {}
+                _ => {
+                    return Err(
+                        "username is required for basic registries, without a colon, and refused for bearer ones",
+                    );
+                }
+            }
+            match (&registry.secret.env, &registry.secret.file) {
+                (Some(name), None) if !name.is_empty() && !name.contains('=') => {}
+                (None, Some(path)) if !path.as_os_str().is_empty() => {}
+                _ => return Err("secret needs exactly one of env and file"),
+            }
+            if registry
+                .allowed_installations
+                .iter()
+                .any(|id| *id == 0 || *id > i64::MAX as u64)
+            {
+                return Err("allowedInstallations IDs must be positive");
+            }
         }
         if !(1..=100).contains(&self.http.default_host_concurrency) {
             return Err("defaultHostConcurrency must be 1..100");
@@ -175,6 +247,39 @@ impl Settings {
             go_freshness_secs: self.http.go_freshness_secs,
             ..Default::default()
         }
+    }
+    /// The registry credentials `installation` may use, or every entry's for
+    /// the CLI, with their secrets read now. Entries whose secret cannot be
+    /// read come back separately, by prefix and reason, never the value.
+    pub fn credentials(
+        &self,
+        installation: Option<u64>,
+    ) -> (Vec<patchula_http::Credential>, Vec<(String, String)>) {
+        let mut credentials = Vec::new();
+        let mut failed = Vec::new();
+        for (prefix, registry) in &self.registries {
+            if let Some(id) = installation
+                && !registry.allowed_installations.is_empty()
+                && !registry.allowed_installations.contains(&id)
+            {
+                continue;
+            }
+            let auth = registry.secret.read().map(|secret| match registry.auth {
+                RegistryAuth::Basic => patchula_http::Auth::Basic {
+                    username: registry.username.clone().unwrap_or_default(),
+                    password: secret,
+                },
+                RegistryAuth::Bearer => patchula_http::Auth::Bearer { token: secret },
+            });
+            match auth.and_then(|auth| {
+                patchula_http::Credential::new(prefix, auth)
+                    .ok_or_else(|| "secret cannot be sent in a header".to_owned())
+            }) {
+                Ok(credential) => credentials.push(credential),
+                Err(reason) => failed.push((prefix.clone(), reason)),
+            }
+        }
+        (credentials, failed)
     }
     /// The installation GitHub client settings. It keeps the client's own
     /// lower default unless `http.hostConcurrency` sets api.github.com.
@@ -476,6 +581,62 @@ mod tests {
             "http { defaultHostConcurrency = 101 }",
         ] {
             assert!(load(bad).is_err(), "{bad}");
+        }
+    }
+    #[test]
+    fn registry_entries_are_validated_and_their_secrets_read_per_installation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.pkl");
+        let secret = dir.path().join("token");
+        std::fs::write(&secret, "s3cret\n").unwrap();
+        let load = |body: &str| {
+            std::fs::write(&path, format!("amends \"PatchulaSettings.pkl\"\n{body}\n")).unwrap();
+            Settings::load(&path)
+        };
+        let settings = load(&format!(
+            r#"registries {{
+  ["https://acme.jfrog.io/artifactory/api/helm/charts"] {{
+    auth = "basic"
+    username = "ci"
+    secret {{ file = "{}" }}
+    allowedInstallations {{ 7 }}
+  }}
+  ["https://ghcr.io"] {{
+    auth = "bearer"
+    secret {{ env = "PATCHULA_TEST_UNSET_REGISTRY_SECRET" }}
+  }}
+}}"#,
+            secret.display()
+        ))
+        .unwrap();
+        let (cli, failed) = settings.credentials(None);
+        assert_eq!(cli.len(), 1);
+        assert_eq!(
+            cli[0].id(),
+            "https://acme.jfrog.io/artifactory/api/helm/charts"
+        );
+        assert_eq!(
+            cli[0].auth,
+            patchula_http::Auth::Basic {
+                username: "ci".into(),
+                password: "s3cret".into()
+            }
+        );
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].0, "https://ghcr.io");
+        assert!(failed[0].1.contains("PATCHULA_TEST_UNSET_REGISTRY_SECRET"));
+        assert_eq!(settings.credentials(Some(7)).0.len(), 1);
+        assert!(settings.credentials(Some(8)).0.is_empty());
+        for bad in [
+            r#"registries { ["http://acme.jfrog.io"] { auth = "bearer"; secret { env = "T" } } }"#,
+            r#"registries { ["https://acme.jfrog.io/?a=b"] { auth = "bearer"; secret { env = "T" } } }"#,
+            r#"registries { ["https://acme.jfrog.io"] { auth = "basic"; secret { env = "T" } } }"#,
+            r#"registries { ["https://acme.jfrog.io"] { auth = "bearer"; username = "ci"; secret { env = "T" } } }"#,
+            r#"registries { ["https://acme.jfrog.io"] { auth = "bearer"; secret { } } }"#,
+            r#"registries { ["https://acme.jfrog.io"] { auth = "bearer"; secret { env = "T"; file = "/t" } } }"#,
+            r#"registries { ["https://acme.jfrog.io"] { auth = "token"; secret { env = "T" } } }"#,
+        ] {
+            assert!(load(&bad.replace("; ", "\n")).is_err(), "{bad}");
         }
     }
 }

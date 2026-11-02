@@ -85,6 +85,11 @@ pub struct HttpKey {
     headers: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     representation: Option<String>,
+    /// The operator registry entry whose credentials fetched this response,
+    /// by name. Responses read with credentials are never shared with reads
+    /// without them, or with another entry's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    credential: Option<String>,
 }
 
 impl HttpKey {
@@ -100,6 +105,7 @@ impl HttpKey {
         url.set_fragment(None);
         Ok(Self {
             representation: None,
+            credential: None,
             method: method.to_ascii_uppercase(),
             url: url.into(),
             headers: headers
@@ -116,6 +122,12 @@ impl HttpKey {
     /// Local derived format/version, never sent as an upstream request header.
     pub fn representation(mut self, format: &str) -> Self {
         self.representation = Some(format.into());
+        self
+    }
+
+    /// Scope the key to an operator registry entry, by its name, never its secret.
+    pub fn credential(mut self, id: &str) -> Self {
+        self.credential = Some(id.into());
         self
     }
 }

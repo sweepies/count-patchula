@@ -28,8 +28,6 @@ const LOG_VAR: &str = "PATCHULA_LOG";
 const LOOKUP_FAILED: u8 = 4;
 const RECHECK_VAR: &str = "PATCHULA_RECHECK";
 const SETTINGS_VAR: &str = "PATCHULA_SETTINGS";
-const DOCKERHUB_USERNAME_VAR: &str = "PATCHULA_DOCKERHUB_USERNAME";
-const DOCKERHUB_TOKEN_VAR: &str = "PATCHULA_DOCKERHUB_TOKEN";
 const MISE_DATA_VAR: &str = "MISE_DATA_DIR";
 const XDG_DATA_VAR: &str = "XDG_DATA_HOME";
 const HOME_VAR: &str = "HOME";
@@ -618,25 +616,6 @@ fn recheck(
     })
 }
 
-/// Docker Hub credentials, when both variables are set.
-fn dockerhub_credentials() -> Result<Option<(String, String)>, (u8, miette::Report)> {
-    match (
-        std::env::var(DOCKERHUB_USERNAME_VAR).ok(),
-        std::env::var(DOCKERHUB_TOKEN_VAR).ok(),
-    ) {
-        (None, None) => Ok(None),
-        (Some(username), Some(token)) if !username.is_empty() && !token.is_empty() => {
-            Ok(Some((username, token)))
-        }
-        _ => Err((
-            2,
-            miette::miette!(
-                "set both PATCHULA_DOCKERHUB_USERNAME and PATCHULA_DOCKERHUB_TOKEN to nonempty values"
-            ),
-        )),
-    }
-}
-
 /// The local cache directory: `--cache`, or `patchula/` in the user cache directory.
 fn cache_dir(flag: Option<&std::path::Path>) -> Result<std::path::PathBuf, miette::Report> {
     let dir = match flag {
@@ -1132,6 +1111,15 @@ async fn report(
     let settings = settings(scan)?;
     let concurrency = scan.concurrency.unwrap_or(settings.concurrency);
     let recheck = recheck(app, run.is_some(), &settings)?;
+    let mut http_options = settings.http_options();
+    let (credentials, failed) = settings.credentials(None);
+    if let Some((prefix, reason)) = failed.first() {
+        return Err((
+            2,
+            miette::miette!("cannot use the registry credentials for {prefix}: {reason}"),
+        ));
+    }
+    http_options.credentials = credentials;
     let spinner = progress::Spinner::start(app.color);
     let token = services
         .token()
@@ -1149,24 +1137,15 @@ async fn report(
     let transport = services
         .transport()
         .map_err(|e| (1, miette::miette!("{e}")))?;
-    let mut engine = Engine::with_http_options(
-        &token,
-        cache,
-        concurrency,
-        transport,
-        settings.http_options(),
-    )
-    .map_err(|e| (1, miette::miette!("{e}")))?
-    .with_recheck(recheck)
-    .with_advisories();
+    let mut engine = Engine::with_http_options(&token, cache, concurrency, transport, http_options)
+        .map_err(|e| (1, miette::miette!("{e}")))?
+        .with_recheck(recheck)
+        .with_advisories();
     if let Some(spinner) = &spinner {
         engine = engine.with_progress(spinner.clone());
     }
     if let Some(mise_data) = user_mise_data() {
         engine = engine.with_tool_seed(mise_data);
-    }
-    if let Some((username, token)) = dockerhub_credentials()? {
-        engine = engine.with_dockerhub_credentials(username, token);
     }
     let options = Options {
         repositories,

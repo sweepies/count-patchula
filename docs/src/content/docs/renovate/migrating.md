@@ -131,9 +131,10 @@ directory has a dozen real configs translated this way.
 
 ## Things that do not carry over
 
-Presets, onboarding, config migration, `hostRules`, private registries,
-`postUpgradeTasks`, replacement PRs and platforms other than GitHub have no
-equivalent. `vulnerabilityAlerts` reads Dependabot alerts; the Count checks
+Presets, onboarding, config migration, `postUpgradeTasks`, replacement PRs and
+platforms other than GitHub have no equivalent. `hostRules` become operator
+[`registries`](/guide/sources/#private-registries) in the settings file, not
+the repository config. `vulnerabilityAlerts` reads Dependabot alerts; the Count checks
 [OSV.dev advisories](/guide/security/) instead, on by default. The
 [compatibility matrix](/renovate/compatibility/) lists everything. A `# renovate:` comment used
 by a regex manager can stay in your files: it is only text, and your Pkl

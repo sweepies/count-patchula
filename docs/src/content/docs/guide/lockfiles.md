@@ -232,8 +232,10 @@ since a committed Yarn release and plugins are repository code.
 Output is kept only when something fails, at most 4 KiB of each stream.
 
 :::note[Private registries]
-Private registries do not work yet, because credentials are scrubbed on
-purpose. Scoped registry credentials will be a separate, explicit opt-in.
+Lockfile tools cannot reach private registries yet, because credentials are
+scrubbed on purpose. Version lookups can, with [registry
+credentials](/guide/sources/#private-registries); passing them to lockfile
+tools will be a separate, explicit opt-in.
 :::
 
 ## Lockfile maintenance

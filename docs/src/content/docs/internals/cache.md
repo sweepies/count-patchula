@@ -134,6 +134,15 @@ errors or fixtures, but SQLite stores them unencrypted. Keep the cache under
 the same access controls as other batch cache data.
 :::
 
+## Registry credentials
+
+A response read with a [private registry](/guide/sources/#private-registries)
+entry's credentials is keyed by that entry's prefix as well as the request, so
+a read without the entry, or with another one, never sees it. The key holds the
+prefix, never the secret. Such responses follow the registry's `no-store` and
+`Vary`, digest-addressed ones included. Tokens a registry issues to an account
+stay in memory and are never written to the cache.
+
 ## Manifest digests
 
 Digest checks send HEAD with the same `Accept` negotiation as GET and their

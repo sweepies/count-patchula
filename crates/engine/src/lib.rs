@@ -187,10 +187,6 @@ impl Engine {
         self.recheck = recheck;
         self
     }
-    pub fn with_dockerhub_credentials(mut self, username: String, token: String) -> Self {
-        self.sources = self.sources.with_dockerhub_credentials(username, token);
-        self
-    }
     pub fn with_transport(
         token: &str,
         cache: Cache,

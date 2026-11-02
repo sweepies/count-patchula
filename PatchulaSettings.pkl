@@ -8,6 +8,11 @@ concurrency: Int = 8
 /// CLI; flags and environment take precedence.
 recheck: "now" | "next-run"? = null
 http: Http = new {}
+/// Credentials for private registries, keyed by https URL prefix, such as
+/// "https://acme.jfrog.io/artifactory/api/helm/charts". A request under a
+/// prefix, matched by whole path segments, carries that entry's credentials;
+/// the longest prefix wins.
+registries: Mapping<String, Registry> = new {}
 /// Only `patchula serve` reads this section.
 server: Server = new {}
 
@@ -22,6 +27,28 @@ class Http {
   /// Minimum freshness seconds for Go proxy lists and latest; 0 uses upstream
   /// policy.
   goFreshnessSecs: Int = 3600
+}
+
+class Registry {
+  /// `basic` sends `username` and the secret as a password, and exchanges
+  /// them at a container registry's token service; `bearer` sends the secret
+  /// as a bearer token.
+  auth: "basic" | "bearer"
+  /// Required for `basic`, and refused for `bearer`.
+  username: String? = null
+  /// Where the secret is read from. Never the secret itself.
+  secret: Secret
+  /// Only `patchula serve` reads this: installation IDs that may use the
+  /// entry. Empty allows every installation the server serves.
+  allowedInstallations: Listing<Int> = new {}
+}
+
+/// Exactly one of `env` and `file`.
+class Secret {
+  /// An environment variable holding the secret.
+  env: String? = null
+  /// A file holding the secret; trailing line breaks are dropped.
+  file: String? = null
 }
 
 class Server {

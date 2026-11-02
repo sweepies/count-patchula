@@ -135,7 +135,6 @@ pub struct Client {
     pub(crate) http: Cached,
     pub(crate) cache: Cache,
     tokens: docker::Tokens,
-    dockerhub_credentials: Option<std::sync::Arc<(String, String)>>,
     changelogs: notes::ChangelogCache,
     note_reads: Option<notes::ReadCache>,
     release_bodies: notes::BodyCache,
@@ -156,7 +155,6 @@ impl Client {
             http,
             cache,
             tokens: Default::default(),
-            dockerhub_credentials: None,
             changelogs: Default::default(),
             note_reads: None,
             release_bodies: Default::default(),
@@ -165,12 +163,6 @@ impl Client {
             nix: None,
             stale_registry: Default::default(),
         }
-    }
-    /// Optional Docker Hub token-service login. Never persisted or included in Debug.
-    pub fn with_dockerhub_credentials(mut self, username: String, token: String) -> Self {
-        self.dockerhub_credentials = Some(std::sync::Arc::new((username, token)));
-        self.tokens = Default::default();
-        self
     }
 
     /// Cached registry reads used because of rate limiting, keyed by catalog or digest tag.
