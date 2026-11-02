@@ -1,5 +1,6 @@
 ---
 title: "Configuration"
+description: "Configure Count Patchula with patchula.pkl: where the config lives, sharing policy across repositories, defaults, rules and custom extractors."
 ---
 The Count reads [Pkl](https://pkl-lang.org), evaluated in process. A repository's
 config amends the `PatchulaConfig.pkl` schema, and every field it leaves

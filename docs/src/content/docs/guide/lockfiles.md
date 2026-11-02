@@ -1,5 +1,6 @@
 ---
 title: "Lockfiles"
+description: "How the Count regenerates lockfiles with each ecosystem's real tool, which tools cover which lockfiles, and what happens when one fails."
 ---
 An update that leaves a stale lockfile behind is not an update. When a changed
 manifest has a committed lockfile, the Count regenerates it with the

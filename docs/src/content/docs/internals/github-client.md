@@ -1,5 +1,6 @@
 ---
 title: "GitHub client"
+description: "The patchula-github client: shared connection pool, GitHub App tokens, conditional reads, writes, rate limits and pagination."
 ---
 Create one `patchula_github::Client` per batch and clone it for repository
 tasks; clones share the token, connection pool, governor and stats.

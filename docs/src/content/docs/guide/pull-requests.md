@@ -1,5 +1,6 @@
 ---
 title: "Branches and PRs"
+description: "Branch names, commits and PR bodies, what the Count owns in a description, closing PRs, limits, holds and repeat runs."
 ---
 Each update gets a branch, a single commit and a pull request. The Count owns
 what he creates and leaves everything else alone.

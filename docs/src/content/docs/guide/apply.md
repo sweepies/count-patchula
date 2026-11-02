@@ -1,5 +1,6 @@
 ---
 title: "Applying updates locally"
+description: "Write dependency updates into a local checkout with patchula apply, for scripts, Makefiles and pre-commit hooks. No branches or PRs."
 ---
 `patchula apply` looks up the working tree in the current directory and writes
 the updates into its files, with no branches and no pull requests. It is for

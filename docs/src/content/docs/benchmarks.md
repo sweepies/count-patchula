@@ -1,5 +1,6 @@
 ---
 title: "Benchmarks"
+description: "Count Patchula against Renovate on six large public repositories: lookup time cold and warm, and peak memory."
 ---
 Count Patchula against Renovate 44.173.1 on six large public repositories,
 looking up updates without writing anything. Each tool ran each repository

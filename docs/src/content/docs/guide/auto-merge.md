@@ -1,5 +1,6 @@
 ---
 title: "Auto-merge"
+description: "Write rules that merge update PRs once checks pass, with GitHub's native auto-merge or without it."
 ---
 Nothing merges unless a rule says so. The one rule built into the schema merges
 [reference data](/guide/configuration/#reference-data), such as CA root bundles;

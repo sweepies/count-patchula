@@ -1,5 +1,6 @@
 ---
 title: "Terminal UI"
+description: "Browse a lookup in the terminal with patchula tui: updates, held-back releases, dependencies and warnings. Pick updates to apply locally."
 ---
 `patchula tui` runs a lookup and lets you browse the result: every update, the
 releases held back by the release-age wait, every dependency found, template

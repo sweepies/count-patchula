@@ -1,5 +1,6 @@
 ---
 title: "Compatibility with Renovate"
+description: "Which Renovate managers, datasources, versioning schemes, lockfiles and options Count Patchula supports, and under what names."
 ---
 This page maps a Renovate setup onto the Count: which managers, datasources,
 versioning schemes, lockfiles and options have an equivalent, under which name,

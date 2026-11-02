@@ -1,5 +1,6 @@
 ---
 title: "GitHub Actions"
+description: "Run Count Patchula on a schedule with the GitHub Action, for one repository or a whole organization, and the action's inputs."
 ---
 The repository is also a GitHub Action. It installs the Count with mise,
 keeps his cache between runs, and runs `patchula run`. A repository is updated

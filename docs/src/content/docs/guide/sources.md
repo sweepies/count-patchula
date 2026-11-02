@@ -1,5 +1,6 @@
 ---
 title: "Sources"
+description: "Where Count Patchula looks up versions: npm, crates.io, the Go proxy, PyPI, container registries, Helm, Terraform, Maven and more."
 ---
 A source is where versions come from. Each dependency has one, chosen by its
 manager, and rules can select by it.

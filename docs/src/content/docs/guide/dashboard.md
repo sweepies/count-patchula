@@ -1,5 +1,6 @@
 ---
 title: "Dependency dashboard"
+description: "The dependency dashboard issue: what it lists, the checkboxes that act on updates, and how to turn it off."
 ---
 The dashboard is on by default. To turn it off:
 

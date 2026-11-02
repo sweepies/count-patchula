@@ -1,5 +1,6 @@
 ---
 title: "Image SBOM advisories"
+description: "How the Count compares container image SBOMs through OSV.dev to find the advisories a digest update fixes."
 ---
 When a pinned image's digest is replaced, the Count compares the OS packages
 in the old and new digests' SBOMs through OSV.dev. The user-facing behaviour is

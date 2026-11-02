@@ -1,5 +1,6 @@
 ---
 title: "Environment variables"
+description: "The environment variables patchula reads, the commands that use them, and what each one does."
 ---
 | Variable | Used by | Meaning |
 |---|---|---|
