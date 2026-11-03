@@ -139,11 +139,12 @@ impl Client {
             .get_derived(
                 &format!("{}/{package}/", index.trim_end_matches('/')),
                 "application/vnd.pypi.simple.v1+json, text/html;q=0.1",
-                "pypi-index-catalog-v1",
+                "pypi-index-catalog-v2",
                 simple_any,
             )
             .await?;
-        Ok(serde_json::from_slice(&response.body)?)
+        let mut catalogs: BTreeMap<String, Catalog> = serde_json::from_slice(&response.body)?;
+        Ok(catalogs.remove(&package).unwrap_or_default())
     }
     /// PEP 691 JSON; public identity is normalized according to PEP 503.
     pub async fn pypi_simple(&self, package: &str) -> Result<Catalog> {
@@ -262,56 +263,99 @@ fn html_files(body: &[u8]) -> std::result::Result<Vec<(String, bool)>, CacheErro
 }
 /// A private index's simple page, as PEP 691 JSON or, failing that, PEP 503
 /// HTML, which carries no upload times.
+/// A private index's page, as PEP 691 JSON or PEP 503 HTML, read into one
+/// catalog per project its files name. A page whose files belong to another
+/// project gives the requested one none of their versions.
 fn simple_any(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
-    simple(body).or_else(|_| {
-        let files = html_files(body)?
-            .into_iter()
-            .map(|(filename, yanked)| serde_json::json!({"filename": filename, "yanked": yanked}))
-            .collect::<Vec<_>>();
-        let document = serde_json::json!({"meta": {"api-version": "1.0"}, "files": files});
-        simple(&serde_json::to_vec(&document).map_err(|_| CacheError::Document)?)
-    })
+    let files = simple_files(body).or_else(|_| {
+        Ok::<_, CacheError>(
+            html_files(body)?
+                .into_iter()
+                .map(|(filename, yanked)| SimpleFile {
+                    filename,
+                    uploaded: None,
+                    yanked: Value::Bool(yanked),
+                })
+                .collect(),
+        )
+    })?;
+    let mut projects = BTreeMap::<String, Vec<SimpleFile>>::new();
+    for file in files {
+        if let Some((project, _)) = file_release(&file.filename) {
+            projects.entry(project).or_default().push(file);
+        }
+    }
+    let catalogs: BTreeMap<String, Catalog> = projects
+        .into_iter()
+        .map(|(project, files)| (project, catalog_of(&files)))
+        .collect();
+    serde_json::to_vec(&catalogs).map_err(|_| CacheError::Document)
 }
+
+/// PyPI's own page for one project.
 fn simple(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
+    encode(&catalog_of(&simple_files(body)?))
+}
+
+#[derive(Deserialize)]
+struct SimpleFile {
+    filename: String,
+    #[serde(rename = "upload-time")]
+    uploaded: Option<String>,
+    #[serde(default)]
+    yanked: Value,
+}
+
+/// The files of a PEP 691 JSON page, of API version 1.
+fn simple_files(body: &[u8]) -> std::result::Result<Vec<SimpleFile>, CacheError> {
     #[derive(Deserialize)]
     struct Document {
         meta: Meta,
-        files: Vec<File>,
+        files: Vec<SimpleFile>,
     }
     #[derive(Deserialize)]
     struct Meta {
         #[serde(rename = "api-version")]
         version: String,
     }
-    #[derive(Deserialize)]
-    struct File {
-        filename: String,
-        #[serde(rename = "upload-time")]
-        uploaded: Option<String>,
-        #[serde(default)]
-        yanked: Value,
-    }
     let doc: Document = serde_json::from_slice(body).map_err(|_| CacheError::Document)?;
     if doc.meta.version.split('.').next() != Some("1") {
         return Err(CacheError::Document);
     }
-    let mut releases = BTreeMap::<String, Version>::new();
-    for file in doc.files {
-        let filename = file
-            .filename
+    Ok(doc.files)
+}
+
+/// The normalised project and the version a wheel or sdist file name holds.
+fn file_release(filename: &str) -> Option<(String, &str)> {
+    let (project, version) = if let Some(wheel) = filename.strip_suffix(".whl") {
+        let mut parts = wheel.split('-');
+        (parts.next()?, parts.next()?)
+    } else {
+        filename
             .strip_suffix(".tar.gz")
-            .or_else(|| file.filename.strip_suffix(".zip"));
-        let version = if file.filename.ends_with(".whl") {
-            file.filename.split('-').nth(1)
+            .or_else(|| filename.strip_suffix(".zip"))?
+            .rsplit_once('-')?
+    };
+    Ecosystem::Pep440.parse(version).ok()?;
+    let mut normalised = String::new();
+    for c in project.chars() {
+        if matches!(c, '-' | '_' | '.') {
+            if !normalised.ends_with('-') {
+                normalised.push('-');
+            }
         } else {
-            filename.and_then(|v| v.rsplit_once('-').map(|(_, v)| v))
-        };
-        let Some(version) = version else {
-            continue;
-        };
-        if Ecosystem::Pep440.parse(version).is_err() {
-            continue;
+            normalised.push(c.to_ascii_lowercase());
         }
+    }
+    Some((normalised, version))
+}
+
+fn catalog_of(files: &[SimpleFile]) -> Catalog {
+    let mut releases = BTreeMap::<String, Version>::new();
+    for file in files {
+        let Some((_, version)) = file_release(&file.filename) else {
+            continue;
+        };
         let yanked = file
             .yanked
             .as_bool()
@@ -321,10 +365,10 @@ fn simple(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
             ..release(version.into())
         });
         v.yanked &= yanked;
-        if let Some(time) = file.uploaded
-            && v.published_at.as_ref().is_none_or(|old| time < *old)
+        if let Some(time) = &file.uploaded
+            && v.published_at.as_ref().is_none_or(|old| time < old)
         {
-            v.published_at = Some(time);
+            v.published_at = Some(time.clone());
         }
     }
     let mut catalog = Catalog {
@@ -332,7 +376,7 @@ fn simple(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
         ..Default::default()
     };
     sort(&mut catalog.versions, Ecosystem::Pep440);
-    encode(&catalog)
+    catalog
 }
 
 #[cfg(test)]

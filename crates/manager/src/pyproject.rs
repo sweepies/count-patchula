@@ -231,13 +231,24 @@ pub(super) fn extract(
         .lock_dirs
         .iter()
         .flat_map(|dir| {
-            ["uv.lock", "poetry.lock"].map(|leaf| {
-                if dir.is_empty() {
-                    leaf.to_owned()
-                } else {
-                    format!("{dir}/{leaf}")
-                }
-            })
+            // A lockfile counts only when its tool could lock the project: a
+            // `poetry.lock` left in a project uv manages, or the reverse,
+            // records how another tool once resolved it.
+            let uv = !discovery.poetry_configured || discovery.uv_configured;
+            let poetry = !discovery.uv_configured || discovery.poetry_configured;
+            [("uv.lock", uv), ("poetry.lock", poetry)]
+                .into_iter()
+                .filter(|(_, trusted)| *trusted)
+                .map(|(leaf, _)| leaf)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(move |leaf| {
+                    if dir.is_empty() {
+                        leaf.to_owned()
+                    } else {
+                        format!("{dir}/{leaf}")
+                    }
+                })
         })
         .find_map(|path| Some((path.ends_with("poetry.lock"), files.get(&path)?)));
     // Poetry records no source for PyPI; uv records one for every package.

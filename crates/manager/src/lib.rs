@@ -281,32 +281,30 @@ impl Scanner {
             || npm_extractors)
             && matches!(leaf, ".npmrc" | ".yarnrc.yml"))
             || (self.config.managers.contains(&Manager::Pyproject)
-                && matches!(
-                    leaf,
-                    "uv.toml" | "pyproject.toml" | "uv.lock" | "poetry.lock"
-                ))
+                && (python_settings(path) || matches!(leaf, "uv.lock" | "poetry.lock")))
     }
-    /// A warning for the pip requirements files among `paths`, which the
-    /// Count does not maintain, when Python projects are enabled.
-    pub fn unsupported<'a>(&self, paths: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    /// The pip requirements files among `paths`, which the Count does not
+    /// maintain, as skipped entries saying why, when Python projects are
+    /// enabled. Skipped, not warned about, so they leave branch cleanup and
+    /// automerge on.
+    pub fn unsupported<'a>(&self, paths: impl IntoIterator<Item = &'a str>) -> Vec<Skipped> {
         if !self.config.managers.contains(&Manager::Pyproject) {
-            return None;
+            return Vec::new();
         }
-        let found: Vec<&str> = paths
+        paths
             .into_iter()
             .filter(|path| {
                 requirements_name(path)
                     && (self.config.exclude.is_empty() || !self.exclude.matches(path))
             })
-            .collect();
-        let named = match found.as_slice() {
-            [] => return None,
-            [one] => format!("`{one}`"),
-            [first, rest @ ..] => format!("`{first}` and {} more", rest.len()),
-        };
-        Some(format!(
-            "{named}: pip requirements files are not maintained. pip takes each package from whatever index its options, included files and environment name, which the Count cannot settle for certain, and guessing could propose someone else's package of the same name. Move the project to uv (`uv init --bare`, then `uv add -r requirements.txt`) and the Count keeps `pyproject.toml` and `uv.lock` current."
-        ))
+            .map(|path| Skipped {
+                manager: Manager::Pyproject,
+                file: path.to_owned(),
+                line: None,
+                value: "pip requirements".into(),
+                reason: "pip requirements files are not maintained: pip takes each package from whatever index its options, included files and environment name, which the Count cannot settle for certain, and a guess could propose someone else's package of the same name. Move the project to uv (`uv init --bare`, then `uv add -r requirements.txt`) and the Count keeps `pyproject.toml` and `uv.lock` current".into(),
+            })
+            .collect()
     }
     fn selected(&self, manager: Manager, path: &str) -> bool {
         if !self.config.managers.contains(&manager)
@@ -658,10 +656,14 @@ pub(crate) fn redacted(value: &str) -> String {
 /// trailing slash or surrounding quotes.
 pub(crate) fn registry_url(value: &str) -> Option<String> {
     let value = value.trim().trim_matches(['"', '\'']).trim_end_matches('/');
-    let rest = value.strip_prefix("https://")?;
+    // A URL's scheme is case-insensitive.
+    let rest = value
+        .get(..8)
+        .filter(|scheme| scheme.eq_ignore_ascii_case("https://"))
+        .map(|_| &value[8..])?;
     let host = rest.split('/').next().unwrap_or_default();
     let valid = !host.is_empty() && !value.contains(['@', '?', '#', ' ', '$']);
-    valid.then(|| value.to_owned())
+    valid.then(|| format!("https://{rest}"))
 }
 
 pub fn word<T: Serialize>(value: &T) -> String {
@@ -692,7 +694,12 @@ mod tests {
     /// leaked part of one shows.
     #[test]
     fn redaction_never_keeps_a_secret() {
-        const SECRET: &[u8] = b"QXZJKWG/?#@:%$&=+!;,[]\\ ";
+        // Letters, digits and a non-ASCII letter no recorded value holds,
+        // among separators, escapes and whitespace.
+        const SECRET: &[char] = &[
+            'Q', 'X', 'Z', 'J', 'K', 'W', 'G', '5', '1', '\u{e9}', '/', '?', '#', '@', ':', '%',
+            '$', '&', '=', '+', '!', ';', ',', '[', ']', '\\', ' ', '\t', '\n',
+        ];
         let mut state: u64 = 0x2545_f491_4f6c_dd1d;
         let mut next = |bound: usize| {
             state ^= state << 13;
@@ -701,9 +708,7 @@ mod tests {
             usize::try_from(state % bound as u64).unwrap_or_default()
         };
         for _ in 0..20_000 {
-            let secret: String = (0..=next(12))
-                .map(|_| char::from(SECRET[next(SECRET.len())]))
-                .collect();
+            let secret: String = (0..=next(12)).map(|_| SECRET[next(SECRET.len())]).collect();
             for value in [
                 format!("https://ci:{secret}@pypi.acme.dev/simple"), // betterleaks:allow
                 format!("https://{secret}@pypi.acme.dev/simple"),    // betterleaks:allow
@@ -718,13 +723,19 @@ mod tests {
                 format!("https://ci:{secret}\\0@pypi.acme.dev/simple"), // betterleaks:allow
                 format!("https://ci:{secret} 0@pypi.acme.dev/simple"), // betterleaks:allow
             ] {
-                let recorded = super::redacted(&value);
-                assert!(
-                    !recorded
-                        .to_ascii_uppercase()
-                        .contains(['Q', 'X', 'Z', 'J', 'K', 'W', 'G']),
-                    "{value} -> {recorded}"
-                );
+                // As redacted, and as the Python reader records an index.
+                let parsed = crate::pypi::Named::parse(&value).recorded();
+                for recorded in [Some(super::redacted(&value)), parsed]
+                    .into_iter()
+                    .flatten()
+                {
+                    assert!(
+                        !recorded.to_ascii_uppercase().contains([
+                            'Q', 'X', 'Z', 'J', 'K', 'W', 'G', '5', '1', '\u{e9}', '\u{c9}'
+                        ]),
+                        "{value:?} -> {recorded:?}"
+                    );
+                }
             }
         }
     }
@@ -734,6 +745,39 @@ mod tests {
 /// against the real uv and Poetry.
 pub mod known {
     pub use crate::pypi::settings::{
-        POETRY_DEPENDENCY_KEYS, POETRY_SOURCE_KEYS, UV_IRRELEVANT, UV_READ, UV_SOURCE_KEYS,
+        POETRY_DEPENDENCY_KEYS, POETRY_SOURCE_KEYS, UV_IRRELEVANT, UV_PIP_IRRELEVANT, UV_PIP_READ,
+        UV_READ, UV_SOURCE_KEYS,
     };
+}
+
+/// A file that can name a Python package index. One the Count cannot read,
+/// such as a symlink or a file that is not text, must reach the scanner as
+/// unreadable, since leaving it out would make its packages PyPI's.
+pub fn python_settings(path: &str) -> bool {
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    matches!(
+        leaf,
+        "pyproject.toml" | "uv.toml" | "pdm.toml" | "pixi.toml" | "hatch.toml"
+    )
+}
+
+/// What a Python settings file the Count could not read becomes: text no
+/// TOML parser accepts, so it is unreadable rather than absent.
+pub const UNREADABLE_SETTINGS: &str = "= the Count could not read this file\n";
+
+/// The host of an http or https `url`, lowercased and without a default
+/// port, whatever the case of its scheme.
+pub(crate) fn web_host(url: &str) -> Option<String> {
+    let rest = ["https://", "http://"].iter().find_map(|scheme| {
+        url.get(..scheme.len())
+            .filter(|prefix| prefix.eq_ignore_ascii_case(scheme))
+            .map(|_| &url[scheme.len()..])
+    })?;
+    let host = rest.split(['/', '?', '#']).next()?.to_ascii_lowercase();
+    Some(
+        host.strip_suffix(":443")
+            .or_else(|| host.strip_suffix(":80"))
+            .unwrap_or(&host)
+            .to_owned(),
+    )
 }

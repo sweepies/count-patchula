@@ -114,3 +114,43 @@ fn a_tracked_file_below_a_symlinked_directory_is_not_read() {
     assert!(files.is_empty(), "{files:?}");
     assert!(!paths.contains("app/package.json"));
 }
+
+/// A Python settings file behind a symlink could name a private index, so it
+/// is read as unreadable, never as absent: its packages' lookups fail rather
+/// than go to PyPI.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_python_settings_file_is_unreadable_not_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("checkout");
+    git(dir.path(), &["init", "-q", "checkout"]);
+    write(
+        &root,
+        "pyproject.toml",
+        "[project]\nname = \"p\"\ndependencies = [\"acme-a>=1\"]\n",
+    );
+    write(
+        &root,
+        "config/uv.toml",
+        "index-url = \"https://pypi.acme.dev/simple\"\n",
+    );
+    std::os::unix::fs::symlink("config/uv.toml", root.join("uv.toml")).unwrap();
+    let scanner = scanner("amends \"PatchulaConfig.pkl\"\n");
+    let (_, files) = patchula_engine::read_tree(&root, &scanner).unwrap();
+    assert_eq!(
+        files.get("uv.toml").map(String::as_str),
+        Some(patchula_manager::UNREADABLE_SETTINGS)
+    );
+    let extraction = scanner.extract(&files).unwrap();
+    let registry = extraction
+        .dependencies
+        .iter()
+        .find(|d| d.name == "acme-a")
+        .and_then(|d| d.registry.clone());
+    assert!(
+        registry
+            .as_deref()
+            .is_some_and(|r| r.contains("uv.toml the Count cannot read")),
+        "{registry:?}"
+    );
+}

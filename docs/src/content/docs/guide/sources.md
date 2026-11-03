@@ -208,17 +208,23 @@ dependency's `registry`:
     instead. Pins in `[tool.uv.sources]` come from the project and its
     workspace root, the root that lists it in `members` and not in `exclude`,
     and `no-sources` turns them off as it does for uv. An override or
-    constraint that names a URL takes its package from there.
+    constraint that names a URL in `[tool.uv]` takes its package from there;
+    uv does not apply those in a `uv.toml` when it locks a project. The indexes in uv's `[pip]` table, which `uv pip
+    install .` reads, count as candidates too.
   - Poetry: `[[tool.poetry.source]]` (`primary` replaces PyPI, and more than
     one is ambiguous; `supplemental` adds an index; `explicit` serves only
     pinned packages; a source named PyPI without a URL is PyPI) and a
     dependency's `source`, matched without regard to case.
   - `uv.lock` and `poetry.lock` record each package's index. Only the
-    project's own lockfile counts, or its uv workspace root's. A package whose
+    project's own lockfile counts, or its uv workspace root's, and only one
+    its tool could have written: a `poetry.lock` left in a project uv
+    manages does not count. A package whose
     entries disagree is ambiguous, and so is one locked to an index the
     project no longer searches: the tool would resolve it again.
 
   Lists may be written as `[[...]]` tables or as inline arrays alike.
+  A project with both `[tool.uv]` and `[tool.poetry]` could be locked by
+  either, so both tools' indexes are candidates.
 
   A package from git, a path, a URL or a workspace member, by pin or by
   lockfile, is not looked up at all: its name on PyPI may be someone else's.
@@ -239,9 +245,12 @@ dependency's `registry`:
   `pyproject.toml` or `uv.toml` at or above the project that does not parse,
   a pin to an index the project does not define, or uv's `torch-backend`
   fails the lookups it could affect. So do index settings of tools the Count
-  cannot check against the tool: PDM sources and overrides, Rye sources,
-  Pixi PyPI options, and Hatch environments that set `PIP_*` or `UV_*`
-  variables. Indexes come only from these files, never from `pip.conf`,
+  cannot check against the tool, in any `pyproject.toml` at or above the
+  project or in `pdm.toml`, `pixi.toml` or `hatch.toml`: PDM sources and
+  overrides, Rye sources, Pixi PyPI options, and Hatch environments that set
+  `PIP_*` or `UV_*` variables or installer flags. A settings file the Count
+  cannot read, such as one behind a symlink, counts as unreadable, not
+  absent. Indexes come only from these files, never from `pip.conf`,
   `PIP_*` or `UV_*` variables, Dockerfiles or CI workflows. Private indexes
   are read through their simple API, as PEP 691 JSON or PEP 503 HTML; HTML
   gives no upload times, so no release-age wait.
@@ -255,7 +264,8 @@ dependency's `registry`:
 
 `.npmrc` and `.yarnrc.yml` are read whenever npm, Bun or an npm extractor is
 enabled, and every `pyproject.toml`, `uv.toml`, `uv.lock` and `poetry.lock`
-whenever pyproject is. `files` and `exclude` do not limit these. Bun's
+whenever pyproject is, with `pdm.toml`, `pixi.toml` and `hatch.toml`. `files`
+and `exclude` do not limit these. Bun's
 `bunfig.toml` and Yarn 1's `.yarnrc` are not read yet: a registry set only
 there is not used.
 

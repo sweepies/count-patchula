@@ -2244,7 +2244,7 @@ impl Engine {
                 .collect();
             let mut extraction = scanner.extract(&files).map_err(std::io::Error::other)?;
             extraction
-                .warnings
+                .skipped
                 .extend(scanner.unsupported(paths.iter().map(String::as_str)));
             std::io::Result::Ok((paths, blobs, extraction))
         })
@@ -2341,7 +2341,7 @@ impl Engine {
         let key = ExtractionKey {
             repo: repo.into(),
             default_branch_commit: commit,
-            config_hash: format!("extract-v16:{}", hash(&serde_json::to_vec(&config)?)),
+            config_hash: format!("extract-v17:{}", hash(&serde_json::to_vec(&config)?)),
         };
         let cached: CachedExtraction = if let Some(bytes) = self.cache.extraction_get(&key).await? {
             self.extraction_hits.fetch_add(1, Ordering::Relaxed);
@@ -2415,7 +2415,7 @@ impl Engine {
                 .await
                 .map_err(|e| Error::Invalid(e.to_string()))?
                 .map_err(Error::Invalid)?;
-            extraction.warnings.extend(unsupported);
+            extraction.skipped.extend(unsupported);
             let cached = CachedExtraction {
                 extraction,
                 snapshot: patchula_update::Snapshot {
@@ -2560,7 +2560,20 @@ pub fn read_tree(
             .any(|parent| {
                 std::fs::symlink_metadata(dir.join(parent)).is_ok_and(|meta| meta.is_symlink())
             });
-        if below_symlink || !std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file()) {
+        let regular = std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file());
+        if below_symlink || !regular {
+            // A Python settings file behind a symlink could name an index:
+            // kept as unreadable, its packages' lookups fail rather than fall
+            // back to PyPI.
+            if scanner.needs(&relative)
+                && patchula_manager::python_settings(&relative)
+                && std::fs::metadata(&path).is_ok_and(|meta| meta.is_file())
+            {
+                files.insert(
+                    relative.clone(),
+                    patchula_manager::UNREADABLE_SETTINGS.to_owned(),
+                );
+            }
             continue;
         }
         if scanner.needs(&relative)
@@ -2570,15 +2583,11 @@ pub fn read_tree(
                 Ok(content) => {
                     files.insert(relative.clone(), content);
                 }
-                // A Python configuration file that is not text still could
-                // name an index: kept, it fails to parse, and its packages'
-                // lookups fail with it rather than fall back to PyPI.
-                Err(error)
-                    if relative.ends_with("pyproject.toml") || relative.ends_with("uv.toml") =>
-                {
+                // One that is not text is unreadable the same way.
+                Err(_) if patchula_manager::python_settings(&relative) => {
                     files.insert(
                         relative.clone(),
-                        String::from_utf8_lossy(error.as_bytes()).into_owned(),
+                        patchula_manager::UNREADABLE_SETTINGS.to_owned(),
                     );
                 }
                 Err(_) => {}

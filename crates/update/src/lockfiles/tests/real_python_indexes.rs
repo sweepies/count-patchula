@@ -236,6 +236,93 @@ fn poetry_cases() -> Vec<Case> {
     cases
 }
 
+/// Cases beyond the generated ones: where uv reads overrides, `no-sources`,
+/// and pins a workspace root sets for its members.
+fn uv_special_cases() -> Vec<Case> {
+    let wheel = "{base}/other/files/fixture_b-1.0.0-py3-none-any.whl";
+    let explicit =
+        "[[tool.uv.index]]\nname = \"corp\"\nurl = \"{base}/corp/simple\"\nexplicit = true\n";
+    let case = |name: &str, files: Vec<(&str, String)>, project: &str| Case {
+        name: name.into(),
+        tool: Tool::Uv,
+        files: files
+            .into_iter()
+            .map(|(path, text)| (path.to_owned(), text))
+            .collect(),
+        project: project.into(),
+    };
+    vec![
+        case(
+            "uv override in pyproject.toml",
+            vec![(
+                "pyproject.toml",
+                format!(
+                    "{}[tool.uv]\noverride-dependencies = [\"fixture-b @ {wheel}\"]\n",
+                    project_table("fixture")
+                ),
+            )],
+            "pyproject.toml",
+        ),
+        case(
+            "uv override in uv.toml",
+            vec![
+                ("pyproject.toml", project_table("fixture")),
+                (
+                    "uv.toml",
+                    format!("override-dependencies = [\"fixture-b @ {wheel}\"]\n"),
+                ),
+            ],
+            "pyproject.toml",
+        ),
+        case(
+            "uv no-sources",
+            vec![(
+                "pyproject.toml",
+                format!(
+                    "{}{explicit}[tool.uv]\nno-sources = true\n[tool.uv.sources]\nfixture-a = {{ index = \"corp\" }}\n",
+                    project_table("fixture")
+                ),
+            )],
+            "pyproject.toml",
+        ),
+        case(
+            "uv pin set by the workspace root",
+            vec![
+                (
+                    "pyproject.toml",
+                    format!(
+                        "[project]\nname = \"root\"\nversion = \"1.0.0\"\nrequires-python = \">=3.12\"\ndependencies = []\n[tool.uv.workspace]\nmembers = [\"packages/*\"]\n{explicit}[tool.uv.sources]\nfixture-a = {{ index = \"corp\" }}\n"
+                    ),
+                ),
+                ("packages/app/pyproject.toml", project_table("app")),
+            ],
+            "packages/app/pyproject.toml",
+        ),
+    ]
+}
+
+/// What the Count says of a package.
+#[derive(Debug, PartialEq, Eq)]
+enum Expect {
+    /// Looked up on PyPI.
+    PyPi,
+    /// Looked up on this index.
+    Index(String),
+    /// Not looked up at all: it comes from a URL, path or git.
+    NotFromIndex,
+}
+
+/// What the tool did with a package.
+#[derive(Debug)]
+enum Observed {
+    /// Locked it from one of the local indexes.
+    Local(String),
+    /// Locked it from somewhere that is not a local index.
+    Elsewhere,
+    /// Could not lock it.
+    Failed,
+}
+
 #[test]
 fn real_python_index_choices_match_uv_and_poetry() {
     let base = serve();
@@ -250,6 +337,7 @@ fn real_python_index_choices_match_uv_and_poetry() {
         project: "pyproject.toml".into(),
     }];
     cases.extend(uv_cases());
+    cases.extend(uv_special_cases());
     cases.extend(poetry_cases());
     let mut mismatches = Vec::new();
     let mut compared = 0;
@@ -272,13 +360,19 @@ fn real_python_index_choices_match_uv_and_poetry() {
             }
             let (observed, log) = resolve(case.tool, &dir, temp.path(), package, &base);
             compared += 1;
-            if observed != expected {
+            let agrees = match (&expected, &observed) {
+                (Expect::Index(url), Observed::Local(local)) => url == local,
+                // A tool that took the package from PyPI failed here, since
+                // PyPI is out of reach; it must have tried PyPI, not failed
+                // for another reason.
+                (Expect::PyPi, Observed::Failed) => log.contains("pypi.org"),
+                (Expect::NotFromIndex, Observed::Elsewhere) => true,
+                _ => false,
+            };
+            if !agrees {
                 mismatches.push(format!(
-                    "{} / {package}: the Count says {}, {:?} took it from {}\n{log}",
-                    case.name,
-                    expected.as_deref().unwrap_or("PyPI"),
-                    case.tool,
-                    observed.as_deref().unwrap_or("PyPI or nowhere"),
+                    "{} / {package}: the Count says {expected:?}, {:?} did {observed:?}\n{log}",
+                    case.name, case.tool,
                 ));
             }
         }
@@ -313,72 +407,85 @@ fn only(path: &str, text: &str, package: &str, base: &str) -> String {
     doc.to_string()
 }
 
-/// The index the Count gives `package` in `project`: `Some(None)` for PyPI,
-/// `Some(url)` for an index, and none when it is ambiguous or unusable,
-/// whose lookup fails rather than guess.
+/// What the Count says of `package` in `project`; none when it is ambiguous
+/// or unusable, whose lookup fails rather than guess.
 fn expected(
     scanner: &patchula_manager::Scanner,
     files: &patchula_manager::Files,
     project: &str,
     package: &str,
     case: &str,
-) -> Option<Option<String>> {
+) -> Option<Expect> {
     let extraction = scanner.extract(files).unwrap();
-    let registry = extraction
+    let Some(dependency) = extraction
         .dependencies
         .iter()
         .find(|d| d.file == project && d.package == package)
-        .unwrap_or_else(|| panic!("{case}: {package} was not extracted"))
-        .registry
-        .clone();
-    match registry {
-        None => Some(None),
-        Some(url) if url.starts_with("http") && !url.contains(' ') => Some(Some(url)),
+    else {
+        assert!(
+            extraction
+                .skipped
+                .iter()
+                .any(|s| s.file == project && s.value == package),
+            "{case}: {package} was neither extracted nor skipped"
+        );
+        return Some(Expect::NotFromIndex);
+    };
+    match dependency.registry.clone() {
+        None => Some(Expect::PyPi),
+        Some(url) if url.starts_with("http") && !url.contains(' ') => Some(Expect::Index(url)),
         Some(_) => None,
     }
 }
 
-/// The local index the tool took `package` from, if any, and its output.
+/// What the tool did with `package`, and its output.
 fn resolve(
     tool_kind: Tool,
     dir: &Path,
     temp: &Path,
     package: &str,
     base: &str,
-) -> (Option<String>, String) {
-    let index_of = |url: &str| -> Option<String> {
-        let rest = url.strip_prefix(base)?.trim_start_matches('/');
-        let index = rest.split('/').next()?;
-        Some(format!("{base}/{index}/simple"))
-    };
+) -> (Observed, String) {
     let python = default_spec("python");
-    let (output, observed) = match tool_kind {
-        Tool::Uv => {
-            let output = tool(dir, temp, &[python, default_spec("uv")], &["uv", "lock"]);
-            let observed = std::fs::read_to_string(dir.join("uv.lock"))
-                .ok()
-                .and_then(|lock| locked(&lock, package, &["source", "registry"]));
-            (output, observed)
-        }
-        Tool::Poetry => {
-            let output = tool(
+    let (output, lock, index_key) = match tool_kind {
+        Tool::Uv => (
+            tool(dir, temp, &[python, default_spec("uv")], &["uv", "lock"]),
+            "uv.lock",
+            "registry",
+        ),
+        Tool::Poetry => (
+            tool(
                 dir,
                 temp,
                 &[python, default_spec("poetry")],
                 &["poetry", "lock"],
-            );
-            let observed = std::fs::read_to_string(dir.join("poetry.lock"))
-                .ok()
-                .and_then(|lock| locked(&lock, package, &["source", "url"]));
-            (output, observed)
-        }
+            ),
+            "poetry.lock",
+            "url",
+        ),
     };
     let log = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    (observed.as_deref().and_then(index_of), log)
+    let text = std::fs::read_to_string(dir.join(lock)).ok();
+    let locked_package = text
+        .as_deref()
+        .is_some_and(|lock| locked(lock, package, &["name"]).is_some());
+    if !output.status.success() || !locked_package {
+        return (Observed::Failed, log);
+    }
+    let index = text
+        .as_deref()
+        .and_then(|lock| locked(lock, package, &["source", index_key]))
+        .and_then(|url| {
+            let rest = url.strip_prefix(base)?.trim_start_matches('/');
+            let index = rest.split('/').next()?;
+            // A Poetry or uv URL source points at a file, not an index.
+            (!rest.contains("/files/")).then(|| format!("{base}/{index}/simple"))
+        });
+    (index.map_or(Observed::Elsewhere, Observed::Local), log)
 }
 
 /// The keys between backticks after "expected one of" in a serde error.
@@ -399,7 +506,9 @@ fn expected_keys(output: &str) -> BTreeSet<String> {
 /// irrelevant, and every one it lists is one uv accepts.
 #[test]
 fn real_uv_settings_and_source_keys_are_the_ones_the_count_classifies() {
-    use patchula_manager::known::{UV_IRRELEVANT, UV_READ, UV_SOURCE_KEYS};
+    use patchula_manager::known::{
+        UV_IRRELEVANT, UV_PIP_IRRELEVANT, UV_PIP_READ, UV_READ, UV_SOURCE_KEYS,
+    };
     let temp = tempfile::tempdir().unwrap();
     let run = |files: &[(&str, &str)]| {
         let dir = tempfile::tempdir_in(temp.path()).unwrap();
@@ -431,6 +540,16 @@ fn real_uv_settings_and_source_keys_are_the_ones_the_count_classifies() {
     )]));
     let known: BTreeSet<String> = UV_SOURCE_KEYS.iter().map(|k| (*k).to_owned()).collect();
     assert_eq!(sources, known);
+    let pip = expected_keys(&run(&[(
+        "pyproject.toml",
+        &format!("{project}[tool.uv.pip]\nzzz-unknown = 1\n"),
+    )]));
+    let classified: BTreeSet<String> = UV_PIP_READ
+        .iter()
+        .chain(UV_PIP_IRRELEVANT)
+        .map(|k| (*k).to_owned())
+        .collect();
+    assert_eq!(pip, classified);
 }
 
 /// The keys the Count accepts in Poetry sources and dependency tables are

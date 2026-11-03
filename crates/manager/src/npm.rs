@@ -406,17 +406,8 @@ enum Named {
 /// Whether `url` is on npm's or Yarn's public registry host, over https or the
 /// plain http some old `.npmrc` files still name.
 fn public(url: &str) -> bool {
-    let host = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .and_then(|rest| rest.split('/').next())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let host = host
-        .strip_suffix(":443")
-        .or_else(|| host.strip_suffix(":80"))
-        .unwrap_or(&host);
-    matches!(host, "registry.npmjs.org" | "registry.yarnpkg.com")
+    crate::web_host(url)
+        .is_some_and(|host| matches!(host.as_str(), "registry.npmjs.org" | "registry.yarnpkg.com"))
 }
 
 fn named(value: &str) -> Named {

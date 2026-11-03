@@ -69,6 +69,7 @@ struct UvSettings {
     #[serde(default)]
     constraint_dependencies: Vec<String>,
     workspace: Option<UvWorkspace>,
+    pip: Option<UvPip>,
     #[serde(flatten)]
     rest: BTreeMap<String, Value>,
 }
@@ -144,8 +145,6 @@ pub const UV_IRRELEVANT: &[&str] = &[
     "dependency-groups",
     "dev-dependencies",
     "build-backend",
-    // Settings for `uv pip` commands, which do not lock projects.
-    "pip",
 ];
 
 /// The uv settings the Count reads, for the test against uv's own list.
@@ -162,6 +161,100 @@ pub const UV_READ: &[&str] = &[
     "override-dependencies",
     "constraint-dependencies",
     "workspace",
+    "pip",
+];
+
+/// `uv pip` settings, which `uv pip install .` and `uv pip compile
+/// pyproject.toml` read for a project's own dependencies: their indexes are
+/// candidates too. Every other key is in [`UV_PIP_IRRELEVANT`].
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct UvPip {
+    index_url: Option<String>,
+    #[serde(default)]
+    extra_index_url: Vec<String>,
+    #[serde(default)]
+    find_links: Vec<String>,
+    #[serde(default)]
+    no_index: bool,
+    torch_backend: Option<Value>,
+    #[serde(default)]
+    no_sources: bool,
+    #[serde(default)]
+    no_sources_package: Vec<String>,
+    #[serde(flatten)]
+    rest: BTreeMap<String, Value>,
+}
+
+/// The `[pip]` settings the Count reads, for the test against uv's list.
+pub const UV_PIP_READ: &[&str] = &[
+    "index-url",
+    "extra-index-url",
+    "find-links",
+    "no-index",
+    "torch-backend",
+    "no-sources",
+    "no-sources-package",
+];
+
+/// Every other `[pip]` setting uv 0.13.6 accepts, none of which moves a
+/// package to another index.
+pub const UV_PIP_IRRELEVANT: &[&str] = &[
+    "python",
+    "system",
+    "break-system-packages",
+    "target",
+    "prefix",
+    "index-strategy",
+    "keyring-provider",
+    "no-build",
+    "no-binary",
+    "only-binary",
+    "no-build-isolation",
+    "require-build-hashes",
+    "no-build-isolation-package",
+    "extra-build-dependencies",
+    "extra-build-variables",
+    "strict",
+    "extra",
+    "all-extras",
+    "no-extra",
+    "no-deps",
+    "group",
+    "allow-empty-requirements",
+    "resolution",
+    "prerelease",
+    "fork-strategy",
+    "dependency-metadata",
+    "output-file",
+    "no-strip-extras",
+    "no-strip-markers",
+    "no-annotate",
+    "no-header",
+    "custom-compile-command",
+    "generate-hashes",
+    "config-settings",
+    "config-settings-package",
+    "python-version",
+    "python-platform",
+    "universal",
+    "exclude-newer",
+    "exclude-newer-package",
+    "no-emit-package",
+    "emit-index-url",
+    "emit-find-links",
+    "emit-build-options",
+    "emit-marker-expression",
+    "emit-index-annotation",
+    "annotation-style",
+    "link-mode",
+    "compile-bytecode",
+    "require-hashes",
+    "verify-hashes",
+    "upgrade",
+    "upgrade-package",
+    "reinstall",
+    "reinstall-package",
 ];
 
 #[derive(Debug, Deserialize)]
@@ -423,6 +516,10 @@ fn find_links(url: &str) -> Named {
 pub(crate) struct Discovery {
     pub indexes: Indexes,
     pub lock_dirs: Vec<String>,
+    /// Whether uv settings or a `[tool.uv]` apply to the project.
+    pub uv_configured: bool,
+    /// Whether the project has a `[tool.poetry]`.
+    pub poetry_configured: bool,
 }
 
 /// The index settings that apply to the `pyproject.toml` at `path`.
@@ -489,8 +586,8 @@ pub(crate) fn discover(path: &str, files: &Files) -> Discovery {
                 return None;
             };
             (!workspace.members.is_empty()
-                && members.matches(member)
-                && (workspace.exclude.is_empty() || !exclude.matches(member)))
+                && members.is_match(member)
+                && (workspace.exclude.is_empty() || !exclude.is_match(member)))
             .then_some(dir)
         });
     for dir in dirs.iter().filter(|dir| Some(**dir) != root) {
@@ -545,29 +642,35 @@ pub(crate) fn discover(path: &str, files: &Files) -> Discovery {
             }
         }
     }
-    let no_sources = settings
-        .as_ref()
-        .and_then(|(_, s)| *s)
-        .map_or((false, &[][..]), |s| {
-            (s.no_sources, &s.no_sources_package[..])
-        });
-    for project in projects.iter().rev() {
-        for requirement in project
+    let read_settings = settings.as_ref().and_then(|(_, s)| *s);
+    // An override or constraint naming a URL takes its package from it.
+    // uv applies those of the project and its workspace root, not a
+    // `uv.toml`'s, when it locks (checked against uv by a real_ test).
+    for table in &projects {
+        for requirement in table
             .override_dependencies
             .iter()
-            .chain(&project.constraint_dependencies)
+            .chain(&table.constraint_dependencies)
         {
-            // An override or constraint naming a URL takes its package from it.
             if let Some(name) = direct_reference(requirement) {
                 indexes.pinned.insert(name, Origin::Other);
             }
         }
-        if no_sources.0 {
-            continue;
+    }
+    let (no_sources, no_sources_package) = read_settings.map_or((false, &[][..]), |s| {
+        (s.no_sources, &s.no_sources_package[..])
+    });
+    for project in projects.iter().rev() {
+        if no_sources {
+            break;
         }
         for (package, sources) in &project.sources {
             let package = super::normalise(package);
-            if no_sources.1.iter().any(|p| super::normalise(p) == package) {
+            if no_sources_package
+                .iter()
+                .any(|p| super::normalise(p) == package)
+                || indexes.pinned.get(&package) == Some(&Origin::Other)
+            {
                 continue;
             }
             let origin = Origin::of(sources.items().iter().map(|source| uv_pin(source, &names)));
@@ -576,16 +679,40 @@ pub(crate) fn discover(path: &str, files: &Files) -> Discovery {
             }
         }
     }
+    let uv_configured = settings.is_some() || uv(project_dir).is_some();
     let project_tools = tools(project_dir);
+    let poetry_configured = project_tools.is_some_and(|t| t.poetry.is_some());
     match project_tools.and_then(|t| t.poetry.as_ref()) {
-        Some(Strict(Some(poetry))) => poetry_settings(poetry, &mut indexes),
+        Some(Strict(Some(poetry))) => {
+            let mut poetry_indexes = Indexes::default();
+            poetry_settings(poetry, &mut poetry_indexes);
+            merge(&mut indexes, poetry_indexes, uv_configured);
+        }
         Some(Strict(None)) => indexes
             .extras
             .push(unreadable(format!("[tool.poetry] in {path}"))),
         None => {}
     }
-    if let Some(tools) = project_tools {
-        unverified(tools, &mut indexes);
+    // Tools the Count cannot check against themselves, configured here or
+    // in any directory above, in `pyproject.toml` or their own files.
+    for dir in &dirs {
+        if let Some(tools) = tools(dir) {
+            unverified(tools, &mut indexes);
+        }
+        for (leaf, read) in [
+            ("pdm.toml", unverified_pdm as fn(&Value) -> bool),
+            ("pixi.toml", unverified_pixi),
+            ("hatch.toml", unverified_hatch),
+        ] {
+            let file = join(dir, leaf);
+            match load::<Value>(files, &file) {
+                Some(Loaded::Read(value)) if !read(&value) => {}
+                Some(_) => indexes.extras.push(Named::Unusable(format!(
+                    "index settings in {file}, which the Count does not read"
+                ))),
+                None => {}
+            }
+        }
     }
     let mut lock_dirs = vec![project_dir.to_owned()];
     if let Some(root) = root
@@ -593,23 +720,75 @@ pub(crate) fn discover(path: &str, files: &Files) -> Discovery {
     {
         lock_dirs.push(root.to_owned());
     }
-    Discovery { indexes, lock_dirs }
+    Discovery {
+        indexes,
+        lock_dirs,
+        uv_configured,
+        poetry_configured,
+    }
 }
 
-/// Workspace globs as uv joins them to the root: `./packages/*/` is
-/// `packages/*`. None when one does not compile.
-fn globs(values: &[String]) -> Option<Patterns> {
-    let values: Vec<String> = values
-        .iter()
-        .map(|glob| {
-            let mut glob = glob.trim_end_matches('/');
-            while let Some(rest) = glob.strip_prefix("./") {
-                glob = rest;
-            }
-            glob.to_owned()
-        })
-        .collect();
-    Patterns::compile(&values).ok()
+/// Fold Poetry's candidates into uv's. When both tools are configured,
+/// either could lock the project, so each one's default is a candidate.
+fn merge(indexes: &mut Indexes, poetry: Indexes, uv_configured: bool) {
+    if uv_configured {
+        let uv_default = indexes.default.take().unwrap_or(Named::Public);
+        let poetry_default = poetry.default.unwrap_or(Named::Public);
+        if poetry_default != uv_default {
+            indexes.extras.push(poetry_default);
+        }
+        indexes.default = Some(uv_default);
+    } else {
+        indexes.default = poetry.default;
+    }
+    indexes.extras.extend(poetry.extras);
+    for (package, origin) in poetry.pinned {
+        pin(&mut indexes.pinned, package, origin);
+    }
+}
+
+/// Pin `package`, or make it ambiguous where another pin disagrees.
+fn pin(pinned: &mut BTreeMap<String, Origin>, package: String, origin: Origin) {
+    let origin = match pinned.remove(&package) {
+        Some(earlier) => Origin::of([earlier, origin]).unwrap_or(Origin::Other),
+        None => origin,
+    };
+    pinned.insert(package, origin);
+}
+
+/// Whether a `pdm.toml` names an index: PDM's `pypi` settings or sources.
+fn unverified_pdm(value: &Value) -> bool {
+    value.get("pypi").is_some() || value.get("source").is_some()
+}
+
+/// Whether a `pixi.toml` names a PyPI index.
+fn unverified_pixi(value: &Value) -> bool {
+    pixi_names_index(value)
+}
+
+/// Whether a `hatch.toml` sets pip or uv variables in an environment.
+fn unverified_hatch(value: &Value) -> bool {
+    hatch_sets_installer(value)
+}
+
+/// Workspace globs as uv joins them to the root, `./packages/*/` being
+/// `packages/*`, each matching within a path segment as a filesystem glob
+/// does. None when one does not compile.
+fn globs(values: &[String]) -> Option<globset::GlobSet> {
+    let mut set = globset::GlobSetBuilder::new();
+    for glob in values {
+        let mut glob = glob.trim_end_matches('/');
+        while let Some(rest) = glob.strip_prefix("./") {
+            glob = rest;
+        }
+        set.add(
+            globset::GlobBuilder::new(glob)
+                .literal_separator(true)
+                .build()
+                .ok()?,
+        );
+    }
+    set.build().ok()
 }
 
 /// The package a PEP 508 requirement takes from a URL, if it does.
@@ -667,6 +846,9 @@ fn uv_settings(settings: &UvSettings, indexes: &mut Indexes) {
     let mut defaults = defaults.into_iter();
     indexes.default = defaults.next();
     indexes.extras.extend(defaults);
+    if let Some(pip) = &settings.pip {
+        uv_pip_settings(pip, indexes);
+    }
     if settings.no_index {
         let mut only = vec!["--no-index".to_owned()];
         only.extend(
@@ -679,6 +861,39 @@ fn uv_settings(settings: &UvSettings, indexes: &mut Indexes) {
         indexes
             .extras
             .retain(|named| !matches!(named, Named::Url(_) | Named::Public));
+    }
+}
+
+/// `uv pip`'s indexes for the project: candidates besides `uv lock`'s, since
+/// the Count cannot tell which installs it.
+fn uv_pip_settings(pip: &UvPip, indexes: &mut Indexes) {
+    for key in pip.rest.keys() {
+        if !UV_PIP_IRRELEVANT.contains(&key.as_str()) {
+            indexes
+                .extras
+                .push(unreadable(format!("uv pip setting {}", shown(key))));
+        }
+    }
+    indexes
+        .extras
+        .extend(pip.index_url.as_deref().map(Named::parse));
+    indexes
+        .extras
+        .extend(pip.extra_index_url.iter().map(|u| Named::parse(u)));
+    indexes
+        .extras
+        .extend(pip.find_links.iter().map(|u| find_links(u)));
+    for (set, what) in [
+        (pip.no_index, "uv pip no-index"),
+        (pip.torch_backend.is_some(), "uv pip torch-backend"),
+        (
+            pip.no_sources || !pip.no_sources_package.is_empty(),
+            "uv pip no-sources, which ignores the project's pins",
+        ),
+    ] {
+        if set {
+            indexes.extras.push(Named::Unusable(what.into()));
+        }
     }
 }
 
@@ -762,7 +977,7 @@ fn poetry_settings(poetry: &Poetry, indexes: &mut Indexes) {
             };
             let origin = Origin::of(specs.iter().filter_map(|spec| poetry_pin(spec, &names)));
             if let Some(origin) = origin {
-                indexes.pinned.insert(super::normalise(package), origin);
+                pin(&mut indexes.pinned, super::normalise(package), origin);
             }
         }
     }
@@ -797,36 +1012,18 @@ fn unverified(tools: &Tools, indexes: &mut Indexes) {
             .and_then(|v| v.pointer(pointer))
             .is_some_and(|v| !v.is_null())
     };
-    let pixi_index = tools
-        .pixi
-        .as_ref()
-        .and_then(|p| p.pointer("/pypi-dependencies"))
-        .and_then(Value::as_object)
-        .is_some_and(|deps| deps.values().any(|d| d.get("index").is_some()));
-    let hatch_env = tools
-        .hatch
-        .as_ref()
-        .and_then(|h| h.pointer("/envs"))
-        .and_then(Value::as_object)
-        .is_some_and(|envs| {
-            envs.values().any(|env| {
-                env.get("env-vars")
-                    .and_then(Value::as_object)
-                    .is_some_and(|vars| {
-                        vars.keys()
-                            .any(|k| k.starts_with("PIP_") || k.starts_with("UV_"))
-                    })
-            })
-        });
     for (present, what) in [
         (has(&tools.pdm, "/source"), "PDM sources"),
         (has(&tools.pdm, "/resolution/overrides"), "PDM overrides"),
         (has(&tools.rye, "/sources"), "Rye sources"),
         (
-            has(&tools.pixi, "/pypi-options") || pixi_index,
+            tools.pixi.as_ref().is_some_and(pixi_names_index),
             "Pixi PyPI options",
         ),
-        (hatch_env, "Hatch environment PIP_ or UV_ variables"),
+        (
+            tools.hatch.as_ref().is_some_and(hatch_sets_installer),
+            "Hatch environment PIP_ or UV_ variables",
+        ),
     ] {
         if present {
             indexes.extras.push(Named::Unusable(format!(
@@ -834,4 +1031,33 @@ fn unverified(tools: &Tools, indexes: &mut Indexes) {
             )));
         }
     }
+}
+
+/// Whether a Pixi table names a PyPI index: its options, or a dependency's.
+fn pixi_names_index(pixi: &Value) -> bool {
+    pixi.get("pypi-options").is_some()
+        || pixi
+            .get("pypi-dependencies")
+            .and_then(Value::as_object)
+            .is_some_and(|deps| deps.values().any(|d| d.get("index").is_some()))
+}
+
+/// Whether a Hatch table sets pip or uv variables in an environment, or
+/// gives the installer its own arguments.
+fn hatch_sets_installer(hatch: &Value) -> bool {
+    hatch
+        .get("envs")
+        .and_then(Value::as_object)
+        .is_some_and(|envs| {
+            envs.values().any(|env| {
+                env.get("pip-install-flags").is_some()
+                    || env
+                        .get("env-vars")
+                        .and_then(Value::as_object)
+                        .is_some_and(|vars| {
+                            vars.keys()
+                                .any(|k| k.starts_with("PIP_") || k.starts_with("UV_"))
+                        })
+            })
+        })
 }

@@ -1569,6 +1569,7 @@ async fn a_python_package_is_read_from_its_private_index_or_not_at_all() {
         <A HREF="../../packages/acme_auth-2.1.0-py3-none-any.whl" data-requires-python=">=3.8" data-yanked="">acme_auth-2.1.0-py3-none-any.whl</A>
         <a
           href="../../packages/acme_auth-2.2.0%2Blocal.tar.gz">acme_auth-2.2.0&#43;local.tar.gz</a>
+        <a href="../../packages/other_pkg-9.0.0.tar.gz">other_pkg-9.0.0.tar.gz</a>
         </body></html>"#;
     let steps = Arc::new(AuthSteps(Mutex::new(VecDeque::from([
         (
@@ -1617,6 +1618,8 @@ async fn a_python_package_is_read_from_its_private_index_or_not_at_all() {
             .yanked
     };
     assert!(!yanked("2.0.0") && yanked("2.1.0") && !yanked("2.2.0+local"));
+    // Another project's file on the page lends it no version.
+    assert!(auth.versions.iter().all(|v| v.version != "9.0.0"));
     assert!(steps.0.lock().unwrap().is_empty());
     assert!(client.credentialed(&id("acme-core", "https://pypi.acme.dev/simple")));
     // An ambiguous package is never looked up, with a reason to act on.

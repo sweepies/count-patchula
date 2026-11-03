@@ -3019,17 +3019,120 @@ fn pip_requirements_files_are_not_maintained_and_the_count_says_why() {
         "pyproject.toml",
         "notes.txt",
     ];
-    let warning = scanner.unsupported(paths).unwrap();
-    assert!(
-        warning.starts_with("`requirements.txt` and 2 more"),
-        "{warning}"
+    // Skipped, each with the reason, rather than a warning that would hold
+    // back branch cleanup and automerge.
+    let skipped = scanner.unsupported(paths);
+    let files: Vec<&str> = skipped.iter().map(|s| s.file.as_str()).collect();
+    assert_eq!(
+        files,
+        [
+            "requirements.txt",
+            "app/requirements-dev.txt",
+            "requirements/base.in"
+        ]
     );
-    assert!(warning.contains("uv add -r requirements.txt"), "{warning}");
-    assert!(scanner.unsupported(["vendor/requirements.txt"]).is_none());
-    // Nothing is extracted from them.
+    assert!(
+        skipped[0].reason.contains("uv add -r requirements.txt"),
+        "{}",
+        skipped[0].reason
+    );
+    assert!(scanner.unsupported(["vendor/requirements.txt"]).is_empty());
+    // Nothing is extracted from them, and nothing warns.
     let files = Files::from([("requirements.txt".into(), "requests==2.31.0\n".into())]);
-    assert!(scanner.extract(&files).unwrap().dependencies.is_empty());
+    let extraction = scanner.extract(&files).unwrap();
+    assert!(extraction.dependencies.is_empty() && extraction.warnings.is_empty());
     // Without Python projects enabled, there is nothing to say.
     config.managers = vec![Manager::Npm];
-    assert!(Scanner::new(&config).unwrap().unsupported(paths).is_none());
+    assert!(Scanner::new(&config).unwrap().unsupported(paths).is_empty());
+}
+
+#[test]
+fn python_index_settings_any_tool_reads_are_candidates() {
+    let project = |extra: &str| {
+        format!("[project]\nname = \"p\"\ndependencies = [\"acme-a>=1\", \"acme-b>=1\"]\n{extra}")
+    };
+    let files = Files::from([
+        // `uv pip install .` reads `[pip]` for the project's dependencies.
+        (
+            "uvpip/pyproject.toml".into(),
+            project("[tool.uv.pip]\nindex-url = \"https://pypi.acme.dev/simple\"\n"),
+        ),
+        // uv does not apply an override in `uv.toml` when it locks a project.
+        (
+            "override/pyproject.toml".into(),
+            project(""),
+        ),
+        (
+            "override/uv.toml".into(),
+            "override-dependencies = [\"acme-b @ https://files.acme.dev/acme_b-1.0.0-py3-none-any.whl\"]\n".into(),
+        ),
+        // A `poetry.lock` left in a project uv manages is not uv's lockfile.
+        (
+            "stray/pyproject.toml".into(),
+            project("[tool.uv]\nextra-index-url = [\"https://pypi.acme.dev/simple\"]\n"),
+        ),
+        (
+            "stray/poetry.lock".into(),
+            "[[package]]\nname = \"acme-a\"\nversion = \"1.0.0\"\n".into(),
+        ),
+        // Rye sources at a workspace root apply to its members.
+        (
+            "rye/pyproject.toml".into(),
+            "[tool.rye]\nvirtual = true\n[[tool.rye.sources]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\n".into(),
+        ),
+        ("rye/app/pyproject.toml".into(), project("")),
+        // PDM, Pixi and Hatch in their own files.
+        ("pdm/pdm.toml".into(), "[pypi]\nurl = \"https://pypi.acme.dev/simple\"\n".into()),
+        ("pdm/pyproject.toml".into(), project("")),
+        ("pixi/pixi.toml".into(), "[pypi-options]\nindex-url = \"https://pypi.acme.dev/simple\"\n".into()),
+        ("pixi/pyproject.toml".into(), project("")),
+        ("hatch/hatch.toml".into(), "[envs.default.env-vars]\nUV_INDEX_URL = \"https://pypi.acme.dev/simple\"\n".into()),
+        ("hatch/pyproject.toml".into(), project("")),
+        ("plain/hatch.toml".into(), "[envs.default]\ndependencies = [\"pytest\"]\n".into()),
+        ("plain/pyproject.toml".into(), project("")),
+        // uv and Poetry both configured: either could lock it.
+        (
+            "both/pyproject.toml".into(),
+            "[project]\nname = \"p\"\ndependencies = [\"acme-a>=1\"]\n[tool.uv]\nnative-tls = true\n[tool.poetry]\npackage-mode = false\n[[tool.poetry.source]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\n".into(),
+        ),
+        // A package pinned to different sources in two groups.
+        (
+            "groups/pyproject.toml".into(),
+            "[tool.poetry.group.dev.dependencies]\nacme-a = { version = \"^1\", source = \"acme\" }\n[tool.poetry.group.docs.dependencies]\nacme-a = { version = \"^1\", source = \"pypi\" }\n[[tool.poetry.source]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\npriority = \"explicit\"\n".into(),
+        ),
+        // A scheme's case does not matter.
+        (
+            "upper/pyproject.toml".into(),
+            project("[tool.uv]\nindex-url = \"HTTPS://pypi.acme.dev/simple\"\n"),
+        ),
+        (
+            "upper-public/pyproject.toml".into(),
+            project("[tool.uv]\nindex-url = \"HTTPS://PYPI.ORG/simple\"\n"),
+        ),
+    ]);
+    let extraction = python_scan(&files);
+    let registry = |file: &str, name: &str| python_registry(&extraction, file, name);
+    assert!(ambiguous(registry("uvpip/pyproject.toml", "acme-a")));
+    assert_eq!(registry("override/pyproject.toml", "acme-b"), None);
+    assert!(ambiguous(registry("stray/pyproject.toml", "acme-a")));
+    for (file, says) in [
+        ("rye/app/pyproject.toml", "Rye sources"),
+        ("pdm/pyproject.toml", "pdm/pdm.toml"),
+        ("pixi/pyproject.toml", "pixi/pixi.toml"),
+        ("hatch/pyproject.toml", "hatch/hatch.toml"),
+    ] {
+        let recorded = registry(file, "acme-a");
+        assert!(
+            recorded.as_deref().is_some_and(|r| r.contains(says)),
+            "{file}: {recorded:?}"
+        );
+    }
+    assert_eq!(registry("plain/pyproject.toml", "acme-a"), None);
+    assert!(ambiguous(registry("both/pyproject.toml", "acme-a")));
+    assert!(ambiguous(registry("groups/pyproject.toml", "acme-a")));
+    assert_eq!(
+        registry("upper/pyproject.toml", "acme-a"),
+        Some(ACME.to_owned())
+    );
+    assert_eq!(registry("upper-public/pyproject.toml", "acme-a"), None);
 }

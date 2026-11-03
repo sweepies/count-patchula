@@ -44,20 +44,12 @@ impl Named {
 
 /// Whether `url` is PyPI's own index, over https or plain http.
 fn public(url: &str) -> bool {
-    let host = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .and_then(|rest| rest.split('/').next())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let host = host
-        .strip_suffix(":443")
-        .or_else(|| host.strip_suffix(":80"))
-        .unwrap_or(&host);
-    matches!(
-        host,
-        "pypi.org" | "pypi.python.org" | "files.pythonhosted.org"
-    )
+    crate::web_host(url).is_some_and(|host| {
+        matches!(
+            host.as_str(),
+            "pypi.org" | "pypi.python.org" | "files.pythonhosted.org"
+        )
+    })
 }
 
 /// Where a package comes from, as a pin or a lockfile records it.
