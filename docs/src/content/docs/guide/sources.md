@@ -204,7 +204,9 @@ dependency's `registry`:
     `--extra-index-url` adds an index, and `--find-links` a source that is
     not an index. As in one pip run, the options of files that include each
     other with `-r` or `-c` apply to all of them. With `--no-index`, nothing
-    comes from an index, so no lookup runs.
+    comes from an index, so every package's lookup fails. Requirements files
+    read only their own options and those of the files they include, not
+    `uv.toml`.
   - uv: `[[tool.uv.index]]` (a `default` one replaces PyPI, an `explicit` one
     serves only packages pinned to it), `index-url` and `extra-index-url`,
     from the nearest `uv.toml`, or `pyproject.toml` with `[tool.uv]`, at or
@@ -220,6 +222,8 @@ dependency's `registry`:
 
   A package from git, a path, a URL or a workspace member, by pin or by
   lockfile, is not looked up at all: its name on PyPI may be someone else's.
+  It is reported as skipped instead. PDM's `[[tool.pdm.source]]` is not read
+  yet.
   A pin to an index the project does not define fails its lookup.
 
   A package that is pinned nowhere and unlocked, in a project that names an
@@ -236,8 +240,10 @@ dependency's `registry`:
   `package.json` beside them.
 
 `.npmrc` and `.yarnrc.yml` are read whenever npm, Bun or an npm extractor is
-enabled, and `uv.toml` whenever pyproject is, whatever `files` and `exclude`
-select. Bun's `bunfig.toml` and Yarn 1's
+enabled; every `pyproject.toml`, `uv.toml`, `uv.lock` and `poetry.lock`
+whenever pyproject is; and every `.txt` and `.in` file outside `exclude`
+whenever requirements is, since `-r` can include any of them. `files` does
+not limit these. Bun's `bunfig.toml` and Yarn 1's
 `.yarnrc` are not read yet: a registry set only there is not used.
 
 npm's, Yarn's and PyPI's public registries (`registry.npmjs.org`,

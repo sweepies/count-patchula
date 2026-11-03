@@ -75,7 +75,9 @@ pub(super) fn extract(
                             Ok(raw) if source == Source::Pypi => {
                                 pypi::Named::parse(&raw).recorded()
                             }
-                            Ok(raw) => Some(registry_url(&raw).unwrap_or(raw)),
+                            Ok(raw) => {
+                                Some(registry_url(&raw).unwrap_or_else(|| crate::redacted(&raw)))
+                            }
                             Err(error) if error.starts_with("unmatched template capture") => None,
                             Err(error) => return Err(error),
                         },

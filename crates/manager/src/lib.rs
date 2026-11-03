@@ -266,7 +266,7 @@ impl Scanner {
     pub fn needs(&self, path: &str) -> bool {
         self.config.managers.iter().any(|m| self.selected(*m, path)) || self.registry_file(path)
     }
-    /// npm's and uv's registry settings are read whatever `files` and `exclude` select:
+    /// Registry settings are read whatever `files` and `exclude` select:
     /// without them, a scoped package would be looked up on the public
     /// registry, where its name may be someone else's.
     fn registry_file(&self, path: &str) -> bool {
@@ -282,7 +282,13 @@ impl Scanner {
             .any(|m| self.config.managers.contains(m))
             || npm_extractors)
             && matches!(leaf, ".npmrc" | ".yarnrc.yml"))
-            || (self.config.managers.contains(&Manager::Pyproject) && leaf == "uv.toml")
+            || (self.config.managers.contains(&Manager::Pyproject)
+                && matches!(leaf, "uv.toml" | "pyproject.toml" | "uv.lock" | "poetry.lock"))
+            // pip reads index options from any file a requirements file
+            // includes with `-r` or `-c`, whatever its name.
+            || (self.config.managers.contains(&Manager::Requirements)
+                && (leaf.ends_with(".txt") || leaf.ends_with(".in"))
+                && (self.config.exclude.is_empty() || !self.exclude.matches(path)))
     }
     fn selected(&self, manager: Manager, path: &str) -> bool {
         if !self.config.managers.contains(&manager)
@@ -402,6 +408,7 @@ impl Scanner {
         let mut result = Extraction::default();
         let locks = npm::locks(files)?;
         let npmrcs = npm::npmrcs(files);
+        let requirements = pypi::RequirementsGraph::new(files);
         let cargo = if self.config.managers.contains(&Manager::Cargo) {
             cargo::documents(files)?
         } else {
@@ -524,9 +531,9 @@ impl Scanner {
             } else if self.selected(Manager::PreCommit, path) {
                 precommit::extract(path, text)
             } else if self.selected(Manager::Pyproject, path) {
-                pyproject::extract(path, text, files)
+                pyproject::extract(path, text, files, &mut result.skipped)
             } else if self.selected(Manager::Requirements, path) {
-                requirements::extract(path, text, files)
+                requirements::extract(path, text, &requirements)
             } else {
                 Ok(Vec::new())
             };
@@ -588,6 +595,23 @@ impl Scanner {
         }
         npm::assign_locked_registries(&mut result.locked, &npmrcs);
         Ok(result)
+    }
+}
+/// A registry value as recorded when the Count cannot use it: any user,
+/// password or query removed, so a secret in it never reaches a report.
+pub(crate) fn redacted(value: &str) -> String {
+    let Some((scheme, rest)) = value.split_once("://") else {
+        return value.to_owned();
+    };
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let path = path.split(['?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit_once('@').map(|(_, host)| host);
+    let stripped = format!("{scheme}://{}/{path}", host.unwrap_or(authority));
+    let stripped = stripped.trim_end_matches('/');
+    if host.is_some() || rest.contains(['?', '#']) {
+        format!("{stripped} (credentials removed)")
+    } else {
+        stripped.to_owned()
     }
 }
 /// A registry URL a repository names: https, without a user, query or

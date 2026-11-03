@@ -24,7 +24,7 @@ impl Named {
         }
         match crate::registry_url(raw) {
             Some(url) => Self::Url(url),
-            None => Self::Unusable(raw.to_owned()),
+            None => Self::Unusable(crate::redacted(raw)),
         }
     }
     /// The registry a dependency records: none for PyPI.
@@ -124,12 +124,13 @@ impl Indexes {
         }
     }
     /// Give each PyPI dependency in `deps` its registry, and drop those that
-    /// do not come from an index.
+    /// do not come from an index, returning them.
     pub(crate) fn assign(
         &self,
         deps: &mut Vec<Dependency>,
         locked: impl Fn(&str) -> Option<Origin>,
-    ) {
+    ) -> Vec<Dependency> {
+        let mut dropped = Vec::new();
         deps.retain_mut(|dep| {
             if dep.source != Source::Pypi {
                 return true;
@@ -140,10 +141,14 @@ impl Indexes {
                     let labels: Vec<_> = named.iter().map(Named::label).collect();
                     dep.registry = Some(PackageId::ambiguous_registry(&labels));
                 }
-                Origin::Other => return false,
+                Origin::Other => {
+                    dropped.push(dep.clone());
+                    return false;
+                }
             }
             true
         });
+        dropped
     }
 }
 
@@ -177,12 +182,22 @@ fn relative(from: &str, path: &str) -> Option<String> {
 
 fn requirements_options(path: &str, text: &str) -> RequirementsOptions {
     let mut options = RequirementsOptions::default();
-    for line in text.lines() {
+    // A backslash at the end of a line continues it, as pip reads it.
+    let joined = text.replace("\\\r\n", " ").replace("\\\n", " ");
+    for line in joined.lines() {
         let line = line.split(" #").next().unwrap_or(line).trim();
         let mut words = line.split_whitespace();
         let Some(first) = words.next() else { continue };
-        let (option, value) = match first.split_once('=') {
-            Some((option, value)) if option.starts_with('-') => (option, Some(value.to_owned())),
+        // `--option=value`, `-xvalue` and `-x value` are all one option.
+        let joined_short = [("-r", 2), ("-c", 2), ("-i", 2), ("-f", 2)]
+            .iter()
+            .find(|(short, len)| first.starts_with(short) && first.len() > *len)
+            .map(|(short, len)| (*short, Some(first[*len..].to_owned())));
+        let (option, value) = match (joined_short, first.split_once('=')) {
+            (Some(joined), _) => joined,
+            (None, Some((option, value))) if option.starts_with("--") => {
+                (option, Some(value.to_owned()))
+            }
             _ => (first, words.next().map(str::to_owned)),
         };
         match (option, value) {
@@ -199,21 +214,38 @@ fn requirements_options(path: &str, text: &str) -> RequirementsOptions {
     options
 }
 
+/// The index options of the `.txt` and `.in` files a scan read, by path: those
+/// that set any, or include other files.
+pub(crate) struct RequirementsGraph(BTreeMap<String, RequirementsOptions>);
+
+impl RequirementsGraph {
+    pub(crate) fn new(files: &Files) -> Self {
+        Self(
+            files
+                .iter()
+                .filter(|(path, _)| path.ends_with(".txt") || path.ends_with(".in"))
+                .map(|(path, text)| (path.clone(), requirements_options(path, text)))
+                .filter(|(_, options)| {
+                    options.no_index
+                        || !options.indexes.is_empty()
+                        || !options.extras.is_empty()
+                        || !options.find_links.is_empty()
+                        || !options.includes.is_empty()
+                })
+                .collect(),
+        )
+    }
+}
+
 /// The indexes of a requirements file: pip applies index options across
 /// every file one run reads, so those of the files it includes, and of the
 /// files that include it, count too. `--find-links` adds a source that is not
 /// an index, and `--no-index` leaves only those.
-pub(crate) fn requirements(path: &str, files: &Files) -> Indexes {
-    let options: BTreeMap<&str, RequirementsOptions> = files
+pub(crate) fn requirements(path: &str, graph: &RequirementsGraph) -> Indexes {
+    let options: BTreeMap<&str, &RequirementsOptions> = graph
+        .0
         .iter()
-        .map(|(path, text)| (path.as_str(), requirements_options(path, text)))
-        .filter(|(_, options)| {
-            options.no_index
-                || !options.indexes.is_empty()
-                || !options.extras.is_empty()
-                || !options.find_links.is_empty()
-                || !options.includes.is_empty()
-        })
+        .map(|(path, options)| (path.as_str(), options))
         .collect();
     let mut connected = vec![path.to_owned()];
     let mut index = 0;
@@ -252,7 +284,11 @@ pub(crate) fn requirements(path: &str, files: &Files) -> Indexes {
     }
     if no_index {
         let mut only: Vec<String> = vec!["--no-index".into()];
-        only.extend(find_links.iter().map(|link| format!("--find-links {link}")));
+        only.extend(
+            find_links
+                .iter()
+                .map(|link| format!("--find-links {}", crate::redacted(link))),
+        );
         indexes.default = Some(Named::Unusable(only.join(" ")));
         indexes.extras.clear();
         return indexes;
@@ -263,7 +299,7 @@ pub(crate) fn requirements(path: &str, files: &Files) -> Indexes {
     indexes.extras.extend(
         find_links
             .into_iter()
-            .map(|link| Named::Unusable(format!("--find-links {link}"))),
+            .map(|link| Named::Unusable(format!("--find-links {}", crate::redacted(&link)))),
     );
     indexes
 }

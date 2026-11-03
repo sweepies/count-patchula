@@ -2769,6 +2769,7 @@ skipped	ci/gitaly/.gitlab-ci.yml:359	registry.gitlab.com/gitlab-org/gitlab-build
 skipped	ci/gitaly/.gitlab-ci.yml:544	${GITLAB_DEPENDENCY_PROXY}ruby:${RUBY_VERSION}	the image contains a GitLab CI variable
 skipped	ci/gitaly/.gitlab-ci.yml:561	${GITLAB_DEPENDENCY_PROXY}ruby:${RUBY_VERSION}	the image contains a GitLab CI variable
 skipped	nix/nixvim/flake/dev/flake.lock:258	path:../..	a path input changes with the repository
+skipped	python/pydantic/pyproject.toml:50	pydantic-core	comes from git, a path, a URL or a workspace member, not a package index, so it is not looked up on PyPI
 skipped	rust/uv/Cargo.toml:19	uv	a path dependency, not looked up on crates.io
 skipped	rust/uv/Cargo.toml:20	uv-audit	a path dependency, not looked up on crates.io
 skipped	rust/uv/Cargo.toml:21	uv-audit-operations	a path dependency, not looked up on crates.io

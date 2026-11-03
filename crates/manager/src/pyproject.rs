@@ -223,6 +223,8 @@ fn indexes(
     // Poetry: sources by priority; names are case-insensitive, and a source
     // without a URL named PyPI is PyPI.
     let mut poetry_names = BTreeMap::<String, Named>::new();
+    // Poetry knows PyPI by that name without a source for it.
+    poetry_names.insert("pypi".into(), Named::Public);
     let mut primaries = Vec::new();
     for source in poetry
         .and_then(|p| p.get("source"))
@@ -406,7 +408,12 @@ impl Scan<'_> {
     }
 }
 
-pub(super) fn extract(path: &str, text: &str, files: &Files) -> Result<Vec<Dependency>, String> {
+pub(super) fn extract(
+    path: &str,
+    text: &str,
+    files: &Files,
+    skipped: &mut Vec<Skipped>,
+) -> Result<Vec<Dependency>, String> {
     if path.ends_with(".python-version") {
         return Ok(python_version(path, text));
     }
@@ -558,7 +565,15 @@ pub(super) fn extract(path: &str, text: &str, files: &Files) -> Result<Vec<Depen
         tool.and_then(|t| t.get("poetry")),
     );
     let lock = scan.lock.as_ref();
-    indexes.assign(&mut scan.out, |package| locked_origin(lock, package));
+    for dep in indexes.assign(&mut scan.out, |package| locked_origin(lock, package)) {
+        skipped.push(Skipped {
+            manager: Manager::Pyproject,
+            file: dep.file,
+            line: Some(dep.location.line),
+            value: dep.name,
+            reason: "comes from git, a path, a URL or a workspace member, not a package index, so it is not looked up on PyPI".into(),
+        });
+    }
     Ok(scan.out)
 }
 

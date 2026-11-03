@@ -426,7 +426,7 @@ fn named(value: &str) -> Named {
     }
     match crate::registry_url(raw) {
         Some(url) => Named::Url(url),
-        None => Named::Unusable(raw.to_owned()),
+        None => Named::Unusable(crate::redacted(raw)),
     }
 }
 

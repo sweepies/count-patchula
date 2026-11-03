@@ -2692,3 +2692,101 @@ priority = "primary"
         Some(Some("--no-index --find-links ./wheels".to_owned()))
     );
 }
+
+#[test]
+fn python_index_files_are_read_and_secrets_never_recorded() {
+    let mut config = config();
+    config.managers = vec![Manager::Requirements, Manager::Pyproject];
+    // Only some manifests are selected; their index files are read anyway.
+    config.files = vec![patchula_config::FileSet {
+        manager: Manager::Pyproject,
+        paths: vec!["services/**/pyproject.toml".into()],
+    }];
+    let scanner = Scanner::new(&config).unwrap();
+    for path in [
+        "pyproject.toml",
+        "uv.lock",
+        "poetry.lock",
+        "base.txt",
+        "deps/prod.in",
+    ] {
+        assert!(scanner.needs(path), "{path}");
+    }
+    let files = Files::from([
+        // pip's joined short options and line continuations.
+        ("base.txt".into(), "-ihttps://ci:s3cret@pypi.acme.dev/simple?token=x\n".into()),
+        (
+            "requirements.txt".into(),
+            "-rbase.txt\nacme-a==1.0.0 \\\n    --hash=sha256:aa\n".into(),
+        ),
+        // A Dockerfile is not a requirements file, whatever its lines say.
+        (
+            "docker/requirements.txt".into(),
+            "flask==3.0.0\n".into(),
+        ),
+        (
+            "docker/Dockerfile".into(),
+            "RUN pip install \\\n -r requirements.txt \\\n --extra-index-url https://pypi.acme.dev/simple\n".into(),
+        ),
+        (
+            "services/api/pyproject.toml".into(),
+            r#"[tool.poetry.dependencies]
+python = "^3.12"
+requests = { version = "^2.31", source = "pypi" }
+internal = { git = "https://github.com/acme/internal.git" , version = "^1" }
+[[tool.poetry.source]]
+name = "acme"
+url = "https://pypi.acme.dev/simple/"
+"#
+            .into(),
+        ),
+    ]);
+    let extraction = scanner.extract(&files).unwrap();
+    let registry = |file: &str, name: &str| {
+        extraction
+            .dependencies
+            .iter()
+            .find(|d| d.file == file && d.name == name)
+            .unwrap_or_else(|| panic!("{file} {name}"))
+            .registry
+            .clone()
+    };
+    let recorded = registry("requirements.txt", "acme-a").unwrap();
+    assert!(
+        !recorded.contains("s3cret") && !recorded.contains("token"),
+        "{recorded}"
+    );
+    assert!(recorded.contains("pypi.acme.dev/simple"), "{recorded}");
+    assert_eq!(registry("docker/requirements.txt", "flask"), None);
+    // Poetry knows PyPI by name without a source for it.
+    assert_eq!(registry("services/api/pyproject.toml", "requests"), None);
+    // Poetry skips git dependencies itself.
+    assert!(extraction.dependencies.iter().all(|d| d.name != "internal"));
+}
+
+#[test]
+fn python_packages_from_outside_an_index_are_skipped_with_a_reason() {
+    let files = Files::from([(
+        "pyproject.toml".into(),
+        "[project]\nname = \"app\"\ndependencies = [\"acme-internal>=1\"]\n[tool.uv.sources]\nacme-internal = { git = \"https://github.com/acme/internal\" }\n".into(),
+    )]);
+    let mut config = config();
+    config.managers = vec![Manager::Pyproject];
+    let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+    assert!(
+        extraction
+            .dependencies
+            .iter()
+            .all(|d| d.name != "acme-internal")
+    );
+    let skipped = extraction
+        .skipped
+        .iter()
+        .find(|s| s.value == "acme-internal")
+        .unwrap();
+    assert!(
+        skipped.reason.contains("not a package index"),
+        "{}",
+        skipped.reason
+    );
+}
