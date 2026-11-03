@@ -229,7 +229,8 @@ impl Client {
         .is_some_and(|entry| entry.auth.sends())
     }
     /// The versions of `package`, from `registry` when it is given: an https
-    /// URL standing in for the source's public registry. Only npm takes one.
+    /// URL standing in for the source's public registry. npm and PyPI take one;
+    /// an ambiguous or unusable registry fails without a request.
     pub async fn lookup(&self, id: &PackageId) -> Result<Catalog> {
         let (source, registry, package) = (id.source, id.registry.as_deref(), id.name.as_str());
         if let Some(registry) = registry {
@@ -238,7 +239,10 @@ impl Client {
                     "{package} could come from several indexes ({indexes}); pin it to one or commit a lockfile"
                 )));
             }
+            // A value the manager kept as written (`${VAR}`, a redacted URL,
+            // find-links) is no URL to request, though a URL parser takes it.
             if !matches!(source, Source::Npm | Source::Pypi)
+                || registry.contains([' ', '$', '{', '(', '@', '?', '#'])
                 || patchula_http::url_prefix(registry).is_none()
             {
                 return Err(Error::Registry(format!(

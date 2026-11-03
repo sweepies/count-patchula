@@ -287,6 +287,14 @@ impl Scanner {
                     leaf,
                     "uv.toml" | "pyproject.toml" | "uv.lock" | "poetry.lock"
                 ))
+            || (self.config.managers.contains(&Manager::Requirements) && requirements_name(path))
+    }
+    /// The requirements files pip runs may start from: the selected ones and
+    /// any named like one, since an excluded file can still set the index
+    /// options of a selected one it includes.
+    fn requirements_root(&self, path: &str) -> bool {
+        self.selected(Manager::Requirements, path)
+            || (self.config.managers.contains(&Manager::Requirements) && requirements_name(path))
     }
     /// Files the requirements files in `files` include with `-r` or `-c`,
     /// whatever their names, that `files` does not hold yet: pip reads their
@@ -295,8 +303,7 @@ impl Scanner {
         if !self.config.managers.contains(&Manager::Requirements) {
             return BTreeSet::new();
         }
-        pypi::RequirementsGraph::new(files, |path| self.selected(Manager::Requirements, path))
-            .missing()
+        pypi::RequirementsGraph::new(files, |path| self.requirements_root(path)).missing()
     }
     fn selected(&self, manager: Manager, path: &str) -> bool {
         if !self.config.managers.contains(&manager)
@@ -404,20 +411,14 @@ impl Scanner {
                 leaf,
                 "pyproject.toml" | "uv.lock" | "poetry.lock" | ".python-version"
             ),
-            Manager::Requirements => {
-                (leaf.starts_with("requirements")
-                    && (leaf.ends_with(".txt") || leaf.ends_with(".in")))
-                    || (path.contains("requirements/")
-                        && (leaf.ends_with(".txt") || leaf.ends_with(".in")))
-            }
+            Manager::Requirements => requirements_name(path),
         }
     }
     pub fn extract(&self, files: &Files) -> Result<Extraction, String> {
         let mut result = Extraction::default();
         let locks = npm::locks(files)?;
         let npmrcs = npm::npmrcs(files);
-        let requirements =
-            pypi::RequirementsGraph::new(files, |path| self.selected(Manager::Requirements, path));
+        let requirements = pypi::RequirementsGraph::new(files, |path| self.requirements_root(path));
         let cargo = if self.config.managers.contains(&Manager::Cargo) {
             cargo::documents(files)?
         } else {
@@ -612,11 +613,15 @@ pub(crate) fn redacted(value: &str) -> String {
     let Some((scheme, rest)) = value.split_once("://") else {
         return value.to_owned();
     };
-    // A query or fragment may hold a token; a password may hold a `/`, so
-    // everything before the last `@` is treated as the user.
-    let before = rest.split(['?', '#']).next().unwrap_or_default();
-    let host = before.rsplit_once('@').map(|(_, host)| host);
-    let stripped = format!("{scheme}://{}", host.unwrap_or(before));
+    // A password may hold `/`, `?` or `#`, so everything before the last
+    // `@` is treated as the user; a query or fragment may hold a token.
+    let host = rest.rsplit_once('@').map(|(_, host)| host);
+    let kept = host
+        .unwrap_or(rest)
+        .split(['?', '#'])
+        .next()
+        .unwrap_or_default();
+    let stripped = format!("{scheme}://{kept}");
     let stripped = stripped.trim_end_matches('/');
     if host.is_some() || rest.contains(['?', '#']) {
         format!("{stripped} (credentials removed)")
@@ -641,4 +646,17 @@ pub fn word<T: Serialize>(value: &T) -> String {
         .as_str()
         .expect("enum word")
         .into()
+}
+/// A pip requirements file by its name: `requirements.txt`,
+/// `dev-requirements.in`, `requirements-test.txt`, or any `.txt` or `.in`
+/// under a `requirements/` directory.
+fn requirements_name(path: &str) -> bool {
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    let Some(stem) = leaf
+        .strip_suffix(".txt")
+        .or_else(|| leaf.strip_suffix(".in"))
+    else {
+        return false;
+    };
+    stem.contains("requirements") || path.contains("requirements/")
 }

@@ -2816,7 +2816,7 @@ fn python_index_settings_follow_runs_workspaces_and_fail_closed() {
         // A member's own [tool.uv] does not replace the root's settings.
         (
             "ws/pyproject.toml".into(),
-            "[tool.uv.workspace]\nmembers = [\"packages/*\"]\nexclude = [\"packages/legacy\"]\n[tool.uv]\nindex-url = \"https://pypi.acme.dev/simple\"\n".into(),
+            "[tool.uv.workspace]\nmembers = [\"./packages/*/\"]\nexclude = [\"./packages/legacy\"]\n[tool.uv]\nindex-url = \"https://pypi.acme.dev/simple\"\n".into(),
         ),
         (
             "ws/packages/lib/pyproject.toml".into(),
@@ -2868,10 +2868,41 @@ fn python_index_settings_follow_runs_workspaces_and_fail_closed() {
             "query/requirements.txt".into(),
             "--index-url https://pypi.acme.dev?token=s3cret\nacme-b==1.0.0\n".into(),
         ),
+        // An excluded run still sets the options of what it includes.
+        (
+            "ci/requirements-ci.txt".into(),
+            "--index-url https://pypi.acme.dev/simple\n-r requirements.txt\n".into(),
+        ),
+        ("ci/requirements.txt".into(), "corp-lib==1.0.0\n".into()),
+        // pip drops a byte order mark and the quotes around a path.
+        (
+            "bom/requirements.txt".into(),
+            "\u{feff}--index-url https://pypi.acme.dev/simple\nacme-c==1.0.0\n".into(),
+        ),
+        (
+            "quoted/requirements.txt".into(),
+            "-r \"base.txt\"\nacme-d==1.0.0\n".into(),
+        ),
+        (
+            "quoted/base.txt".into(),
+            "--index-url https://pypi.acme.dev/simple\n".into(),
+        ),
+        // A password with `?` in it.
+        (
+            "question/requirements.txt".into(),
+            "--index-url https://ci:pa?ss@pypi.acme.dev/simple\nacme-e==1.0.0\n".into(), // betterleaks:allow
+        ),
     ]);
     let mut config = config();
     config.managers = vec![Manager::Requirements, Manager::Pyproject];
+    config.exclude = vec!["ci/requirements-ci.txt".into()];
     let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+    assert!(
+        extraction
+            .dependencies
+            .iter()
+            .all(|d| d.file != "ci/requirements-ci.txt")
+    );
     let registry = |file: &str, name: &str| {
         extraction
             .dependencies
@@ -2921,15 +2952,20 @@ fn python_index_settings_follow_runs_workspaces_and_fail_closed() {
                 .is_some_and(|r| r.contains("unreadable broken/uv.toml")),
         "{broken:?}"
     );
+    assert_eq!(registry("ci/requirements.txt", "corp-lib"), acme);
+    assert_eq!(registry("bom/requirements.txt", "acme-c"), acme);
+    assert_eq!(registry("quoted/requirements.txt", "acme-d"), acme);
     assert_eq!(registry("pdm/pyproject.toml", "requests"), acme);
     assert!(ambiguous(registry("pdm-extra/pyproject.toml", "requests")));
     for (file, name) in [
         ("secret/requirements.txt", "acme-a"),
         ("query/requirements.txt", "acme-b"),
+        ("question/requirements.txt", "acme-e"),
     ] {
         let recorded = registry(file, name).unwrap();
         assert!(
             !recorded.contains("pa/ss")
+                && !recorded.contains("pa?")
                 && !recorded.contains("ci:")
                 && !recorded.contains("s3cret"),
             "{recorded}"

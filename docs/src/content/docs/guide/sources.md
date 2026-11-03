@@ -204,7 +204,9 @@ dependency's `registry`:
     `--extra-index-url` adds an index, and `--find-links` a source that is
     not an index. A file takes the options of every pip run that reads it:
     each requirements file that no other includes, with the files it
-    includes through `-r` or `-c`. A sibling that includes nothing in common
+    includes through `-r` or `-c`. Runs start from every file named like a
+    requirements file, even one `files` or `exclude` leaves out of
+    extraction, and an include through a symlink is not followed. A sibling that includes nothing in common
     does not share its options. An include the Count cannot read, such as a
     URL or a path outside the repository, could name any index, so it makes
     every package in the run ambiguous. With `--no-index`, nothing comes from
@@ -234,8 +236,8 @@ dependency's `registry`:
   It is reported as skipped instead.
 
   A pin to an index the project does not define fails its lookup, and so
-  does every package below a `pyproject.toml` or `uv.toml` that does not
-  parse, since it could name any index.
+  does every package neither pinned nor locked below a `pyproject.toml` or
+  `uv.toml` that does not parse, since it could name any index.
 
   A package that is pinned nowhere and unlocked, in a project that names an
   index besides PyPI, could come from either. pip would take the highest
@@ -252,8 +254,9 @@ dependency's `registry`:
 
 `.npmrc` and `.yarnrc.yml` are read whenever npm, Bun or an npm extractor is
 enabled; every `pyproject.toml`, `uv.toml`, `uv.lock` and `poetry.lock`
-whenever pyproject is; and any file a requirements file includes with `-r`
-or `-c`, whatever its name. `files` and `exclude` do not limit these. Bun's
+whenever pyproject is; and every file named like a requirements file, and
+any file one includes with `-r` or `-c` whatever its name, up to 256 includes,
+whenever requirements is. `files` and `exclude` do not limit these. Bun's
 `bunfig.toml` and Yarn 1's
 `.yarnrc` are not read yet: a registry set only there is not used.
 

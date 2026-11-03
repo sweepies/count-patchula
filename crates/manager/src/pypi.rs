@@ -189,7 +189,9 @@ fn relative(from: &str, path: &str) -> Option<String> {
 
 fn requirements_options(path: &str, text: &str) -> RequirementsOptions {
     let mut options = RequirementsOptions::default();
-    // A backslash at the end of a line continues it, as pip reads it.
+    // pip drops a byte order mark, and a backslash at the end of a line
+    // continues it.
+    let text = text.trim_start_matches('\u{feff}');
     let joined = text.replace("\\\r\n", " ").replace("\\\n", " ");
     for line in joined.lines() {
         let line = line.split(" #").next().unwrap_or(line).trim();
@@ -213,9 +215,10 @@ fn requirements_options(path: &str, text: &str) -> RequirementsOptions {
             ("--extra-index-url", Some(value)) => options.extras.push(Named::parse(&value)),
             ("-f" | "--find-links", Some(value)) => options.find_links.push(value),
             ("-r" | "--requirement" | "-c" | "--constraint", Some(value)) => {
-                match relative(path, &value) {
+                let value = value.trim_matches(['"', '\'']);
+                match relative(path, value) {
                     Some(target) => options.includes.push(target),
-                    None => options.unresolved.push(crate::redacted(&value)),
+                    None => options.unresolved.push(crate::redacted(value)),
                 }
             }
             _ => {}

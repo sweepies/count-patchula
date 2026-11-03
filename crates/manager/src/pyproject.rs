@@ -510,26 +510,37 @@ pub(super) fn extract(
         .iter()
         .filter_map(|dir| Some((*dir, parse(dir, "uv.toml")?)))
         .collect();
-    // A uv workspace root shares its lock, sources and index settings with
-    // the projects its `members` name and `exclude` leaves in.
-    let root = pyprojects.iter().find(|(dir, doc)| {
-        let Some(workspace) = doc
-            .get("tool")
+    // The nearest uv workspace root shares its lock, sources and index
+    // settings with the projects its `members` name and `exclude` leaves in;
+    // a project it does not take in stands alone, as uv treats it.
+    let workspace = |doc: &Document<&str>| {
+        doc.get("tool")
             .and_then(|t| t.get("uv"))
             .and_then(|u| u.get("workspace"))
-        else {
-            return false;
-        };
+            .cloned()
+    };
+    let root = pyprojects
+        .iter()
+        .find_map(|(dir, doc)| Some((*dir, doc, workspace(doc)?)));
+    let root = root.filter(|(dir, _, workspace)| {
         if *dir == ancestors[0] {
             return true;
         }
+        // uv joins each glob to the root, so `./packages/*/` is `packages/*`.
         let globs = |key: &str| -> Vec<String> {
             workspace
                 .get(key)
                 .and_then(Item::as_array)
                 .into_iter()
                 .flatten()
-                .filter_map(|v| v.as_str().map(str::to_owned))
+                .filter_map(|v| v.as_str())
+                .map(|glob| {
+                    let mut glob = glob.trim_end_matches('/');
+                    while let Some(rest) = glob.strip_prefix("./") {
+                        glob = rest;
+                    }
+                    glob.to_owned()
+                })
                 .collect()
         };
         let member = ancestors[0]
@@ -541,10 +552,11 @@ pub(super) fn extract(
         };
         matches(globs("members")) && !matches(globs("exclude"))
     });
+    let root = root.map(|(dir, doc, _)| (dir, doc));
     // Only the project's own lock, or its workspace root's, resolves it: a
     // lock above belongs to another project.
     let lock = std::iter::once(ancestors[0])
-        .chain(root.map(|(dir, _)| *dir))
+        .chain(root.map(|(dir, _)| dir))
         .flat_map(|dir| ["uv.lock", "poetry.lock"].map(|leaf| join(dir, leaf)))
         .find_map(|path| files.get(&path))
         .map(|text| Document::parse(text.as_str()).map_err(|e| e.to_string()))
@@ -623,7 +635,7 @@ pub(super) fn extract(
     // workspace, from its root, whatever a member sets.
     let uv_table = |doc: &Document<&str>| doc.get("tool").and_then(|t| t.get("uv")).cloned();
     let search: Vec<&str> = match root {
-        Some((dir, _)) => vec![*dir],
+        Some((dir, _)) => vec![dir],
         None => ancestors.clone(),
     };
     let settings: Option<Item> = search.iter().find_map(|dir| {
@@ -641,7 +653,7 @@ pub(super) fn extract(
         .into_iter()
         .collect();
     if let Some((dir, doc)) = root
-        && *dir != ancestors[0]
+        && dir != ancestors[0]
     {
         projects.extend(uv_table(doc));
     }

@@ -2338,7 +2338,7 @@ impl Engine {
         let key = ExtractionKey {
             repo: repo.into(),
             default_branch_commit: commit,
-            config_hash: format!("extract-v13:{}", hash(&serde_json::to_vec(&config)?)),
+            config_hash: format!("extract-v14:{}", hash(&serde_json::to_vec(&config)?)),
         };
         let cached: CachedExtraction = if let Some(bytes) = self.cache.extraction_get(&key).await? {
             self.extraction_hits.fetch_add(1, Ordering::Relaxed);
@@ -2379,7 +2379,9 @@ impl Engine {
             let read_manifests = delivery && manifests <= patchula_update::tooling::MANIFEST_LIMIT;
             let blob_entries: BTreeMap<String, (String, String)> = entries
                 .iter()
-                .filter(|e| e.kind == "blob")
+                // A symlink's blob is its target's path, not the file pip
+                // reads, so an include through one stays unread.
+                .filter(|e| e.kind == "blob" && e.mode != "120000")
                 .map(|e| (e.path.clone(), (e.sha.clone(), e.mode.clone())))
                 .collect();
             let selected: Vec<_> = entries
@@ -2415,27 +2417,30 @@ impl Engine {
             // Requirements files include others by any name, and pip reads
             // their index options too: read those, a few rounds deep. One
             // that is not text stays unread, and leaves its packages
-            // ambiguous rather than on PyPI.
+            // ambiguous rather than on PyPI. So does one past the limit, or
+            // one that fails to download.
             let mut tried = BTreeSet::new();
             for _ in 0..8 {
                 let wanted: Vec<_> = scanner
                     .included(&files)
                     .into_iter()
-                    .filter(|path| tried.insert(path.clone()))
+                    .filter(|path| tried.len() < INCLUDE_LIMIT && tried.insert(path.clone()))
                     .filter_map(|path| blob_entries.get(&path).cloned().map(|e| (path, e)))
                     .collect();
                 if wanted.is_empty() {
                     break;
                 }
-                for (path, (sha, mode)) in wanted {
-                    match self.file(repo, &sha).await {
-                        Ok(content) => {
-                            files.insert(path.clone(), content.clone());
-                            blobs.insert(path, patchula_update::Blob { sha, mode, content });
-                        }
-                        Err(Error::Invalid(_)) => {}
-                        Err(error) => return Err(error),
-                    }
+                let read: Vec<_> = stream::iter(wanted)
+                    .map(|(path, (sha, mode))| async move {
+                        let content = self.file(repo, &sha).await.ok()?;
+                        Some((path, patchula_update::Blob { sha, mode, content }))
+                    })
+                    .buffer_unordered(self.github.concurrency())
+                    .collect()
+                    .await;
+                for (path, blob) in read.into_iter().flatten() {
+                    files.insert(path.clone(), blob.content.clone());
+                    blobs.insert(path, blob);
                 }
             }
             let extraction = tokio::task::spawn_blocking(move || scanner.extract(&files))
@@ -2602,7 +2607,9 @@ pub fn read_tree(
         let wanted: Vec<_> = scanner
             .included(&files)
             .into_iter()
-            .filter(|path| paths.contains(path) && tried.insert(path.clone()))
+            .filter(|path| {
+                paths.contains(path) && tried.len() < INCLUDE_LIMIT && tried.insert(path.clone())
+            })
             .collect();
         if wanted.is_empty() {
             break;
@@ -2615,6 +2622,10 @@ pub fn read_tree(
     }
     Ok((paths, files))
 }
+
+/// The most files requirements includes bring into one scan. Those past it
+/// stay unread, which leaves their packages ambiguous rather than on PyPI.
+const INCLUDE_LIMIT: usize = 256;
 
 /// The files Git would carry from this directory, relative to it, or none
 /// when it is not in a Git work tree or Git is not installed.
