@@ -120,7 +120,7 @@ impl Indexes {
             std::iter::once(Origin::Index(default))
                 .chain(self.extras.iter().cloned().map(Origin::Index)),
         )
-        .unwrap_or_else(|| Origin::Index(Named::Public))
+        .unwrap_or(Origin::Index(Named::Public))
     }
     /// Give each PyPI dependency in `deps` its registry, and drop those that
     /// do not come from an index.
