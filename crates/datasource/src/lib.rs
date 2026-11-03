@@ -135,7 +135,6 @@ pub struct Client {
     pub(crate) http: Cached,
     pub(crate) cache: Cache,
     tokens: docker::Tokens,
-    dockerhub_credentials: Option<std::sync::Arc<(String, String)>>,
     changelogs: notes::ChangelogCache,
     note_reads: Option<notes::ReadCache>,
     release_bodies: notes::BodyCache,
@@ -156,7 +155,6 @@ impl Client {
             http,
             cache,
             tokens: Default::default(),
-            dockerhub_credentials: None,
             changelogs: Default::default(),
             note_reads: None,
             release_bodies: Default::default(),
@@ -165,12 +163,6 @@ impl Client {
             nix: None,
             stale_registry: Default::default(),
         }
-    }
-    /// Optional Docker Hub token-service login. Never persisted or included in Debug.
-    pub fn with_dockerhub_credentials(mut self, username: String, token: String) -> Self {
-        self.dockerhub_credentials = Some(std::sync::Arc::new((username, token)));
-        self.tokens = Default::default();
-        self
     }
 
     /// Cached registry reads used because of rate limiting, keyed by catalog or digest tag.
@@ -184,6 +176,24 @@ impl Client {
             .get(&format!("{host}/{path}"))
             .cloned()
             .unwrap_or_default()
+    }
+    /// Whether looking up `package` reads a registry with an operator entry's
+    /// credentials, so that what it finds may be private. Only sources that
+    /// carry their registry's URL can reach one.
+    pub fn credentialed(&self, source: Source, package: &str) -> bool {
+        let url = match source {
+            Source::Docker | Source::Oci => docker::identity(package)
+                .ok()
+                .map(|(host, path)| format!("https://{host}/v2/{path}/tags/list")),
+            Source::Helm => package
+                .rsplit_once('|')
+                .map(|(repo, _)| format!("{}/index.yaml", repo.trim_end_matches('/'))),
+            Source::Maven => maven::metadata_url(package),
+            Source::ForgeTags => forge::tags_url(package),
+            _ => None,
+        };
+        url.and_then(|url| self.http.credential(&url))
+            .is_some_and(|entry| entry.auth != patchula_http::Auth::Withheld)
     }
     pub async fn lookup(&self, source: Source, package: &str) -> Result<Catalog> {
         // A flake reference is a URL with a query; the runner checks its scheme.

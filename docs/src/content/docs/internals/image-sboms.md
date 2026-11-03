@@ -143,8 +143,10 @@ The [HTTP cache](/internals/cache/) treats a registry manifest or blob addressed
 by digest as fresh for ten years once it has been read successfully, and stores
 it even when the registry says `no-store` or `Vary` (quay.io does), since the
 bytes are public and checked against their digest. The exception does not cover
-a read made with an account's Docker Hub token, whose bytes may be private and
-whose cache key leaves the token out; those follow the registry's `no-store`. A
+a read made with an account's token or a [private
+registry](/guide/sources/#private-registries) entry's credentials, whose bytes
+may be private; those follow the registry's `no-store`, and are cached under
+their entry. A
 404 for a digest or a `.att`/`.sbom` tag is kept for a day, never longer. A
 cosign tag's manifest is read by the digest its HEAD names, so only the
 HEAD repeats.

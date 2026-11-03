@@ -77,7 +77,10 @@ async fn recorded() -> Cache {
         &client,
         "patchula[bot]",
         1,
-        &report(),
+        &Recorded {
+            report: &report(),
+            withheld: report(),
+        },
         Utc::now(),
         // Discovery has not listed acme/late yet; acme/stranger is not ours.
         &|repo: String| Box::pin(async move { repo == "acme/late" }),
@@ -170,7 +173,10 @@ async fn anyone_reads_what_the_last_run_left_of_public_repositories() {
         &client,
         "patchula[bot]",
         1,
-        &report(),
+        &Recorded {
+            report: &report(),
+            withheld: report(),
+        },
         Utc::now(),
         // Discovery has not listed acme/late yet; acme/stranger is not ours.
         &|repo: String| Box::pin(async move { repo == "acme/late" }),
@@ -292,4 +298,98 @@ async fn settings_hide_repositories_or_the_whole_api() {
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(error["errorKind"], "disabled");
     }
+}
+
+#[test]
+fn credentialed_lookups_leave_only_the_declared_dependency_in_public() {
+    let dependency = |package: &str, source: &str| {
+        json!({"manager": "regex", "name": package, "package": package,
+            "current": {"value": "1.0.0", "version": "1.0.0", "digest": null},
+            "updates": [{"newValue": "1.1.0", "newVersion": "1.1.0", "newDigest": null,
+                "updateType": "minor", "group": null}],
+            "metadata": {"source": source, "kinds": [], "locations": [],
+                "heldBack": [{"version": "2.0.0", "updateType": "major",
+                    "publishedAt": "2026-11-01T00:00:00Z", "eligibleAt": "2026-11-02T00:00:00Z"}]}})
+    };
+    let private = "https://acme.jfrog.io/artifactory/api/helm/charts|app";
+    let report: Report = serde_json::from_value(json!({"schemaVersion": 4, "repositories": [{
+        "repository": "acme/app", "status": "complete", "reason": null,
+        "defaultBranch": "main", "commit": "c".repeat(40),
+        "packageFiles": [{"path": "deploy.yaml",
+            "dependencies": [dependency(private, "helm"), dependency("nginx", "docker")]}]}]}))
+    .unwrap();
+    let shown = withheld(&report, |source, package| {
+        source == "helm" && package == private
+    });
+    let files = &report.repositories[0].package_files;
+    let [hidden, public] = &shown.repositories[0].package_files[0].dependencies[..] else {
+        panic!("two dependencies")
+    };
+    assert_eq!(hidden.package, private);
+    assert_eq!(hidden.current.version.as_deref(), Some("1.0.0"));
+    assert!(hidden.updates.is_empty());
+    assert!(hidden.metadata.as_ref().unwrap().held_back.is_empty());
+    assert_eq!(public, &files[0].dependencies[1]);
+}
+
+#[tokio::test]
+async fn only_a_private_repository_is_stored_without_what_credentials_found() {
+    let chart = "https://acme.jfrog.io/artifactory/api/helm/charts|app";
+    let repository = |name: &str| {
+        json!({"repository": name, "status": "complete", "reason": null,
+            "defaultBranch": "main", "commit": "c".repeat(40),
+            "packageFiles": [{"path": "deploy.yaml", "dependencies": [{
+                "manager": "regex", "name": chart, "package": chart,
+                "current": {"value": "1.0.0", "version": "1.0.0", "digest": null},
+                "updates": [{"newValue": "1.1.0", "newVersion": "1.1.0", "newDigest": null,
+                    "updateType": "minor", "group": null}],
+                "metadata": {"source": "helm", "kinds": [], "locations": []}}]}]})
+    };
+    let report: Report = serde_json::from_value(json!({"schemaVersion": 4,
+        "repositories": [repository("acme/app"), repository("acme/secret")]}))
+    .unwrap();
+    let cache = Cache::open(":memory:", CacheOptions::default())
+        .await
+        .unwrap();
+    let known = ["acme/app", "acme/secret"]
+        .map(|repo| (repo.to_owned(), false))
+        .to_vec();
+    cache.repositories_added(1, known).await.unwrap();
+    let client = Client::with_transport(
+        "offline-test-token",
+        cache.clone(),
+        patchula_github::Options::default(),
+        Arc::new(GitHub),
+    )
+    .unwrap();
+    record(
+        &cache,
+        &client,
+        "patchula[bot]",
+        1,
+        &Recorded {
+            report: &report,
+            withheld: withheld(&report, |source, package| {
+                source == "helm" && package == chart
+            }),
+        },
+        Utc::now(),
+        &|_: String| Box::pin(async { false }),
+    )
+    .await;
+    let snapshot = |repo: &'static str| {
+        let cache = cache.clone();
+        async move {
+            let row = cache.repository(repo).await.unwrap().unwrap();
+            String::from_utf8(row.snapshot.unwrap()).unwrap()
+        }
+    };
+    // The public repository shows the update, as its dashboard does.
+    assert!(snapshot("acme/app").await.contains("1.1.0"));
+    // The private one is stored without it, in case it later becomes public.
+    let secret = snapshot("acme/secret").await;
+    assert!(
+        secret.contains(chart) && !secret.contains("1.1.0"),
+        "{secret}"
+    );
 }

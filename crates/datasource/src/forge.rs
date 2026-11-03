@@ -40,33 +40,41 @@ fn tags(
     serde_json::to_vec(&versions).map_err(|_| patchula_http::CacheError::Document)
 }
 
+fn forge(package: &str) -> Result<notes::Forge> {
+    Repository::from_url(&format!("https://{package}"))
+        .and_then(|r| r.forge)
+        .ok_or(Error::Invalid)
+}
+
+/// The URL of one page of tags.
+fn page_url(forge: &notes::Forge, page: u32) -> String {
+    match forge.kind {
+        ForgeKind::Gitlab => format!(
+            "https://{}/api/v4/projects/{}/repository/tags?per_page=100&page={page}",
+            forge.host,
+            forge.path.replace('/', "%2F")
+        ),
+        ForgeKind::Gitea => format!(
+            "https://{}/api/v1/repos/{}/tags?limit=50&page={page}",
+            forge.host, forge.path
+        ),
+    }
+}
+
+/// The first URL a `forge-tags` lookup of `package` reads.
+pub(crate) fn tags_url(package: &str) -> Option<String> {
+    forge(package).ok().map(|forge| page_url(&forge, 1))
+}
+
 impl Client {
     pub(crate) async fn forge_tags(&self, package: &str) -> Result<Catalog> {
-        let forge = Repository::from_url(&format!("https://{package}"))
-            .and_then(|r| r.forge)
-            .ok_or(Error::Invalid)?;
+        let forge = forge(package)?;
         let mut versions = Vec::new();
         for page in 1..=PAGES {
-            let (url, size, format, derive): (_, usize, _, fn(&[u8]) -> _) = match forge.kind {
-                ForgeKind::Gitlab => (
-                    format!(
-                        "https://{}/api/v4/projects/{}/repository/tags?per_page=100&page={page}",
-                        forge.host,
-                        forge.path.replace('/', "%2F")
-                    ),
-                    100,
-                    "forge-gitlab-tags-v1",
-                    gitlab,
-                ),
-                ForgeKind::Gitea => (
-                    format!(
-                        "https://{}/api/v1/repos/{}/tags?limit=50&page={page}",
-                        forge.host, forge.path
-                    ),
-                    50,
-                    "forge-gitea-tags-v1",
-                    gitea,
-                ),
+            let url = page_url(&forge, page);
+            let (size, format, derive): (usize, _, fn(&[u8]) -> _) = match forge.kind {
+                ForgeKind::Gitlab => (100, "forge-gitlab-tags-v1", gitlab),
+                ForgeKind::Gitea => (50, "forge-gitea-tags-v1", gitea),
             };
             let response = self
                 .http

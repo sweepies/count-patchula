@@ -253,6 +253,15 @@ A dashboard that merges sends GitHub's
 `PUT /repos/{owner}/{repo}/pulls/{number}/merge` with its own token, passing
 `headSha` as `sha` so that GitHub refuses if the PR changed since the run.
 
+A public repository shows everything, including what lookups with [private
+registry](/guide/sources/#private-registries) credentials found, as its
+dependency dashboard does. A repository that is private when it runs is stored
+without that: such a dependency keeps what the repository declares, but loses
+its `updates`, and its metadata's held-back releases, lookup evidence, tag
+digests and image checks, and does not count in `updates`. So if the repository
+later becomes public, the API does not show what its private-registry lookups
+found until it runs again as a public repository.
+
 Discovery and installation events decide which repositories are listed:
 
 - a sweep replaces each installation's list;

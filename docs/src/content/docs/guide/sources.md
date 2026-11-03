@@ -111,16 +111,76 @@ it to read everything upstream.
 Docker Hub, GHCR and GitLab registries use anonymous registry tokens, cached
 until shortly before they expire. A token comes from the registry's own host,
 except Docker Hub's from `auth.docker.io` and a GitLab registry's
-(`registry.gitlab.com`) from its GitLab instance (`gitlab.com/jwt/auth`). To use authenticated Docker Hub pulls, set both
-`PATCHULA_DOCKERHUB_USERNAME` and `PATCHULA_DOCKERHUB_TOKEN`; they are only ever
-sent to Docker Hub's token service. When Docker Hub's `ratelimit-remaining` hits
-zero, queued reads stop. A 429 shares a cooldown across the host and retries at
-most three times, honouring `Retry-After`. If the wait is too long, the last
-cached response is used and marked stale in the report; a cold miss is still an
-error.
+(`registry.gitlab.com`) from its GitLab instance (`gitlab.com/jwt/auth`).
+Authenticated pulls, Docker Hub's included, use a [private
+registry](#private-registries) entry. When Docker Hub's `ratelimit-remaining`
+hits zero, queued reads stop. A 429 shares a cooldown across the host and
+retries at most three times, honouring `Retry-After`. If the wait is too long,
+the last cached response is used and marked stale in the report; a cold miss is
+still an error.
 
 Redirects are followed up to five times, HTTPS only, with credentials stripped
 when the origin changes.
+
+## Private registries
+
+The operator [settings](/reference/settings/) hold credentials for private
+registries, keyed by an https URL prefix. Repository configs never name
+credentials: a `patchula.pkl` can point a dependency at any URL, so in the
+server it could otherwise read another organisation's registry.
+
+```pkl
+amends "PatchulaSettings.pkl"
+
+registries {
+  ["https://acme.jfrog.io/artifactory/api/helm/charts"] {
+    auth = "bearer"
+    secret { env = "ARTIFACTORY_TOKEN" }
+  }
+  ["https://acme.jfrog.io"] {
+    auth = "basic"
+    username = "ci-bot"
+    secret { file = "/run/secrets/artifactory" }
+  }
+  ["https://registry-1.docker.io"] {
+    auth = "basic"
+    username = "acme"
+    secret { env = "DOCKERHUB_TOKEN" }
+  }
+}
+```
+
+- A request whose URL is under a prefix, matched by whole path segments on the
+  same origin, carries that entry's credentials. The longest prefix wins.
+- `bearer` sends the secret as a bearer token. `basic` sends the username and
+  the secret to the URLs under the prefix, including a container registry's
+  first request. When a registry with an entry answers with a token service
+  instead, the Count exchanges credentials there for a pull token: the
+  registry's own at a token service on its origin, Docker Hub's
+  `auth.docker.io`, or `gitlab.com` for `registry.gitlab.com`, and otherwise
+  only a token service's own entry. A self-hosted GitLab registry needs entries
+  for both the registry and its GitLab's `/jwt/auth`. A registry without an
+  entry only ever gets anonymous tokens. Tokens issued to an account stay in
+  memory, and within the entry's prefix.
+- A secret comes from an environment variable or a file, never the settings
+  file. The server reads secrets again for every batch, so a rotated secret
+  applies without a restart; one it cannot read is logged, and requests under
+  that prefix carry no credentials, not even a broader entry's. The CLI stops
+  with a usage error instead.
+- Responses read with credentials are cached under their entry and a one-way
+  digest of its credentials, so a read without that entry, or after the secret
+  or account changes, never sees them.
+- In the server, an entry's `allowedInstallations` limits which installations
+  use it. For any other installation, requests under its prefix carry no
+  credentials.
+- A redirect carries credentials only to a URL an entry covers, and a token
+  issued under an entry only within that entry's prefix.
+
+A dependency's source decides where its versions come from. Helm repositories,
+OCI and Docker registries, Maven repositories and GitLab, Gitea or Forgejo tags carry
+their URL, so a private one works with an entry. npm, PyPI and the other package
+registries still read only their public registry. Lockfile tools get no
+registry credentials yet.
 
 ## Dates and release age
 

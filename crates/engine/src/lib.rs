@@ -187,9 +187,12 @@ impl Engine {
         self.recheck = recheck;
         self
     }
-    pub fn with_dockerhub_credentials(mut self, username: String, token: String) -> Self {
-        self.sources = self.sources.with_dockerhub_credentials(username, token);
-        self
+    /// Whether a report dependency, by its `source` word and `package`, was
+    /// looked up with an operator entry's credentials, so that what was found
+    /// may be private.
+    pub fn credentialed(&self, source: &str, package: &str) -> bool {
+        serde_json::from_value::<Source>(serde_json::Value::String(source.to_owned()))
+            .is_ok_and(|source| self.sources.credentialed(source, package))
     }
     pub fn with_transport(
         token: &str,

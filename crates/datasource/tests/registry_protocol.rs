@@ -506,6 +506,14 @@ impl Transport for AuthSteps {
     }
 }
 async fn auth_client(steps: Arc<AuthSteps>, dir: &std::path::Path) -> Client {
+    auth_client_with(steps, dir, Vec::new()).await
+}
+
+async fn auth_client_with(
+    steps: Arc<AuthSteps>,
+    dir: &std::path::Path,
+    credentials: Vec<patchula_http::Credential>,
+) -> Client {
     let cache = Cache::open(dir.join("cache.sqlite"), Default::default())
         .await
         .unwrap();
@@ -517,10 +525,30 @@ async fn auth_client(steps: Arc<AuthSteps>, dir: &std::path::Path) -> Client {
             steps.clone(),
         )
         .unwrap(),
-        Cached::new(cache.clone(), steps, 4).unwrap(),
+        Cached::with_options(
+            cache.clone(),
+            steps,
+            patchula_http::Options {
+                default_host_concurrency: 4,
+                credentials,
+                ..Default::default()
+            },
+        )
+        .unwrap(),
         cache,
     )
     .with_versions_host(false)
+}
+
+fn basic(prefix: &str, username: &str, password: &str) -> patchula_http::Credential {
+    patchula_http::Credential::new(
+        prefix,
+        patchula_http::Auth::Basic {
+            username: username.into(),
+            password: password.into(),
+        },
+    )
+    .unwrap()
 }
 
 #[tokio::test]
@@ -629,7 +657,7 @@ async fn dockerhub_login_is_realm_scoped_and_authenticated_tokens_are_not_persis
     let steps = Arc::new(AuthSteps(Mutex::new(VecDeque::from([
         (
             manifest.into(),
-            None,
+            Some("Basic dXNlcjpwYXNz".into()),
             response(
                 401,
                 "",
@@ -662,12 +690,15 @@ async fn dockerhub_login_is_realm_scoped_and_authenticated_tokens_are_not_persis
         ),
     ]))));
     let dir = tempfile::tempdir().unwrap();
-    auth_client(steps.clone(), dir.path())
-        .await
-        .with_dockerhub_credentials("user".into(), "pass".into())
-        .registry_digest("spec", "latest")
-        .await
-        .unwrap();
+    auth_client_with(
+        steps.clone(),
+        dir.path(),
+        vec![basic("https://registry-1.docker.io", "user", "pass")],
+    )
+    .await
+    .registry_digest("spec", "latest")
+    .await
+    .unwrap();
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await
         .unwrap();
@@ -1136,4 +1167,253 @@ async fn an_official_image_the_mirror_lacks_is_read_from_docker_hub() {
         patchula_datasource::ImageSbom::NoPlatform(Some("linux/s390x".into()))
     );
     assert!(steps.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn private_registry_credentials_go_only_to_their_registry_and_their_cache_entries() {
+    let manifest = "https://acme.jfrog.io/v2/team/app/manifests/1.0";
+    let digest = format!("sha256:{}", "b".repeat(64));
+    let found = || {
+        response(
+            200,
+            "",
+            &[
+                ("docker-content-digest", digest.as_str()),
+                ("cache-control", "max-age=600"),
+            ],
+        )
+    };
+    let dir = tempfile::tempdir().unwrap();
+    // A registry that takes basic credentials directly gets them on the first
+    // request and answers without a token exchange.
+    let steps = Arc::new(AuthSteps(Mutex::new(VecDeque::from([(
+        manifest.to_owned(),
+        Some("Basic Y2k6aHVudGVyMg==".to_owned()),
+        found(),
+    )]))));
+    let private = vec![basic("https://acme.jfrog.io", "ci", "hunter2")];
+    let read = auth_client_with(steps.clone(), dir.path(), private.clone())
+        .await
+        .registry_digest("acme.jfrog.io/team/app", "1.0")
+        .await
+        .unwrap();
+    assert_eq!(read, digest);
+    assert!(steps.0.lock().unwrap().is_empty());
+    // The same entry reads its own fresh cache entry again without a request.
+    auth_client_with(steps.clone(), dir.path(), private)
+        .await
+        .registry_digest("acme.jfrog.io/team/app", "1.0")
+        .await
+        .unwrap();
+    // Without the entry, the shared cache has nothing for this registry: the
+    // read goes to the registry anonymously and is refused there.
+    let steps = Arc::new(AuthSteps(Mutex::new(VecDeque::from([(
+        manifest.to_owned(),
+        None,
+        response(401, "", &[]),
+    )]))));
+    assert!(
+        auth_client(steps.clone(), dir.path())
+            .await
+            .registry_digest("acme.jfrog.io/team/app", "1.0")
+            .await
+            .is_err()
+    );
+    assert!(steps.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn basic_credentials_reach_a_token_service_on_the_registry_origin_only() {
+    let manifest = "https://acme.jfrog.io/v2/team/app/manifests/1.0";
+    let challenge = |realm: &str| {
+        response(
+            401,
+            "",
+            &[(
+                "www-authenticate",
+                &format!(r#"Bearer realm="{realm}",service="acme.jfrog.io""#),
+            )],
+        )
+    };
+    let digest = format!("sha256:{}", "c".repeat(64));
+    let realm = "https://acme.jfrog.io/artifactory/api/docker/team/v2/token";
+    let steps = Arc::new(AuthSteps(Mutex::new(VecDeque::from([
+        (
+            manifest.to_owned(),
+            Some("Basic Y2k6aHVudGVyMg==".to_owned()),
+            challenge(realm),
+        ),
+        (
+            format!("{realm}?service=acme.jfrog.io&scope=repository%3Ateam%2Fapp%3Apull"),
+            Some("Basic Y2k6aHVudGVyMg==".to_owned()),
+            response(200, r#"{"token":"account-token","expires_in":300}"#, &[]),
+        ),
+        (
+            manifest.to_owned(),
+            Some("Bearer account-token".to_owned()),
+            response(200, "", &[("docker-content-digest", digest.as_str())]),
+        ),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    let private = vec![basic("https://acme.jfrog.io", "ci", "hunter2")];
+    auth_client_with(steps.clone(), dir.path(), private.clone())
+        .await
+        .registry_digest("acme.jfrog.io/team/app", "1.0")
+        .await
+        .unwrap();
+    assert!(steps.0.lock().unwrap().is_empty());
+    // A token service on another origin is refused before any request to it.
+    let steps = Arc::new(AuthSteps(Mutex::new(VecDeque::from([(
+        manifest.to_owned(),
+        Some("Basic Y2k6aHVudGVyMg==".to_owned()),
+        challenge("https://login.example.com/token"),
+    )]))));
+    let dir = tempfile::tempdir().unwrap();
+    assert!(
+        auth_client_with(steps.clone(), dir.path(), private)
+            .await
+            .registry_digest("acme.jfrog.io/team/app", "1.0")
+            .await
+            .is_err()
+    );
+    assert!(steps.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_token_service_entry_alone_never_mints_account_tokens() {
+    let manifest = "https://registry.gitlab.acme.dev/v2/team/app/manifests/1.0";
+    let realm = "https://gitlab.acme.dev/jwt/auth";
+    let digest = format!("sha256:{}", "d".repeat(64));
+    let steps = Arc::new(AuthSteps(Mutex::new(VecDeque::from([
+        (
+            manifest.to_owned(),
+            None,
+            response(
+                401,
+                "",
+                &[(
+                    "www-authenticate",
+                    &format!(r#"Bearer realm="{realm}",service="container_registry""#),
+                )],
+            ),
+        ),
+        // The registry has no entry, so its token is anonymous even though
+        // the token service has one.
+        (
+            format!("{realm}?service=container_registry&scope=repository%3Ateam%2Fapp%3Apull"),
+            None,
+            response(200, r#"{"token":"anonymous","expires_in":300}"#, &[]),
+        ),
+        (
+            manifest.to_owned(),
+            Some("Bearer anonymous".to_owned()),
+            response(200, "", &[("docker-content-digest", digest.as_str())]),
+        ),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    auth_client_with(
+        steps.clone(),
+        dir.path(),
+        vec![basic("https://gitlab.acme.dev/jwt/auth", "ci", "hunter2")],
+    )
+    .await
+    .registry_digest("registry.gitlab.acme.dev/team/app", "1.0")
+    .await
+    .unwrap();
+    assert!(steps.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_self_hosted_gitlab_registry_uses_its_token_service_entry() {
+    let manifest = "https://registry.gitlab.acme.dev/v2/team/app/manifests/1.0";
+    let realm = "https://gitlab.acme.dev/jwt/auth";
+    let digest = format!("sha256:{}", "e".repeat(64));
+    let steps = Arc::new(AuthSteps(Mutex::new(VecDeque::from([
+        (
+            manifest.to_owned(),
+            Some("Basic cmVnOnJlZy1zZWNyZXQ=".to_owned()),
+            response(
+                401,
+                "",
+                &[(
+                    "www-authenticate",
+                    &format!(r#"Bearer realm="{realm}",service="container_registry""#),
+                )],
+            ),
+        ),
+        // The token service has its own entry, so its credentials are sent.
+        (
+            format!("{realm}?service=container_registry&scope=repository%3Ateam%2Fapp%3Apull"),
+            Some("Basic Y2k6aHVudGVyMg==".to_owned()),
+            response(200, r#"{"token":"account","expires_in":300}"#, &[]),
+        ),
+        (
+            manifest.to_owned(),
+            Some("Bearer account".to_owned()),
+            response(200, "", &[("docker-content-digest", digest.as_str())]),
+        ),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    auth_client_with(
+        steps.clone(),
+        dir.path(),
+        vec![
+            basic("https://registry.gitlab.acme.dev", "reg", "reg-secret"),
+            basic("https://gitlab.acme.dev/jwt/auth", "ci", "hunter2"),
+        ],
+    )
+    .await
+    .registry_digest("registry.gitlab.acme.dev/team/app", "1.0")
+    .await
+    .unwrap();
+    assert!(steps.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn credentialed_names_lookups_that_read_a_registry_with_an_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let withheld = patchula_http::Credential::new(
+        "https://acme.jfrog.io/withheld",
+        patchula_http::Auth::Withheld,
+    )
+    .unwrap();
+    let client = auth_client_with(
+        Arc::new(AuthSteps(Mutex::new(VecDeque::new()))),
+        dir.path(),
+        vec![
+            basic("https://acme.jfrog.io", "ci", "hunter2"),
+            basic("https://gitlab.acme.dev", "ci", "hunter2"),
+            withheld,
+        ],
+    )
+    .await;
+    for (source, package, expected) in [
+        (
+            Source::Helm,
+            "https://acme.jfrog.io/artifactory/api/helm/charts|app",
+            true,
+        ),
+        (Source::Docker, "acme.jfrog.io/team/app", true),
+        (Source::Oci, "acme.jfrog.io/charts/app", true),
+        (
+            Source::Maven,
+            "https://acme.jfrog.io/maven|com.acme:lib",
+            true,
+        ),
+        (Source::ForgeTags, "gitlab.acme.dev/team/tool", true),
+        (
+            Source::Helm,
+            "https://acme.jfrog.io/withheld/charts|app",
+            false,
+        ),
+        (Source::Docker, "ghcr.io/team/app", false),
+        (Source::Helm, "https://charts.example.com|app", false),
+        (Source::Npm, "acme.jfrog.io", false),
+    ] {
+        assert_eq!(
+            client.credentialed(source, package),
+            expected,
+            "{source:?} {package}"
+        );
+    }
 }

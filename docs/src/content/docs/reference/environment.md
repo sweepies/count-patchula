@@ -13,8 +13,6 @@ description: "The environment variables patchula reads, the commands that use th
 | `XDG_CACHE_HOME` | local commands, server | the user cache directory on Linux and other non-macOS systems, holding `patchula/` (the server's default is `patchula/server`); default `~/.cache`. macOS uses `~/Library/Caches` |
 | `PATCHULA_SERVER` | `lookup`, `run`, `tui`, `auth` | the [server](/guide/server/#run-from-your-machine) URL for `--remote`, and for `auth` without `--server` |
 | `XDG_CONFIG_HOME` | `lookup`, `run`, `apply`, `tui`, `auth` | where the default operator settings (`patchula/settings.pkl`), the server sign-ins (`patchula/servers.json`) and per-repository server choices (`patchula/repositories.json`) live; default `~/.config` |
-| `PATCHULA_DOCKERHUB_USERNAME` | lookups | Docker Hub user for authenticated pulls; set with the token |
-| `PATCHULA_DOCKERHUB_TOKEN` | lookups | Docker Hub access token |
 | `PATCHULA_APP_ID` | server | GitHub App ID |
 | `PATCHULA_APP_PRIVATE_KEY_FILE` | server | path to the App's PEM key |
 | `PATCHULA_APP_PRIVATE_KEY` | server | the PEM itself, instead of a file |

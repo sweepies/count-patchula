@@ -164,6 +164,43 @@ struct Summary<'a> {
 pub(crate) type Member =
     dyn Fn(String) -> futures_util::future::BoxFuture<'static, bool> + Send + Sync;
 
+/// A run's report for the public API, and the same without what lookups made
+/// with registry credentials found. A repository that is private when it runs
+/// is stored without them, so it never shows them if it later becomes public;
+/// a public one shows them, as its dependency dashboard does.
+pub(crate) struct Recorded<'a> {
+    pub report: &'a Report,
+    pub withheld: Report,
+}
+
+/// `report` without what lookups made with registry credentials found. Such a
+/// dependency keeps what the repository declares, but loses its updates,
+/// held-back releases, lookup evidence, tag digests and image checks.
+/// `credentialed` answers by a dependency's source word and package.
+pub(crate) fn withheld(report: &Report, credentialed: impl Fn(&str, &str) -> bool) -> Report {
+    let mut report = report.clone();
+    for dep in report
+        .repositories
+        .iter_mut()
+        .flat_map(|repo| &mut repo.package_files)
+        .flat_map(|file| &mut file.dependencies)
+    {
+        let Some(meta) = dep.metadata.as_mut() else {
+            continue;
+        };
+        if !credentialed(&meta.source, &dep.package) {
+            continue;
+        }
+        dep.updates.clear();
+        meta.held_back.clear();
+        meta.stale.clear();
+        meta.tag_digests.clear();
+        meta.lookup = None;
+        meta.image = None;
+    }
+    report
+}
+
 /// Most open PRs read for one repository.
 const PULL_PAGES: u32 = 10;
 
@@ -177,12 +214,13 @@ pub(crate) async fn record(
     client: &Client,
     bot: &str,
     installation: u64,
-    report: &Report,
+    recorded: &Recorded<'_>,
     started: DateTime<Utc>,
     member: &Member,
 ) {
+    let report = recorded.report;
     let actions = report.actions.as_ref();
-    for repo in &report.repositories {
+    for (index, repo) in report.repositories.iter().enumerate() {
         let name = repo.repository.as_str();
         let private = match client.get(&format!("repos/{name}")).await {
             Ok(response) => serde_json::from_slice::<Value>(&response.body)
@@ -237,7 +275,12 @@ pub(crate) async fn record(
                 })
             })
             .collect();
-        let dependencies = repo.package_files.iter().flat_map(|f| &f.dependencies);
+        let package_files = if private {
+            &recorded.withheld.repositories[index].package_files
+        } else {
+            &repo.package_files
+        };
+        let dependencies = package_files.iter().flat_map(|f| &f.dependencies);
         let summary = Summary {
             status: repo.status,
             reason: repo.reason.as_deref(),
@@ -256,7 +299,7 @@ pub(crate) async fn record(
             lookup_failures: &repo.lookup_failures,
             default_branch: repo.default_branch.as_deref(),
             commit: repo.commit.as_deref(),
-            package_files: &repo.package_files,
+            package_files,
             branches,
             pull_requests,
             dashboard,

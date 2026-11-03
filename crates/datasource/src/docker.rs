@@ -124,8 +124,14 @@ impl Client {
         method: Method,
         derived: Option<(&'static str, Derive)>,
     ) -> Result<patchula_http::Response> {
-        let scope = format!("{host}/{path}");
-        let authenticated = host == "registry-1.docker.io" && self.dockerhub_credentials.is_some();
+        // An operator entry covering the registry makes every token an account's:
+        // kept in memory only, never in the shared cache, and per entry.
+        let entry = self.http.credential(url).cloned();
+        let scope = format!(
+            "{host}/{path}#{}",
+            entry.as_ref().map_or("", patchula_http::Credential::scope)
+        );
+        let authenticated = entry.is_some();
         let token = self.tokens.lock().await.entry(scope).or_default().clone();
         let key = token_key(host, path)?;
         let mut saved = token.lock().await;
@@ -208,16 +214,30 @@ impl Client {
                     .query_pairs_mut()
                     .append_pair("scope", &format!("repository:{path}:pull"));
                 let requested_at = now();
-                let credentials = self
-                    .dockerhub_credentials
-                    .as_deref()
-                    .filter(|_| {
-                        authenticated
+                // The registry entry's basic credentials may go to a token service
+                // on the registry's own origin, Docker Hub's auth.docker.io, or
+                // gitlab.com for its registry; any other needs its own entry.
+                let trusted_realm = Url::parse(&format!("https://{host}/"))
+                    .is_ok_and(|registry| registry.origin() == realm.origin())
+                    || (realm.port_or_known_default() == Some(443)
+                        && ((host == "registry-1.docker.io"
                             && realm.host_str() == Some("auth.docker.io")
-                            && realm.port_or_known_default() == Some(443)
-                            && realm.path() == "/token"
-                    })
-                    .map(|(username, token)| (username.as_str(), token.as_str()));
+                            && realm.path() == "/token")
+                            || (host == "registry.gitlab.com"
+                                && realm.host_str() == Some("gitlab.com")
+                                && realm.path() == "/jwt/auth")));
+                // Only a registry with its own entry gets an account token, so its
+                // answers are always cached under that entry, never anonymously.
+                let realm_entry = self.http.credential(realm.as_str()).cloned();
+                let source = entry
+                    .as_ref()
+                    .and_then(|entry| realm_entry.as_ref().or(trusted_realm.then_some(entry)));
+                let credentials = match source.map(|entry| &entry.auth) {
+                    Some(patchula_http::Auth::Basic { username, password }) => {
+                        Some((username.as_str(), password.as_str()))
+                    }
+                    _ => None,
+                };
                 let auth = self
                     .http
                     .token_get_with_credentials(realm.as_str(), credentials)

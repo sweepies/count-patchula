@@ -1,5 +1,5 @@
 //! Conditional, unauthenticated registry GETs sharing the batch transport pool.
-use crate::{RequestTrace, Response, Transport};
+use crate::{Credential, RequestTrace, Response, Transport, credentials::matching};
 use patchula_cache::{Cache, HttpEntry, HttpKey};
 use reqwest::{
     Method, Request, StatusCode, Url,
@@ -27,6 +27,9 @@ pub struct Options {
     pub go_freshness_secs: u64,
     /// Bounded OCI 429 retries; waits above 60 seconds are returned to the caller.
     pub registry_retries: u32,
+    /// Operator registry entries. A request under an entry's prefix carries
+    /// its credentials, and its cache entries are scoped to that entry.
+    pub credentials: Vec<Credential>,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -36,6 +39,7 @@ impl Default for Options {
             registry_freshness_secs: 3600,
             go_freshness_secs: 3600,
             registry_retries: 3,
+            credentials: Vec::new(),
         }
     }
 }
@@ -237,6 +241,10 @@ impl Cached {
         *until = Some(until.map_or(next, |old| old.max(next)));
         Ok(())
     }
+    /// The operator entry whose credentials requests to `url` carry.
+    pub fn credential(&self, url: &str) -> Option<&Credential> {
+        matching(&self.0.options.credentials, &Url::parse(url).ok()?)
+    }
     pub fn stats(&self) -> Stats {
         Stats {
             requests: self.0.requests.load(Ordering::Relaxed),
@@ -269,6 +277,11 @@ impl Cached {
             header::USER_AGENT,
             HeaderValue::from_static(concat!("patchula/", env!("CARGO_PKG_VERSION"))),
         );
+        if let Some(value) =
+            matching(&self.0.options.credentials, &url).and_then(|entry| entry.auth.header())
+        {
+            headers.insert(header::AUTHORIZATION, value);
+        }
         if let Some(body) = body {
             headers.insert(
                 header::CONTENT_TYPE,
@@ -402,17 +415,19 @@ impl Cached {
         url: &Url,
         accept: &str,
         method: &Method,
+        scope: Option<&str>,
     ) -> Result<Option<Response>, Error> {
         // A previous GET also proves a manifest digest if HEAD has not yet been cached.
         let fallback = if cached.is_none() && method == Method::HEAD {
-            self.0
-                .cache
-                .http_get(&HttpKey::new(
-                    "GET",
-                    url.as_str(),
-                    BTreeMap::from([("accept".into(), accept.into())]),
-                )?)
-                .await?
+            let mut key = HttpKey::new(
+                "GET",
+                url.as_str(),
+                BTreeMap::from([("accept".into(), accept.into())]),
+            )?;
+            if let Some(id) = scope {
+                key = key.credential(id);
+            }
+            self.0.cache.http_get(&key).await?
         } else {
             None
         };
@@ -489,6 +504,11 @@ impl Cached {
         )?;
         if let Some((format, _)) = derived {
             key = key.representation(format);
+        }
+        let credential = matching(&self.0.options.credentials, &url).cloned();
+        let scope = credential.as_ref().map(Credential::scope);
+        if let Some(id) = scope {
+            key = key.credential(id);
         }
         let mut trace = RequestTrace::new(method.as_str(), &url);
         let cached = self.0.cache.http_get(&key).await?;
@@ -576,6 +596,8 @@ impl Cached {
                 .map_err(|_| Error::Configuration)?;
             value.set_sensitive(true);
             request.headers_mut().insert(header::AUTHORIZATION, value);
+        } else if let Some(value) = credential.as_ref().and_then(|entry| entry.auth.header()) {
+            request.headers_mut().insert(header::AUTHORIZATION, value);
         }
         request.headers_mut().insert(
             header::ACCEPT,
@@ -605,6 +627,7 @@ impl Cached {
         }
         let mut attempt = 0;
         let mut redirects = BTreeSet::from([url.to_string()]);
+        let mut foreign = false;
         let mut response = loop {
             let queued = Instant::now();
             let target = request.url().clone();
@@ -616,7 +639,7 @@ impl Cached {
                 Ok(permit) => permit,
                 Err(Error::Status(429)) if registry.is_some() => {
                     if let Some(response) = self
-                        .stale_registry(cached.as_ref(), &url, accept, &method)
+                        .stale_registry(cached.as_ref(), &url, accept, &method, scope)
                         .await?
                     {
                         return Ok(response);
@@ -657,6 +680,25 @@ impl Cached {
                         header::PROXY_AUTHORIZATION,
                     ] {
                         request.headers_mut().remove(name);
+                    }
+                }
+                let next_entry = matching(&self.0.options.credentials, &next);
+                if matches!(registry, Some(Some(_))) {
+                    // A registry token stays on its origin; one issued under an
+                    // operator entry also stays within that entry's prefix.
+                    if scope.is_some() && next_entry.map(Credential::scope) != scope {
+                        request.headers_mut().remove(header::AUTHORIZATION);
+                    }
+                } else {
+                    // Operator credentials follow a redirect only to a URL an
+                    // entry covers. Another entry's answer is never stored
+                    // under this request's key.
+                    request.headers_mut().remove(header::AUTHORIZATION);
+                    if let Some(entry) = next_entry
+                        && let Some(value) = entry.auth.header()
+                    {
+                        request.headers_mut().insert(header::AUTHORIZATION, value);
+                        foreign |= Some(entry.scope()) != scope;
                     }
                 }
                 request.url_mut().clone_from(&next);
@@ -702,7 +744,7 @@ impl Cached {
                 }
                 drop(permit);
                 if let Some(response) = self
-                    .stale_registry(cached.as_ref(), &url, accept, &method)
+                    .stale_registry(cached.as_ref(), &url, accept, &method, scope)
                     .await?
                 {
                     return Ok(response);
@@ -724,7 +766,7 @@ impl Cached {
         if registry.is_some()
             && response.status == StatusCode::TOO_MANY_REQUESTS
             && let Some(response) = self
-                .stale_registry(cached.as_ref(), &url, accept, &method)
+                .stale_registry(cached.as_ref(), &url, accept, &method, scope)
                 .await?
         {
             return Ok(response);
@@ -801,20 +843,22 @@ impl Cached {
         let control = text("cache-control");
         // Bytes addressed by their digest are the same for everyone, so a
         // registry's no-store or Vary cannot make them private. Those read with
-        // an account's token may be private, and the cache key omits the token,
+        // an account's token or an operator entry's credentials may be private,
         // so they are stored only as the registry allows.
-        let account = registry.flatten().is_some_and(|bearer| bearer.account);
-        let uncacheable = !(registry.is_some() && immutable(&url) && !account)
-            && (control.as_ref().is_some_and(|c| {
-                c.split(',')
-                    .any(|v| v.trim().eq_ignore_ascii_case("no-store"))
-            }) || text("vary").is_some_and(|v| {
-                v.split(',').any(|n| {
-                    !["accept", "accept-encoding", "user-agent"]
-                        .iter()
-                        .any(|known| n.trim().eq_ignore_ascii_case(known))
-                })
-            }));
+        let account =
+            registry.flatten().is_some_and(|bearer| bearer.account) || credential.is_some();
+        let uncacheable = foreign
+            || !(registry.is_some() && immutable(&url) && !account)
+                && (control.as_ref().is_some_and(|c| {
+                    c.split(',')
+                        .any(|v| v.trim().eq_ignore_ascii_case("no-store"))
+                }) || text("vary").is_some_and(|v| {
+                    v.split(',').any(|n| {
+                        !["accept", "accept-encoding", "user-agent"]
+                            .iter()
+                            .any(|known| n.trim().eq_ignore_ascii_case(known))
+                    })
+                }));
         if uncacheable {
             self.0.cache.http_remove(&key).await?;
         } else {
@@ -1394,5 +1438,202 @@ mod tests {
         let response = client.registry_get(BLOB, "text/plain", None).await.unwrap();
         assert_eq!(response.body, b"new");
         assert_eq!(transport.0.load(Ordering::Relaxed), 1);
+    }
+    struct Scripted(
+        Mutex<std::collections::VecDeque<(&'static str, Option<&'static str>, Response)>>,
+    );
+    impl Transport for Scripted {
+        fn send(&self, request: Request) -> crate::Exchange<'_> {
+            let (url, auth, response) = self
+                .0
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("unexpected request");
+            assert_eq!(request.url().as_str(), url);
+            assert_eq!(
+                request
+                    .headers()
+                    .get(header::AUTHORIZATION)
+                    .map(|v| v.to_str().unwrap()),
+                auth
+            );
+            Box::pin(async { Ok(response) })
+        }
+    }
+    #[tokio::test]
+    async fn operator_credentials_stay_on_their_prefix_and_in_their_own_cache_entries() {
+        const INDEX: &str = "https://acme.jfrog.io/artifactory/api/helm/charts/index.yaml";
+        const MIRROR: &str = "https://cdn.example.com/charts/index.yaml";
+        let reply =
+            |status: u16, headers: &[(header::HeaderName, &'static str)], body: &[u8]| Response {
+                status: StatusCode::from_u16(status).unwrap(),
+                headers: headers
+                    .iter()
+                    .map(|(name, value)| (name.clone(), HeaderValue::from_static(value)))
+                    .collect(),
+                body: body.to_vec(),
+            };
+        let entry = Credential::new(
+            "https://acme.jfrog.io/artifactory/api/helm/charts",
+            crate::Auth::Bearer {
+                token: "tok".into(),
+            },
+        )
+        .unwrap();
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let transport = Arc::new(Scripted(Mutex::new(
+            [
+                (
+                    INDEX,
+                    Some("Bearer tok"),
+                    reply(302, &[(header::LOCATION, MIRROR)], b""),
+                ),
+                // Another origin never sees the entry's token.
+                (
+                    MIRROR,
+                    None,
+                    reply(200, &[(header::CACHE_CONTROL, "max-age=600")], b"charts"),
+                ),
+                // Outside the prefix on the same host, no token either.
+                (
+                    "https://acme.jfrog.io/artifactory/api/helm/other/index.yaml",
+                    None,
+                    reply(401, &[], b""),
+                ),
+            ]
+            .into(),
+        )));
+        let client = Cached::with_options(
+            cache.clone(),
+            transport.clone(),
+            Options {
+                credentials: vec![entry.clone()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            client.get(INDEX, "application/yaml").await.unwrap().body,
+            b"charts"
+        );
+        let scoped = || {
+            HttpKey::new(
+                "GET",
+                INDEX,
+                BTreeMap::from([("accept".into(), "application/yaml".into())]),
+            )
+            .unwrap()
+        };
+        assert!(cache.http_get(&scoped()).await.unwrap().is_none());
+        assert!(
+            cache
+                .http_get(&scoped().credential(entry.scope()))
+                .await
+                .unwrap()
+                .is_some()
+        );
+        // The fresh entry serves the same credentials without a request.
+        assert_eq!(
+            client.get(INDEX, "application/yaml").await.unwrap().body,
+            b"charts"
+        );
+        assert!(
+            client
+                .get(
+                    "https://acme.jfrog.io/artifactory/api/helm/other/index.yaml",
+                    "application/yaml"
+                )
+                .await
+                .is_err()
+        );
+        assert!(transport.0.lock().unwrap().is_empty());
+        // A client without the entry does not read it from the shared cache.
+        let anonymous = Arc::new(Scripted(Mutex::new(
+            [(INDEX, None, reply(401, &[], b""))].into(),
+        )));
+        let client = Cached::with_options(cache, anonymous.clone(), Default::default()).unwrap();
+        assert!(client.get(INDEX, "application/yaml").await.is_err());
+        assert!(anonymous.0.lock().unwrap().is_empty());
+    }
+    #[tokio::test]
+    async fn redirects_never_store_or_carry_another_entrys_credentials() {
+        const PUBLIC: &str = "https://charts.example.com/index.yaml";
+        const PRIVATE: &str = "https://acme.jfrog.io/charts/index.yaml";
+        const BLOB: &str = "https://acme.jfrog.io/v2/team/app/blobs/latest";
+        const OUTSIDE: &str = "https://acme.jfrog.io/other/blob";
+        let reply = |status: u16, location: Option<&'static str>| Response {
+            status: StatusCode::from_u16(status).unwrap(),
+            headers: location
+                .map(|to| (header::LOCATION, HeaderValue::from_static(to)))
+                .into_iter()
+                .chain([(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("max-age=600"),
+                )])
+                .collect(),
+            body: b"body".to_vec(),
+        };
+        let entry = Credential::new(
+            "https://acme.jfrog.io/charts",
+            crate::Auth::Bearer {
+                token: "tok".into(),
+            },
+        )
+        .unwrap();
+        let registry = Credential::new(
+            "https://acme.jfrog.io/v2",
+            crate::Auth::Bearer {
+                token: "reg".into(),
+            },
+        )
+        .unwrap();
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let transport = Arc::new(Scripted(Mutex::new(
+            [
+                // An uncredentialed URL redirected into an entry's prefix gets
+                // the entry's credentials, but its answer is not stored.
+                (PUBLIC, None, reply(302, Some(PRIVATE))),
+                (PRIVATE, Some("Bearer tok"), reply(200, None)),
+                // A registry token issued under an entry stays in its prefix,
+                // even on the same origin.
+                (BLOB, Some("Bearer account"), reply(307, Some(OUTSIDE))),
+                (OUTSIDE, None, reply(200, None)),
+            ]
+            .into(),
+        )));
+        let client = Cached::with_options(
+            cache.clone(),
+            transport.clone(),
+            Options {
+                credentials: vec![entry, registry],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        client.get(PUBLIC, "application/yaml").await.unwrap();
+        assert!(
+            cache
+                .http_get(
+                    &HttpKey::new(
+                        "GET",
+                        PUBLIC,
+                        BTreeMap::from([("accept".into(), "application/yaml".into())]),
+                    )
+                    .unwrap()
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let bearer = Bearer {
+            token: "account",
+            account: true,
+        };
+        client
+            .registry_get(BLOB, "text/plain", Some(bearer))
+            .await
+            .unwrap();
+        assert!(transport.0.lock().unwrap().is_empty());
     }
 }

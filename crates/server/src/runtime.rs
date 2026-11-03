@@ -35,8 +35,6 @@ use tokio::{
 };
 
 /// Docker Hub credentials for authenticated pulls, as in the CLI.
-const DOCKERHUB_USERNAME_VAR: &str = "PATCHULA_DOCKERHUB_USERNAME";
-const DOCKERHUB_TOKEN_VAR: &str = "PATCHULA_DOCKERHUB_TOKEN";
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
@@ -305,11 +303,14 @@ trait Batch: Send + Sync + 'static {
         attribution: &'a Attribution,
     ) -> BoxFuture<'a, Result<BatchOutcome, Error>>;
 }
+/// What an installation engine was built from: the `http` settings and its
+/// registry credentials.
+type EngineKey = (crate::settings::Http, Vec<patchula_http::Credential>);
 struct Engines {
     app: Arc<App>,
     transport: Arc<dyn Transport>,
     cache: Cache,
-    engines: Mutex<BTreeMap<u64, (crate::settings::Http, Engine)>>,
+    engines: Mutex<BTreeMap<u64, (EngineKey, Engine)>>,
     recheck: Option<String>,
     bot_login: String,
     /// The server URL from the App's webhook URL, for `advertise`.
@@ -419,10 +420,10 @@ impl Batch for Engines {
                 return Ok(BatchOutcome::default());
             }
             let started = Utc::now();
-            let result = {
+            let (result, withheld) = {
                 let mut engines = self.engines.lock().await;
                 let engine = self.engine(&mut engines, id, settings)?;
-                engine
+                let result = engine
                     .run(
                         patchula_engine::Options {
                             repositories: repositories.clone(),
@@ -431,15 +432,21 @@ impl Batch for Engines {
                         false,
                         false,
                     )
-                    .await
+                    .await;
+                let withheld = result.as_ref().ok().map(|report| {
+                    crate::public::withheld(report, |source, package| {
+                        engine.credentialed(source, package)
+                    })
+                });
+                (result, withheld)
             };
-            if let Ok(report) = &result {
+            if let (Ok(report), Some(withheld)) = (&result, withheld) {
                 crate::public::record(
                     &self.cache,
                     &client,
                     &self.bot_login,
                     id,
-                    report,
+                    &crate::public::Recorded { report, withheld },
                     started,
                     &self.member(id),
                 )
@@ -490,42 +497,39 @@ impl Engines {
         }
     }
     /// The installation's engine, created on first use and set to the current
-    /// settings. A change to the `http` settings replaces it, since its clients
+    /// settings. Registry secrets are read again for every batch, so a rotated
+    /// secret applies without a restart. A change to the `http` settings or to
+    /// the installation's credentials replaces the engine, since its clients
     /// are built from them.
     fn engine<'a>(
         &self,
-        engines: &'a mut BTreeMap<u64, (crate::settings::Http, Engine)>,
+        engines: &'a mut BTreeMap<u64, (EngineKey, Engine)>,
         id: u64,
         settings: &Settings,
     ) -> Result<&'a mut Engine, Error> {
-        if engines
-            .get(&id)
-            .is_some_and(|(http, _)| *http != settings.http)
-        {
+        let (credentials, failed) = settings.credentials(Some(id));
+        for (prefix, reason) in &failed {
+            tracing::error!(target: "patchula_server", installation = id, registry = %prefix, reason = %reason,
+                "registry credentials unavailable; its lookups run without them");
+        }
+        let key = (settings.http.clone(), credentials);
+        if engines.get(&id).is_some_and(|(built, _)| *built != key) {
             engines.remove(&id);
         }
         if let std::collections::btree_map::Entry::Vacant(entry) = engines.entry(id) {
-            let mut engine = Engine::with_credentials(
+            let mut http = settings.http_options();
+            http.credentials.clone_from(&key.1);
+            let engine = Engine::with_credentials(
                 self.app.installation(id),
                 self.cache.clone(),
                 settings.concurrency,
                 self.transport.clone(),
-                settings.http_options(),
+                http,
                 settings.github_options(),
             )
             .map_err(|_| Error("cannot create batch engine"))?
             .with_advisories();
-            match (
-                std::env::var(DOCKERHUB_USERNAME_VAR).ok(),
-                std::env::var(DOCKERHUB_TOKEN_VAR).ok(),
-            ) {
-                (None, None) => {}
-                (Some(user), Some(token)) if !user.is_empty() && !token.is_empty() => {
-                    engine = engine.with_dockerhub_credentials(user, token)
-                }
-                _ => return Err(Error("set both Docker Hub credentials to nonempty values")),
-            }
-            entry.insert((settings.http.clone(), engine));
+            entry.insert((key, engine));
         }
         let (_, engine) = engines.get_mut(&id).expect("installation engine");
         engine
@@ -554,7 +558,7 @@ impl crate::remote::Runner for Engines {
         use crate::remote::Mode;
         Box::pin(async move {
             let started = Utc::now();
-            let report = {
+            let (report, withheld) = {
                 // The same lock as queued batches, so a remote run never races one.
                 let mut engines = self.engines.lock().await;
                 let engine = self
@@ -564,12 +568,16 @@ impl crate::remote::Runner for Engines {
                     repositories,
                     ..patchula_engine::Options::default()
                 };
-                match mode {
+                let report = match mode {
                     Mode::Lookup => engine.lookup(options).await,
                     Mode::DryRun => engine.run(options, true, false).await,
                     Mode::Run => engine.run(options, false, false).await,
                 }
-                .map_err(|_| "the run failed on the server")?
+                .map_err(|_| "the run failed on the server")?;
+                let withheld = crate::public::withheld(&report, |source, package| {
+                    engine.credentialed(source, package)
+                });
+                (report, withheld)
             };
             if mode == Mode::Run {
                 if let Ok(client) = Client::with_credentials(
@@ -583,7 +591,10 @@ impl crate::remote::Runner for Engines {
                         &client,
                         &self.bot_login,
                         installation,
-                        &report,
+                        &crate::public::Recorded {
+                            report: &report,
+                            withheld,
+                        },
                         started,
                         &self.member(installation),
                     )

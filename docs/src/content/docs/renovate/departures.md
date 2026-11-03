@@ -73,6 +73,12 @@ missing, and behaviour that changes their pull requests. The
 - **The Count:** Skips repositories without a config. In a local checkout with no config, the CLI offers its defaults or a starter `patchula.pkl` at a terminal, and `--default-config` uses the defaults without asking
 - **Why:** Repositories opt in deliberately
 
+### Registry credentials are operator settings {#registry-credentials}
+
+- **Renovate:** `hostRules` in the repository config, with secrets encrypted for the app or passed in by the self-hosted runner
+- **The Count:** [`registries`](/guide/sources/#private-registries) in the operator settings file, keyed by URL prefix, with secrets from environment variables or files. A repository config cannot name a credential or a host to send one to. Credentials cover registry reads, version lookups and image manifest and SBOM reads alike, for the sources that take a registry URL; lockfile tools do not get them yet
+- **Why:** One server serves many organisations, and a repository config can point a dependency at any URL
+
 ## What gets updated
 
 ### Indirect Go requirements {#indirect-go-requirements}
