@@ -1485,9 +1485,9 @@ async fn an_npm_package_is_read_from_its_own_registry_with_its_credentials() {
         "@acme/ui"
     )));
     assert!(!client.credentialed(&patchula_config::PackageId::public(Source::Npm, "@acme/ui")));
-    // Only npm takes a registry, and only an https one.
+    // Only npm and PyPI take a registry, and only an https one.
     for (source, registry) in [
-        (Source::Pypi, "https://npm.acme.dev/repo"),
+        (Source::Crates, "https://npm.acme.dev/repo"),
         (Source::Npm, "http://npm.acme.dev/repo"),
     ] {
         assert!(
@@ -1557,4 +1557,78 @@ async fn a_package_from_its_own_registry_has_no_public_release_notes() {
         .await
         .unwrap();
     assert!(notes.source.is_none());
+}
+
+#[tokio::test]
+async fn a_python_package_is_read_from_its_private_index_or_not_at_all() {
+    let json = r#"{"meta":{"api-version":"1.1"},"name":"acme-core","files":[
+        {"filename":"acme_core-1.0.0-py3-none-any.whl","upload-time":"2026-01-01T00:00:00Z"},
+        {"filename":"acme_core-1.1.0.tar.gz","upload-time":"2026-02-01T00:00:00Z"}]}"#;
+    let html = r#"<!DOCTYPE html><html><body>
+        <a href="../../packages/acme_auth-2.0.0.tar.gz#sha256=aa">acme_auth-2.0.0.tar.gz</a>
+        <a href="../../packages/acme_auth-2.1.0-py3-none-any.whl" data-yanked="">acme_auth-2.1.0-py3-none-any.whl</a>
+        </body></html>"#;
+    let steps = Arc::new(AuthSteps(Mutex::new(VecDeque::from([
+        (
+            "https://pypi.acme.dev/simple/acme-core/".to_owned(),
+            Some("Basic Y2k6aHVudGVyMg==".to_owned()),
+            response(
+                200,
+                json,
+                &[("content-type", "application/vnd.pypi.simple.v1+json")],
+            ),
+        ),
+        (
+            "https://pypi.acme.dev/simple/acme-auth/".to_owned(),
+            Some("Basic Y2k6aHVudGVyMg==".to_owned()),
+            response(200, html, &[("content-type", "text/html")]),
+        ),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    let client = auth_client_with(
+        steps.clone(),
+        dir.path(),
+        vec![basic("https://pypi.acme.dev", "ci", "hunter2")],
+    )
+    .await;
+    let id = |name: &str, registry: &str| {
+        patchula_config::PackageId::new(Source::Pypi, Some(registry.into()), name)
+    };
+    let core = client
+        .lookup(&id("acme_core", "https://pypi.acme.dev/simple/"))
+        .await
+        .unwrap();
+    assert!(
+        core.versions
+            .iter()
+            .any(|v| v.version == "1.1.0" && v.published_at.is_some())
+    );
+    let auth = client
+        .lookup(&id("acme-auth", "https://pypi.acme.dev/simple"))
+        .await
+        .unwrap();
+    let yanked = |version: &str| {
+        auth.versions
+            .iter()
+            .find(|v| v.version == version)
+            .unwrap()
+            .yanked
+    };
+    assert!(!yanked("2.0.0") && yanked("2.1.0"));
+    assert!(steps.0.lock().unwrap().is_empty());
+    assert!(client.credentialed(&id("acme-core", "https://pypi.acme.dev/simple")));
+    // An ambiguous package is never looked up, with a reason to act on.
+    let ambiguous = patchula_config::PackageId::new(
+        Source::Pypi,
+        Some(patchula_config::PackageId::ambiguous_registry(&[
+            "https://pypi.org/simple".into(),
+            "https://pypi.acme.dev/simple".into(),
+        ])),
+        "acme-tools",
+    );
+    let error = client.lookup(&ambiguous).await.unwrap_err().to_string();
+    assert!(
+        error.contains("several indexes") && error.contains("lockfile"),
+        "{error}"
+    );
 }

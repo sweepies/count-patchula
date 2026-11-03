@@ -72,6 +72,157 @@ fn resolved(lock: Option<&Document<&str>>, package: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// The index a lockfile records for `package`: `source.registry` in
+/// `uv.lock`, `[package.source].url` in `poetry.lock`, where a package without
+/// one came from PyPI.
+fn locked_index(lock: Option<&Document<&str>>, package: &str) -> Option<crate::pypi::Named> {
+    let entry = lock?
+        .get("package")?
+        .as_array_of_tables()?
+        .iter()
+        .find(|p| {
+            p.get("name")
+                .and_then(Item::as_str)
+                .map(normalise)
+                .as_deref()
+                == Some(package)
+        })?;
+    let source = entry.get("source");
+    if let Some(registry) = source
+        .and_then(|s| s.get("registry"))
+        .and_then(Item::as_str)
+    {
+        return Some(crate::pypi::Named::parse(registry));
+    }
+    match source.and_then(|s| s.get("url")).and_then(Item::as_str) {
+        Some(url) => Some(crate::pypi::Named::parse(url)),
+        // Poetry records no source for PyPI; uv always records one.
+        None if source.is_none() && entry.get("files").is_some() => {
+            Some(crate::pypi::Named::Public)
+        }
+        None => None,
+    }
+}
+
+/// The indexes uv and Poetry configure, and the packages pinned to one. `uv` is
+/// a `uv.toml`, or `[tool.uv]` without one.
+fn indexes(uv: Option<&Item>, poetry: Option<&Item>) -> crate::pypi::Indexes {
+    use crate::pypi::Named;
+    let mut indexes = crate::pypi::Indexes::default();
+    let mut names = BTreeMap::<String, Named>::new();
+    for index in uv
+        .and_then(|u| u.get("index"))
+        .and_then(Item::as_array_of_tables)
+        .into_iter()
+        .flatten()
+    {
+        let Some(url) = index.get("url").and_then(Item::as_str) else {
+            continue;
+        };
+        let named = Named::parse(url);
+        if let Some(name) = index.get("name").and_then(Item::as_str) {
+            names.insert(name.to_owned(), named.clone());
+        }
+        let flag = |key: &str| index.get(key).and_then(Item::as_bool) == Some(true);
+        if flag("default") {
+            indexes.default = Some(named);
+        } else if !flag("explicit") {
+            indexes.extras.push(named);
+        }
+    }
+    if let Some(url) = uv.and_then(|u| u.get("index-url")).and_then(Item::as_str) {
+        indexes.default = Some(Named::parse(url));
+    }
+    for url in uv
+        .and_then(|u| u.get("extra-index-url"))
+        .and_then(Item::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str())
+    {
+        indexes.extras.push(Named::parse(url));
+    }
+    let mut primaries = Vec::new();
+    for source in poetry
+        .and_then(|p| p.get("source"))
+        .and_then(Item::as_array_of_tables)
+        .into_iter()
+        .flatten()
+    {
+        let Some(url) = source.get("url").and_then(Item::as_str) else {
+            continue;
+        };
+        let named = Named::parse(url);
+        if let Some(name) = source.get("name").and_then(Item::as_str) {
+            names.insert(name.to_owned(), named.clone());
+        }
+        let legacy = |key: &str| source.get(key).and_then(Item::as_bool) == Some(true);
+        let priority =
+            source
+                .get("priority")
+                .and_then(Item::as_str)
+                .unwrap_or(if legacy("default") {
+                    "default"
+                } else if legacy("secondary") {
+                    "supplemental"
+                } else {
+                    "primary"
+                });
+        match priority {
+            "explicit" => {}
+            "supplemental" | "secondary" => indexes.extras.push(named),
+            "default" => indexes.default = Some(named),
+            _ => primaries.push(named),
+        }
+    }
+    // Primary sources replace PyPI, in order; more than one is ambiguous.
+    let mut primaries = primaries.into_iter();
+    if indexes.default.is_none() {
+        indexes.default = primaries.next();
+    }
+    indexes.extras.extend(primaries);
+    // Pins: uv sources by index name, and Poetry dependencies' `source`.
+    for (package, value) in uv
+        .and_then(|u| u.get("sources"))
+        .and_then(Item::as_table_like)
+        .into_iter()
+        .flat_map(|t| t.iter())
+    {
+        if let Some(named) = value
+            .get("index")
+            .and_then(Item::as_str)
+            .and_then(|name| names.get(name))
+        {
+            indexes.pinned.insert(normalise(package), named.clone());
+        }
+    }
+    let mut tables: Vec<&Item> = Vec::new();
+    for key in ["dependencies", "dev-dependencies"] {
+        tables.extend(poetry.and_then(|p| p.get(key)));
+    }
+    for (_, group) in poetry
+        .and_then(|p| p.get("group"))
+        .and_then(Item::as_table_like)
+        .into_iter()
+        .flat_map(|t| t.iter())
+    {
+        tables.extend(group.get("dependencies"));
+    }
+    for (package, value) in tables
+        .into_iter()
+        .filter_map(Item::as_table_like)
+        .flat_map(|t| t.iter())
+    {
+        if let Some(named) = value
+            .get("source")
+            .and_then(Item::as_str)
+            .and_then(|name| names.get(name))
+        {
+            indexes.pinned.insert(normalise(package), named.clone());
+        }
+    }
+    indexes
+}
 struct Scan<'a> {
     path: &'a str,
     text: &'a str,
@@ -277,6 +428,26 @@ pub(super) fn extract(path: &str, text: &str, files: &Files) -> Result<Vec<Depen
             );
         }
     }
+    // uv reads the nearest `uv.toml` at or above the project instead of
+    // `[tool.uv]` when there is one.
+    let uv_toml = files
+        .iter()
+        .filter(|(p, _)| {
+            p.strip_suffix("uv.toml")
+                .is_some_and(|dir| (dir.is_empty() || dir.ends_with('/')) && base.starts_with(dir))
+        })
+        .max_by_key(|(p, _)| p.len())
+        .map(|(_, t)| Document::parse(t.as_str()).map_err(|e| e.to_string()))
+        .transpose()?;
+    let indexes = indexes(
+        uv_toml
+            .as_ref()
+            .map(Document::as_item)
+            .or_else(|| tool.and_then(|t| t.get("uv"))),
+        tool.and_then(|t| t.get("poetry")),
+    );
+    let lock = scan.lock.as_ref();
+    indexes.assign(&mut scan.out, |package| locked_index(lock, package));
     Ok(scan.out)
 }
 

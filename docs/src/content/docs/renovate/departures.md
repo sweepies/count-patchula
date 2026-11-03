@@ -79,6 +79,12 @@ missing, and behaviour that changes their pull requests. The
 - **The Count:** [`registries`](/guide/sources/#private-registries) in the operator settings file, keyed by URL prefix, with secrets from environment variables or files. A repository config cannot name a credential or a host to send one to. Credentials cover registry reads, version lookups and image manifest and SBOM reads alike, for the sources that take a registry URL; lockfile tools do not get them yet
 - **Why:** One server serves many organisations, and a repository config can point a dependency at any URL
 
+### Python packages need one index {#python-indexes}
+
+- **Renovate:** Looks a Python package up in every index the project names, `--extra-index-url` included
+- **The Count:** A package not pinned to an index or recorded in a lockfile, in a project that names an index besides PyPI, fails its lookup with a message to pin it or commit a lockfile. See [package registries](/guide/sources/#package-registries)
+- **Why:** With several indexes, the same name can be a private package in one and anyone's package on PyPI; guessing is how dependency confusion happens
+
 ## What gets updated
 
 ### Indirect Go requirements {#indirect-go-requirements}

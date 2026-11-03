@@ -179,8 +179,8 @@ registries {
 
 A dependency's source decides where its versions come from. Helm repositories,
 OCI and Docker registries, Maven repositories and GitLab, Gitea or Forgejo tags carry
-their URL, so a private one works with an entry. npm dependencies can name
-their own [package registry](#package-registries). PyPI and the other package
+their URL, so a private one works with an entry. npm and Python dependencies
+can name their own [package registry](#package-registries). The other package
 registries still read their public registry, or its mirror. Lockfile tools get
 no registry credentials yet.
 
@@ -198,17 +198,39 @@ dependency's `registry`:
   does not hide one further up. Packages only a lockfile records get the same
   registry as a declared one would. `packageManager` stays on the public
   registry, since Corepack does not read `.npmrc`.
-- An npm [custom extractor](/guide/configuration/#custom-extractors) can set
+- Python packages come from the index the project pins them to, else the one
+  their lockfile records, else the only index the project names:
+  - pip requirements files: `--index-url` (or `-i`) replaces PyPI;
+    `--extra-index-url` adds an index.
+  - uv: `[[tool.uv.index]]` (a `default` one replaces PyPI, an `explicit` one
+    serves only packages pinned to it), `index-url`, `extra-index-url`, and
+    pins in `[tool.uv.sources]`. A `uv.toml` at or above the project replaces
+    `[tool.uv]`.
+  - Poetry: `[[tool.poetry.source]]` (`primary` replaces PyPI, `supplemental`
+    adds an index, `explicit` serves only pinned packages) and a dependency's
+    `source`.
+  - `uv.lock` and `poetry.lock` record each package's index.
+
+  A package that is pinned nowhere and unlocked, in a project that names an
+  index besides PyPI, could come from either. pip would take the highest
+  version from any of them, which is how a public package can stand in for a
+  private one. The Count does not guess: the package's lookup fails, saying it
+  could come from several indexes. Pin it, or commit a lockfile.
+  Indexes come only from the repository, never from `pip.conf` or the
+  environment. Private indexes are read through their simple API, as PEP 691
+  JSON or PEP 503 HTML; HTML gives no upload times, so no release-age wait.
+- An npm or PyPI [custom extractor](/guide/configuration/#custom-extractors) can set
   `registry`, a template such as `"{registry}"`; an empty or unmatched capture
-  means the public registry. Without it, its packages follow `.npmrc` like a
+  means the public registry. Without it, npm packages follow `.npmrc` like a
   `package.json` beside them.
 
-These files are read whenever npm, Bun or an npm extractor is enabled,
-whatever `files` and `exclude` select. Bun's `bunfig.toml` and Yarn 1's
+`.npmrc` and `.yarnrc.yml` are read whenever npm, Bun or an npm extractor is
+enabled, and `uv.toml` whenever pyproject is, whatever `files` and `exclude`
+select. Bun's `bunfig.toml` and Yarn 1's
 `.yarnrc` are not read yet: a registry set only there is not used.
 
-npm's and Yarn's public registries (`registry.npmjs.org`,
-`registry.yarnpkg.com`, over https or plain http) count as none. A value the Count cannot read from,
+npm's, Yarn's and PyPI's public registries (`registry.npmjs.org`,
+`registry.yarnpkg.com`, `pypi.org`, over https or plain http) count as none. A value the Count cannot read from,
 such as a `${VAR}` npm would take from the environment or a plain-http URL, is
 kept as written: that package's lookup fails, rather than reading the public
 package of its name, which may be someone else's.

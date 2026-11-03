@@ -2459,3 +2459,117 @@ fn npm_registry_files_are_read_whatever_files_and_exclude_select() {
     let ui = deps.iter().find(|d| d.name == "@acme/ui").unwrap();
     assert_eq!(ui.registry.as_deref(), Some("https://npm.acme.dev"));
 }
+
+#[test]
+fn python_packages_come_from_their_pinned_locked_or_only_index_never_a_guess() {
+    let files = Files::from([
+        // pip: an index that replaces PyPI, and one alongside it.
+        (
+            "replaced/requirements.txt".into(),
+            "--index-url https://pypi.acme.dev/simple/\nrequests==2.31.0\n".into(),
+        ),
+        (
+            "extra/requirements.txt".into(),
+            "-i https://pypi.org/simple\n--extra-index-url=https://pypi.acme.dev/simple\nacme-tools==1.0.0\n".into(),
+        ),
+        (
+            "public/requirements.txt".into(),
+            "--extra-index-url https://pypi.org/simple\nflask==3.0.0\n".into(),
+        ),
+        // uv: a pinned explicit index, and one searched alongside PyPI.
+        (
+            "uv/pyproject.toml".into(),
+            r#"[project]
+name = "app"
+dependencies = ["acme-core>=1.0", "httpx>=0.27", "attrs>=23"]
+[[tool.uv.index]]
+name = "acme"
+url = "https://pypi.acme.dev/simple"
+explicit = true
+[[tool.uv.index]]
+name = "mirror"
+url = "https://mirror.acme.dev/simple"
+[tool.uv.sources]
+acme-core = { index = "acme" }
+"#
+            .into(),
+        ),
+        (
+            "uv/uv.lock".into(),
+            r#"version = 1
+[[package]]
+name = "httpx"
+version = "0.27.0"
+source = { registry = "https://pypi.org/simple" }
+"#
+            .into(),
+        ),
+        // Poetry: a supplemental source and a dependency pinned to another.
+        (
+            "poetry/pyproject.toml".into(),
+            r#"[tool.poetry.dependencies]
+python = "^3.12"
+acme-auth = { version = "^2.0", source = "private" }
+django = "^5.0"
+rich = "^13.0"
+[[tool.poetry.source]]
+name = "private"
+url = "https://pypi.acme.dev/simple/"
+priority = "explicit"
+[[tool.poetry.source]]
+name = "extra"
+url = "https://extra.acme.dev/simple/"
+priority = "supplemental"
+"#
+            .into(),
+        ),
+        (
+            "poetry/poetry.lock".into(),
+            "[[package]]\nname = \"django\"\nversion = \"5.0.1\"\nfiles = []\n".into(),
+        ),
+        // A uv.toml replaces [tool.uv].
+        (
+            "configured/pyproject.toml".into(),
+            "[project]\nname = \"x\"\ndependencies = [\"numpy>=1.26\"]\n[tool.uv]\nindex-url = \"https://ignored.acme.dev/simple\"\n".into(),
+        ),
+        (
+            "configured/uv.toml".into(),
+            "index-url = \"https://pypi.acme.dev/simple\"\n".into(),
+        ),
+    ]);
+    let mut config = config();
+    config.managers = vec![Manager::Requirements, Manager::Pyproject];
+    let scanner = Scanner::new(&config).unwrap();
+    assert!(scanner.needs("configured/uv.toml"));
+    let extraction = scanner.extract(&files).unwrap();
+    let registry = |file: &str, name: &str| {
+        extraction
+            .dependencies
+            .iter()
+            .find(|d| d.file == file && d.name == name)
+            .unwrap_or_else(|| panic!("{file} {name}"))
+            .registry
+            .clone()
+    };
+    let acme = Some("https://pypi.acme.dev/simple".to_owned());
+    assert_eq!(registry("replaced/requirements.txt", "requests"), acme);
+    let ambiguous = registry("extra/requirements.txt", "acme-tools").unwrap();
+    assert!(ambiguous.starts_with("ambiguous: "), "{ambiguous}");
+    assert!(
+        ambiguous.contains("https://pypi.acme.dev/simple"),
+        "{ambiguous}"
+    );
+    // PyPI listed again is not another index.
+    assert_eq!(registry("public/requirements.txt", "flask"), None);
+    assert_eq!(registry("uv/pyproject.toml", "acme-core"), acme);
+    // The lockfile settles one; the other stays ambiguous.
+    assert_eq!(registry("uv/pyproject.toml", "httpx"), None);
+    assert!(registry("uv/pyproject.toml", "attrs").is_some_and(|r| r.starts_with("ambiguous: ")));
+    assert_eq!(registry("poetry/pyproject.toml", "acme-auth"), acme);
+    // Poetry records no source for PyPI.
+    assert_eq!(registry("poetry/pyproject.toml", "django"), None);
+    assert!(
+        registry("poetry/pyproject.toml", "rich").is_some_and(|r| r.starts_with("ambiguous: "))
+    );
+    assert_eq!(registry("configured/pyproject.toml", "numpy"), acme);
+}

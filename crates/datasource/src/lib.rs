@@ -48,6 +48,8 @@ pub enum Error {
     Nix(String),
     #[error("invalid package identity or upstream payload")]
     Invalid,
+    #[error("{0}")]
+    Registry(String),
     #[error("release-note read failed: {0}")]
     Notes(String),
     #[error("registry rate limit reached; retry after {0} seconds")]
@@ -196,6 +198,14 @@ impl Client {
         let (source, registry, package) = (id.source, id.registry.as_deref(), id.name.as_str());
         let url = match source {
             Source::Npm => Some(npm_url(registry, package)),
+            Source::Pypi => {
+                registries::normalize_python(package)
+                    .ok()
+                    .map(|package| match registry {
+                        Some(index) => format!("{}/{package}/", index.trim_end_matches('/')),
+                        None => format!("https://pypi.org/pypi/{package}/json"),
+                    })
+            }
             Source::Docker | Source::Oci => docker::identity(package)
                 .ok()
                 .map(|(host, path)| format!("https://{host}/v2/{path}/tags/list")),
@@ -222,10 +232,19 @@ impl Client {
     /// URL standing in for the source's public registry. Only npm takes one.
     pub async fn lookup(&self, id: &PackageId) -> Result<Catalog> {
         let (source, registry, package) = (id.source, id.registry.as_deref(), id.name.as_str());
-        if registry.is_some_and(|registry| {
-            source != Source::Npm || patchula_http::url_prefix(registry).is_none()
-        }) {
-            return Err(Error::Invalid);
+        if let Some(registry) = registry {
+            if let Some(indexes) = id.ambiguous() {
+                return Err(Error::Registry(format!(
+                    "{package} could come from several indexes ({indexes}); pin it to one or commit a lockfile"
+                )));
+            }
+            if !matches!(source, Source::Npm | Source::Pypi)
+                || patchula_http::url_prefix(registry).is_none()
+            {
+                return Err(Error::Registry(format!(
+                    "cannot read {package} from the registry {registry}"
+                )));
+            }
         }
         // npm names are URL-safe; an escape could reach another path on a
         // registry that decodes it.
@@ -247,7 +266,10 @@ impl Client {
             }
             Source::Crates => self.crates(package).await,
             Source::Go => self.go(package).await,
-            Source::Pypi => self.pypi(package).await,
+            Source::Pypi => match registry {
+                Some(index) => self.pypi_index(index, package).await,
+                None => self.pypi(package).await,
+            },
             Source::Mise => self.mise(package).await,
             Source::GithubRunners => runners(package),
             Source::Docker => self.docker(package).await,

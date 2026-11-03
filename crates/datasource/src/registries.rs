@@ -131,6 +131,20 @@ impl Client {
         let mut catalogs: BTreeMap<String, Catalog> = serde_json::from_slice(&response.body)?;
         catalogs.remove(chart).ok_or(Error::Invalid)
     }
+    /// A package's versions from a private simple index at `index`.
+    pub(super) async fn pypi_index(&self, index: &str, package: &str) -> Result<Catalog> {
+        let package = normalize_python(package)?;
+        let response = self
+            .http
+            .get_derived(
+                &format!("{}/{package}/", index.trim_end_matches('/')),
+                "application/vnd.pypi.simple.v1+json, text/html;q=0.1",
+                "pypi-index-catalog-v1",
+                simple_any,
+            )
+            .await?;
+        Ok(serde_json::from_slice(&response.body)?)
+    }
     /// PEP 691 JSON; public identity is normalized according to PEP 503.
     pub async fn pypi_simple(&self, package: &str) -> Result<Catalog> {
         let package = normalize_python(package)?;
@@ -165,6 +179,34 @@ pub(super) fn normalize_python(package: &str) -> Result<String> {
         }
     }
     Ok(out)
+}
+/// The files of a PEP 503 HTML simple page: each anchor's text, and whether it
+/// carries `data-yanked`.
+fn html_files(body: &[u8]) -> std::result::Result<Vec<(String, bool)>, CacheError> {
+    let text = std::str::from_utf8(body).map_err(|_| CacheError::Document)?;
+    let mut files = Vec::new();
+    for anchor in text.split("<a ").skip(1) {
+        let Some((attributes, rest)) = anchor.split_once('>') else {
+            continue;
+        };
+        let Some((name, _)) = rest.split_once("</a>") else {
+            continue;
+        };
+        files.push((name.trim().to_owned(), attributes.contains("data-yanked")));
+    }
+    Ok(files)
+}
+/// A private index's simple page, as PEP 691 JSON or, failing that, PEP 503
+/// HTML, which carries no upload times.
+fn simple_any(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
+    simple(body).or_else(|_| {
+        let files = html_files(body)?
+            .into_iter()
+            .map(|(filename, yanked)| serde_json::json!({"filename": filename, "yanked": yanked}))
+            .collect::<Vec<_>>();
+        let document = serde_json::json!({"meta": {"api-version": "1.0"}, "files": files});
+        simple(&serde_json::to_vec(&document).map_err(|_| CacheError::Document)?)
+    })
 }
 fn simple(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
     #[derive(Deserialize)]

@@ -42,5 +42,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
             registry: None,
         });
     }
+    // Without a lockfile, a requirements file pins nothing to an index.
+    crate::pypi::requirements(text).assign(&mut out, |_| None);
     Ok(out)
 }

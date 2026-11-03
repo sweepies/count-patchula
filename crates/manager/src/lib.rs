@@ -20,6 +20,7 @@ mod gradle_vars;
 mod helm;
 mod images;
 mod locked;
+mod pypi;
 pub use locked::Locked;
 mod maven;
 mod mise;
@@ -265,7 +266,7 @@ impl Scanner {
     pub fn needs(&self, path: &str) -> bool {
         self.config.managers.iter().any(|m| self.selected(*m, path)) || self.registry_file(path)
     }
-    /// npm's registry settings are read whatever `files` and `exclude` select:
+    /// npm's and uv's registry settings are read whatever `files` and `exclude` select:
     /// without them, a scoped package would be looked up on the public
     /// registry, where its name may be someone else's.
     fn registry_file(&self, path: &str) -> bool {
@@ -275,14 +276,13 @@ impl Scanner {
                 .extractors
                 .iter()
                 .any(|e| e.source == "npm" || e.source.contains('{'));
-        ([Manager::Npm, Manager::Bun]
+        let leaf = path.rsplit('/').next().unwrap_or(path);
+        (([Manager::Npm, Manager::Bun]
             .iter()
             .any(|m| self.config.managers.contains(m))
             || npm_extractors)
-            && matches!(
-                path.rsplit('/').next().unwrap_or(path),
-                ".npmrc" | ".yarnrc.yml"
-            )
+            && matches!(leaf, ".npmrc" | ".yarnrc.yml"))
+            || (self.config.managers.contains(&Manager::Pyproject) && leaf == "uv.toml")
     }
     fn selected(&self, manager: Manager, path: &str) -> bool {
         if !self.config.managers.contains(&manager)

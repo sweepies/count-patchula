@@ -27,7 +27,7 @@ quoting, comments and formatting.
 | `helm` | `Chart.yaml` | not yet: `Chart.lock` holds the update |
 | `terraform` | `*.tf`, `.terraform-version` | `.terraform.lock.hcl` |
 | `requirements` | `requirements*.txt`, `requirements*.in`, `requirements/*.txt`, `requirements/*.in` | |
-| `pyproject` | `pyproject.toml`, `.python-version` | `uv.lock`, `poetry.lock` |
+| `pyproject` | `pyproject.toml`, `.python-version`, `uv.toml` indexes | `uv.lock`, `poetry.lock` |
 | `pre-commit` | `.pre-commit-config.yaml` | |
 | `devcontainer` | `devcontainer.json`, `.devcontainer.json` | |
 | `woodpecker` | `.woodpecker.yml`, `.woodpecker.yaml`, `.woodpecker/*.yml` and `*.yaml` | |
