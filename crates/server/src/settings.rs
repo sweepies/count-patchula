@@ -23,9 +23,10 @@ pub struct Settings {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Registry {
-    pub auth: RegistryAuth,
+    pub auth: Option<RegistryAuth>,
     pub username: Option<String>,
-    pub secret: Secret,
+    pub secret: Option<Secret>,
+    pub mirror_of: Option<String>,
     pub allowed_installations: Vec<u64>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -159,6 +160,7 @@ impl Settings {
             return Err("recheck must be now or next-run");
         }
         let mut prefixes = std::collections::BTreeSet::new();
+        let mut mirrored = std::collections::BTreeSet::new();
         for (prefix, registry) in &self.registries {
             let Some(normalised) =
                 patchula_http::Credential::new(prefix, patchula_http::Auth::Withheld)
@@ -171,18 +173,34 @@ impl Settings {
                 return Err("registries keys must differ by more than a trailing slash");
             }
             match (registry.auth, registry.username.as_deref()) {
-                (RegistryAuth::Basic, Some(name)) if !name.is_empty() && !name.contains(':') => {}
-                (RegistryAuth::Bearer, None) => {}
+                (Some(RegistryAuth::Basic), Some(name))
+                    if !name.is_empty() && !name.contains(':') => {}
+                (Some(RegistryAuth::Bearer) | None, None) => {}
                 _ => {
                     return Err(
-                        "username is required for basic registries, without a colon, and refused for bearer ones",
+                        "username is required for basic registries, without a colon, and refused otherwise",
                     );
                 }
             }
-            match (&registry.secret.env, &registry.secret.file) {
-                (Some(name), None) if !name.is_empty() && !name.contains('=') => {}
-                (None, Some(path)) if !path.as_os_str().is_empty() => {}
-                _ => return Err("secret needs exactly one of env and file"),
+            match (registry.auth, &registry.secret) {
+                (Some(_), Some(secret)) => match (&secret.env, &secret.file) {
+                    (Some(name), None) if !name.is_empty() && !name.contains('=') => {}
+                    (None, Some(path)) if !path.as_os_str().is_empty() => {}
+                    _ => return Err("secret needs exactly one of env and file"),
+                },
+                (None, None) if registry.mirror_of.is_some() => {}
+                (None, None) => return Err("auth or mirrorOf is required for each registry"),
+                _ => return Err("secret is required with auth, and refused without it"),
+            }
+            if let Some(public) = &registry.mirror_of {
+                let Some(mirror) = normalised.clone().mirroring(public) else {
+                    return Err(
+                        "mirrorOf must be an https URL prefix without a user, query or fragment, other than the entry's own",
+                    );
+                };
+                if !mirrored.insert(mirror.mirror_of().unwrap_or_default().to_owned()) {
+                    return Err("mirrorOf must differ between registries");
+                }
             }
             if registry
                 .allowed_installations
@@ -279,20 +297,31 @@ impl Settings {
                 credentials.push(withheld);
                 continue;
             }
-            let auth = registry.secret.read().map(|secret| match registry.auth {
-                RegistryAuth::Basic => patchula_http::Auth::Basic {
-                    username: registry.username.clone().unwrap_or_default(),
-                    password: secret,
-                },
-                RegistryAuth::Bearer => patchula_http::Auth::Bearer { token: secret },
-            });
+            // A mirror whose secret cannot be read still stands in for its
+            // public registry, without credentials: there is no fallback.
+            let mirror = |entry: patchula_http::Credential| match &registry.mirror_of {
+                Some(public) => entry.mirroring(public),
+                None => Some(entry),
+            };
+            let auth = match (registry.auth, &registry.secret) {
+                (None, _) => Ok(patchula_http::Auth::Anonymous),
+                (Some(_), None) => Err("secret is missing".to_owned()),
+                (Some(kind), Some(secret)) => secret.read().map(|secret| match kind {
+                    RegistryAuth::Basic => patchula_http::Auth::Basic {
+                        username: registry.username.clone().unwrap_or_default(),
+                        password: secret,
+                    },
+                    RegistryAuth::Bearer => patchula_http::Auth::Bearer { token: secret },
+                }),
+            };
             match auth.and_then(|auth| {
                 patchula_http::Credential::new(prefix, auth)
+                    .and_then(mirror)
                     .ok_or_else(|| "secret cannot be sent in a header".to_owned())
             }) {
                 Ok(credential) => credentials.push(credential),
                 Err(reason) => {
-                    credentials.push(withheld);
+                    credentials.extend(mirror(withheld));
                     failed.push((prefix.clone(), reason));
                 }
             }
@@ -665,6 +694,47 @@ mod tests {
             r#"registries { ["https://acme.jfrog.io"] { auth = "bearer"; secret { env = "T"; file = "/t" } } }"#,
             r#"registries { ["https://acme.jfrog.io"] { auth = "token"; secret { env = "T" } } }"#,
             r#"registries { ["https://acme.jfrog.io"] { auth = "bearer"; secret { env = "T" } } ["https://acme.jfrog.io/"] { auth = "bearer"; secret { env = "U" } } }"#,
+        ] {
+            assert!(load(&bad.replace("; ", "\n")).is_err(), "{bad}");
+        }
+    }
+    #[test]
+    fn mirrors_need_no_credentials_and_keep_standing_in_when_a_secret_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.pkl");
+        let load = |body: &str| {
+            std::fs::write(&path, format!("amends \"PatchulaSettings.pkl\"\n{body}\n")).unwrap();
+            Settings::load(&path)
+        };
+        let settings = load(
+            r#"registries {
+  ["https://nexus.acme.dev/repository/npm-proxy"] {
+    mirrorOf = "https://registry.npmjs.org"
+  }
+  ["https://acme.jfrog.io/api/pypi/pypi-remote/simple"] {
+    auth = "bearer"
+    secret { env = "PATCHULA_TEST_UNSET_MIRROR_SECRET" }
+    mirrorOf = "https://pypi.org/simple"
+  }
+}"#,
+        )
+        .unwrap();
+        let (entries, failed) = settings.credentials(None);
+        assert_eq!(failed.len(), 1);
+        let [pypi, npm] = &entries[..] else {
+            panic!("two entries")
+        };
+        assert_eq!(npm.auth, patchula_http::Auth::Anonymous);
+        assert_eq!(npm.mirror_of(), Some("https://registry.npmjs.org"));
+        assert_eq!(pypi.auth, patchula_http::Auth::Withheld);
+        assert_eq!(pypi.mirror_of(), Some("https://pypi.org/simple"));
+        for bad in [
+            r#"registries { ["https://nexus.acme.dev"] { } }"#,
+            r#"registries { ["https://nexus.acme.dev"] { auth = "bearer" } }"#,
+            r#"registries { ["https://nexus.acme.dev"] { secret { env = "T" }; mirrorOf = "https://registry.npmjs.org" } }"#,
+            r#"registries { ["https://nexus.acme.dev"] { mirrorOf = "https://nexus.acme.dev/" } }"#,
+            r#"registries { ["https://nexus.acme.dev"] { mirrorOf = "http://registry.npmjs.org" } }"#,
+            r#"registries { ["https://nexus.acme.dev/a"] { mirrorOf = "https://registry.npmjs.org" } ["https://nexus.acme.dev/b"] { mirrorOf = "https://registry.npmjs.org/" } }"#,
         ] {
             assert!(load(&bad.replace("; ", "\n")).is_err(), "{bad}");
         }

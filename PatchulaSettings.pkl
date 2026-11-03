@@ -32,12 +32,17 @@ class Http {
 class Registry {
   /// `basic` sends `username` and the secret as a password, and exchanges
   /// them at a container registry's token service; `bearer` sends the secret
-  /// as a bearer token.
-  auth: "basic" | "bearer"
-  /// Required for `basic`, and refused for `bearer`.
+  /// as a bearer token. null sends no credentials, for an open mirror.
+  auth: ("basic" | "bearer")? = null
+  /// Required for `basic`, and refused otherwise.
   username: String? = null
-  /// Where the secret is read from. Never the secret itself.
-  secret: Secret
+  /// Where the secret is read from, never the secret itself. Required with
+  /// `auth`, and refused without it.
+  secret: Secret? = null
+  /// A public registry's https URL prefix that this entry stands in for, such
+  /// as "https://registry.npmjs.org". Requests under it go to this entry's
+  /// prefix instead, with no fallback. Container registries are not mirrored.
+  mirrorOf: String? = null
   /// Only `patchula serve` reads this: installation IDs that may use the
   /// entry. Empty allows every installation the server serves.
   allowedInstallations: Listing<Int> = new {}

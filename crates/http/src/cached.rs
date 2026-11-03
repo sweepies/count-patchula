@@ -1,5 +1,8 @@
 //! Conditional, unauthenticated registry GETs sharing the batch transport pool.
-use crate::{Credential, RequestTrace, Response, Transport, credentials::matching};
+use crate::{
+    Credential, RequestTrace, Response, Transport,
+    credentials::{matching, mirrored},
+};
 use patchula_cache::{Cache, HttpEntry, HttpKey};
 use reqwest::{
     Method, Request, StatusCode, Url,
@@ -269,6 +272,7 @@ impl Cached {
         if url.scheme() != "https" || url.host_str().is_none() {
             return Err(Error::Configuration);
         }
+        let url = mirrored(&self.0.options.credentials, &url).unwrap_or(url);
         let trace = RequestTrace::new(method.as_str(), &url);
         let mut request = Request::new(method, url.clone());
         let headers = request.headers_mut();
@@ -497,6 +501,15 @@ impl Cached {
         {
             return Err(Error::Configuration);
         }
+        // An operator mirror stands in for a public registry; there is no
+        // fallback to the public one. Container registries are never mirrored,
+        // since their token services belong to the registry's own host.
+        let requested = url.clone();
+        let url = registry
+            .is_none()
+            .then(|| mirrored(&self.0.options.credentials, &url))
+            .flatten()
+            .unwrap_or(url);
         let mut key = HttpKey::new(
             method.as_str(),
             url.as_str(),
@@ -536,8 +549,9 @@ impl Cached {
                     && entry.last_modified.is_none()
                 {
                     self.0.options.registry_freshness_secs
-                } else if url.host_str() == Some("proxy.golang.org")
-                    && (url.path().ends_with("/@v/list") || url.path().ends_with("/@latest"))
+                } else if requested.host_str() == Some("proxy.golang.org")
+                    && (requested.path().ends_with("/@v/list")
+                        || requested.path().ends_with("/@latest"))
                 {
                     self.0.options.go_freshness_secs
                 } else {
@@ -845,8 +859,10 @@ impl Cached {
         // registry's no-store or Vary cannot make them private. Those read with
         // an account's token or an operator entry's credentials may be private,
         // so they are stored only as the registry allows.
-        let account =
-            registry.flatten().is_some_and(|bearer| bearer.account) || credential.is_some();
+        let account = registry.flatten().is_some_and(|bearer| bearer.account)
+            || credential
+                .as_ref()
+                .is_some_and(|entry| entry.auth != crate::Auth::Anonymous);
         let uncacheable = foreign
             || !(registry.is_some() && immutable(&url) && !account)
                 && (control.as_ref().is_some_and(|c| {
@@ -1634,6 +1650,52 @@ mod tests {
             .registry_get(BLOB, "text/plain", Some(bearer))
             .await
             .unwrap();
+        assert!(transport.0.lock().unwrap().is_empty());
+    }
+    #[tokio::test]
+    async fn a_mirror_stands_in_for_its_public_registry_without_fallback() {
+        const PUBLIC: &str = "https://registry.npmjs.org/react";
+        const MIRROR: &str = "https://acme.jfrog.io/api/npm/npm-remote/react";
+        let reply = |status: u16| Response {
+            status: StatusCode::from_u16(status).unwrap(),
+            headers: header::HeaderMap::new(),
+            body: b"{}".to_vec(),
+        };
+        let entry = Credential::new(
+            "https://acme.jfrog.io/api/npm/npm-remote",
+            crate::Auth::Bearer {
+                token: "tok".into(),
+            },
+        )
+        .unwrap()
+        .mirroring("https://registry.npmjs.org")
+        .unwrap();
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let transport = Arc::new(Scripted(Mutex::new(
+            [
+                (MIRROR, Some("Bearer tok"), reply(200)),
+                // A failing mirror is an error, never a read of the public registry.
+                (MIRROR, Some("Bearer tok"), reply(503)),
+            ]
+            .into(),
+        )));
+        let client = Cached::with_options(
+            cache,
+            transport.clone(),
+            Options {
+                credentials: vec![entry],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        client.get(PUBLIC, "application/json").await.unwrap();
+        assert!(
+            client
+                .revalidating()
+                .get(PUBLIC, "application/json")
+                .await
+                .is_err()
+        );
         assert!(transport.0.lock().unwrap().is_empty());
     }
 }

@@ -179,8 +179,43 @@ registries {
 A dependency's source decides where its versions come from. Helm repositories,
 OCI and Docker registries, Maven repositories and GitLab, Gitea or Forgejo tags carry
 their URL, so a private one works with an entry. npm, PyPI and the other package
-registries still read only their public registry. Lockfile tools get no
-registry credentials yet.
+registries still read their public registry, or its mirror. Lockfile tools get
+no registry credentials yet.
+
+### Mirrors
+
+Where the public registries are out of reach, or should only be read through
+a proxy such as an Artifactory remote repository or a Nexus proxy, an entry
+can stand in for one with `mirrorOf`:
+
+```pkl
+registries {
+  ["https://acme.jfrog.io/artifactory/api/npm/npm-remote"] {
+    auth = "bearer"
+    secret { env = "ARTIFACTORY_TOKEN" }
+    mirrorOf = "https://registry.npmjs.org"
+  }
+  ["https://nexus.acme.dev/repository/pypi-proxy/simple"] {
+    mirrorOf = "https://pypi.org/simple"
+  }
+}
+```
+
+- A request under the `mirrorOf` prefix goes to the entry's prefix instead,
+  with the rest of the URL unchanged, and carries the entry's credentials if it
+  has `auth`. An entry without `auth` sends none.
+- There is no fallback: when the mirror fails, the lookup fails.
+- Dependencies keep their public identity, so branches, rules and the
+  dashboard do not change when a mirror is added or removed. Responses are
+  cached under the mirror's entry.
+- The mirror must serve the same paths as the registry it stands in for. A
+  mirror that serves only part of an API, such as PyPI's simple index but not
+  its JSON API, covers only the prefix it names; the rest is still read from
+  the public registry.
+- Container registries are not mirrored: their token services belong to the
+  registry's own host.
+- Release notes and advisories come from GitHub and OSV.dev, not the registry,
+  and are not mirrored.
 
 ## Dates and release age
 
