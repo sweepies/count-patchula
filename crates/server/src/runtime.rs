@@ -420,7 +420,7 @@ impl Batch for Engines {
                 return Ok(BatchOutcome::default());
             }
             let started = Utc::now();
-            let (result, shown) = {
+            let (result, withheld) = {
                 let mut engines = self.engines.lock().await;
                 let engine = self.engine(&mut engines, id, settings)?;
                 let result = engine
@@ -433,20 +433,20 @@ impl Batch for Engines {
                         false,
                     )
                     .await;
-                let shown = result.as_ref().ok().map(|report| {
-                    crate::public::public_view(report, |source, package| {
+                let withheld = result.as_ref().ok().map(|report| {
+                    crate::public::withheld(report, |source, package| {
                         engine.credentialed(source, package)
                     })
                 });
-                (result, shown)
+                (result, withheld)
             };
-            if let Some(report) = &shown {
+            if let (Ok(report), Some(withheld)) = (&result, withheld) {
                 crate::public::record(
                     &self.cache,
                     &client,
                     &self.bot_login,
                     id,
-                    report,
+                    &crate::public::Recorded { report, withheld },
                     started,
                     &self.member(id),
                 )
@@ -558,7 +558,7 @@ impl crate::remote::Runner for Engines {
         use crate::remote::Mode;
         Box::pin(async move {
             let started = Utc::now();
-            let (report, shown) = {
+            let (report, withheld) = {
                 // The same lock as queued batches, so a remote run never races one.
                 let mut engines = self.engines.lock().await;
                 let engine = self
@@ -574,10 +574,10 @@ impl crate::remote::Runner for Engines {
                     Mode::Run => engine.run(options, false, false).await,
                 }
                 .map_err(|_| "the run failed on the server")?;
-                let shown = crate::public::public_view(&report, |source, package| {
+                let withheld = crate::public::withheld(&report, |source, package| {
                     engine.credentialed(source, package)
                 });
-                (report, shown)
+                (report, withheld)
             };
             if mode == Mode::Run {
                 if let Ok(client) = Client::with_credentials(
@@ -591,7 +591,10 @@ impl crate::remote::Runner for Engines {
                         &client,
                         &self.bot_login,
                         installation,
-                        &shown,
+                        &crate::public::Recorded {
+                            report: &report,
+                            withheld,
+                        },
                         started,
                         &self.member(installation),
                     )
