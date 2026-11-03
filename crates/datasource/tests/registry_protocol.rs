@@ -1322,3 +1322,49 @@ async fn a_token_service_entry_alone_never_mints_account_tokens() {
     .unwrap();
     assert!(steps.0.lock().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn a_self_hosted_gitlab_registry_uses_its_token_service_entry() {
+    let manifest = "https://registry.gitlab.acme.dev/v2/team/app/manifests/1.0";
+    let realm = "https://gitlab.acme.dev/jwt/auth";
+    let digest = format!("sha256:{}", "e".repeat(64));
+    let steps = Arc::new(AuthSteps(Mutex::new(VecDeque::from([
+        (
+            manifest.to_owned(),
+            Some("Basic cmVnOnJlZy1zZWNyZXQ=".to_owned()),
+            response(
+                401,
+                "",
+                &[(
+                    "www-authenticate",
+                    &format!(r#"Bearer realm="{realm}",service="container_registry""#),
+                )],
+            ),
+        ),
+        // The token service has its own entry, so its credentials are sent.
+        (
+            format!("{realm}?service=container_registry&scope=repository%3Ateam%2Fapp%3Apull"),
+            Some("Basic Y2k6aHVudGVyMg==".to_owned()),
+            response(200, r#"{"token":"account","expires_in":300}"#, &[]),
+        ),
+        (
+            manifest.to_owned(),
+            Some("Bearer account".to_owned()),
+            response(200, "", &[("docker-content-digest", digest.as_str())]),
+        ),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    auth_client_with(
+        steps.clone(),
+        dir.path(),
+        vec![
+            basic("https://registry.gitlab.acme.dev", "reg", "reg-secret"),
+            basic("https://gitlab.acme.dev/jwt/auth", "ci", "hunter2"),
+        ],
+    )
+    .await
+    .registry_digest("registry.gitlab.acme.dev/team/app", "1.0")
+    .await
+    .unwrap();
+    assert!(steps.0.lock().unwrap().is_empty());
+}

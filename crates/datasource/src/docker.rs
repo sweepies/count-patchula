@@ -233,7 +233,7 @@ impl Client {
                     .as_ref()
                     .and_then(|entry| realm_entry.as_ref().or(trusted_realm.then_some(entry)));
                 let credentials = match source.map(|entry| &entry.auth) {
-                    Some(patchula_http::Auth::Basic { username, password }) if trusted_realm => {
+                    Some(patchula_http::Auth::Basic { username, password }) => {
                         Some((username.as_str(), password.as_str()))
                     }
                     _ => None,
