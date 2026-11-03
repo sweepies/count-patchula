@@ -177,6 +177,24 @@ impl Client {
             .cloned()
             .unwrap_or_default()
     }
+    /// Whether looking up `package` reads a registry with an operator entry's
+    /// credentials, so that what it finds may be private. Only sources that
+    /// carry their registry's URL can reach one.
+    pub fn credentialed(&self, source: Source, package: &str) -> bool {
+        let url = match source {
+            Source::Docker | Source::Oci => docker::identity(package)
+                .ok()
+                .map(|(host, path)| format!("https://{host}/v2/{path}/tags/list")),
+            Source::Helm => package
+                .rsplit_once('|')
+                .map(|(repo, _)| format!("{}/index.yaml", repo.trim_end_matches('/'))),
+            Source::Maven => maven::metadata_url(package),
+            Source::ForgeTags => forge::tags_url(package),
+            _ => None,
+        };
+        url.and_then(|url| self.http.credential(&url))
+            .is_some_and(|entry| entry.auth != patchula_http::Auth::Withheld)
+    }
     pub async fn lookup(&self, source: Source, package: &str) -> Result<Catalog> {
         // A flake reference is a URL with a query; the runner checks its scheme.
         if source != Source::Nix

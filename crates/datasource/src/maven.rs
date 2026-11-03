@@ -55,10 +55,26 @@ fn versions(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheEr
     serde_json::to_vec(&versions).map_err(|_| patchula_http::CacheError::Document)
 }
 
+/// The directory holding an artifact's `maven-metadata.xml`.
+fn base(package: &str) -> Result<String> {
+    let (repository, group, artifact) = coordinates(package)?;
+    Ok(format!(
+        "{repository}/{}/{artifact}",
+        group.replace('.', "/")
+    ))
+}
+
+/// The URL a Maven lookup of `package` reads.
+pub(crate) fn metadata_url(package: &str) -> Option<String> {
+    base(package)
+        .ok()
+        .map(|base| format!("{base}/maven-metadata.xml"))
+}
+
 impl Client {
     pub(crate) async fn maven(&self, package: &str) -> Result<Catalog> {
-        let (repository, group, artifact) = coordinates(package)?;
-        let base = format!("{repository}/{}/{artifact}", group.replace('.', "/"));
+        let (_, _, artifact) = coordinates(package)?;
+        let base = base(package)?;
         let response = self
             .http
             .get_derived(

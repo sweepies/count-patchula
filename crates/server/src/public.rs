@@ -164,6 +164,35 @@ struct Summary<'a> {
 pub(crate) type Member =
     dyn Fn(String) -> futures_util::future::BoxFuture<'static, bool> + Send + Sync;
 
+/// What the public API may show of `report`: everything except what lookups
+/// made with registry credentials found, since that may be private. Such a
+/// dependency keeps what the repository declares, but loses its updates,
+/// held-back releases, lookup evidence, tag digests and image checks.
+/// `credentialed` answers by a dependency's source word and package.
+pub(crate) fn public_view(report: &Report, credentialed: impl Fn(&str, &str) -> bool) -> Report {
+    let mut report = report.clone();
+    for dep in report
+        .repositories
+        .iter_mut()
+        .flat_map(|repo| &mut repo.package_files)
+        .flat_map(|file| &mut file.dependencies)
+    {
+        let Some(meta) = dep.metadata.as_mut() else {
+            continue;
+        };
+        if !credentialed(&meta.source, &dep.package) {
+            continue;
+        }
+        dep.updates.clear();
+        meta.held_back.clear();
+        meta.stale.clear();
+        meta.tag_digests.clear();
+        meta.lookup = None;
+        meta.image = None;
+    }
+    report
+}
+
 /// Most open PRs read for one repository.
 const PULL_PAGES: u32 = 10;
 

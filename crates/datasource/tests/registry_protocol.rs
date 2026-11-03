@@ -1368,3 +1368,52 @@ async fn a_self_hosted_gitlab_registry_uses_its_token_service_entry() {
     .unwrap();
     assert!(steps.0.lock().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn credentialed_names_lookups_that_read_a_registry_with_an_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let withheld = patchula_http::Credential::new(
+        "https://acme.jfrog.io/withheld",
+        patchula_http::Auth::Withheld,
+    )
+    .unwrap();
+    let client = auth_client_with(
+        Arc::new(AuthSteps(Mutex::new(VecDeque::new()))),
+        dir.path(),
+        vec![
+            basic("https://acme.jfrog.io", "ci", "hunter2"),
+            basic("https://gitlab.acme.dev", "ci", "hunter2"),
+            withheld,
+        ],
+    )
+    .await;
+    for (source, package, expected) in [
+        (
+            Source::Helm,
+            "https://acme.jfrog.io/artifactory/api/helm/charts|app",
+            true,
+        ),
+        (Source::Docker, "acme.jfrog.io/team/app", true),
+        (Source::Oci, "acme.jfrog.io/charts/app", true),
+        (
+            Source::Maven,
+            "https://acme.jfrog.io/maven|com.acme:lib",
+            true,
+        ),
+        (Source::ForgeTags, "gitlab.acme.dev/team/tool", true),
+        (
+            Source::Helm,
+            "https://acme.jfrog.io/withheld/charts|app",
+            false,
+        ),
+        (Source::Docker, "ghcr.io/team/app", false),
+        (Source::Helm, "https://charts.example.com|app", false),
+        (Source::Npm, "acme.jfrog.io", false),
+    ] {
+        assert_eq!(
+            client.credentialed(source, package),
+            expected,
+            "{source:?} {package}"
+        );
+    }
+}

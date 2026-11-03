@@ -63,12 +63,10 @@ A `registries` key is an https URL prefix without a user, query or fragment.
 Set exactly one of `secret.env` and `secret.file`. The settings file names
 where a secret lives, never the secret.
 
-Versions read with credentials appear in reports like any others, including the
-server's [repository API](/guide/server/#repository-api) for a public
-repository. Leave such a repository's installation out of `allowedInstallations`,
-or turn `publicApi` off, before its first credentialed run if those versions
-must stay private: either change stops future reads, but does not remove what
-the API already shows from earlier runs.
+The server's [repository API](/guide/server/#repository-api) hides what lookups
+made with credentials found, as described there. Reports, pull requests and
+the dashboard issue are unchanged: in a public repository those are public on
+GitHub anyway.
 
 ## Server
 
