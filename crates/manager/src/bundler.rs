@@ -418,6 +418,7 @@ enum Token {
 fn tokens(line: &str) -> Option<Vec<Token>> {
     let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
     let bytes = line.as_bytes();
+    let len = bytes.len();
     let mut out = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
@@ -454,7 +455,7 @@ fn tokens(line: &str) -> Option<Vec<Token>> {
             {
                 let end = (i + 1..bytes.len())
                     .find(|&j| !word(bytes[j]))
-                    .unwrap_or(bytes.len());
+                    .unwrap_or(len);
                 out.push(Token::Sym(line[i + 1..end].to_owned()));
                 i = end;
             }
@@ -473,9 +474,7 @@ fn tokens(line: &str) -> Option<Vec<Token>> {
                 i = end + 1;
             }
             b if b.is_ascii_alphabetic() || b == b'_' => {
-                let end = (i..bytes.len())
-                    .find(|&j| !word(bytes[j]))
-                    .unwrap_or(bytes.len());
+                let end = (i..bytes.len()).find(|&j| !word(bytes[j])).unwrap_or(len);
                 let name = line[i..end].to_owned();
                 if bytes.get(end) == Some(&b':') && bytes.get(end + 1) != Some(&b':') {
                     out.push(Token::Key(name));

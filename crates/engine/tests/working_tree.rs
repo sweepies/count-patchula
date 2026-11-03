@@ -145,7 +145,7 @@ fn a_symlinked_settings_file_is_unreadable_not_absent() {
         "config/bundle",
         "BUNDLE_MIRROR__ALL: \"https://gems.acme.dev\"\n",
     );
-    std::fs::create_dir(root.join(".bundle")).unwrap();
+    std::fs::create_dir_all(root.join(".bundle")).unwrap();
     std::os::unix::fs::symlink("../config/bundle", root.join(".bundle/config")).unwrap();
     // A linked `.bundle` directory, which Git lists as one path.
     write(
