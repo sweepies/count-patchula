@@ -201,15 +201,26 @@ dependency's `registry`:
 - Python packages come from the index the project pins them to, else the one
   their lockfile records, else the only index the project names:
   - pip requirements files: `--index-url` (or `-i`) replaces PyPI;
-    `--extra-index-url` adds an index.
+    `--extra-index-url` adds an index, and `--find-links` a source that is
+    not an index. As in one pip run, the options of files that include each
+    other with `-r` or `-c` apply to all of them. With `--no-index`, nothing
+    comes from an index, so no lookup runs.
   - uv: `[[tool.uv.index]]` (a `default` one replaces PyPI, an `explicit` one
-    serves only packages pinned to it), `index-url`, `extra-index-url`, and
-    pins in `[tool.uv.sources]`. A `uv.toml` at or above the project replaces
-    `[tool.uv]`.
-  - Poetry: `[[tool.poetry.source]]` (`primary` replaces PyPI, `supplemental`
-    adds an index, `explicit` serves only pinned packages) and a dependency's
-    `source`.
-  - `uv.lock` and `poetry.lock` record each package's index.
+    serves only packages pinned to it), `index-url` and `extra-index-url`,
+    from the nearest `uv.toml`, or `pyproject.toml` with `[tool.uv]`, at or
+    above the project. Pins in `[tool.uv.sources]` come from the project and
+    its workspace root. A marker-split pin to several indexes is ambiguous.
+  - Poetry: `[[tool.poetry.source]]` (`primary` replaces PyPI, and more than
+    one is ambiguous; `supplemental` adds an index; `explicit` serves only
+    pinned packages; a source named PyPI without a URL is PyPI) and a
+    dependency's `source`, matched without regard to case.
+  - `uv.lock` and `poetry.lock` record each package's index. Only the
+    project's own lockfile counts, or its uv workspace root's. A package whose
+    entries disagree is ambiguous.
+
+  A package from git, a path, a URL or a workspace member, by pin or by
+  lockfile, is not looked up at all: its name on PyPI may be someone else's.
+  A pin to an index the project does not define fails its lookup.
 
   A package that is pinned nowhere and unlocked, in a project that names an
   index besides PyPI, could come from either. pip would take the highest

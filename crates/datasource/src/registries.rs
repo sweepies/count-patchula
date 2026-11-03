@@ -180,19 +180,83 @@ pub(super) fn normalize_python(package: &str) -> Result<String> {
     }
     Ok(out)
 }
-/// The files of a PEP 503 HTML simple page: each anchor's text, and whether it
-/// carries `data-yanked`.
+/// `text` with the character references a PEP 503 page uses decoded.
+fn unescape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find('&') {
+        out.push_str(&rest[..start]);
+        rest = &rest[start..];
+        let Some(end) = rest.find(';').filter(|end| *end <= 10) else {
+            out.push('&');
+            rest = &rest[1..];
+            continue;
+        };
+        let entity = &rest[1..end];
+        let decoded = match entity {
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            _ => entity
+                .strip_prefix("#x")
+                .or_else(|| entity.strip_prefix("#X"))
+                .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+                .or_else(|| entity.strip_prefix('#').and_then(|n| n.parse().ok()))
+                .and_then(char::from_u32),
+        };
+        match decoded {
+            Some(c) => {
+                out.push(c);
+                rest = &rest[end + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The files of a PEP 503 HTML simple page: each anchor's text, and whether
+/// it carries `data-yanked`. Tags are matched without regard to case, and a
+/// `>` inside a quoted attribute value does not end one.
 fn html_files(body: &[u8]) -> std::result::Result<Vec<(String, bool)>, CacheError> {
     let text = std::str::from_utf8(body).map_err(|_| CacheError::Document)?;
+    let lower = text.to_ascii_lowercase();
     let mut files = Vec::new();
-    for anchor in text.split("<a ").skip(1) {
-        let Some((attributes, rest)) = anchor.split_once('>') else {
+    let mut at = 0;
+    while let Some(found) = lower[at..].find("<a") {
+        let start = at + found + 2;
+        at = start;
+        if !lower[start..].starts_with(|c: char| c.is_ascii_whitespace() || c == '>') {
             continue;
+        }
+        // The end of the tag, outside quotes.
+        let mut quote = None;
+        let mut end = None;
+        for (offset, c) in lower[start..].char_indices() {
+            match (quote, c) {
+                (Some(q), c) if c == q => quote = None,
+                (None, '"' | '\'') => quote = Some(c),
+                (None, '>') => {
+                    end = Some(start + offset);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let Some(end) = end else { break };
+        let Some(close) = lower[end..].find("</a>") else {
+            break;
         };
-        let Some((name, _)) = rest.split_once("</a>") else {
-            continue;
-        };
-        files.push((name.trim().to_owned(), attributes.contains("data-yanked")));
+        let attributes = &lower[start..end];
+        let name = unescape(text[end + 1..end + close].trim());
+        files.push((name, attributes.contains("data-yanked")));
+        at = end + close;
     }
     Ok(files)
 }

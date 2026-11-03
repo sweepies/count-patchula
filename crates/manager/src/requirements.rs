@@ -1,6 +1,6 @@
 use crate::*;
 use regex::Regex;
-pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
+pub(super) fn extract(path: &str, text: &str, files: &Files) -> Result<Vec<Dependency>, String> {
     let pattern = Regex::new(r"(?m)^\s*(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]\n]+\])?\s*(?P<version>(?:===|==|~=|!=|<=|>=|<|>)[^;#\\\n]+)").map_err(|e|e.to_string())?;
     let mut out = Vec::new();
     for c in pattern.captures_iter(text) {
@@ -43,6 +43,6 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
         });
     }
     // Without a lockfile, a requirements file pins nothing to an index.
-    crate::pypi::requirements(text).assign(&mut out, |_| None);
+    crate::pypi::requirements(path, files).assign(&mut out, |_| None);
     Ok(out)
 }

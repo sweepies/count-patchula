@@ -2573,3 +2573,122 @@ priority = "supplemental"
     );
     assert_eq!(registry("configured/pyproject.toml", "numpy"), acme);
 }
+
+#[test]
+fn python_pins_lockfiles_includes_and_workspaces_follow_the_tools() {
+    let files = Files::from([
+        // A uv.toml changes index settings but never the project's pins.
+        (
+            "pinned/pyproject.toml".into(),
+            r#"[project]
+name = "pinned"
+dependencies = ["acme-core>=1", "acme-internal>=1", "acme-split>=1", "acme-typo>=1"]
+[[tool.uv.index]]
+name = "acme"
+url = "https://pypi.acme.dev/simple"
+explicit = true
+[[tool.uv.index]]
+name = "other"
+url = "https://other.acme.dev/simple"
+explicit = true
+[tool.uv.sources]
+acme-core = { index = "acme" }
+acme-internal = { git = "https://github.com/acme/internal" }
+acme-split = [
+  { index = "acme", marker = "sys_platform == 'linux'" },
+  { index = "other", marker = "sys_platform == 'darwin'" },
+]
+acme-typo = { index = "acmee" }
+"#
+            .into(),
+        ),
+        ("pinned/uv.toml".into(), "native-tls = true\n".into()),
+        // Poetry names are case-insensitive; a URL-less PyPI source is PyPI.
+        (
+            "poetry/pyproject.toml".into(),
+            r#"[tool.poetry.dependencies]
+python = "^3.12"
+acme-auth = { version = "^2.0", source = "Acme" }
+django = "^5.0"
+[[tool.poetry.source]]
+name = "acme"
+url = "https://pypi.acme.dev/simple/"
+priority = "primary"
+[[tool.poetry.source]]
+name = "PyPI"
+priority = "primary"
+"#
+            .into(),
+        ),
+        // A uv workspace member inherits its root's default index.
+        (
+            "ws/pyproject.toml".into(),
+            "[project]\nname = \"ws\"\n[tool.uv.workspace]\nmembers = [\"packages/*\"]\n[[tool.uv.index]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\ndefault = true\n".into(),
+        ),
+        (
+            "ws/packages/lib/pyproject.toml".into(),
+            "[project]\nname = \"lib\"\ndependencies = [\"requests>=2\"]\n".into(),
+        ),
+        // A lock above that belongs to another project is not this one's.
+        (
+            "other/uv.lock".into(),
+            "version = 1\n[[package]]\nname = \"acme-lib\"\nversion = \"1.0.0\"\nsource = { registry = \"https://pypi.org/simple\" }\n".into(),
+        ),
+        (
+            "other/sub/pyproject.toml".into(),
+            "[project]\nname = \"sub\"\ndependencies = [\"acme-lib>=1\"]\n[tool.uv]\nindex-url = \"https://pypi.acme.dev/simple\"\n".into(),
+        ),
+        // pip reads index options across included files.
+        (
+            "reqs/requirements.txt".into(),
+            "--index-url https://pypi.acme.dev/simple\nrequests==2.31.0\n".into(),
+        ),
+        (
+            "reqs/requirements-dev.txt".into(),
+            "-r requirements.txt\nacme-testkit==1.2.0\n".into(),
+        ),
+        (
+            "links/requirements.txt".into(),
+            "--find-links https://wheels.acme.dev/\nacme-wheel==1.0.0\n".into(),
+        ),
+        (
+            "offline/requirements.txt".into(),
+            "--no-index\n--find-links ./wheels\nacme-offline==1.0.0\n".into(),
+        ),
+    ]);
+    let mut config = config();
+    config.managers = vec![Manager::Requirements, Manager::Pyproject];
+    let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+    let dep = |file: &str, name: &str| {
+        extraction
+            .dependencies
+            .iter()
+            .find(|d| d.file == file && d.name == name)
+            .map(|d| d.registry.clone())
+    };
+    let acme = Some(Some("https://pypi.acme.dev/simple".to_owned()));
+    assert_eq!(dep("pinned/pyproject.toml", "acme-core"), acme);
+    // Not from an index: left alone rather than looked up on PyPI.
+    assert_eq!(dep("pinned/pyproject.toml", "acme-internal"), None);
+    let ambiguous = |found: Option<Option<String>>| {
+        found
+            .flatten()
+            .is_some_and(|r| r.starts_with("ambiguous: "))
+    };
+    assert!(ambiguous(dep("pinned/pyproject.toml", "acme-split")));
+    assert_eq!(
+        dep("pinned/pyproject.toml", "acme-typo"),
+        Some(Some("index acmee".to_owned()))
+    );
+    assert_eq!(dep("poetry/pyproject.toml", "acme-auth"), acme);
+    // Two primary sources, PyPI among them, could each serve it.
+    assert!(ambiguous(dep("poetry/pyproject.toml", "django")));
+    assert_eq!(dep("ws/packages/lib/pyproject.toml", "requests"), acme);
+    assert_eq!(dep("other/sub/pyproject.toml", "acme-lib"), acme);
+    assert_eq!(dep("reqs/requirements-dev.txt", "acme-testkit"), acme);
+    assert!(ambiguous(dep("links/requirements.txt", "acme-wheel")));
+    assert_eq!(
+        dep("offline/requirements.txt", "acme-offline"),
+        Some(Some("--no-index --find-links ./wheels".to_owned()))
+    );
+}

@@ -526,7 +526,7 @@ impl Scanner {
             } else if self.selected(Manager::Pyproject, path) {
                 pyproject::extract(path, text, files)
             } else if self.selected(Manager::Requirements, path) {
-                requirements::extract(path, text)
+                requirements::extract(path, text, files)
             } else {
                 Ok(Vec::new())
             };
