@@ -560,6 +560,7 @@ impl Scanner {
                 .locked
                 .extend(locked::npm(files, &locks, &result.dependencies));
         }
+        npm::assign_locked_registries(&mut result.locked, &npmrcs);
         Ok(result)
     }
 }

@@ -205,8 +205,17 @@ impl Client {
             Source::ForgeTags => forge::tags_url(package),
             _ => None,
         };
-        url.and_then(|url| self.http.credential(&url))
-            .is_some_and(|entry| entry.auth.sends())
+        // Container registry reads are never mirrored; other reads are, so a
+        // public URL behind a credentialed mirror counts.
+        let mirrored = !matches!(source, Source::Docker | Source::Oci);
+        url.and_then(|url| {
+            if mirrored {
+                self.http.read_credential(&url)
+            } else {
+                self.http.credential(&url)
+            }
+        })
+        .is_some_and(|entry| entry.auth.sends())
     }
     /// The versions of `package`, from `registry` when it is given: an https
     /// URL standing in for the source's public registry. Only npm takes one.
@@ -219,6 +228,11 @@ impl Client {
         if registry.is_some_and(|registry| {
             source != Source::Npm || patchula_http::url_prefix(registry).is_none()
         }) {
+            return Err(Error::Invalid);
+        }
+        // npm names are URL-safe; an escape could reach another path on a
+        // registry that decodes it.
+        if source == Source::Npm && package.contains(['%', ' ']) {
             return Err(Error::Invalid);
         }
         // A flake reference is a URL with a query; the runner checks its scheme.

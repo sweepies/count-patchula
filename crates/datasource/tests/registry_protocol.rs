@@ -1451,3 +1451,30 @@ async fn an_npm_package_is_read_from_its_own_registry_with_its_credentials() {
         assert!(client.lookup(source, Some(registry), "x").await.is_err());
     }
 }
+
+#[tokio::test]
+async fn escaped_npm_names_are_refused_and_mirrored_reads_count_as_credentialed() {
+    let dir = tempfile::tempdir().unwrap();
+    let mirror = basic("https://acme.jfrog.io/api/npm/npm-remote", "ci", "hunter2")
+        .mirroring("https://registry.npmjs.org")
+        .unwrap();
+    let client = auth_client_with(
+        Arc::new(AuthSteps(Mutex::new(VecDeque::new()))),
+        dir.path(),
+        vec![mirror, basic("https://npm.acme.dev", "ci", "hunter2")],
+    )
+    .await;
+    // An escape stays one URL segment here, but a registry that decodes it
+    // could serve another path under the same credentials.
+    for package in ["@x/..%2f..%2fother", "a b"] {
+        assert!(
+            client
+                .lookup(Source::Npm, Some("https://npm.acme.dev/repo"), package)
+                .await
+                .is_err(),
+            "{package}"
+        );
+    }
+    // A public package read through a credentialed mirror may be private.
+    assert!(client.credentialed(Source::Npm, None, "react"));
+}

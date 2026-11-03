@@ -2287,6 +2287,17 @@ fn npm_dependencies_take_their_registry_from_the_nearest_npmrc_or_yarnrc() {
             r#"{"dependencies":{"react":"^18.0.0","@acme/ui":"^1.0.0","@env/x":"1.0.0","@plain/y":"1.0.0"},"packageManager":"pnpm@9.0.0"}"#.into(),
         ),
         ("tools/package.json".into(), r#"{"dependencies":{"@acme/cli":"2.0.0"}}"#.into()),
+        // A file that names no registry does not hide the root's.
+        ("tools/.npmrc".into(), "save-exact=true\n".into()),
+        (
+            "berry/.yarnrc.yml".into(),
+            "npmRegistryServer: \"https://registry.yarnpkg.com\"\n".into(),
+        ),
+        ("berry/package.json".into(), r#"{"dependencies":{"left-pad":"1.0.0"}}"#.into()),
+        (
+            "package-lock.json".into(),
+            r#"{"lockfileVersion":3,"packages":{"":{"dependencies":{"@acme/ui":"^1.0.0"}},"node_modules/@acme/ui":{"version":"1.0.0"},"node_modules/@acme/core":{"version":"0.5.0"}}}"#.into(),
+        ),
         (
             "yarn/.yarnrc.yml".into(),
             "npmRegistryServer: \"https://registry.npmjs.org\"\nnpmScopes:\n  acme:\n    npmRegistryServer: \"https://yarn.acme.dev/npm\"\n".into(),
@@ -2311,15 +2322,26 @@ fn npm_dependencies_take_their_registry_from_the_nearest_npmrc_or_yarnrc() {
         Some("https://npm.acme.dev")
     );
     assert_eq!(registry("package.json", "@acme/ui"), acme);
-    // Values from the environment and plain HTTP fall back to `registry=`.
+    // Values the Count cannot read from are kept as written, so those
+    // lookups fail instead of reading the public package of the name.
     assert_eq!(
         registry("package.json", "@env/x").as_deref(),
-        Some("https://npm.acme.dev")
+        Some("${PRIVATE_REGISTRY}")
     );
     assert_eq!(
         registry("package.json", "@plain/y").as_deref(),
-        Some("https://npm.acme.dev")
+        Some("http://insecure.acme.dev")
     );
+    // Yarn's registry serves the public packages.
+    assert_eq!(registry("berry/package.json", "left-pad"), None);
+    // A package only the lockfile records is looked up where its scope is.
+    let core = extraction
+        .locked
+        .iter()
+        .find(|l| l.package == "@acme/core")
+        .unwrap();
+    assert_eq!(core.registry, acme);
+    assert_eq!(core.dependency().registry, acme);
     // Corepack does not read .npmrc.
     assert_eq!(registry("package.json", "pnpm"), None);
     // A manifest below reads the nearest .npmrc above it.
@@ -2350,7 +2372,7 @@ fn extractors_can_name_a_registry_from_a_capture() {
     });
     let files = Files::from([(
         "deploy/versions.txt".into(),
-        "@acme/ui=1.2.3 registry=https://npm.acme.dev/\n@acme/cli=2.0.0\n".into(),
+        "@acme/ui=1.2.3 registry=https://npm.acme.dev/\n@acme/cli=2.0.0\n@acme/old=1.0.0 registry=http://old.acme.dev\n".into(),
     )]);
     let deps = Scanner::new(&config)
         .unwrap()
@@ -2370,4 +2392,10 @@ fn extractors_can_name_a_registry_from_a_capture() {
     );
     // An empty capture means the source's public registry.
     assert_eq!(registry("@acme/cli"), None);
+    // A value the Count cannot read from is kept, so its lookup fails
+    // instead of the whole extraction.
+    assert_eq!(
+        registry("@acme/old").as_deref(),
+        Some("http://old.acme.dev")
+    );
 }

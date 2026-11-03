@@ -391,21 +391,65 @@ pub(super) fn node_version(path: &str, text: &str, manager: Manager) -> Vec<Depe
     }]
 }
 
-/// The registries a project's `.npmrc` names: `registry=` and
-/// `@scope:registry=`. Values npm would expand from the environment are
-/// ignored, and so is anything but an https URL.
+/// What a registry setting names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Named {
+    /// npm's or Yarn's public registry, which serve the same packages.
+    Public,
+    Url(String),
+    /// A value the Count cannot read from, such as `${VAR}` or plain http,
+    /// kept as written. Its packages are never looked up on the public
+    /// registry instead, where the same name may be someone else's.
+    Unusable(String),
+}
+
+/// Whether `url` is on npm's or Yarn's public registry host.
+fn public(url: &str) -> bool {
+    let host = url
+        .strip_prefix("https://")
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let host = host.strip_suffix(":443").unwrap_or(&host);
+    matches!(host, "registry.npmjs.org" | "registry.yarnpkg.com")
+}
+
+fn named(value: &str) -> Named {
+    let raw = value.trim().trim_matches(['"', '\'']);
+    match crate::registry_url(raw) {
+        Some(url) if public(&url) => Named::Public,
+        Some(url) => Named::Url(url),
+        None => Named::Unusable(raw.to_owned()),
+    }
+}
+
+/// The registry a dependency records for a setting: none for the public one.
+fn recorded(named: &Named) -> Option<String> {
+    match named {
+        Named::Public => None,
+        Named::Url(value) | Named::Unusable(value) => Some(value.clone()),
+    }
+}
+
+/// An npm registry an extractor names, as a dependency records it.
+pub(super) fn extracted_registry(value: &str) -> Option<String> {
+    recorded(&named(value))
+}
+
+/// The registries a project's `.npmrc` or `.yarnrc.yml` names.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct Npmrc {
-    default: Option<String>,
-    scopes: BTreeMap<String, String>,
+    default: Option<Named>,
+    scopes: BTreeMap<String, Named>,
 }
 
-/// An npm registry URL, normalised. npm's public registry is no registry of
-/// its own.
-fn registry_url(value: &str) -> Option<String> {
-    crate::registry_url(value).filter(|url| url != "https://registry.npmjs.org")
+impl Npmrc {
+    fn names_any(&self) -> bool {
+        self.default.is_some() || !self.scopes.is_empty()
+    }
 }
 
+/// `registry=` and `@scope:registry=` from an `.npmrc`.
 pub(super) fn npmrc(text: &str) -> Npmrc {
     let mut npmrc = Npmrc::default();
     for line in text.lines() {
@@ -417,23 +461,20 @@ pub(super) fn npmrc(text: &str) -> Npmrc {
             continue;
         };
         let key = key.trim();
-        let Some(url) = registry_url(value) else {
-            continue;
-        };
         if key == "registry" {
-            npmrc.default = Some(url);
+            npmrc.default = Some(named(value));
         } else if let Some(scope) = key.strip_suffix(":registry")
             && scope.starts_with('@')
             && scope.len() > 1
         {
-            npmrc.scopes.insert(scope.to_owned(), url);
+            npmrc.scopes.insert(scope.to_owned(), named(value));
         }
     }
     npmrc
 }
 
-/// The registries Yarn Berry's `.yarnrc.yml` names: `npmRegistryServer`, at
-/// the top level and under `npmScopes`.
+/// Yarn Berry's `npmRegistryServer` in `.yarnrc.yml`, at the top level and
+/// under `npmScopes`.
 pub(super) fn yarnrc(text: &str) -> Npmrc {
     let mut npmrc = Npmrc::default();
     let Ok(value) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(text) else {
@@ -443,7 +484,7 @@ pub(super) fn yarnrc(text: &str) -> Npmrc {
         value
             .get("npmRegistryServer")
             .and_then(serde_yaml_ng::Value::as_str)
-            .and_then(registry_url)
+            .map(named)
     };
     npmrc.default = server(&value);
     if let Some(scopes) = value
@@ -451,10 +492,10 @@ pub(super) fn yarnrc(text: &str) -> Npmrc {
         .and_then(serde_yaml_ng::Value::as_mapping)
     {
         for (scope, settings) in scopes {
-            if let (Some(scope), Some(url)) = (scope.as_str(), server(settings))
+            if let (Some(scope), Some(named)) = (scope.as_str(), server(settings))
                 && !scope.is_empty()
             {
-                npmrc.scopes.insert(format!("@{scope}"), url);
+                npmrc.scopes.insert(format!("@{scope}"), named);
             }
         }
     }
@@ -462,7 +503,8 @@ pub(super) fn yarnrc(text: &str) -> Npmrc {
 }
 
 /// The registries each directory's `.npmrc` and `.yarnrc.yml` name, keyed by
-/// directory ("" at the root). Where both name one, Yarn's wins.
+/// directory ("" at the root). A file that names none is left out, so it
+/// does not hide one further up. Where both files name the same, Yarn's wins.
 pub(super) fn npmrcs(files: &crate::Files) -> BTreeMap<&str, Npmrc> {
     let mut found: BTreeMap<&str, Npmrc> = BTreeMap::new();
     for (leaf, parse) in [
@@ -476,6 +518,9 @@ pub(super) fn npmrcs(files: &crate::Files) -> BTreeMap<&str, Npmrc> {
                 _ => continue,
             };
             let read = parse(text);
+            if !read.names_any() {
+                continue;
+            }
             let entry = found.entry(directory).or_default();
             if read.default.is_some() {
                 entry.default = read.default;
@@ -486,33 +531,51 @@ pub(super) fn npmrcs(files: &crate::Files) -> BTreeMap<&str, Npmrc> {
     found
 }
 
-/// Look each npm dependency up in the registry the nearest `.npmrc` at or
-/// above its file names for its scope, or for everything. `packageManager`
-/// stays on the public registry, since Corepack does not read `.npmrc`.
+/// The registry for `package` in `file`: the nearest setting for its scope at
+/// or above the file, else the nearest `registry=` there.
+fn registry_for(file: &str, package: &str, npmrcs: &BTreeMap<&str, Npmrc>) -> Option<String> {
+    let mut directories = Vec::new();
+    let mut directory = file.rsplit_once('/').map_or("", |(d, _)| d);
+    loop {
+        directories.push(directory);
+        if directory.is_empty() {
+            break;
+        }
+        directory = directory.rsplit_once('/').map_or("", |(d, _)| d);
+    }
+    let settings: Vec<&Npmrc> = directories.iter().filter_map(|d| npmrcs.get(d)).collect();
+    let scope = package
+        .split_once('/')
+        .map(|(scope, _)| scope)
+        .filter(|scope| scope.starts_with('@'));
+    let named = scope
+        .and_then(|scope| settings.iter().find_map(|s| s.scopes.get(scope)))
+        .or_else(|| settings.iter().find_map(|s| s.default.as_ref()))?;
+    recorded(named)
+}
+
+/// Look each npm dependency up in the registry its `.npmrc` or `.yarnrc.yml`
+/// names. `packageManager` stays on the public registry, since Corepack does
+/// not read them.
 pub(super) fn assign_registries(deps: &mut [Dependency], npmrcs: &BTreeMap<&str, Npmrc>) {
     for dep in deps
         .iter_mut()
         .filter(|dep| dep.source == Source::Npm && dep.location.pointer != "/packageManager")
     {
-        let mut directory = dep.file.rsplit_once('/').map_or("", |(d, _)| d);
-        let npmrc = loop {
-            if let Some(npmrc) = npmrcs.get(directory) {
-                break Some(npmrc);
-            }
-            if directory.is_empty() {
-                break None;
-            }
-            directory = directory.rsplit_once('/').map_or("", |(d, _)| d);
-        };
-        let Some(npmrc) = npmrc else { continue };
-        let scope = dep
-            .package
-            .split_once('/')
-            .map(|(scope, _)| scope)
-            .filter(|scope| scope.starts_with('@'));
-        dep.registry = scope
-            .and_then(|scope| npmrc.scopes.get(scope))
-            .or(npmrc.default.as_ref())
-            .cloned();
+        dep.registry = registry_for(&dep.file, &dep.package, npmrcs);
+    }
+}
+
+/// The same for packages only a lockfile records, so their advisories are
+/// not read for the public package of their name.
+pub(super) fn assign_locked_registries(
+    locked: &mut [crate::locked::Locked],
+    npmrcs: &BTreeMap<&str, Npmrc>,
+) {
+    for entry in locked
+        .iter_mut()
+        .filter(|entry| matches!(entry.manager, Manager::Npm | Manager::Bun))
+    {
+        entry.registry = registry_for(&entry.file, &entry.package, npmrcs);
     }
 }

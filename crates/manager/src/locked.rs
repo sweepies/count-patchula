@@ -12,6 +12,10 @@ pub struct Locked {
     pub package: String,
     pub version: String,
     pub location: Location,
+    /// The registry its lockfile's project looks it up in, when it is not the
+    /// public one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
 }
 impl Locked {
     /// The package as a `transitive` dependency of its lockfile.
@@ -34,7 +38,7 @@ impl Locked {
             scheme: Scheme::Semver,
             extract: None,
             included_by: None,
-            registry: None,
+            registry: self.registry.clone(),
         }
     }
 }
@@ -87,6 +91,7 @@ pub(crate) fn cargo(
                 continue;
             }
             out.push(Locked {
+                registry: None,
                 manager: Manager::Cargo,
                 file: (*path).into(),
                 package: name.into(),
@@ -141,6 +146,7 @@ pub(crate) fn npm(
                 continue;
             }
             out.push(Locked {
+                registry: None,
                 manager: Manager::Npm,
                 file: (*path).into(),
                 package: name.into(),
@@ -295,6 +301,7 @@ pub(crate) fn aube(
             continue;
         }
         out.push(Locked {
+            registry: None,
             manager,
             file,
             package,

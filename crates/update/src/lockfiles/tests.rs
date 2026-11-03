@@ -3549,6 +3549,7 @@ async fn real_cargo_moves_a_locked_package_without_a_manifest_change() {
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut dep = patchula_manager::Locked {
+        registry: None,
         manager: Manager::Cargo,
         file: "Cargo.lock".into(),
         package: "offline-patch-fixture".into(),

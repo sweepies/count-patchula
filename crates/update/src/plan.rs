@@ -93,6 +93,10 @@ pub fn branch_name(prefix: &str, label: &str, _identity: &str) -> Result<String,
     }
     Ok(name)
 }
+/// Each branch label's packages, by source, package and registry; a label
+/// shared by several gets a prefix to tell their branches apart.
+type PackageNames = BTreeMap<String, BTreeSet<(String, String, Option<String>)>>;
+
 struct Item<'a> {
     dep: &'a Dependency,
     update: &'a Update,
@@ -110,12 +114,12 @@ pub fn plan(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Vec<Plan>, String> {
     let evaluator = patchula_lookup::Evaluator::new(config)?;
-    let mut package_names = BTreeMap::<String, BTreeSet<(String, String)>>::new();
+    let mut package_names = PackageNames::new();
     for dep in dependencies {
         package_names
             .entry(package_slug(&dep.package))
             .or_default()
-            .insert((word(&dep.source), dep.package.clone()));
+            .insert((word(&dep.source), dep.package.clone(), dep.registry.clone()));
     }
     let mut groups = BTreeMap::<String, (String, Vec<Item<'_>>)>::new();
     for file in &repo.package_files {
@@ -582,7 +586,7 @@ fn branch_identity(
     reported: &patchula_report::Dependency,
     update: &Update,
     dependencies: &[Dependency],
-    package_names: &BTreeMap<String, BTreeSet<(String, String)>>,
+    package_names: &PackageNames,
     snapshot: Option<&Snapshot>,
 ) -> (String, String) {
     // Pins share one branch, except reference data: a pin branch of
@@ -626,17 +630,42 @@ fn branch_identity(
     } else {
         let line = line(dep, reported, update);
         (
-            serde_json::json!(["dependency", word(&dep.source), dep.package, line]).to_string(),
+            // A package from its own registry is another branch than the public
+            // package of its name; other identities stay as they were.
+            match &dep.registry {
+                Some(registry) => serde_json::json!([
+                    "dependency",
+                    word(&dep.source),
+                    dep.package,
+                    line,
+                    registry
+                ]),
+                None => serde_json::json!(["dependency", word(&dep.source), dep.package, line]),
+            }
+            .to_string(),
             {
                 let package = package_slug(&dep.package);
-                let manager = if package_names[&package].len() > 1 {
-                    format!("{}-", manager_slug(dep))
-                } else {
-                    String::default()
+                let manager = match &dep.registry {
+                    _ if package_names[&package].len() <= 1 => String::default(),
+                    Some(registry) => format!(
+                        "{}-",
+                        slug(
+                            registry
+                                .trim_start_matches("https://")
+                                .split('/')
+                                .next()
+                                .unwrap_or(registry)
+                        )
+                    ),
+                    None => format!("{}-", manager_slug(dep)),
                 };
                 let variants: BTreeSet<_> = dependencies
                     .iter()
-                    .filter(|d| d.package == dep.package && d.source == dep.source)
+                    .filter(|d| {
+                        d.package == dep.package
+                            && d.source == dep.source
+                            && d.registry == dep.registry
+                    })
                     .map(|d| d.current.split_once('-').map(|(_, v)| v))
                     .collect();
                 let display = if variants.len() == 1 && line.contains(".x-") {
