@@ -15,6 +15,8 @@ pub enum Auth {
     /// requests under it, which then carry nothing, so a broader entry's
     /// credentials never stand in for it.
     Withheld,
+    /// An entry without credentials, such as an open mirror.
+    Anonymous,
 }
 
 impl std::fmt::Debug for Auth {
@@ -26,6 +28,7 @@ impl std::fmt::Debug for Auth {
                 .finish_non_exhaustive(),
             Self::Bearer { .. } => f.debug_struct("Bearer").finish_non_exhaustive(),
             Self::Withheld => f.write_str("Withheld"),
+            Self::Anonymous => f.write_str("Anonymous"),
         }
     }
 }
@@ -48,11 +51,15 @@ impl Auth {
                 )
             }
             Self::Bearer { token } => format!("Bearer {token}"),
-            Self::Withheld => return None,
+            Self::Withheld | Self::Anonymous => return None,
         };
         let mut value = HeaderValue::from_str(&text).ok()?;
         value.set_sensitive(true);
         Some(value)
+    }
+    /// Whether requests carry credentials.
+    pub fn sends(&self) -> bool {
+        matches!(self, Self::Basic { .. } | Self::Bearer { .. })
     }
     fn valid(&self) -> bool {
         match self {
@@ -63,7 +70,7 @@ impl Auth {
                     && self.header().is_some()
             }
             Self::Bearer { token } => !token.is_empty() && token.chars().all(token_char),
-            Self::Withheld => true,
+            Self::Withheld | Self::Anonymous => true,
         }
     }
     /// A one-way digest of who this authenticates as, so a changed account or
@@ -74,6 +81,7 @@ impl Auth {
             Self::Basic { username, password } => format!("basic\0{username}\0{password}"),
             Self::Bearer { token } => format!("bearer\0{token}"),
             Self::Withheld => return "withheld".into(),
+            Self::Anonymous => return "anonymous".into(),
         };
         Sha256::digest(identity.as_bytes())
             .iter()
@@ -103,6 +111,23 @@ pub struct Credential {
     scope: String,
     url: Url,
     pub auth: Auth,
+    /// The public registry prefix this entry stands in for, if it is a mirror.
+    mirror_of: Option<(String, Url)>,
+}
+
+/// Whether `prefix` covers `url`: same origin, and the path continues the
+/// prefix's by whole segments.
+fn covers(prefix: &Url, url: &Url) -> bool {
+    if url.scheme() != prefix.scheme()
+        || url.host_str() != prefix.host_str()
+        || url.port_or_known_default() != prefix.port_or_known_default()
+    {
+        return false;
+    }
+    let base = prefix.path().trim_end_matches('/');
+    url.path()
+        .strip_prefix(base)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
 impl Credential {
@@ -117,7 +142,24 @@ impl Credential {
             url,
             prefix: normalised,
             auth,
+            mirror_of: None,
         })
+    }
+    /// Make the entry a mirror of the public registry under `public`: requests
+    /// there are sent to this entry's prefix instead. None if `public` is not
+    /// a usable prefix or is the entry's own.
+    pub fn mirroring(mut self, public: &str) -> Option<Self> {
+        let normalised = self::prefix(public)?;
+        let url = Url::parse(&normalised).ok()?;
+        if normalised == self.prefix {
+            return None;
+        }
+        self.mirror_of = Some((normalised, url));
+        Some(self)
+    }
+    /// The public registry prefix this entry mirrors.
+    pub fn mirror_of(&self) -> Option<&str> {
+        self.mirror_of.as_ref().map(|(prefix, _)| prefix.as_str())
     }
     /// The entry's normalised prefix, for messages.
     pub fn prefix(&self) -> &str {
@@ -129,20 +171,24 @@ impl Credential {
         &self.scope
     }
     pub(crate) fn covers(&self, url: &Url) -> bool {
-        if url.scheme() != self.url.scheme()
-            || url.host_str() != self.url.host_str()
-            || url.port_or_known_default() != self.url.port_or_known_default()
-        {
-            return false;
-        }
-        let base = self.url.path().trim_end_matches('/');
-        url.path()
-            .strip_prefix(base)
-            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+        covers(&self.url, url)
     }
     fn len(&self) -> usize {
         self.url.path().trim_end_matches('/').len()
     }
+}
+
+/// Where a request for `url` goes: through the mirror whose public prefix
+/// covers it, the longest if several do, or None to go as it is. A mirror's
+/// own URL is never rewritten again.
+pub(crate) fn mirrored(credentials: &[Credential], url: &Url) -> Option<Url> {
+    let (entry, public) = credentials
+        .iter()
+        .filter_map(|entry| Some((entry, entry.mirror_of.as_ref()?)))
+        .filter(|(_, (_, public))| covers(public, url))
+        .max_by_key(|(_, (_, public))| public.path().trim_end_matches('/').len())?;
+    let rest = url.as_str().strip_prefix(public.0.as_str())?;
+    Url::parse(&format!("{}{rest}", entry.prefix)).ok()
 }
 
 /// The entry for `url`: the one with the longest matching prefix.
@@ -254,5 +300,45 @@ mod tests {
         let withheld = Credential::new("https://acme.jfrog.io", Auth::Withheld).unwrap();
         assert!(withheld.auth.header().is_none());
         assert_ne!(withheld.scope(), entry.scope());
+    }
+
+    #[test]
+    fn mirrors_rewrite_whole_segments_of_their_public_prefix_once() {
+        let npm = Credential::new(
+            "https://acme.jfrog.io/artifactory/api/npm/npm-remote/",
+            Auth::Anonymous,
+        )
+        .unwrap()
+        .mirroring("https://registry.npmjs.org/")
+        .unwrap();
+        let simple = bearer("https://acme.jfrog.io/pypi")
+            .mirroring("https://pypi.org/simple")
+            .unwrap();
+        let entries = [npm.clone(), simple];
+        let to =
+            |url: &str| mirrored(&entries, &Url::parse(url).unwrap()).map(|url| url.to_string());
+        assert_eq!(
+            to("https://registry.npmjs.org/@scope%2fpkg"),
+            Some("https://acme.jfrog.io/artifactory/api/npm/npm-remote/@scope%2fpkg".into())
+        );
+        assert_eq!(
+            to("https://pypi.org/simple/requests/"),
+            Some("https://acme.jfrog.io/pypi/requests/".into())
+        );
+        for unmirrored in [
+            "https://pypi.org/pypi/requests/json",
+            "https://registry.npmjs.org.evil.dev/x",
+            "https://acme.jfrog.io/artifactory/api/npm/npm-remote/react",
+        ] {
+            assert_eq!(to(unmirrored), None, "{unmirrored}");
+        }
+        assert_eq!(npm.mirror_of(), Some("https://registry.npmjs.org"));
+        assert!(!npm.auth.sends());
+        assert!(
+            Credential::new("https://acme.jfrog.io", Auth::Anonymous)
+                .unwrap()
+                .mirroring("https://acme.jfrog.io/")
+                .is_none()
+        );
     }
 }

@@ -55,14 +55,16 @@ A `registries` key is an https URL prefix without a user, query or fragment.
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `auth` | `"basic"\|"bearer"` | required | `basic` sends `username` and the secret, exchanging them at a container registry's token service; `bearer` sends the secret as a token |
-| `username` | `String?` | `null` | required for `basic`, without a colon; refused for `bearer` |
+| `auth` | `("basic"\|"bearer")?` | `null` | `basic` sends `username` and the secret, exchanging them at a container registry's token service; `bearer` sends the secret as a token; `null` sends nothing |
+| `username` | `String?` | `null` | required for `basic`, without a colon; refused otherwise |
+| `secret` | `Secret?` | `null` | required with `auth`, refused without it |
 | `secret.env` | `String?` | `null` | environment variable holding the secret |
 | `secret.file` | `String?` | `null` | file holding the secret; trailing line breaks are dropped |
+| `mirrorOf` | `String?` | `null` | a public registry's https URL prefix this entry [stands in for](/guide/sources/#mirrors) |
 | `allowedInstallations` | `Listing<Int>` | all | server only: installations that may use the entry |
 
-Set exactly one of `secret.env` and `secret.file`. The settings file names
-where a secret lives, never the secret.
+An entry needs `auth`, `mirrorOf` or both. Set exactly one of `secret.env` and
+`secret.file`. The settings file names where a secret lives, never the secret.
 
 Versions found with credentials show like any others, in a public repository's
 dependency dashboard, pull requests and the server's [repository

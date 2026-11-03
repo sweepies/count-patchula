@@ -193,7 +193,7 @@ impl Client {
             _ => None,
         };
         url.and_then(|url| self.http.credential(&url))
-            .is_some_and(|entry| entry.auth != patchula_http::Auth::Withheld)
+            .is_some_and(|entry| entry.auth.sends())
     }
     pub async fn lookup(&self, source: Source, package: &str) -> Result<Catalog> {
         // A flake reference is a URL with a query; the runner checks its scheme.
