@@ -132,7 +132,8 @@ Renovate's other schemes, including `regex` versioning, `node`, `debian`,
 |---|---|
 | `package-lock.json` | aube by default, npm with `npmEngine = "npm"` |
 | `aube-lock.yaml`, `pnpm-lock.yaml` | aube |
-| `yarn.lock`, `bun.lock` | Yarn, Bun |
+| `yarn.lock` | aube for Classic, Yarn for Berry |
+| `bun.lock` | Bun |
 | `Cargo.lock`, `go.sum`, `.terraform.lock.hcl` | yes |
 | `uv.lock`, `poetry.lock` | yes |
 | `packages.lock.json`, `Gemfile.lock`, `composer.lock` | yes |

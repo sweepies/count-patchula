@@ -56,9 +56,10 @@ token or toolchain of your own.
 ## What you get
 
 - Real lockfiles for npm, pnpm, Yarn, Bun, Cargo, Go, Terraform, uv, Poetry,
-  NuGet, Bundler, Composer and mise, regenerated with the real tools. npm and
-  pnpm locks go through [aube](https://aube.sh), which is ten to twenty times
-  faster than npm and pnpm at it.
+  NuGet, Bundler, Composer and mise, regenerated with the real tools. npm, pnpm
+  and Yarn Classic locks go through [aube](https://aube.sh), which is ten to
+  twenty times faster than npm and pnpm at it, and about thirty times faster
+  than Yarn Classic.
 - Managers for JavaScript, GitHub Actions, mise, Rust, Go, Docker, Compose,
   Kubernetes, Kustomize, Flux, Helm, Terraform, Python, Maven, Gradle, .NET,
   Ruby, PHP, pre-commit, devcontainers, Woodpecker CI, GitLab CI, Nix flakes, APM,

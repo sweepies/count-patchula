@@ -199,8 +199,8 @@ See [container image rebuilds](/guide/security/#container-image-rebuilds).
 
 ## Lockfiles
 
-### aube for npm and pnpm {#node-lockfile-engine}
+### aube for npm, pnpm and Yarn Classic {#node-lockfile-engine}
 
-- **Renovate:** Regenerates npm and pnpm locks with npm and pnpm
-- **The Count:** Regenerates `aube-lock.yaml`, `pnpm-lock.yaml`, `package-lock.json` and `npm-shrinkwrap.json` with aube; `lockfiles.npmEngine = "npm"` restores native npm for npm lockfiles
-- **Why:** Lockfile updates are 10 to 20 times faster; [why aube](/guide/lockfiles/#why-aube-for-npm-and-pnpm) lists how its output differs from npm's
+- **Renovate:** Regenerates npm, pnpm and Yarn locks with npm, pnpm and Yarn
+- **The Count:** Regenerates `aube-lock.yaml`, `pnpm-lock.yaml`, `package-lock.json`, `npm-shrinkwrap.json` and Yarn Classic `yarn.lock` with aube; `lockfiles.npmEngine = "npm"` restores native npm for npm lockfiles. Berry `yarn.lock` stays with Yarn
+- **Why:** Lockfile updates are 10 to 30 times faster; [why aube](/guide/lockfiles/#why-aube-for-npm-pnpm-and-yarn-classic) lists how its output differs from each tool's

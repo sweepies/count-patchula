@@ -1,4 +1,5 @@
-//! Node lockfile engines: aube for pnpm and npm locks, Yarn for `yarn.lock`, Bun for `bun.lock`.
+//! Node lockfile engines: aube for pnpm, npm and Yarn Classic locks, Yarn for
+//! Berry `yarn.lock`, Bun for `bun.lock`.
 use super::*;
 
 /// Lockfile names the Node ecosystem regenerates in place.
@@ -17,23 +18,32 @@ const CATALOGS: [&str; 2] = ["pnpm-workspace.yaml", ".yarnrc.yml"];
 /// The tool that owns a Node lockfile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Engine {
-    /// aube reads and writes `aube-lock.yaml`, pnpm and npm lockfiles in place.
+    /// aube reads and writes `aube-lock.yaml`, pnpm, npm and Yarn Classic
+    /// lockfiles in place.
     Aube,
     /// Bun keeps `bun.lock` in Bun's own format.
     Bun,
     /// Native npm keeps `package-lock.json` in npm's own format.
     Npm,
-    /// Yarn keeps `yarn.lock` in Yarn's own format.
+    /// Yarn Berry keeps its `yarn.lock` in Berry's own format.
     Yarn,
 }
 
 impl Engine {
-    /// aube, pnpm and Yarn locks have a single owner; npm locks follow the repository setting.
-    fn for_lock(leaf: &str, config: &Config) -> Engine {
+    /// aube, pnpm and Yarn locks have a single owner; npm locks follow the
+    /// repository setting. A Classic `yarn.lock` goes to aube, any other to Yarn.
+    fn for_lock(cwd: &Path, leaf: &str, config: &Config) -> Engine {
         match leaf {
             "bun.lock" => Engine::Bun,
             "aube-lock.yaml" | "pnpm-lock.yaml" => Engine::Aube,
-            "yarn.lock" => Engine::Yarn,
+            "yarn.lock" => match std::fs::read_to_string(cwd.join(leaf))
+                .ok()
+                .as_deref()
+                .and_then(family)
+            {
+                Some(Family::Classic) => Engine::Aube,
+                _ => Engine::Yarn,
+            },
             _ => match config.lockfiles.npm_engine {
                 NpmEngine::Aube => Engine::Aube,
                 NpmEngine::Npm => Engine::Npm,
@@ -188,7 +198,7 @@ impl Runner {
             if !cwd.join(leaf).is_file() {
                 continue;
             }
-            let mut engine = Engine::for_lock(leaf, config);
+            let mut engine = Engine::for_lock(&cwd, leaf, config);
             if engine == Engine::Aube
                 && matches!(leaf, "package-lock.json" | "npm-shrinkwrap.json")
                 && aube_cannot_write_npm(&cwd, leaf)?
@@ -383,22 +393,15 @@ impl Runner {
     ) -> Result<(), String> {
         let manifest = std::fs::read_to_string(cwd.join("package.json")).ok();
         let lock = std::fs::read_to_string(cwd.join("yarn.lock")).unwrap_or_default();
-        let defaults = tool_defaults()?;
-        let classic = defaults["tools"]["yarn"]
+        if family(&lock) != Some(Family::Berry) {
+            return Err("cannot determine the Yarn lockfile format".into());
+        }
+        let default = tool_defaults()?["tools"]["yarn"]
             .as_str()
             .unwrap_or_default()
             .to_string();
-        let berry = defaults["yarn"]["berry"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string();
-        let yarn = yarn_version(manifest.as_deref(), &lock, versions, &classic, &berry)?;
-        let berry = family(&lock) == Some(Family::Berry);
-        let args = if berry {
-            vec!["install".into(), "--mode=update-lockfile".into()]
-        } else {
-            vec!["install".into(), "--ignore-scripts".into()]
-        };
+        let yarn = yarn_version(manifest.as_deref(), versions, &default)?;
+        let args = vec!["install".into(), "--mode=update-lockfile".into()];
         // The manifest as planned, before Yarn may rewrite it in its own layout.
         let planned = manifest.clone();
         // Yarn reads registries, cache keys and catalogs from `.yarnrc.yml`, but
@@ -488,14 +491,12 @@ fn bun_too_old(version: &str) -> bool {
     )
 }
 
-/// Yarn's version comes from `packageManager`, then the repository pin, then the
-/// format of the committed lockfile.
+/// Yarn Berry's version comes from `packageManager`, then a Berry repository
+/// pin, then the pinned default.
 pub(super) fn yarn_version(
     manifest: Option<&str>,
-    lock: &str,
     versions: &BTreeMap<String, String>,
-    classic: &str,
-    berry: &str,
+    default: &str,
 ) -> Result<String, String> {
     let pinned = manifest
         .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
@@ -510,23 +511,14 @@ pub(super) fn yarn_version(
     if let Some(version) = pinned {
         return Ok(version);
     }
-    let family = family(lock).ok_or("cannot determine the Yarn lockfile format")?;
     let candidate = versions.get("yarn").map(String::as_str).unwrap_or("");
-    let wanted = |major: u32| match family {
-        Family::Classic => major == 1,
-        Family::Berry => major >= 2,
-    };
-    if major(candidate).is_some_and(wanted) {
+    if major(candidate).is_some_and(|major| major >= 2) {
         return Ok(candidate.to_string());
     }
-    let fallback = match family {
-        Family::Classic => classic,
-        Family::Berry => berry,
-    };
-    if fallback.is_empty() {
+    if default.is_empty() {
         return Err("missing pinned Yarn version".into());
     }
-    Ok(fallback.to_string())
+    Ok(default.to_string())
 }
 
 /// `.npmrc` lines giving each registry entry its credentials, keyed by its

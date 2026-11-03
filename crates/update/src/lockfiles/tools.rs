@@ -229,9 +229,6 @@ pub(super) fn defaults() -> Result<Vec<(String, String)>, String> {
     if let Ok(nix) = super::nix::tools() {
         tools.extend(nix);
     }
-    if let Some(berry) = doc["yarn"]["berry"].as_str() {
-        tools.push(("yarn".into(), berry.into()));
-    }
     // The static build is the default; compiled PHP is built on first use.
     if let (Some(php), Some(composer)) = (
         doc["tools"]["php"].as_str(),
