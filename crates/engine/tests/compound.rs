@@ -24,7 +24,7 @@ async fn a_compound_constraint_that_cannot_allow_the_release_is_a_notice() {
     .unwrap();
     std::fs::write(
         tree.join("composer.lock"),
-        r#"{"packages":[{"name":"acme/lib","version":"2.5.0"}]}"#,
+        r#"{"packages":[{"name":"acme/lib","version":"2.5.0","notification-url":"https://packagist.org/downloads/"}]}"#,
     )
     .unwrap();
     let cassette = Cassette {

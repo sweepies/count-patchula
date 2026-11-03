@@ -1633,7 +1633,7 @@ async fn a_python_package_is_read_from_its_private_index_or_not_at_all() {
     );
     let error = client.lookup(&ambiguous).await.unwrap_err().to_string();
     assert!(
-        error.contains("several indexes") && error.contains("lockfile"),
+        error.contains("several registries") && error.contains("lockfile"),
         "{error}"
     );
 }

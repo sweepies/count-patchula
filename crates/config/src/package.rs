@@ -46,7 +46,7 @@ impl PackageId {
     }
 }
 
-/// How a package that could come from several indexes records its registry:
+/// How a package that could come from several registries records its registry:
 /// its lookup fails rather than guess, since the public one may be someone
 /// else's.
 const AMBIGUOUS: &str = "ambiguous: ";

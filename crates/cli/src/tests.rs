@@ -976,7 +976,7 @@ async fn apply_reports_notices_that_are_not_templates() {
         ("composer.json", r#"{"require":{"acme/lib":"^1 | ^2"}}"#),
         (
             "composer.lock",
-            r#"{"packages":[{"name":"acme/lib","version":"2.5.0"}]}"#,
+            r#"{"packages":[{"name":"acme/lib","version":"2.5.0","notification-url":"https://packagist.org/downloads/"}]}"#,
         ),
     ] {
         std::fs::write(tree.path().join(path), content).unwrap();
