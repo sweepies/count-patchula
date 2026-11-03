@@ -60,12 +60,13 @@ fn resolved(lock: Option<&Document<&str>>, package: &str) -> Option<String> {
 /// `editable`, `directory`, `virtual`) for anything else; `poetry.lock`
 /// records `[package.source]` with a `type`, and nothing for PyPI. Entries
 /// that disagree, as a forked uv resolution can, are ambiguous.
-fn locked_origin(lock: Option<&Document<&str>>, package: &str) -> Option<crate::pypi::Origin> {
+fn locked_origin(
+    lock: Option<&Document<&str>>,
+    poetry: bool,
+    package: &str,
+) -> Option<crate::pypi::Origin> {
     use crate::pypi::{Named, Origin};
-    let lock = lock?;
-    // Poetry records no source for PyPI; uv records one for every package.
-    let poetry = lock.get("metadata").is_some();
-    let entries = lock.get("package")?.as_array_of_tables()?;
+    let entries = lock?.get("package")?.as_array_of_tables()?;
     let origins = entries
         .iter()
         .filter(|p| {
@@ -238,8 +239,11 @@ pub(super) fn extract(
                 }
             })
         })
-        .find_map(|path| files.get(&path))
-        .map(|text| Document::parse(text.as_str()).map_err(|e| toml_error(text, &e)))
+        .find_map(|path| Some((path.ends_with("poetry.lock"), files.get(&path)?)));
+    // Poetry records no source for PyPI; uv records one for every package.
+    let poetry_lock = lock.is_some_and(|(poetry, _)| poetry);
+    let lock = lock
+        .map(|(_, text)| Document::parse(text.as_str()).map_err(|e| toml_error(text, &e)))
         .transpose()?;
     let mut scan = Scan {
         path,
@@ -311,10 +315,9 @@ pub(super) fn extract(
         }
     }
     let lock = scan.lock.as_ref();
-    for dep in discovery
-        .indexes
-        .assign(&mut scan.out, |package| locked_origin(lock, package))
-    {
+    for dep in discovery.indexes.assign(&mut scan.out, |package| {
+        locked_origin(lock, poetry_lock, package)
+    }) {
         skipped.push(Skipped {
             manager: Manager::Pyproject,
             file: dep.file,

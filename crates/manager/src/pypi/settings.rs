@@ -479,19 +479,19 @@ pub(crate) fn discover(path: &str, files: &Files) -> Discovery {
             let member = project_dir
                 .strip_prefix(dir)
                 .map_or(project_dir, |rest| rest.trim_start_matches('/'));
-            match (globs(&workspace.members), globs(&workspace.exclude)) {
-                (Some(members), Some(exclude)) => (!workspace.members.is_empty()
-                    && members.matches(member)
-                    && (workspace.exclude.is_empty() || !exclude.matches(member)))
-                .then_some(dir),
-                _ => {
-                    indexes.extras.push(unreadable(format!(
-                        "workspace globs in {}",
-                        join(dir, "pyproject.toml")
-                    )));
-                    None
-                }
-            }
+            let (Some(members), Some(exclude)) =
+                (globs(&workspace.members), globs(&workspace.exclude))
+            else {
+                indexes.extras.push(unreadable(format!(
+                    "workspace globs in {}",
+                    join(dir, "pyproject.toml")
+                )));
+                return None;
+            };
+            (!workspace.members.is_empty()
+                && members.matches(member)
+                && (workspace.exclude.is_empty() || !exclude.matches(member)))
+            .then_some(dir)
         });
     for dir in dirs.iter().filter(|dir| Some(**dir) != root) {
         if let Some(None) = uv(dir) {

@@ -120,18 +120,19 @@ impl Indexes {
         let candidates: Vec<Named> = std::iter::once(self.default.clone().unwrap_or(Named::Public))
             .chain(self.extras.iter().cloned())
             .collect();
-        match locked {
+        let possible: Vec<Named> = match locked {
             // A lockfile picks among the indexes the project searches. One it
             // records that the project no longer searches is stale: the tool
             // would resolve the package again from those it does.
-            Some(Origin::Index(named)) if !candidates.contains(&named) => Origin::of(
-                std::iter::once(Origin::Index(named))
-                    .chain(candidates.into_iter().map(Origin::Index)),
-            )
-            .unwrap_or(Origin::Index(Named::Public)),
-            Some(locked) => locked,
-            None => Origin::of(candidates.into_iter().map(Origin::Index))
-                .unwrap_or(Origin::Index(Named::Public)),
+            Some(Origin::Index(named)) if !candidates.contains(&named) => {
+                std::iter::once(named).chain(candidates).collect()
+            }
+            Some(locked) => return locked,
+            None => candidates,
+        };
+        match Origin::of(possible.into_iter().map(Origin::Index)) {
+            Some(origin) => origin,
+            None => Origin::Index(Named::Public),
         }
     }
     /// Give each PyPI dependency in `deps` its registry, and drop those that

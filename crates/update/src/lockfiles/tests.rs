@@ -4474,7 +4474,7 @@ fn lock_only_cases() -> Vec<LockOnlyCase> {
                 ),
                 (
                     "uv.lock".to_string(),
-                    "version = 1\n\n[[package]]\nname = \"six\"\nversion = \"1.15.0\"\n".to_string(),
+                    "version = 1\n\n[[package]]\nname = \"six\"\nversion = \"1.15.0\"\nsource = { registry = \"https://pypi.org/simple\" }\n".to_string(),
                 ),
             ]),
             "pyproject.toml",
