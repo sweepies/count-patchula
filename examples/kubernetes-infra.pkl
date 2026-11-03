@@ -25,7 +25,7 @@ extractors = new Listing {
 rules = new Listing {
   new Rule {
     note = "Group Python dependencies."
-    select { managers = new Listing { "requirements" } }
+    select { managers = new Listing { "pyproject" } }
     apply { group = "python dependencies" }
   }
   new Rule {

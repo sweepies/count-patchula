@@ -322,7 +322,7 @@ literals or substitute captures with `{capture}`; by default they expect
 `source` and `dependency` captures, and the dependency doubles as the package
 identity. `scheme` picks the version comparison. `extract` normalises registry
 tags and needs a named `version` capture. `registry` is the URL of the [package
-registry](/guide/sources/#package-registries) to read, for npm, and is a template too.
+registry](/guide/sources/#package-registries) to read, for npm and PyPI, and is a template too.
 
 Rust regexes have no lookaround or backreferences. Pkl raw strings such as
 `#"(?<current>\S+)"#` avoid double escaping.

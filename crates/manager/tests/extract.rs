@@ -2459,3 +2459,396 @@ fn npm_registry_files_are_read_whatever_files_and_exclude_select() {
     let ui = deps.iter().find(|d| d.name == "@acme/ui").unwrap();
     assert_eq!(ui.registry.as_deref(), Some("https://npm.acme.dev"));
 }
+
+/// The registry of `name` in `file`, failing the test when it is missing.
+fn python_registry(
+    extraction: &patchula_manager::Extraction,
+    file: &str,
+    name: &str,
+) -> Option<String> {
+    extraction
+        .dependencies
+        .iter()
+        .find(|d| d.file == file && d.name == name)
+        .unwrap_or_else(|| panic!("{file} {name}"))
+        .registry
+        .clone()
+}
+
+fn python_scan(files: &Files) -> patchula_manager::Extraction {
+    let mut config = config();
+    config.managers = vec![Manager::Pyproject];
+    Scanner::new(&config).unwrap().extract(files).unwrap()
+}
+
+fn ambiguous(found: Option<String>) -> bool {
+    found.is_some_and(|r| r.starts_with("ambiguous: "))
+}
+
+/// Whether a lookup for this registry fails: ambiguous, or something the
+/// Count cannot read from rather than an index URL.
+fn fails(found: Option<String>) -> bool {
+    found.is_some_and(|r| !r.starts_with("https://"))
+}
+
+const ACME: &str = "https://pypi.acme.dev/simple";
+
+fn uv_lock(package: &str, source: &str) -> String {
+    format!(
+        "version = 1\n[[package]]\nname = \"{package}\"\nversion = \"1.0.0\"\nsource = {source}\n"
+    )
+}
+
+fn project(extra: &str) -> String {
+    format!("[project]\nname = \"p\"\ndependencies = [\"acme-a>=1\"]\n{extra}")
+}
+
+#[test]
+fn python_packages_come_from_what_their_lockfile_records() {
+    let acme = "{ registry = \"https://pypi.acme.dev/simple\" }";
+    let pypi = "{ registry = \"https://pypi.org/simple\" }";
+    let files = Files::from([
+        // No index configured: PyPI, locked or not.
+        ("plain/pyproject.toml".into(), project("")),
+        ("plain-locked/pyproject.toml".into(), project("")),
+        ("plain-locked/uv.lock".into(), uv_lock("acme-a", pypi)),
+        // An index configured and no lockfile: PyPI or it, never a guess.
+        (
+            "unlocked/pyproject.toml".into(),
+            project("[tool.uv]\nindex-url = \"https://pypi.acme.dev/simple\"\n"),
+        ),
+        // The lockfile decides, whatever the settings say.
+        (
+            "locked/pyproject.toml".into(),
+            project("[tool.uv]\nextra-index-url = [\"https://pypi.acme.dev/simple\"]\n"),
+        ),
+        ("locked/uv.lock".into(), uv_lock("acme-a", acme)),
+        // PyPI listed as an extra index configures nothing else.
+        (
+            "public/pyproject.toml".into(),
+            project("[tool.uv]\nextra-index-url = [\"https://pypi.org/simple\"]\n"),
+        ),
+        // Inline arrays of tables are read like [[...]] ones.
+        (
+            "inline/pyproject.toml".into(),
+            project("[tool.uv]\nindex = [{ name = \"acme\", url = \"https://pypi.acme.dev/simple\", default = true }]\n"),
+        ),
+        // uv pip's table and an override naming a URL configure too.
+        (
+            "uvpip/pyproject.toml".into(),
+            project("[tool.uv.pip]\nindex-url = \"https://pypi.acme.dev/simple\"\n"),
+        ),
+        (
+            "override/pyproject.toml".into(),
+            project("[tool.uv]\noverride-dependencies = [\"acme-b @ https://files.acme.dev/acme_b-1.0-py3-none-any.whl\"]\n"),
+        ),
+        // A source from git, recorded so in the lockfile, is not looked up.
+        (
+            "git/pyproject.toml".into(),
+            project("[tool.uv.sources]\nacme-a = { git = \"https://github.com/acme/a\" }\n"),
+        ),
+        (
+            "git/uv.lock".into(),
+            uv_lock("acme-a", "{ git = \"https://github.com/acme/a?rev=abc#abc\" }"),
+        ),
+        // A forked resolution recording two indexes is ambiguous.
+        ("forked/pyproject.toml".into(), project("")),
+        (
+            "forked/uv.lock".into(),
+            format!("{}[[package]]\nname = \"acme-a\"\nversion = \"1.0.0\"\nsource = {acme}\n", uv_lock("acme-a", pypi)),
+        ),
+        // Poetry: a legacy source in poetry.lock, and no source for PyPI.
+        (
+            "poetry/pyproject.toml".into(),
+            "[tool.poetry.dependencies]\nacme-a = \"^1\"\nrequests = \"^2\"\n[[tool.poetry.source]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\npriority = \"supplemental\"\n".into(),
+        ),
+        (
+            "poetry/poetry.lock".into(),
+            "[[package]]\nname = \"acme-a\"\nversion = \"1.0.0\"\n[package.source]\ntype = \"legacy\"\nurl = \"https://pypi.acme.dev/simple\"\nreference = \"acme\"\n[[package]]\nname = \"requests\"\nversion = \"2.31.0\"\n".into(),
+        ),
+        // Two lockfiles that disagree.
+        (
+            "both/pyproject.toml".into(),
+            "[project]\nname = \"p\"\ndependencies = [\"acme-a>=1\"]\n[tool.poetry]\npackage-mode = false\n".into(),
+        ),
+        ("both/uv.lock".into(), uv_lock("acme-a", pypi)),
+        (
+            "both/poetry.lock".into(),
+            "[[package]]\nname = \"acme-a\"\nversion = \"1.0.0\"\n[package.source]\ntype = \"legacy\"\nurl = \"https://pypi.acme.dev/simple\"\n".into(),
+        ),
+        // uv locks a workspace at its root; a member's own lock is stale.
+        (
+            "ws/pyproject.toml".into(),
+            "[tool.uv.workspace]\nmembers = [\"./packages/*/\"]\n[tool.uv]\nindex-url = \"https://pypi.acme.dev/simple\"\n".into(),
+        ),
+        ("ws/uv.lock".into(), uv_lock("acme-a", acme)),
+        ("ws/packages/lib/pyproject.toml".into(), project("")),
+        ("ws/packages/lib/uv.lock".into(), uv_lock("acme-a", pypi)),
+        // A lock above that belongs to another project is not this one's.
+        ("other/uv.lock".into(), uv_lock("acme-a", pypi)),
+        (
+            "other/sub/pyproject.toml".into(),
+            project("[tool.uv]\nindex-url = \"https://pypi.acme.dev/simple\"\n"),
+        ),
+    ]);
+    let extraction = python_scan(&files);
+    let registry = |file: &str, name: &str| python_registry(&extraction, file, name);
+    let acme = Some(ACME.to_owned());
+    assert_eq!(registry("plain/pyproject.toml", "acme-a"), None);
+    assert_eq!(registry("plain-locked/pyproject.toml", "acme-a"), None);
+    let unlocked = registry("unlocked/pyproject.toml", "acme-a");
+    assert!(
+        ambiguous(unlocked.clone()) && unlocked.is_some_and(|r| r.contains(ACME)),
+        "unlocked"
+    );
+    assert_eq!(registry("locked/pyproject.toml", "acme-a"), acme);
+    assert_eq!(registry("public/pyproject.toml", "acme-a"), None);
+    for file in [
+        "inline/pyproject.toml",
+        "uvpip/pyproject.toml",
+        "override/pyproject.toml",
+        "forked/pyproject.toml",
+        "both/pyproject.toml",
+        "other/sub/pyproject.toml",
+    ] {
+        assert!(
+            ambiguous(registry(file, "acme-a")),
+            "{file}: {:?}",
+            registry(file, "acme-a")
+        );
+    }
+    assert!(
+        extraction
+            .dependencies
+            .iter()
+            .all(|d| d.file != "git/pyproject.toml")
+    );
+    assert!(
+        extraction
+            .skipped
+            .iter()
+            .any(|s| s.file == "git/pyproject.toml" && s.reason.contains("not a package index"))
+    );
+    assert_eq!(registry("poetry/pyproject.toml", "acme-a"), acme);
+    assert_eq!(registry("poetry/pyproject.toml", "requests"), None);
+    assert_eq!(registry("ws/packages/lib/pyproject.toml", "acme-a"), acme);
+}
+
+#[test]
+fn python_settings_the_count_cannot_read_fail_every_lookup() {
+    let lock = uv_lock("acme-a", "{ registry = \"https://pypi.acme.dev/simple\" }");
+    let mut files = Files::new();
+    for (dir, pyproject, extra) in [
+        ("toml", project(""), Some(("uv.toml", "index-url = [\n"))),
+        ("key", project("[tool.uv]\nsome-new-setting = true\n"), None),
+        (
+            "indexkey",
+            project("[[tool.uv.index]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\nsome-new-key = 1\n"),
+            None,
+        ),
+        (
+            "poetry",
+            "[project]\nname = \"p\"\ndependencies = [\"acme-a>=1\"]\n[[tool.poetry.source]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\npriority = \"some-new-priority\"\n".to_owned(),
+            None,
+        ),
+        (
+            "hatch",
+            project("[tool.hatch.envs.default.overrides]\nplatform.linux.env-vars = [{ key = \"UV_INDEX_URL\", value = \"https://pypi.acme.dev/simple\" }]\n"),
+            None,
+        ),
+        (
+            "pixi",
+            project("[tool.pixi.feature.test.pypi-options]\nindex-url = \"https://pypi.acme.dev/simple\"\n"),
+            None,
+        ),
+        ("pdm", project(""), Some(("pdm.toml", "[pypi]\nurl = \"https://pypi.acme.dev/simple\"\n"))),
+        (
+            "rye",
+            project("[[tool.rye.sources]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\n"),
+            None,
+        ),
+        ("braces", "[tool.uv.workspace]\nmembers = [\"libs/{core,old}\"]\n".to_owned(), None),
+        ("badlock", project(""), Some(("uv.lock", "version = [\n"))),
+    ] {
+        files.insert(format!("{dir}/pyproject.toml"), pyproject);
+        if let Some((leaf, text)) = extra {
+            files.insert(format!("{dir}/{leaf}"), text.into());
+        }
+        // A lockfile recording the package does not help either.
+        files
+            .entry(format!("{dir}/uv.lock"))
+            .or_insert_with(|| lock.clone());
+    }
+    files.insert("braces/libs/core/pyproject.toml".into(), project(""));
+    let extraction = python_scan(&files);
+    for dir in [
+        "toml", "key", "indexkey", "poetry", "hatch", "pixi", "pdm", "rye",
+    ] {
+        let file = format!("{dir}/pyproject.toml");
+        assert!(
+            fails(python_registry(&extraction, &file, "acme-a")),
+            "{dir}: {:?}",
+            python_registry(&extraction, &file, "acme-a")
+        );
+    }
+    assert!(fails(python_registry(
+        &extraction,
+        "braces/libs/core/pyproject.toml",
+        "acme-a"
+    )));
+    // A lockfile that does not parse fails its manifest, with a warning.
+    assert!(
+        extraction
+            .dependencies
+            .iter()
+            .all(|d| !d.file.starts_with("badlock/"))
+    );
+    assert!(
+        extraction
+            .warnings
+            .iter()
+            .any(|w| w.contains("badlock/pyproject.toml"))
+    );
+}
+
+#[test]
+fn python_index_files_are_read_and_secrets_never_recorded() {
+    let mut config = config();
+    config.managers = vec![Manager::Pyproject];
+    // Only some manifests are selected; index files are read anyway.
+    config.files = vec![patchula_config::FileSet {
+        manager: Manager::Pyproject,
+        paths: vec!["services/**/pyproject.toml".into()],
+    }];
+    let scanner = Scanner::new(&config).unwrap();
+    for path in [
+        "pyproject.toml",
+        "uv.toml",
+        "uv.lock",
+        "poetry.lock",
+        "pdm.toml",
+        "pixi.toml",
+        "hatch.toml",
+    ] {
+        assert!(scanner.needs(path), "{path}");
+    }
+    let with_index = |url: &str| project(&format!("[tool.uv]\nindex-url = \"{url}\"\n"));
+    let files = Files::from([
+        (
+            "services/token/pyproject.toml".into(),
+            with_index("https://ci:s3cret@pypi.acme.dev/simple?token=x"), // betterleaks:allow
+        ),
+        (
+            "services/slash/pyproject.toml".into(),
+            with_index("https://ci:pa/ss@pypi.acme.dev/simple"), // betterleaks:allow
+        ),
+        (
+            "services/query/pyproject.toml".into(),
+            with_index("https://pypi.acme.dev?token=s3cret"),
+        ),
+        (
+            "services/links/pyproject.toml".into(),
+            project("[tool.uv]\nfind-links = [\"wheels.acme.dev/x?token=s3cret\"]\n"),
+        ),
+        // A lockfile recording a URL with credentials.
+        ("services/locked/pyproject.toml".into(), project("")),
+        (
+            "services/locked/uv.lock".into(),
+            uv_lock(
+                "acme-a",
+                "{ registry = \"https://ci:s3cret@pypi.acme.dev/simple\" }",
+            ), // betterleaks:allow
+        ),
+    ]);
+    let extraction = scanner.extract(&files).unwrap();
+    for dep in &extraction.dependencies {
+        let recorded = dep.registry.clone().unwrap_or_default();
+        for secret in ["s3cret", "token", "pa/ss", "ci:"] {
+            assert!(!recorded.contains(secret), "{recorded}");
+        }
+    }
+    let locked = python_registry(&extraction, "services/locked/pyproject.toml", "acme-a").unwrap();
+    assert!(locked.contains("pypi.acme.dev"), "{locked}");
+}
+
+#[test]
+fn python_packages_from_outside_an_index_are_skipped_with_a_reason() {
+    let files = Files::from([
+        (
+            "pyproject.toml".into(),
+            "[project]\nname = \"app\"\ndependencies = [\"acme-wheel @ https://files.acme.dev/acme_wheel-1.0-py3-none-any.whl\"]\n[tool.poetry.dependencies]\ninternal = { git = \"https://github.com/acme/internal.git\" }\n".into(),
+        ),
+    ]);
+    let extraction = python_scan(&files);
+    for name in ["acme-wheel", "internal"] {
+        assert!(
+            extraction.dependencies.iter().all(|d| d.name != name),
+            "{name}"
+        );
+        let skipped = extraction
+            .skipped
+            .iter()
+            .find(|s| s.value == name)
+            .unwrap_or_else(|| panic!("{name} not skipped"));
+        assert!(
+            skipped.reason.contains("not a package index"),
+            "{}",
+            skipped.reason
+        );
+    }
+}
+
+#[test]
+fn a_toml_error_does_not_quote_the_line_it_is_on() {
+    let files = Files::from([(
+        "pyproject.toml".into(),
+        "[project]\nname = \"p\"\n[[tool.uv.index]]\nurl = \"https://ci:s3c\\qret@pypi.acme.dev/simple\"\n".into(), // betterleaks:allow
+    )]);
+    let extraction = python_scan(&files);
+    assert!(!extraction.warnings.is_empty());
+    for warning in &extraction.warnings {
+        assert!(!warning.contains("s3c"), "{warning}");
+    }
+}
+
+#[test]
+fn pip_requirements_files_are_not_maintained_and_the_count_says_why() {
+    let mut config = config();
+    config.managers = vec![Manager::Pyproject];
+    config.exclude = vec!["vendor/**".into()];
+    let scanner = Scanner::new(&config).unwrap();
+    assert!(!scanner.needs("requirements.txt"));
+    let paths = [
+        "requirements.txt",
+        "app/requirements-dev.txt",
+        "requirements/base.in",
+        "vendor/requirements.txt",
+        "pyproject.toml",
+        "notes.txt",
+    ];
+    // Skipped, each with the reason, rather than a warning that would hold
+    // back branch cleanup and automerge.
+    let skipped = scanner.unsupported(paths);
+    let files: Vec<&str> = skipped.iter().map(|s| s.file.as_str()).collect();
+    assert_eq!(
+        files,
+        [
+            "requirements.txt",
+            "app/requirements-dev.txt",
+            "requirements/base.in"
+        ]
+    );
+    assert!(
+        skipped[0].reason.contains("uv add -r requirements.txt"),
+        "{}",
+        skipped[0].reason
+    );
+    assert!(scanner.unsupported(["vendor/requirements.txt"]).is_empty());
+    // Nothing is extracted from them, and nothing warns.
+    let files = Files::from([("requirements.txt".into(), "requests==2.31.0\n".into())]);
+    let extraction = scanner.extract(&files).unwrap();
+    assert!(extraction.dependencies.is_empty() && extraction.warnings.is_empty());
+    // Without Python projects enabled, there is nothing to say.
+    config.managers = vec![Manager::Npm];
+    assert!(Scanner::new(&config).unwrap().unsupported(paths).is_empty());
+}

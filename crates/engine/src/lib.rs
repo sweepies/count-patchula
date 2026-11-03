@@ -2242,7 +2242,10 @@ impl Engine {
                     )
                 })
                 .collect();
-            let extraction = scanner.extract(&files).map_err(std::io::Error::other)?;
+            let mut extraction = scanner.extract(&files).map_err(std::io::Error::other)?;
+            extraction
+                .skipped
+                .extend(scanner.unsupported(paths.iter().map(String::as_str)));
             std::io::Result::Ok((paths, blobs, extraction))
         })
         .await
@@ -2338,7 +2341,7 @@ impl Engine {
         let key = ExtractionKey {
             repo: repo.into(),
             default_branch_commit: commit,
-            config_hash: format!("extract-v12:{}", hash(&serde_json::to_vec(&config)?)),
+            config_hash: format!("extract-v18:{}", hash(&serde_json::to_vec(&config)?)),
         };
         let cached: CachedExtraction = if let Some(bytes) = self.cache.extraction_get(&key).await? {
             self.extraction_hits.fetch_add(1, Ordering::Relaxed);
@@ -2350,7 +2353,7 @@ impl Engine {
             } else {
                 self.tree(repo, tree_sha).await?
             };
-            let paths = entries
+            let paths: BTreeSet<String> = entries
                 .iter()
                 .filter(|e| e.kind == "blob")
                 .map(|e| e.path.clone())
@@ -2407,10 +2410,12 @@ impl Engine {
                 .iter()
                 .map(|(p, b)| (p.clone(), b.content.clone()))
                 .collect();
-            let extraction = tokio::task::spawn_blocking(move || scanner.extract(&files))
+            let unsupported = scanner.unsupported(paths.iter().map(String::as_str));
+            let mut extraction = tokio::task::spawn_blocking(move || scanner.extract(&files))
                 .await
                 .map_err(|e| Error::Invalid(e.to_string()))?
                 .map_err(Error::Invalid)?;
+            extraction.skipped.extend(unsupported);
             let cached = CachedExtraction {
                 extraction,
                 snapshot: patchula_update::Snapshot {
@@ -2555,13 +2560,37 @@ pub fn read_tree(
             .any(|parent| {
                 std::fs::symlink_metadata(dir.join(parent)).is_ok_and(|meta| meta.is_symlink())
             });
-        if below_symlink || !std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file()) {
+        let regular = std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file());
+        if below_symlink || !regular {
+            // A Python settings file behind a symlink could name an index:
+            // kept as unreadable, its packages' lookups fail rather than fall
+            // back to PyPI.
+            if scanner.needs(&relative)
+                && patchula_manager::python_settings(&relative)
+                && std::fs::metadata(&path).is_ok_and(|meta| meta.is_file())
+            {
+                files.insert(
+                    relative.clone(),
+                    patchula_manager::UNREADABLE_SETTINGS.to_owned(),
+                );
+            }
             continue;
         }
-        if scanner.needs(&relative)
-            && let Ok(content) = std::fs::read_to_string(&path)
-        {
-            files.insert(relative.clone(), content);
+        if scanner.needs(&relative) {
+            match std::fs::read(&path).map(String::from_utf8) {
+                Ok(Ok(content)) => {
+                    files.insert(relative.clone(), content);
+                }
+                // One that cannot be read, or is not text, is unreadable
+                // the same way.
+                _ if patchula_manager::python_settings(&relative) => {
+                    files.insert(
+                        relative.clone(),
+                        patchula_manager::UNREADABLE_SETTINGS.to_owned(),
+                    );
+                }
+                _ => {}
+            }
         }
         paths.insert(relative);
     }

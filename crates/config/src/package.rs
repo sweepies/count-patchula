@@ -45,3 +45,19 @@ impl PackageId {
             .unwrap_or_default()
     }
 }
+
+/// How a package that could come from several indexes records its registry:
+/// its lookup fails rather than guess, since the public one may be someone
+/// else's.
+const AMBIGUOUS: &str = "ambiguous: ";
+
+impl PackageId {
+    /// The registry of a package that could come from any of `indexes`.
+    pub fn ambiguous_registry(indexes: &[String]) -> String {
+        format!("{AMBIGUOUS}{}", indexes.join(", "))
+    }
+    /// The indexes an ambiguous package could come from.
+    pub fn ambiguous(&self) -> Option<&str> {
+        self.registry.as_deref()?.strip_prefix(AMBIGUOUS)
+    }
+}

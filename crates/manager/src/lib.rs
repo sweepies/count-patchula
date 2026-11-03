@@ -20,6 +20,7 @@ mod gradle_vars;
 mod helm;
 mod images;
 mod locked;
+mod pypi;
 pub use locked::Locked;
 mod maven;
 mod mise;
@@ -32,7 +33,6 @@ mod npm;
 mod nuget;
 mod precommit;
 mod pyproject;
-mod requirements;
 mod terraform;
 mod toolchains;
 mod woodpecker;
@@ -224,7 +224,6 @@ pub fn supported(manager: Manager) -> bool {
         | Manager::Kustomize
         | Manager::Flux
         | Manager::HelmValues
-        | Manager::Requirements
         | Manager::Pyproject
         | Manager::PreCommit
         | Manager::Helm
@@ -265,7 +264,7 @@ impl Scanner {
     pub fn needs(&self, path: &str) -> bool {
         self.config.managers.iter().any(|m| self.selected(*m, path)) || self.registry_file(path)
     }
-    /// npm's registry settings are read whatever `files` and `exclude` select:
+    /// Registry settings are read whatever `files` and `exclude` select:
     /// without them, a scoped package would be looked up on the public
     /// registry, where its name may be someone else's.
     fn registry_file(&self, path: &str) -> bool {
@@ -275,14 +274,37 @@ impl Scanner {
                 .extractors
                 .iter()
                 .any(|e| e.source == "npm" || e.source.contains('{'));
-        ([Manager::Npm, Manager::Bun]
+        let leaf = path.rsplit('/').next().unwrap_or(path);
+        (([Manager::Npm, Manager::Bun]
             .iter()
             .any(|m| self.config.managers.contains(m))
             || npm_extractors)
-            && matches!(
-                path.rsplit('/').next().unwrap_or(path),
-                ".npmrc" | ".yarnrc.yml"
-            )
+            && matches!(leaf, ".npmrc" | ".yarnrc.yml"))
+            || (self.config.managers.contains(&Manager::Pyproject)
+                && (python_settings(path) || matches!(leaf, "uv.lock" | "poetry.lock")))
+    }
+    /// The pip requirements files among `paths`, which the Count does not
+    /// maintain, as skipped entries saying why, when Python projects are
+    /// enabled. Skipped, not warned about, so they leave branch cleanup and
+    /// automerge on.
+    pub fn unsupported<'a>(&self, paths: impl IntoIterator<Item = &'a str>) -> Vec<Skipped> {
+        if !self.config.managers.contains(&Manager::Pyproject) {
+            return Vec::new();
+        }
+        paths
+            .into_iter()
+            .filter(|path| {
+                requirements_name(path)
+                    && (self.config.exclude.is_empty() || !self.exclude.matches(path))
+            })
+            .map(|path| Skipped {
+                manager: Manager::Pyproject,
+                file: path.to_owned(),
+                line: None,
+                value: "pip requirements".into(),
+                reason: "pip requirements files are not maintained: pip takes each package from whatever index its options, included files and environment name, which the Count cannot settle for certain, and a guess could propose someone else's package of the same name. Move the project to uv (`uv init --bare`, then `uv add -r requirements.txt`) and the Count keeps `pyproject.toml` and `uv.lock` current".into(),
+            })
+            .collect()
     }
     fn selected(&self, manager: Manager, path: &str) -> bool {
         if !self.config.managers.contains(&manager)
@@ -390,12 +412,6 @@ impl Scanner {
                 leaf,
                 "pyproject.toml" | "uv.lock" | "poetry.lock" | ".python-version"
             ),
-            Manager::Requirements => {
-                (leaf.starts_with("requirements")
-                    && (leaf.ends_with(".txt") || leaf.ends_with(".in")))
-                    || (path.contains("requirements/")
-                        && (leaf.ends_with(".txt") || leaf.ends_with(".in")))
-            }
         }
     }
     pub fn extract(&self, files: &Files) -> Result<Extraction, String> {
@@ -524,9 +540,7 @@ impl Scanner {
             } else if self.selected(Manager::PreCommit, path) {
                 precommit::extract(path, text)
             } else if self.selected(Manager::Pyproject, path) {
-                pyproject::extract(path, text, files)
-            } else if self.selected(Manager::Requirements, path) {
-                requirements::extract(path, text)
+                pyproject::extract(path, text, files, &mut result.skipped)
             } else {
                 Ok(Vec::new())
             };
@@ -590,15 +604,66 @@ impl Scanner {
         Ok(result)
     }
 }
+/// A registry value as recorded when the Count cannot use it: any user,
+/// password or query removed, so a secret in it never reaches a report.
+pub(crate) fn redacted(value: &str) -> String {
+    const UNREADABLE: &str = "<unreadable URL>";
+    if !value.contains("://") {
+        // A path or name; one with an `@` may be a URL with a user in it, and
+        // a query or fragment may hold a token.
+        return match value.split_once(['?', '#']) {
+            _ if value.contains('@') => UNREADABLE.into(),
+            Some((kept, _)) => format!("{kept} (credentials removed)"),
+            None => value.to_owned(),
+        };
+    }
+    let Ok(mut url) = url::Url::parse(value) else {
+        return UNREADABLE.into();
+    };
+    let user = !url.username().is_empty() || url.password().is_some();
+    // An `@` that did not end a user means a password holding `/`, `?` or `#`
+    // ended the host early, leaving part of itself where the host should be.
+    if value.contains('@') && !user {
+        return UNREADABLE.into();
+    }
+    // A user ends at the last `@`; a parser that ended it sooner took part
+    // of the password for the host.
+    if let Some((_, after)) = value.rsplit_once('@')
+        && !after
+            .to_ascii_lowercase()
+            .starts_with(url.host_str().unwrap_or("\0"))
+    {
+        return UNREADABLE.into();
+    }
+    let secret = user || url.query().is_some() || url.fragment().is_some();
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_query(None);
+    url.set_fragment(None);
+    let kept = url.as_str().trim_end_matches('/');
+    // Or it ended the host early and left the rest of itself in the path.
+    if kept.contains('@') {
+        return UNREADABLE.into();
+    }
+    if secret {
+        format!("{kept} (credentials removed)")
+    } else {
+        kept.to_owned()
+    }
+}
 /// A registry URL a repository names: https, without a user, query or
 /// fragment, and nothing to expand from the environment. Normalised without a
 /// trailing slash or surrounding quotes.
 pub(crate) fn registry_url(value: &str) -> Option<String> {
     let value = value.trim().trim_matches(['"', '\'']).trim_end_matches('/');
-    let rest = value.strip_prefix("https://")?;
+    // A URL's scheme is case-insensitive.
+    let rest = value
+        .get(..8)
+        .filter(|scheme| scheme.eq_ignore_ascii_case("https://"))
+        .map(|_| &value[8..])?;
     let host = rest.split('/').next().unwrap_or_default();
-    let valid = !host.is_empty() && !host.contains('@') && !value.contains(['?', '#', ' ', '$']);
-    valid.then(|| value.to_owned())
+    let valid = !host.is_empty() && !value.contains(['@', '?', '#', ' ', '$']);
+    valid.then(|| format!("https://{rest}"))
 }
 
 pub fn word<T: Serialize>(value: &T) -> String {
@@ -607,4 +672,115 @@ pub fn word<T: Serialize>(value: &T) -> String {
         .as_str()
         .expect("enum word")
         .into()
+}
+/// A pip requirements file by its name: `requirements.txt`,
+/// `dev-requirements.in`, `requirements-test.txt`, or any `.txt` or `.in`
+/// under a `requirements/` directory.
+fn requirements_name(path: &str) -> bool {
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    let Some(stem) = leaf
+        .strip_suffix(".txt")
+        .or_else(|| leaf.strip_suffix(".in"))
+    else {
+        return false;
+    };
+    stem.contains("requirements")
+        || path
+            .rsplit_once('/')
+            .is_some_and(|(dir, _)| dir.split('/').any(|part| part == "requirements"))
+}
+
+#[cfg(test)]
+mod tests {
+    /// No user, password or token survives redaction, whatever characters
+    /// it holds. The secrets use letters no recorded value contains, so any
+    /// leaked part of one shows.
+    #[test]
+    fn redaction_never_keeps_a_secret() {
+        // Letters, digits and a non-ASCII letter no recorded value holds,
+        // among separators, escapes and whitespace.
+        const SECRET: &[char] = &[
+            'Q', 'X', 'Z', 'J', 'K', 'W', 'G', '5', '1', '\u{e9}', '/', '?', '#', '@', ':', '%',
+            '$', '&', '=', '+', '!', ';', ',', '[', ']', '\\', ' ', '\t', '\n',
+        ];
+        let mut state: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = |bound: usize| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            usize::try_from(state % bound as u64).unwrap_or_default()
+        };
+        for _ in 0..20_000 {
+            let secret: String = (0..=next(12)).map(|_| SECRET[next(SECRET.len())]).collect();
+            for value in [
+                format!("https://ci:{secret}@pypi.acme.dev/simple"), // betterleaks:allow
+                format!("https://{secret}@pypi.acme.dev/simple"),    // betterleaks:allow
+                format!("https://{secret}:0@pypi.acme.dev/simple"),  // betterleaks:allow
+                format!("https://pypi.acme.dev/simple?token={secret}"),
+                format!("https://pypi.acme.dev?{secret}"),
+                format!("https://pypi.acme.dev/simple#{secret}"),
+                format!("ci:{secret}@pypi.acme.dev/simple"),
+                format!("pypi.acme.dev/simple?token={secret}"),
+                format!("http://ci:{secret}@pypi.acme.dev/simple"), // betterleaks:allow
+                format!("HTTPS://ci:{secret}@pypi.acme.dev/simple"), // betterleaks:allow
+                format!("https://ci:{secret}\\0@pypi.acme.dev/simple"), // betterleaks:allow
+                format!("https://ci:{secret} 0@pypi.acme.dev/simple"), // betterleaks:allow
+            ] {
+                // As redacted, and as the Python reader records an index.
+                let parsed = crate::pypi::Named::parse(&value).recorded();
+                for recorded in [Some(super::redacted(&value)), parsed]
+                    .into_iter()
+                    .flatten()
+                {
+                    assert!(
+                        !recorded.to_ascii_uppercase().contains([
+                            'Q', 'X', 'Z', 'J', 'K', 'W', 'G', '5', '1', '\u{e9}', '\u{c9}'
+                        ]),
+                        "{value:?} -> {recorded:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The keys the Count's Python readers know, for the tests that check them
+/// against the real uv and Poetry.
+pub mod known {
+    pub use crate::pypi::settings::{
+        POETRY_DEPENDENCY_KEYS, POETRY_SOURCE_KEYS, UV_IRRELEVANT, UV_PIP_IRRELEVANT, UV_PIP_READ,
+        UV_READ, UV_SOURCE_KEYS,
+    };
+}
+
+/// A file that can name a Python package index. One the Count cannot read,
+/// such as a symlink or a file that is not text, must reach the scanner as
+/// unreadable, since leaving it out would make its packages PyPI's.
+pub fn python_settings(path: &str) -> bool {
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    matches!(
+        leaf,
+        "pyproject.toml" | "uv.toml" | "pdm.toml" | "pixi.toml" | "hatch.toml"
+    )
+}
+
+/// What a Python settings file the Count could not read becomes: text no
+/// TOML parser accepts, so it is unreadable rather than absent.
+pub const UNREADABLE_SETTINGS: &str = "= the Count could not read this file\n";
+
+/// The host of an http or https `url`, lowercased and without a default
+/// port, whatever the case of its scheme.
+pub(crate) fn web_host(url: &str) -> Option<String> {
+    let rest = ["https://", "http://"].iter().find_map(|scheme| {
+        url.get(..scheme.len())
+            .filter(|prefix| prefix.eq_ignore_ascii_case(scheme))
+            .map(|_| &url[scheme.len()..])
+    })?;
+    let host = rest.split(['/', '?', '#']).next()?.to_ascii_lowercase();
+    Some(
+        host.strip_suffix(":443")
+            .or_else(|| host.strip_suffix(":80"))
+            .unwrap_or(&host)
+            .to_owned(),
+    )
 }

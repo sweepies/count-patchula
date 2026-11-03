@@ -179,8 +179,8 @@ registries {
 
 A dependency's source decides where its versions come from. Helm repositories,
 OCI and Docker registries, Maven repositories and GitLab, Gitea or Forgejo tags carry
-their URL, so a private one works with an entry. npm dependencies can name
-their own [package registry](#package-registries). PyPI and the other package
+their URL, so a private one works with an entry. npm and Python dependencies
+can name their own [package registry](#package-registries). The other package
 registries still read their public registry, or its mirror. Lockfile tools get
 no registry credentials yet.
 
@@ -198,20 +198,78 @@ dependency's `registry`:
   does not hide one further up. Packages only a lockfile records get the same
   registry as a declared one would. `packageManager` stays on the public
   registry, since Corepack does not read `.npmrc`.
-- An npm [custom extractor](/guide/configuration/#custom-extractors) can set
+- Python packages come from what the project's lockfile records. The
+  Count does not work out which index uv or Poetry would pick from their
+  settings; the tool already did, and wrote it down:
+  - `uv.lock` records each package's index; uv reads the one at its
+    workspace root (the nearest whose `members` name the project and whose
+    `exclude` leaves it in), or the project's own outside a workspace.
+  - `poetry.lock` records each package's source, and nothing for PyPI.
+  - A lock above the project that belongs to another one does not count,
+    nor does a workspace member's own `uv.lock`. A package whose entries
+    disagree, within one lockfile or between `uv.lock` and `poetry.lock`,
+    is ambiguous.
+
+  A package no lockfile records is PyPI's only when the project configures
+  no index at all: no index, `index-url`, `extra-index-url`, `find-links`,
+  `no-index` or `torch-backend` in any `uv.toml` or `[tool.uv]` (its `[pip]`
+  table included) at or above it, no index pins in `[tool.uv.sources]`, no
+  override naming a URL, and no Poetry source or dependency pinned to one.
+  Otherwise its lookup fails, saying it could come from several indexes:
+  commit a lockfile that records it. That is how a public package could
+  otherwise stand in for a private one of the same name.
+
+  A lockfile can be stale, recording PyPI for a package the project now
+  takes from a private index. The update itself then runs the real `uv
+  lock` or `poetry lock` with the project's settings, which resolves from
+  the index the tool actually uses, so it never installs the public
+  package in its place.
+
+  A package from git, a path, a URL or a workspace member, by
+  `[tool.uv.sources]`, a Poetry dependency, a `name @ url` requirement or
+  the lockfile, is not looked up at all: its name on PyPI may be someone
+  else's. It is reported as skipped instead.
+
+  Everything the Count cannot read fails closed, for every package, locked
+  or not. Every setting uv accepts is either one that configures an index
+  or known not to, and every key a Poetry source or dependency may have is
+  known; tests check both lists against uv and Poetry themselves. A key the
+  Count does not know, a section that does not fit, a `pyproject.toml`,
+  `uv.toml` or lockfile that does not parse, a settings file it cannot read
+  (such as one behind a symlink), or workspace globs it might read
+  differently from uv make every lookup fail. So do index settings of tools
+  the Count cannot check against the tool, in any `pyproject.toml` at or
+  above the project or in `pdm.toml`, `pixi.toml` or `hatch.toml`: PDM
+  sources and overrides, Rye sources, Pixi PyPI options, and Hatch
+  installer flags or `PIP_*` and `UV_*` variables. Indexes come only from
+  these files, never from `pip.conf`, `PIP_*` or `UV_*` variables,
+  Dockerfiles or CI workflows. Private indexes are read through their
+  simple API, as PEP 691 JSON or PEP 503 HTML; HTML gives no upload times,
+  so no release-age wait.
+
+  pip requirements files are not maintained at all; see
+  [managers](/guide/managers/#python).
+- An npm or PyPI [custom extractor](/guide/configuration/#custom-extractors) can set
   `registry`, a template such as `"{registry}"`; an empty or unmatched capture
-  means the public registry. Without it, its packages follow `.npmrc` like a
+  means the public registry. Without it, npm packages follow `.npmrc` like a
   `package.json` beside them.
 
-These files are read whenever npm, Bun or an npm extractor is enabled,
-whatever `files` and `exclude` select. Bun's `bunfig.toml` and Yarn 1's
-`.yarnrc` are not read yet: a registry set only there is not used.
+`.npmrc` and `.yarnrc.yml` are read whenever npm, Bun or an npm extractor is
+enabled, and every `pyproject.toml`, `uv.toml`, `uv.lock` and `poetry.lock`
+whenever pyproject is, with `pdm.toml`, `pixi.toml` and `hatch.toml`. `files`
+and `exclude` do not limit these. Bun's
+`bunfig.toml` and Yarn 1's `.yarnrc` are not read yet: a registry set only
+there is not used.
 
-npm's and Yarn's public registries (`registry.npmjs.org`,
-`registry.yarnpkg.com`, over https or plain http) count as none. A value the Count cannot read from,
+npm's, Yarn's and PyPI's public registries (`registry.npmjs.org`,
+`registry.yarnpkg.com`, `pypi.org`, over https or plain http) count as none. A value the Count cannot read from,
 such as a `${VAR}` npm would take from the environment or a plain-http URL, is
-kept as written: that package's lookup fails, rather than reading the public
-package of its name, which may be someone else's.
+recorded instead: that package's lookup fails, rather than reading the public
+package of its name, which may be someone else's. Any user, password, query
+or fragment is removed from it first, and a URL that does not parse cleanly
+is recorded only as `<unreadable URL>`. A token in the path of a URL, as some
+hosted registries issue, looks like any other path and is recorded; keep such
+URLs in the operator's registry settings rather than the repository.
 
 A repository naming a registry never brings credentials: requests to it carry
 an operator entry's, when one covers its URL, and nothing otherwise. Two

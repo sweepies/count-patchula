@@ -26,8 +26,7 @@ quoting, comments and formatting.
 | `helm-values` | `values*.yaml`, `*values.yaml` (each also `.yml`) | |
 | `helm` | `Chart.yaml` | not yet: `Chart.lock` holds the update |
 | `terraform` | `*.tf`, `.terraform-version` | `.terraform.lock.hcl` |
-| `requirements` | `requirements*.txt`, `requirements*.in`, `requirements/*.txt`, `requirements/*.in` | |
-| `pyproject` | `pyproject.toml`, `.python-version` | `uv.lock`, `poetry.lock` |
+| `pyproject` | `pyproject.toml`, `.python-version`, `uv.toml` indexes | `uv.lock`, `poetry.lock` |
 | `pre-commit` | `.pre-commit-config.yaml` | |
 | `devcontainer` | `devcontainer.json`, `.devcontainer.json` | |
 | `woodpecker` | `.woodpecker.yml`, `.woodpecker.yaml`, `.woodpecker/*.yml` and `*.yaml` | |
@@ -259,13 +258,20 @@ Helm templates are not rendered. Image updates keep the tag's
 
 ## Python
 
-`requirements` reads pip requirement files, keeping extras, markers and hashes
-outside the version. `pyproject` reads PEP 621 dependencies and optional
+`pyproject` reads PEP 621 dependencies and optional
 dependencies, PEP 735 dependency groups, uv's dev, constraint and override
 dependencies, and Poetry's dependencies and groups. Edits touch only the
 version specifier. URL requirements, unversioned names and Poetry `git`/`path`
 sources are skipped. Names are PEP 503 normalised and resolved from `uv.lock` or
 `poetry.lock`; `.python-version` pins CPython.
+
+pip requirements files are not maintained: each is listed as skipped, with
+the reason. pip takes each package from whatever index the
+file's options, the files it includes and the environment name, and the
+Count cannot settle that for certain from the repository; a guess could
+propose someone else's package of the same name. Move the project to uv
+(`uv init --bare`, then `uv add -r requirements.txt`) to have it maintained.
+See [pip requirements files](/renovate/departures/#pip-requirements).
 
 ## GitLab CI
 

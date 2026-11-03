@@ -79,6 +79,18 @@ missing, and behaviour that changes their pull requests. The
 - **The Count:** [`registries`](/guide/sources/#private-registries) in the operator settings file, keyed by URL prefix, with secrets from environment variables or files. A repository config cannot name a credential or a host to send one to. Credentials cover registry reads, version lookups and image manifest and SBOM reads alike, for the sources that take a registry URL; lockfile tools do not get them yet
 - **Why:** One server serves many organisations, and a repository config can point a dependency at any URL
 
+### Python packages come from their lockfile {#python-indexes}
+
+- **Renovate:** Looks a Python package up in every index the project names, `--extra-index-url` included
+- **The Count:** Takes each package's index from what `uv.lock` or `poetry.lock` records. In a project that configures any index besides PyPI, a package no lockfile records fails its lookup with a message to commit a lockfile, and so does every package where the Count finds settings it does not know. See [package registries](/guide/sources/#package-registries)
+- **Why:** With several indexes, the same name can be a private package in one and anyone's package on PyPI. The lockfile is the tool's own answer; predicting it from the settings would mean re-implementing each tool's resolution, and a wrong guess is how dependency confusion happens
+
+### pip requirements files are not maintained {#pip-requirements}
+
+- **Renovate:** Updates `requirements.txt` and `pip-compile` inputs, looking packages up in the indexes their options name
+- **The Count:** Does not read them. Each pip requirements file is listed as skipped with the reason, recommending a move to uv (`uv init --bare`, then `uv add -r requirements.txt`), whose `pyproject.toml` and `uv.lock` it maintains
+- **Why:** pip takes each package from whatever index a file's options, the files it includes and the environment name, which cannot be settled for certain from the repository; a guess could propose someone else's package of the same name
+
 ## What gets updated
 
 ### Indirect Go requirements {#indirect-go-requirements}

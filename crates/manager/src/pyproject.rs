@@ -1,25 +1,8 @@
 //! `pyproject.toml` (PEP 621, PEP 735 groups, uv and Poetry tables) and
 //! `.python-version`. `uv.lock` and `poetry.lock` resolve direct declarations.
+use crate::pypi::normalise;
 use crate::*;
 use toml_edit::{Document, Item, Value};
-
-/// PEP 503 normalised project name.
-fn normalise(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    let mut separator = false;
-    for c in name.chars() {
-        if matches!(c, '-' | '_' | '.') {
-            separator = true;
-            continue;
-        }
-        if separator && !out.is_empty() {
-            out.push('-');
-        }
-        separator = false;
-        out.push(c.to_ascii_lowercase());
-    }
-    out
-}
 
 /// The name and the byte range of the version specifiers in one PEP 508
 /// requirement. URL requirements and unversioned names have no specifier.
@@ -77,9 +60,23 @@ struct Scan<'a> {
     text: &'a str,
     lock: Option<Document<&'a str>>,
     out: Vec<Dependency>,
+    skipped: Vec<Skipped>,
 }
 
+/// Why a package from git, a path, a URL or a workspace member is skipped.
+const NOT_FROM_AN_INDEX: &str = "comes from git, a path, a URL or a workspace member, not a package index, so it is not looked up on PyPI";
+
 impl Scan<'_> {
+    /// Report a package that does not come from an index, at `at`.
+    fn skip(&mut self, at: usize, name: &str) {
+        self.skipped.push(Skipped {
+            manager: Manager::Pyproject,
+            file: self.path.into(),
+            line: Some(self.text[..at.min(self.text.len())].matches('\n').count() + 1),
+            value: name.into(),
+            reason: NOT_FROM_AN_INDEX.into(),
+        });
+    }
     /// PEP 508 strings, edited inside the TOML string at the specifier only.
     fn requirements(&mut self, values: Option<&Item>, pointer: &str, kind: DependencyKind) {
         let Some(array) = values.and_then(Item::as_array) else {
@@ -100,6 +97,10 @@ impl Scan<'_> {
                 continue;
             }
             let requirement = string.value();
+            if let Some(name) = crate::pypi::settings::direct_reference(requirement) {
+                self.skip(span.start, &name);
+                continue;
+            }
             let Some((name, start, end)) = pep508(requirement) else {
                 continue;
             };
@@ -141,10 +142,13 @@ impl Scan<'_> {
             let version = if value.is_str() {
                 Some(value)
             } else {
-                if ["git", "path", "url", "file"]
+                if ["git", "path", "url", "file", "directory"]
                     .iter()
                     .any(|key| value.get(key).is_some())
                 {
+                    if let Some(span) = value.span() {
+                        self.skip(span.start, name);
+                    }
                     continue;
                 }
                 value.get("version")
@@ -184,35 +188,34 @@ impl Scan<'_> {
     }
 }
 
-pub(super) fn extract(path: &str, text: &str, files: &Files) -> Result<Vec<Dependency>, String> {
+pub(super) fn extract(
+    path: &str,
+    text: &str,
+    files: &Files,
+    skipped: &mut Vec<Skipped>,
+) -> Result<Vec<Dependency>, String> {
     if path.ends_with(".python-version") {
         return Ok(python_version(path, text));
     }
     if !path.ends_with("pyproject.toml") {
         return Ok(Vec::new());
     }
-    let doc = Document::parse(text).map_err(|e| e.to_string())?;
-    // The nearest lockfile beside or above the manifest resolves it; uv
-    // workspaces keep one lock at the workspace root.
-    let base = path
-        .strip_suffix("pyproject.toml")
-        .expect("manifest suffix");
-    let lock = files
-        .iter()
-        .filter(|(p, _)| {
-            ["uv.lock", "poetry.lock"].iter().any(|leaf| {
-                p.strip_suffix(leaf)
-                    .is_some_and(|dir| base.starts_with(dir))
-            })
-        })
-        .max_by_key(|(p, _)| p.len())
-        .map(|(_, t)| Document::parse(t.as_str()).map_err(|e| e.to_string()))
+    let doc = Document::parse(text).map_err(|e| toml_error(text, &e))?;
+    let discovery = crate::pypi::settings::discover(path, files);
+    // The lockfile whose versions are the project's: its own, or its uv
+    // workspace root's; a lock above belongs to another project.
+    let lock = discovery
+        .resolved_lock
+        .as_ref()
+        .and_then(|lock| files.get(lock))
+        .map(|text| Document::parse(text.as_str()).map_err(|e| toml_error(text, &e)))
         .transpose()?;
     let mut scan = Scan {
         path,
         text,
         lock,
         out: Vec::new(),
+        skipped: Vec::new(),
     };
     let project = doc.get("project");
     scan.requirements(
@@ -277,6 +280,16 @@ pub(super) fn extract(path: &str, text: &str, files: &Files) -> Result<Vec<Depen
             );
         }
     }
+    for dep in discovery.indexes.assign(&mut scan.out) {
+        skipped.push(Skipped {
+            manager: Manager::Pyproject,
+            file: dep.file,
+            line: Some(dep.location.line),
+            value: dep.name,
+            reason: NOT_FROM_AN_INDEX.into(),
+        });
+    }
+    skipped.extend(scan.skipped);
     Ok(scan.out)
 }
 
@@ -309,4 +322,15 @@ fn python_version(path: &str, text: &str) -> Vec<Dependency> {
         included_by: None,
         registry: None,
     }]
+}
+
+/// A TOML parse error without the source line toml_edit quotes, which may
+/// hold an index URL's credentials.
+fn toml_error(text: &str, error: &toml_edit::TomlError) -> String {
+    let line = error
+        .span()
+        .and_then(|span| text.get(..span.start))
+        .map_or(0, |before| before.matches('\n').count())
+        + 1;
+    format!("invalid TOML at line {line}: {}", error.message())
 }

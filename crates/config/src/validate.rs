@@ -239,8 +239,10 @@ impl Config {
                 }
                 if let Some(registry) = &extractor.registry {
                     template(&format!("{field}.registry"), registry, &capture)?;
-                    if !extractor.source.contains('{') && extractor.source != "npm" {
-                        return fail(&field, "only npm extractors take a registry");
+                    if !extractor.source.contains('{')
+                        && !matches!(extractor.source.as_str(), "npm" | "pypi")
+                    {
+                        return fail(&field, "only npm and pypi extractors take a registry");
                     }
                 }
                 if !extractor.source.contains('{')

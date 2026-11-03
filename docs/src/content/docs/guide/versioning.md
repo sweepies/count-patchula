@@ -10,7 +10,7 @@ is rewritten.
 |---|---|---|
 | `semver` | npm, Cargo, most GitHub sources | npm and Cargo requirements are parsed separately: bare `1.2.3` is exact in npm and compatible in Cargo |
 | `docker` | container images | a numeric prefix plus a variant suffix that never changes (`-alpine`, `-bookworm`) |
-| `pep440` | requirements, PEP 621, uv | epochs, pre/dev/post and local versions, `~=`, wildcards and exclusions |
+| `pep440` | PEP 621, uv | epochs, pre/dev/post and local versions, `~=`, wildcards and exclusions |
 | `poetry` | Poetry | `^` keeps the leftmost nonzero part, `~` allows patches (minors for a bare major), `\|\|` separates alternatives |
 | `go` | Go modules | canonical `v` SemVer and pseudo-versions |
 | `hashicorp` | Terraform | `=`, `!=`, comparisons, `~>` (two- and three-part forms differ) |
@@ -58,7 +58,7 @@ Under `preserve` a shifted range keeps the precision it was declared with:
 | Cargo | a convex interval keeping the original minimum, `>=1.2.3, <3.0.0`, because a Cargo requirement cannot be a union |
 | Composer | adds an alternative covering the target: `^1.2 \|\| ^3.0` |
 | Poetry | adds an alternative covering the target: `^1.2 \|\| ^3.0` |
-| PEP 440 (requirements, PEP 621, uv) | a declaration that is a single upper-bound clause is raised, `<2` to `<=3.1.4`; a compound one such as `>=1, <2` is reported as a notice instead, and other single specifiers cannot be unions, so they shift as under `preserve` |
+| PEP 440 (PEP 621, uv) | a declaration that is a single upper-bound clause is raised, `<2` to `<=3.1.4`; a compound one such as `>=1, <2` is reported as a notice instead, and other single specifiers cannot be unions, so they shift as under `preserve` |
 | Terraform | as PEP 440: a single upper-bound clause is raised, anything else shifts as under `preserve` |
 | Maven, NuGet | a single interval takes the target as its inclusive upper bound, `[1.0,2.0)` to `[1.0,3.1]`; several intervals are not rewritten |
 | Bundler | as `preserve`: `,` only means "and", so a requirement cannot be extended |
@@ -78,8 +78,7 @@ per package, and a lockfile records it.
   `=0.23.1` in Cargo fails to resolve when another crate in the tree needs
   `^0.23.2`, where a range lets the resolver pick one version for both.
 
-`requirements.txt` stays `exact`: `==` is the norm there, and the file acts as
-the lock. npm and Bun stay `exact` too, so installs are reproducible without
+npm and Bun stay `exact`, so installs are reproducible without
 relying on a lockfile alone; see [Exact npm versions](/renovate/departures/#npm-range-edits).
 
 Under `preserve` a release the declaration already allows does not edit the
