@@ -128,6 +128,12 @@ sources = ["src/**/*", "public/**/*", "astro.config.mjs", "package.json", "aube-
 outputs = ["dist/**/*"]
 run = "aube run build"
 
+# Workers Builds (Cloudflare, script `count-patchula`) runs the build command
+# `curl -fsSL https://mise.run | sh && ~/.local/bin/mise trust` and then, on
+# `main`, `MISE_LOCKED=1 MISE_ENABLE_TOOLS=node,aube ~/.local/bin/mise run
+# docs:deploy`, or on any other branch the same with `docs:upload`. These are
+# set in the dashboard; keep them in step with this note.
+
 ["docs:deploy"]
 description = "Deploy the built site to Cloudflare Workers; needs CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID"
 depends = ["docs:build"]

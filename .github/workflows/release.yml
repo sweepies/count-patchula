@@ -28,6 +28,11 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  # Install exactly what mise.lock records, never update it: a build fetches
+  # only the tools it uses, so a download host for another tool cannot stall it.
+  MISE_LOCKED: "1"
+
 jobs:
   build:
     name: Build (${{ matrix.name }})
