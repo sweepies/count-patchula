@@ -16,6 +16,11 @@ concurrency:
 
 # Every job runs one or two mise tasks, so `mise run ci` runs the same checks
 # locally.
+env:
+  # Install exactly what mise.lock records, never update it: a build fetches
+  # only the tools it uses, so a download host for another tool cannot stall it.
+  MISE_LOCKED: "1"
+
 jobs:
   # Each job below runs only when a changed path can affect it; a docs-only
   # change skips the Rust jobs. A skipped job still reports its check.
@@ -249,6 +254,9 @@ jobs:
     timeout-minutes: 30
     env:
       PATCHULA_RECORD: "0"
+      # yarn and poetry install through vfox plugins, whose downloads mise
+      # cannot lock, so locked mode would refuse them.
+      MISE_LOCKED: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
