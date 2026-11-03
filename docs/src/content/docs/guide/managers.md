@@ -344,8 +344,9 @@ items, local tools and the SDK in `global.json` (feature-band releases only).
 with `dotnet restore --force-evaluate`.
 
 `bundler` reads `gem "name", "requirement"` lines and the `ruby` directive,
-resolving from `Gemfile.lock`, plus `.ruby-version`. Gems from `git:`, `path:`
-or `github:` sources are listed as skipped; where each gem comes from is in
+resolving from `Gemfile.lock`, plus `.ruby-version`. Gems from git, a path or
+a forge (`git:`, `path:`, `github:` and the like, or a `GIT` or `PATH`
+section of the lock) are listed as skipped; where each gem comes from is in
 [package registries](/guide/sources/#package-registries). Gems with two
 requirement strings are skipped too, and so are gems with no requirement at all: any version satisfies them, so only
 [lockfile maintenance](/guide/lockfiles/#lockfile-maintenance) moves them.

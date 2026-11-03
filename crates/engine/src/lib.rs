@@ -2562,11 +2562,11 @@ pub fn read_tree(
             });
         let regular = std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file());
         if below_symlink || !regular {
-            // A Python settings file behind a symlink could name an index:
-            // kept as unreadable, its packages' lookups fail rather than fall
-            // back to PyPI.
+            // A settings file behind a symlink could name a registry: kept as
+            // unreadable, its packages' lookups fail rather than fall back to
+            // the public registry.
             if scanner.needs(&relative)
-                && patchula_manager::python_settings(&relative)
+                && patchula_manager::registry_settings(&relative)
                 && std::fs::metadata(&path).is_ok_and(|meta| meta.is_file())
             {
                 files.insert(
@@ -2583,7 +2583,7 @@ pub fn read_tree(
                 }
                 // One that cannot be read, or is not text, is unreadable
                 // the same way.
-                _ if patchula_manager::python_settings(&relative) => {
+                _ if patchula_manager::registry_settings(&relative) => {
                     files.insert(
                         relative.clone(),
                         patchula_manager::UNREADABLE_SETTINGS.to_owned(),

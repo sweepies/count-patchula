@@ -2854,43 +2854,57 @@ fn pip_requirements_files_are_not_maintained_and_the_count_says_why() {
 }
 
 #[test]
-fn gems_come_from_their_source_their_lockfile_or_rubygems_alone() {
+fn gems_come_from_their_lockfile_or_rubygems_alone() {
     let gemfile = |body: &str| format!("source \"https://rubygems.org\"\n{body}");
     let lock =
         |sections: &str| format!("{sections}\nPLATFORMS\n  ruby\n\nDEPENDENCIES\n  acme-a\n");
+    let acme_lock = lock(
+        "GEM\n  remote: https://gems.acme.dev/\n  specs:\n    acme-a (1.0.0)\n\nGEM\n  remote: https://rubygems.org/\n  specs:\n    rake (13.0.0)\n",
+    );
+    let blocks = gemfile(
+        "source \"https://gems.acme.dev\" do\n  gem \"acme-a\", \"~> 1.0\"\nend\ngem \"acme-b\", \"~> 1.0\", source: \"https://gems.acme.dev\"\ngem \"rake\", \"~> 13.0\"\n",
+    );
     let files = Files::from([
+        // Plain lines and RubyGems alone: an unrecorded gem is RubyGems'.
         (
             "public/Gemfile".into(),
-            gemfile("gem \"rails\", \"~> 7.1\"\n"),
-        ),
-        (
-            "public/Gemfile.lock".into(),
-            lock("GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (7.1.0)\n"),
-        ),
-        // A source block, and a gem's own source option.
-        (
-            "block/Gemfile".into(),
             gemfile(
-                "source \"https://gems.acme.dev\" do\n  gem \"acme-a\", \"~> 1.0\"\nend\ngem \"acme-b\", \"~> 1.0\", source: \"https://gems.acme.dev\"\ngem \"rake\", \"~> 13.0\"\n",
+                "gemspec\ngem \"rails\", \"~> 7.1\"\ngroup :test do\n  gem \"rspec\", \"~> 3.0\", require: false\nend\n",
             ),
         ),
-        // A second top-level source: the lockfile decides, else ambiguous.
+        ("public/.bundle/config".into(), "---\nBUNDLE_PATH: \"vendor/bundle\"\nBUNDLE_BUILD__NOKOGIRI: \"--use-system-libraries\"\n".into()),
+        // Another source: the lockfile decides; unrecorded gems fail.
+        ("locked/Gemfile".into(), blocks.clone()),
+        ("locked/Gemfile.lock".into(), acme_lock.clone()),
+        ("unlocked/Gemfile".into(), blocks),
+        // A line the Count cannot read: the same.
         (
-            "second/Gemfile".into(),
+            "unread/Gemfile".into(),
             gemfile(
-                "source \"https://gems.acme.dev\"\ngem \"acme-a\", \"~> 1.0\"\ngem \"acme-b\", \"~> 1.0\"\n",
+                "if ENV[\"CI\"]\n  gem \"acme-a\", \"~> 1.0\"\nend\ngem \"rake\", \"~> 13.0\"\ngem \"rails\", \"~> 7.1\"\n",
             ),
         ),
-        (
-            "second/Gemfile.lock".into(),
-            lock(
-                "GEM\n  remote: https://gems.acme.dev/\n  specs:\n    acme-a (1.0.0)\n\nGEM\n  remote: https://rubygems.org/\n  specs:\n    rake (13.0.0)\n",
-            ),
-        ),
-        // A source the Count cannot read.
+        ("unread/Gemfile.lock".into(), acme_lock.clone()),
         (
             "env/Gemfile".into(),
             "source ENV.fetch(\"GEM_SOURCE\")\ngem \"rails\", \"~> 7.1\"\n".into(),
+        ),
+        // A credential in a source never reaches a report.
+        (
+            "secret/Gemfile".into(),
+            gemfile("source \"https://bot:s3cr3t@gems.acme.dev\"\ngem \"acme-a\", \"~> 1.0\"\n"),
+        ),
+        // Bundler settings that could move any gem fail every lookup.
+        ("mirror/Gemfile".into(), gemfile("gem \"rake\", \"~> 13.0\"\n")),
+        ("mirror/Gemfile.lock".into(), acme_lock.clone()),
+        (
+            "mirror/.bundle/config".into(),
+            "---\nBUNDLE_MIRROR__HTTPS://RUBYGEMS__ORG/: \"https://gems.acme.dev\"\n".into(),
+        ),
+        ("symlink/Gemfile".into(), gemfile("gem \"rake\", \"~> 13.0\"\n")),
+        (
+            "symlink/.bundle/config".into(),
+            patchula_manager::UNREADABLE_SETTINGS.into(),
         ),
         // From git, by option or as the lockfile records.
         (
@@ -2919,13 +2933,27 @@ fn gems_come_from_their_source_their_lockfile_or_rubygems_alone() {
             .clone()
     };
     let acme = Some("https://gems.acme.dev".to_owned());
+    let ambiguous = |found: Option<String>| found.is_some_and(|r| r.starts_with("ambiguous: "));
     assert_eq!(registry("public/Gemfile", "rails"), None);
-    assert_eq!(registry("block/Gemfile", "acme-a"), acme);
-    assert_eq!(registry("block/Gemfile", "acme-b"), acme);
-    assert_eq!(registry("block/Gemfile", "rake"), None);
-    assert_eq!(registry("second/Gemfile", "acme-a"), acme);
-    assert!(registry("second/Gemfile", "acme-b").is_some_and(|r| r.starts_with("ambiguous: ")));
+    assert_eq!(registry("public/Gemfile", "rspec"), None);
+    assert_eq!(registry("locked/Gemfile", "acme-a"), acme);
+    assert_eq!(registry("locked/Gemfile", "rake"), None);
+    assert!(ambiguous(registry("locked/Gemfile", "acme-b")));
+    for name in ["acme-a", "acme-b", "rake"] {
+        assert!(ambiguous(registry("unlocked/Gemfile", name)), "{name}");
+    }
+    assert_eq!(registry("unread/Gemfile", "acme-a"), acme);
+    assert_eq!(registry("unread/Gemfile", "rake"), None);
+    assert!(registry("unread/Gemfile", "rails").is_some_and(|r| r.contains("cannot read")));
     assert!(registry("env/Gemfile", "rails").is_some_and(|r| r.contains("cannot read")));
+    let secret = registry("secret/Gemfile", "acme-a").unwrap();
+    assert!(
+        ambiguous(Some(secret.clone())) && !secret.contains("s3cr3t"),
+        "{secret}"
+    );
+    assert!(fails(registry("mirror/Gemfile", "rake")));
+    assert!(registry("mirror/Gemfile", "rake").is_some_and(|r| r.contains("does not follow")));
+    assert!(registry("symlink/Gemfile", "rake").is_some_and(|r| r.contains("cannot read")));
     for name in ["acme-a", "acme-b"] {
         assert!(
             extraction

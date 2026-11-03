@@ -79,11 +79,11 @@ missing, and behaviour that changes their pull requests. The
 - **The Count:** [`registries`](/guide/sources/#private-registries) in the operator settings file, keyed by URL prefix, with secrets from environment variables or files. A repository config cannot name a credential or a host to send one to. Credentials cover registry reads, version lookups and image manifest and SBOM reads alike, for the sources that take a registry URL; lockfile tools do not get them yet
 - **Why:** One server serves many organisations, and a repository config can point a dependency at any URL
 
-### Python packages come from their lockfile {#python-indexes}
+### Packages come from their lockfile {#lockfile-registries}
 
-- **Renovate:** Looks a Python package up in every index the project names, `--extra-index-url` included
-- **The Count:** Takes each package's index from what `uv.lock` or `poetry.lock` records. In a project that configures any index besides PyPI, a package no lockfile records fails its lookup with a message to commit a lockfile, and so does every package where the Count finds settings it does not know. See [package registries](/guide/sources/#package-registries)
-- **Why:** With several indexes, the same name can be a private package in one and anyone's package on PyPI. The lockfile is the tool's own answer; predicting it from the settings would mean re-implementing each tool's resolution, and a wrong guess is how dependency confusion happens
+- **Renovate:** Looks a Python package up in every index the project names, `--extra-index-url` included, and a gem in the sources its Gemfile names
+- **The Count:** Takes each Python package's index from what `uv.lock` or `poetry.lock` records, and each gem's source from `Gemfile.lock`. A package no lockfile records fails its lookup, with a message to commit a lockfile, in a project that configures any registry besides the public one, or whose settings the Count does not know. For gems that includes a Gemfile line other than a few plain forms, such as a condition or a `git_source`. See [package registries](/guide/sources/#package-registries)
+- **Why:** With several registries, the same name can be a private package in one and anyone's package on the public one. The lockfile is the tool's own answer; predicting it from the settings, or from a Gemfile, which is Ruby, would mean re-implementing each tool's resolution, and a wrong guess is how dependency confusion happens
 
 ### pip requirements files are not maintained {#pip-requirements}
 

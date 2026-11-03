@@ -198,16 +198,18 @@ dependency's `registry`:
   does not hide one further up. Packages only a lockfile records get the same
   registry as a declared one would. `packageManager` stays on the public
   registry, since Corepack does not read `.npmrc`.
-- Ruby gems come from the source the Gemfile names for them, a `source "…"
-  do` block or a gem's `source:` option; else from the `remote:` that
-  `Gemfile.lock` records; else from RubyGems, but only when the Gemfile names
-  no other top-level `source`. Anywhere else the gem's lookup fails, saying it
-  could come from several sources: commit `Gemfile.lock`. A `source` the Count
-  cannot read, such as `ENV.fetch(...)`, or an `eval_gemfile`, fails every
-  lookup. Gems from git, a path or GitHub are listed as skipped. Private gem
-  sources are not read yet, so their gems' lookups fail rather than read
-  RubyGems; Bundler mirrors in `.bundle/config` only move where RubyGems is
-  fetched from.
+- Ruby gems come from the `remote:` that `Gemfile.lock` records for them.
+  A Gemfile is Ruby, so the Count does not work out sources from it. A gem
+  the lock does not record comes from RubyGems only when every line of the
+  Gemfile is a plain `source`, `gem`, `group`, `platforms`, `gemspec`, `ruby`
+  or `end` with literal values, and no `source` names anything but RubyGems.
+  Otherwise, as with a condition, a `git_source`, an `eval_gemfile` or a
+  `gem` continued onto a second line, its lookup fails, saying it could come
+  from several sources: commit `Gemfile.lock`. A project `.bundle/config`
+  with a setting that could move gems, such as a mirror or `BUNDLE_GEMFILE`,
+  fails every lookup. Gems from git, a path or GitHub are listed as skipped.
+  Private gem sources are not read yet, so their gems' lookups fail rather
+  than read RubyGems.
 - Python packages come from what the project's lockfile records. The
   Count does not work out which index uv or Poetry would pick from their
   settings; the tool already did, and wrote it down:

@@ -282,7 +282,9 @@ impl Scanner {
             || npm_extractors)
             && matches!(leaf, ".npmrc" | ".yarnrc.yml"))
             || (self.config.managers.contains(&Manager::Pyproject)
-                && (python_settings(path) || matches!(leaf, "uv.lock" | "poetry.lock")))
+                && (registry_settings(path) || matches!(leaf, "uv.lock" | "poetry.lock")))
+            || (self.config.managers.contains(&Manager::Bundler)
+                && (registry_settings(path) || leaf == "Gemfile.lock"))
     }
     /// The pip requirements files among `paths`, which the Count does not
     /// maintain, as skipped entries saying why, when Python projects are
@@ -754,19 +756,21 @@ pub mod known {
     };
 }
 
-/// A file that can name a Python package index. One the Count cannot read,
-/// such as a symlink or a file that is not text, must reach the scanner as
-/// unreadable, since leaving it out would make its packages PyPI's.
-pub fn python_settings(path: &str) -> bool {
+/// A file that can say where packages come from: a Python package index or
+/// Bundler's settings. One the Count cannot read, such as a symlink or a file
+/// that is not text, must reach the scanner as unreadable, since leaving it
+/// out would make its packages the public registry's.
+pub fn registry_settings(path: &str) -> bool {
     let leaf = path.rsplit('/').next().unwrap_or(path);
     matches!(
         leaf,
         "pyproject.toml" | "uv.toml" | "pdm.toml" | "pixi.toml" | "hatch.toml"
-    )
+    ) || path == ".bundle/config"
+        || path.ends_with("/.bundle/config")
 }
 
-/// What a Python settings file the Count could not read becomes: text no
-/// TOML parser accepts, so it is unreadable rather than absent.
+/// What a settings file the Count could not read becomes: text no TOML or
+/// YAML mapping parser accepts, so it is unreadable rather than absent.
 pub const UNREADABLE_SETTINGS: &str = "= the Count could not read this file\n";
 
 /// The host of an http or https `url`, lowercased and without a default
