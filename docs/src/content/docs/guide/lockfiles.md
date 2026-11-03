@@ -233,9 +233,11 @@ Output is kept only when something fails, at most 4 KiB of each stream.
 
 :::note[Private registries]
 Lockfile tools cannot reach private registries yet, because credentials are
-scrubbed on purpose. Version lookups can, with [registry
-credentials](/guide/sources/#private-registries); passing them to lockfile
-tools will be a separate, explicit opt-in.
+scrubbed on purpose. Lookups from sources that take a registry URL, such as
+Helm, OCI and Maven, can, with [registry
+credentials](/guide/sources/#private-registries); npm, PyPI and the other
+package registries still read only their public registry. Passing credentials
+to lockfile tools will be a separate, explicit opt-in.
 :::
 
 ## Lockfile maintenance
