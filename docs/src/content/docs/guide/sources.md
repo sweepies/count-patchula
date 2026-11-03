@@ -198,6 +198,20 @@ dependency's `registry`:
   does not hide one further up. Packages only a lockfile records get the same
   registry as a declared one would. `packageManager` stays on the public
   registry, since Corepack does not read `.npmrc`.
+- Ruby gems come from what `Gemfile.lock` records and what the Gemfile
+  says. A Gemfile is Ruby, so the Count reads it only when every line is a
+  plain `source`, `gem`, `group`, `platforms`, `gemspec`, `ruby` or `end`
+  with literal values. Then each gem comes from its `source:` option, else
+  the `source` block around it, else the one top-level `source`, and where
+  `Gemfile.lock` records the gem too, the two must agree. A Gemfile with any
+  other line, such as a condition, a `git_source`, an `eval_gemfile` or a
+  `gem` continued onto a second line, or with several top-level sources,
+  leaves it to the `remote:` the lock records. A gem neither settles fails
+  its lookup, saying it could come from several sources: commit
+  `Gemfile.lock`. A project `.bundle/config` with a setting that could move
+  gems, such as a mirror or `BUNDLE_GEMFILE`, fails every lookup. Gems from
+  git, a path or GitHub are listed as skipped. Private gem sources are not
+  read yet, so their gems' lookups fail rather than read RubyGems.
 - Python packages come from what the project's lockfile records. The
   Count does not work out which index uv or Poetry would pick from their
   settings; the tool already did, and wrote it down:

@@ -280,7 +280,10 @@ pub(super) fn extract(
             );
         }
     }
-    for dep in discovery.indexes.assign(&mut scan.out) {
+    for dep in discovery
+        .origins
+        .assign(&mut scan.out, &crate::pypi::PYPI, |dep| dep.package.clone())
+    {
         skipped.push(Skipped {
             manager: Manager::Pyproject,
             file: dep.file,

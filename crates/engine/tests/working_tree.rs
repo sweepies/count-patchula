@@ -115,12 +115,12 @@ fn a_tracked_file_below_a_symlinked_directory_is_not_read() {
     assert!(!paths.contains("app/package.json"));
 }
 
-/// A Python settings file behind a symlink could name a private index, so it
-/// is read as unreadable, never as absent: its packages' lookups fail rather
-/// than go to PyPI.
+/// A settings file behind a symlink could name a private registry, so it is
+/// read as unreadable, never as absent: its packages' lookups fail rather than
+/// go to the public registry.
 #[cfg(unix)]
 #[test]
-fn a_symlinked_python_settings_file_is_unreadable_not_absent() {
+fn a_symlinked_settings_file_is_unreadable_not_absent() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("checkout");
     git(dir.path(), &["init", "-q", "checkout"]);
@@ -135,6 +135,30 @@ fn a_symlinked_python_settings_file_is_unreadable_not_absent() {
         "index-url = \"https://pypi.acme.dev/simple\"\n",
     );
     std::os::unix::fs::symlink("config/uv.toml", root.join("uv.toml")).unwrap();
+    write(
+        &root,
+        "Gemfile",
+        "source \"https://rubygems.org\"\ngem \"rake\", \"~> 13.0\"\n",
+    );
+    write(
+        &root,
+        "config/bundle",
+        "BUNDLE_MIRROR__ALL: \"https://gems.acme.dev\"\n",
+    );
+    std::fs::create_dir_all(root.join(".bundle")).unwrap();
+    std::os::unix::fs::symlink("../config/bundle", root.join(".bundle/config")).unwrap();
+    // A linked `.bundle` directory, which Git lists as one path.
+    write(
+        &root,
+        "app/Gemfile",
+        "source \"https://rubygems.org\"\ngem \"rack\", \"~> 3.0\"\n",
+    );
+    write(
+        &root,
+        "config/bundle-dir/config",
+        "BUNDLE_MIRROR__ALL: \"https://gems.acme.dev\"\n",
+    );
+    std::os::unix::fs::symlink("../config/bundle-dir", root.join("app/.bundle")).unwrap();
     let scanner = scanner("amends \"PatchulaConfig.pkl\"\n");
     let (_, files) = patchula_engine::read_tree(&root, &scanner).unwrap();
     assert_eq!(
@@ -152,5 +176,23 @@ fn a_symlinked_python_settings_file_is_unreadable_not_absent() {
             .as_deref()
             .is_some_and(|r| r.contains("uv.toml the Count cannot read")),
         "{registry:?}"
+    );
+    assert_eq!(
+        files.get(".bundle/config").map(String::as_str),
+        Some(patchula_manager::UNREADABLE_SETTINGS)
+    );
+    assert_eq!(
+        files.get("app/.bundle/config").map(String::as_str),
+        Some(patchula_manager::UNREADABLE_SETTINGS)
+    );
+    let rake = extraction
+        .dependencies
+        .iter()
+        .find(|d| d.name == "rake")
+        .and_then(|d| d.registry.clone());
+    assert!(
+        rake.as_deref()
+            .is_some_and(|r| r.contains(".bundle/config, which the Count cannot read")),
+        "{rake:?}"
     );
 }
