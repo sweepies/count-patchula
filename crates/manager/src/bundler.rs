@@ -1,16 +1,16 @@
 //! Bundler: `gem` requirements and the `ruby` directive in a Gemfile, resolved
 //! from `Gemfile.lock`, plus `.ruby-version`.
 //!
-//! Where each gem comes from follows `crate::origins`, with `Gemfile.lock` as
-//! the record: a gem it lists comes from the `remote:` of its section. A
-//! Gemfile is Ruby, so the Count reads its declarations only to tell whether
-//! an unrecorded gem can only be RubyGems': every line must be one of a few
-//! plain forms, and naming no source besides RubyGems. Anything else, such as
-//! a condition, a second source or a line continued onto the next, leaves
-//! unrecorded gems' lookups failing until `Gemfile.lock` is committed.
+//! Where each gem comes from follows `crate::origins`: the `remote:` of its
+//! section in `Gemfile.lock`, and what the Gemfile says. A Gemfile is Ruby,
+//! so the Count relies on it only when every line is one of a few plain
+//! forms (see `gemfile`). Anything else, such as a condition or a line
+//! continued onto the next, leaves gems the lock does not record failing
+//! their lookups until `Gemfile.lock` is committed.
 use crate::origins::{Named, Origin, Origins, Public};
 use crate::*;
 use regex::Regex;
+use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
 fn ruby(path: &str, text: &str, start: usize, version: &str, pointer: &str) -> Dependency {
@@ -87,19 +87,22 @@ pub(super) fn extract(
         let start = text.find(token).expect("token from text") + (token.len() - version.len());
         return Ok(vec![ruby(path, text, start, version, "/ruby")]);
     }
-    let Some(dir) = path.strip_suffix("Gemfile") else {
+    if !path.ends_with("Gemfile") {
         return Ok(Vec::new());
-    };
+    }
+    let dir = &path[..path.rfind('/').map_or(0, |i| i + 1)];
+    // Each string's quotes captured on both sides, so a line Ruby reads
+    // differently, such as `gem "a', '1"`, is not taken apart.
     static GEM: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r#"(?m)^[ \t]*gem[ \t(]+["']([A-Za-z0-9_.-]+)["'][ \t]*,[ \t]*["']([^"'\n]+)["'](?:[ \t]*,[ \t]*["']([^"'\n]+)["'])?([^\n]*)$"#)
+        Regex::new(r#"(?m)^[ \t]*gem[ \t(]+(["'])([A-Za-z0-9_.-]+)(["'])[ \t]*,[ \t]*(["'])([^"'\n]+)(["'])(?:[ \t]*,[ \t]*(["'])[^"'\n]+(["']))?"#)
             .expect("gem pattern")
     });
     static RUBY: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r#"(?m)^[ \t]*ruby[ \t(]+["']([0-9][0-9.]*)["']"#).expect("ruby pattern")
     });
-    let lock_text = files.get(&format!("{dir}Gemfile.lock"));
+    let lock_text = files.get(&format!("{path}.lock"));
     let lock = lock_text.map(|l| locked(l)).unwrap_or_default();
-    let mut origins = gemfile(path, text);
+    let Gemfile { mut origins, gems } = gemfile(path, text);
     origins.locks.extend(lock_text.map(|l| lock_origins(l)));
     origins.uncertain.extend(bundle_config(
         dir,
@@ -107,13 +110,26 @@ pub(super) fn extract(
     ));
     let mut out = Vec::new();
     for c in GEM.captures_iter(text) {
-        // Two requirement strings form a compound requirement, which is
-        // not rewritten.
-        if c.get(3).is_some() {
+        let quoted = |open: usize, close: usize| {
+            c.get(open).map(|m| m.as_str()) == c.get(close).map(|m| m.as_str())
+        };
+        if !(quoted(1, 3) && quoted(4, 6) && quoted(7, 8)) {
             continue;
         }
-        let name = &c[1];
-        let first = c.get(2).unwrap();
+        // Two requirement strings form a compound requirement, which is
+        // not rewritten.
+        if c.get(7).is_some() {
+            continue;
+        }
+        let name = &c[2];
+        let first = c.get(5).unwrap();
+        // A gem line the Gemfile's reading did not see as one: its gem is
+        // not taken to be RubyGems'.
+        if !gems.contains(name) {
+            origins.configured.push(Named::Unusable(format!(
+                "a gem line in {path} the Count cannot read"
+            )));
+        }
         out.push(Dependency {
             manager: Manager::Bundler,
             file: path.into(),
@@ -160,25 +176,74 @@ const RUBYGEMS: Public = Public {
     },
 };
 
-/// What a Gemfile itself says about where its gems come from: the sources it
-/// names besides RubyGems, and the gems it takes from git, a path or a forge.
-/// A line that is not one of the plain forms below counts as a source the
-/// Count cannot read, so unrecorded gems are not taken to be RubyGems'.
-fn gemfile(path: &str, text: &str) -> Origins {
-    let mut origins = Origins::default();
-    let mut unread = false;
+/// What a Gemfile says about where its gems come from, and the gems its
+/// lines name.
+struct Gemfile {
+    origins: Origins,
+    gems: BTreeSet<String>,
+}
+
+/// Read a Gemfile's lines. When every line is one of the plain forms
+/// `Reading::line` knows, the Gemfile alone says where each gem comes from,
+/// as Bundler's DSL defines it: the gem's `source:` option, else the `source`
+/// block around it, else the one top-level source. Otherwise nothing it says
+/// is relied on: `Gemfile.lock` decides, and an unrecorded gem's lookup fails.
+fn gemfile(path: &str, text: &str) -> Gemfile {
+    let mut reading = Reading::default();
+    let mut read = true;
     for line in text.lines() {
-        let read = tokens(line)
+        read &= tokens(line)
             .and_then(|tokens| call(&tokens))
-            .is_some_and(|call| declaration(&call, &mut origins));
-        unread |= !read;
+            .is_some_and(|call| reading.line(&call));
     }
-    if unread {
+    let Reading {
+        mut origins,
+        blocks,
+        globals,
+        gems,
+    } = reading;
+    if !read || !blocks.is_empty() {
         origins.configured.push(Named::Unusable(format!(
             "lines in {path} the Count cannot read"
         )));
+        let gems = gems.into_iter().map(|(name, _)| name).collect();
+        return Gemfile { origins, gems };
     }
-    origins
+    // Several top-level sources leave a gem outside a block to the lock.
+    let global = match globals.as_slice() {
+        [] => Some(Named::Unusable(format!("no source in {path}"))),
+        [one] => Some(one.clone()),
+        _ => None,
+    };
+    let mut declared = BTreeMap::<String, Option<Origin>>::new();
+    for (name, named) in &gems {
+        let origin = named.clone().or_else(|| global.clone()).map(Origin::Index);
+        let merged = match (declared.get(name), origin) {
+            (None, origin) => origin,
+            (Some(Some(before)), Some(origin)) => Origin::of([before.clone(), origin]),
+            _ => None,
+        };
+        declared.insert(name.clone(), merged);
+    }
+    origins.declared = declared
+        .into_iter()
+        .filter_map(|(name, origin)| Some((name, origin?)))
+        .collect();
+    let gems = gems.into_iter().map(|(name, _)| name).collect();
+    Gemfile { origins, gems }
+}
+
+/// The state of reading a Gemfile line by line.
+#[derive(Default)]
+struct Reading {
+    origins: Origins,
+    /// The blocks open around the current line: a `source` block's source,
+    /// or none for a `group` or `platforms` block.
+    blocks: Vec<Option<Named>>,
+    /// Top-level sources, each once.
+    globals: Vec<Named>,
+    /// Each `gem` line's gem, with the source its option or block names.
+    gems: Vec<(String, Option<Named>)>,
 }
 
 /// Gem options that leave the gem on its source.
@@ -195,77 +260,108 @@ const OUTSIDE_KEYS: [&str; 6] = ["git", "path", "github", "gist", "bitbucket", "
 /// Options that only go with `OUTSIDE_KEYS`.
 const GIT_KEYS: [&str; 5] = ["branch", "ref", "tag", "submodules", "glob"];
 
-/// Record what one parsed Gemfile line says; false when it is not a form the
-/// Count knows.
-fn declaration(call: &Call, origins: &mut Origins) -> bool {
-    let keys = || call.options.iter().map(|(key, _)| key.as_str());
-    let only = |allowed: &[&str]| keys().all(|key| allowed.contains(&key));
-    let strings = |values: &[Value]| values.iter().all(|v| matches!(v, Value::Str(_)));
-    let names = |values: &[Value]| {
-        !values.is_empty()
-            && values
-                .iter()
-                .all(|v| matches!(v, Value::Str(_) | Value::Sym(_)))
-    };
-    match call.head.as_str() {
-        "" => true,
-        "end" => call.positional.is_empty() && call.options.is_empty() && !call.block,
-        "source" => {
-            let named = match call.positional.as_slice() {
-                [Value::Sym(s)] if s == "rubygems" => Named::Public,
-                [Value::Str(s)] if s == "rubygems" => Named::Public,
-                [Value::Str(s)] => Named::parse(s, &RUBYGEMS),
-                _ => return false,
-            };
-            if !call.options.is_empty() {
-                return false;
+impl Reading {
+    /// Record what one parsed line says; false when it is not a form the
+    /// Count knows.
+    fn line(&mut self, call: &Call) -> bool {
+        let keys = || call.options.iter().map(|(key, _)| key.as_str());
+        let only = |allowed: &[&str]| keys().all(|key| allowed.contains(&key));
+        let strings = |values: &[Value]| values.iter().all(|v| matches!(v, Value::Str(_)));
+        let names = |values: &[Value]| {
+            !values.is_empty()
+                && values
+                    .iter()
+                    .all(|v| matches!(v, Value::Str(_) | Value::Sym(_)))
+        };
+        let source = |value: &Value| match value {
+            Value::Sym(s) if s == "rubygems" => Some(Named::Public),
+            Value::Str(s) => Some(Named::parse(s, &RUBYGEMS)),
+            _ => None,
+        };
+        let in_source = self.blocks.iter().rev().find_map(Clone::clone);
+        match call.head.as_str() {
+            "" => true,
+            "end" => {
+                call.positional.is_empty()
+                    && call.options.is_empty()
+                    && !call.block
+                    && self.blocks.pop().is_some()
             }
-            if named != Named::Public {
-                origins.configured.push(named);
-            }
-            true
-        }
-        "gem" => {
-            let [Value::Str(name), requirements @ ..] = call.positional.as_slice() else {
-                return false;
-            };
-            if call.block || !strings(requirements) {
-                return false;
-            }
-            let outside = keys().any(|key| OUTSIDE_KEYS.contains(&key));
-            for (key, value) in &call.options {
-                match (key.as_str(), value) {
-                    ("source", Value::Str(source)) => {
-                        let named = Named::parse(source, &RUBYGEMS);
-                        if named != Named::Public {
-                            origins.configured.push(named);
-                        }
-                    }
-                    (key, _) if GEM_KEYS.contains(&key) || OUTSIDE_KEYS.contains(&key) => {}
-                    (key, _) if outside && GIT_KEYS.contains(&key) => {}
-                    _ => return false,
+            "source" => {
+                let ([value], []) = (call.positional.as_slice(), call.options.as_slice()) else {
+                    return false;
+                };
+                let Some(named) = source(value) else {
+                    return false;
+                };
+                if named != Named::Public {
+                    self.origins.configured.push(named.clone());
                 }
+                if call.block {
+                    // Bundler does not nest source blocks.
+                    if in_source.is_some() {
+                        return false;
+                    }
+                    self.blocks.push(Some(named));
+                } else if !self.blocks.is_empty() {
+                    return false;
+                } else if !self.globals.contains(&named) {
+                    self.globals.push(named);
+                }
+                true
             }
-            if outside {
-                origins.outside.insert(name.clone());
+            "gem" => {
+                let [Value::Str(name), requirements @ ..] = call.positional.as_slice() else {
+                    return false;
+                };
+                if call.block || !strings(requirements) {
+                    return false;
+                }
+                let outside = keys().any(|key| OUTSIDE_KEYS.contains(&key));
+                let mut named = in_source;
+                for (key, value) in &call.options {
+                    match key.as_str() {
+                        // The gem's own option wins over its block.
+                        "source" => match value {
+                            Value::Str(_) => {
+                                named = source(value);
+                                if let Some(other) = named.clone().filter(|n| *n != Named::Public) {
+                                    self.origins.configured.push(other);
+                                }
+                            }
+                            _ => return false,
+                        },
+                        key if GEM_KEYS.contains(&key) || OUTSIDE_KEYS.contains(&key) => {}
+                        key if outside && GIT_KEYS.contains(&key) => {}
+                        _ => return false,
+                    }
+                }
+                if outside {
+                    self.origins.outside.insert(name.clone());
+                }
+                self.gems.push((name.clone(), named));
+                true
             }
-            true
+            "group" | "platforms" | "platform" => {
+                let known = call.block && names(&call.positional) && only(&["optional"]);
+                if known {
+                    self.blocks.push(None);
+                }
+                known
+            }
+            "gemspec" => {
+                !call.block
+                    && call.positional.is_empty()
+                    && only(&["path", "name", "development_group", "glob"])
+            }
+            "ruby" => {
+                !call.block
+                    && call.positional.len() <= 1
+                    && strings(&call.positional)
+                    && only(&["file", "engine", "engine_version", "patchlevel"])
+            }
+            _ => false,
         }
-        "group" | "platforms" | "platform" => {
-            call.block && names(&call.positional) && only(&["optional"])
-        }
-        "gemspec" => {
-            !call.block
-                && call.positional.is_empty()
-                && only(&["path", "name", "development_group", "glob"])
-        }
-        "ruby" => {
-            !call.block
-                && call.positional.len() <= 1
-                && strings(&call.positional)
-                && only(&["file", "engine", "engine_version", "patchlevel"])
-        }
-        _ => false,
     }
 }
 
@@ -319,7 +415,7 @@ fn tokens(line: &str) -> Option<Vec<Token>> {
             b'"' | b'\'' => {
                 let end = i + 1 + line[i + 1..].find(b as char)?;
                 let inner = &line[i + 1..end];
-                if inner.contains(['\\', '#']) {
+                if inner.contains(['\\', '#', '"', '\'']) {
                     return None;
                 }
                 out.push(Token::Str(inner.to_owned()));
@@ -488,7 +584,9 @@ const BUNDLE_SETTINGS: [&str; 30] = [
 ];
 
 /// What a project's `.bundle/config` makes uncertain: a setting outside
-/// `BUNDLE_SETTINGS`, or a file the Count cannot read.
+/// `BUNDLE_SETTINGS`, or a file the Count cannot read. Bundler reads the file
+/// line by line as `KEY: value`, not as YAML, so the Count does too, and any
+/// line of another shape, such as an indented one, is unreadable.
 fn bundle_config(dir: &str, text: Option<&String>) -> Option<Named> {
     let text = text?;
     let unread = || {
@@ -496,15 +594,23 @@ fn bundle_config(dir: &str, text: Option<&String>) -> Option<Named> {
             "{dir}.bundle/config, which the Count cannot read"
         )))
     };
-    let settings = match serde_yaml_ng::from_str::<serde_yaml_ng::Value>(text) {
-        Ok(serde_yaml_ng::Value::Null) => return None,
-        Ok(serde_yaml_ng::Value::Mapping(settings)) => settings,
-        _ => return unread(),
-    };
-    for key in settings.keys() {
-        let Some(key) = key.as_str() else {
+    for line in text.lines() {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if line.is_empty() || line == "---" {
+            continue;
+        }
+        if line.starts_with(char::is_whitespace) {
+            return unread();
+        }
+        // The key runs to the first colon followed by a space or the end.
+        let Some(colon) = line
+            .match_indices(':')
+            .map(|(i, _)| i)
+            .find(|&i| line[i + 1..].chars().next().is_none_or(char::is_whitespace))
+        else {
             return unread();
         };
+        let key = line[..colon].trim_matches(['"', '\'']);
         let setting = key
             .strip_prefix("BUNDLE_")
             .map(|name| name.to_ascii_lowercase().replace("__", "."));
@@ -570,10 +676,34 @@ mod tests {
     use super::*;
 
     fn reads(line: &str) -> bool {
-        let mut origins = Origins::default();
+        let mut reading = Reading::default();
+        if line == "end" {
+            reading.blocks.push(None);
+        }
         tokens(line)
             .and_then(|t| call(&t))
-            .is_some_and(|c| declaration(&c, &mut origins))
+            .is_some_and(|c| reading.line(&c))
+    }
+
+    #[test]
+    fn bundle_config_is_read_as_bundler_reads_it() {
+        let read = |text: &str| bundle_config("", Some(&text.to_owned()));
+        assert_eq!(
+            read("---\nBUNDLE_PATH: \"vendor/bundle\"\nBUNDLE_BUILD__PG: \"--with-pg\"\n"),
+            None
+        );
+        for text in [
+            "BUNDLE_MIRROR__HTTPS://RUBYGEMS__ORG/: \"https://gems.acme.dev\"\n",
+            "BUNDLE_GEMFILE: \"other/Gemfile\"\n",
+            "BUNDLE_GEMS__ACME__DEV: \"bot:token\"\n",
+            "bundle_path: x\n",
+            // YAML would read one setting here; Bundler reads two.
+            "---\nBUNDLE_PATH: |\n BUNDLE_MIRROR__ALL: https://gems.acme.dev\n",
+            "../shared/bundle-config",
+            crate::UNREADABLE_SETTINGS,
+        ] {
+            assert!(read(text).is_some(), "{text}");
+        }
     }
 
     #[test]
@@ -619,6 +749,7 @@ mod tests {
             "plugin \"bundler-acme\"",
             "group :test",
             "source \"https://gems.acme.dev\" do gem \"a\" end",
+            "gem \"a', '1.0\", git: \"https://github.com/acme/a\"",
         ] {
             assert!(!reads(line), "{line}");
         }

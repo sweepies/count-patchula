@@ -2854,7 +2854,7 @@ fn pip_requirements_files_are_not_maintained_and_the_count_says_why() {
 }
 
 #[test]
-fn gems_come_from_their_lockfile_or_rubygems_alone() {
+fn gems_come_from_their_gemfile_when_it_is_plain_else_their_lockfile() {
     let gemfile = |body: &str| format!("source \"https://rubygems.org\"\n{body}");
     let lock =
         |sections: &str| format!("{sections}\nPLATFORMS\n  ruby\n\nDEPENDENCIES\n  acme-a\n");
@@ -2873,10 +2873,26 @@ fn gems_come_from_their_lockfile_or_rubygems_alone() {
             ),
         ),
         ("public/.bundle/config".into(), "---\nBUNDLE_PATH: \"vendor/bundle\"\nBUNDLE_BUILD__NOKOGIRI: \"--use-system-libraries\"\n".into()),
-        // Another source: the lockfile decides; unrecorded gems fail.
+        // A plain Gemfile says where each gem comes from; a lock that
+        // disagrees makes the gem's lookup fail.
         ("locked/Gemfile".into(), blocks.clone()),
         ("locked/Gemfile.lock".into(), acme_lock.clone()),
-        ("unlocked/Gemfile".into(), blocks),
+        ("unlocked/Gemfile".into(), blocks.clone()),
+        ("stale/Gemfile".into(), blocks),
+        (
+            "stale/Gemfile.lock".into(),
+            lock("GEM\n  remote: https://rubygems.org/\n  specs:\n    acme-a (1.0.0)\n"),
+        ),
+        // Two top-level sources: the lockfile decides; unrecorded gems fail.
+        (
+            "second/Gemfile".into(),
+            gemfile(
+                "source \"https://gems.acme.dev\"\ngem \"acme-a\", \"~> 1.0\"\ngem \"acme-b\", \"~> 1.0\"\ngem \"rake\", \"~> 13.0\"\n",
+            ),
+        ),
+        ("second/Gemfile.lock".into(), acme_lock.clone()),
+        // No source at all: Bundler fetches nothing.
+        ("nosource/Gemfile".into(), "gem \"rake\", \"~> 13.0\"\n".into()),
         // A line the Count cannot read: the same.
         (
             "unread/Gemfile".into(),
@@ -2936,12 +2952,17 @@ fn gems_come_from_their_lockfile_or_rubygems_alone() {
     let ambiguous = |found: Option<String>| found.is_some_and(|r| r.starts_with("ambiguous: "));
     assert_eq!(registry("public/Gemfile", "rails"), None);
     assert_eq!(registry("public/Gemfile", "rspec"), None);
-    assert_eq!(registry("locked/Gemfile", "acme-a"), acme);
-    assert_eq!(registry("locked/Gemfile", "rake"), None);
-    assert!(ambiguous(registry("locked/Gemfile", "acme-b")));
-    for name in ["acme-a", "acme-b", "rake"] {
-        assert!(ambiguous(registry("unlocked/Gemfile", name)), "{name}");
+    assert!(ambiguous(registry("stale/Gemfile", "acme-a")));
+    assert_eq!(registry("stale/Gemfile", "acme-b"), acme);
+    for file in ["locked/Gemfile", "unlocked/Gemfile"] {
+        assert_eq!(registry(file, "acme-a"), acme, "{file}");
+        assert_eq!(registry(file, "acme-b"), acme, "{file}");
+        assert_eq!(registry(file, "rake"), None, "{file}");
     }
+    assert_eq!(registry("second/Gemfile", "acme-a"), acme);
+    assert_eq!(registry("second/Gemfile", "rake"), None);
+    assert!(ambiguous(registry("second/Gemfile", "acme-b")));
+    assert!(fails(registry("nosource/Gemfile", "rake")));
     assert_eq!(registry("unread/Gemfile", "acme-a"), acme);
     assert_eq!(registry("unread/Gemfile", "rake"), None);
     assert!(registry("unread/Gemfile", "rails").is_some_and(|r| r.contains("cannot read")));

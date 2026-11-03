@@ -1,8 +1,10 @@
 //! Where a package comes from, decided the same way in every ecosystem:
 //!
-//! 1. A registry the declaration itself names.
-//! 2. Otherwise what the tool's own lockfile records.
-//! 3. Otherwise the public registry, but only where the repository configures
+//! 1. What the tool's own lockfile records, and what the declarations say
+//!    where the Count can read them with certainty. When both speak they
+//!    must agree: a package they disagree on is ambiguous and fails, or, when
+//!    either takes it from git or a path, is skipped.
+//! 2. Otherwise the public registry, but only where the repository configures
 //!    no other; anywhere else the lookup fails rather than guess, since the
 //!    public package of the name may be someone else's.
 //!
@@ -93,7 +95,8 @@ impl Origin {
 /// What decides where one project's packages come from.
 #[derive(Debug, Default)]
 pub(crate) struct Origins {
-    /// Registries the declarations name for their own packages, by package.
+    /// Where the declarations, read with certainty, say each package comes
+    /// from.
     pub declared: BTreeMap<String, Origin>,
     /// The registries and other sources the project configures besides the
     /// public one; empty when it configures none.
@@ -115,14 +118,12 @@ impl Origins {
         if let Some(origin) = Origin::of(self.uncertain.iter().cloned().map(Origin::Index)) {
             return origin;
         }
-        if let Some(origin) = self.declared.get(package) {
-            return origin.clone();
-        }
+        let declared = self.declared.get(package).cloned();
         let recorded = self
             .locks
             .iter()
             .filter_map(|lock| lock.get(package).cloned());
-        if let Some(origin) = Origin::of(recorded) {
+        if let Some(origin) = Origin::of(declared.into_iter().chain(recorded)) {
             return origin;
         }
         let candidates = std::iter::once(Named::Public).chain(self.configured.iter().cloned());

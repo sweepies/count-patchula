@@ -2380,6 +2380,15 @@ impl Engine {
                 })
                 .count();
             let read_manifests = delivery && manifests <= patchula_update::tooling::MANIFEST_LIMIT;
+            // A settings file the tree links to, or one inside a linked
+            // `.bundle`, is unreadable rather than absent or read as the
+            // link's target.
+            let linked: Vec<String> = entries
+                .iter()
+                .filter(|e| e.mode == "120000")
+                .filter_map(|e| patchula_manager::linked_settings(&e.path))
+                .filter(|settings| scanner.needs(settings))
+                .collect();
             let selected: Vec<_> = entries
                 .into_iter()
                 .filter(|entry| {
@@ -2406,10 +2415,13 @@ impl Engine {
                 .await
                 .into_iter()
                 .collect::<Result<_>>()?;
-            let files: Files = blobs
+            let mut files: Files = blobs
                 .iter()
                 .map(|(p, b)| (p.clone(), b.content.clone()))
                 .collect();
+            for settings in linked {
+                files.insert(settings, patchula_manager::UNREADABLE_SETTINGS.to_owned());
+            }
             let unsupported = scanner.unsupported(paths.iter().map(String::as_str));
             let mut extraction = tokio::task::spawn_blocking(move || scanner.extract(&files))
                 .await
@@ -2565,14 +2577,11 @@ pub fn read_tree(
             // A settings file behind a symlink could name a registry: kept as
             // unreadable, its packages' lookups fail rather than fall back to
             // the public registry.
-            if scanner.needs(&relative)
-                && patchula_manager::registry_settings(&relative)
-                && std::fs::metadata(&path).is_ok_and(|meta| meta.is_file())
+            if let Some(settings) = patchula_manager::linked_settings(&relative)
+                && scanner.needs(&settings)
+                && std::fs::metadata(dir.join(&settings)).is_ok_and(|meta| meta.is_file())
             {
-                files.insert(
-                    relative.clone(),
-                    patchula_manager::UNREADABLE_SETTINGS.to_owned(),
-                );
+                files.insert(settings, patchula_manager::UNREADABLE_SETTINGS.to_owned());
             }
             continue;
         }

@@ -147,6 +147,18 @@ fn a_symlinked_settings_file_is_unreadable_not_absent() {
     );
     std::fs::create_dir(root.join(".bundle")).unwrap();
     std::os::unix::fs::symlink("../config/bundle", root.join(".bundle/config")).unwrap();
+    // A linked `.bundle` directory, which Git lists as one path.
+    write(
+        &root,
+        "app/Gemfile",
+        "source \"https://rubygems.org\"\ngem \"rack\", \"~> 3.0\"\n",
+    );
+    write(
+        &root,
+        "config/bundle-dir/config",
+        "BUNDLE_MIRROR__ALL: \"https://gems.acme.dev\"\n",
+    );
+    std::os::unix::fs::symlink("../config/bundle-dir", root.join("app/.bundle")).unwrap();
     let scanner = scanner("amends \"PatchulaConfig.pkl\"\n");
     let (_, files) = patchula_engine::read_tree(&root, &scanner).unwrap();
     assert_eq!(
@@ -167,6 +179,10 @@ fn a_symlinked_settings_file_is_unreadable_not_absent() {
     );
     assert_eq!(
         files.get(".bundle/config").map(String::as_str),
+        Some(patchula_manager::UNREADABLE_SETTINGS)
+    );
+    assert_eq!(
+        files.get("app/.bundle/config").map(String::as_str),
         Some(patchula_manager::UNREADABLE_SETTINGS)
     );
     let rake = extraction

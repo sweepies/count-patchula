@@ -769,6 +769,18 @@ pub fn registry_settings(path: &str) -> bool {
         || path.ends_with("/.bundle/config")
 }
 
+/// The settings file a symlink at `path` could stand for: the path itself
+/// when it is a settings file, or the `config` inside a linked `.bundle`
+/// directory, which Bundler follows.
+pub fn linked_settings(path: &str) -> Option<String> {
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    if registry_settings(path) {
+        Some(path.to_owned())
+    } else {
+        (leaf == ".bundle").then(|| format!("{path}/config"))
+    }
+}
+
 /// What a settings file the Count could not read becomes: text no TOML or
 /// YAML mapping parser accepts, so it is unreadable rather than absent.
 pub const UNREADABLE_SETTINGS: &str = "= the Count could not read this file\n";
