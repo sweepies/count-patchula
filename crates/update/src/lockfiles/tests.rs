@@ -3,6 +3,8 @@ use patchula_http::{Exchange, Transport};
 use patchula_process::CommandSpec;
 use std::{future::Future, pin::Pin, sync::Mutex};
 
+mod real_python_indexes;
+
 /// What `defaults.toml` pins for a tool, which a repository without its own pin
 /// gets. A defaults bump must not need a test edit, so expectations ask here.
 fn default_version(tool: &str) -> String {

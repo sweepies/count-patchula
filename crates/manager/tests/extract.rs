@@ -2970,6 +2970,73 @@ fn python_index_settings_follow_runs_workspaces_and_fail_closed() {
                 && !recorded.contains("s3cret"),
             "{recorded}"
         );
-        assert!(recorded.contains("pypi.acme.dev"), "{recorded}");
+    }
+}
+
+#[test]
+fn python_settings_the_count_does_not_know_fail_closed() {
+    let project =
+        |extra: &str| format!("[project]\nname = \"p\"\ndependencies = [\"acme-a>=1\"]\n{extra}");
+    let files = Files::from([
+        (
+            "pip/requirements.txt".into(),
+            "--some-new-option https://wheels.acme.dev\nacme-a==1.0.0\n".into(),
+        ),
+        (
+            "harmless/requirements.txt".into(),
+            "--prefer-binary\n-e .\nacme-a==1.0.0\n".into(),
+        ),
+        (
+            "nosources/pyproject.toml".into(),
+            project("[tool.uv]\nno-sources = true\n"),
+        ),
+        (
+            "indexkey/pyproject.toml".into(),
+            project("[[tool.uv.index]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\ndefault = true\nsome-new-key = 1\n"),
+        ),
+        (
+            "marker/pyproject.toml".into(),
+            project("[[tool.uv.index]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\nexplicit = true\n[tool.uv.sources]\nacme-a = { index = \"acme\", marker = \"sys_platform == 'linux'\" }\n"),
+        ),
+        (
+            "pinkey/pyproject.toml".into(),
+            project("[[tool.uv.index]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\nexplicit = true\n[tool.uv.sources]\nacme-a = { index = \"acme\", some-new-key = true }\n"),
+        ),
+        (
+            "poetry/pyproject.toml".into(),
+            "[tool.poetry.dependencies]\nacme-a = \"^1\"\n[[tool.poetry.source]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\npriority = \"some-new-priority\"\n".into(),
+        ),
+        (
+            "pdm/pyproject.toml".into(),
+            project("[[tool.pdm.source]]\nname = \"pypi\"\nurl = \"https://pypi.acme.dev/simple\"\ninclude_packages = [\"acme-*\"]\n"),
+        ),
+    ]);
+    let mut config = config();
+    config.managers = vec![Manager::Requirements, Manager::Pyproject];
+    let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+    let registry = |file: &str| {
+        extraction
+            .dependencies
+            .iter()
+            .find(|d| d.file == file && d.name == "acme-a")
+            .unwrap_or_else(|| panic!("{file}"))
+            .registry
+            .clone()
+    };
+    assert_eq!(registry("harmless/requirements.txt"), None);
+    for (file, says) in [
+        ("pip/requirements.txt", "pip option --some-new-option"),
+        ("nosources/pyproject.toml", "uv setting no-sources"),
+        ("indexkey/pyproject.toml", "a uv index with some-new-key"),
+        ("marker/pyproject.toml", "where the pin does not hold"),
+        ("pinkey/pyproject.toml", "a pin with some-new-key"),
+        ("poetry/pyproject.toml", "Poetry priority some-new-priority"),
+        ("pdm/pyproject.toml", "a PDM source with include_packages"),
+    ] {
+        let recorded = registry(file);
+        assert!(
+            recorded.as_deref().is_some_and(|r| r.contains(says)),
+            "{file}: {recorded:?}"
+        );
     }
 }

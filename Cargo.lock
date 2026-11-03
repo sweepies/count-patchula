@@ -2336,6 +2336,7 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "toml_edit",
+ "url",
  "yaml-rust2",
 ]
 

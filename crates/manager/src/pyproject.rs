@@ -115,23 +115,23 @@ fn locked_origin(lock: Option<&Document<&str>>, package: &str) -> Option<crate::
 fn pin(value: &Item, names: &BTreeMap<String, crate::pypi::Named>) -> Option<crate::pypi::Origin> {
     use crate::pypi::{Named, Origin};
     let one = |value: &dyn toml_edit::TableLike| -> Option<Origin> {
-        if let Some(name) = value
-            .get("index")
-            .or_else(|| value.get("source"))
-            .and_then(Item::as_str)
-        {
-            // A pin to an index this project does not define cannot be read.
-            return Some(Origin::Index(
-                names
-                    .get(&name.to_ascii_lowercase())
-                    .cloned()
-                    .unwrap_or_else(|| Named::Unusable(format!("index {name}"))),
-            ));
+        // A key the Count does not know could move the package anywhere.
+        if let Some(key) = unknown_key(value, PIN_KEYS) {
+            return Some(Origin::Index(Named::Unusable(format!("a pin with {key}"))));
         }
-        ["git", "path", "url", "workspace", "file", "directory"]
+        let pinned = one_pin(value, names)?;
+        // A pin that holds only under some markers, extras, groups or Pythons
+        // leaves the package to the project's indexes everywhere else.
+        let conditional = ["marker", "markers", "extra", "group", "python", "platform"]
             .iter()
-            .any(|key| value.get(key).is_some())
-            .then_some(Origin::Other)
+            .any(|key| value.get(key).is_some());
+        Some(match pinned {
+            Origin::Index(named) if conditional => Origin::Ambiguous(vec![
+                named,
+                Named::Unusable("its indexes where the pin does not hold".into()),
+            ]),
+            pinned => pinned,
+        })
     };
     if let Some(table) = value.as_table_like() {
         return one(table);
@@ -142,6 +142,70 @@ fn pin(value: &Item, names: &BTreeMap<String, crate::pypi::Named>) -> Option<cra
             .filter_map(|v| v.as_inline_table())
             .filter_map(|table| one(table)),
     )
+}
+
+/// The keys of a uv source or Poetry dependency table the Count knows.
+const PIN_KEYS: &[&str] = &[
+    "index",
+    "source",
+    "git",
+    "path",
+    "url",
+    "workspace",
+    "file",
+    "directory",
+    "rev",
+    "branch",
+    "tag",
+    "subdirectory",
+    "editable",
+    "develop",
+    "package",
+    "lfs",
+    "marker",
+    "markers",
+    "extra",
+    "group",
+    "python",
+    "platform",
+    "version",
+    "optional",
+    "extras",
+    "allow-prereleases",
+];
+
+/// The first key of `table` not in `known`.
+fn unknown_key(table: &dyn toml_edit::TableLike, known: &[&str]) -> Option<String> {
+    table
+        .iter()
+        .map(|(key, _)| key)
+        .find(|key| !known.contains(key))
+        .map(str::to_owned)
+}
+
+/// One pin table's origin, whatever its conditions.
+fn one_pin(
+    value: &dyn toml_edit::TableLike,
+    names: &BTreeMap<String, crate::pypi::Named>,
+) -> Option<crate::pypi::Origin> {
+    use crate::pypi::{Named, Origin};
+    if let Some(name) = value
+        .get("index")
+        .or_else(|| value.get("source"))
+        .and_then(Item::as_str)
+    {
+        // A pin to an index this project does not define cannot be read.
+        return Some(Origin::Index(
+            names
+                .get(&name.to_ascii_lowercase())
+                .cloned()
+                .unwrap_or_else(|| Named::Unusable(format!("index {name}"))),
+        ));
+    }
+    ["git", "path", "url", "workspace", "file", "directory"]
+        .iter()
+        .any(|key| value.get(key).is_some())
+        .then_some(Origin::Other)
 }
 
 /// The indexes uv, Poetry and PDM configure, and the packages pinned by them.
@@ -166,11 +230,16 @@ fn indexes(
             .filter_map(|index| {
                 let url = index.get("url").and_then(Item::as_str)?;
                 let flag = |key: &str| index.get(key).and_then(Item::as_bool) == Some(true);
-                // A flat index is a list of files, not an index the Count reads.
-                let named = if index.get("format").and_then(Item::as_str) == Some("flat") {
-                    find_links(url)
+                // A flat index is a list of files, not an index the Count
+                // reads; a key or format it does not know could be anything.
+                let named = if let Some(key) = unknown_key(index, UV_INDEX_KEYS) {
+                    Named::Unusable(format!("a uv index with {key}"))
                 } else {
-                    Named::parse(url)
+                    match index.get("format").and_then(Item::as_str) {
+                        None | Some("simple") => Named::parse(url),
+                        Some("flat") => find_links(url),
+                        Some(format) => Named::Unusable(format!("a {format} uv index")),
+                    }
                 };
                 Some((
                     index
@@ -227,6 +296,24 @@ fn indexes(
         .and_then(|u| u.get("no-index"))
         .and_then(Item::as_bool)
         == Some(true);
+    // A uv setting about indexes, sources or overrides the Count does not
+    // read, such as `no-sources`, could change where packages come from.
+    for key in settings
+        .and_then(Item::as_table_like)
+        .into_iter()
+        .flat_map(|t| t.iter())
+        .map(|(key, _)| key)
+        .filter(|key| {
+            ["index", "source", "find-links", "override", "registry"]
+                .iter()
+                .any(|word| key.contains(word))
+                && !UV_SETTINGS.contains(key)
+        })
+    {
+        indexes
+            .extras
+            .push(Named::Unusable(format!("uv setting {key}")));
+    }
     // uv sources: the workspace root's, overridden by the project's.
     for project in projects.iter().rev() {
         for (package, value) in project
@@ -256,10 +343,12 @@ fn indexes(
             .get("name")
             .and_then(Item::as_str)
             .map(str::to_ascii_lowercase);
-        let named = match source.get("url").and_then(Item::as_str) {
-            Some(url) => Named::parse(url),
-            None if name.as_deref() == Some("pypi") => Named::Public,
-            None => continue,
+        let unknown = unknown_key(source, POETRY_SOURCE_KEYS);
+        let named = match (unknown, source.get("url").and_then(Item::as_str)) {
+            (Some(key), _) => Named::Unusable(format!("a Poetry source with {key}")),
+            (None, Some(url)) => Named::parse(url),
+            (None, None) if name.as_deref() == Some("pypi") => Named::Public,
+            (None, None) => continue,
         };
         if let Some(name) = name {
             poetry_names.insert(name, named.clone());
@@ -275,7 +364,10 @@ fn indexes(
             "explicit" => {}
             "supplemental" | "secondary" => indexes.extras.push(named),
             "default" => indexes.default = Some(named),
-            _ => primaries.push(named),
+            "primary" => primaries.push(named),
+            other => indexes
+                .extras
+                .push(Named::Unusable(format!("Poetry priority {other}"))),
         }
     }
     // Primary sources replace PyPI, in order; more than one is ambiguous.
@@ -318,10 +410,16 @@ fn indexes(
         let Some(url) = source.get("url").and_then(Item::as_str) else {
             continue;
         };
-        let named = if source.get("type").and_then(Item::as_str) == Some("find_links") {
-            find_links(url)
+        // `include_packages` and `exclude_packages` route packages between
+        // sources, which the Count does not follow.
+        let named = if let Some(key) = unknown_key(source, PDM_SOURCE_KEYS) {
+            Named::Unusable(format!("a PDM source with {key}"))
         } else {
-            Named::parse(url)
+            match source.get("type").and_then(Item::as_str) {
+                None | Some("index") => Named::parse(url),
+                Some("find_links") => find_links(url),
+                Some(kind) => Named::Unusable(format!("a {kind} PDM source")),
+            }
         };
         if source.get("name").and_then(Item::as_str) == Some("pypi") {
             indexes.default = Some(named);
@@ -341,6 +439,34 @@ fn indexes(
     }
     indexes
 }
+
+/// The keys of `[[tool.uv.index]]` the Count knows.
+const UV_INDEX_KEYS: &[&str] = &[
+    "name",
+    "url",
+    "default",
+    "explicit",
+    "format",
+    "authenticate",
+    "ignore-error-codes",
+    "cache-control",
+    "publish-url",
+];
+/// The uv settings about indexes and sources the Count reads or knows to be
+/// harmless.
+const UV_SETTINGS: &[&str] = &[
+    "index",
+    "index-url",
+    "extra-index-url",
+    "find-links",
+    "no-index",
+    "index-strategy",
+    "sources",
+];
+/// The keys of `[[tool.poetry.source]]` the Count knows.
+const POETRY_SOURCE_KEYS: &[&str] = &["name", "url", "priority", "default", "secondary"];
+/// The keys of `[[tool.pdm.source]]` the Count knows.
+const PDM_SOURCE_KEYS: &[&str] = &["name", "url", "type", "verify_ssl"];
 
 /// A find-links location: a directory or page of files, not an index the
 /// Count reads, so its packages' lookups fail.

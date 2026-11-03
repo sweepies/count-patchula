@@ -610,23 +610,47 @@ impl Scanner {
 /// A registry value as recorded when the Count cannot use it: any user,
 /// password or query removed, so a secret in it never reaches a report.
 pub(crate) fn redacted(value: &str) -> String {
-    let Some((scheme, rest)) = value.split_once("://") else {
-        return value.to_owned();
+    const UNREADABLE: &str = "<unreadable URL>";
+    if !value.contains("://") {
+        // A path or name; one with an `@` may be a URL with a user in it.
+        return if value.contains('@') {
+            UNREADABLE.into()
+        } else {
+            value.to_owned()
+        };
+    }
+    let Ok(mut url) = url::Url::parse(value) else {
+        return UNREADABLE.into();
     };
-    // A password may hold `/`, `?` or `#`, so everything before the last
-    // `@` is treated as the user; a query or fragment may hold a token.
-    let host = rest.rsplit_once('@').map(|(_, host)| host);
-    let kept = host
-        .unwrap_or(rest)
-        .split(['?', '#'])
-        .next()
-        .unwrap_or_default();
-    let stripped = format!("{scheme}://{kept}");
-    let stripped = stripped.trim_end_matches('/');
-    if host.is_some() || rest.contains(['?', '#']) {
-        format!("{stripped} (credentials removed)")
+    let user = !url.username().is_empty() || url.password().is_some();
+    // An `@` that did not end a user means a password holding `/`, `?` or `#`
+    // ended the host early, leaving part of itself where the host should be.
+    if value.contains('@') && !user {
+        return UNREADABLE.into();
+    }
+    // A user ends at the last `@`; a parser that ended it sooner took part
+    // of the password for the host.
+    if let Some((_, after)) = value.rsplit_once('@')
+        && !after
+            .to_ascii_lowercase()
+            .starts_with(url.host_str().unwrap_or("\0"))
+    {
+        return UNREADABLE.into();
+    }
+    let secret = user || url.query().is_some() || url.fragment().is_some();
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_query(None);
+    url.set_fragment(None);
+    let kept = url.as_str().trim_end_matches('/');
+    // Or it ended the host early and left the rest of itself in the path.
+    if kept.contains('@') {
+        return UNREADABLE.into();
+    }
+    if secret {
+        format!("{kept} (credentials removed)")
     } else {
-        stripped.to_owned()
+        kept.to_owned()
     }
 }
 /// A registry URL a repository names: https, without a user, query or
@@ -659,4 +683,44 @@ fn requirements_name(path: &str) -> bool {
         return false;
     };
     stem.contains("requirements") || path.contains("requirements/")
+}
+
+#[cfg(test)]
+mod tests {
+    /// No user, password or token survives redaction, whatever characters
+    /// it holds. The secrets use letters no recorded value contains, so any
+    /// leaked part of one shows.
+    #[test]
+    fn redaction_never_keeps_a_secret() {
+        const SECRET: &[u8] = b"QXZJKWG/?#@:%$&=+!;,[]";
+        let mut state: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = |bound: usize| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            usize::try_from(state % bound as u64).unwrap_or_default()
+        };
+        for _ in 0..20_000 {
+            let secret: String = (0..1 + next(12))
+                .map(|_| char::from(SECRET[next(SECRET.len())]))
+                .collect();
+            for value in [
+                format!("https://ci:{secret}@pypi.acme.dev/simple"), // betterleaks:allow
+                format!("https://{secret}@pypi.acme.dev/simple"),    // betterleaks:allow
+                format!("https://{secret}:0@pypi.acme.dev/simple"),  // betterleaks:allow
+                format!("https://pypi.acme.dev/simple?token={secret}"),
+                format!("https://pypi.acme.dev?{secret}"),
+                format!("https://pypi.acme.dev/simple#{secret}"),
+                format!("ci:{secret}@pypi.acme.dev/simple"),
+            ] {
+                let recorded = super::redacted(&value);
+                assert!(
+                    !recorded
+                        .to_ascii_uppercase()
+                        .contains(['Q', 'X', 'Z', 'J', 'K', 'W', 'G']),
+                    "{value} -> {recorded}"
+                );
+            }
+        }
+    }
 }

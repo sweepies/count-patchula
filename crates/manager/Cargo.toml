@@ -21,3 +21,4 @@ serde_json.workspace = true
 serde_yaml_ng = "0.10.0"
 toml_edit = "0.25.17"
 globset = "0.4"
+url = "2.5.8"

@@ -164,6 +164,8 @@ struct RequirementsOptions {
     /// `-r` and `-c` values that name no file in the repository: absolute
     /// paths, URLs, `${VAR}` paths, or paths outside it.
     unresolved: Vec<String>,
+    /// Options the Count does not know, which could name a source.
+    unknown: Vec<String>,
 }
 
 /// `path` joined to the directory of `from`, with `.` and `..` resolved; none
@@ -221,6 +223,15 @@ fn requirements_options(path: &str, text: &str) -> RequirementsOptions {
                     None => options.unresolved.push(crate::redacted(value)),
                 }
             }
+            // Options that leave where packages come from alone.
+            (
+                "-e" | "--editable" | "--pre" | "--prefer-binary" | "--only-binary" | "--no-binary"
+                | "--require-hashes" | "--trusted-host" | "--use-feature" | "--config-settings"
+                | "--global-option" | "--install-option" | "--hash",
+                _,
+            ) => {}
+            // Any other option could change it, so the Count does not guess.
+            (option, _) if option.starts_with('-') => options.unknown.push(option.to_owned()),
             _ => {}
         }
     }
@@ -323,6 +334,12 @@ pub(crate) fn requirements(path: &str, graph: &RequirementsGraph) -> Indexes {
                 .unresolved
                 .iter()
                 .map(|value| Named::Unusable(format!("-r {value}"))),
+        );
+        indexes.extras.extend(
+            options
+                .unknown
+                .iter()
+                .map(|option| Named::Unusable(format!("pip option {option}"))),
         );
         find_links.extend(options.find_links.iter().map(|link| crate::redacted(link)));
         no_index |= options.no_index;

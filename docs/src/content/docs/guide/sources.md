@@ -244,6 +244,12 @@ dependency's `registry`:
   version from any of them, which is how a public package can stand in for a
   private one. The Count does not guess: the package's lookup fails, saying it
   could come from several indexes. Pin it, or commit a lockfile.
+  The Count reads a fixed list of pip options, uv settings and index keys,
+  Poetry and PDM source keys, and pin keys. Any other that could move a
+  package, such as uv's `no-sources` or PDM's `include_packages`, fails the
+  lookups it could affect rather than be ignored. A pin that holds only under
+  some markers, extras, groups or Pythons is ambiguous too, since elsewhere
+  the package comes from the project's indexes.
   Indexes come only from the repository, never from `pip.conf` or the
   environment. Private indexes are read through their simple API, as PEP 691
   JSON or PEP 503 HTML; HTML gives no upload times, so no release-age wait.
@@ -264,7 +270,9 @@ npm's, Yarn's and PyPI's public registries (`registry.npmjs.org`,
 `registry.yarnpkg.com`, `pypi.org`, over https or plain http) count as none. A value the Count cannot read from,
 such as a `${VAR}` npm would take from the environment or a plain-http URL, is
 kept as written: that package's lookup fails, rather than reading the public
-package of its name, which may be someone else's.
+package of its name, which may be someone else's. Any user, password, query
+or fragment is removed first, and a URL that does not parse cleanly is kept
+only as `<unreadable URL>`.
 
 A repository naming a registry never brings credentials: requests to it carry
 an operator entry's, when one covers its URL, and nothing otherwise. Two
