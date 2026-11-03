@@ -461,6 +461,10 @@ pub(super) fn npmrc(text: &str) -> Npmrc {
             continue;
         };
         let key = key.trim();
+        // An empty value sets nothing.
+        if value.trim().trim_matches(['"', '\'']).is_empty() {
+            continue;
+        }
         if key == "registry" {
             npmrc.default = Some(named(value));
         } else if let Some(scope) = key.strip_suffix(":registry")
@@ -484,6 +488,7 @@ pub(super) fn yarnrc(text: &str) -> Npmrc {
         value
             .get("npmRegistryServer")
             .and_then(serde_yaml_ng::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
             .map(named)
     };
     npmrc.default = server(&value);
@@ -533,7 +538,11 @@ pub(super) fn npmrcs(files: &crate::Files) -> BTreeMap<&str, Npmrc> {
 
 /// The registry for `package` in `file`: the nearest setting for its scope at
 /// or above the file, else the nearest `registry=` there.
-fn registry_for(file: &str, package: &str, npmrcs: &BTreeMap<&str, Npmrc>) -> Option<String> {
+pub(super) fn registry_for(
+    file: &str,
+    package: &str,
+    npmrcs: &BTreeMap<&str, Npmrc>,
+) -> Option<String> {
     let mut directories = Vec::new();
     let mut directory = file.rsplit_once('/').map_or("", |(d, _)| d);
     loop {

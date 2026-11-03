@@ -647,16 +647,8 @@ fn branch_identity(
                 let package = package_slug(&dep.package);
                 let manager = match &dep.registry {
                     _ if package_names[&package].len() <= 1 => String::default(),
-                    Some(registry) => format!(
-                        "{}-",
-                        slug(
-                            registry
-                                .trim_start_matches("https://")
-                                .split('/')
-                                .next()
-                                .unwrap_or(registry)
-                        )
-                    ),
+                    // The whole registry, path included: one host can serve several.
+                    Some(registry) => format!("{}-", slug(registry.trim_start_matches("https://"))),
                     None => format!("{}-", manager_slug(dep)),
                 };
                 let variants: BTreeSet<_> = dependencies

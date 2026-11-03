@@ -2288,7 +2288,7 @@ fn npm_dependencies_take_their_registry_from_the_nearest_npmrc_or_yarnrc() {
         ),
         ("tools/package.json".into(), r#"{"dependencies":{"@acme/cli":"2.0.0"}}"#.into()),
         // A file that names no registry does not hide the root's.
-        ("tools/.npmrc".into(), "save-exact=true\n".into()),
+        ("tools/.npmrc".into(), "save-exact=true\nregistry=\n".into()),
         (
             "berry/.yarnrc.yml".into(),
             "npmRegistryServer: \"https://registry.yarnpkg.com\"\n".into(),
@@ -2398,4 +2398,45 @@ fn extractors_can_name_a_registry_from_a_capture() {
         registry("@acme/old").as_deref(),
         Some("http://old.acme.dev")
     );
+}
+
+#[test]
+fn npm_registry_files_are_read_whatever_files_and_exclude_select() {
+    let mut config = config();
+    config.files = vec![patchula_config::FileSet {
+        manager: Manager::Npm,
+        paths: vec!["**/package.json".into()],
+    }];
+    config.exclude.push("config/**".into());
+    let scanner = Scanner::new(&config).unwrap();
+    for path in [".npmrc", "config/.npmrc", "apps/web/.yarnrc.yml"] {
+        assert!(scanner.needs(path), "{path}");
+    }
+    // An npm extractor without a registry template follows .npmrc too.
+    let mut config = self::config();
+    config.extractors.push(patchula_config::Extractor {
+        note: String::new(),
+        paths: vec!["deploy/versions.txt".into()],
+        patterns: vec![r"(?<dependency>@[\w./-]+)=(?<current>\S+)".into()],
+        source: "npm".into(),
+        dependency: "{dependency}".into(),
+        package: "{dependency}".into(),
+        scheme: "semver".into(),
+        extract: None,
+        registry: None,
+    });
+    let files = Files::from([
+        (
+            ".npmrc".into(),
+            "@acme:registry=https://npm.acme.dev\n".into(),
+        ),
+        ("deploy/versions.txt".into(), "@acme/ui=1.2.3\n".into()),
+    ]);
+    let deps = Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies;
+    let ui = deps.iter().find(|d| d.name == "@acme/ui").unwrap();
+    assert_eq!(ui.registry.as_deref(), Some("https://npm.acme.dev"));
 }

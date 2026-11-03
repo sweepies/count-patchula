@@ -259,7 +259,19 @@ impl Scanner {
         })
     }
     pub fn needs(&self, path: &str) -> bool {
-        self.config.managers.iter().any(|m| self.selected(*m, path))
+        self.config.managers.iter().any(|m| self.selected(*m, path)) || self.registry_file(path)
+    }
+    /// npm's registry settings are read whatever `files` and `exclude` select:
+    /// without them, a scoped package would be looked up on the public
+    /// registry, where its name may be someone else's.
+    fn registry_file(&self, path: &str) -> bool {
+        [Manager::Npm, Manager::Bun]
+            .iter()
+            .any(|m| self.config.managers.contains(m))
+            && matches!(
+                path.rsplit('/').next().unwrap_or(path),
+                ".npmrc" | ".yarnrc.yml"
+            )
     }
     fn selected(&self, manager: Manager, path: &str) -> bool {
         if !self.config.managers.contains(&manager)
@@ -538,9 +550,12 @@ impl Scanner {
                 }
             }
             if self.selected(Manager::Regex, path) {
-                result
-                    .dependencies
-                    .extend(custom::extract(path, text, &self.config.extractors)?);
+                result.dependencies.extend(custom::extract(
+                    path,
+                    text,
+                    &self.config.extractors,
+                    &npmrcs,
+                )?);
             }
         }
         if self.config.managers.contains(&Manager::Gradle) {

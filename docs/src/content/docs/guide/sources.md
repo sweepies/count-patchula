@@ -199,7 +199,11 @@ dependency's `registry`:
   registry, since Corepack does not read `.npmrc`.
 - An npm [custom extractor](/guide/configuration/#custom-extractors) can set
   `registry`, a template such as `"{registry}"`; an empty or unmatched capture
-  means the public registry.
+  means the public registry. Without it, its packages follow `.npmrc` like a
+  `package.json` beside them.
+
+These files are read whenever npm or Bun is enabled, whatever `files` and
+`exclude` select.
 
 npm's and Yarn's public registries (`registry.npmjs.org`,
 `registry.yarnpkg.com`) count as none. A value the Count cannot read from,
