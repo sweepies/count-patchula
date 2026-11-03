@@ -2,6 +2,8 @@
 #![forbid(unsafe_code)]
 
 mod model;
+mod package;
+pub use package::PackageId;
 mod validate;
 pub use model::*;
 

@@ -80,7 +80,10 @@ async fn public_release_and_tag_catalogs_are_conditional_and_keep_age_provenance
     for _ in 0..2 {
         let catalog = client(host.clone(), cache.clone())
             .await
-            .lookup(Source::GithubTags, None, "FiloSottile/age")
+            .lookup(&patchula_config::PackageId::public(
+                Source::GithubTags,
+                "FiloSottile/age",
+            ))
             .await
             .unwrap();
         assert_eq!(
@@ -107,7 +110,10 @@ async fn mirror_answers_are_authoritative_but_transient_errors_can_use_github() 
         });
         let result = client(host.clone(), memory().await)
             .await
-            .lookup(Source::GithubReleases, None, "FiloSottile/age")
+            .lookup(&patchula_config::PackageId::public(
+                Source::GithubReleases,
+                "FiloSottile/age",
+            ))
             .await;
         assert_eq!(result.is_ok(), status == 429 || status >= 500);
         assert_eq!(
@@ -126,7 +132,10 @@ async fn mirror_answers_are_authoritative_but_transient_errors_can_use_github() 
     assert!(
         client(host.clone(), memory().await)
             .await
-            .lookup(Source::GithubReleases, None, "FiloSottile/age")
+            .lookup(&patchula_config::PackageId::public(
+                Source::GithubReleases,
+                "FiloSottile/age"
+            ))
             .await
             .unwrap()
             .versions
@@ -140,7 +149,10 @@ async fn mirror_answers_are_authoritative_but_transient_errors_can_use_github() 
     assert_eq!(
         client(host.clone(), memory().await)
             .await
-            .lookup(Source::GithubReleases, None, "FiloSottile/age")
+            .lookup(&patchula_config::PackageId::public(
+                Source::GithubReleases,
+                "FiloSottile/age"
+            ))
             .await
             .unwrap()
             .versions
@@ -156,7 +168,10 @@ async fn private_unlisted_repositories_and_explicit_opt_out_skip_the_host() {
         client(host.clone(), memory().await)
             .await
             .with_versions_host(enabled)
-            .lookup(Source::GithubReleases, None, package)
+            .lookup(&patchula_config::PackageId::public(
+                Source::GithubReleases,
+                package,
+            ))
             .await
             .unwrap();
         assert_eq!(

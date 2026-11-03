@@ -20,9 +20,13 @@ fn eligible(fetched: i64, now: i64, hours: u32) -> bool {
 impl Engine {
     fn catalog_cache_key(&self, key: &LookupKey) -> ExtractionKey {
         ExtractionKey {
-            repo: format!("catalog:{}:{}", key.0, key.1),
+            repo: format!(
+                "catalog:{}:{}",
+                key.0,
+                serde_json::to_string(&key.1).unwrap_or_default()
+            ),
             default_branch_commit: self.github.credential_scope().into(),
-            config_hash: "age-catalog-v2".into(),
+            config_hash: "age-catalog-v3".into(),
         }
     }
     pub(super) async fn age_catalogs(
@@ -92,8 +96,8 @@ impl Engine {
             if let Ok(catalog) = result {
                 // Quota fallbacks may expose an older registry snapshot. Never
                 // reset its age by promoting it into a newly fetched view.
-                if (key.0.ends_with(":docker") || key.0.ends_with(":oci"))
-                    && !sources.registry_stale(&key.1).await.is_empty()
+                if matches!(key.1.source, Source::Docker | Source::Oci)
+                    && !sources.registry_stale(&key.1.name).await.is_empty()
                 {
                     continue;
                 }

@@ -39,7 +39,7 @@ mod woodpecker;
 mod yaml;
 mod yaml_locations;
 
-use patchula_config::{Config, DependencyKind, Manager, Patterns, Scheme, Source};
+use patchula_config::{Config, DependencyKind, Manager, PackageId, Patterns, Scheme, Source};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -112,6 +112,10 @@ pub(crate) fn pointer_token(key: &str) -> String {
 }
 
 impl Dependency {
+    /// The package as the Count looks it up, registry included.
+    pub fn id(&self) -> PackageId {
+        PackageId::new(self.source, self.registry.clone(), &self.package)
+    }
     /// The version a committed lockfile holds for a direct dependency whose
     /// lock the Count can move to a chosen version: Cargo.lock, uv.lock,
     /// poetry.lock, Gemfile.lock and composer.lock. A release inside the

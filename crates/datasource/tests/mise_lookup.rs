@@ -65,7 +65,10 @@ fn client(replay: Option<&Arc<MiseReplay>>, cache: Cache, token: &str) -> Client
 async fn a_packslip_tool_lists_versions_with_dates_newest_first() {
     let replay = replay();
     let catalog = client(Some(&replay), memory().await, "a-token")
-        .lookup(Source::Mise, None, "packslip:jdx/hk")
+        .lookup(&patchula_config::PackageId::public(
+            Source::Mise,
+            "packslip:jdx/hk",
+        ))
         .await
         .unwrap();
     assert_eq!(catalog.versions.len(), 13);
@@ -92,11 +95,10 @@ async fn a_packslip_tool_lists_versions_with_dates_newest_first() {
 #[tokio::test]
 async fn versions_a_backend_cannot_date_stay_undated() {
     let catalog = client(Some(&replay()), memory().await, "a-token")
-        .lookup(
+        .lookup(&patchula_config::PackageId::public(
             Source::Mise,
-            None,
             "go:github.com/golangci/golangci-lint/cmd/golangci-lint",
-        )
+        ))
         .await
         .unwrap();
     assert!(catalog.versions.iter().any(|v| v.published_at.is_none()));
@@ -107,7 +109,13 @@ async fn versions_a_backend_cannot_date_stay_undated() {
 async fn prereleases_stay_in_the_catalog_for_the_policy_to_decide() {
     let source = client(Some(&replay()), memory().await, "a-token");
     // npm reports `prerelease` for these; the Count does not drop them.
-    let prettier = source.lookup(Source::Mise, None, "prettier").await.unwrap();
+    let prettier = source
+        .lookup(&patchula_config::PackageId::public(
+            Source::Mise,
+            "prettier",
+        ))
+        .await
+        .unwrap();
     for version in ["3.0.0-alpha.0", "3.0.0-alpha.11", "1.11.0-rc.1"] {
         assert!(
             prettier.versions.iter().any(|v| v.version == version),
@@ -115,7 +123,10 @@ async fn prereleases_stay_in_the_catalog_for_the_policy_to_decide() {
         );
     }
     // GitHub-backed tools mark them too, with versions that look stable.
-    let jq = source.lookup(Source::Mise, None, "jq").await.unwrap();
+    let jq = source
+        .lookup(&patchula_config::PackageId::public(Source::Mise, "jq"))
+        .await
+        .unwrap();
     assert!(jq.versions.iter().any(|v| v.version == "1.7rc2"));
 }
 
@@ -124,7 +135,7 @@ async fn node_takes_its_lts_line_from_mise() {
     let replay = replay();
     for name in ["node", "core:node"] {
         let catalog = client(Some(&replay), memory().await, "a-token")
-            .lookup(Source::Mise, None, name)
+            .lookup(&patchula_config::PackageId::public(Source::Mise, name))
             .await
             .unwrap();
         assert_eq!(catalog.dist_tags["lts"], "24.22.1", "{name}");
@@ -158,17 +169,23 @@ async fn a_stored_listing_is_reused_until_it_is_scoped_differently_or_retried() 
     let cache = memory().await;
     let lookups = || replay.lookups().len();
     let first = client(Some(&replay), cache.clone(), "a-token");
-    first.lookup(Source::Mise, None, "jq").await.unwrap();
+    first
+        .lookup(&patchula_config::PackageId::public(Source::Mise, "jq"))
+        .await
+        .unwrap();
     assert_eq!(lookups(), 1);
     // Another client over the same cache reads what the first stored.
     let again = client(Some(&replay), cache.clone(), "a-token");
-    let catalog = again.lookup(Source::Mise, None, "jq").await.unwrap();
+    let catalog = again
+        .lookup(&patchula_config::PackageId::public(Source::Mise, "jq"))
+        .await
+        .unwrap();
     assert_eq!(lookups(), 1);
     assert_eq!(catalog.versions[0].version, "1.8.2");
     // A manual retry asks mise again.
     again
         .revalidating()
-        .lookup(Source::Mise, None, "jq")
+        .lookup(&patchula_config::PackageId::public(Source::Mise, "jq"))
         .await
         .unwrap();
     assert_eq!(lookups(), 2);
@@ -176,7 +193,7 @@ async fn a_stored_listing_is_reused_until_it_is_scoped_differently_or_retried() 
     again
         .clone()
         .with_versions_host(false)
-        .lookup(Source::Mise, None, "jq")
+        .lookup(&patchula_config::PackageId::public(Source::Mise, "jq"))
         .await
         .unwrap();
     assert_eq!(lookups(), 3);
@@ -185,7 +202,7 @@ async fn a_stored_listing_is_reused_until_it_is_scoped_differently_or_retried() 
     assert_eq!(last.env["MISE_USE_VERSIONS_HOST"], "0");
     // What one token may see is not shared with another.
     client(Some(&replay), cache, "another-token")
-        .lookup(Source::Mise, None, "jq")
+        .lookup(&patchula_config::PackageId::public(Source::Mise, "jq"))
         .await
         .unwrap();
     assert_eq!(lookups(), 4);
@@ -202,7 +219,10 @@ async fn failed_lookups_are_not_stored() {
     for _ in 0..2 {
         assert!(
             source
-                .lookup(Source::Mise, None, "somethingunknownxyz")
+                .lookup(&patchula_config::PackageId::public(
+                    Source::Mise,
+                    "somethingunknownxyz"
+                ))
                 .await
                 .is_err()
         );
@@ -224,7 +244,10 @@ async fn lookup_failures_name_the_tool_and_say_why() {
             "lists no versions of `packslip:github.com/jdx/hk/tools/lint`",
         ),
     ] {
-        let error = source.lookup(Source::Mise, None, tool).await.unwrap_err();
+        let error = source
+            .lookup(&patchula_config::PackageId::public(Source::Mise, tool))
+            .await
+            .unwrap_err();
         assert!(matches!(error, Error::Mise(_)), "{tool}");
         assert!(error.to_string().contains(expected), "{tool}: {error}");
     }
@@ -233,11 +256,10 @@ async fn lookup_failures_name_the_tool_and_say_why() {
 #[tokio::test]
 async fn a_tool_that_installs_from_a_git_ref_has_no_releases_to_update_to() {
     let error = client(Some(&replay()), memory().await, "a-token")
-        .lookup(
+        .lookup(&patchula_config::PackageId::public(
             Source::Mise,
-            None,
             "cargo:https://github.com/BurntSushi/ripgrep",
-        )
+        ))
         .await
         .unwrap_err();
     let message = error.to_string();
@@ -250,14 +272,20 @@ async fn asdf_and_vfox_tools_are_refused_before_mise_starts() {
     let replay = replay();
     let source = client(Some(&replay), memory().await, "a-token");
     for tool in ["asdf:mise-plugins/asdf-tiny", "vfox:version-fox/vfox-cmake"] {
-        let error = source.lookup(Source::Mise, None, tool).await.unwrap_err();
+        let error = source
+            .lookup(&patchula_config::PackageId::public(Source::Mise, tool))
+            .await
+            .unwrap_err();
         assert!(
             error.to_string().contains("runs plugin code"),
             "{tool}: {error}"
         );
         assert!(
             source
-                .source_repository(Source::Mise, tool, "1.0.0")
+                .source_repository(
+                    &patchula_config::PackageId::public(Source::Mise, tool),
+                    "1.0.0"
+                )
                 .await
                 .is_err()
         );
@@ -268,7 +296,7 @@ async fn asdf_and_vfox_tools_are_refused_before_mise_starts() {
 #[tokio::test]
 async fn a_client_without_the_tool_store_cannot_look_up_mise_tools() {
     let error = client(None, memory().await, "a-token")
-        .lookup(Source::Mise, None, "jq")
+        .lookup(&patchula_config::PackageId::public(Source::Mise, "jq"))
         .await
         .unwrap_err();
     assert!(matches!(error, Error::NoMise));
@@ -279,13 +307,19 @@ async fn release_notes_find_their_repository_from_the_release_url() {
     let replay = replay();
     let source = client(Some(&replay), memory().await, "a-token");
     let jq = source
-        .source_repository(Source::Mise, "jq", "1.8.2")
+        .source_repository(
+            &patchula_config::PackageId::public(Source::Mise, "jq"),
+            "1.8.2",
+        )
         .await
         .unwrap()
         .unwrap();
     assert_eq!(jq.github.as_deref(), Some("jqlang/jq"));
     let hk = source
-        .source_repository(Source::Mise, "packslip:jdx/hk", "2.8.0")
+        .source_repository(
+            &patchula_config::PackageId::public(Source::Mise, "packslip:jdx/hk"),
+            "2.8.0",
+        )
         .await
         .unwrap()
         .unwrap();
@@ -294,7 +328,10 @@ async fn release_notes_find_their_repository_from_the_release_url() {
     let before = replay.lookups().len();
     for (tool, repo) in [("node", "nodejs/node"), ("core:node", "nodejs/node")] {
         let found = source
-            .source_repository(Source::Mise, tool, "26.12.1")
+            .source_repository(
+                &patchula_config::PackageId::public(Source::Mise, tool),
+                "26.12.1",
+            )
             .await
             .unwrap()
             .unwrap();
@@ -307,7 +344,10 @@ async fn release_notes_find_their_repository_from_the_release_url() {
 async fn release_notes_follow_an_npm_backend_when_the_listing_has_no_release_url() {
     let replay = replay();
     let found = client(Some(&replay), memory().await, "a-token")
-        .source_repository(Source::Mise, "prettier", "3.9.10")
+        .source_repository(
+            &patchula_config::PackageId::public(Source::Mise, "prettier"),
+            "3.9.10",
+        )
         .await
         .unwrap()
         .unwrap();
@@ -352,7 +392,7 @@ async fn node_keeps_its_catalog_when_the_lts_listing_fails() {
         ),
     ]));
     let catalog = client(Some(&replay), memory().await, "a-token")
-        .lookup(Source::Mise, None, "node")
+        .lookup(&patchula_config::PackageId::public(Source::Mise, "node"))
         .await
         .unwrap();
     assert_eq!(catalog.versions.len(), 3);
@@ -364,7 +404,7 @@ async fn node_keeps_its_catalog_when_the_lts_listing_fails() {
         run(&["node", "lts"], listing(&[])),
     ]));
     let catalog = client(Some(&replay), memory().await, "a-token")
-        .lookup(Source::Mise, None, "node")
+        .lookup(&patchula_config::PackageId::public(Source::Mise, "node"))
         .await
         .unwrap();
     assert_eq!(catalog.versions.len(), 2);
@@ -380,11 +420,14 @@ async fn versions_that_do_not_order_are_not_taken_for_a_git_ref() {
     ]));
     let source = client(Some(&replay), memory().await, "a-token");
     for tool in ["nightlies", "mixed"] {
-        let catalog = source.lookup(Source::Mise, None, tool).await.unwrap();
+        let catalog = source
+            .lookup(&patchula_config::PackageId::public(Source::Mise, tool))
+            .await
+            .unwrap();
         assert!(!catalog.versions.is_empty(), "{tool}");
     }
     let error = source
-        .lookup(Source::Mise, None, "pinned")
+        .lookup(&patchula_config::PackageId::public(Source::Mise, "pinned"))
         .await
         .unwrap_err();
     assert!(error.to_string().contains("Git ref"), "{error}");

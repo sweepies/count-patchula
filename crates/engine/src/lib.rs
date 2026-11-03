@@ -6,7 +6,7 @@ pub use patchula_update::Recheck;
 
 use futures_util::{StreamExt, stream};
 use patchula_cache::{Cache, ExtractionKey};
-use patchula_config::{Config, Manager, Source};
+use patchula_config::{Config, Manager, PackageId, Source};
 use patchula_datasource::{Client as Sources, Failure, LookupErrorKind};
 use patchula_github::{Client as Github, Options as GithubOptions};
 use patchula_http::{Cached, PhaseTrace, Transport};
@@ -131,13 +131,16 @@ fn file_mode() -> String {
     "100644".into()
 }
 
-type LookupKey = (String, String);
+/// A catalog: whether the versions host may stand in, and the package.
+type LookupKey = (bool, PackageId);
+/// An image digest to resolve: the image and its reference.
+type DigestKey = (String, String);
 type Catalogs = BTreeMap<LookupKey, std::result::Result<patchula_datasource::Catalog, Failure>>;
 pub const REPOSITORY_HEAD_QUERY: &str = "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){isPrivate defaultBranchRef{name target{... on Commit{oid tree{oid}}}}}}";
 #[derive(Default, Serialize, Deserialize)]
 struct LookupHint {
     catalogs: BTreeSet<LookupKey>,
-    digests: BTreeSet<LookupKey>,
+    digests: BTreeSet<DigestKey>,
 }
 
 impl Engine {
@@ -187,12 +190,10 @@ impl Engine {
         self.recheck = recheck;
         self
     }
-    /// Whether a report dependency, by its `source` word, registry and `package`, was
-    /// looked up with an operator entry's credentials, so that what was found
-    /// may be private.
-    pub fn credentialed(&self, source: &str, registry: Option<&str>, package: &str) -> bool {
-        serde_json::from_value::<Source>(serde_json::Value::String(source.to_owned()))
-            .is_ok_and(|source| self.sources.credentialed(source, registry, package))
+    /// Whether `id` was looked up with an operator entry's credentials, so that
+    /// what was found may be private.
+    pub fn credentialed(&self, id: &PackageId) -> bool {
+        self.sources.credentialed(id)
     }
     pub fn with_transport(
         token: &str,
@@ -284,38 +285,22 @@ impl Engine {
         let enabled = self
             .versions_host_override
             .unwrap_or_else(|| config.is_none_or(|config| config.use_versions_host));
+        let mut id = dep.id();
         // A flake input is looked up by the reference it was written with: the
         // same repository can be followed on different branches.
-        let package = if dep.source == Source::Nix {
-            &dep.current
-        } else {
-            &dep.package
-        };
-        // A package from its own registry is another catalog than the public one.
-        let source = match &dep.registry {
-            Some(registry) => format!("{enabled}:{}:{registry}", word(&dep.source)),
-            None => format!("{enabled}:{}", word(&dep.source)),
-        };
-        (source, package.clone())
+        if dep.source == Source::Nix {
+            id.name.clone_from(&dep.current);
+        }
+        (enabled, id)
     }
     async fn lookup_key(
         sources: &Sources,
-        key: &LookupKey,
+        (enabled, id): &LookupKey,
     ) -> std::result::Result<patchula_datasource::Catalog, Failure> {
-        let invalid = || Failure {
-            kind: LookupErrorKind::Other,
-            message: "invalid catalog key".into(),
-        };
-        let mut parts = key.0.splitn(3, ':');
-        let (Some(enabled), Some(source)) = (parts.next(), parts.next()) else {
-            return Err(invalid());
-        };
-        let registry = parts.next();
-        let sources = sources.clone().with_versions_host(enabled == "true");
-        let source: Source =
-            serde_json::from_value(Value::String(source.into())).map_err(|_| invalid())?;
         sources
-            .lookup(source, registry, &key.1)
+            .clone()
+            .with_versions_host(*enabled)
+            .lookup(id)
             .await
             .map_err(Failure::from)
     }
@@ -798,7 +783,7 @@ impl Engine {
         // Hints overlap mutable digest reads with the repository head read.
         // Catalogs wait for current policy, age-cache and checkbox decisions.
         let hint_hash = format!(
-            "lookup-hint-v3:{}:{}:{}",
+            "lookup-hint-v4:{}:{}:{}",
             hash(&serde_json::to_vec(&(
                 &options.config,
                 &overrides,
@@ -1236,13 +1221,11 @@ impl Engine {
         // commits. Reuse those for both current and proposed action tags instead
         // of adding a serial /commits/{tag} round trip after policy evaluation.
         for (package, reference) in &digest_keys {
-            if let Some(Ok(catalog)) = catalogs.iter().find_map(|((source, pkg), result)| {
-                (pkg == package
-                    && (source.ends_with(":forge-tags")
-                        || (source.ends_with(":github-tags")
-                            && catalog_evidence
-                                .get(&(source.clone(), pkg.clone()))
-                                .is_none_or(|e| !e.reused))))
+            if let Some(Ok(catalog)) = catalogs.iter().find_map(|(key, result)| {
+                (key.1.name == *package
+                    && (key.1.source == Source::ForgeTags
+                        || (key.1.source == Source::GithubTags
+                            && catalog_evidence.get(key).is_none_or(|e| !e.reused))))
                 .then_some(result)
             }) && let Some(digest) = catalog
                 .versions
@@ -1257,8 +1240,8 @@ impl Engine {
         // Forge refs resolve only through their tag catalog. A ref missing
         // from it is not sent to GitHub.
         digest_keys.retain(|(package, reference)| {
-            let Some(result) = catalogs.iter().find_map(|((source, pkg), result)| {
-                (source.ends_with(":forge-tags") && pkg == package).then_some(result)
+            let Some(result) = catalogs.iter().find_map(|(key, result)| {
+                (key.1.source == Source::ForgeTags && key.1.name == *package).then_some(result)
             }) else {
                 return true;
             };
@@ -1280,8 +1263,8 @@ impl Engine {
         let mutable_tags: Vec<_> = digest_keys
             .iter()
             .filter(|(package, _)| {
-                catalog_evidence.iter().any(|((source, pkg), e)| {
-                    source.ends_with(":github-tags") && pkg == package && e.reused
+                catalog_evidence.iter().any(|(key, e)| {
+                    key.1.source == Source::GithubTags && key.1.name == *package && e.reused
                 })
             })
             .cloned()
@@ -1295,10 +1278,9 @@ impl Engine {
         let fresh_sources = &fresh_sources;
         let image_digests: BTreeMap<_, _> = stream::iter(image_keys)
             .map(|(package, tag)| async move {
-                let sources = if retry_keys
-                    .iter()
-                    .any(|(s, p)| (s.ends_with(":docker") || s.ends_with(":oci")) && p == &package)
-                {
+                let sources = if retry_keys.iter().any(|(_, id)| {
+                    matches!(id.source, Source::Docker | Source::Oci) && id.name == package
+                }) {
                     fresh_sources
                 } else {
                     &self.sources
@@ -2009,13 +1991,13 @@ impl Engine {
     async fn catalogs(&self, keys: BTreeSet<LookupKey>, sources: &Sources) -> Catalogs {
         let (releases, others): (Vec<_>, Vec<_>) = keys
             .into_iter()
-            .partition(|(source, _)| source.ends_with(":github-releases"));
+            .partition(|(_, id)| id.source == Source::GithubReleases && id.is_public());
         let mut groups = Vec::new();
         for enabled in [true, false] {
             let packages: Vec<_> = releases
                 .iter()
-                .filter(|(source, _)| source.starts_with(&enabled.to_string()))
-                .map(|(_, package)| package.clone())
+                .filter(|(host, _)| *host == enabled)
+                .map(|(_, id)| id.name.clone())
                 .collect();
             groups.extend(packages.chunks(16).map(|chunk| (enabled, chunk.to_vec())));
         }
@@ -2028,7 +2010,7 @@ impl Engine {
                         .into_iter()
                         .map(|(package, result)| {
                             (
-                                (format!("{enabled}:github-releases"), package),
+                                (enabled, PackageId::public(Source::GithubReleases, package)),
                                 result.map_err(Failure::from),
                             )
                         })
@@ -2036,7 +2018,8 @@ impl Engine {
                     Err(_) => {
                         stream::iter(packages)
                             .map(|package| async move {
-                                let key = (format!("{enabled}:github-releases"), package);
+                                let key =
+                                    (enabled, PackageId::public(Source::GithubReleases, package));
                                 let result = Self::lookup_key(sources, &key).await;
                                 (key, result)
                             })

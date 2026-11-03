@@ -87,12 +87,12 @@ async fn fresh_reopen_304_changed_200_and_invalid_200_preserve_catalog_semantics
         (Some("v3"), response(304, "v3", "max-age=600", Value::Null)),
     ]))));
     let first = client(cache.clone(), transport.clone())
-        .lookup(Source::Npm, None, "fixture")
+        .lookup(&patchula_config::PackageId::public(Source::Npm, "fixture"))
         .await
         .unwrap();
     assert!(first.versions[0].deprecated);
     let second = client(cache.clone(), transport.clone())
-        .lookup(Source::Npm, None, "fixture")
+        .lookup(&patchula_config::PackageId::public(Source::Npm, "fixture"))
         .await
         .unwrap();
     assert_eq!(
@@ -101,7 +101,7 @@ async fn fresh_reopen_304_changed_200_and_invalid_200_preserve_catalog_semantics
     );
     let reopened = Cache::open(&path, Default::default()).await.unwrap();
     let third = client(reopened, transport.clone())
-        .lookup(Source::Npm, None, "fixture")
+        .lookup(&patchula_config::PackageId::public(Source::Npm, "fixture"))
         .await
         .unwrap();
     assert_eq!(
@@ -132,7 +132,7 @@ async fn fresh_reopen_304_changed_200_and_invalid_200_preserve_catalog_semantics
     entry.expires_at = Some(0);
     cache.http_put(&key, &entry).await.unwrap();
     let changed = client(cache.clone(), transport.clone())
-        .lookup(Source::Npm, None, "fixture")
+        .lookup(&patchula_config::PackageId::public(Source::Npm, "fixture"))
         .await
         .unwrap();
     assert_eq!(changed.versions.len(), 1, "unpublished versions disappear");
@@ -145,12 +145,12 @@ async fn fresh_reopen_304_changed_200_and_invalid_200_preserve_catalog_semantics
     );
     assert!(
         client(cache.clone(), transport.clone())
-            .lookup(Source::Npm, None, "fixture")
+            .lookup(&patchula_config::PackageId::public(Source::Npm, "fixture"))
             .await
             .is_err()
     );
     let final_catalog = client(cache, transport.clone())
-        .lookup(Source::Npm, None, "fixture")
+        .lookup(&patchula_config::PackageId::public(Source::Npm, "fixture"))
         .await
         .unwrap();
     assert_eq!(
@@ -185,7 +185,7 @@ async fn uncacheable_derived_responses_remove_body_and_validators() {
         for version in ["1.0.0", "2.0.0", "3.0.0"] {
             assert_eq!(
                 client
-                    .lookup(Source::Npm, None, "fixture")
+                    .lookup(&patchula_config::PackageId::public(Source::Npm, "fixture"))
                     .await
                     .unwrap()
                     .versions[0]

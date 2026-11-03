@@ -1,4 +1,4 @@
-use patchula_config::Config;
+use patchula_config::{Config, PackageId};
 use patchula_manager::{Dependency, Edit, word};
 use patchula_report::{ActionStatus, BranchAction, FileAction, Repository, Update};
 use serde::{Deserialize, Serialize};
@@ -41,6 +41,9 @@ pub struct Plan {
 pub struct Change {
     pub source: String,
     pub package: String,
+    /// The registry the package comes from, when it is not the public one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
     pub file: String,
     pub current: String,
     pub current_version: Option<String>,
@@ -58,6 +61,14 @@ pub struct Change {
     /// The image SBOM comparison, for a pinned image's new digest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<patchula_report::ImageCheck>,
+}
+impl Change {
+    /// The package the change updates, or None for a source word this build
+    /// does not know.
+    pub fn id(&self) -> Option<PackageId> {
+        let source = serde_json::from_value(serde_json::Value::String(self.source.clone())).ok()?;
+        Some(PackageId::new(source, self.registry.clone(), &self.package))
+    }
 }
 pub(crate) fn hash(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -373,6 +384,7 @@ fn build(
                 current_version: item.current_version.map(str::to_owned),
                 source: word(&item.dep.source),
                 package: item.dep.package.clone(),
+                registry: item.dep.registry.clone(),
                 file: item.dep.file.clone(),
                 current: format!(
                     "{}{}",
@@ -389,9 +401,7 @@ fn build(
                 kind: u.update_type.clone(),
                 merge: p.map_or(config.defaults.merge, |p| p.merge),
                 labels: p.map_or_else(|| config.defaults.labels.clone(), |p| p.labels.clone()),
-                // Release notes are read from the public registry, never the package's own.
-                release_notes: item.dep.registry.is_none()
-                    && p.map_or(config.defaults.release_notes, |p| p.release_notes),
+                release_notes: p.map_or(config.defaults.release_notes, |p| p.release_notes),
                 body_notes: p.map_or_else(
                     || config.defaults.body_notes.clone(),
                     |p| p.body_notes.clone(),

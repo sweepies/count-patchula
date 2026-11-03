@@ -568,7 +568,10 @@ mod tests {
         ] {
             transport.phase.store(phase, Ordering::SeqCst);
             let tags = client
-                .lookup(Source::GithubTags, None, "example/dates")
+                .lookup(&patchula_config::PackageId::public(
+                    Source::GithubTags,
+                    "example/dates",
+                ))
                 .await
                 .unwrap();
             assert_eq!(
@@ -654,7 +657,10 @@ mod tests {
         );
         for _ in 0..2 {
             let catalog = client
-                .lookup(Source::GithubTags, None, "example/empty")
+                .lookup(&patchula_config::PackageId::public(
+                    Source::GithubTags,
+                    "example/empty",
+                ))
                 .await
                 .unwrap();
             assert_eq!(catalog.versions.len(), 1);
@@ -749,7 +755,10 @@ mod tests {
             cache,
         );
         let cold = client
-            .lookup(Source::GithubTags, None, "example/tags")
+            .lookup(&patchula_config::PackageId::public(
+                Source::GithubTags,
+                "example/tags",
+            ))
             .await
             .unwrap();
         assert_eq!(cold.versions.len(), 201);
@@ -757,7 +766,10 @@ mod tests {
         assert_eq!(transport.peak.load(Ordering::SeqCst), 2);
         transport.step.store(1, Ordering::SeqCst);
         let warm = client
-            .lookup(Source::GithubTags, None, "example/tags")
+            .lookup(&patchula_config::PackageId::public(
+                Source::GithubTags,
+                "example/tags",
+            ))
             .await
             .unwrap();
         assert_eq!(
@@ -771,7 +783,10 @@ mod tests {
         );
         transport.step.store(2, Ordering::SeqCst);
         let changed = client
-            .lookup(Source::GithubTags, None, "example/tags")
+            .lookup(&patchula_config::PackageId::public(
+                Source::GithubTags,
+                "example/tags",
+            ))
             .await
             .unwrap();
         assert_eq!(transport.queries.load(Ordering::SeqCst), 4);
@@ -786,7 +801,10 @@ mod tests {
         );
         transport.step.store(3, Ordering::SeqCst);
         let deleted = client
-            .lookup(Source::GithubTags, None, "example/tags")
+            .lookup(&patchula_config::PackageId::public(
+                Source::GithubTags,
+                "example/tags",
+            ))
             .await
             .unwrap();
         assert_eq!(deleted.versions.len(), 200);
@@ -905,7 +923,10 @@ mod tests {
         );
         assert_eq!(
             client
-                .lookup(Source::GithubReleases, None, "example/spec")
+                .lookup(&patchula_config::PackageId::public(
+                    Source::GithubReleases,
+                    "example/spec"
+                ))
                 .await
                 .unwrap()
                 .versions
@@ -913,7 +934,10 @@ mod tests {
             3
         );
         let repeated = client
-            .lookup(Source::GithubReleases, None, "example/spec")
+            .lookup(&patchula_config::PackageId::public(
+                Source::GithubReleases,
+                "example/spec",
+            ))
             .await
             .unwrap();
         assert_eq!(repeated.versions.len(), 3);
@@ -924,7 +948,10 @@ mod tests {
         );
         assert_eq!(
             client
-                .lookup(Source::GithubReleases, None, "example/spec")
+                .lookup(&patchula_config::PackageId::public(
+                    Source::GithubReleases,
+                    "example/spec"
+                ))
                 .await
                 .unwrap()
                 .versions
@@ -938,7 +965,10 @@ mod tests {
         );
         assert_eq!(
             client
-                .lookup(Source::GithubReleases, None, "example/spec")
+                .lookup(&patchula_config::PackageId::public(
+                    Source::GithubReleases,
+                    "example/spec"
+                ))
                 .await
                 .unwrap()
                 .versions
@@ -947,7 +977,10 @@ mod tests {
         );
         assert_eq!(
             client
-                .lookup(Source::GithubReleases, None, "example/spec")
+                .lookup(&patchula_config::PackageId::public(
+                    Source::GithubReleases,
+                    "example/spec"
+                ))
                 .await
                 .unwrap()
                 .versions

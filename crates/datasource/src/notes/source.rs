@@ -267,16 +267,21 @@ impl Client {
             Some(("cargo", package)) if !package.contains('/') => (Source::Crates, package),
             _ => return Ok(None),
         };
-        Box::pin(self.source_repository(source, package, version)).await
+        Box::pin(self.source_repository(&PackageId::public(source, package), version)).await
     }
     /// Only called while rendering changed PRs. Registry metadata uses independent
     /// compact representations and the batch's conditional public HTTP cache.
     pub async fn source_repository(
         &self,
-        source: Source,
-        package: &str,
+        id: &PackageId,
         version: &str,
     ) -> Result<Option<Repository>> {
+        // Registry metadata is read by name from the public registry; a
+        // package from its own is not the public package of its name.
+        if !id.is_public() {
+            return Ok(None);
+        }
+        let (source, package) = (id.source, id.name.as_str());
         if package.is_empty()
             || package.contains(['?', '#', '\\'])
             || package.split('/').any(|p| matches!(p, "." | ".."))

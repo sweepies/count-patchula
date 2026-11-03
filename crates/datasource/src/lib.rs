@@ -18,7 +18,7 @@ mod packagist;
 mod registries;
 mod rubygems;
 use patchula_cache::{Cache, Release};
-use patchula_config::Source;
+use patchula_config::{PackageId, Source};
 use patchula_github::Error as GithubError;
 use patchula_http::Cached;
 pub use patchula_report::LookupErrorKind;
@@ -192,7 +192,8 @@ impl Client {
     /// Whether looking up `package` reads a registry with an operator entry's
     /// credentials, so that what it finds may be private. Only sources that
     /// carry their registry's URL can reach one.
-    pub fn credentialed(&self, source: Source, registry: Option<&str>, package: &str) -> bool {
+    pub fn credentialed(&self, id: &PackageId) -> bool {
+        let (source, registry, package) = (id.source, id.registry.as_deref(), id.name.as_str());
         let url = match source {
             Source::Npm => Some(npm_url(registry, package)),
             Source::Docker | Source::Oci => docker::identity(package)
@@ -219,12 +220,8 @@ impl Client {
     }
     /// The versions of `package`, from `registry` when it is given: an https
     /// URL standing in for the source's public registry. Only npm takes one.
-    pub async fn lookup(
-        &self,
-        source: Source,
-        registry: Option<&str>,
-        package: &str,
-    ) -> Result<Catalog> {
+    pub async fn lookup(&self, id: &PackageId) -> Result<Catalog> {
+        let (source, registry, package) = (id.source, id.registry.as_deref(), id.name.as_str());
         if registry.is_some_and(|registry| {
             source != Source::Npm || patchula_http::url_prefix(registry).is_none()
         }) {

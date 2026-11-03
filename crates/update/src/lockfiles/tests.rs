@@ -1386,6 +1386,7 @@ async fn real_cargo_and_go_targeted_updates_retain_the_selected_manifest_and_loc
             diff: String::new(),
         });
         p.changes.push(crate::Change {
+            registry: None,
             source: source.into(),
             package: package.into(),
             file: manifest.into(),
@@ -1644,6 +1645,7 @@ async fn cargo_lock_adds_a_semver_incompatible_entry_then_pins_the_target() {
         diff: String::new(),
     });
     p.changes.push(crate::Change {
+        registry: None,
         source: "crates".into(),
         package: "base64".into(),
         file: "Cargo.toml".into(),
@@ -1688,6 +1690,7 @@ fn provider_lock_drift_is_rejected_before_publication() {
         .unwrap()
         .unwrap();
     p.changes.push(crate::Change {
+        registry: None,
         source: "terraform".into(),
         package: "hashicorp/aws".into(),
         file: "providers.tf".into(),
@@ -2232,6 +2235,7 @@ fn mise_lock_maintenance_respects_refresh_and_unlocked_manifests_need_no_job() {
 
 fn npm_change(value: &str) -> crate::plan::Change {
     crate::plan::Change {
+        registry: None,
         source: "npm".into(),
         package: "fixture".into(),
         file: "package.json".into(),
@@ -3317,6 +3321,7 @@ fn a_lock_resolves_a_target_that_names_no_build_metadata() {
         .unwrap()
         .unwrap();
     plan.changes.push(crate::Change {
+        registry: None,
         source: "crates".into(),
         package: "zstd-sys".into(),
         file: "Cargo.lock".into(),
@@ -4644,6 +4649,7 @@ async fn lock_only_jobs_reach_their_exact_target_in_every_lockfile_tool() {
                 lock_only: true,
             }];
             p.changes = vec![crate::plan::Change {
+                registry: None,
                 source: source.into(),
                 package: dep.package.clone(),
                 file: manifest.into(),
@@ -4816,6 +4822,7 @@ fn a_branch_with_a_security_fix_takes_its_commit_prefix() {
 
 fn cargo_change(package: &str, current: &str, version: &str) -> crate::plan::Change {
     crate::plan::Change {
+        registry: None,
         source: "crates".into(),
         package: package.into(),
         file: "Cargo.toml".into(),
@@ -4946,6 +4953,7 @@ fn a_batch_moves_every_declaration_of_a_dependency_in_a_file() {
     assert_eq!(dependencies.len(), 3, "{dependencies:?}");
     let source = serde_json::to_value(dependencies[0].source).unwrap();
     let target = crate::plan::Change {
+        registry: None,
         source: source.as_str().unwrap().into(),
         package: dependencies[0].package.clone(),
         file: ".github/workflows/ci.yml".into(),
@@ -5327,6 +5335,7 @@ fn a_batch_drops_a_target_older_than_the_current_version() {
         .dependencies;
     let source = serde_json::to_value(dependencies[0].source).unwrap();
     let target = |version: &str| crate::plan::Change {
+        registry: None,
         source: source.as_str().unwrap().into(),
         package: dependencies[0].package.clone(),
         file: "mise.toml".into(),

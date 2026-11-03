@@ -61,7 +61,10 @@ async fn undescribed_versions_are_dropped_and_cold_lookups_date_only_recent_rele
     )
     .with_versions_host(false);
     let catalog = client
-        .lookup(Source::Go, None, "example.com/mod")
+        .lookup(&patchula_config::PackageId::public(
+            Source::Go,
+            "example.com/mod",
+        ))
         .await
         .unwrap();
     let versions: Vec<_> = catalog

@@ -30,17 +30,17 @@ fn release_key(repo: &str, tag: &str) -> ExtractionKey {
 impl Client {
     /// Union selected tags before rendering so overlapping PR ranges cost one
     /// query per upstream (bounded to 100 aliases per request).
-    pub async fn prepare_release_notes(&self, ranges: &[(Source, String, String, String)]) {
+    pub async fn prepare_release_notes(&self, ranges: &[(PackageId, String, String)]) {
         let mut repos: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-        for (source, package, current, target) in ranges {
-            let Ok(Some(repository)) = self.notes_source_repository(*source, package, target).await
-            else {
+        for (id, current, target) in ranges {
+            let (source, package) = (id.source, id.name.as_str());
+            let Ok(Some(repository)) = self.notes_source_repository(id, target).await else {
                 continue;
             };
             let Some(repo) = repository.github.as_deref() else {
                 continue;
             };
-            let Some((old, new)) = note_bounds(*source, package, current, target, &repository)
+            let Some((old, new)) = note_bounds(source, package, current, target, &repository)
             else {
                 continue;
             };

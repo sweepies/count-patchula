@@ -228,15 +228,14 @@ impl Client {
     }
     async fn notes_source_repository(
         &self,
-        source: Source,
-        package: &str,
+        id: &PackageId,
         target: &str,
     ) -> Result<Option<Repository>> {
-        let key = serde_json::to_string(&("note-source", source, package, target))?;
+        let key = serde_json::to_string(&("note-source", id, target))?;
         let bytes = self
             .note_read(&key, async {
                 Ok(serde_json::to_vec(
-                    &self.source_repository(source, package, target).await?,
+                    &self.source_repository(id, target).await?,
                 )?)
             })
             .await?;
@@ -401,17 +400,15 @@ impl Client {
     }
     pub async fn release_notes(
         &self,
-        source: Source,
-        package: &str,
+        id: &PackageId,
         current: &str,
         target: &str,
     ) -> Result<Notes> {
+        let (source, package) = (id.source, id.name.as_str());
         let mut notes = Notes {
             from: current.into(),
             to: target.into(),
-            source: self
-                .notes_source_repository(source, package, target)
-                .await?,
+            source: self.notes_source_repository(id, target).await?,
             ..Notes::default()
         };
         let Some(repository) = notes.source.as_ref() else {

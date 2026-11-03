@@ -1,6 +1,6 @@
 use crate::{Plan, plan::hash};
 use chrono::{DateTime, Duration, Utc};
-use patchula_config::Config;
+use patchula_config::{Config, PackageId};
 use patchula_github::Client;
 use patchula_report::{ActionStatus, PullRequestAction};
 use serde::{Deserialize, Serialize};
@@ -233,7 +233,7 @@ pub struct Lifecycle {
     base: String,
     pub(crate) prs: Vec<Value>,
     pub actions: Vec<PullRequestAction>,
-    notes: BTreeMap<(String, String, String, String), patchula_datasource::notes::Notes>,
+    notes: BTreeMap<(PackageId, String, String), patchula_datasource::notes::Notes>,
     pub(crate) recheck: Recheck,
     merge_settings: Option<crate::automerge::Settings>,
     maintenance_policy: patchula_config::Policy,
@@ -536,10 +536,11 @@ impl Lifecycle {
                 .iter()
                 .filter(|c| c.kind != "pin" && c.release_notes)
             {
-                if let Some(target) = change.version.as_ref().or(change.value.as_ref()) {
+                if let Some(target) = change.version.as_ref().or(change.value.as_ref())
+                    && let Some(id) = change.id().filter(PackageId::is_public)
+                {
                     plan_ranges.insert((
-                        change.source.clone(),
-                        change.package.clone(),
+                        id,
                         change
                             .current_version
                             .as_ref()
@@ -554,17 +555,7 @@ impl Lifecycle {
             }
             ranges.extend(plan_ranges);
         }
-        let ranges: Vec<_> = ranges
-            .into_iter()
-            .filter_map(|(source, package, current, target)| {
-                Some((
-                    serde_json::from_value(json!(source)).ok()?,
-                    package,
-                    current,
-                    target,
-                ))
-            })
-            .collect();
+        let ranges: Vec<_> = ranges.into_iter().collect();
         sources.prepare_release_notes(&ranges).await;
         for plan in plans {
             if let Some(pr) = &plan.cached_pr {
@@ -1026,25 +1017,20 @@ impl Lifecycle {
                 continue;
             };
             let current = change.current_version.as_ref().unwrap_or(&change.current);
-            let key = (
-                change.source.clone(),
-                change.package.clone(),
-                current.clone(),
-                version.clone(),
-            );
+            // A package from its own registry has no public release notes, and
+            // no section saying so.
+            let Some(id) = change.id().filter(PackageId::is_public) else {
+                continue;
+            };
+            let key = (id, current.clone(), version.clone());
             if !releases.insert(key.clone()) {
                 continue;
             }
             if !self.notes.contains_key(&key) {
-                let note =
-                    if let Ok(source) = serde_json::from_value(serde_json::json!(change.source)) {
-                        sources
-                            .release_notes(source, &change.package, current, version)
-                            .await
-                            .unwrap_or_default()
-                    } else {
-                        Default::default()
-                    };
+                let note = sources
+                    .release_notes(&key.0, current, version)
+                    .await
+                    .unwrap_or_default();
                 self.notes.insert(key.clone(), note);
             }
             let budget = (BODY_LIMIT - 1500)
@@ -1420,6 +1406,7 @@ mod security_tests {
         }))
         .unwrap();
         let change = crate::Change {
+            registry: None,
             source: "npm".into(),
             package: "lodash".into(),
             file: "package.json".into(),
@@ -1455,6 +1442,7 @@ mod security_tests {
         }))
         .unwrap();
         let change = crate::Change {
+            registry: None,
             source: "npm".into(),
             package: "@scope/pkg".into(),
             file: "package.json".into(),
@@ -1498,6 +1486,7 @@ mod image_tests {
 
     fn change(package: &str, check: ImageCheck) -> crate::Change {
         crate::Change {
+            registry: None,
             source: "docker".into(),
             package: package.into(),
             file: "Dockerfile".into(),

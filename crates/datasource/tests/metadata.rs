@@ -31,7 +31,10 @@ async fn registry_flags_tags_and_sparse_layout_are_preserved() {
     )
     .with_versions_host(false);
     let npm = client
-        .lookup(Source::Npm, None, "spec-package")
+        .lookup(&patchula_config::PackageId::public(
+            Source::Npm,
+            "spec-package",
+        ))
         .await
         .unwrap();
     assert_eq!(npm.dist_tags["next"], "3.0.0-beta.1");
@@ -52,7 +55,10 @@ async fn registry_flags_tags_and_sparse_layout_are_preserved() {
             .deprecated
     );
     let crates = client
-        .lookup(Source::Crates, None, "spec-package")
+        .lookup(&patchula_config::PackageId::public(
+            Source::Crates,
+            "spec-package",
+        ))
         .await
         .unwrap();
     assert!(crates.versions[0].yanked);

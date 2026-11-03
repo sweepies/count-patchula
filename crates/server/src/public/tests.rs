@@ -318,8 +318,8 @@ fn credentialed_lookups_leave_only_the_declared_dependency_in_public() {
         "packageFiles": [{"path": "deploy.yaml",
             "dependencies": [dependency(private, "helm"), dependency("nginx", "docker")]}]}]}))
     .unwrap();
-    let shown = withheld(&report, |source, _, package| {
-        source == "helm" && package == private
+    let shown = withheld(&report, |id| {
+        id.source == patchula_config::Source::Helm && id.name == private
     });
     let files = &report.repositories[0].package_files;
     let [hidden, public] = &shown.repositories[0].package_files[0].dependencies[..] else {
@@ -369,8 +369,8 @@ async fn only_a_private_repository_is_stored_without_what_credentials_found() {
         1,
         &Recorded {
             report: &report,
-            withheld: withheld(&report, |source, _, package| {
-                source == "helm" && package == chart
+            withheld: withheld(&report, |id| {
+                id.source == patchula_config::Source::Helm && id.name == chart
             }),
         },
         Utc::now(),
