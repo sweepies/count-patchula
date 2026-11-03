@@ -178,9 +178,37 @@ registries {
 
 A dependency's source decides where its versions come from. Helm repositories,
 OCI and Docker registries, Maven repositories and GitLab, Gitea or Forgejo tags carry
-their URL, so a private one works with an entry. npm, PyPI and the other package
+their URL, so a private one works with an entry. npm dependencies can name
+their own [package registry](#package-registries). PyPI and the other package
 registries still read their public registry, or its mirror. Lockfile tools get
 no registry credentials yet.
+
+### Package registries
+
+A dependency can come from a registry of its own instead of its source's
+public one. The repository says which, and the report shows it as the
+dependency's `registry`:
+
+- npm reads the nearest `.npmrc` at or above each `package.json`:
+  `registry=` for every package, and `@scope:registry=` for a scope. Yarn
+  Berry's `npmRegistryServer` in `.yarnrc.yml`, at the top level and under
+  `npmScopes`, works the same and wins over `.npmrc` in the same directory.
+  `packageManager` stays on the public registry, since Corepack does not read
+  `.npmrc`.
+- A [custom extractor](/guide/configuration/#custom-extractors) can set
+  `registry`, a template such as `"{registry}"`; an empty or unmatched capture
+  means the public registry.
+
+Only https URLs count, and values npm would read from the environment
+(`${VAR}`) are ignored, so such a dependency stays on the public registry.
+npm's own public registry is the same as none.
+
+A repository naming a registry never brings credentials: requests to it carry
+an operator entry's, when one covers its URL, and nothing otherwise. Two
+packages with the same name from different registries are separate
+dependencies with separate lookups. A package from its own registry gets no
+[advisories](/guide/security/) and no release notes, since the public package
+of that name is a different package.
 
 ### Mirrors
 

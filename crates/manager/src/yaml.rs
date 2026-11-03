@@ -87,6 +87,7 @@ impl<'a> Scan<'a> {
             scheme: Scheme::Semver,
             extract: None,
             included_by: None,
+            registry: None,
         });
         Ok(())
     }
@@ -176,6 +177,7 @@ pub(super) fn extract(
                 scheme: Scheme::Loose,
                 extract: None,
                 included_by: None,
+                registry: None,
             });
         }
     }

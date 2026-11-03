@@ -170,6 +170,7 @@ fn add(
         scheme: Scheme::Hashicorp,
         extract: None,
         included_by: None,
+        registry: None,
     });
 }
 

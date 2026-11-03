@@ -34,6 +34,7 @@ impl Locked {
             scheme: Scheme::Semver,
             extract: None,
             included_by: None,
+            registry: None,
         }
     }
 }

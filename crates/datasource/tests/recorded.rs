@@ -103,7 +103,7 @@ async fn public_sources_cold_and_conditional_warm() {
     let start = std::time::Instant::now();
     let mut first = Vec::new();
     for (source, package) in packages {
-        let catalog = client.lookup(source, package).await.unwrap();
+        let catalog = client.lookup(source, None, package).await.unwrap();
         assert!(!catalog.versions.is_empty(), "{package}");
         first.push(catalog);
     }
@@ -117,7 +117,7 @@ async fn public_sources_cold_and_conditional_warm() {
     let before_h = http.stats();
     let start = std::time::Instant::now();
     for ((source, package), catalog) in packages.into_iter().zip(first) {
-        let next = client.lookup(source, package).await.unwrap();
+        let next = client.lookup(source, None, package).await.unwrap();
         assert_eq!(
             serde_json::to_value(catalog).unwrap(),
             serde_json::to_value(next).unwrap()

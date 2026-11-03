@@ -83,7 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 async move {
                     Ok::<_, patchula_datasource::Error>((
                         package,
-                        serde_json::to_value(client.lookup(Source::Npm, package).await?)?,
+                        serde_json::to_value(client.lookup(Source::Npm, None, package).await?)?,
                     ))
                 }
             })

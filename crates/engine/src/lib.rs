@@ -187,12 +187,12 @@ impl Engine {
         self.recheck = recheck;
         self
     }
-    /// Whether a report dependency, by its `source` word and `package`, was
+    /// Whether a report dependency, by its `source` word, registry and `package`, was
     /// looked up with an operator entry's credentials, so that what was found
     /// may be private.
-    pub fn credentialed(&self, source: &str, package: &str) -> bool {
+    pub fn credentialed(&self, source: &str, registry: Option<&str>, package: &str) -> bool {
         serde_json::from_value::<Source>(serde_json::Value::String(source.to_owned()))
-            .is_ok_and(|source| self.sources.credentialed(source, package))
+            .is_ok_and(|source| self.sources.credentialed(source, registry, package))
     }
     pub fn with_transport(
         token: &str,
@@ -291,7 +291,12 @@ impl Engine {
         } else {
             &dep.package
         };
-        (format!("{enabled}:{}", word(&dep.source)), package.clone())
+        // A package from its own registry is another catalog than the public one.
+        let source = match &dep.registry {
+            Some(registry) => format!("{enabled}:{}:{registry}", word(&dep.source)),
+            None => format!("{enabled}:{}", word(&dep.source)),
+        };
+        (source, package.clone())
     }
     async fn lookup_key(
         sources: &Sources,
@@ -301,11 +306,18 @@ impl Engine {
             kind: LookupErrorKind::Other,
             message: "invalid catalog key".into(),
         };
-        let (enabled, source) = key.0.split_once(':').ok_or_else(invalid)?;
+        let mut parts = key.0.splitn(3, ':');
+        let (Some(enabled), Some(source)) = (parts.next(), parts.next()) else {
+            return Err(invalid());
+        };
+        let registry = parts.next();
         let sources = sources.clone().with_versions_host(enabled == "true");
         let source: Source =
             serde_json::from_value(Value::String(source.into())).map_err(|_| invalid())?;
-        sources.lookup(source, &key.1).await.map_err(Failure::from)
+        sources
+            .lookup(source, registry, &key.1)
+            .await
+            .map_err(Failure::from)
     }
     pub async fn lookup(&self, options: Options) -> Result<Report> {
         self.lookup_at(options, chrono::Utc::now()).await
@@ -1857,6 +1869,7 @@ impl Engine {
                     name: dep.name.clone(),
                     occurrence: None,
                     package: dep.package.clone(),
+                    registry: dep.registry.clone(),
                     current: Current {
                         value: Some(dep.current.clone()),
                         version: catalogs

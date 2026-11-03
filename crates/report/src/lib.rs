@@ -4,13 +4,13 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("invalid report JSON: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("unsupported report schemaVersion {0}; expected 4")]
+    #[error("unsupported report schemaVersion {0}; expected 5")]
     Version(u32),
     #[error("invalid report: {0}")]
     Invalid(String),
@@ -275,6 +275,10 @@ pub struct Dependency {
     pub occurrence: Option<String>,
     /// Registry identity, which may differ from the name in the manifest.
     pub package: String,
+    /// The registry the package was looked up in, as an https URL, when it is
+    /// not the source's public one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
     pub current: Current,
     pub updates: Vec<Update>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -749,13 +753,13 @@ mod tests {
     #[test]
     fn reject_future_schema_before_interpreting_payload() {
         assert!(matches!(
-            Report::from_json(br#"{"schemaVersion":5,"future":true}"#),
-            Err(Error::Version(5))
+            Report::from_json(br#"{"schemaVersion":6,"future":true}"#),
+            Err(Error::Version(6))
         ));
         assert!(
-            Report::from_json(br#"{"schemaVersion":4,"repositories":[],"typo":true}"#).is_err()
+            Report::from_json(br#"{"schemaVersion":5,"repositories":[],"typo":true}"#).is_err()
         );
-        for old in [1, 2, 3] {
+        for old in [1, 2, 3, 4] {
             let report = format!(r#"{{"schemaVersion":{old},"repositories":[]}}"#);
             assert!(matches!(
                 Report::from_json(report.as_bytes()),
@@ -764,29 +768,37 @@ mod tests {
         }
     }
 
-    /// Version 4 added a notice `reason`; a version 3 reader would reject the
-    /// field, so a version 3 report no longer parses.
+    /// Version 5 added a dependency's `registry`; a version 4 reader would reject
+    /// the field, so a version 4 report no longer parses.
     #[test]
-    fn a_notice_reason_is_part_of_version_4() {
+    fn a_registry_is_part_of_version_5() {
         let report = |version: u32| {
             format!(
-                r#"{{"schemaVersion":{version},"repositories":[{{"repository":"demo/app","status":"complete","reason":null,"packageFiles":[],"notices":[{{"manager":"composer","path":"composer.json","name":"acme/lib","package":"acme/lib","current":"^1 | ^2","available":"3.0.0","reason":"cannot be rewritten"}}]}}]}}"#
+                r#"{{"schemaVersion":{version},"repositories":[{{"repository":"demo/app","status":"complete","reason":null,"packageFiles":[{{"path":"package.json","dependencies":[{{"manager":"npm","name":"@acme/ui","package":"@acme/ui","registry":"https://npm.acme.dev","current":{{"value":"1.0.0","version":"1.0.0","digest":null}},"updates":[]}}]}}]}}]}}"#
             )
         };
-        let parsed = Report::from_json(report(4).as_bytes()).unwrap();
+        let parsed = Report::from_json(report(5).as_bytes()).unwrap();
+        let dependency = &parsed.repositories[0].package_files[0].dependencies[0];
+        assert_eq!(dependency.registry.as_deref(), Some("https://npm.acme.dev"));
+        assert!(matches!(
+            Report::from_json(report(4).as_bytes()),
+            Err(Error::Version(4))
+        ));
+    }
+
+    #[test]
+    fn a_notice_reason_parses() {
+        let report = r#"{"schemaVersion":5,"repositories":[{"repository":"demo/app","status":"complete","reason":null,"packageFiles":[],"notices":[{"manager":"composer","path":"composer.json","name":"acme/lib","package":"acme/lib","current":"^1 | ^2","available":"3.0.0","reason":"cannot be rewritten"}]}]}"#;
+        let parsed = Report::from_json(report.as_bytes()).unwrap();
         let notice = &parsed.repositories[0].notices[0];
         assert_eq!(notice.reason.as_deref(), Some("cannot be rewritten"));
         assert!(!notice.is_template());
-        assert!(matches!(
-            Report::from_json(report(3).as_bytes()),
-            Err(Error::Version(3))
-        ));
     }
 
     #[test]
     fn action_versions_and_dry_run_states_are_validated() {
         let mut value = serde_json::json!({
-            "schemaVersion": 4,
+            "schemaVersion": 5,
             "repositories": [{"repository":"demo/app","status":"complete","reason":null,"packageFiles":[]}],
             "actions": {"schemaVersion":1,"dryRun":true,"branches":[{
                 "repository":"demo/app","branch":"patchula/example","baseCommit":"base",

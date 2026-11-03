@@ -37,6 +37,7 @@ fn dependency(source: Source, package: &str, current: &str, resolved: Option<&st
         scheme,
         extract: None,
         included_by: None,
+        registry: None,
     }
 }
 

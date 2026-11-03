@@ -114,6 +114,7 @@ pub struct Extractor {
     pub package: String,
     pub scheme: String,
     pub extract: Option<String>,
+    pub registry: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

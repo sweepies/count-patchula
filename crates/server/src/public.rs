@@ -176,8 +176,11 @@ pub(crate) struct Recorded<'a> {
 /// `report` without what lookups made with registry credentials found. Such a
 /// dependency keeps what the repository declares, but loses its updates,
 /// held-back releases, lookup evidence, tag digests and image checks.
-/// `credentialed` answers by a dependency's source word and package.
-pub(crate) fn withheld(report: &Report, credentialed: impl Fn(&str, &str) -> bool) -> Report {
+/// `credentialed` answers by a dependency's source word, registry and package.
+pub(crate) fn withheld(
+    report: &Report,
+    credentialed: impl Fn(&str, Option<&str>, &str) -> bool,
+) -> Report {
     let mut report = report.clone();
     for dep in report
         .repositories
@@ -188,7 +191,7 @@ pub(crate) fn withheld(report: &Report, credentialed: impl Fn(&str, &str) -> boo
         let Some(meta) = dep.metadata.as_mut() else {
             continue;
         };
-        if !credentialed(&meta.source, &dep.package) {
+        if !credentialed(&meta.source, dep.registry.as_deref(), &dep.package) {
             continue;
         }
         dep.updates.clear();

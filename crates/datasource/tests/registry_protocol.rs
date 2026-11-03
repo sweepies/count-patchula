@@ -103,7 +103,7 @@ async fn lexical_pagination_is_complete_and_conditional_links_survive_304() {
     for _ in 0..2 {
         assert_eq!(
             client
-                .lookup(Source::Docker, "ghcr.io/spec/image")
+                .lookup(Source::Docker, None, "ghcr.io/spec/image")
                 .await
                 .unwrap()
                 .versions
@@ -140,7 +140,7 @@ async fn rate_limit_and_foreign_pagination_are_explicit() {
         assert!(
             client(steps, dir.path())
                 .await
-                .lookup(Source::Docker, "ghcr.io/spec/image")
+                .lookup(Source::Docker, None, "ghcr.io/spec/image")
                 .await
                 .unwrap_err()
                 .to_string()
@@ -175,7 +175,7 @@ async fn rate_limited_catalogs_and_digests_reuse_cache_without_refreshing_it() {
     ]))));
     let dir = tempfile::tempdir().unwrap();
     let sources = client(steps.clone(), dir.path()).await;
-    sources.lookup(Source::Docker, "spec").await.unwrap();
+    sources.lookup(Source::Docker, None, "spec").await.unwrap();
     assert_eq!(
         sources.registry_digest("spec", "1.0").await.unwrap(),
         digest
@@ -198,7 +198,7 @@ async fn rate_limited_catalogs_and_digests_reuse_cache_without_refreshing_it() {
     let fetched = cache.http_get(&key).await.unwrap().unwrap().fetched_at;
     assert_eq!(
         sources
-            .lookup(Source::Docker, "spec")
+            .lookup(Source::Docker, None, "spec")
             .await
             .unwrap()
             .versions
@@ -310,7 +310,7 @@ async fn public_helm_index_redirects_use_the_same_https_policy() {
     let dir = tempfile::tempdir().unwrap();
     let catalog = client(steps.clone(), dir.path())
         .await
-        .lookup(Source::Helm, "https://charts.example.org|chart")
+        .lookup(Source::Helm, None, "https://charts.example.org|chart")
         .await
         .unwrap();
     assert_eq!(catalog.versions[0].version, "1.0.0");
@@ -331,11 +331,11 @@ async fn a_fresh_catalog_clears_stale_provenance_after_a_short_limit() {
     let dir = tempfile::tempdir().unwrap();
     let sources = client(steps.clone(), dir.path()).await;
     sources
-        .lookup(Source::Docker, "ghcr.io/spec/image")
+        .lookup(Source::Docker, None, "ghcr.io/spec/image")
         .await
         .unwrap();
     sources
-        .lookup(Source::Docker, "ghcr.io/spec/image")
+        .lookup(Source::Docker, None, "ghcr.io/spec/image")
         .await
         .unwrap();
     assert!(
@@ -345,7 +345,7 @@ async fn a_fresh_catalog_clears_stale_provenance_after_a_short_limit() {
             .contains_key("catalog")
     );
     sources
-        .lookup(Source::Docker, "ghcr.io/spec/image")
+        .lookup(Source::Docker, None, "ghcr.io/spec/image")
         .await
         .unwrap();
     assert!(
@@ -374,8 +374,8 @@ async fn concurrent_charts_share_one_compact_index_but_later_calls_revalidate() 
     let dir = tempfile::tempdir().unwrap();
     let client = client(steps.clone(), dir.path()).await;
     let (a, b) = tokio::join!(
-        client.lookup(Source::Helm, "https://charts.example.org|first"),
-        client.lookup(Source::Helm, "https://charts.example.org|second")
+        client.lookup(Source::Helm, None, "https://charts.example.org|first"),
+        client.lookup(Source::Helm, None, "https://charts.example.org|second")
     );
     assert_eq!(a.unwrap().versions[0].version, "1.0.0");
     assert_eq!(b.unwrap().versions[0].version, "2.0.0");
@@ -386,7 +386,7 @@ async fn concurrent_charts_share_one_compact_index_but_later_calls_revalidate() 
     );
     assert!(
         client
-            .lookup(Source::Helm, "https://charts.example.org|first")
+            .lookup(Source::Helm, None, "https://charts.example.org|first")
             .await
             .is_ok()
     );
@@ -403,12 +403,12 @@ async fn validator_free_tags_are_compact_and_survive_a_new_client() {
     let dir = tempfile::tempdir().unwrap();
     let first = client(steps.clone(), dir.path())
         .await
-        .lookup(Source::Docker, "ghcr.io/spec/image")
+        .lookup(Source::Docker, None, "ghcr.io/spec/image")
         .await
         .unwrap();
     let second = client(steps.clone(), dir.path())
         .await
-        .lookup(Source::Docker, "ghcr.io/spec/image")
+        .lookup(Source::Docker, None, "ghcr.io/spec/image")
         .await
         .unwrap();
     assert_eq!(
@@ -475,7 +475,7 @@ async fn go_skips_latest_for_tagged_versions_and_preserves_pseudo_version_fallba
         for _ in 0..2 {
             let catalog = client(steps.clone(), dir.path())
                 .await
-                .lookup(Source::Go, "example.org/mod")
+                .lookup(Source::Go, None, "example.org/mod")
                 .await
                 .unwrap();
             assert_eq!(catalog.dist_tags["latest"], expected);
@@ -1411,9 +1411,43 @@ async fn credentialed_names_lookups_that_read_a_registry_with_an_entry() {
         (Source::Npm, "acme.jfrog.io", false),
     ] {
         assert_eq!(
-            client.credentialed(source, package),
+            client.credentialed(source, None, package),
             expected,
             "{source:?} {package}"
         );
+    }
+}
+
+#[tokio::test]
+async fn an_npm_package_is_read_from_its_own_registry_with_its_credentials() {
+    let packument = r#"{"name":"@acme/ui","dist-tags":{"latest":"1.1.0"},
+        "versions":{"1.0.0":{"name":"@acme/ui","version":"1.0.0"},"1.1.0":{"name":"@acme/ui","version":"1.1.0"}},
+        "time":{"1.0.0":"2026-01-01T00:00:00.000Z","1.1.0":"2026-02-01T00:00:00.000Z"}}"#;
+    let steps = Arc::new(AuthSteps(Mutex::new(VecDeque::from([(
+        "https://npm.acme.dev/repo/@acme%2fui".to_owned(),
+        Some("Basic Y2k6aHVudGVyMg==".to_owned()),
+        response(200, packument, &[]),
+    )]))));
+    let dir = tempfile::tempdir().unwrap();
+    let client = auth_client_with(
+        steps.clone(),
+        dir.path(),
+        vec![basic("https://npm.acme.dev", "ci", "hunter2")],
+    )
+    .await;
+    let catalog = client
+        .lookup(Source::Npm, Some("https://npm.acme.dev/repo"), "@acme/ui")
+        .await
+        .unwrap();
+    assert!(catalog.versions.iter().any(|v| v.version == "1.1.0"));
+    assert!(steps.0.lock().unwrap().is_empty());
+    assert!(client.credentialed(Source::Npm, Some("https://npm.acme.dev/repo"), "@acme/ui"));
+    assert!(!client.credentialed(Source::Npm, None, "@acme/ui"));
+    // Only npm takes a registry, and only an https one.
+    for (source, registry) in [
+        (Source::Pypi, "https://npm.acme.dev/repo"),
+        (Source::Npm, "http://npm.acme.dev/repo"),
+    ] {
+        assert!(client.lookup(source, Some(registry), "x").await.is_err());
     }
 }

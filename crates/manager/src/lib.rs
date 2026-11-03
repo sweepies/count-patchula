@@ -101,6 +101,10 @@ pub struct Dependency {
     pub extract: Option<String>,
     /// The mise config that includes this file as a TOML task file.
     pub included_by: Option<String>,
+    /// The registry to look the package up in, as an https URL, when it is not
+    /// the source's public one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
 }
 /// A key as one token of a JSON Pointer, which escapes `~` and `/`.
 pub(crate) fn pointer_token(key: &str) -> String {
@@ -279,6 +283,7 @@ impl Scanner {
                         | ".yarnrc.yml"
                         | ".nvmrc"
                         | ".node-version"
+                        | ".npmrc"
                 )
             }
             Manager::GithubActions => {
@@ -373,6 +378,7 @@ impl Scanner {
     pub fn extract(&self, files: &Files) -> Result<Extraction, String> {
         let mut result = Extraction::default();
         let locks = npm::locks(files)?;
+        let npmrcs = npm::npmrcs(files);
         let cargo = if self.config.managers.contains(&Manager::Cargo) {
             cargo::documents(files)?
         } else {
@@ -427,11 +433,20 @@ impl Scanner {
         };
         for (path, text) in files {
             let extraction = if self.selected(node, path) && path.ends_with("package.json") {
-                npm::extract(path, text, node, &locks)
+                npm::extract(path, text, node, &locks).map(|mut deps| {
+                    npm::assign_registries(&mut deps, &npmrcs);
+                    deps
+                })
             } else if self.selected(node, path)
                 && (path.ends_with("pnpm-workspace.yaml") || path.ends_with(".yarnrc.yml"))
             {
-                npm::catalogs(path, text, node)
+                npm::catalogs(path, text, node).map(|mut deps| {
+                    npm::assign_registries(&mut deps, &npmrcs);
+                    deps
+                })
+            } else if self.selected(node, path) && path.ends_with(".npmrc") {
+                // Read for the registries of the manifests beside and below it.
+                Ok(Vec::new())
             } else if self.selected(node, path)
                 && (path.ends_with(".nvmrc") || path.ends_with(".node-version"))
             {
@@ -548,6 +563,17 @@ impl Scanner {
         Ok(result)
     }
 }
+/// A registry URL a repository names: https, without a user, query or
+/// fragment, and nothing to expand from the environment. Normalised without a
+/// trailing slash or surrounding quotes.
+pub(crate) fn registry_url(value: &str) -> Option<String> {
+    let value = value.trim().trim_matches(['"', '\'']).trim_end_matches('/');
+    let rest = value.strip_prefix("https://")?;
+    let host = rest.split('/').next().unwrap_or_default();
+    let valid = !host.is_empty() && !host.contains('@') && !value.contains(['?', '#', ' ', '$']);
+    valid.then(|| value.to_owned())
+}
+
 pub fn word<T: Serialize>(value: &T) -> String {
     serde_json::to_value(value)
         .expect("enum serializes")

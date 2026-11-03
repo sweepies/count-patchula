@@ -237,6 +237,9 @@ impl Config {
                 ] {
                     template(&format!("{field}.{name}"), value, &capture)?;
                 }
+                if let Some(registry) = &extractor.registry {
+                    template(&format!("{field}.registry"), registry, &capture)?;
+                }
                 if !extractor.source.contains('{')
                     && serde_json::from_value::<Source>(serde_json::Value::String(
                         extractor.source.clone(),

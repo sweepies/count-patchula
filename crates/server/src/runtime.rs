@@ -434,8 +434,8 @@ impl Batch for Engines {
                     )
                     .await;
                 let withheld = result.as_ref().ok().map(|report| {
-                    crate::public::withheld(report, |source, package| {
-                        engine.credentialed(source, package)
+                    crate::public::withheld(report, |source, registry, package| {
+                        engine.credentialed(source, registry, package)
                     })
                 });
                 (result, withheld)
@@ -574,8 +574,8 @@ impl crate::remote::Runner for Engines {
                     Mode::Run => engine.run(options, false, false).await,
                 }
                 .map_err(|_| "the run failed on the server")?;
-                let withheld = crate::public::withheld(&report, |source, package| {
-                    engine.credentialed(source, package)
+                let withheld = crate::public::withheld(&report, |source, registry, package| {
+                    engine.credentialed(source, registry, package)
                 });
                 (report, withheld)
             };

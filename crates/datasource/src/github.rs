@@ -568,7 +568,7 @@ mod tests {
         ] {
             transport.phase.store(phase, Ordering::SeqCst);
             let tags = client
-                .lookup(Source::GithubTags, "example/dates")
+                .lookup(Source::GithubTags, None, "example/dates")
                 .await
                 .unwrap();
             assert_eq!(
@@ -654,7 +654,7 @@ mod tests {
         );
         for _ in 0..2 {
             let catalog = client
-                .lookup(Source::GithubTags, "example/empty")
+                .lookup(Source::GithubTags, None, "example/empty")
                 .await
                 .unwrap();
             assert_eq!(catalog.versions.len(), 1);
@@ -749,7 +749,7 @@ mod tests {
             cache,
         );
         let cold = client
-            .lookup(Source::GithubTags, "example/tags")
+            .lookup(Source::GithubTags, None, "example/tags")
             .await
             .unwrap();
         assert_eq!(cold.versions.len(), 201);
@@ -757,7 +757,7 @@ mod tests {
         assert_eq!(transport.peak.load(Ordering::SeqCst), 2);
         transport.step.store(1, Ordering::SeqCst);
         let warm = client
-            .lookup(Source::GithubTags, "example/tags")
+            .lookup(Source::GithubTags, None, "example/tags")
             .await
             .unwrap();
         assert_eq!(
@@ -771,7 +771,7 @@ mod tests {
         );
         transport.step.store(2, Ordering::SeqCst);
         let changed = client
-            .lookup(Source::GithubTags, "example/tags")
+            .lookup(Source::GithubTags, None, "example/tags")
             .await
             .unwrap();
         assert_eq!(transport.queries.load(Ordering::SeqCst), 4);
@@ -786,7 +786,7 @@ mod tests {
         );
         transport.step.store(3, Ordering::SeqCst);
         let deleted = client
-            .lookup(Source::GithubTags, "example/tags")
+            .lookup(Source::GithubTags, None, "example/tags")
             .await
             .unwrap();
         assert_eq!(deleted.versions.len(), 200);
@@ -905,7 +905,7 @@ mod tests {
         );
         assert_eq!(
             client
-                .lookup(Source::GithubReleases, "example/spec")
+                .lookup(Source::GithubReleases, None, "example/spec")
                 .await
                 .unwrap()
                 .versions
@@ -913,7 +913,7 @@ mod tests {
             3
         );
         let repeated = client
-            .lookup(Source::GithubReleases, "example/spec")
+            .lookup(Source::GithubReleases, None, "example/spec")
             .await
             .unwrap();
         assert_eq!(repeated.versions.len(), 3);
@@ -924,7 +924,7 @@ mod tests {
         );
         assert_eq!(
             client
-                .lookup(Source::GithubReleases, "example/spec")
+                .lookup(Source::GithubReleases, None, "example/spec")
                 .await
                 .unwrap()
                 .versions
@@ -938,7 +938,7 @@ mod tests {
         );
         assert_eq!(
             client
-                .lookup(Source::GithubReleases, "example/spec")
+                .lookup(Source::GithubReleases, None, "example/spec")
                 .await
                 .unwrap()
                 .versions
@@ -947,7 +947,7 @@ mod tests {
         );
         assert_eq!(
             client
-                .lookup(Source::GithubReleases, "example/spec")
+                .lookup(Source::GithubReleases, None, "example/spec")
                 .await
                 .unwrap()
                 .versions

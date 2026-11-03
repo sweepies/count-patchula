@@ -51,6 +51,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
                 scheme: Scheme::Go,
                 extract: None,
                 included_by: None,
+                registry: None,
             });
         } else if let Some(c) = directive.captures(code) {
             let version = c.name("version").unwrap();
@@ -78,6 +79,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
                 scheme: Scheme::Loose,
                 extract: None,
                 included_by: None,
+                registry: None,
             });
         }
         offset += line.len();

@@ -1584,7 +1584,7 @@ async fn forge_tags_page_newest_first_until_a_short_page() {
     ]);
     let client = client(routes, memory().await).await;
     let gitlab = client
-        .lookup(Source::ForgeTags, "gitlab.com/grp/hooks")
+        .lookup(Source::ForgeTags, None, "gitlab.com/grp/hooks")
         .await
         .unwrap();
     assert_eq!(gitlab.versions.len(), 101);
@@ -1595,7 +1595,7 @@ async fn forge_tags_page_newest_first_until_a_short_page() {
     );
     assert_eq!(gitlab.versions[100].published_at, None);
     let gitea = client
-        .lookup(Source::ForgeTags, "codeberg.org/owner/hooks")
+        .lookup(Source::ForgeTags, None, "codeberg.org/owner/hooks")
         .await
         .unwrap();
     assert_eq!(gitea.versions[0].version, "v0.3");
@@ -1605,7 +1605,7 @@ async fn forge_tags_page_newest_first_until_a_short_page() {
     );
     assert!(
         client
-            .lookup(Source::ForgeTags, "git.example.com/a/b")
+            .lookup(Source::ForgeTags, None, "git.example.com/a/b")
             .await
             .is_err()
     );

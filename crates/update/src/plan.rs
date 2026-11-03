@@ -384,7 +384,9 @@ fn build(
                 kind: u.update_type.clone(),
                 merge: p.map_or(config.defaults.merge, |p| p.merge),
                 labels: p.map_or_else(|| config.defaults.labels.clone(), |p| p.labels.clone()),
-                release_notes: p.map_or(config.defaults.release_notes, |p| p.release_notes),
+                // Release notes are read from the public registry, never the package's own.
+                release_notes: item.dep.registry.is_none()
+                    && p.map_or(config.defaults.release_notes, |p| p.release_notes),
                 body_notes: p.map_or_else(
                     || config.defaults.body_notes.clone(),
                     |p| p.body_notes.clone(),

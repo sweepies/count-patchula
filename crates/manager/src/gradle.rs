@@ -37,6 +37,7 @@ pub(super) fn maven(
         scheme: Scheme::Maven,
         extract: None,
         included_by: None,
+        registry: None,
     }
 }
 /// Gradle dynamic and rich versions are not pins.
@@ -253,6 +254,7 @@ fn wrapper(path: &str, text: &str) -> Vec<Dependency> {
         scheme: Scheme::Loose,
         extract: None,
         included_by: None,
+        registry: None,
     }]
 }
 
