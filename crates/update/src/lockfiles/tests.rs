@@ -4456,7 +4456,7 @@ fn lock_only_cases() -> Vec<LockOnlyCase> {
                 ),
                 (
                     "composer.lock".to_string(),
-                    "{\"packages\": [{\"name\": \"psr/log\", \"version\": \"3.0.0\"}]}\n".to_string(),
+                    "{\"packages\": [{\"name\": \"psr/log\", \"version\": \"3.0.0\", \"notification-url\": \"https://packagist.org/downloads/\"}]}\n".to_string(),
                 ),
             ]),
             "composer.json",
@@ -4590,7 +4590,9 @@ fn lock_recording(lock: &str, package: &str, version: &str) -> String {
             "GEM\n  remote: https://rubygems.org/\n  specs:\n    {package} ({version})\n\nPLATFORMS\n  ruby\n\nDEPENDENCIES\n  {package}\n"
         ),
         "composer.lock" => {
-            format!("{{\"packages\": [{{\"name\": \"{package}\", \"version\": \"{version}\"}}]}}\n")
+            format!(
+                "{{\"packages\": [{{\"name\": \"{package}\", \"version\": \"{version}\", \"notification-url\": \"https://packagist.org/downloads/\"}}]}}\n"
+            )
         }
         _ => format!("version = 1\n\n[[package]]\nname = \"{package}\"\nversion = \"{version}\"\n"),
     }
