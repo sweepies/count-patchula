@@ -237,8 +237,9 @@ Lockfile tools cannot reach private registries yet, because credentials are
 scrubbed on purpose. Lookups from sources that take a registry URL, such as
 Helm, OCI and Maven, can, with [registry
 credentials](/guide/sources/#private-registries); npm, PyPI and the other
-package registries still read only their public registry. Passing credentials
-to lockfile tools will be a separate, explicit opt-in.
+package registries read their public registry or a
+[mirror](/guide/sources/#mirrors). Lockfile tools get neither. Passing
+credentials to lockfile tools will be a separate, explicit opt-in.
 :::
 
 ## Lockfile maintenance

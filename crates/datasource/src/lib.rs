@@ -178,22 +178,49 @@ impl Client {
             .unwrap_or_default()
     }
     /// Whether looking up `package` reads a registry with an operator entry's
-    /// credentials, so that what it finds may be private. Only sources that
-    /// carry their registry's URL can reach one.
+    /// credentials, directly or through a mirror, so that what it finds may be
+    /// private.
     pub fn credentialed(&self, source: Source, package: &str) -> bool {
-        let url = match source {
-            Source::Docker | Source::Oci => docker::identity(package)
+        // Container registries are not mirrored, so only a direct entry counts.
+        if matches!(source, Source::Docker | Source::Oci) {
+            return docker::identity(package)
                 .ok()
-                .map(|(host, path)| format!("https://{host}/v2/{path}/tags/list")),
+                .map(|(host, path)| format!("https://{host}/v2/{path}/tags/list"))
+                .and_then(|url| self.http.credential(&url))
+                .is_some_and(|entry| entry.auth.sends());
+        }
+        let urls: Vec<String> = match source {
             Source::Helm => package
                 .rsplit_once('|')
-                .map(|(repo, _)| format!("{}/index.yaml", repo.trim_end_matches('/'))),
-            Source::Maven => maven::metadata_url(package),
-            Source::ForgeTags => forge::tags_url(package),
-            _ => None,
+                .map(|(repo, _)| vec![format!("{}/index.yaml", repo.trim_end_matches('/'))])
+                .unwrap_or_default(),
+            Source::Maven => maven::metadata_url(package).into_iter().collect(),
+            Source::ForgeTags => forge::tags_url(package).into_iter().collect(),
+            Source::Npm => vec![format!(
+                "https://registry.npmjs.org/{}",
+                package.replace('/', "%2f")
+            )],
+            Source::Crates => vec!["https://index.crates.io/".into()],
+            Source::Go => vec!["https://proxy.golang.org/".into()],
+            Source::Pypi => {
+                let Ok(package) = registries::normalize_python(package) else {
+                    return false;
+                };
+                vec![
+                    format!("https://pypi.org/pypi/{package}/json"),
+                    format!("https://pypi.org/simple/{package}/"),
+                ]
+            }
+            Source::Nuget => vec!["https://api.nuget.org/".into()],
+            Source::Rubygems => vec!["https://rubygems.org/".into()],
+            Source::Packagist => vec!["https://repo.packagist.org/".into()],
+            Source::Terraform => vec!["https://registry.terraform.io/".into()],
+            Source::GithubReleases | Source::GithubTags => {
+                vec!["https://api.github.com/".into()]
+            }
+            _ => Vec::new(),
         };
-        url.and_then(|url| self.http.credential(&url))
-            .is_some_and(|entry| entry.auth.sends())
+        urls.iter().any(|url| self.http.credentialed(url))
     }
     pub async fn lookup(&self, source: Source, package: &str) -> Result<Catalog> {
         // A flake reference is a URL with a query; the runner checks its scheme.

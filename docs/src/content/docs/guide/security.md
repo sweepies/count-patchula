@@ -87,7 +87,9 @@ the rebuild.
 This runs whenever a pinned digest is replaced: a same-tag digest update, and a
 tag update of a pinned image. A first pin has nothing to compare against.
 
-**Where SBOMs come from.** The Count reads, by digest and without logging in:
+**Where SBOMs come from.** The Count reads, by digest, and uses a [private
+registry](/guide/sources/#private-registries) entry's credentials when one
+covers the registry he reads from:
 
 - the BuildKit attestation in the image index, which is where Docker official
   images, and most images built with `docker buildx --sbom`, keep theirs;

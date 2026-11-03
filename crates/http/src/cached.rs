@@ -248,6 +248,15 @@ impl Cached {
     pub fn credential(&self, url: &str) -> Option<&Credential> {
         matching(&self.0.options.credentials, &Url::parse(url).ok()?)
     }
+    /// Whether requests to `url` carry an operator entry's credentials,
+    /// directly or through a mirror.
+    pub fn credentialed(&self, url: &str) -> bool {
+        let Ok(url) = Url::parse(url) else {
+            return false;
+        };
+        let url = mirrored(&self.0.options.credentials, &url).unwrap_or(url);
+        matching(&self.0.options.credentials, &url).is_some_and(|entry| entry.auth.sends())
+    }
     pub fn stats(&self) -> Stats {
         Stats {
             requests: self.0.requests.load(Ordering::Relaxed),

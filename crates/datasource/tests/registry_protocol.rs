@@ -1377,6 +1377,27 @@ async fn credentialed_names_lookups_that_read_a_registry_with_an_entry() {
         patchula_http::Auth::Withheld,
     )
     .unwrap();
+    let npm = basic("https://mirror.acme.dev/npm", "ci", "hunter2")
+        .mirroring("https://registry.npmjs.org")
+        .unwrap();
+    let pypi = basic("https://mirror.acme.dev/pypi", "ci", "hunter2")
+        .mirroring("https://pypi.org")
+        .unwrap();
+    // An open mirror stands in for its registry without credentials.
+    let open = patchula_http::Credential::new(
+        "https://mirror.acme.dev/go",
+        patchula_http::Auth::Anonymous,
+    )
+    .unwrap()
+    .mirroring("https://proxy.golang.org")
+    .unwrap();
+    let withheld_mirror = patchula_http::Credential::new(
+        "https://mirror.acme.dev/crates",
+        patchula_http::Auth::Withheld,
+    )
+    .unwrap()
+    .mirroring("https://index.crates.io")
+    .unwrap();
     let client = auth_client_with(
         Arc::new(AuthSteps(Mutex::new(VecDeque::new()))),
         dir.path(),
@@ -1384,6 +1405,10 @@ async fn credentialed_names_lookups_that_read_a_registry_with_an_entry() {
             basic("https://acme.jfrog.io", "ci", "hunter2"),
             basic("https://gitlab.acme.dev", "ci", "hunter2"),
             withheld,
+            npm,
+            pypi,
+            open,
+            withheld_mirror,
         ],
     )
     .await;
@@ -1408,7 +1433,12 @@ async fn credentialed_names_lookups_that_read_a_registry_with_an_entry() {
         ),
         (Source::Docker, "ghcr.io/team/app", false),
         (Source::Helm, "https://charts.example.com|app", false),
-        (Source::Npm, "acme.jfrog.io", false),
+        (Source::Npm, "@scope/pkg", true),
+        (Source::Pypi, "Requests", true),
+        // A mirror without credentials stands in without making data private.
+        (Source::Go, "example.com/mod", false),
+        (Source::Crates, "serde", false),
+        (Source::Rubygems, "rack", false),
     ] {
         assert_eq!(
             client.credentialed(source, package),

@@ -1,6 +1,6 @@
 ---
 title: "Settings"
-description: "Operator settings in PatchulaSettings.pkl, shared by the CLI and patchula serve: concurrency, HTTP limits, and the server's triggers, sweeps and allowed installations."
+description: "Operator settings in PatchulaSettings.pkl, shared by the CLI and patchula serve: concurrency, HTTP limits, private registry credentials and mirrors, and the server's triggers, sweeps and allowed installations."
 ---
 
 import { Code } from "@astrojs/starlight/components";
@@ -63,13 +63,15 @@ A `registries` key is an https URL prefix without a user, query or fragment.
 | `mirrorOf` | `String?` | `null` | a public registry's https URL prefix this entry [stands in for](/guide/sources/#mirrors) |
 | `allowedInstallations` | `Listing<Int>` | all | server only: installations that may use the entry |
 
-An entry needs `auth`, `mirrorOf` or both. Set exactly one of `secret.env` and
-`secret.file`. The settings file names where a secret lives, never the secret.
+An entry needs `auth`, `mirrorOf` or both, and two entries cannot name the
+same `mirrorOf`. Set exactly one of `secret.env` and `secret.file`. The
+settings file names where a secret lives, never the secret.
 
-Versions found with credentials show like any others, in a public repository's
-dependency dashboard, pull requests and the server's [repository
-API](/guide/server/#repository-api). The API stores a private repository's run
-without them, so they do not appear if it later becomes public.
+Versions found with credentials, directly or through a mirror, show like any
+others, in a public repository's dependency dashboard, pull requests and the
+server's [repository API](/guide/server/#repository-api). The API stores a
+private repository's run without them, so they do not appear if it later
+becomes public.
 
 ## Server
 

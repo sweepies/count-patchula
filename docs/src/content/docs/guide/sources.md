@@ -1,6 +1,6 @@
 ---
 title: "Sources"
-description: "Where Count Patchula looks up versions: npm, crates.io, the Go proxy, PyPI, container registries, Helm, Terraform, Maven and more."
+description: "Where Count Patchula looks up versions: npm, crates.io, the Go proxy, PyPI, container registries, Helm, Terraform, Maven and more, including private registries and mirrors of public ones."
 ---
 A source is where versions come from. Each dependency has one, chosen by its
 manager, and rules can select by it.
@@ -184,9 +184,9 @@ no registry credentials yet.
 
 ### Mirrors
 
-Where the public registries are out of reach, or should only be read through
-a proxy such as an Artifactory remote repository or a Nexus proxy, an entry
-can stand in for one with `mirrorOf`:
+Where a public registry should only be read through a proxy such as an
+Artifactory remote repository or a Nexus proxy, an entry can stand in for one
+with `mirrorOf`:
 
 ```pkl
 registries {
@@ -195,8 +195,8 @@ registries {
     secret { env = "ARTIFACTORY_TOKEN" }
     mirrorOf = "https://registry.npmjs.org"
   }
-  ["https://nexus.acme.dev/repository/pypi-proxy/simple"] {
-    mirrorOf = "https://pypi.org/simple"
+  ["https://goproxy.acme.dev"] {
+    mirrorOf = "https://proxy.golang.org"
   }
 }
 ```
@@ -205,17 +205,17 @@ registries {
   with the rest of the URL unchanged, and carries the entry's credentials if it
   has `auth`. An entry without `auth` sends none.
 - There is no fallback: when the mirror fails, the lookup fails.
-- Dependencies keep their public identity, so branches, rules and the
-  dashboard do not change when a mirror is added or removed. Responses are
-  cached under the mirror's entry.
+- Dependencies keep their public identity, so branch names, rules and the
+  dashboard name the public registry, not the mirror. Responses are cached
+  under the mirror's entry.
 - The mirror must serve the same paths as the registry it stands in for. A
-  mirror that serves only part of an API, such as PyPI's simple index but not
-  its JSON API, covers only the prefix it names; the rest is still read from
-  the public registry.
+  mirror that serves only part of an API covers only the prefix it names; the
+  rest is still read from the public registry. PyPI is read through its JSON
+  API first, so a mirror of only its simple index does not replace it.
 - Container registries are not mirrored: their token services belong to the
   registry's own host.
-- Release notes and advisories come from GitHub and OSV.dev, not the registry,
-  and are not mirrored.
+- Release notes and advisories come from GitHub and OSV.dev, not the package
+  registry, so a mirror of npm or PyPI does not cover them.
 
 ## Dates and release age
 
