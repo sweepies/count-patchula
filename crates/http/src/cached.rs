@@ -859,8 +859,10 @@ impl Cached {
         // registry's no-store or Vary cannot make them private. Those read with
         // an account's token or an operator entry's credentials may be private,
         // so they are stored only as the registry allows.
-        let account =
-            registry.flatten().is_some_and(|bearer| bearer.account) || credential.is_some();
+        let account = registry.flatten().is_some_and(|bearer| bearer.account)
+            || credential
+                .as_ref()
+                .is_some_and(|entry| entry.auth != crate::Auth::Anonymous);
         let uncacheable = foreign
             || !(registry.is_some() && immutable(&url) && !account)
                 && (control.as_ref().is_some_and(|c| {

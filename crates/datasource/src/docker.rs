@@ -126,7 +126,11 @@ impl Client {
     ) -> Result<patchula_http::Response> {
         // An operator entry covering the registry makes every token an account's:
         // kept in memory only, never in the shared cache, and per entry.
-        let entry = self.http.credential(url).cloned();
+        let entry = self
+            .http
+            .credential(url)
+            .filter(|entry| entry.auth != patchula_http::Auth::Anonymous)
+            .cloned();
         let scope = format!(
             "{host}/{path}#{}",
             entry.as_ref().map_or("", patchula_http::Credential::scope)
