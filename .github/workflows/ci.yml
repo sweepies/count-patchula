@@ -16,6 +16,11 @@ concurrency:
 
 # Every job runs one or two mise tasks, so `mise run ci` runs the same checks
 # locally.
+env:
+  # Install exactly what mise.lock records, never update it: a build fetches
+  # only the tools it uses, so a download host for another tool cannot stall it.
+  MISE_LOCKED: "1"
+
 jobs:
   # Each job below runs only when a changed path can affect it; a docs-only
   # change skips the Rust jobs. A skipped job still reports its check.
