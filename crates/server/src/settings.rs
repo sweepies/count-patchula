@@ -158,14 +158,17 @@ impl Settings {
         {
             return Err("recheck must be now or next-run");
         }
+        let mut prefixes = std::collections::BTreeSet::new();
         for (prefix, registry) in &self.registries {
-            let probe = patchula_http::Auth::Bearer {
-                token: "probe".into(),
-            };
-            if patchula_http::Credential::new(prefix, probe).is_none() {
+            let Some(normalised) =
+                patchula_http::Credential::new(prefix, patchula_http::Auth::Withheld)
+            else {
                 return Err(
                     "registries keys must be https URL prefixes without a user, query or fragment",
                 );
+            };
+            if !prefixes.insert(normalised.prefix().to_owned()) {
+                return Err("registries keys must differ by more than a trailing slash");
             }
             match (registry.auth, registry.username.as_deref()) {
                 (RegistryAuth::Basic, Some(name)) if !name.is_empty() && !name.contains(':') => {}
@@ -249,19 +252,27 @@ impl Settings {
         }
     }
     /// The registry credentials `installation` may use, or every entry's for
-    /// the CLI, with their secrets read now. Entries whose secret cannot be
-    /// read come back separately, by prefix and reason, never the value.
+    /// the CLI, with their secrets read now. An entry the installation may not
+    /// use, or whose secret cannot be read, is withheld: its prefix still
+    /// claims its requests, which carry nothing, so a broader entry never
+    /// stands in. Unreadable secrets also come back by prefix and reason,
+    /// never the value.
     pub fn credentials(
         &self,
         installation: Option<u64>,
     ) -> (Vec<patchula_http::Credential>, Vec<(String, String)>) {
         let mut credentials = Vec::new();
         let mut failed = Vec::new();
+        let withheld = |prefix: &str| {
+            patchula_http::Credential::new(prefix, patchula_http::Auth::Withheld)
+                .expect("validated registry prefix")
+        };
         for (prefix, registry) in &self.registries {
             if let Some(id) = installation
                 && !registry.allowed_installations.is_empty()
                 && !registry.allowed_installations.contains(&id)
             {
+                credentials.push(withheld(prefix));
                 continue;
             }
             let auth = registry.secret.read().map(|secret| match registry.auth {
@@ -276,7 +287,10 @@ impl Settings {
                     .ok_or_else(|| "secret cannot be sent in a header".to_owned())
             }) {
                 Ok(credential) => credentials.push(credential),
-                Err(reason) => failed.push((prefix.clone(), reason)),
+                Err(reason) => {
+                    credentials.push(withheld(prefix));
+                    failed.push((prefix.clone(), reason));
+                }
             }
         }
         (credentials, failed)
@@ -610,9 +624,10 @@ mod tests {
         ))
         .unwrap();
         let (cli, failed) = settings.credentials(None);
-        assert_eq!(cli.len(), 1);
+        assert_eq!(cli.len(), 2);
+        assert_eq!(cli[1].auth, patchula_http::Auth::Withheld);
         assert_eq!(
-            cli[0].id(),
+            cli[0].prefix(),
             "https://acme.jfrog.io/artifactory/api/helm/charts"
         );
         assert_eq!(
@@ -625,8 +640,18 @@ mod tests {
         assert_eq!(failed.len(), 1);
         assert_eq!(failed[0].0, "https://ghcr.io");
         assert!(failed[0].1.contains("PATCHULA_TEST_UNSET_REGISTRY_SECRET"));
-        assert_eq!(settings.credentials(Some(7)).0.len(), 1);
-        assert!(settings.credentials(Some(8)).0.is_empty());
+        assert!(matches!(
+            settings.credentials(Some(7)).0[0].auth,
+            patchula_http::Auth::Basic { .. }
+        ));
+        // Another installation gets the prefix withheld, not a broader entry.
+        assert!(
+            settings
+                .credentials(Some(8))
+                .0
+                .iter()
+                .all(|entry| entry.auth == patchula_http::Auth::Withheld)
+        );
         for bad in [
             r#"registries { ["http://acme.jfrog.io"] { auth = "bearer"; secret { env = "T" } } }"#,
             r#"registries { ["https://acme.jfrog.io/?a=b"] { auth = "bearer"; secret { env = "T" } } }"#,
@@ -635,6 +660,7 @@ mod tests {
             r#"registries { ["https://acme.jfrog.io"] { auth = "bearer"; secret { } } }"#,
             r#"registries { ["https://acme.jfrog.io"] { auth = "bearer"; secret { env = "T"; file = "/t" } } }"#,
             r#"registries { ["https://acme.jfrog.io"] { auth = "token"; secret { env = "T" } } }"#,
+            r#"registries { ["https://acme.jfrog.io"] { auth = "bearer"; secret { env = "T" } } ["https://acme.jfrog.io/"] { auth = "bearer"; secret { env = "U" } } }"#,
         ] {
             assert!(load(&bad.replace("; ", "\n")).is_err(), "{bad}");
         }

@@ -137,9 +137,10 @@ the same access controls as other batch cache data.
 ## Registry credentials
 
 A response read with a [private registry](/guide/sources/#private-registries)
-entry's credentials is keyed by that entry's prefix as well as the request, so
-a read without the entry, or with another one, never sees it. The key holds the
-prefix, never the secret. Such responses follow the registry's `no-store` and
+entry's credentials is keyed by that entry's prefix and a one-way digest of its
+credentials as well as the request, so a read without the entry, with another
+one, or after its secret or account changes never sees it. The key never holds
+the secret. Such responses follow the registry's `no-store` and
 `Vary`, digest-addressed ones included. Tokens a registry issues to an account
 stay in memory and are never written to the cache.
 

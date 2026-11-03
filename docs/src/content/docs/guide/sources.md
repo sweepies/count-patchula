@@ -152,23 +152,29 @@ registries {
 - A request whose URL is under a prefix, matched by whole path segments on the
   same origin, carries that entry's credentials. The longest prefix wins.
 - `bearer` sends the secret as a bearer token. `basic` sends the username and
-  the secret, and when a container registry answers with a token service,
-  exchanges them there for a pull token. Basic credentials reach only a token
-  service on the registry's own origin, Docker Hub's `auth.docker.io`, or a
-  GitLab registry's GitLab instance. Tokens issued to an account stay in
-  memory.
+  the secret to the URLs under the prefix, including a container registry's
+  first request. When the registry answers with a token service instead, the
+  Count exchanges them there for a pull token, but only at a token service with
+  its own entry, one on the registry's own origin, Docker Hub's
+  `auth.docker.io`, or `gitlab.com` for `registry.gitlab.com`. A self-hosted
+  GitLab registry needs an entry for its GitLab's `/jwt/auth`. Tokens issued to
+  an account stay in memory, and within the entry's prefix.
 - A secret comes from an environment variable or a file, never the settings
   file. The server reads secrets again for every batch, so a rotated secret
-  applies without a restart; one it cannot read is logged, and that registry's
-  lookups run without credentials. The CLI stops with a usage error instead.
-- Responses read with credentials are cached under their entry, so a read
-  without that entry never sees them.
+  applies without a restart; one it cannot read is logged, and requests under
+  that prefix carry no credentials, not even a broader entry's. The CLI stops
+  with a usage error instead.
+- Responses read with credentials are cached under their entry and a one-way
+  digest of its credentials, so a read without that entry, or after the secret
+  or account changes, never sees them.
 - In the server, an entry's `allowedInstallations` limits which installations
-  use it.
-- A redirect carries credentials only to a URL an entry covers.
+  use it. For any other installation, requests under its prefix carry no
+  credentials.
+- A redirect carries credentials only to a URL an entry covers, and a token
+  issued under an entry only within that entry's prefix.
 
 A dependency's source decides where its versions come from. Helm repositories,
-OCI and Docker registries, Maven repositories and GitLab or Gitea tags carry
+OCI and Docker registries, Maven repositories and GitLab, Gitea or Forgejo tags carry
 their URL, so a private one works with an entry. npm, PyPI and the other package
 registries still read only their public registry. Lockfile tools get no
 registry credentials yet.

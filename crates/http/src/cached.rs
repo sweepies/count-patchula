@@ -506,7 +506,7 @@ impl Cached {
             key = key.representation(format);
         }
         let credential = matching(&self.0.options.credentials, &url).cloned();
-        let scope = credential.as_ref().map(Credential::id);
+        let scope = credential.as_ref().map(Credential::scope);
         if let Some(id) = scope {
             key = key.credential(id);
         }
@@ -627,6 +627,7 @@ impl Cached {
         }
         let mut attempt = 0;
         let mut redirects = BTreeSet::from([url.to_string()]);
+        let mut foreign = false;
         let mut response = loop {
             let queued = Instant::now();
             let target = request.url().clone();
@@ -681,14 +682,23 @@ impl Cached {
                         request.headers_mut().remove(name);
                     }
                 }
-                // Operator credentials follow a redirect only to a URL their own
-                // entry, or another, covers.
-                if !matches!(registry, Some(Some(_))) {
+                let next_entry = matching(&self.0.options.credentials, &next);
+                if matches!(registry, Some(Some(_))) {
+                    // A registry token stays on its origin; one issued under an
+                    // operator entry also stays within that entry's prefix.
+                    if scope.is_some() && next_entry.map(Credential::scope) != scope {
+                        request.headers_mut().remove(header::AUTHORIZATION);
+                    }
+                } else {
+                    // Operator credentials follow a redirect only to a URL an
+                    // entry covers. Another entry's answer is never stored
+                    // under this request's key.
                     request.headers_mut().remove(header::AUTHORIZATION);
-                    if let Some(value) = matching(&self.0.options.credentials, &next)
-                        .and_then(|entry| entry.auth.header())
+                    if let Some(entry) = next_entry
+                        && let Some(value) = entry.auth.header()
                     {
                         request.headers_mut().insert(header::AUTHORIZATION, value);
+                        foreign |= Some(entry.scope()) != scope;
                     }
                 }
                 request.url_mut().clone_from(&next);
@@ -837,17 +847,18 @@ impl Cached {
         // so they are stored only as the registry allows.
         let account =
             registry.flatten().is_some_and(|bearer| bearer.account) || credential.is_some();
-        let uncacheable = !(registry.is_some() && immutable(&url) && !account)
-            && (control.as_ref().is_some_and(|c| {
-                c.split(',')
-                    .any(|v| v.trim().eq_ignore_ascii_case("no-store"))
-            }) || text("vary").is_some_and(|v| {
-                v.split(',').any(|n| {
-                    !["accept", "accept-encoding", "user-agent"]
-                        .iter()
-                        .any(|known| n.trim().eq_ignore_ascii_case(known))
-                })
-            }));
+        let uncacheable = foreign
+            || !(registry.is_some() && immutable(&url) && !account)
+                && (control.as_ref().is_some_and(|c| {
+                    c.split(',')
+                        .any(|v| v.trim().eq_ignore_ascii_case("no-store"))
+                }) || text("vary").is_some_and(|v| {
+                    v.split(',').any(|n| {
+                        !["accept", "accept-encoding", "user-agent"]
+                            .iter()
+                            .any(|known| n.trim().eq_ignore_ascii_case(known))
+                    })
+                }));
         if uncacheable {
             self.0.cache.http_remove(&key).await?;
         } else {
@@ -1517,7 +1528,7 @@ mod tests {
         assert!(cache.http_get(&scoped()).await.unwrap().is_none());
         assert!(
             cache
-                .http_get(&scoped().credential(entry.id()))
+                .http_get(&scoped().credential(entry.scope()))
                 .await
                 .unwrap()
                 .is_some()
@@ -1544,5 +1555,85 @@ mod tests {
         let client = Cached::with_options(cache, anonymous.clone(), Default::default()).unwrap();
         assert!(client.get(INDEX, "application/yaml").await.is_err());
         assert!(anonymous.0.lock().unwrap().is_empty());
+    }
+    #[tokio::test]
+    async fn redirects_never_store_or_carry_another_entrys_credentials() {
+        const PUBLIC: &str = "https://charts.example.com/index.yaml";
+        const PRIVATE: &str = "https://acme.jfrog.io/charts/index.yaml";
+        const BLOB: &str = "https://acme.jfrog.io/v2/team/app/blobs/latest";
+        const OUTSIDE: &str = "https://acme.jfrog.io/other/blob";
+        let reply = |status: u16, location: Option<&'static str>| Response {
+            status: StatusCode::from_u16(status).unwrap(),
+            headers: location
+                .map(|to| (header::LOCATION, HeaderValue::from_static(to)))
+                .into_iter()
+                .chain([(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("max-age=600"),
+                )])
+                .collect(),
+            body: b"body".to_vec(),
+        };
+        let entry = Credential::new(
+            "https://acme.jfrog.io/charts",
+            crate::Auth::Bearer {
+                token: "tok".into(),
+            },
+        )
+        .unwrap();
+        let registry = Credential::new(
+            "https://acme.jfrog.io/v2",
+            crate::Auth::Bearer {
+                token: "reg".into(),
+            },
+        )
+        .unwrap();
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let transport = Arc::new(Scripted(Mutex::new(
+            [
+                // An uncredentialed URL redirected into an entry's prefix gets
+                // the entry's credentials, but its answer is not stored.
+                (PUBLIC, None, reply(302, Some(PRIVATE))),
+                (PRIVATE, Some("Bearer tok"), reply(200, None)),
+                // A registry token issued under an entry stays in its prefix,
+                // even on the same origin.
+                (BLOB, Some("Bearer account"), reply(307, Some(OUTSIDE))),
+                (OUTSIDE, None, reply(200, None)),
+            ]
+            .into(),
+        )));
+        let client = Cached::with_options(
+            cache.clone(),
+            transport.clone(),
+            Options {
+                credentials: vec![entry, registry],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        client.get(PUBLIC, "application/yaml").await.unwrap();
+        assert!(
+            cache
+                .http_get(
+                    &HttpKey::new(
+                        "GET",
+                        PUBLIC,
+                        BTreeMap::from([("accept".into(), "application/yaml".into())]),
+                    )
+                    .unwrap()
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let bearer = Bearer {
+            token: "account",
+            account: true,
+        };
+        client
+            .registry_get(BLOB, "text/plain", Some(bearer))
+            .await
+            .unwrap();
+        assert!(transport.0.lock().unwrap().is_empty());
     }
 }
