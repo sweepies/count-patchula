@@ -285,6 +285,7 @@ impl Scanner {
                 && (registry_settings(path) || matches!(leaf, "uv.lock" | "poetry.lock")))
             || (self.config.managers.contains(&Manager::Bundler)
                 && (registry_settings(path) || leaf == "Gemfile.lock"))
+            || (self.config.managers.contains(&Manager::Composer) && leaf == "composer.lock")
     }
     /// The pip requirements files among `paths`, which the Count does not
     /// maintain, as skipped entries saying why, when Python projects are
@@ -519,7 +520,7 @@ impl Scanner {
             } else if self.selected(Manager::Terraform, path) {
                 terraform::extract(path, text, &terraform)
             } else if self.selected(Manager::Composer, path) {
-                composer::extract(path, text, files)
+                composer::extract(path, text, files, &mut result.skipped)
             } else if self.selected(Manager::Nix, path) {
                 nix::extract(path, text, files, &mut result.skipped)
             } else if self.selected(Manager::Bundler, path) {

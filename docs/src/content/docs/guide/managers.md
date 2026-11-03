@@ -354,7 +354,9 @@ Evaluating a Gemfile runs Ruby, so `bundle lock` runs in a scrubbed
 environment that ignores any repository `.bundle/config`.
 
 `composer` reads `require` and `require-dev`, skipping platform packages
-(`php`, `ext-*`, `lib-*`), `dev-` branches and `*`. `composer update` runs with
+(`php`, `ext-*`, `lib-*`), `dev-` branches and `*`. Packages from path, VCS
+and other non-registry repositories are listed as skipped; where each
+package comes from is in [package registries](/guide/sources/#package-registries). `composer update` runs with
 `--no-install --no-scripts --no-plugins`, so no repository code runs. The PHP
 version constrains resolution; extension requirements do not, since they
 describe where the app is deployed, not the runner.

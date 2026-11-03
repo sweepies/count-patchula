@@ -212,6 +212,20 @@ dependency's `registry`:
   gems, such as a mirror or `BUNDLE_GEMFILE`, fails every lookup. Gems from
   git, a path or GitHub are listed as skipped. Private gem sources are not
   read yet, so their gems' lookups fail rather than read RubyGems.
+- PHP packages come from what `composer.lock` records. Composer marks a
+  package from a Composer registry with the registry's `notification-url`,
+  Packagist's being `https://packagist.org/downloads/`; a package with
+  another registry's mark fails its lookup, since private Composer
+  repositories are not read yet. Packages from a `path`, VCS, inline
+  `package` or artifact repository are listed as skipped. A package the
+  lock does not record comes from Packagist only when `composer.json`
+  configures no other repository, leaves Packagist on without filters such
+  as `exclude`, and uses no merge plugin, and the lock holds no Composer
+  plugin, since plugins can add repositories; otherwise its lookup fails:
+  commit `composer.lock`. With `config.lock` set to false, Composer and the
+  Count ignore the lock. A `composer.json` with
+  comments, which Composer does not read, or a lock the Count cannot read,
+  fails every lookup.
 - Python packages come from what the project's lockfile records. The
   Count does not work out which index uv or Poetry would pick from their
   settings; the tool already did, and wrote it down:
@@ -229,7 +243,7 @@ dependency's `registry`:
   `no-index` or `torch-backend` in any `uv.toml` or `[tool.uv]` (its `[pip]`
   table included) at or above it, no index pins in `[tool.uv.sources]`, no
   override naming a URL, and no Poetry source or dependency pinned to one.
-  Otherwise its lookup fails, saying it could come from several indexes:
+  Otherwise its lookup fails, saying it could come from several registries:
   commit a lockfile that records it. That is how a public package could
   otherwise stand in for a private one of the same name.
 

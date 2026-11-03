@@ -693,7 +693,7 @@ fn composer_requirements_and_lock_resolutions() {
     }
 }
 "#;
-    let lock = r#"{"packages": [{"name": "laravel/framework", "version": "v11.14.0"}, {"name": "guzzlehttp/guzzle", "version": "7.8.1"}], "packages-dev": [{"name": "phpunit/phpunit", "version": "11.2.5"}]}"#;
+    let lock = r#"{"packages": [{"name": "laravel/framework", "version": "v11.14.0", "notification-url": "https://packagist.org/downloads/"}, {"name": "guzzlehttp/guzzle", "version": "7.8.1", "notification-url": "https://packagist.org/downloads/"}], "packages-dev": [{"name": "phpunit/phpunit", "version": "11.2.5", "notification-url": "https://packagist.org/downloads/"}]}"#;
     let files = Files::from([
         ("composer.json".into(), manifest.into()),
         ("composer.lock".into(), lock.into()),
@@ -3000,5 +3000,169 @@ fn gems_come_from_their_gemfile_when_it_is_plain_else_their_lockfile() {
                 .iter()
                 .any(|s| s.file == "git/Gemfile" && s.value == name)
         );
+    }
+}
+
+#[test]
+fn composer_packages_come_from_their_lockfile_or_packagist_alone() {
+    let manifest = |extra: &str| {
+        format!(
+            "{{\n  \"require\": {{\n    \"psr/log\": \"^3.0\",\n    \"acme/a\": \"^1.0\",\n    \"acme/b\": \"^1.0\",\n    \"acme/c\": \"^1.0\",\n    \"acme/d\": \"^1.0\"\n  }}{extra}\n}}\n"
+        )
+    };
+    let package =
+        |name: &str, rest: &str| format!("{{\"name\": \"{name}\", \"version\": \"1.0.0\"{rest}}}");
+    let packagist = ", \"notification-url\": \"https://packagist.org/downloads/\"";
+    let lock = format!(
+        "{{\"packages\": [{}, {}, {}, {}]}}",
+        package("psr/log", packagist),
+        package(
+            "acme/a",
+            ", \"notification-url\": \"https://bot:s3cr3t@repo.acme.dev/downloads/\""
+        ),
+        package(
+            "acme/c",
+            ", \"source\": {\"type\": \"git\", \"url\": \"https://github.com/acme/c.git\"}"
+        ),
+        package(
+            "acme/d",
+            ", \"dist\": {\"type\": \"path\", \"url\": \"packages/d\"}"
+        ),
+    );
+    let private = ",\n  \"repositories\": [{\"type\": \"composer\", \"url\": \"https://bot:s3cr3t@repo.acme.dev\"}]";
+    let files = Files::from([
+        ("plain/composer.json".into(), manifest("")),
+        (
+            "enabled/composer.json".into(),
+            manifest(",\n  \"repositories\": [{\"packagist.org\": true}]"),
+        ),
+        ("private/composer.json".into(), manifest(private)),
+        ("private/composer.lock".into(), lock.clone()),
+        (
+            "off/composer.json".into(),
+            manifest(",\n  \"repositories\": {\"packagist.org\": false}"),
+        ),
+        ("off/composer.lock".into(), lock.clone()),
+        // Composer reads strict JSON.
+        (
+            "comments/composer.json".into(),
+            manifest(",\n  // a comment\n  \"name\": \"acme/app\""),
+        ),
+        ("broken/composer.json".into(), manifest("")),
+        ("broken/composer.lock".into(), "{\"packages\": {}}".into()),
+        // `--no-dev` writes a null packages-dev.
+        ("nodev/composer.json".into(), manifest("")),
+        (
+            "nodev/composer.lock".into(),
+            format!(
+                "{{\"packages\": [{}], \"packages-dev\": null}}",
+                package("psr/log", packagist)
+            ),
+        ),
+        // An inline package, even one whose data claims Packagist, and an
+        // artifact are not looked up.
+        (
+            "inline/composer.json".into(),
+            manifest(
+                ",\n  \"repositories\": [{\"type\": \"package\", \"package\": {\"name\": \"Acme/A\", \"version\": \"1.0.0\"}}]",
+            ),
+        ),
+        (
+            "inline/composer.lock".into(),
+            format!(
+                "{{\"packages\": [{}, {}]}}",
+                package("acme/a", packagist),
+                package(
+                    "acme/b",
+                    ", \"dist\": {\"type\": \"zip\", \"url\": \"/srv/artifacts/b.zip\"}, \"notification-url\": \"https://packagist.org/downloads/\""
+                ),
+            ),
+        ),
+        // Packagist with a filter, a Composer plugin and the merge plugin
+        // leave unrecorded packages to the lock.
+        (
+            "filtered/composer.json".into(),
+            manifest(
+                ",\n  \"repositories\": [{\"type\": \"composer\", \"url\": \"https://repo.packagist.org\", \"exclude\": [\"acme/*\"]}]",
+            ),
+        ),
+        ("plugin/composer.json".into(), manifest("")),
+        (
+            "plugin/composer.lock".into(),
+            format!(
+                "{{\"packages\": [{}]}}",
+                package(
+                    "acme/plugin",
+                    ", \"type\": \"composer-plugin\", \"notification-url\": \"https://packagist.org/downloads/\""
+                )
+            ),
+        ),
+        (
+            "merge/composer.json".into(),
+            manifest(
+                ",\n  \"extra\": {\"merge-plugin\": {\"include\": [\"modules/*/composer.json\"]}}",
+            ),
+        ),
+        // Composer ignores a lock its config turns off.
+        (
+            "lockoff/composer.json".into(),
+            manifest(",\n  \"config\": {\"lock\": false}"),
+        ),
+        ("lockoff/composer.lock".into(), "not json".into()),
+    ]);
+    let mut config = config();
+    config.managers = vec![Manager::Composer];
+    let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+    let found = |file: &str, name: &str| {
+        extraction
+            .dependencies
+            .iter()
+            .find(|d| d.file == file && d.name == name)
+            .map(|d| d.registry.clone())
+    };
+    let registry =
+        |file: &str, name: &str| found(file, name).unwrap_or_else(|| panic!("{file} {name}"));
+    let ambiguous = |found: Option<String>| found.is_some_and(|r| r.starts_with("ambiguous: "));
+    for name in ["psr/log", "acme/a", "acme/b"] {
+        assert_eq!(registry("plain/composer.json", name), None, "{name}");
+        assert_eq!(registry("enabled/composer.json", name), None, "{name}");
+    }
+    for file in ["private/composer.json", "off/composer.json"] {
+        assert_eq!(registry(file, "psr/log"), None, "{file}");
+        let a = registry(file, "acme/a").unwrap();
+        assert!(fails(Some(a.clone())) && !a.contains("s3cr3t"), "{a}");
+        assert!(ambiguous(registry(file, "acme/b")), "{file}");
+        for name in ["acme/c", "acme/d"] {
+            assert!(found(file, name).is_none(), "{file} {name}");
+            assert!(
+                extraction
+                    .skipped
+                    .iter()
+                    .any(|s| s.file == file && s.value == name),
+                "{file} {name}"
+            );
+        }
+    }
+    let secret = registry("private/composer.json", "acme/b").unwrap();
+    assert!(!secret.contains("s3cr3t"), "{secret}");
+    assert_eq!(registry("nodev/composer.json", "psr/log"), None);
+    for name in ["acme/a", "acme/b"] {
+        assert!(found("inline/composer.json", name).is_none(), "{name}");
+    }
+    for file in [
+        "filtered/composer.json",
+        "plugin/composer.json",
+        "merge/composer.json",
+    ] {
+        assert!(ambiguous(registry(file, "acme/a")), "{file}");
+    }
+    assert_eq!(registry("lockoff/composer.json", "acme/a"), None);
+    for file in ["comments/composer.json", "broken/composer.json"] {
+        for name in ["psr/log", "acme/a"] {
+            assert!(
+                registry(file, name).is_some_and(|r| r.contains("cannot read")),
+                "{file} {name}"
+            );
+        }
     }
 }

@@ -234,9 +234,9 @@ impl Client {
     pub async fn lookup(&self, id: &PackageId) -> Result<Catalog> {
         let (source, registry, package) = (id.source, id.registry.as_deref(), id.name.as_str());
         if let Some(registry) = registry {
-            if let Some(indexes) = id.ambiguous() {
+            if let Some(registries) = id.ambiguous() {
                 return Err(Error::Registry(format!(
-                    "{package} could come from several indexes ({indexes}); commit a lockfile that records where it comes from"
+                    "{package} could come from several registries ({registries}); commit a lockfile that records where it comes from"
                 )));
             }
             // A value the manager kept as written (`${VAR}`, a redacted URL,
