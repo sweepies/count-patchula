@@ -263,16 +263,20 @@ impl Settings {
     ) -> (Vec<patchula_http::Credential>, Vec<(String, String)>) {
         let mut credentials = Vec::new();
         let mut failed = Vec::new();
-        let withheld = |prefix: &str| {
-            patchula_http::Credential::new(prefix, patchula_http::Auth::Withheld)
-                .expect("validated registry prefix")
-        };
         for (prefix, registry) in &self.registries {
+            // Settings built without `validate` can hold a bad prefix: it is
+            // reported, never a panic.
+            let Some(withheld) =
+                patchula_http::Credential::new(prefix, patchula_http::Auth::Withheld)
+            else {
+                failed.push((prefix.clone(), "not an https URL prefix".to_owned()));
+                continue;
+            };
             if let Some(id) = installation
                 && !registry.allowed_installations.is_empty()
                 && !registry.allowed_installations.contains(&id)
             {
-                credentials.push(withheld(prefix));
+                credentials.push(withheld);
                 continue;
             }
             let auth = registry.secret.read().map(|secret| match registry.auth {
@@ -288,7 +292,7 @@ impl Settings {
             }) {
                 Ok(credential) => credentials.push(credential),
                 Err(reason) => {
-                    credentials.push(withheld(prefix));
+                    credentials.push(withheld);
                     failed.push((prefix.clone(), reason));
                 }
             }

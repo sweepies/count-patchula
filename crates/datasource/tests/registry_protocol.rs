@@ -1278,3 +1278,47 @@ async fn basic_credentials_reach_a_token_service_on_the_registry_origin_only() {
     );
     assert!(steps.0.lock().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn a_token_service_entry_alone_never_mints_account_tokens() {
+    let manifest = "https://registry.gitlab.acme.dev/v2/team/app/manifests/1.0";
+    let realm = "https://gitlab.acme.dev/jwt/auth";
+    let digest = format!("sha256:{}", "d".repeat(64));
+    let steps = Arc::new(AuthSteps(Mutex::new(VecDeque::from([
+        (
+            manifest.to_owned(),
+            None,
+            response(
+                401,
+                "",
+                &[(
+                    "www-authenticate",
+                    &format!(r#"Bearer realm="{realm}",service="container_registry""#),
+                )],
+            ),
+        ),
+        // The registry has no entry, so its token is anonymous even though
+        // the token service has one.
+        (
+            format!("{realm}?service=container_registry&scope=repository%3Ateam%2Fapp%3Apull"),
+            None,
+            response(200, r#"{"token":"anonymous","expires_in":300}"#, &[]),
+        ),
+        (
+            manifest.to_owned(),
+            Some("Bearer anonymous".to_owned()),
+            response(200, "", &[("docker-content-digest", digest.as_str())]),
+        ),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    auth_client_with(
+        steps.clone(),
+        dir.path(),
+        vec![basic("https://gitlab.acme.dev/jwt/auth", "ci", "hunter2")],
+    )
+    .await
+    .registry_digest("registry.gitlab.acme.dev/team/app", "1.0")
+    .await
+    .unwrap();
+    assert!(steps.0.lock().unwrap().is_empty());
+}

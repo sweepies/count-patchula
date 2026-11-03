@@ -153,12 +153,14 @@ registries {
   same origin, carries that entry's credentials. The longest prefix wins.
 - `bearer` sends the secret as a bearer token. `basic` sends the username and
   the secret to the URLs under the prefix, including a container registry's
-  first request. When the registry answers with a token service instead, the
-  Count exchanges them there for a pull token, but only at a token service with
-  its own entry, one on the registry's own origin, Docker Hub's
-  `auth.docker.io`, or `gitlab.com` for `registry.gitlab.com`. A self-hosted
-  GitLab registry needs an entry for its GitLab's `/jwt/auth`. Tokens issued to
-  an account stay in memory, and within the entry's prefix.
+  first request. When a registry with an entry answers with a token service
+  instead, the Count exchanges credentials there for a pull token: the
+  registry's own at a token service on its origin, Docker Hub's
+  `auth.docker.io`, or `gitlab.com` for `registry.gitlab.com`, and otherwise
+  only a token service's own entry. A self-hosted GitLab registry needs entries
+  for both the registry and its GitLab's `/jwt/auth`. A registry without an
+  entry only ever gets anonymous tokens. Tokens issued to an account stay in
+  memory, and within the entry's prefix.
 - A secret comes from an environment variable or a file, never the settings
   file. The server reads secrets again for every batch, so a rotated secret
   applies without a restart; one it cannot read is logged, and requests under
