@@ -2377,6 +2377,11 @@ impl Engine {
                 })
                 .count();
             let read_manifests = delivery && manifests <= patchula_update::tooling::MANIFEST_LIMIT;
+            let blob_entries: BTreeMap<String, (String, String)> = entries
+                .iter()
+                .filter(|e| e.kind == "blob")
+                .map(|e| (e.path.clone(), (e.sha.clone(), e.mode.clone())))
+                .collect();
             let selected: Vec<_> = entries
                 .into_iter()
                 .filter(|entry| {
@@ -2386,7 +2391,7 @@ impl Engine {
                             || (read_manifests && patchula_update::tooling::manifest(&entry.path)))
                 })
                 .collect();
-            let blobs: BTreeMap<String, patchula_update::Blob> = stream::iter(selected)
+            let mut blobs: BTreeMap<String, patchula_update::Blob> = stream::iter(selected)
                 .map(|entry| async move {
                     let content = self.file(repo, &entry.sha).await?;
                     Ok((
@@ -2403,10 +2408,36 @@ impl Engine {
                 .await
                 .into_iter()
                 .collect::<Result<_>>()?;
-            let files: Files = blobs
+            let mut files: Files = blobs
                 .iter()
                 .map(|(p, b)| (p.clone(), b.content.clone()))
                 .collect();
+            // Requirements files include others by any name, and pip reads
+            // their index options too: read those, a few rounds deep. One
+            // that is not text stays unread, and leaves its packages
+            // ambiguous rather than on PyPI.
+            let mut tried = BTreeSet::new();
+            for _ in 0..8 {
+                let wanted: Vec<_> = scanner
+                    .included(&files)
+                    .into_iter()
+                    .filter(|path| tried.insert(path.clone()))
+                    .filter_map(|path| blob_entries.get(&path).cloned().map(|e| (path, e)))
+                    .collect();
+                if wanted.is_empty() {
+                    break;
+                }
+                for (path, (sha, mode)) in wanted {
+                    match self.file(repo, &sha).await {
+                        Ok(content) => {
+                            files.insert(path.clone(), content.clone());
+                            blobs.insert(path, patchula_update::Blob { sha, mode, content });
+                        }
+                        Err(Error::Invalid(_)) => {}
+                        Err(error) => return Err(error),
+                    }
+                }
+            }
             let extraction = tokio::task::spawn_blocking(move || scanner.extract(&files))
                 .await
                 .map_err(|e| Error::Invalid(e.to_string()))?
@@ -2564,6 +2595,23 @@ pub fn read_tree(
             files.insert(relative.clone(), content);
         }
         paths.insert(relative);
+    }
+    // Requirements files include others by any name; read those too.
+    let mut tried = BTreeSet::new();
+    for _ in 0..8 {
+        let wanted: Vec<_> = scanner
+            .included(&files)
+            .into_iter()
+            .filter(|path| paths.contains(path) && tried.insert(path.clone()))
+            .collect();
+        if wanted.is_empty() {
+            break;
+        }
+        for relative in wanted {
+            if let Ok(content) = std::fs::read_to_string(dir.join(&relative)) {
+                files.insert(relative, content);
+            }
+        }
     }
     Ok((paths, files))
 }

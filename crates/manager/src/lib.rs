@@ -42,7 +42,7 @@ mod yaml_locations;
 
 use patchula_config::{Config, DependencyKind, Manager, PackageId, Patterns, Scheme, Source};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Location {
@@ -283,12 +283,20 @@ impl Scanner {
             || npm_extractors)
             && matches!(leaf, ".npmrc" | ".yarnrc.yml"))
             || (self.config.managers.contains(&Manager::Pyproject)
-                && matches!(leaf, "uv.toml" | "pyproject.toml" | "uv.lock" | "poetry.lock"))
-            // pip reads index options from any file a requirements file
-            // includes with `-r` or `-c`, whatever its name.
-            || (self.config.managers.contains(&Manager::Requirements)
-                && (leaf.ends_with(".txt") || leaf.ends_with(".in"))
-                && (self.config.exclude.is_empty() || !self.exclude.matches(path)))
+                && matches!(
+                    leaf,
+                    "uv.toml" | "pyproject.toml" | "uv.lock" | "poetry.lock"
+                ))
+    }
+    /// Files the requirements files in `files` include with `-r` or `-c`,
+    /// whatever their names, that `files` does not hold yet: pip reads their
+    /// index options too. A caller reads those that exist and asks again.
+    pub fn included(&self, files: &Files) -> BTreeSet<String> {
+        if !self.config.managers.contains(&Manager::Requirements) {
+            return BTreeSet::new();
+        }
+        pypi::RequirementsGraph::new(files, |path| self.selected(Manager::Requirements, path))
+            .missing()
     }
     fn selected(&self, manager: Manager, path: &str) -> bool {
         if !self.config.managers.contains(&manager)
@@ -408,7 +416,8 @@ impl Scanner {
         let mut result = Extraction::default();
         let locks = npm::locks(files)?;
         let npmrcs = npm::npmrcs(files);
-        let requirements = pypi::RequirementsGraph::new(files);
+        let requirements =
+            pypi::RequirementsGraph::new(files, |path| self.selected(Manager::Requirements, path));
         let cargo = if self.config.managers.contains(&Manager::Cargo) {
             cargo::documents(files)?
         } else {
@@ -603,10 +612,11 @@ pub(crate) fn redacted(value: &str) -> String {
     let Some((scheme, rest)) = value.split_once("://") else {
         return value.to_owned();
     };
-    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
-    let path = path.split(['?', '#']).next().unwrap_or_default();
-    let host = authority.rsplit_once('@').map(|(_, host)| host);
-    let stripped = format!("{scheme}://{}/{path}", host.unwrap_or(authority));
+    // A query or fragment may hold a token; a password may hold a `/`, so
+    // everything before the last `@` is treated as the user.
+    let before = rest.split(['?', '#']).next().unwrap_or_default();
+    let host = before.rsplit_once('@').map(|(_, host)| host);
+    let stripped = format!("{scheme}://{}", host.unwrap_or(before));
     let stripped = stripped.trim_end_matches('/');
     if host.is_some() || rest.contains(['?', '#']) {
         format!("{stripped} (credentials removed)")
@@ -621,7 +631,7 @@ pub(crate) fn registry_url(value: &str) -> Option<String> {
     let value = value.trim().trim_matches(['"', '\'']).trim_end_matches('/');
     let rest = value.strip_prefix("https://")?;
     let host = rest.split('/').next().unwrap_or_default();
-    let valid = !host.is_empty() && !host.contains('@') && !value.contains(['?', '#', ' ', '$']);
+    let valid = !host.is_empty() && !value.contains(['@', '?', '#', ' ', '$']);
     valid.then(|| value.to_owned())
 }
 

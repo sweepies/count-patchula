@@ -144,7 +144,7 @@ fn pin(value: &Item, names: &BTreeMap<String, crate::pypi::Named>) -> Option<cra
     )
 }
 
-/// The indexes uv and Poetry configure, and the packages pinned by them.
+/// The indexes uv, Poetry and PDM configure, and the packages pinned by them.
 /// `settings` is where uv reads its index settings: the nearest `uv.toml`, or
 /// the nearest `[tool.uv]`. `projects` are the `[tool.uv]` tables of the
 /// project and its workspace root, nearest first, for index names and
@@ -153,6 +153,7 @@ fn indexes(
     settings: Option<&Item>,
     projects: &[&Item],
     poetry: Option<&Item>,
+    pdm: Option<&Item>,
 ) -> crate::pypi::Indexes {
     use crate::pypi::Named;
     let mut indexes = crate::pypi::Indexes::default();
@@ -165,12 +166,18 @@ fn indexes(
             .filter_map(|index| {
                 let url = index.get("url").and_then(Item::as_str)?;
                 let flag = |key: &str| index.get(key).and_then(Item::as_bool) == Some(true);
+                // A flat index is a list of files, not an index the Count reads.
+                let named = if index.get("format").and_then(Item::as_str) == Some("flat") {
+                    find_links(url)
+                } else {
+                    Named::parse(url)
+                };
                 Some((
                     index
                         .get("name")
                         .and_then(Item::as_str)
                         .map(str::to_ascii_lowercase),
-                    Named::parse(url),
+                    named,
                     flag("default"),
                     flag("explicit"),
                 ))
@@ -207,6 +214,19 @@ fn indexes(
     {
         indexes.extras.push(Named::parse(url));
     }
+    for link in settings
+        .and_then(|u| u.get("find-links"))
+        .and_then(Item::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str())
+    {
+        indexes.extras.push(find_links(link));
+    }
+    let no_index = settings
+        .and_then(|u| u.get("no-index"))
+        .and_then(Item::as_bool)
+        == Some(true);
     // uv sources: the workspace root's, overridden by the project's.
     for project in projects.iter().rev() {
         for (package, value) in project
@@ -293,7 +313,44 @@ fn indexes(
             indexes.pinned.insert(normalise(package), origin);
         }
     }
+    // PDM: a source named `pypi` replaces PyPI; the rest are searched too.
+    for source in pdm
+        .and_then(|p| p.get("source"))
+        .and_then(Item::as_array_of_tables)
+        .into_iter()
+        .flatten()
+    {
+        let Some(url) = source.get("url").and_then(Item::as_str) else {
+            continue;
+        };
+        let named = if source.get("type").and_then(Item::as_str) == Some("find_links") {
+            find_links(url)
+        } else {
+            Named::parse(url)
+        };
+        if source.get("name").and_then(Item::as_str) == Some("pypi") {
+            indexes.default = Some(named);
+        } else {
+            indexes.extras.push(named);
+        }
+    }
+    // uv's `no-index` leaves only pinned indexes and find-links.
+    if no_index {
+        let mut only = vec!["--no-index".to_owned()];
+        only.extend(indexes.extras.iter().filter_map(|named| match named {
+            Named::Unusable(value) if value.starts_with("--find-links ") => Some(value.clone()),
+            _ => None,
+        }));
+        indexes.default = Some(Named::Unusable(only.join(" ")));
+        indexes.extras.clear();
+    }
     indexes
+}
+
+/// A find-links location: a directory or page of files, not an index the
+/// Count reads, so its packages' lookups fail.
+fn find_links(url: &str) -> crate::pypi::Named {
+    crate::pypi::Named::Unusable(format!("--find-links {}", crate::redacted(url)))
 }
 
 struct Scan<'a> {
@@ -438,19 +495,57 @@ pub(super) fn extract(
     {
         ancestors.push(dir.rsplit_once('/').map_or("", |(parent, _)| parent));
     }
+    // A configuration file above the project that does not parse could name
+    // any index, so its packages become ambiguous rather than PyPI's.
+    let mut unreadable = Vec::new();
+    let mut parse = |dir: &str, leaf: &str| -> Option<Document<&str>> {
+        let path = join(dir, leaf);
+        let text = files.get(&path)?;
+        let parsed = Document::parse(text.as_str()).ok();
+        if parsed.is_none() {
+            unreadable.push(path);
+        }
+        parsed
+    };
     let pyprojects: Vec<(&str, Document<&str>)> = ancestors
         .iter()
-        .filter_map(|dir| {
-            let text = files.get(&join(dir, "pyproject.toml"))?;
-            Some((*dir, Document::parse(text.as_str()).ok()?))
-        })
+        .filter_map(|dir| Some((*dir, parse(dir, "pyproject.toml")?)))
         .collect();
-    // A uv workspace root shares its lock, sources and indexes with members.
-    let root = pyprojects.iter().find(|(_, doc)| {
-        doc.get("tool")
+    let uv_tomls: Vec<(&str, Document<&str>)> = ancestors
+        .iter()
+        .filter_map(|dir| Some((*dir, parse(dir, "uv.toml")?)))
+        .collect();
+    // A uv workspace root shares its lock, sources and index settings with
+    // the projects its `members` name and `exclude` leaves in.
+    let root = pyprojects.iter().find(|(dir, doc)| {
+        let Some(workspace) = doc
+            .get("tool")
             .and_then(|t| t.get("uv"))
             .and_then(|u| u.get("workspace"))
-            .is_some()
+        else {
+            return false;
+        };
+        if *dir == ancestors[0] {
+            return true;
+        }
+        let globs = |key: &str| -> Vec<String> {
+            workspace
+                .get(key)
+                .and_then(Item::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        };
+        let member = ancestors[0]
+            .strip_prefix(*dir)
+            .map(|rest| rest.trim_start_matches('/'))
+            .unwrap_or(ancestors[0]);
+        let matches = |globs: Vec<String>| {
+            Patterns::compile(&globs)
+                .is_ok_and(|patterns| !globs.is_empty() && patterns.matches(member))
+        };
+        matches(globs("members")) && !matches(globs("exclude"))
     });
     // Only the project's own lock, or its workspace root's, resolves it: a
     // lock above belongs to another project.
@@ -530,16 +625,14 @@ pub(super) fn extract(
         }
     }
     // uv reads its index settings from the nearest `uv.toml`, or the nearest
-    // `pyproject.toml` with `[tool.uv]`, at or above the project.
-    let uv_tomls: Vec<(&str, Document<&str>)> = ancestors
-        .iter()
-        .filter_map(|dir| {
-            let text = files.get(&join(dir, "uv.toml"))?;
-            Some((*dir, Document::parse(text.as_str()).ok()?))
-        })
-        .collect();
+    // `pyproject.toml` with `[tool.uv]`, at or above the project; in a
+    // workspace, from its root, whatever a member sets.
     let uv_table = |doc: &Document<&str>| doc.get("tool").and_then(|t| t.get("uv")).cloned();
-    let settings: Option<Item> = ancestors.iter().find_map(|dir| {
+    let search: Vec<&str> = match root {
+        Some((dir, _)) => vec![*dir],
+        None => ancestors.clone(),
+    };
+    let settings: Option<Item> = search.iter().find_map(|dir| {
         if let Some((_, doc)) = uv_tomls.iter().find(|(d, _)| d == dir) {
             return Some(doc.as_item().clone());
         }
@@ -559,10 +652,16 @@ pub(super) fn extract(
         projects.extend(uv_table(doc));
     }
     let projects: Vec<&Item> = projects.iter().collect();
-    let indexes = indexes(
+    let mut indexes = indexes(
         settings.as_ref(),
         &projects,
         tool.and_then(|t| t.get("poetry")),
+        tool.and_then(|t| t.get("pdm")),
+    );
+    indexes.extras.extend(
+        unreadable
+            .into_iter()
+            .map(|path| crate::pypi::Named::Unusable(format!("unreadable {path}"))),
     );
     let lock = scan.lock.as_ref();
     for dep in indexes.assign(&mut scan.out, |package| locked_origin(lock, package)) {

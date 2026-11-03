@@ -3,7 +3,7 @@
 //! package that could come from several is ambiguous: its lookup fails rather
 //! than guess, since the public package of its name may be someone else's.
 use crate::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// What an index setting names.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -161,10 +161,17 @@ struct RequirementsOptions {
     no_index: bool,
     /// `-r` and `-c` files, as repository paths.
     includes: Vec<String>,
+    /// `-r` and `-c` values that name no file in the repository: absolute
+    /// paths, URLs, `${VAR}` paths, or paths outside it.
+    unresolved: Vec<String>,
 }
 
-/// `path` joined to the directory of `from`, with `.` and `..` resolved.
+/// `path` joined to the directory of `from`, with `.` and `..` resolved; none
+/// outside the repository.
 fn relative(from: &str, path: &str) -> Option<String> {
+    if path.starts_with('/') || path.contains("://") || path.contains('$') {
+        return None;
+    }
     let mut parts: Vec<&str> = from
         .rsplit_once('/')
         .map_or(Vec::new(), |(dir, _)| dir.split('/').collect());
@@ -189,10 +196,10 @@ fn requirements_options(path: &str, text: &str) -> RequirementsOptions {
         let mut words = line.split_whitespace();
         let Some(first) = words.next() else { continue };
         // `--option=value`, `-xvalue` and `-x value` are all one option.
-        let joined_short = [("-r", 2), ("-c", 2), ("-i", 2), ("-f", 2)]
+        let joined_short = ["-r", "-c", "-i", "-f"]
             .iter()
-            .find(|(short, len)| first.starts_with(short) && first.len() > *len)
-            .map(|(short, len)| (*short, Some(first[*len..].to_owned())));
+            .find(|short| first.starts_with(*short) && first.len() > 2)
+            .map(|short| (*short, Some(first[2..].to_owned())));
         let (option, value) = match (joined_short, first.split_once('=')) {
             (Some(joined), _) => joined,
             (None, Some((option, value))) if option.starts_with("--") => {
@@ -206,7 +213,10 @@ fn requirements_options(path: &str, text: &str) -> RequirementsOptions {
             ("--extra-index-url", Some(value)) => options.extras.push(Named::parse(&value)),
             ("-f" | "--find-links", Some(value)) => options.find_links.push(value),
             ("-r" | "--requirement" | "-c" | "--constraint", Some(value)) => {
-                options.includes.extend(relative(path, &value));
+                match relative(path, &value) {
+                    Some(target) => options.includes.push(target),
+                    None => options.unresolved.push(crate::redacted(&value)),
+                }
             }
             _ => {}
         }
@@ -214,81 +224,109 @@ fn requirements_options(path: &str, text: &str) -> RequirementsOptions {
     options
 }
 
-/// The index options of the `.txt` and `.in` files a scan read, by path: those
-/// that set any, or include other files.
-pub(crate) struct RequirementsGraph(BTreeMap<String, RequirementsOptions>);
+/// The requirements files of a scan and every file they include with `-r`
+/// or `-c`, whatever its name, with the options each sets.
+pub(crate) struct RequirementsGraph {
+    options: BTreeMap<String, RequirementsOptions>,
+}
 
 impl RequirementsGraph {
-    pub(crate) fn new(files: &Files) -> Self {
-        Self(
-            files
-                .iter()
-                .filter(|(path, _)| path.ends_with(".txt") || path.ends_with(".in"))
-                .map(|(path, text)| (path.clone(), requirements_options(path, text)))
-                .filter(|(_, options)| {
-                    options.no_index
-                        || !options.indexes.is_empty()
-                        || !options.extras.is_empty()
-                        || !options.find_links.is_empty()
-                        || !options.includes.is_empty()
-                })
-                .collect(),
-        )
+    /// Start from the files `selected` picks and follow their includes
+    /// through `files`.
+    pub(crate) fn new(files: &Files, selected: impl Fn(&str) -> bool) -> Self {
+        let mut options = BTreeMap::new();
+        let mut pending: Vec<String> = files.keys().filter(|p| selected(p)).cloned().collect();
+        while let Some(path) = pending.pop() {
+            if options.contains_key(&path) {
+                continue;
+            }
+            let Some(text) = files.get(&path) else {
+                continue;
+            };
+            let parsed = requirements_options(&path, text);
+            pending.extend(parsed.includes.iter().cloned());
+            options.insert(path, parsed);
+        }
+        Self { options }
+    }
+    /// The files the graph includes but `files` does not hold.
+    pub(crate) fn missing(&self) -> BTreeSet<String> {
+        self.options
+            .values()
+            .flat_map(|o| &o.includes)
+            .filter(|path| !self.options.contains_key(*path))
+            .cloned()
+            .collect()
+    }
+    /// The files one pip run reading `root` reads: it and what it includes.
+    fn closure<'a>(&'a self, root: &'a str) -> Vec<&'a str> {
+        let mut seen = vec![root];
+        let mut index = 0;
+        while let Some(&path) = seen.get(index) {
+            index += 1;
+            for target in self.options.get(path).into_iter().flat_map(|o| &o.includes) {
+                if !seen.contains(&target.as_str()) {
+                    seen.push(target);
+                }
+            }
+        }
+        seen
     }
 }
 
-/// The indexes of a requirements file: pip applies index options across
-/// every file one run reads, so those of the files it includes, and of the
-/// files that include it, count too. `--find-links` adds a source that is not
-/// an index, and `--no-index` leaves only those.
+/// The indexes of a requirements file. pip applies index options across
+/// every file one run reads, so a file gets the options of each run that
+/// reads it: those of every file no other includes whose includes reach it.
+/// `--find-links` adds a source that is not an index, `--no-index` leaves
+/// only those, and an include the Count cannot read could set anything.
 pub(crate) fn requirements(path: &str, graph: &RequirementsGraph) -> Indexes {
-    let options: BTreeMap<&str, &RequirementsOptions> = graph
-        .0
-        .iter()
-        .map(|(path, options)| (path.as_str(), options))
+    let included: BTreeSet<&str> = graph
+        .options
+        .values()
+        .flat_map(|o| &o.includes)
+        .map(String::as_str)
         .collect();
-    let mut connected = vec![path.to_owned()];
-    let mut index = 0;
-    while let Some(current) = connected.get(index).cloned() {
-        index += 1;
-        let linked = options
-            .get(current.as_str())
-            .map(|o| o.includes.clone())
-            .unwrap_or_default()
-            .into_iter()
-            .chain(
-                options
-                    .iter()
-                    .filter(|(_, o)| o.includes.contains(&current))
-                    .map(|(p, _)| (*p).to_owned()),
-            );
-        for path in linked {
-            if !connected.contains(&path) {
-                connected.push(path);
-            }
-        }
+    let mut runs: Vec<Vec<&str>> = graph
+        .options
+        .keys()
+        .map(String::as_str)
+        .filter(|root| !included.contains(root))
+        .map(|root| graph.closure(root))
+        .filter(|run| run.contains(&path))
+        .collect();
+    if runs.is_empty() {
+        runs.push(graph.closure(path));
     }
+    let mut read: Vec<&str> = runs.concat();
+    read.sort_unstable();
+    read.dedup();
     let mut indexes = Indexes::default();
     let mut defaults: Vec<Named> = Vec::new();
     let mut find_links = Vec::new();
     let mut no_index = false;
-    for options in connected.iter().filter_map(|p| options.get(p.as_str())) {
+    for file in &read {
+        let Some(options) = graph.options.get(*file) else {
+            indexes.extras.push(Named::Unusable(format!("-r {file}")));
+            continue;
+        };
         for named in &options.indexes {
             if !defaults.contains(named) {
                 defaults.push(named.clone());
             }
         }
         indexes.extras.extend(options.extras.iter().cloned());
-        find_links.extend(options.find_links.iter().cloned());
+        indexes.extras.extend(
+            options
+                .unresolved
+                .iter()
+                .map(|value| Named::Unusable(format!("-r {value}"))),
+        );
+        find_links.extend(options.find_links.iter().map(|link| crate::redacted(link)));
         no_index |= options.no_index;
     }
     if no_index {
         let mut only: Vec<String> = vec!["--no-index".into()];
-        only.extend(
-            find_links
-                .iter()
-                .map(|link| format!("--find-links {}", crate::redacted(link))),
-        );
+        only.extend(find_links.iter().map(|link| format!("--find-links {link}")));
         indexes.default = Some(Named::Unusable(only.join(" ")));
         indexes.extras.clear();
         return indexes;
@@ -299,7 +337,7 @@ pub(crate) fn requirements(path: &str, graph: &RequirementsGraph) -> Indexes {
     indexes.extras.extend(
         find_links
             .into_iter()
-            .map(|link| Named::Unusable(format!("--find-links {}", crate::redacted(&link)))),
+            .map(|link| Named::Unusable(format!("--find-links {link}"))),
     );
     indexes
 }

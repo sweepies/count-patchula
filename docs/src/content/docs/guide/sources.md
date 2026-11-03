@@ -202,29 +202,40 @@ dependency's `registry`:
   their lockfile records, else the only index the project names:
   - pip requirements files: `--index-url` (or `-i`) replaces PyPI;
     `--extra-index-url` adds an index, and `--find-links` a source that is
-    not an index. As in one pip run, the options of files that include each
-    other with `-r` or `-c` apply to all of them. With `--no-index`, nothing
-    comes from an index, so every package's lookup fails. Requirements files
-    read only their own options and those of the files they include, not
+    not an index. A file takes the options of every pip run that reads it:
+    each requirements file that no other includes, with the files it
+    includes through `-r` or `-c`. A sibling that includes nothing in common
+    does not share its options. An include the Count cannot read, such as a
+    URL or a path outside the repository, could name any index, so it makes
+    every package in the run ambiguous. With `--no-index`, nothing comes from
+    an index, so every package's lookup fails. Requirements files never read
     `uv.toml`.
   - uv: `[[tool.uv.index]]` (a `default` one replaces PyPI, an `explicit` one
-    serves only packages pinned to it), `index-url` and `extra-index-url`,
+    serves only packages pinned to it, and a `flat` one is a find-links
+    source), `index-url`, `extra-index-url`, `find-links` and `no-index`,
     from the nearest `uv.toml`, or `pyproject.toml` with `[tool.uv]`, at or
-    above the project. Pins in `[tool.uv.sources]` come from the project and
-    its workspace root. A marker-split pin to several indexes is ambiguous.
+    above the project. A workspace member takes them from its workspace root
+    instead. Pins in `[tool.uv.sources]` come from the project and its
+    workspace root, the root that lists it in `members` and not in `exclude`.
+    A marker-split pin to several indexes is ambiguous.
   - Poetry: `[[tool.poetry.source]]` (`primary` replaces PyPI, and more than
     one is ambiguous; `supplemental` adds an index; `explicit` serves only
     pinned packages; a source named PyPI without a URL is PyPI) and a
     dependency's `source`, matched without regard to case.
+  - PDM: `[[tool.pdm.source]]`; one named `pypi` replaces PyPI, the rest add
+    an index, and a `find_links` source is not an index. `pdm.lock` is not
+    read.
   - `uv.lock` and `poetry.lock` record each package's index. Only the
     project's own lockfile counts, or its uv workspace root's. A package whose
     entries disagree is ambiguous.
 
   A package from git, a path, a URL or a workspace member, by pin or by
   lockfile, is not looked up at all: its name on PyPI may be someone else's.
-  It is reported as skipped instead. PDM's `[[tool.pdm.source]]` is not read
-  yet.
-  A pin to an index the project does not define fails its lookup.
+  It is reported as skipped instead.
+
+  A pin to an index the project does not define fails its lookup, and so
+  does every package below a `pyproject.toml` or `uv.toml` that does not
+  parse, since it could name any index.
 
   A package that is pinned nowhere and unlocked, in a project that names an
   index besides PyPI, could come from either. pip would take the highest
@@ -241,9 +252,9 @@ dependency's `registry`:
 
 `.npmrc` and `.yarnrc.yml` are read whenever npm, Bun or an npm extractor is
 enabled; every `pyproject.toml`, `uv.toml`, `uv.lock` and `poetry.lock`
-whenever pyproject is; and every `.txt` and `.in` file outside `exclude`
-whenever requirements is, since `-r` can include any of them. `files` does
-not limit these. Bun's `bunfig.toml` and Yarn 1's
+whenever pyproject is; and any file a requirements file includes with `-r`
+or `-c`, whatever its name. `files` and `exclude` do not limit these. Bun's
+`bunfig.toml` and Yarn 1's
 `.yarnrc` are not read yet: a registry set only there is not used.
 
 npm's, Yarn's and PyPI's public registries (`registry.npmjs.org`,
