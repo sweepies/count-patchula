@@ -217,10 +217,13 @@ dependency's `registry`:
   Packagist's being `https://packagist.org/downloads/`; a package with
   another registry's mark fails its lookup, since private Composer
   repositories are not read yet. Packages from a `path`, VCS, inline
-  `package` or artifact repository carry no mark and are listed as skipped.
-  A package the lock does not record comes from Packagist only when
-  `composer.json` configures no other repository and leaves Packagist on;
-  otherwise its lookup fails: commit `composer.lock`. A `composer.json` with
+  `package` or artifact repository are listed as skipped. A package the
+  lock does not record comes from Packagist only when `composer.json`
+  configures no other repository, leaves Packagist on without filters such
+  as `exclude`, and uses no merge plugin, and the lock holds no Composer
+  plugin, since plugins can add repositories; otherwise its lookup fails:
+  commit `composer.lock`. With `config.lock` set to false, Composer and the
+  Count ignore the lock. A `composer.json` with
   comments, which Composer does not read, or a lock the Count cannot read,
   fails every lookup.
 - Python packages come from what the project's lockfile records. The

@@ -11,6 +11,7 @@
 use crate::origins::{Named, Origin, Origins, Public};
 use crate::*;
 use jsonc_parser::common::Ranged;
+use std::collections::BTreeSet;
 
 fn platform(name: &str) -> bool {
     !name.contains('/')
@@ -43,7 +44,7 @@ pub(super) fn extract(
     files: &Files,
     skipped: &mut Vec<Skipped>,
 ) -> Result<Vec<Dependency>, String> {
-    if !path.ends_with("composer.json") {
+    if path.rsplit('/').next() != Some("composer.json") {
         return Ok(Vec::new());
     }
     let root = jsonc_parser::parse_to_ast(text, &Default::default(), &Default::default())
@@ -55,16 +56,29 @@ pub(super) fn extract(
         "{}composer.lock",
         path.strip_suffix("composer.json").unwrap_or("")
     );
-    let lock_text = files.get(&lock_path);
-    let lock = locked(lock_text);
     let mut origins = Origins::default();
-    match configured(path, text) {
-        Ok(configured) => origins.configured = configured,
+    let mut lock_text = files.get(&lock_path);
+    match manifest(path, text) {
+        Ok(manifest) => {
+            origins.configured = manifest.configured;
+            origins.outside = manifest.inline;
+            if manifest.unlocked {
+                lock_text = None;
+            }
+        }
         Err(unread) => origins.uncertain.push(unread),
     }
-    match lock_text.map(|l| lock_origins(l)) {
+    let lock_versions = locked(lock_text);
+    match lock_text.map(|l| lock(l)) {
         None => {}
-        Some(Some(recorded)) => origins.locks.push(recorded),
+        Some(Some(Lock { recorded, plugins })) => {
+            origins.locks.push(recorded);
+            if plugins {
+                origins.configured.push(Named::Unusable(format!(
+                    "Composer plugins in {lock_path}, which can add repositories"
+                )));
+            }
+        }
         Some(None) => origins.uncertain.push(Named::Unusable(format!(
             "{lock_path}, which the Count cannot read"
         ))),
@@ -104,7 +118,7 @@ pub(super) fn extract(
                 package: name.to_ascii_lowercase(),
                 kind,
                 current: value.value.to_string(),
-                resolved: lock.get(&name.to_ascii_lowercase()).cloned(),
+                resolved: lock_versions.get(&name.to_ascii_lowercase()).cloned(),
                 digest: None,
                 source: Source::Packagist,
                 scheme: Scheme::Composer,
@@ -136,18 +150,40 @@ const PACKAGIST: Public = Public {
     },
 };
 
-/// Why a package from a path, VCS or inline repository is skipped.
-const NOT_FROM_PACKAGIST: &str = "comes from a path, VCS or other repository that composer.lock does not record as a Composer registry, so it is not looked up on Packagist";
+/// Why a package not from a Composer registry is skipped.
+const NOT_FROM_PACKAGIST: &str = "comes from a repository composer.lock does not record as a Composer registry (a path, VCS, inline package or artifact repository, or a registry without download notifications), so it is not looked up on Packagist";
 
-/// The repositories `composer.json` configures besides Packagist, for
-/// `Origins::configured`: every entry but one that only turns Packagist on.
-/// Composer reads strict JSON, so a file only a JSON-with-comments parser
-/// takes is unreadable.
-fn configured(path: &str, text: &str) -> Result<Vec<Named>, Named> {
+/// What `composer.json` says about repositories.
+#[derive(Default)]
+struct Manifest {
+    /// The repositories it configures besides Packagist, for
+    /// `Origins::configured`.
+    configured: Vec<Named>,
+    /// Packages its inline `package` repositories define.
+    inline: BTreeSet<String>,
+    /// `config.lock` is false, so Composer ignores `composer.lock`.
+    unlocked: bool,
+}
+
+/// Read `composer.json` as Composer does, as strict JSON: a file only a
+/// JSON-with-comments parser takes is unreadable. Every repository entry
+/// counts as configured but one that only turns Packagist on or names
+/// Packagist plainly, and so does the merge plugin, which adds repositories
+/// from other files.
+fn manifest(path: &str, text: &str) -> Result<Manifest, Named> {
     let unread = || Named::Unusable(format!("{path}, which the Count cannot read as JSON"));
     let json = serde_json::from_str::<serde_json::Value>(text).map_err(|_| unread())?;
+    let mut out = Manifest {
+        unlocked: json.pointer("/config/lock") == Some(&serde_json::Value::Bool(false)),
+        ..Manifest::default()
+    };
+    if json.pointer("/extra/merge-plugin").is_some() {
+        out.configured.push(Named::Unusable(format!(
+            "the merge plugin's files in {path}"
+        )));
+    }
     let entries: Vec<(Option<&str>, &serde_json::Value)> = match json.get("repositories") {
-        None => return Ok(Vec::new()),
+        None => return Ok(out),
         Some(serde_json::Value::Array(entries)) => entries.iter().map(|e| (None, e)).collect(),
         Some(serde_json::Value::Object(entries)) => entries
             .iter()
@@ -156,7 +192,6 @@ fn configured(path: &str, text: &str) -> Result<Vec<Named>, Named> {
         Some(_) => return Err(unread()),
     };
     let packagist = |key: &str| matches!(key, "packagist.org" | "packagist");
-    let mut out = Vec::new();
     for (key, entry) in entries {
         // `"packagist.org": false`, as a keyed entry or an object of its own.
         let switch = match (key, entry) {
@@ -169,39 +204,81 @@ fn configured(path: &str, text: &str) -> Result<Vec<Named>, Named> {
             _ => None,
         };
         match switch {
-            Some(true) => {}
-            Some(false) => out.push(Named::Unusable(format!("Packagist turned off in {path}"))),
-            None => out.push(match entry.get("url").and_then(|url| url.as_str()) {
-                Some(url) => Named::parse(url, &PACKAGIST),
-                None => Named::Unusable(format!("a repository in {path}")),
-            }),
+            Some(true) => continue,
+            Some(false) => {
+                out.configured
+                    .push(Named::Unusable(format!("Packagist turned off in {path}")));
+                continue;
+            }
+            None => {}
+        }
+        let map = entry.as_object();
+        // Packagist named plainly, without filters such as `only` or
+        // `exclude` that change which packages it serves.
+        let plain =
+            map.is_some_and(|map| map.keys().all(|key| matches!(key.as_str(), "type" | "url")));
+        let named = match entry.get("url").and_then(|url| url.as_str()) {
+            Some(url) => Named::parse(url, &PACKAGIST),
+            None => Named::Unusable(format!("a repository in {path}")),
+        };
+        if named == Named::Public && plain {
+            continue;
+        }
+        out.configured.push(match named {
+            Named::Public => Named::Unusable(format!("Packagist with filters in {path}")),
+            named => named,
+        });
+        if entry.get("type").and_then(|t| t.as_str()) == Some("package") {
+            let packages = match entry.get("package") {
+                Some(serde_json::Value::Array(packages)) => packages.iter().collect(),
+                Some(package) => vec![package],
+                None => Vec::new(),
+            };
+            for package in packages {
+                match package.get("name").and_then(|n| n.as_str()) {
+                    Some(name) => {
+                        out.inline.insert(name.to_ascii_lowercase());
+                    }
+                    None => return Err(unread()),
+                }
+            }
         }
     }
-    out.retain(|named| *named != Named::Public);
     Ok(out)
 }
 
-/// What `composer.lock` records of each package. Composer marks a package
-/// from a Composer registry with that registry's `notification-url`;
-/// Packagist's is `https://packagist.org/downloads/`. A path package, or one
-/// with no `notification-url` (from a VCS, inline or artifact repository),
-/// does not come from a registry. None when the file is not a lock the Count
-/// can read.
-fn lock_origins(lock: &str) -> Option<BTreeMap<String, Origin>> {
+/// What `composer.lock` records.
+struct Lock {
+    /// Where each package comes from.
+    recorded: BTreeMap<String, Origin>,
+    /// Whether it holds a Composer plugin, which can add repositories.
+    plugins: bool,
+}
+
+/// Read `composer.lock`. Composer marks a package from a Composer registry
+/// with that registry's `notification-url`; Packagist's is
+/// `https://packagist.org/downloads/`. A path package, one downloaded from a
+/// local file (an artifact), or one with no `notification-url` (from a VCS
+/// or inline repository) does not come from a registry. None when the file
+/// is not a lock the Count can read.
+fn lock(lock: &str) -> Option<Lock> {
     let lock = serde_json::from_str::<serde_json::Value>(lock).ok()?;
+    lock.as_object()?;
     let mut origins = BTreeMap::<String, Vec<Origin>>::new();
+    let mut plugins = false;
     for key in ["packages", "packages-dev"] {
+        // `composer update --no-dev` writes a null `packages-dev`.
         let packages = match lock.get(key) {
-            None => continue,
+            None | Some(serde_json::Value::Null) => continue,
             Some(packages) => packages.as_array()?,
         };
         for package in packages {
             let name = package.get("name")?.as_str()?.to_ascii_lowercase();
-            let kind = |field: &str| package.get(field).and_then(|f| f.get("type"));
-            let origin = if [kind("dist"), kind("source")]
-                .iter()
-                .any(|t| t.and_then(|t| t.as_str()) == Some("path"))
-            {
+            let text = |pointer: &str| package.pointer(pointer).and_then(|v| v.as_str());
+            plugins |= text("/type") == Some("composer-plugin");
+            let local = [text("/dist/type"), text("/source/type")].contains(&Some("path"))
+                || text("/dist/url").is_some_and(|url| crate::web_host(url).is_none());
+            let origin = if local {
                 Origin::Other
             } else {
                 match package.get("notification-url") {
@@ -218,10 +295,9 @@ fn lock_origins(lock: &str) -> Option<BTreeMap<String, Origin>> {
             origins.entry(name).or_default().push(origin);
         }
     }
-    Some(
-        origins
-            .into_iter()
-            .filter_map(|(name, entries)| Some((name, Origin::of(entries)?)))
-            .collect(),
-    )
+    let recorded = origins
+        .into_iter()
+        .filter_map(|(name, entries)| Some((name, Origin::of(entries)?)))
+        .collect();
+    Some(Lock { recorded, plugins })
 }

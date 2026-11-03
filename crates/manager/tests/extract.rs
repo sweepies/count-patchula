@@ -3050,6 +3050,65 @@ fn composer_packages_come_from_their_lockfile_or_packagist_alone() {
         ),
         ("broken/composer.json".into(), manifest("")),
         ("broken/composer.lock".into(), "{\"packages\": {}}".into()),
+        // `--no-dev` writes a null packages-dev.
+        ("nodev/composer.json".into(), manifest("")),
+        (
+            "nodev/composer.lock".into(),
+            format!(
+                "{{\"packages\": [{}], \"packages-dev\": null}}",
+                package("psr/log", packagist)
+            ),
+        ),
+        // An inline package, even one whose data claims Packagist, and an
+        // artifact are not looked up.
+        (
+            "inline/composer.json".into(),
+            manifest(
+                ",\n  \"repositories\": [{\"type\": \"package\", \"package\": {\"name\": \"Acme/A\", \"version\": \"1.0.0\"}}]",
+            ),
+        ),
+        (
+            "inline/composer.lock".into(),
+            format!(
+                "{{\"packages\": [{}, {}]}}",
+                package("acme/a", packagist),
+                package(
+                    "acme/b",
+                    ", \"dist\": {\"type\": \"zip\", \"url\": \"/srv/artifacts/b.zip\"}, \"notification-url\": \"https://packagist.org/downloads/\""
+                ),
+            ),
+        ),
+        // Packagist with a filter, a Composer plugin and the merge plugin
+        // leave unrecorded packages to the lock.
+        (
+            "filtered/composer.json".into(),
+            manifest(
+                ",\n  \"repositories\": [{\"type\": \"composer\", \"url\": \"https://repo.packagist.org\", \"exclude\": [\"acme/*\"]}]",
+            ),
+        ),
+        ("plugin/composer.json".into(), manifest("")),
+        (
+            "plugin/composer.lock".into(),
+            format!(
+                "{{\"packages\": [{}]}}",
+                package(
+                    "acme/plugin",
+                    ", \"type\": \"composer-plugin\", \"notification-url\": \"https://packagist.org/downloads/\""
+                )
+            ),
+        ),
+        (
+            "merge/composer.json".into(),
+            manifest(
+                ",\n  \"extra\": {\"merge-plugin\": {\"include\": [\"modules/*/composer.json\"]}}",
+            ),
+        ),
+        // Composer ignores a lock its config turns off.
+        (
+            "lockoff/composer.json".into(),
+            manifest(",\n  \"config\": {\"lock\": false}"),
+        ),
+        ("lockoff/composer.lock".into(), "not json".into()),
     ]);
     let mut config = config();
     config.managers = vec![Manager::Composer];
@@ -3086,6 +3145,18 @@ fn composer_packages_come_from_their_lockfile_or_packagist_alone() {
     }
     let secret = registry("private/composer.json", "acme/b").unwrap();
     assert!(!secret.contains("s3cr3t"), "{secret}");
+    assert_eq!(registry("nodev/composer.json", "psr/log"), None);
+    for name in ["acme/a", "acme/b"] {
+        assert!(found("inline/composer.json", name).is_none(), "{name}");
+    }
+    for file in [
+        "filtered/composer.json",
+        "plugin/composer.json",
+        "merge/composer.json",
+    ] {
+        assert!(ambiguous(registry(file, "acme/a")), "{file}");
+    }
+    assert_eq!(registry("lockoff/composer.json", "acme/a"), None);
     for file in ["comments/composer.json", "broken/composer.json"] {
         for name in ["psr/log", "acme/a"] {
             assert!(
