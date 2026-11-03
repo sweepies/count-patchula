@@ -534,8 +534,7 @@ pub(super) fn extract(
         };
         let member = ancestors[0]
             .strip_prefix(*dir)
-            .map(|rest| rest.trim_start_matches('/'))
-            .unwrap_or(ancestors[0]);
+            .map_or(ancestors[0], |rest| rest.trim_start_matches('/'));
         let matches = |globs: Vec<String>| {
             Patterns::compile(&globs)
                 .is_ok_and(|patterns| !globs.is_empty() && patterns.matches(member))
