@@ -10,7 +10,7 @@ fn dependency(source: Source, package: &str, current: &str, resolved: Option<&st
         Source::Npm => (Manager::Npm, Scheme::Semver),
         Source::Crates => (Manager::Cargo, Scheme::Semver),
         Source::Go => (Manager::Go, Scheme::Go),
-        Source::Pypi => (Manager::Requirements, Scheme::Pep440),
+        Source::Pypi => (Manager::Pyproject, Scheme::Pep440),
         _ => (Manager::GithubActions, Scheme::Loose),
     };
     Dependency {

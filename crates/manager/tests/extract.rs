@@ -2460,21 +2460,44 @@ fn npm_registry_files_are_read_whatever_files_and_exclude_select() {
     assert_eq!(ui.registry.as_deref(), Some("https://npm.acme.dev"));
 }
 
+/// The registry of `name` in `file`, failing the test when it is missing.
+fn python_registry(
+    extraction: &patchula_manager::Extraction,
+    file: &str,
+    name: &str,
+) -> Option<String> {
+    extraction
+        .dependencies
+        .iter()
+        .find(|d| d.file == file && d.name == name)
+        .unwrap_or_else(|| panic!("{file} {name}"))
+        .registry
+        .clone()
+}
+
+fn python_scan(files: &Files) -> patchula_manager::Extraction {
+    let mut config = config();
+    config.managers = vec![Manager::Pyproject];
+    Scanner::new(&config).unwrap().extract(files).unwrap()
+}
+
+fn ambiguous(found: Option<String>) -> bool {
+    found.is_some_and(|r| r.starts_with("ambiguous: "))
+}
+
+const ACME: &str = "https://pypi.acme.dev/simple";
+
 #[test]
 fn python_packages_come_from_their_pinned_locked_or_only_index_never_a_guess() {
     let files = Files::from([
-        // pip: an index that replaces PyPI, and one alongside it.
+        // uv: PyPI with an index searched alongside it, and PyPI listed again.
         (
-            "replaced/requirements.txt".into(),
-            "--index-url https://pypi.acme.dev/simple/\nrequests==2.31.0\n".into(),
+            "extra/pyproject.toml".into(),
+            "[project]\nname = \"x\"\ndependencies = [\"acme-tools>=1\"]\n[tool.uv]\nindex-url = \"https://pypi.org/simple\"\nextra-index-url = [\"https://pypi.acme.dev/simple\"]\n".into(),
         ),
         (
-            "extra/requirements.txt".into(),
-            "-i https://pypi.org/simple\n--extra-index-url=https://pypi.acme.dev/simple\nacme-tools==1.0.0\n".into(),
-        ),
-        (
-            "public/requirements.txt".into(),
-            "--extra-index-url https://pypi.org/simple\nflask==3.0.0\n".into(),
+            "public/pyproject.toml".into(),
+            "[project]\nname = \"x\"\ndependencies = [\"flask>=3\"]\n[tool.uv]\nextra-index-url = [\"https://pypi.org/simple\"]\n".into(),
         ),
         // uv: a pinned explicit index, and one searched alongside PyPI.
         (
@@ -2496,13 +2519,7 @@ acme-core = { index = "acme" }
         ),
         (
             "uv/uv.lock".into(),
-            r#"version = 1
-[[package]]
-name = "httpx"
-version = "0.27.0"
-source = { registry = "https://pypi.org/simple" }
-"#
-            .into(),
+            "version = 1\n[[package]]\nname = \"httpx\"\nversion = \"0.27.0\"\nsource = { registry = \"https://pypi.org/simple\" }\n".into(),
         ),
         // Poetry: a supplemental source and a dependency pinned to another.
         (
@@ -2525,7 +2542,7 @@ priority = "supplemental"
         ),
         (
             "poetry/poetry.lock".into(),
-            "[[package]]\nname = \"django\"\nversion = \"5.0.1\"\nfiles = []\n".into(),
+            "[metadata]\nlock-version = \"2.1\"\n[[package]]\nname = \"django\"\nversion = \"5.0.1\"\nfiles = []\n".into(),
         ),
         // A uv.toml replaces [tool.uv].
         (
@@ -2536,46 +2553,42 @@ priority = "supplemental"
             "configured/uv.toml".into(),
             "index-url = \"https://pypi.acme.dev/simple\"\n".into(),
         ),
+        // A lockfile that records an index the project no longer searches
+        // is stale.
+        (
+            "stale/pyproject.toml".into(),
+            "[project]\nname = \"x\"\ndependencies = [\"acme-lib>=1\"]\n[tool.uv]\nindex-url = \"https://pypi.acme.dev/simple\"\n".into(),
+        ),
+        (
+            "stale/uv.lock".into(),
+            "version = 1\n[[package]]\nname = \"acme-lib\"\nversion = \"1.0.0\"\nsource = { registry = \"https://pypi.org/simple\" }\n".into(),
+        ),
     ]);
     let mut config = config();
-    config.managers = vec![Manager::Requirements, Manager::Pyproject];
+    config.managers = vec![Manager::Pyproject];
     let scanner = Scanner::new(&config).unwrap();
     assert!(scanner.needs("configured/uv.toml"));
     let extraction = scanner.extract(&files).unwrap();
-    let registry = |file: &str, name: &str| {
-        extraction
-            .dependencies
-            .iter()
-            .find(|d| d.file == file && d.name == name)
-            .unwrap_or_else(|| panic!("{file} {name}"))
-            .registry
-            .clone()
-    };
-    let acme = Some("https://pypi.acme.dev/simple".to_owned());
-    assert_eq!(registry("replaced/requirements.txt", "requests"), acme);
-    let ambiguous = registry("extra/requirements.txt", "acme-tools").unwrap();
-    assert!(ambiguous.starts_with("ambiguous: "), "{ambiguous}");
-    assert!(
-        ambiguous.contains("https://pypi.acme.dev/simple"),
-        "{ambiguous}"
-    );
+    let registry = |file: &str, name: &str| python_registry(&extraction, file, name);
+    let acme = Some(ACME.to_owned());
+    let tools = registry("extra/pyproject.toml", "acme-tools");
+    assert!(ambiguous(tools.clone()) && tools.is_some_and(|t| t.contains(ACME)));
     // PyPI listed again is not another index.
-    assert_eq!(registry("public/requirements.txt", "flask"), None);
+    assert_eq!(registry("public/pyproject.toml", "flask"), None);
     assert_eq!(registry("uv/pyproject.toml", "acme-core"), acme);
     // The lockfile settles one; the other stays ambiguous.
     assert_eq!(registry("uv/pyproject.toml", "httpx"), None);
-    assert!(registry("uv/pyproject.toml", "attrs").is_some_and(|r| r.starts_with("ambiguous: ")));
+    assert!(ambiguous(registry("uv/pyproject.toml", "attrs")));
     assert_eq!(registry("poetry/pyproject.toml", "acme-auth"), acme);
     // Poetry records no source for PyPI.
     assert_eq!(registry("poetry/pyproject.toml", "django"), None);
-    assert!(
-        registry("poetry/pyproject.toml", "rich").is_some_and(|r| r.starts_with("ambiguous: "))
-    );
+    assert!(ambiguous(registry("poetry/pyproject.toml", "rich")));
     assert_eq!(registry("configured/pyproject.toml", "numpy"), acme);
+    assert!(ambiguous(registry("stale/pyproject.toml", "acme-lib")));
 }
 
 #[test]
-fn python_pins_lockfiles_includes_and_workspaces_follow_the_tools() {
+fn python_pins_lockfiles_and_workspaces_follow_the_tools() {
     let files = Files::from([
         // A uv.toml changes index settings but never the project's pins.
         (
@@ -2638,27 +2651,8 @@ priority = "primary"
             "other/sub/pyproject.toml".into(),
             "[project]\nname = \"sub\"\ndependencies = [\"acme-lib>=1\"]\n[tool.uv]\nindex-url = \"https://pypi.acme.dev/simple\"\n".into(),
         ),
-        // pip reads index options across included files.
-        (
-            "reqs/requirements.txt".into(),
-            "--index-url https://pypi.acme.dev/simple\nrequests==2.31.0\n".into(),
-        ),
-        (
-            "reqs/requirements-dev.txt".into(),
-            "-r requirements.txt\nacme-testkit==1.2.0\n".into(),
-        ),
-        (
-            "links/requirements.txt".into(),
-            "--find-links https://wheels.acme.dev/\nacme-wheel==1.0.0\n".into(),
-        ),
-        (
-            "offline/requirements.txt".into(),
-            "--no-index\n--find-links ./wheels\nacme-offline==1.0.0\n".into(),
-        ),
     ]);
-    let mut config = config();
-    config.managers = vec![Manager::Requirements, Manager::Pyproject];
-    let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+    let extraction = python_scan(&files);
     let dep = |file: &str, name: &str| {
         extraction
             .dependencies
@@ -2666,71 +2660,65 @@ priority = "primary"
             .find(|d| d.file == file && d.name == name)
             .map(|d| d.registry.clone())
     };
-    let acme = Some(Some("https://pypi.acme.dev/simple".to_owned()));
+    let acme = Some(Some(ACME.to_owned()));
     assert_eq!(dep("pinned/pyproject.toml", "acme-core"), acme);
     // Not from an index: left alone rather than looked up on PyPI.
     assert_eq!(dep("pinned/pyproject.toml", "acme-internal"), None);
-    let ambiguous = |found: Option<Option<String>>| {
-        found
-            .flatten()
-            .is_some_and(|r| r.starts_with("ambiguous: "))
-    };
-    assert!(ambiguous(dep("pinned/pyproject.toml", "acme-split")));
+    assert!(ambiguous(
+        dep("pinned/pyproject.toml", "acme-split").flatten()
+    ));
     assert_eq!(
         dep("pinned/pyproject.toml", "acme-typo"),
         Some(Some("index acmee".to_owned()))
     );
     assert_eq!(dep("poetry/pyproject.toml", "acme-auth"), acme);
     // Two primary sources, PyPI among them, could each serve it.
-    assert!(ambiguous(dep("poetry/pyproject.toml", "django")));
+    assert!(ambiguous(dep("poetry/pyproject.toml", "django").flatten()));
     assert_eq!(dep("ws/packages/lib/pyproject.toml", "requests"), acme);
     assert_eq!(dep("other/sub/pyproject.toml", "acme-lib"), acme);
-    assert_eq!(dep("reqs/requirements-dev.txt", "acme-testkit"), acme);
-    assert!(ambiguous(dep("links/requirements.txt", "acme-wheel")));
-    assert_eq!(
-        dep("offline/requirements.txt", "acme-offline"),
-        Some(Some("--no-index --find-links ./wheels".to_owned()))
-    );
 }
 
 #[test]
 fn python_index_files_are_read_and_secrets_never_recorded() {
     let mut config = config();
-    config.managers = vec![Manager::Requirements, Manager::Pyproject];
+    config.managers = vec![Manager::Pyproject];
     // Only some manifests are selected; their index files are read anyway.
     config.files = vec![patchula_config::FileSet {
         manager: Manager::Pyproject,
         paths: vec!["services/**/pyproject.toml".into()],
     }];
     let scanner = Scanner::new(&config).unwrap();
-    for path in ["pyproject.toml", "uv.lock", "poetry.lock"] {
+    for path in ["pyproject.toml", "uv.toml", "uv.lock", "poetry.lock"] {
         assert!(scanner.needs(path), "{path}");
     }
-    // Text files are fetched only when a requirements file includes them.
-    assert!(!scanner.needs("base.txt"));
-    let partial = Files::from([(
-        "requirements.txt".into(),
-        "-r base.txt\n-c deps/prod.in\n".into(),
-    )]);
-    assert_eq!(
-        scanner.included(&partial),
-        ["base.txt".to_owned(), "deps/prod.in".to_owned()].into()
-    );
+    let project = |url: &str| {
+        format!(
+            "[project]\nname = \"p\"\ndependencies = [\"acme-a>=1\"]\n[tool.uv]\nindex-url = \"{url}\"\n"
+        )
+    };
     let files = Files::from([
-        // pip's joined short options and line continuations.
-        ("base.txt".into(), "-ihttps://ci:s3cret@pypi.acme.dev/simple?token=x\n".into()),
         (
-            "requirements.txt".into(),
-            "-rbase.txt\nacme-a==1.0.0 \\\n    --hash=sha256:aa\n".into(),
+            "services/token/pyproject.toml".into(),
+            project("https://ci:s3cret@pypi.acme.dev/simple?token=x"), // betterleaks:allow
         ),
-        // A Dockerfile is not a requirements file, whatever its lines say.
+        // A password with a slash, a token in a query with no path, and a
+        // password with `?` in it.
         (
-            "docker/requirements.txt".into(),
-            "flask==3.0.0\n".into(),
+            "services/slash/pyproject.toml".into(),
+            project("https://ci:pa/ss@pypi.acme.dev/simple"), // betterleaks:allow
         ),
         (
-            "docker/Dockerfile".into(),
-            "RUN pip install \\\n -r requirements.txt \\\n --extra-index-url https://pypi.acme.dev/simple\n".into(),
+            "services/query/pyproject.toml".into(),
+            project("https://pypi.acme.dev?token=s3cret"),
+        ),
+        (
+            "services/question/pyproject.toml".into(),
+            project("https://ci:pa?ss@pypi.acme.dev/simple"), // betterleaks:allow
+        ),
+        // A scheme-less find-links value with a token.
+        (
+            "services/links/pyproject.toml".into(),
+            "[project]\nname = \"p\"\ndependencies = [\"acme-a>=1\"]\n[tool.uv]\nfind-links = [\"wheels.acme.dev/x?token=s3cret\"]\n".into(),
         ),
         (
             "services/api/pyproject.toml".into(),
@@ -2746,24 +2734,19 @@ url = "https://pypi.acme.dev/simple/"
         ),
     ]);
     let extraction = scanner.extract(&files).unwrap();
-    let registry = |file: &str, name: &str| {
-        extraction
-            .dependencies
-            .iter()
-            .find(|d| d.file == file && d.name == name)
-            .unwrap_or_else(|| panic!("{file} {name}"))
-            .registry
-            .clone()
-    };
-    let recorded = registry("requirements.txt", "acme-a").unwrap();
-    assert!(
-        !recorded.contains("s3cret") && !recorded.contains("token"),
-        "{recorded}"
-    );
+    let recorded = python_registry(&extraction, "services/token/pyproject.toml", "acme-a").unwrap();
     assert!(recorded.contains("pypi.acme.dev/simple"), "{recorded}");
-    assert_eq!(registry("docker/requirements.txt", "flask"), None);
+    for dep in &extraction.dependencies {
+        let recorded = dep.registry.clone().unwrap_or_default();
+        for secret in ["s3cret", "token", "pa/ss", "pa?", "ci:"] {
+            assert!(!recorded.contains(secret), "{recorded}");
+        }
+    }
     // Poetry knows PyPI by name without a source for it.
-    assert_eq!(registry("services/api/pyproject.toml", "requests"), None);
+    assert_eq!(
+        python_registry(&extraction, "services/api/pyproject.toml", "requests"),
+        None
+    );
     // Poetry skips git dependencies itself.
     assert!(extraction.dependencies.iter().all(|d| d.name != "internal"));
 }
@@ -2774,9 +2757,7 @@ fn python_packages_from_outside_an_index_are_skipped_with_a_reason() {
         "pyproject.toml".into(),
         "[project]\nname = \"app\"\ndependencies = [\"acme-internal>=1\"]\n[tool.uv.sources]\nacme-internal = { git = \"https://github.com/acme/internal\" }\n".into(),
     )]);
-    let mut config = config();
-    config.managers = vec![Manager::Pyproject];
-    let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+    let extraction = python_scan(&files);
     assert!(
         extraction
             .dependencies
@@ -2796,27 +2777,12 @@ fn python_packages_from_outside_an_index_are_skipped_with_a_reason() {
 }
 
 #[test]
-fn python_index_settings_follow_runs_workspaces_and_fail_closed() {
+fn python_index_settings_follow_workspaces_and_fail_closed() {
     let files = Files::from([
-        // Each requirements file a run starts from brings its own options;
-        // a sibling run's index is not this one's.
-        (
-            "app/requirements.txt".into(),
-            "requests==2.31.0\n".into(),
-        ),
-        (
-            "app/requirements-docs.txt".into(),
-            "--index-url https://docs.acme.dev/simple\nsphinx==7.0.0\n".into(),
-        ),
-        // An include the Count cannot read could name any index.
-        (
-            "remote/requirements.txt".into(),
-            "-r https://acme.dev/base.txt\nacme-remote==1.0.0\n".into(),
-        ),
         // A member's own [tool.uv] does not replace the root's settings.
         (
             "ws/pyproject.toml".into(),
-            "[tool.uv.workspace]\nmembers = [\"./packages/*/\"]\nexclude = [\"./packages/legacy\"]\n[tool.uv]\nindex-url = \"https://pypi.acme.dev/simple\"\n".into(),
+            "[tool.uv.workspace]\nmembers = [\"./packages/*/\"]\nexclude = [\"./packages/legacy\"]\n[tool.uv]\nindex-url = \"https://pypi.acme.dev/simple\"\nextra-index-url = [\"https://mirror.acme.dev/simple\"]\n".into(),
         ),
         (
             "ws/packages/lib/pyproject.toml".into(),
@@ -2850,91 +2816,31 @@ fn python_index_settings_follow_runs_workspaces_and_fail_closed() {
             "broken/app/pyproject.toml".into(),
             "[project]\nname = \"app\"\ndependencies = [\"requests>=2\"]\n".into(),
         ),
-        // PDM sources.
+        // PDM sources, plain and inline.
         (
             "pdm/pyproject.toml".into(),
             "[project]\nname = \"pdm\"\ndependencies = [\"requests>=2\"]\n[[tool.pdm.source]]\nname = \"pypi\"\nurl = \"https://pypi.acme.dev/simple\"\n".into(),
         ),
         (
-            "pdm-extra/pyproject.toml".into(),
-            "[project]\nname = \"pdm-extra\"\ndependencies = [\"requests>=2\"]\n[[tool.pdm.source]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\n".into(),
-        ),
-        // A password with a slash, and a token in a query with no path.
-        (
-            "secret/requirements.txt".into(),
-            "--index-url https://ci:pa/ss@pypi.acme.dev/simple\nacme-a==1.0.0\n".into(),
-        ),
-        (
-            "query/requirements.txt".into(),
-            "--index-url https://pypi.acme.dev?token=s3cret\nacme-b==1.0.0\n".into(),
-        ),
-        // An excluded run still sets the options of what it includes.
-        (
-            "ci/requirements-ci.txt".into(),
-            "--index-url https://pypi.acme.dev/simple\n-r requirements.txt\n".into(),
-        ),
-        ("ci/requirements.txt".into(), "corp-lib==1.0.0\n".into()),
-        // pip drops a byte order mark and the quotes around a path.
-        (
-            "bom/requirements.txt".into(),
-            "\u{feff}--index-url https://pypi.acme.dev/simple\nacme-c==1.0.0\n".into(),
-        ),
-        (
-            "quoted/requirements.txt".into(),
-            "-r \"base.txt\"\nacme-d==1.0.0\n".into(),
-        ),
-        (
-            "quoted/base.txt".into(),
-            "--index-url https://pypi.acme.dev/simple\n".into(),
-        ),
-        // A password with `?` in it.
-        (
-            "question/requirements.txt".into(),
-            "--index-url https://ci:pa?ss@pypi.acme.dev/simple\nacme-e==1.0.0\n".into(), // betterleaks:allow
+            "pdm-inline/pyproject.toml".into(),
+            "[project]\nname = \"pdm\"\ndependencies = [\"requests>=2\"]\n[tool.pdm]\nsource = [{ name = \"acme\", url = \"https://pypi.acme.dev/simple\" }]\n".into(),
         ),
     ]);
-    let mut config = config();
-    config.managers = vec![Manager::Requirements, Manager::Pyproject];
-    config.exclude = vec!["ci/requirements-ci.txt".into()];
-    let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
-    assert!(
-        extraction
-            .dependencies
-            .iter()
-            .all(|d| d.file != "ci/requirements-ci.txt")
-    );
-    let registry = |file: &str, name: &str| {
-        extraction
-            .dependencies
-            .iter()
-            .find(|d| d.file == file && d.name == name)
-            .unwrap_or_else(|| panic!("{file} {name}"))
-            .registry
-            .clone()
-    };
-    let acme = Some("https://pypi.acme.dev/simple".to_owned());
-    let ambiguous = |found: Option<String>| found.is_some_and(|r| r.starts_with("ambiguous: "));
-    assert_eq!(registry("app/requirements.txt", "requests"), None);
-    assert_eq!(
-        registry("app/requirements-docs.txt", "sphinx"),
-        Some("https://docs.acme.dev/simple".to_owned())
-    );
-    let remote = registry("remote/requirements.txt", "acme-remote");
-    assert!(
-        remote
-            .as_deref()
-            .is_some_and(|r| r.contains("-r https://acme.dev/base.txt")),
-        "{remote:?}"
-    );
+    let extraction = python_scan(&files);
+    let registry = |file: &str, name: &str| python_registry(&extraction, file, name);
     assert_eq!(
         registry("ws/packages/lib/pyproject.toml", "requests"),
         Some("https://mirror.acme.dev/simple".to_owned())
     );
-    assert_eq!(registry("ws/packages/lib/pyproject.toml", "acme-x"), acme);
-    assert_eq!(
-        registry("ws/packages/legacy/pyproject.toml", "requests"),
-        acme
-    );
+    // The root's settings, not the member's, and only members use its lock.
+    assert!(ambiguous(registry(
+        "ws/packages/lib/pyproject.toml",
+        "acme-x"
+    )));
+    assert!(ambiguous(registry(
+        "ws/packages/legacy/pyproject.toml",
+        "requests"
+    )));
     assert!(ambiguous(registry("links/pyproject.toml", "acme-wheel")));
     assert_eq!(
         registry("flat/pyproject.toml", "acme-flat"),
@@ -2949,26 +2855,17 @@ fn python_index_settings_follow_runs_workspaces_and_fail_closed() {
         ambiguous(broken.clone())
             && broken
                 .as_deref()
-                .is_some_and(|r| r.contains("unreadable broken/uv.toml")),
+                .is_some_and(|r| r.contains("broken/uv.toml the Count cannot read")),
         "{broken:?}"
     );
-    assert_eq!(registry("ci/requirements.txt", "corp-lib"), acme);
-    assert_eq!(registry("bom/requirements.txt", "acme-c"), acme);
-    assert_eq!(registry("quoted/requirements.txt", "acme-d"), acme);
-    assert_eq!(registry("pdm/pyproject.toml", "requests"), acme);
-    assert!(ambiguous(registry("pdm-extra/pyproject.toml", "requests")));
-    for (file, name) in [
-        ("secret/requirements.txt", "acme-a"),
-        ("query/requirements.txt", "acme-b"),
-        ("question/requirements.txt", "acme-e"),
-    ] {
-        let recorded = registry(file, name).unwrap();
+    // PDM cannot be checked against PDM itself, so its sources fail closed.
+    for file in ["pdm/pyproject.toml", "pdm-inline/pyproject.toml"] {
+        let recorded = registry(file, "requests");
         assert!(
-            !recorded.contains("pa/ss")
-                && !recorded.contains("pa?")
-                && !recorded.contains("ci:")
-                && !recorded.contains("s3cret"),
-            "{recorded}"
+            recorded
+                .as_deref()
+                .is_some_and(|r| r.contains("PDM sources")),
+            "{recorded:?}"
         );
     }
 }
@@ -2979,16 +2876,12 @@ fn python_settings_the_count_does_not_know_fail_closed() {
         |extra: &str| format!("[project]\nname = \"p\"\ndependencies = [\"acme-a>=1\"]\n{extra}");
     let files = Files::from([
         (
-            "pip/requirements.txt".into(),
-            "--some-new-option https://wheels.acme.dev\nacme-a==1.0.0\n".into(),
-        ),
-        (
-            "harmless/requirements.txt".into(),
-            "--prefer-binary\n-e .\nacme-a==1.0.0\n".into(),
-        ),
-        (
             "nosources/pyproject.toml".into(),
-            project("[tool.uv]\nno-sources = true\n"),
+            project("[[tool.uv.index]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\nexplicit = true\n[tool.uv]\nno-sources = true\n[tool.uv.sources]\nacme-a = { index = \"acme\" }\n"),
+        ),
+        (
+            "setting/pyproject.toml".into(),
+            project("[tool.uv]\nsome-new-setting = true\n"),
         ),
         (
             "indexkey/pyproject.toml".into(),
@@ -3003,6 +2896,10 @@ fn python_settings_the_count_does_not_know_fail_closed() {
             project("[[tool.uv.index]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\nexplicit = true\n[tool.uv.sources]\nacme-a = { index = \"acme\", some-new-key = true }\n"),
         ),
         (
+            "torch/pyproject.toml".into(),
+            project("[tool.uv]\ntorch-backend = \"auto\"\n"),
+        ),
+        (
             "poetry/pyproject.toml".into(),
             "[tool.poetry.dependencies]\nacme-a = \"^1\"\n[[tool.poetry.source]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\npriority = \"some-new-priority\"\n".into(),
         ),
@@ -3010,28 +2907,38 @@ fn python_settings_the_count_does_not_know_fail_closed() {
             "pdm/pyproject.toml".into(),
             project("[[tool.pdm.source]]\nname = \"pypi\"\nurl = \"https://pypi.acme.dev/simple\"\ninclude_packages = [\"acme-*\"]\n"),
         ),
+        (
+            "rye/pyproject.toml".into(),
+            project("[[tool.rye.sources]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\n"),
+        ),
+        (
+            "hatch/pyproject.toml".into(),
+            project("[tool.hatch.envs.default.env-vars]\nPIP_INDEX_URL = \"https://pypi.acme.dev/simple\"\n"),
+        ),
     ]);
-    let mut config = config();
-    config.managers = vec![Manager::Requirements, Manager::Pyproject];
-    let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
-    let registry = |file: &str| {
-        extraction
-            .dependencies
-            .iter()
-            .find(|d| d.file == file && d.name == "acme-a")
-            .unwrap_or_else(|| panic!("{file}"))
-            .registry
-            .clone()
-    };
-    assert_eq!(registry("harmless/requirements.txt"), None);
+    let extraction = python_scan(&files);
+    let registry = |file: &str| python_registry(&extraction, file, "acme-a");
+    // uv ignores sources under `no-sources`.
+    assert_eq!(registry("nosources/pyproject.toml"), None);
     for (file, says) in [
-        ("pip/requirements.txt", "pip option --some-new-option"),
-        ("nosources/pyproject.toml", "uv setting no-sources"),
-        ("indexkey/pyproject.toml", "a uv index with some-new-key"),
+        ("setting/pyproject.toml", "uv setting some-new-setting"),
+        (
+            "indexkey/pyproject.toml",
+            "[tool.uv] in indexkey/pyproject.toml the Count cannot read",
+        ),
         ("marker/pyproject.toml", "where the pin does not hold"),
-        ("pinkey/pyproject.toml", "a pin with some-new-key"),
-        ("poetry/pyproject.toml", "Poetry priority some-new-priority"),
-        ("pdm/pyproject.toml", "a PDM source with include_packages"),
+        (
+            "pinkey/pyproject.toml",
+            "[tool.uv] in pinkey/pyproject.toml the Count cannot read",
+        ),
+        ("torch/pyproject.toml", "torch-backend"),
+        (
+            "poetry/pyproject.toml",
+            "[tool.poetry] in poetry/pyproject.toml the Count cannot read",
+        ),
+        ("pdm/pyproject.toml", "PDM sources"),
+        ("rye/pyproject.toml", "Rye sources"),
+        ("hatch/pyproject.toml", "Hatch environment"),
     ] {
         let recorded = registry(file);
         assert!(
@@ -3039,4 +2946,90 @@ fn python_settings_the_count_does_not_know_fail_closed() {
             "{file}: {recorded:?}"
         );
     }
+}
+
+#[test]
+fn python_indexes_are_read_in_every_toml_form() {
+    let project = |extra: &str| {
+        format!("[project]\nname = \"p\"\ndependencies = [\"acme-a>=1\", \"acme-b>=1\"]\n{extra}")
+    };
+    let files = Files::from([
+        // Inline arrays of tables.
+        (
+            "inline/pyproject.toml".into(),
+            project("[tool.uv]\nindex = [{ name = \"acme\", url = \"https://pypi.acme.dev/simple\", default = true }]\n"),
+        ),
+        (
+            "poetry/pyproject.toml".into(),
+            "[tool.poetry]\nsource = [{ name = \"acme\", url = \"https://pypi.acme.dev/simple\", priority = \"primary\" }]\n[tool.poetry.dependencies]\nacme-a = \"^1\"\n".into(),
+        ),
+        // A pin written as an array of tables.
+        (
+            "aot/pyproject.toml".into(),
+            project("[[tool.uv.index]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\nexplicit = true\n[[tool.uv.sources.acme-a]]\nindex = \"acme\"\n"),
+        ),
+        // An override naming a URL takes that package from there, and leaves
+        // the rest alone.
+        (
+            "override/pyproject.toml".into(),
+            project("[tool.uv]\noverride-dependencies = [\"acme-b @ https://files.acme.dev/acme_b-1.0.0-py3-none-any.whl\"]\n"),
+        ),
+    ]);
+    let extraction = python_scan(&files);
+    let registry = |file: &str, name: &str| python_registry(&extraction, file, name);
+    let acme = Some(ACME.to_owned());
+    assert_eq!(registry("inline/pyproject.toml", "acme-a"), acme);
+    assert_eq!(registry("poetry/pyproject.toml", "acme-a"), acme);
+    assert_eq!(registry("aot/pyproject.toml", "acme-a"), acme);
+    assert_eq!(registry("aot/pyproject.toml", "acme-b"), None);
+    assert_eq!(registry("override/pyproject.toml", "acme-a"), None);
+    assert!(
+        extraction
+            .dependencies
+            .iter()
+            .all(|d| !(d.file == "override/pyproject.toml" && d.name == "acme-b"))
+    );
+}
+
+#[test]
+fn a_toml_error_does_not_quote_the_line_it_is_on() {
+    let files = Files::from([(
+        "pyproject.toml".into(),
+        "[project]\nname = \"p\"\n[[tool.uv.index]]\nurl = \"https://ci:s3c\\qret@pypi.acme.dev/simple\"\n".into(), // betterleaks:allow
+    )]);
+    let extraction = python_scan(&files);
+    assert!(!extraction.warnings.is_empty());
+    for warning in &extraction.warnings {
+        assert!(!warning.contains("s3c"), "{warning}");
+    }
+}
+
+#[test]
+fn pip_requirements_files_are_not_maintained_and_the_count_says_why() {
+    let mut config = config();
+    config.managers = vec![Manager::Pyproject];
+    config.exclude = vec!["vendor/**".into()];
+    let scanner = Scanner::new(&config).unwrap();
+    assert!(!scanner.needs("requirements.txt"));
+    let paths = [
+        "requirements.txt",
+        "app/requirements-dev.txt",
+        "requirements/base.in",
+        "vendor/requirements.txt",
+        "pyproject.toml",
+        "notes.txt",
+    ];
+    let warning = scanner.unsupported(paths).unwrap();
+    assert!(
+        warning.starts_with("`requirements.txt` and 2 more"),
+        "{warning}"
+    );
+    assert!(warning.contains("uv add -r requirements.txt"), "{warning}");
+    assert!(scanner.unsupported(["vendor/requirements.txt"]).is_none());
+    // Nothing is extracted from them.
+    let files = Files::from([("requirements.txt".into(), "requests==2.31.0\n".into())]);
+    assert!(scanner.extract(&files).unwrap().dependencies.is_empty());
+    // Without Python projects enabled, there is nothing to say.
+    config.managers = vec![Manager::Npm];
+    assert!(Scanner::new(&config).unwrap().unsupported(paths).is_none());
 }

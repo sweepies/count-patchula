@@ -1,25 +1,8 @@
 //! `pyproject.toml` (PEP 621, PEP 735 groups, uv and Poetry tables) and
 //! `.python-version`. `uv.lock` and `poetry.lock` resolve direct declarations.
+use crate::pypi::normalise;
 use crate::*;
 use toml_edit::{Document, Item, Value};
-
-/// PEP 503 normalised project name.
-fn normalise(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    let mut separator = false;
-    for c in name.chars() {
-        if matches!(c, '-' | '_' | '.') {
-            separator = true;
-            continue;
-        }
-        if separator && !out.is_empty() {
-            out.push('-');
-        }
-        separator = false;
-        out.push(c.to_ascii_lowercase());
-    }
-    out
-}
 
 /// The name and the byte range of the version specifiers in one PEP 508
 /// requirement. URL requirements and unversioned names have no specifier.
@@ -79,7 +62,10 @@ fn resolved(lock: Option<&Document<&str>>, package: &str) -> Option<String> {
 /// that disagree, as a forked uv resolution can, are ambiguous.
 fn locked_origin(lock: Option<&Document<&str>>, package: &str) -> Option<crate::pypi::Origin> {
     use crate::pypi::{Named, Origin};
-    let entries = lock?.get("package")?.as_array_of_tables()?;
+    let lock = lock?;
+    // Poetry records no source for PyPI; uv records one for every package.
+    let poetry = lock.get("metadata").is_some();
+    let entries = lock.get("package")?.as_array_of_tables()?;
     let origins = entries
         .iter()
         .filter(|p| {
@@ -91,387 +77,25 @@ fn locked_origin(lock: Option<&Document<&str>>, package: &str) -> Option<crate::
         })
         .map(|entry| {
             let Some(source) = entry.get("source") else {
-                // Poetry records no source for PyPI.
-                return Origin::Index(Named::Public);
+                return Origin::Index(if poetry {
+                    Named::Public
+                } else {
+                    Named::Unusable("a locked package without a source".into())
+                });
             };
             if let Some(registry) = source.get("registry").and_then(Item::as_str) {
                 return Origin::Index(Named::parse(registry));
             }
             match source.get("type").and_then(Item::as_str) {
-                Some("legacy" | "pypi") => source
-                    .get("url")
-                    .and_then(Item::as_str)
-                    .map_or(Origin::Index(Named::Public), |url| {
-                        Origin::Index(Named::parse(url))
-                    }),
+                // A source the lockfile names without its URL is not PyPI's.
+                Some("legacy" | "pypi") => source.get("url").and_then(Item::as_str).map_or_else(
+                    || Origin::Index(Named::Unusable("a locked source without a URL".into())),
+                    |url| Origin::Index(Named::parse(url)),
+                ),
                 _ => Origin::Other,
             }
         });
     Origin::of(origins)
-}
-
-/// Where a uv source or Poetry dependency pins a package: to a named index,
-/// to several (marker-split lists), or to something that is not an index.
-fn pin(value: &Item, names: &BTreeMap<String, crate::pypi::Named>) -> Option<crate::pypi::Origin> {
-    use crate::pypi::{Named, Origin};
-    let one = |value: &dyn toml_edit::TableLike| -> Option<Origin> {
-        // A key the Count does not know could move the package anywhere.
-        if let Some(key) = unknown_key(value, PIN_KEYS) {
-            return Some(Origin::Index(Named::Unusable(format!("a pin with {key}"))));
-        }
-        let pinned = one_pin(value, names)?;
-        // A pin that holds only under some markers, extras, groups or Pythons
-        // leaves the package to the project's indexes everywhere else.
-        let conditional = ["marker", "markers", "extra", "group", "python", "platform"]
-            .iter()
-            .any(|key| value.get(key).is_some());
-        Some(match pinned {
-            Origin::Index(named) if conditional => Origin::Ambiguous(vec![
-                named,
-                Named::Unusable("its indexes where the pin does not hold".into()),
-            ]),
-            pinned => pinned,
-        })
-    };
-    if let Some(table) = value.as_table_like() {
-        return one(table);
-    }
-    let list = value.as_array()?;
-    Origin::of(
-        list.iter()
-            .filter_map(|v| v.as_inline_table())
-            .filter_map(|table| one(table)),
-    )
-}
-
-/// The keys of a uv source or Poetry dependency table the Count knows.
-const PIN_KEYS: &[&str] = &[
-    "index",
-    "source",
-    "git",
-    "path",
-    "url",
-    "workspace",
-    "file",
-    "directory",
-    "rev",
-    "branch",
-    "tag",
-    "subdirectory",
-    "editable",
-    "develop",
-    "package",
-    "lfs",
-    "marker",
-    "markers",
-    "extra",
-    "group",
-    "python",
-    "platform",
-    "version",
-    "optional",
-    "extras",
-    "allow-prereleases",
-];
-
-/// The first key of `table` not in `known`.
-fn unknown_key(table: &dyn toml_edit::TableLike, known: &[&str]) -> Option<String> {
-    table
-        .iter()
-        .map(|(key, _)| key)
-        .find(|key| !known.contains(key))
-        .map(str::to_owned)
-}
-
-/// One pin table's origin, whatever its conditions.
-fn one_pin(
-    value: &dyn toml_edit::TableLike,
-    names: &BTreeMap<String, crate::pypi::Named>,
-) -> Option<crate::pypi::Origin> {
-    use crate::pypi::{Named, Origin};
-    if let Some(name) = value
-        .get("index")
-        .or_else(|| value.get("source"))
-        .and_then(Item::as_str)
-    {
-        // A pin to an index this project does not define cannot be read.
-        return Some(Origin::Index(
-            names
-                .get(&name.to_ascii_lowercase())
-                .cloned()
-                .unwrap_or_else(|| Named::Unusable(format!("index {name}"))),
-        ));
-    }
-    ["git", "path", "url", "workspace", "file", "directory"]
-        .iter()
-        .any(|key| value.get(key).is_some())
-        .then_some(Origin::Other)
-}
-
-/// The indexes uv, Poetry and PDM configure, and the packages pinned by them.
-/// `settings` is where uv reads its index settings: the nearest `uv.toml`, or
-/// the nearest `[tool.uv]`. `projects` are the `[tool.uv]` tables of the
-/// project and its workspace root, nearest first, for index names and
-/// `[tool.uv.sources]`.
-fn indexes(
-    settings: Option<&Item>,
-    projects: &[&Item],
-    poetry: Option<&Item>,
-    pdm: Option<&Item>,
-) -> crate::pypi::Indexes {
-    use crate::pypi::Named;
-    let mut indexes = crate::pypi::Indexes::default();
-    let mut names = BTreeMap::<String, Named>::new();
-    let uv_indexes = |item: Option<&Item>| -> Vec<(Option<String>, Named, bool, bool)> {
-        item.and_then(|u| u.get("index"))
-            .and_then(Item::as_array_of_tables)
-            .into_iter()
-            .flatten()
-            .filter_map(|index| {
-                let url = index.get("url").and_then(Item::as_str)?;
-                let flag = |key: &str| index.get(key).and_then(Item::as_bool) == Some(true);
-                // A flat index is a list of files, not an index the Count
-                // reads; a key or format it does not know could be anything.
-                let named = if let Some(key) = unknown_key(index, UV_INDEX_KEYS) {
-                    Named::Unusable(format!("a uv index with {key}"))
-                } else {
-                    match index.get("format").and_then(Item::as_str) {
-                        None | Some("simple") => Named::parse(url),
-                        Some("flat") => find_links(url),
-                        Some(format) => Named::Unusable(format!("a {format} uv index")),
-                    }
-                };
-                Some((
-                    index
-                        .get("name")
-                        .and_then(Item::as_str)
-                        .map(str::to_ascii_lowercase),
-                    named,
-                    flag("default"),
-                    flag("explicit"),
-                ))
-            })
-            .collect()
-    };
-    // Names from every table that can define them; the nearest wins.
-    for item in projects.iter().rev().copied().map(Some).chain([settings]) {
-        for (name, named, _, _) in uv_indexes(item) {
-            if let Some(name) = name {
-                names.insert(name, named);
-            }
-        }
-    }
-    for (_, named, default, explicit) in uv_indexes(settings) {
-        if default {
-            indexes.default = Some(named);
-        } else if !explicit {
-            indexes.extras.push(named);
-        }
-    }
-    if let Some(url) = settings
-        .and_then(|u| u.get("index-url"))
-        .and_then(Item::as_str)
-    {
-        indexes.default = Some(Named::parse(url));
-    }
-    for url in settings
-        .and_then(|u| u.get("extra-index-url"))
-        .and_then(Item::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|v| v.as_str())
-    {
-        indexes.extras.push(Named::parse(url));
-    }
-    for link in settings
-        .and_then(|u| u.get("find-links"))
-        .and_then(Item::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|v| v.as_str())
-    {
-        indexes.extras.push(find_links(link));
-    }
-    let no_index = settings
-        .and_then(|u| u.get("no-index"))
-        .and_then(Item::as_bool)
-        == Some(true);
-    // A uv setting about indexes, sources or overrides the Count does not
-    // read, such as `no-sources`, could change where packages come from.
-    for key in settings
-        .and_then(Item::as_table_like)
-        .into_iter()
-        .flat_map(|t| t.iter())
-        .map(|(key, _)| key)
-        .filter(|key| {
-            ["index", "source", "find-links", "override", "registry"]
-                .iter()
-                .any(|word| key.contains(word))
-                && !UV_SETTINGS.contains(key)
-        })
-    {
-        indexes
-            .extras
-            .push(Named::Unusable(format!("uv setting {key}")));
-    }
-    // uv sources: the workspace root's, overridden by the project's.
-    for project in projects.iter().rev() {
-        for (package, value) in project
-            .get("sources")
-            .and_then(Item::as_table_like)
-            .into_iter()
-            .flat_map(|t| t.iter())
-        {
-            if let Some(origin) = pin(value, &names) {
-                indexes.pinned.insert(normalise(package), origin);
-            }
-        }
-    }
-    // Poetry: sources by priority; names are case-insensitive, and a source
-    // without a URL named PyPI is PyPI.
-    let mut poetry_names = BTreeMap::<String, Named>::new();
-    // Poetry knows PyPI by that name without a source for it.
-    poetry_names.insert("pypi".into(), Named::Public);
-    let mut primaries = Vec::new();
-    for source in poetry
-        .and_then(|p| p.get("source"))
-        .and_then(Item::as_array_of_tables)
-        .into_iter()
-        .flatten()
-    {
-        let name = source
-            .get("name")
-            .and_then(Item::as_str)
-            .map(str::to_ascii_lowercase);
-        let unknown = unknown_key(source, POETRY_SOURCE_KEYS);
-        let named = match (unknown, source.get("url").and_then(Item::as_str)) {
-            (Some(key), _) => Named::Unusable(format!("a Poetry source with {key}")),
-            (None, Some(url)) => Named::parse(url),
-            (None, None) if name.as_deref() == Some("pypi") => Named::Public,
-            (None, None) => continue,
-        };
-        if let Some(name) = name {
-            poetry_names.insert(name, named.clone());
-        }
-        let legacy = |key: &str| source.get(key).and_then(Item::as_bool) == Some(true);
-        let priority = match source.get("priority").and_then(Item::as_str) {
-            Some(priority) => priority,
-            None if legacy("default") => "default",
-            None if legacy("secondary") => "supplemental",
-            None => "primary",
-        };
-        match priority {
-            "explicit" => {}
-            "supplemental" | "secondary" => indexes.extras.push(named),
-            "default" => indexes.default = Some(named),
-            "primary" => primaries.push(named),
-            other => indexes
-                .extras
-                .push(Named::Unusable(format!("Poetry priority {other}"))),
-        }
-    }
-    // Primary sources replace PyPI, in order; more than one is ambiguous.
-    let mut primaries = primaries.into_iter();
-    if indexes.default.is_none() {
-        indexes.default = primaries.next();
-    }
-    indexes.extras.extend(primaries);
-    let mut tables: Vec<&Item> = Vec::new();
-    for key in ["dependencies", "dev-dependencies"] {
-        tables.extend(poetry.and_then(|p| p.get(key)));
-    }
-    for (_, group) in poetry
-        .and_then(|p| p.get("group"))
-        .and_then(Item::as_table_like)
-        .into_iter()
-        .flat_map(|t| t.iter())
-    {
-        tables.extend(group.get("dependencies"));
-    }
-    for (package, value) in tables
-        .into_iter()
-        .filter_map(Item::as_table_like)
-        .flat_map(|t| t.iter())
-    {
-        if value.is_str() {
-            continue;
-        }
-        if let Some(origin) = pin(value, &poetry_names) {
-            indexes.pinned.insert(normalise(package), origin);
-        }
-    }
-    // PDM: a source named `pypi` replaces PyPI; the rest are searched too.
-    for source in pdm
-        .and_then(|p| p.get("source"))
-        .and_then(Item::as_array_of_tables)
-        .into_iter()
-        .flatten()
-    {
-        let Some(url) = source.get("url").and_then(Item::as_str) else {
-            continue;
-        };
-        // `include_packages` and `exclude_packages` route packages between
-        // sources, which the Count does not follow.
-        let named = if let Some(key) = unknown_key(source, PDM_SOURCE_KEYS) {
-            Named::Unusable(format!("a PDM source with {key}"))
-        } else {
-            match source.get("type").and_then(Item::as_str) {
-                None | Some("index") => Named::parse(url),
-                Some("find_links") => find_links(url),
-                Some(kind) => Named::Unusable(format!("a {kind} PDM source")),
-            }
-        };
-        if source.get("name").and_then(Item::as_str) == Some("pypi") {
-            indexes.default = Some(named);
-        } else {
-            indexes.extras.push(named);
-        }
-    }
-    // uv's `no-index` leaves only pinned indexes and find-links.
-    if no_index {
-        let mut only = vec!["--no-index".to_owned()];
-        only.extend(indexes.extras.iter().filter_map(|named| match named {
-            Named::Unusable(value) if value.starts_with("--find-links ") => Some(value.clone()),
-            _ => None,
-        }));
-        indexes.default = Some(Named::Unusable(only.join(" ")));
-        indexes.extras.clear();
-    }
-    indexes
-}
-
-/// The keys of `[[tool.uv.index]]` the Count knows.
-const UV_INDEX_KEYS: &[&str] = &[
-    "name",
-    "url",
-    "default",
-    "explicit",
-    "format",
-    "authenticate",
-    "ignore-error-codes",
-    "cache-control",
-    "publish-url",
-];
-/// The uv settings about indexes and sources the Count reads or knows to be
-/// harmless.
-const UV_SETTINGS: &[&str] = &[
-    "index",
-    "index-url",
-    "extra-index-url",
-    "find-links",
-    "no-index",
-    "index-strategy",
-    "sources",
-];
-/// The keys of `[[tool.poetry.source]]` the Count knows.
-const POETRY_SOURCE_KEYS: &[&str] = &["name", "url", "priority", "default", "secondary"];
-/// The keys of `[[tool.pdm.source]]` the Count knows.
-const PDM_SOURCE_KEYS: &[&str] = &["name", "url", "type", "verify_ssl"];
-
-/// A find-links location: a directory or page of files, not an index the
-/// Count reads, so its packages' lookups fail.
-fn find_links(url: &str) -> crate::pypi::Named {
-    crate::pypi::Named::Unusable(format!("--find-links {}", crate::redacted(url)))
 }
 
 struct Scan<'a> {
@@ -598,94 +222,24 @@ pub(super) fn extract(
     if !path.ends_with("pyproject.toml") {
         return Ok(Vec::new());
     }
-    let doc = Document::parse(text).map_err(|e| e.to_string())?;
-    let base = path
-        .strip_suffix("pyproject.toml")
-        .expect("manifest suffix");
-    // The project's directory and those above it, nearest first.
-    let join = |dir: &str, leaf: &str| {
-        if dir.is_empty() {
-            leaf.to_owned()
-        } else {
-            format!("{dir}/{leaf}")
-        }
-    };
-    let mut ancestors = vec![base.trim_end_matches('/')];
-    while let Some(&dir) = ancestors.last()
-        && !dir.is_empty()
-    {
-        ancestors.push(dir.rsplit_once('/').map_or("", |(parent, _)| parent));
-    }
-    // A configuration file above the project that does not parse could name
-    // any index, so its packages become ambiguous rather than PyPI's.
-    let mut unreadable = Vec::new();
-    let mut parse = |dir: &str, leaf: &str| -> Option<Document<&str>> {
-        let path = join(dir, leaf);
-        let text = files.get(&path)?;
-        let parsed = Document::parse(text.as_str()).ok();
-        if parsed.is_none() {
-            unreadable.push(path);
-        }
-        parsed
-    };
-    let pyprojects: Vec<(&str, Document<&str>)> = ancestors
-        .iter()
-        .filter_map(|dir| Some((*dir, parse(dir, "pyproject.toml")?)))
-        .collect();
-    let uv_tomls: Vec<(&str, Document<&str>)> = ancestors
-        .iter()
-        .filter_map(|dir| Some((*dir, parse(dir, "uv.toml")?)))
-        .collect();
-    // The nearest uv workspace root shares its lock, sources and index
-    // settings with the projects its `members` name and `exclude` leaves in;
-    // a project it does not take in stands alone, as uv treats it.
-    let workspace = |doc: &Document<&str>| {
-        doc.get("tool")
-            .and_then(|t| t.get("uv"))
-            .and_then(|u| u.get("workspace"))
-            .cloned()
-    };
-    let root = pyprojects
-        .iter()
-        .find_map(|(dir, doc)| Some((*dir, doc, workspace(doc)?)));
-    let root = root.filter(|(dir, _, workspace)| {
-        if *dir == ancestors[0] {
-            return true;
-        }
-        // uv joins each glob to the root, so `./packages/*/` is `packages/*`.
-        let globs = |key: &str| -> Vec<String> {
-            workspace
-                .get(key)
-                .and_then(Item::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|v| v.as_str())
-                .map(|glob| {
-                    let mut glob = glob.trim_end_matches('/');
-                    while let Some(rest) = glob.strip_prefix("./") {
-                        glob = rest;
-                    }
-                    glob.to_owned()
-                })
-                .collect()
-        };
-        let member = ancestors[0]
-            .strip_prefix(*dir)
-            .map_or(ancestors[0], |rest| rest.trim_start_matches('/'));
-        let matches = |globs: Vec<String>| {
-            Patterns::compile(&globs)
-                .is_ok_and(|patterns| !globs.is_empty() && patterns.matches(member))
-        };
-        matches(globs("members")) && !matches(globs("exclude"))
-    });
-    let root = root.map(|(dir, doc, _)| (dir, doc));
+    let doc = Document::parse(text).map_err(|e| toml_error(text, &e))?;
+    let discovery = crate::pypi::settings::discover(path, files);
     // Only the project's own lock, or its workspace root's, resolves it: a
     // lock above belongs to another project.
-    let lock = std::iter::once(ancestors[0])
-        .chain(root.map(|(dir, _)| dir))
-        .flat_map(|dir| ["uv.lock", "poetry.lock"].map(|leaf| join(dir, leaf)))
+    let lock = discovery
+        .lock_dirs
+        .iter()
+        .flat_map(|dir| {
+            ["uv.lock", "poetry.lock"].map(|leaf| {
+                if dir.is_empty() {
+                    leaf.to_owned()
+                } else {
+                    format!("{dir}/{leaf}")
+                }
+            })
+        })
         .find_map(|path| files.get(&path))
-        .map(|text| Document::parse(text.as_str()).map_err(|e| e.to_string()))
+        .map(|text| Document::parse(text.as_str()).map_err(|e| toml_error(text, &e)))
         .transpose()?;
     let mut scan = Scan {
         path,
@@ -756,47 +310,11 @@ pub(super) fn extract(
             );
         }
     }
-    // uv reads its index settings from the nearest `uv.toml`, or the nearest
-    // `pyproject.toml` with `[tool.uv]`, at or above the project; in a
-    // workspace, from its root, whatever a member sets.
-    let uv_table = |doc: &Document<&str>| doc.get("tool").and_then(|t| t.get("uv")).cloned();
-    let search: Vec<&str> = match root {
-        Some((dir, _)) => vec![dir],
-        None => ancestors.clone(),
-    };
-    let settings: Option<Item> = search.iter().find_map(|dir| {
-        if let Some((_, doc)) = uv_tomls.iter().find(|(d, _)| d == dir) {
-            return Some(doc.as_item().clone());
-        }
-        pyprojects
-            .iter()
-            .find(|(d, _)| d == dir)
-            .and_then(|(_, doc)| uv_table(doc))
-    });
-    let mut projects: Vec<Item> = tool
-        .and_then(|t| t.get("uv"))
-        .cloned()
-        .into_iter()
-        .collect();
-    if let Some((dir, doc)) = root
-        && dir != ancestors[0]
-    {
-        projects.extend(uv_table(doc));
-    }
-    let projects: Vec<&Item> = projects.iter().collect();
-    let mut indexes = indexes(
-        settings.as_ref(),
-        &projects,
-        tool.and_then(|t| t.get("poetry")),
-        tool.and_then(|t| t.get("pdm")),
-    );
-    indexes.extras.extend(
-        unreadable
-            .into_iter()
-            .map(|path| crate::pypi::Named::Unusable(format!("unreadable {path}"))),
-    );
     let lock = scan.lock.as_ref();
-    for dep in indexes.assign(&mut scan.out, |package| locked_origin(lock, package)) {
+    for dep in discovery
+        .indexes
+        .assign(&mut scan.out, |package| locked_origin(lock, package))
+    {
         skipped.push(Skipped {
             manager: Manager::Pyproject,
             file: dep.file,
@@ -837,4 +355,15 @@ fn python_version(path: &str, text: &str) -> Vec<Dependency> {
         included_by: None,
         registry: None,
     }]
+}
+
+/// A TOML parse error without the source line toml_edit quotes, which may
+/// hold an index URL's credentials.
+fn toml_error(text: &str, error: &toml_edit::TomlError) -> String {
+    let line = error
+        .span()
+        .and_then(|span| text.get(..span.start))
+        .map_or(0, |before| before.matches('\n').count())
+        + 1;
+    format!("invalid TOML at line {line}: {}", error.message())
 }

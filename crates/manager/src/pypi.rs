@@ -3,7 +3,9 @@
 //! package that could come from several is ambiguous: its lookup fails rather
 //! than guess, since the public package of its name may be someone else's.
 use crate::*;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+
+pub(crate) mod settings;
 
 /// What an index setting names.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,15 +114,24 @@ impl Indexes {
     /// Where `package` (normalised) comes from: its pin, else what its
     /// lockfile records, else the project's only index, else ambiguous.
     fn origin(&self, package: &str, locked: Option<Origin>) -> Origin {
-        if let Some(origin) = self.pinned.get(package).cloned().or(locked) {
-            return origin;
+        if let Some(origin) = self.pinned.get(package) {
+            return origin.clone();
         }
-        let default = self.default.clone().unwrap_or(Named::Public);
-        let candidates = std::iter::once(Origin::Index(default))
-            .chain(self.extras.iter().cloned().map(Origin::Index));
-        match Origin::of(candidates) {
-            Some(origin) => origin,
-            None => Origin::Index(Named::Public),
+        let candidates: Vec<Named> = std::iter::once(self.default.clone().unwrap_or(Named::Public))
+            .chain(self.extras.iter().cloned())
+            .collect();
+        match locked {
+            // A lockfile picks among the indexes the project searches. One it
+            // records that the project no longer searches is stale: the tool
+            // would resolve the package again from those it does.
+            Some(Origin::Index(named)) if !candidates.contains(&named) => Origin::of(
+                std::iter::once(Origin::Index(named))
+                    .chain(candidates.into_iter().map(Origin::Index)),
+            )
+            .unwrap_or(Origin::Index(Named::Public)),
+            Some(locked) => locked,
+            None => Origin::of(candidates.into_iter().map(Origin::Index))
+                .unwrap_or(Origin::Index(Named::Public)),
         }
     }
     /// Give each PyPI dependency in `deps` its registry, and drop those that
@@ -152,212 +163,35 @@ impl Indexes {
     }
 }
 
-/// One requirements file's options that decide where packages come from.
-#[derive(Debug, Default)]
-struct RequirementsOptions {
-    indexes: Vec<Named>,
-    extras: Vec<Named>,
-    find_links: Vec<String>,
-    no_index: bool,
-    /// `-r` and `-c` files, as repository paths.
-    includes: Vec<String>,
-    /// `-r` and `-c` values that name no file in the repository: absolute
-    /// paths, URLs, `${VAR}` paths, or paths outside it.
-    unresolved: Vec<String>,
-    /// Options the Count does not know, which could name a source.
-    unknown: Vec<String>,
-}
-
-/// `path` joined to the directory of `from`, with `.` and `..` resolved; none
-/// outside the repository.
-fn relative(from: &str, path: &str) -> Option<String> {
-    if path.starts_with('/') || path.contains("://") || path.contains('$') {
-        return None;
-    }
-    let mut parts: Vec<&str> = from
-        .rsplit_once('/')
-        .map_or(Vec::new(), |(dir, _)| dir.split('/').collect());
-    for part in path.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                parts.pop()?;
-            }
-            part => parts.push(part),
-        }
-    }
-    Some(parts.join("/"))
-}
-
-fn requirements_options(path: &str, text: &str) -> RequirementsOptions {
-    let mut options = RequirementsOptions::default();
-    // pip drops a byte order mark, and a backslash at the end of a line
-    // continues it.
-    let text = text.trim_start_matches('\u{feff}');
-    let joined = text.replace("\\\r\n", " ").replace("\\\n", " ");
-    for line in joined.lines() {
-        let line = line.split(" #").next().unwrap_or(line).trim();
-        let mut words = line.split_whitespace();
-        let Some(first) = words.next() else { continue };
-        // `--option=value`, `-xvalue` and `-x value` are all one option.
-        let joined_short = ["-r", "-c", "-i", "-f"]
-            .iter()
-            .find(|short| first.starts_with(*short) && first.len() > 2)
-            .map(|short| (*short, Some(first[2..].to_owned())));
-        let (option, value) = match (joined_short, first.split_once('=')) {
-            (Some(joined), _) => joined,
-            (None, Some((option, value))) if option.starts_with("--") => {
-                (option, Some(value.to_owned()))
-            }
-            _ => (first, words.next().map(str::to_owned)),
-        };
-        match (option, value) {
-            ("--no-index", _) => options.no_index = true,
-            ("-i" | "--index-url", Some(value)) => options.indexes.push(Named::parse(&value)),
-            ("--extra-index-url", Some(value)) => options.extras.push(Named::parse(&value)),
-            ("-f" | "--find-links", Some(value)) => options.find_links.push(value),
-            ("-r" | "--requirement" | "-c" | "--constraint", Some(value)) => {
-                let value = value.trim_matches(['"', '\'']);
-                match relative(path, value) {
-                    Some(target) => options.includes.push(target),
-                    None => options.unresolved.push(crate::redacted(value)),
-                }
-            }
-            // Options that leave where packages come from alone.
-            (
-                "-e" | "--editable" | "--pre" | "--prefer-binary" | "--only-binary" | "--no-binary"
-                | "--require-hashes" | "--trusted-host" | "--use-feature" | "--config-settings"
-                | "--global-option" | "--install-option" | "--hash",
-                _,
-            ) => {}
-            // Any other option could change it, so the Count does not guess.
-            (option, _) if option.starts_with('-') => options.unknown.push(option.to_owned()),
-            _ => {}
-        }
-    }
-    options
-}
-
-/// The requirements files of a scan and every file they include with `-r`
-/// or `-c`, whatever its name, with the options each sets.
-pub(crate) struct RequirementsGraph {
-    options: BTreeMap<String, RequirementsOptions>,
-}
-
-impl RequirementsGraph {
-    /// Start from the files `selected` picks and follow their includes
-    /// through `files`.
-    pub(crate) fn new(files: &Files, selected: impl Fn(&str) -> bool) -> Self {
-        let mut options = BTreeMap::new();
-        let mut pending: Vec<String> = files.keys().filter(|p| selected(p)).cloned().collect();
-        while let Some(path) = pending.pop() {
-            if options.contains_key(&path) {
-                continue;
-            }
-            let Some(text) = files.get(&path) else {
-                continue;
-            };
-            let parsed = requirements_options(&path, text);
-            pending.extend(parsed.includes.iter().cloned());
-            options.insert(path, parsed);
-        }
-        Self { options }
-    }
-    /// The files the graph includes but `files` does not hold.
-    pub(crate) fn missing(&self) -> BTreeSet<String> {
-        self.options
-            .values()
-            .flat_map(|o| &o.includes)
-            .filter(|path| !self.options.contains_key(*path))
-            .cloned()
-            .collect()
-    }
-    /// The files one pip run reading `root` reads: it and what it includes.
-    fn closure<'a>(&'a self, root: &'a str) -> Vec<&'a str> {
-        let mut seen = vec![root];
-        let mut index = 0;
-        while let Some(&path) = seen.get(index) {
-            index += 1;
-            for target in self.options.get(path).into_iter().flat_map(|o| &o.includes) {
-                if !seen.contains(&target.as_str()) {
-                    seen.push(target);
-                }
-            }
-        }
-        seen
+/// `text`, which a repository wrote, when it is plainly a name; a stand-in
+/// otherwise, so nothing a repository wrote reaches a report unchecked.
+pub(crate) fn shown(text: &str) -> String {
+    if !text.is_empty()
+        && text.len() <= 64
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    {
+        text.to_owned()
+    } else {
+        "(a name the Count does not repeat)".to_owned()
     }
 }
 
-/// The indexes of a requirements file. pip applies index options across
-/// every file one run reads, so a file gets the options of each run that
-/// reads it: those of every file no other includes whose includes reach it.
-/// `--find-links` adds a source that is not an index, `--no-index` leaves
-/// only those, and an include the Count cannot read could set anything.
-pub(crate) fn requirements(path: &str, graph: &RequirementsGraph) -> Indexes {
-    let included: BTreeSet<&str> = graph
-        .options
-        .values()
-        .flat_map(|o| &o.includes)
-        .map(String::as_str)
-        .collect();
-    let mut runs: Vec<Vec<&str>> = graph
-        .options
-        .keys()
-        .map(String::as_str)
-        .filter(|root| !included.contains(root))
-        .map(|root| graph.closure(root))
-        .filter(|run| run.contains(&path))
-        .collect();
-    if runs.is_empty() {
-        runs.push(graph.closure(path));
-    }
-    let mut read: Vec<&str> = runs.concat();
-    read.sort_unstable();
-    read.dedup();
-    let mut indexes = Indexes::default();
-    let mut defaults: Vec<Named> = Vec::new();
-    let mut find_links = Vec::new();
-    let mut no_index = false;
-    for file in &read {
-        let Some(options) = graph.options.get(*file) else {
-            indexes.extras.push(Named::Unusable(format!("-r {file}")));
+/// PEP 503 normalised project name.
+pub(crate) fn normalise(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut separator = false;
+    for c in name.chars() {
+        if matches!(c, '-' | '_' | '.') {
+            separator = true;
             continue;
-        };
-        for named in &options.indexes {
-            if !defaults.contains(named) {
-                defaults.push(named.clone());
-            }
         }
-        indexes.extras.extend(options.extras.iter().cloned());
-        indexes.extras.extend(
-            options
-                .unresolved
-                .iter()
-                .map(|value| Named::Unusable(format!("-r {value}"))),
-        );
-        indexes.extras.extend(
-            options
-                .unknown
-                .iter()
-                .map(|option| Named::Unusable(format!("pip option {option}"))),
-        );
-        find_links.extend(options.find_links.iter().map(|link| crate::redacted(link)));
-        no_index |= options.no_index;
+        if separator && !out.is_empty() {
+            out.push('-');
+        }
+        separator = false;
+        out.push(c.to_ascii_lowercase());
     }
-    if no_index {
-        let mut only: Vec<String> = vec!["--no-index".into()];
-        only.extend(find_links.iter().map(|link| format!("--find-links {link}")));
-        indexes.default = Some(Named::Unusable(only.join(" ")));
-        indexes.extras.clear();
-        return indexes;
-    }
-    let mut defaults = defaults.into_iter();
-    indexes.default = defaults.next();
-    indexes.extras.extend(defaults);
-    indexes.extras.extend(
-        find_links
-            .into_iter()
-            .map(|link| Named::Unusable(format!("--find-links {link}"))),
-    );
-    indexes
+    out
 }

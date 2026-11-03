@@ -2242,7 +2242,10 @@ impl Engine {
                     )
                 })
                 .collect();
-            let extraction = scanner.extract(&files).map_err(std::io::Error::other)?;
+            let mut extraction = scanner.extract(&files).map_err(std::io::Error::other)?;
+            extraction
+                .warnings
+                .extend(scanner.unsupported(paths.iter().map(String::as_str)));
             std::io::Result::Ok((paths, blobs, extraction))
         })
         .await
@@ -2338,7 +2341,7 @@ impl Engine {
         let key = ExtractionKey {
             repo: repo.into(),
             default_branch_commit: commit,
-            config_hash: format!("extract-v15:{}", hash(&serde_json::to_vec(&config)?)),
+            config_hash: format!("extract-v16:{}", hash(&serde_json::to_vec(&config)?)),
         };
         let cached: CachedExtraction = if let Some(bytes) = self.cache.extraction_get(&key).await? {
             self.extraction_hits.fetch_add(1, Ordering::Relaxed);
@@ -2350,7 +2353,7 @@ impl Engine {
             } else {
                 self.tree(repo, tree_sha).await?
             };
-            let paths = entries
+            let paths: BTreeSet<String> = entries
                 .iter()
                 .filter(|e| e.kind == "blob")
                 .map(|e| e.path.clone())
@@ -2377,13 +2380,6 @@ impl Engine {
                 })
                 .count();
             let read_manifests = delivery && manifests <= patchula_update::tooling::MANIFEST_LIMIT;
-            let blob_entries: BTreeMap<String, (String, String)> = entries
-                .iter()
-                // A symlink's blob is its target's path, not the file pip
-                // reads, so an include through one stays unread.
-                .filter(|e| e.kind == "blob" && e.mode != "120000")
-                .map(|e| (e.path.clone(), (e.sha.clone(), e.mode.clone())))
-                .collect();
             let selected: Vec<_> = entries
                 .into_iter()
                 .filter(|entry| {
@@ -2393,7 +2389,7 @@ impl Engine {
                             || (read_manifests && patchula_update::tooling::manifest(&entry.path)))
                 })
                 .collect();
-            let mut blobs: BTreeMap<String, patchula_update::Blob> = stream::iter(selected)
+            let blobs: BTreeMap<String, patchula_update::Blob> = stream::iter(selected)
                 .map(|entry| async move {
                     let content = self.file(repo, &entry.sha).await?;
                     Ok((
@@ -2410,43 +2406,16 @@ impl Engine {
                 .await
                 .into_iter()
                 .collect::<Result<_>>()?;
-            let mut files: Files = blobs
+            let files: Files = blobs
                 .iter()
                 .map(|(p, b)| (p.clone(), b.content.clone()))
                 .collect();
-            // Requirements files include others by any name, and pip reads
-            // their index options too: read those, a few rounds deep. One
-            // that is not text stays unread, and leaves its packages
-            // ambiguous rather than on PyPI. So does one past the limit, or
-            // one that fails to download.
-            let mut tried = BTreeSet::new();
-            for _ in 0..8 {
-                let wanted: Vec<_> = scanner
-                    .included(&files)
-                    .into_iter()
-                    .filter(|path| tried.len() < INCLUDE_LIMIT && tried.insert(path.clone()))
-                    .filter_map(|path| blob_entries.get(&path).cloned().map(|e| (path, e)))
-                    .collect();
-                if wanted.is_empty() {
-                    break;
-                }
-                let read: Vec<_> = stream::iter(wanted)
-                    .map(|(path, (sha, mode))| async move {
-                        let content = self.file(repo, &sha).await.ok()?;
-                        Some((path, patchula_update::Blob { sha, mode, content }))
-                    })
-                    .buffer_unordered(self.github.concurrency())
-                    .collect()
-                    .await;
-                for (path, blob) in read.into_iter().flatten() {
-                    files.insert(path.clone(), blob.content.clone());
-                    blobs.insert(path, blob);
-                }
-            }
-            let extraction = tokio::task::spawn_blocking(move || scanner.extract(&files))
+            let unsupported = scanner.unsupported(paths.iter().map(String::as_str));
+            let mut extraction = tokio::task::spawn_blocking(move || scanner.extract(&files))
                 .await
                 .map_err(|e| Error::Invalid(e.to_string()))?
                 .map_err(Error::Invalid)?;
+            extraction.warnings.extend(unsupported);
             let cached = CachedExtraction {
                 extraction,
                 snapshot: patchula_update::Snapshot {
@@ -2595,37 +2564,30 @@ pub fn read_tree(
             continue;
         }
         if scanner.needs(&relative)
-            && let Ok(content) = std::fs::read_to_string(&path)
+            && let Ok(bytes) = std::fs::read(&path)
         {
-            files.insert(relative.clone(), content);
+            match String::from_utf8(bytes) {
+                Ok(content) => {
+                    files.insert(relative.clone(), content);
+                }
+                // A Python configuration file that is not text still could
+                // name an index: kept, it fails to parse, and its packages'
+                // lookups fail with it rather than fall back to PyPI.
+                Err(error)
+                    if relative.ends_with("pyproject.toml") || relative.ends_with("uv.toml") =>
+                {
+                    files.insert(
+                        relative.clone(),
+                        String::from_utf8_lossy(error.as_bytes()).into_owned(),
+                    );
+                }
+                Err(_) => {}
+            }
         }
         paths.insert(relative);
     }
-    // Requirements files include others by any name; read those too.
-    let mut tried = BTreeSet::new();
-    for _ in 0..8 {
-        let wanted: Vec<_> = scanner
-            .included(&files)
-            .into_iter()
-            .filter(|path| {
-                paths.contains(path) && tried.len() < INCLUDE_LIMIT && tried.insert(path.clone())
-            })
-            .collect();
-        if wanted.is_empty() {
-            break;
-        }
-        for relative in wanted {
-            if let Ok(content) = std::fs::read_to_string(dir.join(&relative)) {
-                files.insert(relative, content);
-            }
-        }
-    }
     Ok((paths, files))
 }
-
-/// The most files requirements includes bring into one scan. Those past it
-/// stay unread, which leaves their packages ambiguous rather than on PyPI.
-const INCLUDE_LIMIT: usize = 256;
 
 /// The files Git would carry from this directory, relative to it, or none
 /// when it is not in a Git work tree or Git is not installed.

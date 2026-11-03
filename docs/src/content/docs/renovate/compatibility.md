@@ -40,8 +40,7 @@ Managers the Count supports, under Renovate's names:
 | `helmv3` | `helm` | partial: `Chart.lock` is not regenerated |
 | `terraform` | `terraform` | public registry only; no git modules |
 | `terraform-version` | `terraform` | |
-| `pip_requirements` | `requirements` | |
-| `pip-compile` | `requirements` | partial: inputs are read, `pip-compile` is not run |
+| `pip_requirements`, `pip-compile` | none | not supported on purpose: a [warning](/renovate/departures/#pip-requirements) recommends uv |
 | `pep621`, `poetry` | `pyproject` | uv and Poetry lockfiles regenerated |
 | `pyenv` | `pyproject` | `.python-version` |
 | `pre-commit` | `pre-commit` | GitHub, GitLab, Codeberg, Gitea and Forgejo hooks |
@@ -165,7 +164,7 @@ Renovate's other schemes, including `regex` versioning, `node`, `debian`,
 | none, for OS packages in images | [image rebuild advisories](/guide/security/#container-image-rebuilds): a new digest is compared with the old through their SBOMs and OSV.dev |
 | JSONata managers, custom datasources | none |
 | `hostRules`, private registries | operator [`registries`](/guide/sources/#private-registries) with basic or bearer credentials, and [`mirrorOf`](/guide/sources/#mirrors) for proxies of public package registries (not container registries), for lookups from Helm, OCI and Docker registries, Maven, GitLab, Gitea or Forgejo, and npm and Python package registries; not in repository configs, and lockfile tools get none |
-| `registryUrls`, `.npmrc`, pip and uv/Poetry indexes | npm reads `.npmrc` and `.yarnrc.yml`, Python reads requirements options, uv, Poetry and PDM indexes and the uv and Poetry lockfiles for [registries](/guide/sources/#package-registries), and an ambiguous Python package fails its lookup instead of guessing; extractors take a `registry` template; `npmrc` and `npmToken` options have no equivalent |
+| `registryUrls`, `.npmrc`, uv and Poetry indexes | npm reads `.npmrc` and `.yarnrc.yml`, Python reads uv and Poetry indexes and lockfiles for [registries](/guide/sources/#package-registries), and an ambiguous Python package fails its lookup instead of guessing; extractors take a `registry` template; `npmrc` and `npmToken` options have no equivalent |
 | `postUpgradeTasks` | none, on purpose |
 | `gitAuthor` | none; commits are made through the API and signed by GitHub |
 | Merge confidence, abandonment detection, replacement PRs, draft PRs | none |

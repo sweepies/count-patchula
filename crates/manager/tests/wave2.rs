@@ -103,10 +103,10 @@ fn dockerfile_args_multistage_platform_and_compose() {
     );
 }
 #[test]
-fn go_directives_requires_and_python_markers_hashes() {
+fn go_directives_requires_and_python_markers() {
     let files=Files::from([
         ("go.mod".into(),"module example.org/m\ngo 1.24.0\ntoolchain go1.24.2\nrequire (\n example.org/lib v1.2.3 // indirect\n)\nrequire example.org/other/v2 v2.4.0\nreplace example.org/lib => ../local\n".into()),
-        ("requirements.txt".into(),"# spec fixture\nrequests[security]==2.31.0 ; python_version >= '3.8'\nDjango>=4.2,<5\nsix==1.16.0 --hash=sha256:abc\n-r extra.txt\n-e ../local\n".into()),
+        ("pyproject.toml".into(),"[project]\nname = \"spec\"\ndependencies = [\"requests[security]==2.31.0 ; python_version >= '3.8'\", \"Django>=4.2,<5\", \"six==1.16.0\"]\n".into()),
     ]);
     let deps = extract(&files);
     assert_eq!(deps.len(), 7, "{deps:?}");
@@ -213,24 +213,10 @@ fn flux_chart_refs_still_extract_embedded_image_pins() {
 }
 
 #[test]
-fn exact_requirements_and_go_pseudo_versions_retain_observed_identity() {
+fn go_pseudo_versions_retain_observed_identity() {
     let deps = extract(&Files::from([
-        ("requirements.txt".into(), "widget==2.3.4\nrange>=2,<3\nwild==2.*\n".into()),
         ("go.mod".into(), "module example.org/demo\nrequire example.org/lib v0.0.0-20240102030405-abcdef123456\nrequire example.org/plain v1.2.3\n".into()),
     ]));
-    assert_eq!(
-        deps.iter()
-            .find(|d| d.name == "widget")
-            .unwrap()
-            .resolved
-            .as_deref(),
-        Some("2.3.4")
-    );
-    assert!(
-        deps.iter()
-            .filter(|d| matches!(d.name.as_str(), "range" | "wild"))
-            .all(|d| d.resolved.is_none())
-    );
     assert_eq!(
         deps.iter()
             .find(|d| d.name == "example.org/lib")

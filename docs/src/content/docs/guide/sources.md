@@ -200,79 +200,74 @@ dependency's `registry`:
   registry, since Corepack does not read `.npmrc`.
 - Python packages come from the index the project pins them to, else the one
   their lockfile records, else the only index the project names:
-  - pip requirements files: `--index-url` (or `-i`) replaces PyPI;
-    `--extra-index-url` adds an index, and `--find-links` a source that is
-    not an index. A file takes the options of every pip run that reads it:
-    each requirements file that no other includes, with the files it
-    includes through `-r` or `-c`. Runs start from every file named like a
-    requirements file, even one `files` or `exclude` leaves out of
-    extraction, and an include through a symlink is not followed. A sibling that includes nothing in common
-    does not share its options. An include the Count cannot read, such as a
-    URL or a path outside the repository, could name any index, so it makes
-    every package in the run ambiguous. With `--no-index`, nothing comes from
-    an index, so every package's lookup fails. Requirements files never read
-    `uv.toml`.
   - uv: `[[tool.uv.index]]` (a `default` one replaces PyPI, an `explicit` one
     serves only packages pinned to it, and a `flat` one is a find-links
     source), `index-url`, `extra-index-url`, `find-links` and `no-index`,
     from the nearest `uv.toml`, or `pyproject.toml` with `[tool.uv]`, at or
     above the project. A workspace member takes them from its workspace root
     instead. Pins in `[tool.uv.sources]` come from the project and its
-    workspace root, the root that lists it in `members` and not in `exclude`.
-    A marker-split pin to several indexes is ambiguous.
+    workspace root, the root that lists it in `members` and not in `exclude`,
+    and `no-sources` turns them off as it does for uv. An override or
+    constraint that names a URL takes its package from there.
   - Poetry: `[[tool.poetry.source]]` (`primary` replaces PyPI, and more than
     one is ambiguous; `supplemental` adds an index; `explicit` serves only
     pinned packages; a source named PyPI without a URL is PyPI) and a
     dependency's `source`, matched without regard to case.
-  - PDM: `[[tool.pdm.source]]`; one named `pypi` replaces PyPI, the rest add
-    an index, and a `find_links` source is not an index. `pdm.lock` is not
-    read.
   - `uv.lock` and `poetry.lock` record each package's index. Only the
     project's own lockfile counts, or its uv workspace root's. A package whose
-    entries disagree is ambiguous.
+    entries disagree is ambiguous, and so is one locked to an index the
+    project no longer searches: the tool would resolve it again.
+
+  Lists may be written as `[[...]]` tables or as inline arrays alike.
 
   A package from git, a path, a URL or a workspace member, by pin or by
   lockfile, is not looked up at all: its name on PyPI may be someone else's.
   It is reported as skipped instead.
 
-  A pin to an index the project does not define fails its lookup, and so
-  does every package neither pinned nor locked below a `pyproject.toml` or
-  `uv.toml` that does not parse, since it could name any index.
-
   A package that is pinned nowhere and unlocked, in a project that names an
-  index besides PyPI, could come from either. pip would take the highest
-  version from any of them, which is how a public package can stand in for a
-  private one. The Count does not guess: the package's lookup fails, saying it
-  could come from several indexes. Pin it, or commit a lockfile.
-  The Count reads a fixed list of pip options, uv settings and index keys,
-  Poetry and PDM source keys, and pin keys. Any other that could move a
-  package, such as uv's `no-sources` or PDM's `include_packages`, fails the
-  lookups it could affect rather than be ignored. A pin that holds only under
-  some markers, extras, groups or Pythons is ambiguous too, since elsewhere
-  the package comes from the project's indexes.
-  Indexes come only from the repository, never from `pip.conf` or the
-  environment. Private indexes are read through their simple API, as PEP 691
-  JSON or PEP 503 HTML; HTML gives no upload times, so no release-age wait.
+  index besides PyPI, could come from either, which is how a public package
+  can stand in for a private one. The Count does not guess: the package's
+  lookup fails, saying it could come from several indexes. Pin it, or commit
+  a lockfile. A pin that holds only under some markers, extras, groups or
+  Pythons is ambiguous too, since elsewhere the package comes from the
+  project's indexes.
+
+  Everything else fails closed. Every setting uv accepts is either read or
+  known not to move packages, and every key a Poetry source or dependency
+  may have is known; tests check both lists against uv and Poetry
+  themselves. A key the Count does not know, a section it cannot read, a
+  `pyproject.toml` or `uv.toml` at or above the project that does not parse,
+  a pin to an index the project does not define, or uv's `torch-backend`
+  fails the lookups it could affect. So do index settings of tools the Count
+  cannot check against the tool: PDM sources and overrides, Rye sources,
+  Pixi PyPI options, and Hatch environments that set `PIP_*` or `UV_*`
+  variables. Indexes come only from these files, never from `pip.conf`,
+  `PIP_*` or `UV_*` variables, Dockerfiles or CI workflows. Private indexes
+  are read through their simple API, as PEP 691 JSON or PEP 503 HTML; HTML
+  gives no upload times, so no release-age wait.
+
+  pip requirements files are not maintained at all; see
+  [managers](/guide/managers/#python).
 - An npm or PyPI [custom extractor](/guide/configuration/#custom-extractors) can set
   `registry`, a template such as `"{registry}"`; an empty or unmatched capture
   means the public registry. Without it, npm packages follow `.npmrc` like a
   `package.json` beside them.
 
 `.npmrc` and `.yarnrc.yml` are read whenever npm, Bun or an npm extractor is
-enabled; every `pyproject.toml`, `uv.toml`, `uv.lock` and `poetry.lock`
-whenever pyproject is; and every file named like a requirements file, and
-any file one includes with `-r` or `-c` whatever its name, up to 256 includes,
-whenever requirements is. `files` and `exclude` do not limit these. Bun's
-`bunfig.toml` and Yarn 1's
-`.yarnrc` are not read yet: a registry set only there is not used.
+enabled, and every `pyproject.toml`, `uv.toml`, `uv.lock` and `poetry.lock`
+whenever pyproject is. `files` and `exclude` do not limit these. Bun's
+`bunfig.toml` and Yarn 1's `.yarnrc` are not read yet: a registry set only
+there is not used.
 
 npm's, Yarn's and PyPI's public registries (`registry.npmjs.org`,
 `registry.yarnpkg.com`, `pypi.org`, over https or plain http) count as none. A value the Count cannot read from,
 such as a `${VAR}` npm would take from the environment or a plain-http URL, is
-kept as written: that package's lookup fails, rather than reading the public
+recorded instead: that package's lookup fails, rather than reading the public
 package of its name, which may be someone else's. Any user, password, query
-or fragment is removed first, and a URL that does not parse cleanly is kept
-only as `<unreadable URL>`.
+or fragment is removed from it first, and a URL that does not parse cleanly
+is recorded only as `<unreadable URL>`. A token in the path of a URL, as some
+hosted registries issue, looks like any other path and is recorded; keep such
+URLs in the operator's registry settings rather than the repository.
 
 A repository naming a registry never brings credentials: requests to it carry
 an operator entry's, when one covers its URL, and nothing otherwise. Two

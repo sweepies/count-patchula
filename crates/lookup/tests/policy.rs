@@ -324,7 +324,7 @@ fn docker_policy_keeps_variants_and_python_epochs_use_pep440_order() {
             .iter()
             .all(|p| p.new_version.as_deref().unwrap().ends_with("-alpine"))
     );
-    dep.manager = Manager::Requirements;
+    dep.manager = Manager::Pyproject;
     dep.kind = DependencyKind::Production;
     dep.source = Source::Pypi;
     dep.scheme = Scheme::Pep440;
@@ -1050,8 +1050,8 @@ fn reference_data_is_fast_tracked_by_the_built_in_rule() {
         .unwrap()
         .to_utc();
     let mut certifi = dependency("certifi");
-    certifi.manager = Manager::Requirements;
-    certifi.file = "requirements.txt".into();
+    certifi.manager = Manager::Pyproject;
+    certifi.file = "pyproject.toml".into();
     certifi.source = Source::Pypi;
     certifi.scheme = Scheme::Pep440;
     certifi.current = "2025.1.31".into();
@@ -1526,15 +1526,6 @@ fn cargo_pyproject_bundler_and_composer_preserve_by_default_and_the_rest_pin() {
             "3.0.0",
             "3.1.0",
             "preserve",
-        ),
-        (
-            Manager::Requirements,
-            Source::Pypi,
-            Scheme::Pep440,
-            "==2.0.0",
-            "2.0.0",
-            "2.1.0",
-            "exact",
         ),
         (
             Manager::Npm,

@@ -29,7 +29,7 @@ differ from Renovate's, such as the 24-hour release-age wait and exact npm pins.
 | Renovate | Count Patchula |
 |---|---|
 | `extends` | `amends "org.pkl"` or `import` |
-| `enabledManagers` | `managers` (Renovate names differ: `gomod` is `go`, `docker-compose` is `compose`, `pip_requirements` is `requirements`, `pep621` and `poetry` are `pyproject`, `helmv3` is `helm`) |
+| `enabledManagers` | `managers` (Renovate names differ: `gomod` is `go`, `docker-compose` is `compose`, `pep621` and `poetry` are `pyproject` (`pip_requirements` has no equivalent), `helmv3` is `helm`) |
 | `ignoreDeps` | `ignore`, with globs and regexes |
 | `ignorePaths` | `exclude` |
 | `managerFilePatterns` | `files` |

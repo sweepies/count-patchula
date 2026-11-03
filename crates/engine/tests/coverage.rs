@@ -14,7 +14,7 @@ fn every_example_has_implemented_dispatch_for_the_twelve_repo_matrix() {
         ("docker-compose.yml".into(),"services:\n  db:\n    image: postgres:16.3-alpine\n".into()),
         ("go.mod".into(),"module example.org/module\ngo 1.24.0\ntoolchain go1.24.2\nrequire example.org/dep v1.2.3\n".into()),
         ("main.tf".into(),"terraform {\n required_providers {\n random = {\n source = \"hashicorp/random\"\n version = \"3.6.0\"\n }\n }\n}\nmodule \"iam\" {\n source = \"terraform-aws-modules/iam/aws\"\n version = \"5.0.0\"\n}\n".into()),
-        ("requirements.txt".into(),"six==1.16.0\n".into()),
+        ("pyproject.toml".into(),"[project]\nname = \"x\"\ndependencies = [\"six==1.16.0\"]\n".into()),
         ("apps/example/deploy.yaml".into(),"apiVersion: apps/v1\nkind: Deployment\nspec:\n  template:\n    spec:\n      containers:\n        - name: web\n          image: nginx:1.26-alpine\n".into()),
         ("kustomization.yaml".into(),"apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nimages:\n  - name: alpine\n    newTag: 3.20\n".into()),
         ("values.yaml".into(),"image:\n  repository: nginx\n  tag: 1.26-alpine\n".into()),
@@ -73,7 +73,7 @@ fn every_example_has_implemented_dispatch_for_the_twelve_repo_matrix() {
                 Manager::Kustomize,
                 Manager::Flux,
                 Manager::HelmValues,
-                Manager::Requirements,
+                Manager::Pyproject,
             ],
             _ => &[Manager::Npm],
         };

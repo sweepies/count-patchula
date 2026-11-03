@@ -33,7 +33,6 @@ mod npm;
 mod nuget;
 mod precommit;
 mod pyproject;
-mod requirements;
 mod terraform;
 mod toolchains;
 mod woodpecker;
@@ -42,7 +41,7 @@ mod yaml_locations;
 
 use patchula_config::{Config, DependencyKind, Manager, PackageId, Patterns, Scheme, Source};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Location {
@@ -225,7 +224,6 @@ pub fn supported(manager: Manager) -> bool {
         | Manager::Kustomize
         | Manager::Flux
         | Manager::HelmValues
-        | Manager::Requirements
         | Manager::Pyproject
         | Manager::PreCommit
         | Manager::Helm
@@ -287,23 +285,28 @@ impl Scanner {
                     leaf,
                     "uv.toml" | "pyproject.toml" | "uv.lock" | "poetry.lock"
                 ))
-            || (self.config.managers.contains(&Manager::Requirements) && requirements_name(path))
     }
-    /// The requirements files pip runs may start from: the selected ones and
-    /// any named like one, since an excluded file can still set the index
-    /// options of a selected one it includes.
-    fn requirements_root(&self, path: &str) -> bool {
-        self.selected(Manager::Requirements, path)
-            || (self.config.managers.contains(&Manager::Requirements) && requirements_name(path))
-    }
-    /// Files the requirements files in `files` include with `-r` or `-c`,
-    /// whatever their names, that `files` does not hold yet: pip reads their
-    /// index options too. A caller reads those that exist and asks again.
-    pub fn included(&self, files: &Files) -> BTreeSet<String> {
-        if !self.config.managers.contains(&Manager::Requirements) {
-            return BTreeSet::new();
+    /// A warning for the pip requirements files among `paths`, which the
+    /// Count does not maintain, when Python projects are enabled.
+    pub fn unsupported<'a>(&self, paths: impl IntoIterator<Item = &'a str>) -> Option<String> {
+        if !self.config.managers.contains(&Manager::Pyproject) {
+            return None;
         }
-        pypi::RequirementsGraph::new(files, |path| self.requirements_root(path)).missing()
+        let found: Vec<&str> = paths
+            .into_iter()
+            .filter(|path| {
+                requirements_name(path)
+                    && (self.config.exclude.is_empty() || !self.exclude.matches(path))
+            })
+            .collect();
+        let named = match found.as_slice() {
+            [] => return None,
+            [one] => format!("`{one}`"),
+            [first, rest @ ..] => format!("`{first}` and {} more", rest.len()),
+        };
+        Some(format!(
+            "{named}: pip requirements files are not maintained. pip takes each package from whatever index its options, included files and environment name, which the Count cannot settle for certain, and guessing could propose someone else's package of the same name. Move the project to uv (`uv init --bare`, then `uv add -r requirements.txt`) and the Count keeps `pyproject.toml` and `uv.lock` current."
+        ))
     }
     fn selected(&self, manager: Manager, path: &str) -> bool {
         if !self.config.managers.contains(&manager)
@@ -411,14 +414,12 @@ impl Scanner {
                 leaf,
                 "pyproject.toml" | "uv.lock" | "poetry.lock" | ".python-version"
             ),
-            Manager::Requirements => requirements_name(path),
         }
     }
     pub fn extract(&self, files: &Files) -> Result<Extraction, String> {
         let mut result = Extraction::default();
         let locks = npm::locks(files)?;
         let npmrcs = npm::npmrcs(files);
-        let requirements = pypi::RequirementsGraph::new(files, |path| self.requirements_root(path));
         let cargo = if self.config.managers.contains(&Manager::Cargo) {
             cargo::documents(files)?
         } else {
@@ -542,8 +543,6 @@ impl Scanner {
                 precommit::extract(path, text)
             } else if self.selected(Manager::Pyproject, path) {
                 pyproject::extract(path, text, files, &mut result.skipped)
-            } else if self.selected(Manager::Requirements, path) {
-                requirements::extract(path, text, &requirements)
             } else {
                 Ok(Vec::new())
             };
@@ -612,11 +611,12 @@ impl Scanner {
 pub(crate) fn redacted(value: &str) -> String {
     const UNREADABLE: &str = "<unreadable URL>";
     if !value.contains("://") {
-        // A path or name; one with an `@` may be a URL with a user in it.
-        return if value.contains('@') {
-            UNREADABLE.into()
-        } else {
-            value.to_owned()
+        // A path or name; one with an `@` may be a URL with a user in it, and
+        // a query or fragment may hold a token.
+        return match value.split_once(['?', '#']) {
+            _ if value.contains('@') => UNREADABLE.into(),
+            Some((kept, _)) => format!("{kept} (credentials removed)"),
+            None => value.to_owned(),
         };
     }
     let Ok(mut url) = url::Url::parse(value) else {
@@ -692,7 +692,7 @@ mod tests {
     /// leaked part of one shows.
     #[test]
     fn redaction_never_keeps_a_secret() {
-        const SECRET: &[u8] = b"QXZJKWG/?#@:%$&=+!;,[]";
+        const SECRET: &[u8] = b"QXZJKWG/?#@:%$&=+!;,[]\\ ";
         let mut state: u64 = 0x2545_f491_4f6c_dd1d;
         let mut next = |bound: usize| {
             state ^= state << 13;
@@ -712,6 +712,11 @@ mod tests {
                 format!("https://pypi.acme.dev?{secret}"),
                 format!("https://pypi.acme.dev/simple#{secret}"),
                 format!("ci:{secret}@pypi.acme.dev/simple"),
+                format!("pypi.acme.dev/simple?token={secret}"),
+                format!("http://ci:{secret}@pypi.acme.dev/simple"), // betterleaks:allow
+                format!("HTTPS://ci:{secret}@pypi.acme.dev/simple"), // betterleaks:allow
+                format!("https://ci:{secret}\\0@pypi.acme.dev/simple"), // betterleaks:allow
+                format!("https://ci:{secret} 0@pypi.acme.dev/simple"), // betterleaks:allow
             ] {
                 let recorded = super::redacted(&value);
                 assert!(
@@ -723,4 +728,12 @@ mod tests {
             }
         }
     }
+}
+
+/// The keys the Count's Python readers know, for the tests that check them
+/// against the real uv and Poetry.
+pub mod known {
+    pub use crate::pypi::settings::{
+        POETRY_DEPENDENCY_KEYS, POETRY_SOURCE_KEYS, UV_IRRELEVANT, UV_READ, UV_SOURCE_KEYS,
+    };
 }

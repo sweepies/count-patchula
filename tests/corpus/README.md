@@ -27,7 +27,6 @@ unmodified copies; their licences are those of the projects below.
 | [astral-sh/uv](https://github.com/astral-sh/uv) | `dce159bf3c49` | Apache-2.0 | `rust/uv` |
 | [prometheus/prometheus](https://github.com/prometheus/prometheus) | `30bcf0f03c33` | Apache-2.0 | `go/prometheus` |
 | [pydantic/pydantic](https://github.com/pydantic/pydantic) | `e3b6f55a8c77` | MIT | `python/pydantic` |
-| [home-assistant/core](https://github.com/home-assistant/core) | `a38890c0da2f` | Apache-2.0 | `python/home-assistant` |
 | [apache/superset](https://github.com/apache/superset) | `abc1b50f65dc` | Apache-2.0 | `containers/superset` |
 | [prometheus-community/helm-charts](https://github.com/prometheus-community/helm-charts) | `740ca6d94cf1` | Apache-2.0 | `kubernetes/kube-prometheus-stack` |
 | [terraform-aws-modules/terraform-aws-eks](https://github.com/terraform-aws-modules/terraform-aws-eks) | `91b8a8d944e3` | Apache-2.0 | `terraform/eks` |
