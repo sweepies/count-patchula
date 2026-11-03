@@ -701,7 +701,7 @@ mod tests {
             usize::try_from(state % bound as u64).unwrap_or_default()
         };
         for _ in 0..20_000 {
-            let secret: String = (0..1 + next(12))
+            let secret: String = (0..=next(12))
                 .map(|_| char::from(SECRET[next(SECRET.len())]))
                 .collect();
             for value in [
