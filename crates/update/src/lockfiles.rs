@@ -1311,6 +1311,7 @@ fn materialized(path: &str) -> bool {
                 | "go.work.sum"
                 | "pnpm-workspace.yaml"
                 | ".yarnrc.yml"
+                | ".npmrc"
                 | ".python-version"
                 | "uv.toml"
                 | "poetry.toml"

@@ -712,10 +712,13 @@ impl Cached {
                     }
                 } else {
                     // Operator credentials follow a redirect only to a URL an
-                    // entry covers. Another entry's answer is never stored
+                    // entry covers, and only from a request that sent some: a
+                    // redirect never lends credentials to a request that had
+                    // none. Another entry's answer is never stored
                     // under this request's key.
                     request.headers_mut().remove(header::AUTHORIZATION);
-                    if let Some(entry) = next_entry
+                    if credential.as_ref().is_some_and(|entry| entry.auth.sends())
+                        && let Some(entry) = next_entry
                         && let Some(value) = entry.auth.header()
                     {
                         request.headers_mut().insert(header::AUTHORIZATION, value);
@@ -1585,6 +1588,8 @@ mod tests {
         const PRIVATE: &str = "https://acme.jfrog.io/charts/index.yaml";
         const BLOB: &str = "https://acme.jfrog.io/v2/team/app/blobs/latest";
         const OUTSIDE: &str = "https://acme.jfrog.io/other/blob";
+        const OTHER: &str = "https://acme.jfrog.io/charts/other.yaml";
+        const MOVED: &str = "https://acme.jfrog.io/v2/moved";
         let reply = |status: u16, location: Option<&'static str>| Response {
             status: StatusCode::from_u16(status).unwrap(),
             headers: location
@@ -1614,10 +1619,15 @@ mod tests {
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
         let transport = Arc::new(Scripted(Mutex::new(
             [
-                // An uncredentialed URL redirected into an entry's prefix gets
-                // the entry's credentials, but its answer is not stored.
+                // A request without credentials gains none on a redirect, even
+                // into an entry's prefix.
                 (PUBLIC, None, reply(302, Some(PRIVATE))),
-                (PRIVATE, Some("Bearer tok"), reply(200, None)),
+                (PRIVATE, None, reply(200, None)),
+                // A credentialed request redirected into another entry's
+                // prefix carries that entry's credentials, but its answer is
+                // not stored under its own key.
+                (OTHER, Some("Bearer tok"), reply(302, Some(MOVED))),
+                (MOVED, Some("Bearer reg"), reply(200, None)),
                 // A registry token issued under an entry stays in its prefix,
                 // even on the same origin.
                 (BLOB, Some("Bearer account"), reply(307, Some(OUTSIDE))),
@@ -1634,17 +1644,21 @@ mod tests {
             },
         )
         .unwrap();
+        let key = |url| {
+            HttpKey::new(
+                "GET",
+                url,
+                BTreeMap::from([("accept".into(), "application/yaml".into())]),
+            )
+            .unwrap()
+        };
         client.get(PUBLIC, "application/yaml").await.unwrap();
+        assert!(cache.http_get(&key(PUBLIC)).await.unwrap().is_some());
+        client.get(OTHER, "application/yaml").await.unwrap();
+        let scope = client.credential(OTHER).unwrap().scope().to_owned();
         assert!(
             cache
-                .http_get(
-                    &HttpKey::new(
-                        "GET",
-                        PUBLIC,
-                        BTreeMap::from([("accept".into(), "application/yaml".into())]),
-                    )
-                    .unwrap()
-                )
+                .http_get(&key(OTHER).credential(&scope))
                 .await
                 .unwrap()
                 .is_none()

@@ -403,21 +403,28 @@ enum Named {
     Unusable(String),
 }
 
-/// Whether `url` is on npm's or Yarn's public registry host.
+/// Whether `url` is on npm's or Yarn's public registry host, over https or the
+/// plain http some old `.npmrc` files still name.
 fn public(url: &str) -> bool {
     let host = url
         .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
         .and_then(|rest| rest.split('/').next())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    let host = host.strip_suffix(":443").unwrap_or(&host);
+    let host = host
+        .strip_suffix(":443")
+        .or_else(|| host.strip_suffix(":80"))
+        .unwrap_or(&host);
     matches!(host, "registry.npmjs.org" | "registry.yarnpkg.com")
 }
 
 fn named(value: &str) -> Named {
     let raw = value.trim().trim_matches(['"', '\'']);
+    if public(raw) {
+        return Named::Public;
+    }
     match crate::registry_url(raw) {
-        Some(url) if public(&url) => Named::Public,
         Some(url) => Named::Url(url),
         None => Named::Unusable(raw.to_owned()),
     }

@@ -2365,6 +2365,31 @@ fn yarnrc_keeps_settings_but_drops_repository_code_and_credentials() {
     assert!(clean["npmScopes"]["acme"].get("npmAuthToken").is_none());
 }
 
+/// Tools see a repository's registries, never its tokens or other settings,
+/// and a registry they cannot read stays so they stop rather than read the
+/// public package of a private name.
+#[test]
+fn tools_see_only_the_registries_a_repository_names() {
+    let npmrc = node::npmrc(
+        "registry=https://npm.acme.test/\n@acme:registry=https://npm.acme.test/scoped\n//npm.acme.test/:_authToken=${NPM_TOKEN}\n@env:registry=${PRIVATE}\nignore-scripts=false\nnode-options=--require ./evil.js\n",
+    );
+    assert_eq!(
+        npmrc,
+        "registry=https://npm.acme.test/\n@acme:registry=https://npm.acme.test/scoped\n@env:registry=${PRIVATE}\n"
+    );
+    let clean: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+        &node::yarnrc(
+            "npmRegistryServer: \"${PRIVATE_REGISTRY}\"\nnpmAuthToken: \"${NPM_TOKEN}\"\n",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        clean["npmRegistryServer"].as_str(),
+        Some("${PRIVATE_REGISTRY}")
+    );
+    assert!(clean.get("npmAuthToken").is_none());
+}
 /// A catalog edit that leaves the lock untouched is a stale lock.
 #[tokio::test]
 async fn an_unchanged_lockfile_after_a_catalog_edit_fails_the_branch() {

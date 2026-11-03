@@ -265,9 +265,16 @@ impl Scanner {
     /// without them, a scoped package would be looked up on the public
     /// registry, where its name may be someone else's.
     fn registry_file(&self, path: &str) -> bool {
-        [Manager::Npm, Manager::Bun]
+        let npm_extractors = self.config.managers.contains(&Manager::Regex)
+            && self
+                .config
+                .extractors
+                .iter()
+                .any(|e| e.source == "npm" || e.source.contains('{'));
+        ([Manager::Npm, Manager::Bun]
             .iter()
             .any(|m| self.config.managers.contains(m))
+            || npm_extractors)
             && matches!(
                 path.rsplit('/').next().unwrap_or(path),
                 ".npmrc" | ".yarnrc.yml"

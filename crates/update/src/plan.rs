@@ -132,6 +132,7 @@ pub fn plan(
                         && d.package == reported.package
                         && reported.current.value.as_deref() == Some(&d.current)
                         && d.digest == reported.current.digest
+                        && d.registry == reported.registry
                 }) {
                     // One best proposal per occurrence and track avoids overlapping edits.
                     let track = |u: &Update| match u.update_type.as_str() {

@@ -2294,6 +2294,9 @@ fn npm_dependencies_take_their_registry_from_the_nearest_npmrc_or_yarnrc() {
             "npmRegistryServer: \"https://registry.yarnpkg.com\"\n".into(),
         ),
         ("berry/package.json".into(), r#"{"dependencies":{"left-pad":"1.0.0"}}"#.into()),
+        // An old .npmrc may name public npm over plain http.
+        ("legacy/.npmrc".into(), "registry=http://registry.npmjs.org/\n".into()),
+        ("legacy/package.json".into(), r#"{"dependencies":{"is-odd":"1.0.0"}}"#.into()),
         (
             "package-lock.json".into(),
             r#"{"lockfileVersion":3,"packages":{"":{"dependencies":{"@acme/ui":"^1.0.0"}},"node_modules/@acme/ui":{"version":"1.0.0"},"node_modules/@acme/core":{"version":"0.5.0"}}}"#.into(),
@@ -2334,6 +2337,7 @@ fn npm_dependencies_take_their_registry_from_the_nearest_npmrc_or_yarnrc() {
     );
     // Yarn's registry serves the public packages.
     assert_eq!(registry("berry/package.json", "left-pad"), None);
+    assert_eq!(registry("legacy/package.json", "is-odd"), None);
     // A package only the lockfile records is looked up where its scope is.
     let core = extraction
         .locked
@@ -2412,6 +2416,21 @@ fn npm_registry_files_are_read_whatever_files_and_exclude_select() {
     for path in [".npmrc", "config/.npmrc", "apps/web/.yarnrc.yml"] {
         assert!(scanner.needs(path), "{path}");
     }
+    // With only the regex manager, an npm extractor still needs them.
+    let mut regex_only = self::config();
+    regex_only.managers = vec![Manager::Regex];
+    regex_only.extractors.push(patchula_config::Extractor {
+        note: String::new(),
+        paths: vec!["deploy/versions.txt".into()],
+        patterns: vec![r"(?<dependency>@[\w./-]+)=(?<current>\S+)".into()],
+        source: "npm".into(),
+        dependency: "{dependency}".into(),
+        package: "{dependency}".into(),
+        scheme: "semver".into(),
+        extract: None,
+        registry: None,
+    });
+    assert!(Scanner::new(&regex_only).unwrap().needs(".npmrc"));
     // An npm extractor without a registry template follows .npmrc too.
     let mut config = self::config();
     config.extractors.push(patchula_config::Extractor {

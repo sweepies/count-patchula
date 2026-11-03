@@ -173,8 +173,9 @@ registries {
 - In the server, an entry's `allowedInstallations` limits which installations
   use it. For any other installation, requests under its prefix carry no
   credentials.
-- A redirect carries credentials only to a URL an entry covers, and a token
-  issued under an entry only within that entry's prefix.
+- A redirect carries credentials only to a URL an entry covers, and only from
+  a request that sent some: a request without credentials never gains any on
+  a redirect. A token issued under an entry stays within that entry's prefix.
 
 A dependency's source decides where its versions come from. Helm repositories,
 OCI and Docker registries, Maven repositories and GitLab, Gitea or Forgejo tags carry
@@ -202,11 +203,12 @@ dependency's `registry`:
   means the public registry. Without it, its packages follow `.npmrc` like a
   `package.json` beside them.
 
-These files are read whenever npm or Bun is enabled, whatever `files` and
-`exclude` select.
+These files are read whenever npm, Bun or an npm extractor is enabled,
+whatever `files` and `exclude` select. Bun's `bunfig.toml` and Yarn 1's
+`.yarnrc` are not read yet: a registry set only there is not used.
 
 npm's and Yarn's public registries (`registry.npmjs.org`,
-`registry.yarnpkg.com`) count as none. A value the Count cannot read from,
+`registry.yarnpkg.com`, over https or plain http) count as none. A value the Count cannot read from,
 such as a `${VAR}` npm would take from the environment or a plain-http URL, is
 kept as written: that package's lookup fails, rather than reading the public
 package of its name, which may be someone else's.
