@@ -20,6 +20,7 @@ mod gradle_vars;
 mod helm;
 mod images;
 mod locked;
+mod origins;
 mod pypi;
 pub use locked::Locked;
 mod maven;
@@ -520,7 +521,7 @@ impl Scanner {
             } else if self.selected(Manager::Nix, path) {
                 nix::extract(path, text, files, &mut result.skipped)
             } else if self.selected(Manager::Bundler, path) {
-                bundler::extract(path, text, files)
+                bundler::extract(path, text, files, &mut result.skipped)
             } else if self.selected(Manager::Nuget, path) {
                 nuget::extract(path, text)
             } else if self.selected(Manager::Gradle, path) {
@@ -727,7 +728,7 @@ mod tests {
                 format!("https://ci:{secret} 0@pypi.acme.dev/simple"), // betterleaks:allow
             ] {
                 // As redacted, and as the Python reader records an index.
-                let parsed = crate::pypi::Named::parse(&value).recorded();
+                let parsed = crate::pypi::named(&value).recorded();
                 for recorded in [Some(super::redacted(&value)), parsed]
                     .into_iter()
                     .flatten()

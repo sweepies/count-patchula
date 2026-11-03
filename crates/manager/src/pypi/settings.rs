@@ -12,7 +12,7 @@
 //! Count cannot check against those tools, make every package's lookup fail.
 //!
 //! Errors are never repeated in reports: serde's messages can quote values.
-use super::{Indexes, Named, Origin, shown};
+use crate::origins::{Named, Origin, Origins, shown};
 use crate::*;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -511,7 +511,7 @@ fn find_links(url: &str) -> Named {
 /// Where the packages of one `pyproject.toml` come from, and the lockfile
 /// whose versions are its current ones.
 pub(crate) struct Discovery {
-    pub indexes: Indexes,
+    pub origins: Origins,
     pub resolved_lock: Option<String>,
 }
 
@@ -520,7 +520,7 @@ pub(crate) struct Discovery {
 /// the Count cannot read.
 pub(crate) fn discover(path: &str, files: &Files) -> Discovery {
     let dirs = ancestors(path);
-    let mut indexes = Indexes::default();
+    let mut origins = Origins::default();
     let mut pyprojects: Vec<(&str, Loaded<PyprojectFile>)> = Vec::new();
     for dir in &dirs {
         let file = join(dir, "pyproject.toml");
@@ -529,18 +529,18 @@ pub(crate) fn discover(path: &str, files: &Files) -> Discovery {
                 Loaded::Read(PyprojectFile {
                     tool: Strict(Some(tools)),
                 }) => {
-                    project_settings(tools, &file, &mut indexes);
+                    project_settings(tools, &file, &mut origins);
                 }
-                _ => indexes.uncertain.push(unreadable(&file)),
+                _ => origins.uncertain.push(unreadable(&file)),
             }
             pyprojects.push((dir, loaded));
         }
         let file = join(dir, "uv.toml");
         match load::<Strict<UvSettings>>(files, &file) {
             Some(Loaded::Read(Strict(Some(settings)))) => {
-                uv_settings(&settings, &file, &mut indexes);
+                uv_settings(&settings, &file, &mut origins);
             }
-            Some(_) => indexes.uncertain.push(unreadable(&file)),
+            Some(_) => origins.uncertain.push(unreadable(&file)),
             None => {}
         }
         for (leaf, names_index) in [
@@ -551,7 +551,7 @@ pub(crate) fn discover(path: &str, files: &Files) -> Discovery {
             let file = join(dir, leaf);
             match load::<Value>(files, &file) {
                 Some(Loaded::Read(value)) if !names_index(&value) => {}
-                Some(_) => indexes.uncertain.push(Named::Unusable(format!(
+                Some(_) => origins.uncertain.push(Named::Unusable(format!(
                     "index settings in {file}, which the Count does not read"
                 ))),
                 None => {}
@@ -584,7 +584,7 @@ pub(crate) fn discover(path: &str, files: &Files) -> Discovery {
                 Some(true) => Some(dir),
                 Some(false) => None,
                 None => {
-                    indexes.uncertain.push(unreadable(format!(
+                    origins.uncertain.push(unreadable(format!(
                         "workspace globs in {}",
                         join(dir, "pyproject.toml")
                     )));
@@ -597,8 +597,8 @@ pub(crate) fn discover(path: &str, files: &Files) -> Discovery {
     for (lock, poetry) in [(&uv_lock, false), (&poetry_lock, true)] {
         if let Some(text) = files.get(lock) {
             match locked(text, poetry) {
-                Some(origins) => indexes.locks.push(origins),
-                None => indexes.uncertain.push(unreadable(lock)),
+                Some(recorded) => origins.locks.push(recorded),
+                None => origins.uncertain.push(unreadable(lock)),
             }
         }
     }
@@ -607,44 +607,44 @@ pub(crate) fn discover(path: &str, files: &Files) -> Discovery {
         .find(|lock| files.contains_key(*lock))
         .cloned();
     Discovery {
-        indexes,
+        origins,
         resolved_lock,
     }
 }
 
 /// The index settings of one `pyproject.toml`'s tool tables.
-fn project_settings(tools: &Tools, file: &str, indexes: &mut Indexes) {
+fn project_settings(tools: &Tools, file: &str, origins: &mut Origins) {
     match tools.uv.as_ref() {
-        Some(Strict(Some(settings))) => uv_settings(settings, file, indexes),
-        Some(Strict(None)) => indexes
+        Some(Strict(Some(settings))) => uv_settings(settings, file, origins),
+        Some(Strict(None)) => origins
             .uncertain
             .push(unreadable(format!("[tool.uv] in {file}"))),
         None => {}
     }
     match tools.poetry.as_ref() {
-        Some(Strict(Some(poetry))) => poetry_settings(poetry, indexes),
-        Some(Strict(None)) => indexes
+        Some(Strict(Some(poetry))) => poetry_settings(poetry, origins),
+        Some(Strict(None)) => origins
             .uncertain
             .push(unreadable(format!("[tool.poetry] in {file}"))),
         None => {}
     }
-    unverified(tools, &mut indexes.uncertain);
+    unverified(tools, &mut origins.uncertain);
 }
 
 /// The indexes and other sources one uv settings table configures, `[pip]`
 /// included, since `uv pip` reads it for the project too.
-fn uv_settings(settings: &UvSettings, file: &str, indexes: &mut Indexes) {
+fn uv_settings(settings: &UvSettings, file: &str, origins: &mut Origins) {
     for key in settings.rest.keys() {
         if !UV_IRRELEVANT.contains(&key.as_str()) {
-            indexes
+            origins
                 .uncertain
                 .push(unreadable(format!("uv setting {} in {file}", shown(key))));
         }
     }
-    let configured = &mut indexes.configured;
+    let configured = &mut origins.configured;
     configured.extend(settings.index.iter().map(uv_index));
-    configured.extend(settings.index_url.as_deref().map(Named::parse));
-    configured.extend(settings.extra_index_url.iter().map(|u| Named::parse(u)));
+    configured.extend(settings.index_url.as_deref().map(super::named));
+    configured.extend(settings.extra_index_url.iter().map(|u| super::named(u)));
     configured.extend(settings.find_links.iter().map(|u| find_links(u)));
     if settings.no_index {
         configured.push(Named::Unusable("uv --no-index".into()));
@@ -666,14 +666,14 @@ fn uv_settings(settings: &UvSettings, file: &str, indexes: &mut Indexes) {
                     || source.workspace.is_some())
         });
         if outside {
-            indexes.outside.insert(super::normalise(package));
+            origins.outside.insert(super::normalise(package));
         } else {
-            indexes
+            origins
                 .configured
                 .push(Named::Unusable(format!("[tool.uv.sources] in {file}")));
         }
     }
-    let configured = &mut indexes.configured;
+    let configured = &mut origins.configured;
     if settings
         .override_dependencies
         .iter()
@@ -687,15 +687,15 @@ fn uv_settings(settings: &UvSettings, file: &str, indexes: &mut Indexes) {
     if let Some(pip) = &settings.pip {
         for key in pip.rest.keys() {
             if !UV_PIP_IRRELEVANT.contains(&key.as_str()) {
-                indexes.uncertain.push(unreadable(format!(
+                origins.uncertain.push(unreadable(format!(
                     "uv pip setting {} in {file}",
                     shown(key)
                 )));
             }
         }
-        let configured = &mut indexes.configured;
-        configured.extend(pip.index_url.as_deref().map(Named::parse));
-        configured.extend(pip.extra_index_url.iter().map(|u| Named::parse(u)));
+        let configured = &mut origins.configured;
+        configured.extend(pip.index_url.as_deref().map(super::named));
+        configured.extend(pip.extra_index_url.iter().map(|u| super::named(u)));
         configured.extend(pip.find_links.iter().map(|u| find_links(u)));
         if pip.no_index {
             configured.push(Named::Unusable("uv pip --no-index".into()));
@@ -708,11 +708,11 @@ fn uv_settings(settings: &UvSettings, file: &str, indexes: &mut Indexes) {
 
 /// The sources Poetry's table configures: its sources, and dependencies
 /// pinned to one or taken from git, a path or a URL.
-fn poetry_settings(poetry: &Poetry, indexes: &mut Indexes) {
+fn poetry_settings(poetry: &Poetry, origins: &mut Origins) {
     for source in &poetry.source {
-        indexes.configured.push(match (&source.url, source.links) {
+        origins.configured.push(match (&source.url, source.links) {
             (Some(url), Some(true)) => find_links(url),
-            (Some(url), _) => Named::parse(url),
+            (Some(url), _) => super::named(url),
             (None, _) if source.name.eq_ignore_ascii_case("pypi") => Named::Public,
             (None, _) => Named::Unusable(format!(
                 "Poetry source {} without a URL",
@@ -740,7 +740,7 @@ fn poetry_settings(poetry: &Poetry, indexes: &mut Indexes) {
                 || spec.url.is_some()
         });
     if pinned {
-        indexes.configured.push(Named::Unusable(
+        origins.configured.push(Named::Unusable(
             "Poetry dependencies pinned to a source".into(),
         ));
     }
@@ -786,7 +786,7 @@ fn lock_entry(entry: &toml_edit::Table, poetry: bool) -> Origin {
         });
     };
     if let Some(registry) = source.get("registry").and_then(toml_edit::Item::as_str) {
-        return Origin::Index(Named::parse(registry));
+        return Origin::Index(super::named(registry));
     }
     match source.get("type").and_then(toml_edit::Item::as_str) {
         // A source the lockfile names without its URL is not PyPI's.
@@ -795,7 +795,7 @@ fn lock_entry(entry: &toml_edit::Table, poetry: bool) -> Origin {
             .and_then(toml_edit::Item::as_str)
             .map_or_else(
                 || Origin::Index(Named::Unusable("a locked source without a URL".into())),
-                |url| Origin::Index(Named::parse(url)),
+                |url| Origin::Index(super::named(url)),
             ),
         _ => Origin::Other,
     }
@@ -858,7 +858,7 @@ pub(crate) fn direct_reference(requirement: &str) -> Option<String> {
 
 fn uv_index(index: &UvIndex) -> Named {
     match index.format {
-        UvFormat::Simple => Named::parse(&index.url),
+        UvFormat::Simple => super::named(&index.url),
         UvFormat::Flat => find_links(&index.url),
     }
 }

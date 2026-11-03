@@ -2852,3 +2852,92 @@ fn pip_requirements_files_are_not_maintained_and_the_count_says_why() {
     config.managers = vec![Manager::Npm];
     assert!(Scanner::new(&config).unwrap().unsupported(paths).is_empty());
 }
+
+#[test]
+fn gems_come_from_their_source_their_lockfile_or_rubygems_alone() {
+    let gemfile = |body: &str| format!("source \"https://rubygems.org\"\n{body}");
+    let lock =
+        |sections: &str| format!("{sections}\nPLATFORMS\n  ruby\n\nDEPENDENCIES\n  acme-a\n");
+    let files = Files::from([
+        (
+            "public/Gemfile".into(),
+            gemfile("gem \"rails\", \"~> 7.1\"\n"),
+        ),
+        (
+            "public/Gemfile.lock".into(),
+            lock("GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (7.1.0)\n"),
+        ),
+        // A source block, and a gem's own source option.
+        (
+            "block/Gemfile".into(),
+            gemfile(
+                "source \"https://gems.acme.dev\" do\n  gem \"acme-a\", \"~> 1.0\"\nend\ngem \"acme-b\", \"~> 1.0\", source: \"https://gems.acme.dev\"\ngem \"rake\", \"~> 13.0\"\n",
+            ),
+        ),
+        // A second top-level source: the lockfile decides, else ambiguous.
+        (
+            "second/Gemfile".into(),
+            gemfile(
+                "source \"https://gems.acme.dev\"\ngem \"acme-a\", \"~> 1.0\"\ngem \"acme-b\", \"~> 1.0\"\n",
+            ),
+        ),
+        (
+            "second/Gemfile.lock".into(),
+            lock(
+                "GEM\n  remote: https://gems.acme.dev/\n  specs:\n    acme-a (1.0.0)\n\nGEM\n  remote: https://rubygems.org/\n  specs:\n    rake (13.0.0)\n",
+            ),
+        ),
+        // A source the Count cannot read.
+        (
+            "env/Gemfile".into(),
+            "source ENV.fetch(\"GEM_SOURCE\")\ngem \"rails\", \"~> 7.1\"\n".into(),
+        ),
+        // From git, by option or as the lockfile records.
+        (
+            "git/Gemfile".into(),
+            gemfile(
+                "gem \"acme-a\", \"~> 1.0\", git: \"https://github.com/acme/a\"\ngem \"acme-b\", \"~> 1.0\"\n",
+            ),
+        ),
+        (
+            "git/Gemfile.lock".into(),
+            lock(
+                "GIT\n  remote: https://github.com/acme/b\n  revision: abc\n  specs:\n    acme-b (1.0.0)\n",
+            ),
+        ),
+    ]);
+    let mut config = config();
+    config.managers = vec![Manager::Bundler];
+    let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+    let registry = |file: &str, name: &str| {
+        extraction
+            .dependencies
+            .iter()
+            .find(|d| d.file == file && d.name == name)
+            .unwrap_or_else(|| panic!("{file} {name}"))
+            .registry
+            .clone()
+    };
+    let acme = Some("https://gems.acme.dev".to_owned());
+    assert_eq!(registry("public/Gemfile", "rails"), None);
+    assert_eq!(registry("block/Gemfile", "acme-a"), acme);
+    assert_eq!(registry("block/Gemfile", "acme-b"), acme);
+    assert_eq!(registry("block/Gemfile", "rake"), None);
+    assert_eq!(registry("second/Gemfile", "acme-a"), acme);
+    assert!(registry("second/Gemfile", "acme-b").is_some_and(|r| r.starts_with("ambiguous: ")));
+    assert!(registry("env/Gemfile", "rails").is_some_and(|r| r.contains("cannot read")));
+    for name in ["acme-a", "acme-b"] {
+        assert!(
+            extraction
+                .dependencies
+                .iter()
+                .all(|d| !(d.file == "git/Gemfile" && d.name == name))
+        );
+        assert!(
+            extraction
+                .skipped
+                .iter()
+                .any(|s| s.file == "git/Gemfile" && s.value == name)
+        );
+    }
+}
