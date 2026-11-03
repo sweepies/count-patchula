@@ -2901,6 +2901,17 @@ fn gems_come_from_their_gemfile_when_it_is_plain_else_their_lockfile() {
             ),
         ),
         ("unread/Gemfile.lock".into(), acme_lock.clone()),
+        // A source a read line names still counts against a stale lock.
+        (
+            "unread-stale/Gemfile".into(),
+            gemfile(
+                "git_source(:acme) { |repo| \"https://git.acme.dev/#{repo}\" }\ngem \"acme-a\", \"~> 1.0\", source: \"https://gems.acme.dev\"\n",
+            ),
+        ),
+        (
+            "unread-stale/Gemfile.lock".into(),
+            lock("GEM\n  remote: https://rubygems.org/\n  specs:\n    acme-a (1.0.0)\n"),
+        ),
         (
             "env/Gemfile".into(),
             "source ENV.fetch(\"GEM_SOURCE\")\ngem \"rails\", \"~> 7.1\"\n".into(),
@@ -2966,6 +2977,7 @@ fn gems_come_from_their_gemfile_when_it_is_plain_else_their_lockfile() {
     assert_eq!(registry("unread/Gemfile", "acme-a"), acme);
     assert_eq!(registry("unread/Gemfile", "rake"), None);
     assert!(registry("unread/Gemfile", "rails").is_some_and(|r| r.contains("cannot read")));
+    assert!(ambiguous(registry("unread-stale/Gemfile", "acme-a")));
     assert!(registry("env/Gemfile", "rails").is_some_and(|r| r.contains("cannot read")));
     let secret = registry("secret/Gemfile", "acme-a").unwrap();
     assert!(

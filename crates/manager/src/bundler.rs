@@ -206,6 +206,19 @@ fn gemfile(path: &str, text: &str) -> Gemfile {
         origins.configured.push(Named::Unusable(format!(
             "lines in {path} the Count cannot read"
         )));
+        // A source other than RubyGems that a read line names for a gem
+        // still counts: against a lock that disagrees it can only make the
+        // lookup fail.
+        for (name, named) in &gems {
+            if let Some(named) = named.clone().filter(|n| *n != Named::Public) {
+                let origin = Origin::Index(named);
+                let merged = match origins.declared.remove(name) {
+                    Some(before) => Origin::of([before, origin]).expect("two origins"),
+                    None => origin,
+                };
+                origins.declared.insert(name.clone(), merged);
+            }
+        }
         let gems = gems.into_iter().map(|(name, _)| name).collect();
         return Gemfile { origins, gems };
     }
