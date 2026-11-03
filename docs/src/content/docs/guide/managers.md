@@ -265,8 +265,8 @@ version specifier. URL requirements, unversioned names and Poetry `git`/`path`
 sources are skipped. Names are PEP 503 normalised and resolved from `uv.lock` or
 `poetry.lock`; `.python-version` pins CPython.
 
-pip requirements files are not maintained, and a repository that has them
-gets a warning saying so. pip takes each package from whatever index the
+pip requirements files are not maintained: each is listed as skipped, with
+the reason. pip takes each package from whatever index the
 file's options, the files it includes and the environment name, and the
 Count cannot settle that for certain from the repository; a guess could
 propose someone else's package of the same name. Move the project to uv

@@ -2341,7 +2341,7 @@ impl Engine {
         let key = ExtractionKey {
             repo: repo.into(),
             default_branch_commit: commit,
-            config_hash: format!("extract-v17:{}", hash(&serde_json::to_vec(&config)?)),
+            config_hash: format!("extract-v18:{}", hash(&serde_json::to_vec(&config)?)),
         };
         let cached: CachedExtraction = if let Some(bytes) = self.cache.extraction_get(&key).await? {
             self.extraction_hits.fetch_add(1, Ordering::Relaxed);
@@ -2576,21 +2576,20 @@ pub fn read_tree(
             }
             continue;
         }
-        if scanner.needs(&relative)
-            && let Ok(bytes) = std::fs::read(&path)
-        {
-            match String::from_utf8(bytes) {
-                Ok(content) => {
+        if scanner.needs(&relative) {
+            match std::fs::read(&path).map(String::from_utf8) {
+                Ok(Ok(content)) => {
                     files.insert(relative.clone(), content);
                 }
-                // One that is not text is unreadable the same way.
-                Err(_) if patchula_manager::python_settings(&relative) => {
+                // One that cannot be read, or is not text, is unreadable
+                // the same way.
+                _ if patchula_manager::python_settings(&relative) => {
                     files.insert(
                         relative.clone(),
                         patchula_manager::UNREADABLE_SETTINGS.to_owned(),
                     );
                 }
-                Err(_) => {}
+                _ => {}
             }
         }
         paths.insert(relative);

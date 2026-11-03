@@ -55,58 +55,28 @@ fn resolved(lock: Option<&Document<&str>>, package: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Where a lockfile says `package` came from. `uv.lock` records
-/// `source.registry` for an index and other keys (`git`, `path`, `url`,
-/// `editable`, `directory`, `virtual`) for anything else; `poetry.lock`
-/// records `[package.source]` with a `type`, and nothing for PyPI. Entries
-/// that disagree, as a forked uv resolution can, are ambiguous.
-fn locked_origin(
-    lock: Option<&Document<&str>>,
-    poetry: bool,
-    package: &str,
-) -> Option<crate::pypi::Origin> {
-    use crate::pypi::{Named, Origin};
-    let entries = lock?.get("package")?.as_array_of_tables()?;
-    let origins = entries
-        .iter()
-        .filter(|p| {
-            p.get("name")
-                .and_then(Item::as_str)
-                .map(normalise)
-                .as_deref()
-                == Some(package)
-        })
-        .map(|entry| {
-            let Some(source) = entry.get("source") else {
-                return Origin::Index(if poetry {
-                    Named::Public
-                } else {
-                    Named::Unusable("a locked package without a source".into())
-                });
-            };
-            if let Some(registry) = source.get("registry").and_then(Item::as_str) {
-                return Origin::Index(Named::parse(registry));
-            }
-            match source.get("type").and_then(Item::as_str) {
-                // A source the lockfile names without its URL is not PyPI's.
-                Some("legacy" | "pypi") => source.get("url").and_then(Item::as_str).map_or_else(
-                    || Origin::Index(Named::Unusable("a locked source without a URL".into())),
-                    |url| Origin::Index(Named::parse(url)),
-                ),
-                _ => Origin::Other,
-            }
-        });
-    Origin::of(origins)
-}
-
 struct Scan<'a> {
     path: &'a str,
     text: &'a str,
     lock: Option<Document<&'a str>>,
     out: Vec<Dependency>,
+    skipped: Vec<Skipped>,
 }
 
+/// Why a package from git, a path, a URL or a workspace member is skipped.
+const NOT_FROM_AN_INDEX: &str = "comes from git, a path, a URL or a workspace member, not a package index, so it is not looked up on PyPI";
+
 impl Scan<'_> {
+    /// Report a package that does not come from an index, at `at`.
+    fn skip(&mut self, at: usize, name: &str) {
+        self.skipped.push(Skipped {
+            manager: Manager::Pyproject,
+            file: self.path.into(),
+            line: Some(self.text[..at.min(self.text.len())].matches('\n').count() + 1),
+            value: name.into(),
+            reason: NOT_FROM_AN_INDEX.into(),
+        });
+    }
     /// PEP 508 strings, edited inside the TOML string at the specifier only.
     fn requirements(&mut self, values: Option<&Item>, pointer: &str, kind: DependencyKind) {
         let Some(array) = values.and_then(Item::as_array) else {
@@ -127,6 +97,10 @@ impl Scan<'_> {
                 continue;
             }
             let requirement = string.value();
+            if let Some(name) = crate::pypi::settings::direct_reference(requirement) {
+                self.skip(span.start, &name);
+                continue;
+            }
             let Some((name, start, end)) = pep508(requirement) else {
                 continue;
             };
@@ -168,10 +142,13 @@ impl Scan<'_> {
             let version = if value.is_str() {
                 Some(value)
             } else {
-                if ["git", "path", "url", "file"]
+                if ["git", "path", "url", "file", "directory"]
                     .iter()
                     .any(|key| value.get(key).is_some())
                 {
+                    if let Some(span) = value.span() {
+                        self.skip(span.start, name);
+                    }
                     continue;
                 }
                 value.get("version")
@@ -225,42 +202,20 @@ pub(super) fn extract(
     }
     let doc = Document::parse(text).map_err(|e| toml_error(text, &e))?;
     let discovery = crate::pypi::settings::discover(path, files);
-    // Only the project's own lock, or its workspace root's, resolves it: a
-    // lock above belongs to another project.
+    // The lockfile whose versions are the project's: its own, or its uv
+    // workspace root's; a lock above belongs to another project.
     let lock = discovery
-        .lock_dirs
-        .iter()
-        .flat_map(|dir| {
-            // A lockfile counts only when its tool could lock the project: a
-            // `poetry.lock` left in a project uv manages, or the reverse,
-            // records how another tool once resolved it.
-            let uv = !discovery.poetry_configured || discovery.uv_configured;
-            let poetry = !discovery.uv_configured || discovery.poetry_configured;
-            [("uv.lock", uv), ("poetry.lock", poetry)]
-                .into_iter()
-                .filter(|(_, trusted)| *trusted)
-                .map(|(leaf, _)| leaf)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .map(move |leaf| {
-                    if dir.is_empty() {
-                        leaf.to_owned()
-                    } else {
-                        format!("{dir}/{leaf}")
-                    }
-                })
-        })
-        .find_map(|path| Some((path.ends_with("poetry.lock"), files.get(&path)?)));
-    // Poetry records no source for PyPI; uv records one for every package.
-    let poetry_lock = lock.is_some_and(|(poetry, _)| poetry);
-    let lock = lock
-        .map(|(_, text)| Document::parse(text.as_str()).map_err(|e| toml_error(text, &e)))
+        .resolved_lock
+        .as_ref()
+        .and_then(|lock| files.get(lock))
+        .map(|text| Document::parse(text.as_str()).map_err(|e| toml_error(text, &e)))
         .transpose()?;
     let mut scan = Scan {
         path,
         text,
         lock,
         out: Vec::new(),
+        skipped: Vec::new(),
     };
     let project = doc.get("project");
     scan.requirements(
@@ -325,18 +280,16 @@ pub(super) fn extract(
             );
         }
     }
-    let lock = scan.lock.as_ref();
-    for dep in discovery.indexes.assign(&mut scan.out, |package| {
-        locked_origin(lock, poetry_lock, package)
-    }) {
+    for dep in discovery.indexes.assign(&mut scan.out) {
         skipped.push(Skipped {
             manager: Manager::Pyproject,
             file: dep.file,
             line: Some(dep.location.line),
             value: dep.name,
-            reason: "comes from git, a path, a URL or a workspace member, not a package index, so it is not looked up on PyPI".into(),
+            reason: NOT_FROM_AN_INDEX.into(),
         });
     }
+    skipped.extend(scan.skipped);
     Ok(scan.out)
 }
 

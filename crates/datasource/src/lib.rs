@@ -236,7 +236,7 @@ impl Client {
         if let Some(registry) = registry {
             if let Some(indexes) = id.ambiguous() {
                 return Err(Error::Registry(format!(
-                    "{package} could come from several indexes ({indexes}); pin it to one or commit a lockfile"
+                    "{package} could come from several indexes ({indexes}); commit a lockfile that records where it comes from"
                 )));
             }
             // A value the manager kept as written (`${VAR}`, a redacted URL,

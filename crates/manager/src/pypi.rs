@@ -3,7 +3,7 @@
 //! package that could come from several is ambiguous: its lookup fails rather
 //! than guess, since the public package of its name may be someone else's.
 use crate::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) mod settings;
 
@@ -90,56 +90,54 @@ impl Origin {
     }
 }
 
-/// A project's indexes.
+/// Where a project's packages come from. The tools' own lockfiles decide:
+/// a package one records comes from what it records. A package none records
+/// is PyPI's only in a project that configures no index; anywhere else the
+/// Count does not guess which index the tool would pick.
 #[derive(Debug, Default)]
 pub(crate) struct Indexes {
-    /// The index that replaces PyPI for packages pinned nowhere.
-    pub default: Option<Named>,
-    /// Indexes searched besides it. Any that is not PyPI makes every package
-    /// pinned nowhere ambiguous.
-    pub extras: Vec<Named>,
-    /// Packages pinned by the project, by normalised name.
-    pub pinned: BTreeMap<String, Origin>,
+    /// The indexes and other sources the project configures; empty when it
+    /// configures none.
+    pub configured: Vec<Named>,
+    /// What each lockfile that applies records, by normalised name.
+    pub locks: Vec<BTreeMap<String, Origin>>,
+    /// Settings that could move any package, recorded or not.
+    pub uncertain: Vec<Named>,
+    /// Packages the manifest itself takes from git, a path, a URL or a
+    /// workspace member, by normalised name: never looked up.
+    pub outside: BTreeSet<String>,
 }
 
 impl Indexes {
-    /// Where `package` (normalised) comes from: its pin, else what its
-    /// lockfile records, else the project's only index, else ambiguous.
-    fn origin(&self, package: &str, locked: Option<Origin>) -> Origin {
-        if let Some(origin) = self.pinned.get(package) {
-            return origin.clone();
+    fn origin(&self, package: &str) -> Origin {
+        if self.outside.contains(package) {
+            return Origin::Other;
         }
-        let candidates: Vec<Named> = std::iter::once(self.default.clone().unwrap_or(Named::Public))
-            .chain(self.extras.iter().cloned())
-            .collect();
-        let possible: Vec<Named> = match locked {
-            // A lockfile picks among the indexes the project searches. One it
-            // records that the project no longer searches is stale: the tool
-            // would resolve the package again from those it does.
-            Some(Origin::Index(named)) if !candidates.contains(&named) => {
-                std::iter::once(named).chain(candidates).collect()
-            }
-            Some(locked) => return locked,
-            None => candidates,
-        };
-        match Origin::of(possible.into_iter().map(Origin::Index)) {
+        if let Some(origin) = Origin::of(self.uncertain.iter().cloned().map(Origin::Index)) {
+            return origin;
+        }
+        let recorded = self
+            .locks
+            .iter()
+            .filter_map(|lock| lock.get(package).cloned());
+        if let Some(origin) = Origin::of(recorded) {
+            return origin;
+        }
+        let candidates = std::iter::once(Named::Public).chain(self.configured.iter().cloned());
+        match Origin::of(candidates.map(Origin::Index)) {
             Some(origin) => origin,
             None => Origin::Index(Named::Public),
         }
     }
     /// Give each PyPI dependency in `deps` its registry, and drop those that
     /// do not come from an index, returning them.
-    pub(crate) fn assign(
-        &self,
-        deps: &mut Vec<Dependency>,
-        locked: impl Fn(&str) -> Option<Origin>,
-    ) -> Vec<Dependency> {
+    pub(crate) fn assign(&self, deps: &mut Vec<Dependency>) -> Vec<Dependency> {
         let mut dropped = Vec::new();
         deps.retain_mut(|dep| {
             if dep.source != Source::Pypi {
                 return true;
             }
-            match self.origin(&dep.package, locked(&dep.package)) {
+            match self.origin(&dep.package) {
                 Origin::Index(named) => dep.registry = named.recorded(),
                 Origin::Ambiguous(named) => {
                     let labels: Vec<_> = named.iter().map(Named::label).collect();

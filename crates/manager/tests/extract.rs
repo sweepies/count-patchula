@@ -2485,510 +2485,317 @@ fn ambiguous(found: Option<String>) -> bool {
     found.is_some_and(|r| r.starts_with("ambiguous: "))
 }
 
+/// Whether a lookup for this registry fails: ambiguous, or something the
+/// Count cannot read from rather than an index URL.
+fn fails(found: Option<String>) -> bool {
+    found.is_some_and(|r| !r.starts_with("https://"))
+}
+
 const ACME: &str = "https://pypi.acme.dev/simple";
 
-#[test]
-fn python_packages_come_from_their_pinned_locked_or_only_index_never_a_guess() {
-    let files = Files::from([
-        // uv: PyPI with an index searched alongside it, and PyPI listed again.
-        (
-            "extra/pyproject.toml".into(),
-            "[project]\nname = \"x\"\ndependencies = [\"acme-tools>=1\"]\n[tool.uv]\nindex-url = \"https://pypi.org/simple\"\nextra-index-url = [\"https://pypi.acme.dev/simple\"]\n".into(),
-        ),
-        (
-            "public/pyproject.toml".into(),
-            "[project]\nname = \"x\"\ndependencies = [\"flask>=3\"]\n[tool.uv]\nextra-index-url = [\"https://pypi.org/simple\"]\n".into(),
-        ),
-        // uv: a pinned explicit index, and one searched alongside PyPI.
-        (
-            "uv/pyproject.toml".into(),
-            r#"[project]
-name = "app"
-dependencies = ["acme-core>=1.0", "httpx>=0.27", "attrs>=23"]
-[[tool.uv.index]]
-name = "acme"
-url = "https://pypi.acme.dev/simple"
-explicit = true
-[[tool.uv.index]]
-name = "mirror"
-url = "https://mirror.acme.dev/simple"
-[tool.uv.sources]
-acme-core = { index = "acme" }
-"#
-            .into(),
-        ),
-        (
-            "uv/uv.lock".into(),
-            "version = 1\n[[package]]\nname = \"httpx\"\nversion = \"0.27.0\"\nsource = { registry = \"https://pypi.org/simple\" }\n".into(),
-        ),
-        // Poetry: a supplemental source and a dependency pinned to another.
-        (
-            "poetry/pyproject.toml".into(),
-            r#"[tool.poetry.dependencies]
-python = "^3.12"
-acme-auth = { version = "^2.0", source = "private" }
-django = "^5.0"
-rich = "^13.0"
-[[tool.poetry.source]]
-name = "private"
-url = "https://pypi.acme.dev/simple/"
-priority = "explicit"
-[[tool.poetry.source]]
-name = "extra"
-url = "https://extra.acme.dev/simple/"
-priority = "supplemental"
-"#
-            .into(),
-        ),
-        (
-            "poetry/poetry.lock".into(),
-            "[metadata]\nlock-version = \"2.1\"\n[[package]]\nname = \"django\"\nversion = \"5.0.1\"\nfiles = []\n".into(),
-        ),
-        // A uv.toml replaces [tool.uv].
-        (
-            "configured/pyproject.toml".into(),
-            "[project]\nname = \"x\"\ndependencies = [\"numpy>=1.26\"]\n[tool.uv]\nindex-url = \"https://ignored.acme.dev/simple\"\n".into(),
-        ),
-        (
-            "configured/uv.toml".into(),
-            "index-url = \"https://pypi.acme.dev/simple\"\n".into(),
-        ),
-        // A lockfile that records an index the project no longer searches
-        // is stale.
-        (
-            "stale/pyproject.toml".into(),
-            "[project]\nname = \"x\"\ndependencies = [\"acme-lib>=1\"]\n[tool.uv]\nindex-url = \"https://pypi.acme.dev/simple\"\n".into(),
-        ),
-        (
-            "stale/uv.lock".into(),
-            "version = 1\n[[package]]\nname = \"acme-lib\"\nversion = \"1.0.0\"\nsource = { registry = \"https://pypi.org/simple\" }\n".into(),
-        ),
-    ]);
-    let mut config = config();
-    config.managers = vec![Manager::Pyproject];
-    let scanner = Scanner::new(&config).unwrap();
-    assert!(scanner.needs("configured/uv.toml"));
-    let extraction = scanner.extract(&files).unwrap();
-    let registry = |file: &str, name: &str| python_registry(&extraction, file, name);
-    let acme = Some(ACME.to_owned());
-    let tools = registry("extra/pyproject.toml", "acme-tools");
-    assert!(ambiguous(tools.clone()) && tools.is_some_and(|t| t.contains(ACME)));
-    // PyPI listed again is not another index.
-    assert_eq!(registry("public/pyproject.toml", "flask"), None);
-    assert_eq!(registry("uv/pyproject.toml", "acme-core"), acme);
-    // The lockfile settles one; the other stays ambiguous.
-    assert_eq!(registry("uv/pyproject.toml", "httpx"), None);
-    assert!(ambiguous(registry("uv/pyproject.toml", "attrs")));
-    assert_eq!(registry("poetry/pyproject.toml", "acme-auth"), acme);
-    // Poetry records no source for PyPI.
-    assert_eq!(registry("poetry/pyproject.toml", "django"), None);
-    assert!(ambiguous(registry("poetry/pyproject.toml", "rich")));
-    assert_eq!(registry("configured/pyproject.toml", "numpy"), acme);
-    assert!(ambiguous(registry("stale/pyproject.toml", "acme-lib")));
+fn uv_lock(package: &str, source: &str) -> String {
+    format!(
+        "version = 1\n[[package]]\nname = \"{package}\"\nversion = \"1.0.0\"\nsource = {source}\n"
+    )
+}
+
+fn project(extra: &str) -> String {
+    format!("[project]\nname = \"p\"\ndependencies = [\"acme-a>=1\"]\n{extra}")
 }
 
 #[test]
-fn python_pins_lockfiles_and_workspaces_follow_the_tools() {
+fn python_packages_come_from_what_their_lockfile_records() {
+    let acme = "{ registry = \"https://pypi.acme.dev/simple\" }";
+    let pypi = "{ registry = \"https://pypi.org/simple\" }";
     let files = Files::from([
-        // A uv.toml changes index settings but never the project's pins.
+        // No index configured: PyPI, locked or not.
+        ("plain/pyproject.toml".into(), project("")),
+        ("plain-locked/pyproject.toml".into(), project("")),
+        ("plain-locked/uv.lock".into(), uv_lock("acme-a", pypi)),
+        // An index configured and no lockfile: PyPI or it, never a guess.
         (
-            "pinned/pyproject.toml".into(),
-            r#"[project]
-name = "pinned"
-dependencies = ["acme-core>=1", "acme-internal>=1", "acme-split>=1", "acme-typo>=1"]
-[[tool.uv.index]]
-name = "acme"
-url = "https://pypi.acme.dev/simple"
-explicit = true
-[[tool.uv.index]]
-name = "other"
-url = "https://other.acme.dev/simple"
-explicit = true
-[tool.uv.sources]
-acme-core = { index = "acme" }
-acme-internal = { git = "https://github.com/acme/internal" }
-acme-split = [
-  { index = "acme", marker = "sys_platform == 'linux'" },
-  { index = "other", marker = "sys_platform == 'darwin'" },
-]
-acme-typo = { index = "acmee" }
-"#
-            .into(),
+            "unlocked/pyproject.toml".into(),
+            project("[tool.uv]\nindex-url = \"https://pypi.acme.dev/simple\"\n"),
         ),
-        ("pinned/uv.toml".into(), "native-tls = true\n".into()),
-        // Poetry names are case-insensitive; a URL-less PyPI source is PyPI.
+        // The lockfile decides, whatever the settings say.
+        (
+            "locked/pyproject.toml".into(),
+            project("[tool.uv]\nextra-index-url = [\"https://pypi.acme.dev/simple\"]\n"),
+        ),
+        ("locked/uv.lock".into(), uv_lock("acme-a", acme)),
+        // PyPI listed as an extra index configures nothing else.
+        (
+            "public/pyproject.toml".into(),
+            project("[tool.uv]\nextra-index-url = [\"https://pypi.org/simple\"]\n"),
+        ),
+        // Inline arrays of tables are read like [[...]] ones.
+        (
+            "inline/pyproject.toml".into(),
+            project("[tool.uv]\nindex = [{ name = \"acme\", url = \"https://pypi.acme.dev/simple\", default = true }]\n"),
+        ),
+        // uv pip's table and an override naming a URL configure too.
+        (
+            "uvpip/pyproject.toml".into(),
+            project("[tool.uv.pip]\nindex-url = \"https://pypi.acme.dev/simple\"\n"),
+        ),
+        (
+            "override/pyproject.toml".into(),
+            project("[tool.uv]\noverride-dependencies = [\"acme-b @ https://files.acme.dev/acme_b-1.0-py3-none-any.whl\"]\n"),
+        ),
+        // A source from git, recorded so in the lockfile, is not looked up.
+        (
+            "git/pyproject.toml".into(),
+            project("[tool.uv.sources]\nacme-a = { git = \"https://github.com/acme/a\" }\n"),
+        ),
+        (
+            "git/uv.lock".into(),
+            uv_lock("acme-a", "{ git = \"https://github.com/acme/a?rev=abc#abc\" }"),
+        ),
+        // A forked resolution recording two indexes is ambiguous.
+        ("forked/pyproject.toml".into(), project("")),
+        (
+            "forked/uv.lock".into(),
+            format!("{}[[package]]\nname = \"acme-a\"\nversion = \"1.0.0\"\nsource = {acme}\n", uv_lock("acme-a", pypi)),
+        ),
+        // Poetry: a legacy source in poetry.lock, and no source for PyPI.
         (
             "poetry/pyproject.toml".into(),
-            r#"[tool.poetry.dependencies]
-python = "^3.12"
-acme-auth = { version = "^2.0", source = "Acme" }
-django = "^5.0"
-[[tool.poetry.source]]
-name = "acme"
-url = "https://pypi.acme.dev/simple/"
-priority = "primary"
-[[tool.poetry.source]]
-name = "PyPI"
-priority = "primary"
-"#
-            .into(),
+            "[tool.poetry.dependencies]\nacme-a = \"^1\"\nrequests = \"^2\"\n[[tool.poetry.source]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\npriority = \"supplemental\"\n".into(),
         ),
-        // A uv workspace member inherits its root's default index.
+        (
+            "poetry/poetry.lock".into(),
+            "[[package]]\nname = \"acme-a\"\nversion = \"1.0.0\"\n[package.source]\ntype = \"legacy\"\nurl = \"https://pypi.acme.dev/simple\"\nreference = \"acme\"\n[[package]]\nname = \"requests\"\nversion = \"2.31.0\"\n".into(),
+        ),
+        // Two lockfiles that disagree.
+        (
+            "both/pyproject.toml".into(),
+            "[project]\nname = \"p\"\ndependencies = [\"acme-a>=1\"]\n[tool.poetry]\npackage-mode = false\n".into(),
+        ),
+        ("both/uv.lock".into(), uv_lock("acme-a", pypi)),
+        (
+            "both/poetry.lock".into(),
+            "[[package]]\nname = \"acme-a\"\nversion = \"1.0.0\"\n[package.source]\ntype = \"legacy\"\nurl = \"https://pypi.acme.dev/simple\"\n".into(),
+        ),
+        // uv locks a workspace at its root; a member's own lock is stale.
         (
             "ws/pyproject.toml".into(),
-            "[project]\nname = \"ws\"\n[tool.uv.workspace]\nmembers = [\"packages/*\"]\n[[tool.uv.index]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\ndefault = true\n".into(),
+            "[tool.uv.workspace]\nmembers = [\"./packages/*/\"]\n[tool.uv]\nindex-url = \"https://pypi.acme.dev/simple\"\n".into(),
         ),
-        (
-            "ws/packages/lib/pyproject.toml".into(),
-            "[project]\nname = \"lib\"\ndependencies = [\"requests>=2\"]\n".into(),
-        ),
+        ("ws/uv.lock".into(), uv_lock("acme-a", acme)),
+        ("ws/packages/lib/pyproject.toml".into(), project("")),
+        ("ws/packages/lib/uv.lock".into(), uv_lock("acme-a", pypi)),
         // A lock above that belongs to another project is not this one's.
-        (
-            "other/uv.lock".into(),
-            "version = 1\n[[package]]\nname = \"acme-lib\"\nversion = \"1.0.0\"\nsource = { registry = \"https://pypi.org/simple\" }\n".into(),
-        ),
+        ("other/uv.lock".into(), uv_lock("acme-a", pypi)),
         (
             "other/sub/pyproject.toml".into(),
-            "[project]\nname = \"sub\"\ndependencies = [\"acme-lib>=1\"]\n[tool.uv]\nindex-url = \"https://pypi.acme.dev/simple\"\n".into(),
+            project("[tool.uv]\nindex-url = \"https://pypi.acme.dev/simple\"\n"),
         ),
     ]);
     let extraction = python_scan(&files);
-    let dep = |file: &str, name: &str| {
+    let registry = |file: &str, name: &str| python_registry(&extraction, file, name);
+    let acme = Some(ACME.to_owned());
+    assert_eq!(registry("plain/pyproject.toml", "acme-a"), None);
+    assert_eq!(registry("plain-locked/pyproject.toml", "acme-a"), None);
+    let unlocked = registry("unlocked/pyproject.toml", "acme-a");
+    assert!(
+        ambiguous(unlocked.clone()) && unlocked.is_some_and(|r| r.contains(ACME)),
+        "unlocked"
+    );
+    assert_eq!(registry("locked/pyproject.toml", "acme-a"), acme);
+    assert_eq!(registry("public/pyproject.toml", "acme-a"), None);
+    for file in [
+        "inline/pyproject.toml",
+        "uvpip/pyproject.toml",
+        "override/pyproject.toml",
+        "forked/pyproject.toml",
+        "both/pyproject.toml",
+        "other/sub/pyproject.toml",
+    ] {
+        assert!(
+            ambiguous(registry(file, "acme-a")),
+            "{file}: {:?}",
+            registry(file, "acme-a")
+        );
+    }
+    assert!(
         extraction
             .dependencies
             .iter()
-            .find(|d| d.file == file && d.name == name)
-            .map(|d| d.registry.clone())
-    };
-    let acme = Some(Some(ACME.to_owned()));
-    assert_eq!(dep("pinned/pyproject.toml", "acme-core"), acme);
-    // Not from an index: left alone rather than looked up on PyPI.
-    assert_eq!(dep("pinned/pyproject.toml", "acme-internal"), None);
-    assert!(ambiguous(
-        dep("pinned/pyproject.toml", "acme-split").flatten()
-    ));
-    assert_eq!(
-        dep("pinned/pyproject.toml", "acme-typo"),
-        Some(Some("index acmee".to_owned()))
+            .all(|d| d.file != "git/pyproject.toml")
     );
-    assert_eq!(dep("poetry/pyproject.toml", "acme-auth"), acme);
-    // Two primary sources, PyPI among them, could each serve it.
-    assert!(ambiguous(dep("poetry/pyproject.toml", "django").flatten()));
-    assert_eq!(dep("ws/packages/lib/pyproject.toml", "requests"), acme);
-    assert_eq!(dep("other/sub/pyproject.toml", "acme-lib"), acme);
+    assert!(
+        extraction
+            .skipped
+            .iter()
+            .any(|s| s.file == "git/pyproject.toml" && s.reason.contains("not a package index"))
+    );
+    assert_eq!(registry("poetry/pyproject.toml", "acme-a"), acme);
+    assert_eq!(registry("poetry/pyproject.toml", "requests"), None);
+    assert_eq!(registry("ws/packages/lib/pyproject.toml", "acme-a"), acme);
+}
+
+#[test]
+fn python_settings_the_count_cannot_read_fail_every_lookup() {
+    let lock = uv_lock("acme-a", "{ registry = \"https://pypi.acme.dev/simple\" }");
+    let mut files = Files::new();
+    for (dir, pyproject, extra) in [
+        ("toml", project(""), Some(("uv.toml", "index-url = [\n"))),
+        ("key", project("[tool.uv]\nsome-new-setting = true\n"), None),
+        (
+            "indexkey",
+            project("[[tool.uv.index]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\nsome-new-key = 1\n"),
+            None,
+        ),
+        (
+            "poetry",
+            "[project]\nname = \"p\"\ndependencies = [\"acme-a>=1\"]\n[[tool.poetry.source]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\npriority = \"some-new-priority\"\n".to_owned(),
+            None,
+        ),
+        (
+            "hatch",
+            project("[tool.hatch.envs.default.overrides]\nplatform.linux.env-vars = [{ key = \"UV_INDEX_URL\", value = \"https://pypi.acme.dev/simple\" }]\n"),
+            None,
+        ),
+        (
+            "pixi",
+            project("[tool.pixi.feature.test.pypi-options]\nindex-url = \"https://pypi.acme.dev/simple\"\n"),
+            None,
+        ),
+        ("pdm", project(""), Some(("pdm.toml", "[pypi]\nurl = \"https://pypi.acme.dev/simple\"\n"))),
+        (
+            "rye",
+            project("[[tool.rye.sources]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\n"),
+            None,
+        ),
+        ("braces", "[tool.uv.workspace]\nmembers = [\"libs/{core,old}\"]\n".to_owned(), None),
+        ("badlock", project(""), Some(("uv.lock", "version = [\n"))),
+    ] {
+        files.insert(format!("{dir}/pyproject.toml"), pyproject);
+        if let Some((leaf, text)) = extra {
+            files.insert(format!("{dir}/{leaf}"), text.into());
+        }
+        // A lockfile recording the package does not help either.
+        files
+            .entry(format!("{dir}/uv.lock"))
+            .or_insert_with(|| lock.clone());
+    }
+    files.insert("braces/libs/core/pyproject.toml".into(), project(""));
+    let extraction = python_scan(&files);
+    for dir in [
+        "toml", "key", "indexkey", "poetry", "hatch", "pixi", "pdm", "rye",
+    ] {
+        let file = format!("{dir}/pyproject.toml");
+        assert!(
+            fails(python_registry(&extraction, &file, "acme-a")),
+            "{dir}: {:?}",
+            python_registry(&extraction, &file, "acme-a")
+        );
+    }
+    assert!(fails(python_registry(
+        &extraction,
+        "braces/libs/core/pyproject.toml",
+        "acme-a"
+    )));
+    // A lockfile that does not parse fails its manifest, with a warning.
+    assert!(
+        extraction
+            .dependencies
+            .iter()
+            .all(|d| !d.file.starts_with("badlock/"))
+    );
+    assert!(
+        extraction
+            .warnings
+            .iter()
+            .any(|w| w.contains("badlock/pyproject.toml"))
+    );
 }
 
 #[test]
 fn python_index_files_are_read_and_secrets_never_recorded() {
     let mut config = config();
     config.managers = vec![Manager::Pyproject];
-    // Only some manifests are selected; their index files are read anyway.
+    // Only some manifests are selected; index files are read anyway.
     config.files = vec![patchula_config::FileSet {
         manager: Manager::Pyproject,
         paths: vec!["services/**/pyproject.toml".into()],
     }];
     let scanner = Scanner::new(&config).unwrap();
-    for path in ["pyproject.toml", "uv.toml", "uv.lock", "poetry.lock"] {
+    for path in [
+        "pyproject.toml",
+        "uv.toml",
+        "uv.lock",
+        "poetry.lock",
+        "pdm.toml",
+        "pixi.toml",
+        "hatch.toml",
+    ] {
         assert!(scanner.needs(path), "{path}");
     }
-    let project = |url: &str| {
-        format!(
-            "[project]\nname = \"p\"\ndependencies = [\"acme-a>=1\"]\n[tool.uv]\nindex-url = \"{url}\"\n"
-        )
-    };
+    let with_index = |url: &str| project(&format!("[tool.uv]\nindex-url = \"{url}\"\n"));
     let files = Files::from([
         (
             "services/token/pyproject.toml".into(),
-            project("https://ci:s3cret@pypi.acme.dev/simple?token=x"), // betterleaks:allow
+            with_index("https://ci:s3cret@pypi.acme.dev/simple?token=x"), // betterleaks:allow
         ),
-        // A password with a slash, a token in a query with no path, and a
-        // password with `?` in it.
         (
             "services/slash/pyproject.toml".into(),
-            project("https://ci:pa/ss@pypi.acme.dev/simple"), // betterleaks:allow
+            with_index("https://ci:pa/ss@pypi.acme.dev/simple"), // betterleaks:allow
         ),
         (
             "services/query/pyproject.toml".into(),
-            project("https://pypi.acme.dev?token=s3cret"),
+            with_index("https://pypi.acme.dev?token=s3cret"),
         ),
-        (
-            "services/question/pyproject.toml".into(),
-            project("https://ci:pa?ss@pypi.acme.dev/simple"), // betterleaks:allow
-        ),
-        // A scheme-less find-links value with a token.
         (
             "services/links/pyproject.toml".into(),
-            "[project]\nname = \"p\"\ndependencies = [\"acme-a>=1\"]\n[tool.uv]\nfind-links = [\"wheels.acme.dev/x?token=s3cret\"]\n".into(),
+            project("[tool.uv]\nfind-links = [\"wheels.acme.dev/x?token=s3cret\"]\n"),
         ),
+        // A lockfile recording a URL with credentials.
+        ("services/locked/pyproject.toml".into(), project("")),
         (
-            "services/api/pyproject.toml".into(),
-            r#"[tool.poetry.dependencies]
-python = "^3.12"
-requests = { version = "^2.31", source = "pypi" }
-internal = { git = "https://github.com/acme/internal.git" , version = "^1" }
-[[tool.poetry.source]]
-name = "acme"
-url = "https://pypi.acme.dev/simple/"
-"#
-            .into(),
+            "services/locked/uv.lock".into(),
+            uv_lock(
+                "acme-a",
+                "{ registry = \"https://ci:s3cret@pypi.acme.dev/simple\" }",
+            ), // betterleaks:allow
         ),
     ]);
     let extraction = scanner.extract(&files).unwrap();
-    let recorded = python_registry(&extraction, "services/token/pyproject.toml", "acme-a").unwrap();
-    assert!(recorded.contains("pypi.acme.dev/simple"), "{recorded}");
     for dep in &extraction.dependencies {
         let recorded = dep.registry.clone().unwrap_or_default();
-        for secret in ["s3cret", "token", "pa/ss", "pa?", "ci:"] {
+        for secret in ["s3cret", "token", "pa/ss", "ci:"] {
             assert!(!recorded.contains(secret), "{recorded}");
         }
     }
-    // Poetry knows PyPI by name without a source for it.
-    assert_eq!(
-        python_registry(&extraction, "services/api/pyproject.toml", "requests"),
-        None
-    );
-    // Poetry skips git dependencies itself.
-    assert!(extraction.dependencies.iter().all(|d| d.name != "internal"));
+    let locked = python_registry(&extraction, "services/locked/pyproject.toml", "acme-a").unwrap();
+    assert!(locked.contains("pypi.acme.dev"), "{locked}");
 }
 
 #[test]
 fn python_packages_from_outside_an_index_are_skipped_with_a_reason() {
-    let files = Files::from([(
-        "pyproject.toml".into(),
-        "[project]\nname = \"app\"\ndependencies = [\"acme-internal>=1\"]\n[tool.uv.sources]\nacme-internal = { git = \"https://github.com/acme/internal\" }\n".into(),
-    )]);
-    let extraction = python_scan(&files);
-    assert!(
-        extraction
-            .dependencies
-            .iter()
-            .all(|d| d.name != "acme-internal")
-    );
-    let skipped = extraction
-        .skipped
-        .iter()
-        .find(|s| s.value == "acme-internal")
-        .unwrap();
-    assert!(
-        skipped.reason.contains("not a package index"),
-        "{}",
-        skipped.reason
-    );
-}
-
-#[test]
-fn python_index_settings_follow_workspaces_and_fail_closed() {
     let files = Files::from([
-        // A member's own [tool.uv] does not replace the root's settings.
         (
-            "ws/pyproject.toml".into(),
-            "[tool.uv.workspace]\nmembers = [\"./packages/*/\"]\nexclude = [\"./packages/legacy\"]\n[tool.uv]\nindex-url = \"https://pypi.acme.dev/simple\"\nextra-index-url = [\"https://mirror.acme.dev/simple\"]\n".into(),
-        ),
-        (
-            "ws/packages/lib/pyproject.toml".into(),
-            "[project]\nname = \"lib\"\ndependencies = [\"requests>=2\", \"acme-x>=1\"]\n[tool.uv]\nnative-tls = true\n".into(),
-        ),
-        (
-            "ws/uv.lock".into(),
-            "version = 1\n[[package]]\nname = \"requests\"\nversion = \"2.31.0\"\nsource = { registry = \"https://mirror.acme.dev/simple\" }\n".into(),
-        ),
-        // Excluded from the workspace: the root's lock is not its.
-        (
-            "ws/packages/legacy/pyproject.toml".into(),
-            "[project]\nname = \"legacy\"\ndependencies = [\"requests>=2\"]\n".into(),
-        ),
-        // uv find-links, flat indexes and no-index.
-        (
-            "links/pyproject.toml".into(),
-            "[project]\nname = \"links\"\ndependencies = [\"acme-wheel>=1\"]\n[tool.uv]\nfind-links = [\"https://wheels.acme.dev/\"]\n".into(),
-        ),
-        (
-            "flat/pyproject.toml".into(),
-            "[project]\nname = \"flat\"\ndependencies = [\"acme-flat>=1\"]\n[[tool.uv.index]]\nname = \"wheels\"\nurl = \"https://wheels.acme.dev/\"\nformat = \"flat\"\nexplicit = true\n[tool.uv.sources]\nacme-flat = { index = \"wheels\" }\n".into(),
-        ),
-        (
-            "offline/pyproject.toml".into(),
-            "[project]\nname = \"offline\"\ndependencies = [\"acme-offline>=1\"]\n[tool.uv]\nno-index = true\n".into(),
-        ),
-        // A configuration file above the project that does not parse.
-        ("broken/uv.toml".into(), "index-url = [\n".into()),
-        (
-            "broken/app/pyproject.toml".into(),
-            "[project]\nname = \"app\"\ndependencies = [\"requests>=2\"]\n".into(),
-        ),
-        // PDM sources, plain and inline.
-        (
-            "pdm/pyproject.toml".into(),
-            "[project]\nname = \"pdm\"\ndependencies = [\"requests>=2\"]\n[[tool.pdm.source]]\nname = \"pypi\"\nurl = \"https://pypi.acme.dev/simple\"\n".into(),
-        ),
-        (
-            "pdm-inline/pyproject.toml".into(),
-            "[project]\nname = \"pdm\"\ndependencies = [\"requests>=2\"]\n[tool.pdm]\nsource = [{ name = \"acme\", url = \"https://pypi.acme.dev/simple\" }]\n".into(),
+            "pyproject.toml".into(),
+            "[project]\nname = \"app\"\ndependencies = [\"acme-wheel @ https://files.acme.dev/acme_wheel-1.0-py3-none-any.whl\"]\n[tool.poetry.dependencies]\ninternal = { git = \"https://github.com/acme/internal.git\" }\n".into(),
         ),
     ]);
     let extraction = python_scan(&files);
-    let registry = |file: &str, name: &str| python_registry(&extraction, file, name);
-    assert_eq!(
-        registry("ws/packages/lib/pyproject.toml", "requests"),
-        Some("https://mirror.acme.dev/simple".to_owned())
-    );
-    // The root's settings, not the member's, and only members use its lock.
-    assert!(ambiguous(registry(
-        "ws/packages/lib/pyproject.toml",
-        "acme-x"
-    )));
-    assert!(ambiguous(registry(
-        "ws/packages/legacy/pyproject.toml",
-        "requests"
-    )));
-    assert!(ambiguous(registry("links/pyproject.toml", "acme-wheel")));
-    assert_eq!(
-        registry("flat/pyproject.toml", "acme-flat"),
-        Some("--find-links https://wheels.acme.dev".to_owned())
-    );
-    assert_eq!(
-        registry("offline/pyproject.toml", "acme-offline"),
-        Some("--no-index".to_owned())
-    );
-    let broken = registry("broken/app/pyproject.toml", "requests");
-    assert!(
-        ambiguous(broken.clone())
-            && broken
-                .as_deref()
-                .is_some_and(|r| r.contains("broken/uv.toml the Count cannot read")),
-        "{broken:?}"
-    );
-    // PDM cannot be checked against PDM itself, so its sources fail closed.
-    for file in ["pdm/pyproject.toml", "pdm-inline/pyproject.toml"] {
-        let recorded = registry(file, "requests");
+    for name in ["acme-wheel", "internal"] {
         assert!(
-            recorded
-                .as_deref()
-                .is_some_and(|r| r.contains("PDM sources")),
-            "{recorded:?}"
+            extraction.dependencies.iter().all(|d| d.name != name),
+            "{name}"
+        );
+        let skipped = extraction
+            .skipped
+            .iter()
+            .find(|s| s.value == name)
+            .unwrap_or_else(|| panic!("{name} not skipped"));
+        assert!(
+            skipped.reason.contains("not a package index"),
+            "{}",
+            skipped.reason
         );
     }
-}
-
-#[test]
-fn python_settings_the_count_does_not_know_fail_closed() {
-    let project =
-        |extra: &str| format!("[project]\nname = \"p\"\ndependencies = [\"acme-a>=1\"]\n{extra}");
-    let files = Files::from([
-        (
-            "nosources/pyproject.toml".into(),
-            project("[[tool.uv.index]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\nexplicit = true\n[tool.uv]\nno-sources = true\n[tool.uv.sources]\nacme-a = { index = \"acme\" }\n"),
-        ),
-        (
-            "setting/pyproject.toml".into(),
-            project("[tool.uv]\nsome-new-setting = true\n"),
-        ),
-        (
-            "indexkey/pyproject.toml".into(),
-            project("[[tool.uv.index]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\ndefault = true\nsome-new-key = 1\n"),
-        ),
-        (
-            "marker/pyproject.toml".into(),
-            project("[[tool.uv.index]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\nexplicit = true\n[tool.uv.sources]\nacme-a = { index = \"acme\", marker = \"sys_platform == 'linux'\" }\n"),
-        ),
-        (
-            "pinkey/pyproject.toml".into(),
-            project("[[tool.uv.index]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\nexplicit = true\n[tool.uv.sources]\nacme-a = { index = \"acme\", some-new-key = true }\n"),
-        ),
-        (
-            "torch/pyproject.toml".into(),
-            project("[tool.uv]\ntorch-backend = \"auto\"\n"),
-        ),
-        (
-            "poetry/pyproject.toml".into(),
-            "[tool.poetry.dependencies]\nacme-a = \"^1\"\n[[tool.poetry.source]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\npriority = \"some-new-priority\"\n".into(),
-        ),
-        (
-            "pdm/pyproject.toml".into(),
-            project("[[tool.pdm.source]]\nname = \"pypi\"\nurl = \"https://pypi.acme.dev/simple\"\ninclude_packages = [\"acme-*\"]\n"),
-        ),
-        (
-            "rye/pyproject.toml".into(),
-            project("[[tool.rye.sources]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\n"),
-        ),
-        (
-            "hatch/pyproject.toml".into(),
-            project("[tool.hatch.envs.default.env-vars]\nPIP_INDEX_URL = \"https://pypi.acme.dev/simple\"\n"),
-        ),
-    ]);
-    let extraction = python_scan(&files);
-    let registry = |file: &str| python_registry(&extraction, file, "acme-a");
-    // uv ignores sources under `no-sources`.
-    assert_eq!(registry("nosources/pyproject.toml"), None);
-    for (file, says) in [
-        ("setting/pyproject.toml", "uv setting some-new-setting"),
-        (
-            "indexkey/pyproject.toml",
-            "[tool.uv] in indexkey/pyproject.toml the Count cannot read",
-        ),
-        ("marker/pyproject.toml", "where the pin does not hold"),
-        (
-            "pinkey/pyproject.toml",
-            "[tool.uv] in pinkey/pyproject.toml the Count cannot read",
-        ),
-        ("torch/pyproject.toml", "torch-backend"),
-        (
-            "poetry/pyproject.toml",
-            "[tool.poetry] in poetry/pyproject.toml the Count cannot read",
-        ),
-        ("pdm/pyproject.toml", "PDM sources"),
-        ("rye/pyproject.toml", "Rye sources"),
-        ("hatch/pyproject.toml", "Hatch environment"),
-    ] {
-        let recorded = registry(file);
-        assert!(
-            recorded.as_deref().is_some_and(|r| r.contains(says)),
-            "{file}: {recorded:?}"
-        );
-    }
-}
-
-#[test]
-fn python_indexes_are_read_in_every_toml_form() {
-    let project = |extra: &str| {
-        format!("[project]\nname = \"p\"\ndependencies = [\"acme-a>=1\", \"acme-b>=1\"]\n{extra}")
-    };
-    let files = Files::from([
-        // Inline arrays of tables.
-        (
-            "inline/pyproject.toml".into(),
-            project("[tool.uv]\nindex = [{ name = \"acme\", url = \"https://pypi.acme.dev/simple\", default = true }]\n"),
-        ),
-        (
-            "poetry/pyproject.toml".into(),
-            "[tool.poetry]\nsource = [{ name = \"acme\", url = \"https://pypi.acme.dev/simple\", priority = \"primary\" }]\n[tool.poetry.dependencies]\nacme-a = \"^1\"\n".into(),
-        ),
-        // A pin written as an array of tables.
-        (
-            "aot/pyproject.toml".into(),
-            project("[[tool.uv.index]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\nexplicit = true\n[[tool.uv.sources.acme-a]]\nindex = \"acme\"\n"),
-        ),
-        // An override naming a URL takes that package from there, and leaves
-        // the rest alone.
-        (
-            "override/pyproject.toml".into(),
-            project("[tool.uv]\noverride-dependencies = [\"acme-b @ https://files.acme.dev/acme_b-1.0.0-py3-none-any.whl\"]\n"),
-        ),
-    ]);
-    let extraction = python_scan(&files);
-    let registry = |file: &str, name: &str| python_registry(&extraction, file, name);
-    let acme = Some(ACME.to_owned());
-    assert_eq!(registry("inline/pyproject.toml", "acme-a"), acme);
-    assert_eq!(registry("poetry/pyproject.toml", "acme-a"), acme);
-    assert_eq!(registry("aot/pyproject.toml", "acme-a"), acme);
-    assert_eq!(registry("aot/pyproject.toml", "acme-b"), None);
-    assert_eq!(registry("override/pyproject.toml", "acme-a"), None);
-    assert!(
-        extraction
-            .dependencies
-            .iter()
-            .all(|d| !(d.file == "override/pyproject.toml" && d.name == "acme-b"))
-    );
 }
 
 #[test]
@@ -3044,95 +2851,4 @@ fn pip_requirements_files_are_not_maintained_and_the_count_says_why() {
     // Without Python projects enabled, there is nothing to say.
     config.managers = vec![Manager::Npm];
     assert!(Scanner::new(&config).unwrap().unsupported(paths).is_empty());
-}
-
-#[test]
-fn python_index_settings_any_tool_reads_are_candidates() {
-    let project = |extra: &str| {
-        format!("[project]\nname = \"p\"\ndependencies = [\"acme-a>=1\", \"acme-b>=1\"]\n{extra}")
-    };
-    let files = Files::from([
-        // `uv pip install .` reads `[pip]` for the project's dependencies.
-        (
-            "uvpip/pyproject.toml".into(),
-            project("[tool.uv.pip]\nindex-url = \"https://pypi.acme.dev/simple\"\n"),
-        ),
-        // uv does not apply an override in `uv.toml` when it locks a project.
-        (
-            "override/pyproject.toml".into(),
-            project(""),
-        ),
-        (
-            "override/uv.toml".into(),
-            "override-dependencies = [\"acme-b @ https://files.acme.dev/acme_b-1.0.0-py3-none-any.whl\"]\n".into(),
-        ),
-        // A `poetry.lock` left in a project uv manages is not uv's lockfile.
-        (
-            "stray/pyproject.toml".into(),
-            project("[tool.uv]\nextra-index-url = [\"https://pypi.acme.dev/simple\"]\n"),
-        ),
-        (
-            "stray/poetry.lock".into(),
-            "[[package]]\nname = \"acme-a\"\nversion = \"1.0.0\"\n".into(),
-        ),
-        // Rye sources at a workspace root apply to its members.
-        (
-            "rye/pyproject.toml".into(),
-            "[tool.rye]\nvirtual = true\n[[tool.rye.sources]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\n".into(),
-        ),
-        ("rye/app/pyproject.toml".into(), project("")),
-        // PDM, Pixi and Hatch in their own files.
-        ("pdm/pdm.toml".into(), "[pypi]\nurl = \"https://pypi.acme.dev/simple\"\n".into()),
-        ("pdm/pyproject.toml".into(), project("")),
-        ("pixi/pixi.toml".into(), "[pypi-options]\nindex-url = \"https://pypi.acme.dev/simple\"\n".into()),
-        ("pixi/pyproject.toml".into(), project("")),
-        ("hatch/hatch.toml".into(), "[envs.default.env-vars]\nUV_INDEX_URL = \"https://pypi.acme.dev/simple\"\n".into()),
-        ("hatch/pyproject.toml".into(), project("")),
-        ("plain/hatch.toml".into(), "[envs.default]\ndependencies = [\"pytest\"]\n".into()),
-        ("plain/pyproject.toml".into(), project("")),
-        // uv and Poetry both configured: either could lock it.
-        (
-            "both/pyproject.toml".into(),
-            "[project]\nname = \"p\"\ndependencies = [\"acme-a>=1\"]\n[tool.uv]\nnative-tls = true\n[tool.poetry]\npackage-mode = false\n[[tool.poetry.source]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\n".into(),
-        ),
-        // A package pinned to different sources in two groups.
-        (
-            "groups/pyproject.toml".into(),
-            "[tool.poetry.group.dev.dependencies]\nacme-a = { version = \"^1\", source = \"acme\" }\n[tool.poetry.group.docs.dependencies]\nacme-a = { version = \"^1\", source = \"pypi\" }\n[[tool.poetry.source]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\npriority = \"explicit\"\n".into(),
-        ),
-        // A scheme's case does not matter.
-        (
-            "upper/pyproject.toml".into(),
-            project("[tool.uv]\nindex-url = \"HTTPS://pypi.acme.dev/simple\"\n"),
-        ),
-        (
-            "upper-public/pyproject.toml".into(),
-            project("[tool.uv]\nindex-url = \"HTTPS://PYPI.ORG/simple\"\n"),
-        ),
-    ]);
-    let extraction = python_scan(&files);
-    let registry = |file: &str, name: &str| python_registry(&extraction, file, name);
-    assert!(ambiguous(registry("uvpip/pyproject.toml", "acme-a")));
-    assert_eq!(registry("override/pyproject.toml", "acme-b"), None);
-    assert!(ambiguous(registry("stray/pyproject.toml", "acme-a")));
-    for (file, says) in [
-        ("rye/app/pyproject.toml", "Rye sources"),
-        ("pdm/pyproject.toml", "pdm/pdm.toml"),
-        ("pixi/pyproject.toml", "pixi/pixi.toml"),
-        ("hatch/pyproject.toml", "hatch/hatch.toml"),
-    ] {
-        let recorded = registry(file, "acme-a");
-        assert!(
-            recorded.as_deref().is_some_and(|r| r.contains(says)),
-            "{file}: {recorded:?}"
-        );
-    }
-    assert_eq!(registry("plain/pyproject.toml", "acme-a"), None);
-    assert!(ambiguous(registry("both/pyproject.toml", "acme-a")));
-    assert!(ambiguous(registry("groups/pyproject.toml", "acme-a")));
-    assert_eq!(
-        registry("upper/pyproject.toml", "acme-a"),
-        Some(ACME.to_owned())
-    );
-    assert_eq!(registry("upper-public/pyproject.toml", "acme-a"), None);
 }

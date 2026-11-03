@@ -198,62 +198,54 @@ dependency's `registry`:
   does not hide one further up. Packages only a lockfile records get the same
   registry as a declared one would. `packageManager` stays on the public
   registry, since Corepack does not read `.npmrc`.
-- Python packages come from the index the project pins them to, else the one
-  their lockfile records, else the only index the project names:
-  - uv: `[[tool.uv.index]]` (a `default` one replaces PyPI, an `explicit` one
-    serves only packages pinned to it, and a `flat` one is a find-links
-    source), `index-url`, `extra-index-url`, `find-links` and `no-index`,
-    from the nearest `uv.toml`, or `pyproject.toml` with `[tool.uv]`, at or
-    above the project. A workspace member takes them from its workspace root
-    instead. Pins in `[tool.uv.sources]` come from the project and its
-    workspace root, the root that lists it in `members` and not in `exclude`,
-    and `no-sources` turns them off as it does for uv. An override or
-    constraint that names a URL in `[tool.uv]` takes its package from there;
-    uv does not apply those in a `uv.toml` when it locks a project. The indexes in uv's `[pip]` table, which `uv pip
-    install .` reads, count as candidates too.
-  - Poetry: `[[tool.poetry.source]]` (`primary` replaces PyPI, and more than
-    one is ambiguous; `supplemental` adds an index; `explicit` serves only
-    pinned packages; a source named PyPI without a URL is PyPI) and a
-    dependency's `source`, matched without regard to case.
-  - `uv.lock` and `poetry.lock` record each package's index. Only the
-    project's own lockfile counts, or its uv workspace root's, and only one
-    its tool could have written: a `poetry.lock` left in a project uv
-    manages does not count. A package whose
-    entries disagree is ambiguous, and so is one locked to an index the
-    project no longer searches: the tool would resolve it again.
+- Python packages come from what the project's lockfile records. The
+  Count does not work out which index uv or Poetry would pick from their
+  settings; the tool already did, and wrote it down:
+  - `uv.lock` records each package's index; uv reads the one at its
+    workspace root (the nearest whose `members` name the project and whose
+    `exclude` leaves it in), or the project's own outside a workspace.
+  - `poetry.lock` records each package's source, and nothing for PyPI.
+  - A lock above the project that belongs to another one does not count,
+    nor does a workspace member's own `uv.lock`. A package whose entries
+    disagree, within one lockfile or between `uv.lock` and `poetry.lock`,
+    is ambiguous.
 
-  Lists may be written as `[[...]]` tables or as inline arrays alike.
-  A project with both `[tool.uv]` and `[tool.poetry]` could be locked by
-  either, so both tools' indexes are candidates.
+  A package no lockfile records is PyPI's only when the project configures
+  no index at all: no index, `index-url`, `extra-index-url`, `find-links`,
+  `no-index` or `torch-backend` in any `uv.toml` or `[tool.uv]` (its `[pip]`
+  table included) at or above it, no index pins in `[tool.uv.sources]`, no
+  override naming a URL, and no Poetry source or dependency pinned to one.
+  Otherwise its lookup fails, saying it could come from several indexes:
+  commit a lockfile that records it. That is how a public package could
+  otherwise stand in for a private one of the same name.
 
-  A package from git, a path, a URL or a workspace member, by pin or by
-  lockfile, is not looked up at all: its name on PyPI may be someone else's.
-  It is reported as skipped instead.
+  A lockfile can be stale, recording PyPI for a package the project now
+  takes from a private index. The update itself then runs the real `uv
+  lock` or `poetry lock` with the project's settings, which resolves from
+  the index the tool actually uses, so it never installs the public
+  package in its place.
 
-  A package that is pinned nowhere and unlocked, in a project that names an
-  index besides PyPI, could come from either, which is how a public package
-  can stand in for a private one. The Count does not guess: the package's
-  lookup fails, saying it could come from several indexes. Pin it, or commit
-  a lockfile. A pin that holds only under some markers, extras, groups or
-  Pythons is ambiguous too, since elsewhere the package comes from the
-  project's indexes.
+  A package from git, a path, a URL or a workspace member, by
+  `[tool.uv.sources]`, a Poetry dependency, a `name @ url` requirement or
+  the lockfile, is not looked up at all: its name on PyPI may be someone
+  else's. It is reported as skipped instead.
 
-  Everything else fails closed. Every setting uv accepts is either read or
-  known not to move packages, and every key a Poetry source or dependency
-  may have is known; tests check both lists against uv and Poetry
-  themselves. A key the Count does not know, a section it cannot read, a
-  `pyproject.toml` or `uv.toml` at or above the project that does not parse,
-  a pin to an index the project does not define, or uv's `torch-backend`
-  fails the lookups it could affect. So do index settings of tools the Count
-  cannot check against the tool, in any `pyproject.toml` at or above the
-  project or in `pdm.toml`, `pixi.toml` or `hatch.toml`: PDM sources and
-  overrides, Rye sources, Pixi PyPI options, and Hatch environments that set
-  `PIP_*` or `UV_*` variables or installer flags. A settings file the Count
-  cannot read, such as one behind a symlink, counts as unreadable, not
-  absent. Indexes come only from these files, never from `pip.conf`,
-  `PIP_*` or `UV_*` variables, Dockerfiles or CI workflows. Private indexes
-  are read through their simple API, as PEP 691 JSON or PEP 503 HTML; HTML
-  gives no upload times, so no release-age wait.
+  Everything the Count cannot read fails closed, for every package, locked
+  or not. Every setting uv accepts is either one that configures an index
+  or known not to, and every key a Poetry source or dependency may have is
+  known; tests check both lists against uv and Poetry themselves. A key the
+  Count does not know, a section that does not fit, a `pyproject.toml`,
+  `uv.toml` or lockfile that does not parse, a settings file it cannot read
+  (such as one behind a symlink), or workspace globs it might read
+  differently from uv make every lookup fail. So do index settings of tools
+  the Count cannot check against the tool, in any `pyproject.toml` at or
+  above the project or in `pdm.toml`, `pixi.toml` or `hatch.toml`: PDM
+  sources and overrides, Rye sources, Pixi PyPI options, and Hatch
+  installer flags or `PIP_*` and `UV_*` variables. Indexes come only from
+  these files, never from `pip.conf`, `PIP_*` or `UV_*` variables,
+  Dockerfiles or CI workflows. Private indexes are read through their
+  simple API, as PEP 691 JSON or PEP 503 HTML; HTML gives no upload times,
+  so no release-age wait.
 
   pip requirements files are not maintained at all; see
   [managers](/guide/managers/#python).

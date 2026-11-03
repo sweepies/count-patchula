@@ -1,12 +1,15 @@
-//! uv and Poetry index settings, read into types that describe every key
-//! the Count understands and reject the rest, so `[[x]]` and `x = [{...}]`
-//! read alike and nothing a repository wrote is skipped unread. A section
-//! that does not fit its type is unreadable, and its packages' lookups fail.
+//! Which of a project's packages come from an index the Count cannot pick
+//! for itself. The tools' lockfiles decide where a package comes from; these
+//! settings only say whether the project configures any index at all, in
+//! which case a package no lockfile records is not assumed to be PyPI's.
 //!
-//! Every key uv 0.13.6 accepts is either read here or listed as irrelevant
-//! to where packages come from; a test with the real uv checks the lists
-//! against uv's own. PDM, Rye, Pixi and Hatch settings that could name an
-//! index are not read, and any present fails the lookups they could affect.
+//! uv and Poetry settings are read into types that describe every key the
+//! Count knows and reject the rest, so `[[x]]` and `x = [{...}]` read alike.
+//! Every key uv 0.13.6 accepts is either one that configures where packages
+//! come from or listed as irrelevant; a test with the real uv checks the
+//! lists against uv's own. A section that does not fit its type, a file that
+//! does not parse, and PDM, Rye, Pixi or Hatch index settings, which the
+//! Count cannot check against those tools, make every package's lookup fail.
 //!
 //! Errors are never repeated in reports: serde's messages can quote values.
 use super::{Indexes, Named, Origin, shown};
@@ -57,10 +60,6 @@ struct UvSettings {
     find_links: Vec<String>,
     #[serde(default)]
     no_index: bool,
-    #[serde(default)]
-    no_sources: bool,
-    #[serde(default)]
-    no_sources_package: Vec<String>,
     torch_backend: Option<Value>,
     #[serde(default)]
     sources: BTreeMap<String, OneOrMany<UvSource>>,
@@ -77,6 +76,9 @@ struct UvSettings {
 /// Every other setting uv 0.13.6 accepts in `uv.toml` and `[tool.uv]`,
 /// none of which moves a package to another index.
 pub const UV_IRRELEVANT: &[&str] = &[
+    // Only matters where sources exist, which configure the project anyway.
+    "no-sources",
+    "no-sources-package",
     "required-version",
     "system-certs",
     "native-tls",
@@ -154,8 +156,6 @@ pub const UV_READ: &[&str] = &[
     "extra-index-url",
     "find-links",
     "no-index",
-    "no-sources",
-    "no-sources-package",
     "torch-backend",
     "sources",
     "override-dependencies",
@@ -178,10 +178,6 @@ struct UvPip {
     #[serde(default)]
     no_index: bool,
     torch_backend: Option<Value>,
-    #[serde(default)]
-    no_sources: bool,
-    #[serde(default)]
-    no_sources_package: Vec<String>,
     #[serde(flatten)]
     rest: BTreeMap<String, Value>,
 }
@@ -193,13 +189,14 @@ pub const UV_PIP_READ: &[&str] = &[
     "find-links",
     "no-index",
     "torch-backend",
-    "no-sources",
-    "no-sources-package",
 ];
 
 /// Every other `[pip]` setting uv 0.13.6 accepts, none of which moves a
 /// package to another index.
 pub const UV_PIP_IRRELEVANT: &[&str] = &[
+    // Only matters where sources exist, which configure the project anyway.
+    "no-sources",
+    "no-sources-package",
     "python",
     "system",
     "break-system-packages",
@@ -511,64 +508,71 @@ fn find_links(url: &str) -> Named {
     Named::Unusable(format!("--find-links {}", crate::redacted(url)))
 }
 
-/// Where the packages of one `pyproject.toml` come from, and the
-/// directories whose lockfiles resolve them.
+/// Where the packages of one `pyproject.toml` come from, and the lockfile
+/// whose versions are its current ones.
 pub(crate) struct Discovery {
     pub indexes: Indexes,
-    pub lock_dirs: Vec<String>,
-    /// Whether uv settings or a `[tool.uv]` apply to the project.
-    pub uv_configured: bool,
-    /// Whether the project has a `[tool.poetry]`.
-    pub poetry_configured: bool,
+    pub resolved_lock: Option<String>,
 }
 
-/// The index settings that apply to the `pyproject.toml` at `path`.
+/// What applies to the `pyproject.toml` at `path`: the indexes configured at
+/// or above it, the lockfiles uv and Poetry would read for it, and anything
+/// the Count cannot read.
 pub(crate) fn discover(path: &str, files: &Files) -> Discovery {
     let dirs = ancestors(path);
     let mut indexes = Indexes::default();
     let mut pyprojects: Vec<(&str, Loaded<PyprojectFile>)> = Vec::new();
-    let mut uv_tomls: Vec<(&str, Loaded<Strict<UvSettings>>)> = Vec::new();
     for dir in &dirs {
-        if let Some(loaded) = load(files, &join(dir, "pyproject.toml")) {
+        let file = join(dir, "pyproject.toml");
+        if let Some(loaded) = load(files, &file) {
+            match &loaded {
+                Loaded::Read(PyprojectFile {
+                    tool: Strict(Some(tools)),
+                }) => {
+                    project_settings(tools, &file, &mut indexes);
+                }
+                _ => indexes.uncertain.push(unreadable(&file)),
+            }
             pyprojects.push((dir, loaded));
         }
-        if let Some(loaded) = load(files, &join(dir, "uv.toml")) {
-            uv_tomls.push((dir, loaded));
+        let file = join(dir, "uv.toml");
+        match load::<Strict<UvSettings>>(files, &file) {
+            Some(Loaded::Read(Strict(Some(settings)))) => {
+                uv_settings(&settings, &file, &mut indexes);
+            }
+            Some(_) => indexes.uncertain.push(unreadable(&file)),
+            None => {}
+        }
+        for (leaf, names_index) in [
+            ("pdm.toml", pdm_names_index as fn(&Value) -> bool),
+            ("pixi.toml", pixi_names_index),
+            ("hatch.toml", hatch_sets_installer),
+        ] {
+            let file = join(dir, leaf);
+            match load::<Value>(files, &file) {
+                Some(Loaded::Read(value)) if !names_index(&value) => {}
+                Some(_) => indexes.uncertain.push(Named::Unusable(format!(
+                    "index settings in {file}, which the Count does not read"
+                ))),
+                None => {}
+            }
         }
     }
-    // A configuration file at or above the project that cannot be read
-    // could name any index.
-    for (dir, loaded) in &pyprojects {
-        if matches!(loaded, Loaded::Unreadable)
-            || matches!(loaded, Loaded::Read(file) if file.tool.0.is_none())
-        {
-            indexes.extras.push(unreadable(join(dir, "pyproject.toml")));
-        }
-    }
-    for (dir, loaded) in &uv_tomls {
-        if matches!(loaded, Loaded::Unreadable | Loaded::Read(Strict(None))) {
-            indexes.extras.push(unreadable(join(dir, "uv.toml")));
-        }
-    }
-    let tools = |dir: &str| -> Option<&Tools> {
+    let project_dir = dirs[0];
+    // uv locks a workspace at its root: the nearest one whose `members` name
+    // the project and whose `exclude` leaves it in. A member's own `uv.lock`
+    // is left over from before it joined.
+    let workspace = |dir: &str| -> Option<&UvWorkspace> {
         pyprojects.iter().find_map(|(d, loaded)| match loaded {
-            Loaded::Read(file) if *d == dir => file.tool.0.as_ref(),
+            Loaded::Read(PyprojectFile {
+                tool: Strict(Some(tools)),
+            }) if *d == dir => tools.uv.as_ref()?.0.as_ref()?.workspace.as_ref(),
             _ => None,
         })
     };
-    // A uv table that cannot be read, here or in the workspace root.
-    let uv = |dir: &str| -> Option<Option<&UvSettings>> {
-        tools(dir)?.uv.as_ref().map(|strict| strict.0.as_ref())
-    };
-    let project_dir = dirs[0];
-    // The nearest uv workspace root takes in the projects its `members`
-    // name and `exclude` leaves out; one it does not take in stands alone.
     let root = dirs
         .iter()
-        .find_map(|dir| match uv(dir) {
-            Some(Some(settings)) => settings.workspace.as_ref().map(|w| (*dir, w)),
-            _ => None,
-        })
+        .find_map(|dir| Some((*dir, workspace(dir)?)))
         .and_then(|(dir, workspace)| {
             if dir == project_dir {
                 return Some(dir);
@@ -576,205 +580,251 @@ pub(crate) fn discover(path: &str, files: &Files) -> Discovery {
             let member = project_dir
                 .strip_prefix(dir)
                 .map_or(project_dir, |rest| rest.trim_start_matches('/'));
-            let (Some(members), Some(exclude)) =
-                (globs(&workspace.members), globs(&workspace.exclude))
-            else {
-                indexes.extras.push(unreadable(format!(
-                    "workspace globs in {}",
-                    join(dir, "pyproject.toml")
-                )));
-                return None;
-            };
-            (!workspace.members.is_empty()
-                && members.is_match(member)
-                && (workspace.exclude.is_empty() || !exclude.is_match(member)))
-            .then_some(dir)
+            match membership(workspace, member) {
+                Some(true) => Some(dir),
+                Some(false) => None,
+                None => {
+                    indexes.uncertain.push(unreadable(format!(
+                        "workspace globs in {}",
+                        join(dir, "pyproject.toml")
+                    )));
+                    None
+                }
+            }
         });
-    for dir in dirs.iter().filter(|dir| Some(**dir) != root) {
-        if let Some(None) = uv(dir) {
-            indexes.extras.push(unreadable(format!(
-                "[tool.uv] in {}",
-                join(dir, "pyproject.toml")
-            )));
-        }
-    }
-    // uv reads its settings from the nearest `uv.toml`, or `pyproject.toml`
-    // with `[tool.uv]`, at or above the project; in a workspace, its root's.
-    let search: Vec<&str> = root.map_or_else(|| dirs.clone(), |root| vec![root]);
-    let settings: Option<(String, Option<&UvSettings>)> = search.iter().find_map(|dir| {
-        if let Some((_, loaded)) = uv_tomls.iter().find(|(d, _)| d == dir) {
-            let read = match loaded {
-                Loaded::Read(Strict(Some(settings))) => Some(settings),
-                _ => None,
-            };
-            return Some((join(dir, "uv.toml"), read));
-        }
-        uv(dir).map(|read| (join(dir, "pyproject.toml"), read))
-    });
-    let mut names = BTreeMap::<String, Named>::new();
-    if let Some((file, Some(settings))) = &settings {
-        if file.ends_with("uv.toml")
-            && (!settings.sources.is_empty() || settings.workspace.is_some())
-        {
-            indexes
-                .extras
-                .push(unreadable(format!("sources or a workspace in {file}")));
-        }
-        uv_settings(settings, &mut indexes);
-    }
-    // Sources and the index names they pin to come from the project and its
-    // workspace root, the project's winning. uv does not resolve a pin to an
-    // index only a `uv.toml` defines, so neither does the Count.
-    let mut projects: Vec<&UvSettings> = Vec::new();
-    if let Some(Some(project)) = uv(project_dir) {
-        projects.push(project);
-    }
-    if let Some(root) = root
-        && root != project_dir
-        && let Some(Some(settings)) = uv(root)
-    {
-        projects.push(settings);
-    }
-    for project in projects.iter().rev() {
-        for index in &project.index {
-            if let Some(name) = &index.name {
-                names.insert(name.clone(), uv_index(index));
+    let uv_lock = join(root.unwrap_or(project_dir), "uv.lock");
+    let poetry_lock = join(project_dir, "poetry.lock");
+    for (lock, poetry) in [(&uv_lock, false), (&poetry_lock, true)] {
+        if let Some(text) = files.get(lock) {
+            match locked(text, poetry) {
+                Some(origins) => indexes.locks.push(origins),
+                None => indexes.uncertain.push(unreadable(lock)),
             }
         }
     }
-    let read_settings = settings.as_ref().and_then(|(_, s)| *s);
-    // An override or constraint naming a URL takes its package from it.
-    // uv applies those of the project and its workspace root, not a
-    // `uv.toml`'s, when it locks (checked against uv by a real_ test).
-    for table in &projects {
-        for requirement in table
-            .override_dependencies
-            .iter()
-            .chain(&table.constraint_dependencies)
-        {
-            if let Some(name) = direct_reference(requirement) {
-                indexes.pinned.insert(name, Origin::Other);
-            }
-        }
-    }
-    let (no_sources, no_sources_package) = read_settings.map_or((false, &[][..]), |s| {
-        (s.no_sources, &s.no_sources_package[..])
-    });
-    for project in projects.iter().rev() {
-        if no_sources {
-            break;
-        }
-        for (package, sources) in &project.sources {
-            let package = super::normalise(package);
-            if no_sources_package
-                .iter()
-                .any(|p| super::normalise(p) == package)
-                || indexes.pinned.get(&package) == Some(&Origin::Other)
-            {
-                continue;
-            }
-            let origin = Origin::of(sources.items().iter().map(|source| uv_pin(source, &names)));
-            if let Some(origin) = origin {
-                indexes.pinned.insert(package, origin);
-            }
-        }
-    }
-    let uv_configured = settings.is_some() || uv(project_dir).is_some();
-    let project_tools = tools(project_dir);
-    let poetry_configured = project_tools.is_some_and(|t| t.poetry.is_some());
-    match project_tools.and_then(|t| t.poetry.as_ref()) {
-        Some(Strict(Some(poetry))) => {
-            let mut poetry_indexes = Indexes::default();
-            poetry_settings(poetry, &mut poetry_indexes);
-            merge(&mut indexes, poetry_indexes, uv_configured);
-        }
-        Some(Strict(None)) => indexes
-            .extras
-            .push(unreadable(format!("[tool.poetry] in {path}"))),
-        None => {}
-    }
-    // Tools the Count cannot check against themselves, configured here or
-    // in any directory above, in `pyproject.toml` or their own files.
-    for dir in &dirs {
-        if let Some(tools) = tools(dir) {
-            unverified(tools, &mut indexes);
-        }
-        for (leaf, read) in [
-            ("pdm.toml", unverified_pdm as fn(&Value) -> bool),
-            ("pixi.toml", unverified_pixi),
-            ("hatch.toml", unverified_hatch),
-        ] {
-            let file = join(dir, leaf);
-            match load::<Value>(files, &file) {
-                Some(Loaded::Read(value)) if !read(&value) => {}
-                Some(_) => indexes.extras.push(Named::Unusable(format!(
-                    "index settings in {file}, which the Count does not read"
-                ))),
-                None => {}
-            }
-        }
-    }
-    let mut lock_dirs = vec![project_dir.to_owned()];
-    if let Some(root) = root
-        && root != project_dir
-    {
-        lock_dirs.push(root.to_owned());
-    }
+    let resolved_lock = [&uv_lock, &poetry_lock]
+        .into_iter()
+        .find(|lock| files.contains_key(*lock))
+        .cloned();
     Discovery {
         indexes,
-        lock_dirs,
-        uv_configured,
-        poetry_configured,
+        resolved_lock,
     }
 }
 
-/// Fold Poetry's candidates into uv's. When both tools are configured,
-/// either could lock the project, so each one's default is a candidate.
-fn merge(indexes: &mut Indexes, poetry: Indexes, uv_configured: bool) {
-    if uv_configured {
-        let uv_default = indexes.default.take().unwrap_or(Named::Public);
-        let poetry_default = poetry.default.unwrap_or(Named::Public);
-        if poetry_default != uv_default {
-            indexes.extras.push(poetry_default);
+/// The index settings of one `pyproject.toml`'s tool tables.
+fn project_settings(tools: &Tools, file: &str, indexes: &mut Indexes) {
+    match tools.uv.as_ref() {
+        Some(Strict(Some(settings))) => uv_settings(settings, file, indexes),
+        Some(Strict(None)) => indexes
+            .uncertain
+            .push(unreadable(format!("[tool.uv] in {file}"))),
+        None => {}
+    }
+    match tools.poetry.as_ref() {
+        Some(Strict(Some(poetry))) => poetry_settings(poetry, indexes),
+        Some(Strict(None)) => indexes
+            .uncertain
+            .push(unreadable(format!("[tool.poetry] in {file}"))),
+        None => {}
+    }
+    unverified(tools, &mut indexes.uncertain);
+}
+
+/// The indexes and other sources one uv settings table configures, `[pip]`
+/// included, since `uv pip` reads it for the project too.
+fn uv_settings(settings: &UvSettings, file: &str, indexes: &mut Indexes) {
+    for key in settings.rest.keys() {
+        if !UV_IRRELEVANT.contains(&key.as_str()) {
+            indexes
+                .uncertain
+                .push(unreadable(format!("uv setting {} in {file}", shown(key))));
         }
-        indexes.default = Some(uv_default);
-    } else {
-        indexes.default = poetry.default;
     }
-    indexes.extras.extend(poetry.extras);
-    for (package, origin) in poetry.pinned {
-        pin(&mut indexes.pinned, package, origin);
+    let configured = &mut indexes.configured;
+    configured.extend(settings.index.iter().map(uv_index));
+    configured.extend(settings.index_url.as_deref().map(Named::parse));
+    configured.extend(settings.extra_index_url.iter().map(|u| Named::parse(u)));
+    configured.extend(settings.find_links.iter().map(|u| find_links(u)));
+    if settings.no_index {
+        configured.push(Named::Unusable("uv --no-index".into()));
+    }
+    if settings.torch_backend.is_some() {
+        configured.push(Named::Unusable(
+            "uv torch-backend, which routes packages to PyTorch's indexes".into(),
+        ));
+    }
+    // A source that names git, a path, a URL or a workspace member says the
+    // package comes from no index; one that names an index leaves it to the
+    // lockfile.
+    for (package, sources) in &settings.sources {
+        let outside = sources.items().iter().all(|source| {
+            source.index.is_none()
+                && (source.git.is_some()
+                    || source.url.is_some()
+                    || source.path.is_some()
+                    || source.workspace.is_some())
+        });
+        if outside {
+            indexes.outside.insert(super::normalise(package));
+        } else {
+            indexes
+                .configured
+                .push(Named::Unusable(format!("[tool.uv.sources] in {file}")));
+        }
+    }
+    let configured = &mut indexes.configured;
+    if settings
+        .override_dependencies
+        .iter()
+        .chain(&settings.constraint_dependencies)
+        .any(|requirement| direct_reference(requirement).is_some())
+    {
+        configured.push(Named::Unusable(format!(
+            "an override naming a URL in {file}"
+        )));
+    }
+    if let Some(pip) = &settings.pip {
+        for key in pip.rest.keys() {
+            if !UV_PIP_IRRELEVANT.contains(&key.as_str()) {
+                indexes.uncertain.push(unreadable(format!(
+                    "uv pip setting {} in {file}",
+                    shown(key)
+                )));
+            }
+        }
+        let configured = &mut indexes.configured;
+        configured.extend(pip.index_url.as_deref().map(Named::parse));
+        configured.extend(pip.extra_index_url.iter().map(|u| Named::parse(u)));
+        configured.extend(pip.find_links.iter().map(|u| find_links(u)));
+        if pip.no_index {
+            configured.push(Named::Unusable("uv pip --no-index".into()));
+        }
+        if pip.torch_backend.is_some() {
+            configured.push(Named::Unusable("uv pip torch-backend".into()));
+        }
     }
 }
 
-/// Pin `package`, or make it ambiguous where another pin disagrees.
-fn pin(pinned: &mut BTreeMap<String, Origin>, package: String, origin: Origin) {
-    let origin = match pinned.remove(&package) {
-        Some(earlier) => Origin::of([earlier, origin]).unwrap_or(Origin::Other),
-        None => origin,
+/// The sources Poetry's table configures: its sources, and dependencies
+/// pinned to one or taken from git, a path or a URL.
+fn poetry_settings(poetry: &Poetry, indexes: &mut Indexes) {
+    for source in &poetry.source {
+        indexes.configured.push(match (&source.url, source.links) {
+            (Some(url), Some(true)) => find_links(url),
+            (Some(url), _) => Named::parse(url),
+            (None, _) if source.name.eq_ignore_ascii_case("pypi") => Named::Public,
+            (None, _) => Named::Unusable(format!(
+                "Poetry source {} without a URL",
+                shown(&source.name)
+            )),
+        });
+    }
+    let groups = poetry.group.values().map(|g| &g.dependencies);
+    let pinned = [&poetry.dependencies, &poetry.dev_dependencies]
+        .into_iter()
+        .chain(groups)
+        .flat_map(|dependencies| dependencies.values())
+        .flat_map(|dependency| match dependency {
+            PoetryDependency::Version(_) => &[][..],
+            PoetryDependency::One(spec) => std::slice::from_ref(spec.as_ref()),
+            PoetryDependency::Many(specs) => specs.as_slice(),
+        })
+        .any(|spec| {
+            spec.source
+                .as_deref()
+                .is_some_and(|name| !name.eq_ignore_ascii_case("pypi"))
+                || spec.git.is_some()
+                || spec.path.is_some()
+                || spec.file.is_some()
+                || spec.url.is_some()
+        });
+    if pinned {
+        indexes.configured.push(Named::Unusable(
+            "Poetry dependencies pinned to a source".into(),
+        ));
+    }
+}
+
+/// What a lockfile records of each package, by normalised name; none when
+/// it does not parse, in which case it could record anything.
+fn locked(text: &str, poetry: bool) -> Option<BTreeMap<String, Origin>> {
+    let doc = text.parse::<toml_edit::Document<String>>().ok()?;
+    let mut origins = BTreeMap::<String, Vec<Origin>>::new();
+    for entry in doc
+        .get("package")
+        .and_then(toml_edit::Item::as_array_of_tables)
+        .into_iter()
+        .flatten()
+    {
+        let Some(name) = entry.get("name").and_then(toml_edit::Item::as_str) else {
+            continue;
+        };
+        origins
+            .entry(super::normalise(name))
+            .or_default()
+            .push(lock_entry(entry, poetry));
+    }
+    Some(
+        origins
+            .into_iter()
+            .filter_map(|(name, entries)| Some((name, Origin::of(entries)?)))
+            .collect(),
+    )
+}
+
+/// Where one lockfile entry says its package came from. Entries for one
+/// package that disagree, as a forked uv resolution can record, are
+/// ambiguous.
+fn lock_entry(entry: &toml_edit::Table, poetry: bool) -> Origin {
+    let Some(source) = entry.get("source") else {
+        // Poetry records no source for PyPI; uv records one for every package.
+        return Origin::Index(if poetry {
+            Named::Public
+        } else {
+            Named::Unusable("a locked package without a source".into())
+        });
     };
-    pinned.insert(package, origin);
+    if let Some(registry) = source.get("registry").and_then(toml_edit::Item::as_str) {
+        return Origin::Index(Named::parse(registry));
+    }
+    match source.get("type").and_then(toml_edit::Item::as_str) {
+        // A source the lockfile names without its URL is not PyPI's.
+        Some("legacy" | "pypi") => source
+            .get("url")
+            .and_then(toml_edit::Item::as_str)
+            .map_or_else(
+                || Origin::Index(Named::Unusable("a locked source without a URL".into())),
+                |url| Origin::Index(Named::parse(url)),
+            ),
+        _ => Origin::Other,
+    }
 }
 
-/// Whether a `pdm.toml` names an index: PDM's `pypi` settings or sources.
-fn unverified_pdm(value: &Value) -> bool {
-    value.get("pypi").is_some() || value.get("source").is_some()
-}
-
-/// Whether a `pixi.toml` names a PyPI index.
-fn unverified_pixi(value: &Value) -> bool {
-    pixi_names_index(value)
-}
-
-/// Whether a `hatch.toml` sets pip or uv variables in an environment.
-fn unverified_hatch(value: &Value) -> bool {
-    hatch_sets_installer(value)
+/// Whether `member` (relative to the root) is in the workspace: none when
+/// the globs do not compile or use syntax uv may read differently, braces,
+/// or a `*` whose match depends on crossing `/`.
+fn membership(workspace: &UvWorkspace, member: &str) -> Option<bool> {
+    let all = workspace.members.iter().chain(&workspace.exclude);
+    if all.clone().any(|glob| glob.contains(['{', '}'])) {
+        return None;
+    }
+    let matches = |values: &[String], literal: bool| -> Option<bool> {
+        Some(!values.is_empty() && globs(values, literal)?.is_match(member))
+    };
+    let member_in = matches(&workspace.members, true)?;
+    let excluded = matches(&workspace.exclude, true)?;
+    if member_in != matches(&workspace.members, false)?
+        || excluded != matches(&workspace.exclude, false)?
+    {
+        return None;
+    }
+    Some(member_in && !excluded)
 }
 
 /// Workspace globs as uv joins them to the root, `./packages/*/` being
-/// `packages/*`, each matching within a path segment as a filesystem glob
-/// does. None when one does not compile.
-fn globs(values: &[String]) -> Option<globset::GlobSet> {
+/// `packages/*`. None when one does not compile.
+fn globs(values: &[String], literal_separator: bool) -> Option<globset::GlobSet> {
     let mut set = globset::GlobSetBuilder::new();
     for glob in values {
         let mut glob = glob.trim_end_matches('/');
@@ -783,7 +833,7 @@ fn globs(values: &[String]) -> Option<globset::GlobSet> {
         }
         set.add(
             globset::GlobBuilder::new(glob)
-                .literal_separator(true)
+                .literal_separator(literal_separator)
                 .build()
                 .ok()?,
         );
@@ -792,7 +842,7 @@ fn globs(values: &[String]) -> Option<globset::GlobSet> {
 }
 
 /// The package a PEP 508 requirement takes from a URL, if it does.
-fn direct_reference(requirement: &str) -> Option<String> {
+pub(crate) fn direct_reference(requirement: &str) -> Option<String> {
     let name: String = requirement
         .trim()
         .chars()
@@ -813,251 +863,84 @@ fn uv_index(index: &UvIndex) -> Named {
     }
 }
 
-/// The default and searched indexes of one uv settings table.
-fn uv_settings(settings: &UvSettings, indexes: &mut Indexes) {
-    for key in settings.rest.keys() {
-        if !UV_IRRELEVANT.contains(&key.as_str()) {
-            indexes
-                .extras
-                .push(unreadable(format!("uv setting {}", shown(key))));
-        }
-    }
-    if settings.torch_backend.is_some() {
-        indexes.extras.push(Named::Unusable(
-            "uv torch-backend, which routes packages to PyTorch's indexes".into(),
-        ));
-    }
-    let mut defaults = Vec::new();
-    for index in &settings.index {
-        let named = uv_index(index);
-        if index.default {
-            defaults.push(named);
-        } else if !index.explicit {
-            indexes.extras.push(named);
-        }
-    }
-    defaults.extend(settings.index_url.as_deref().map(Named::parse));
-    indexes
-        .extras
-        .extend(settings.extra_index_url.iter().map(|u| Named::parse(u)));
-    indexes
-        .extras
-        .extend(settings.find_links.iter().map(|u| find_links(u)));
-    let mut defaults = defaults.into_iter();
-    indexes.default = defaults.next();
-    indexes.extras.extend(defaults);
-    if let Some(pip) = &settings.pip {
-        uv_pip_settings(pip, indexes);
-    }
-    if settings.no_index {
-        let mut only = vec!["--no-index".to_owned()];
-        only.extend(
-            settings
-                .find_links
-                .iter()
-                .map(|u| format!("--find-links {}", crate::redacted(u))),
-        );
-        indexes.default = Some(Named::Unusable(only.join(" ")));
-        indexes
-            .extras
-            .retain(|named| !matches!(named, Named::Url(_) | Named::Public));
-    }
-}
-
-/// `uv pip`'s indexes for the project: candidates besides `uv lock`'s, since
-/// the Count cannot tell which installs it.
-fn uv_pip_settings(pip: &UvPip, indexes: &mut Indexes) {
-    for key in pip.rest.keys() {
-        if !UV_PIP_IRRELEVANT.contains(&key.as_str()) {
-            indexes
-                .extras
-                .push(unreadable(format!("uv pip setting {}", shown(key))));
-        }
-    }
-    indexes
-        .extras
-        .extend(pip.index_url.as_deref().map(Named::parse));
-    indexes
-        .extras
-        .extend(pip.extra_index_url.iter().map(|u| Named::parse(u)));
-    indexes
-        .extras
-        .extend(pip.find_links.iter().map(|u| find_links(u)));
-    for (set, what) in [
-        (pip.no_index, "uv pip no-index"),
-        (pip.torch_backend.is_some(), "uv pip torch-backend"),
-        (
-            pip.no_sources || !pip.no_sources_package.is_empty(),
-            "uv pip no-sources, which ignores the project's pins",
-        ),
-    ] {
-        if set {
-            indexes.extras.push(Named::Unusable(what.into()));
-        }
-    }
-}
-
-/// Where one uv source pins its package.
-fn uv_pin(source: &UvSource, names: &BTreeMap<String, Named>) -> Origin {
-    let pinned = if let Some(name) = &source.index {
-        Origin::Index(
-            names
-                .get(name)
-                .cloned()
-                .unwrap_or_else(|| Named::Unusable(format!("index {}", shown(name)))),
-        )
-    } else if source.git.is_some()
-        || source.url.is_some()
-        || source.path.is_some()
-        || source.workspace.is_some()
-    {
-        return Origin::Other;
-    } else {
-        Origin::Index(unreadable("a uv source"))
-    };
-    conditional(
-        pinned,
-        source.marker.is_some() || source.extra.is_some() || source.group.is_some(),
-    )
-}
-
-/// A pin that holds only under some markers, extras, groups or Pythons
-/// leaves the package to the project's indexes everywhere else.
-fn conditional(pinned: Origin, conditional: bool) -> Origin {
-    match pinned {
-        Origin::Index(named) if conditional => Origin::Ambiguous(vec![
-            named,
-            Named::Unusable("its indexes where the pin does not hold".into()),
-        ]),
-        pinned => pinned,
-    }
-}
-
-/// Poetry's sources, by priority, and the packages pinned to them.
-fn poetry_settings(poetry: &Poetry, indexes: &mut Indexes) {
-    let mut names = BTreeMap::<String, Named>::new();
-    // Poetry knows PyPI by that name, whatever its case.
-    names.insert("pypi".into(), Named::Public);
-    let mut primaries = Vec::new();
-    for source in &poetry.source {
-        let name = source.name.to_ascii_lowercase();
-        let named = match (&source.url, source.links) {
-            (Some(url), Some(true)) => find_links(url),
-            (Some(url), _) => Named::parse(url),
-            (None, _) if name == "pypi" => Named::Public,
-            (None, _) => unreadable(format!(
-                "Poetry source {} without a URL",
-                shown(&source.name)
-            )),
-        };
-        names.insert(name, named.clone());
-        match source.priority.unwrap_or(PoetryPriority::Primary) {
-            PoetryPriority::Primary => primaries.push(named),
-            PoetryPriority::Supplemental => indexes.extras.push(named),
-            PoetryPriority::Explicit => {}
-        }
-    }
-    // With no primary source, PyPI is; primary sources replace it, and more
-    // than one is ambiguous.
-    let mut primaries = primaries.into_iter();
-    if let Some(first) = primaries.next() {
-        indexes.default = Some(first);
-    }
-    indexes.extras.extend(primaries);
-    let groups = poetry.group.values().map(|g| &g.dependencies);
-    for dependencies in [&poetry.dependencies, &poetry.dev_dependencies]
-        .into_iter()
-        .chain(groups)
-    {
-        for (package, dependency) in dependencies {
-            let specs = match dependency {
-                PoetryDependency::Version(_) => continue,
-                PoetryDependency::One(spec) => std::slice::from_ref(spec.as_ref()),
-                PoetryDependency::Many(specs) => specs.as_slice(),
-            };
-            let origin = Origin::of(specs.iter().filter_map(|spec| poetry_pin(spec, &names)));
-            if let Some(origin) = origin {
-                pin(&mut indexes.pinned, super::normalise(package), origin);
-            }
-        }
-    }
-}
-
-fn poetry_pin(spec: &PoetrySpec, names: &BTreeMap<String, Named>) -> Option<Origin> {
-    let pinned = if let Some(name) = &spec.source {
-        Origin::Index(
-            names
-                .get(&name.to_ascii_lowercase())
-                .cloned()
-                .unwrap_or_else(|| Named::Unusable(format!("index {}", shown(name)))),
-        )
-    } else if spec.git.is_some() || spec.path.is_some() || spec.file.is_some() || spec.url.is_some()
-    {
-        return Some(Origin::Other);
-    } else {
-        return None;
-    };
-    Some(conditional(
-        pinned,
-        spec.python.is_some() || spec.platform.is_some() || spec.markers.is_some(),
-    ))
-}
-
 /// Settings of tools the Count cannot check against the tool itself, which
-/// could name an index: their packages' lookups fail.
-fn unverified(tools: &Tools, indexes: &mut Indexes) {
-    let has = |value: &Option<Value>, pointer: &str| {
-        value
-            .as_ref()
-            .and_then(|v| v.pointer(pointer))
-            .is_some_and(|v| !v.is_null())
-    };
+/// could name an index: every package's lookup fails.
+fn unverified(tools: &Tools, uncertain: &mut Vec<Named>) {
     for (present, what) in [
-        (has(&tools.pdm, "/source"), "PDM sources"),
-        (has(&tools.pdm, "/resolution/overrides"), "PDM overrides"),
-        (has(&tools.rye, "/sources"), "Rye sources"),
+        (
+            tools.pdm.as_ref().is_some_and(pdm_names_index),
+            "PDM sources or overrides",
+        ),
+        (
+            tools
+                .rye
+                .as_ref()
+                .is_some_and(|rye| has_key(rye, &|key| key == "sources")),
+            "Rye sources",
+        ),
         (
             tools.pixi.as_ref().is_some_and(pixi_names_index),
             "Pixi PyPI options",
         ),
         (
             tools.hatch.as_ref().is_some_and(hatch_sets_installer),
-            "Hatch environment PIP_ or UV_ variables",
+            "Hatch installer settings",
         ),
     ] {
         if present {
-            indexes.extras.push(Named::Unusable(format!(
+            uncertain.push(Named::Unusable(format!(
                 "{what}, which the Count does not read"
             )));
         }
     }
 }
 
-/// Whether a Pixi table names a PyPI index: its options, or a dependency's.
-fn pixi_names_index(pixi: &Value) -> bool {
-    pixi.get("pypi-options").is_some()
-        || pixi
-            .get("pypi-dependencies")
-            .and_then(Value::as_object)
-            .is_some_and(|deps| deps.values().any(|d| d.get("index").is_some()))
+/// Whether `value` holds, at any depth, a key `wanted` accepts.
+fn has_key(value: &Value, wanted: &dyn Fn(&str) -> bool) -> bool {
+    match value {
+        Value::Object(map) => map
+            .iter()
+            .any(|(key, value)| wanted(key) || has_key(value, wanted)),
+        Value::Array(items) => items.iter().any(|item| has_key(item, wanted)),
+        _ => false,
+    }
 }
 
-/// Whether a Hatch table sets pip or uv variables in an environment, or
-/// gives the installer its own arguments.
+/// Whether PDM settings, in `[tool.pdm]` or `pdm.toml`, name an index:
+/// sources, `pypi` settings or resolution overrides anywhere.
+fn pdm_names_index(pdm: &Value) -> bool {
+    has_key(pdm, &|key| matches!(key, "source" | "pypi" | "overrides"))
+}
+
+/// Whether Pixi settings, in `[tool.pixi]` or `pixi.toml`, name a PyPI
+/// index: options or a dependency's index in any feature or target.
+fn pixi_names_index(pixi: &Value) -> bool {
+    has_key(pixi, &|key| {
+        matches!(
+            key,
+            "pypi-options" | "index-url" | "extra-index-urls" | "find-links" | "index"
+        )
+    })
+}
+
+/// Whether Hatch settings, in `[tool.hatch]` or `hatch.toml`, give the
+/// installer flags or pip or uv variables, in any environment or override.
 fn hatch_sets_installer(hatch: &Value) -> bool {
-    hatch
-        .get("envs")
-        .and_then(Value::as_object)
-        .is_some_and(|envs| {
-            envs.values().any(|env| {
-                env.get("pip-install-flags").is_some()
-                    || env
-                        .get("env-vars")
-                        .and_then(Value::as_object)
-                        .is_some_and(|vars| {
-                            vars.keys()
-                                .any(|k| k.starts_with("PIP_") || k.starts_with("UV_"))
-                        })
-            })
-        })
+    fn installer_variable(value: &Value) -> bool {
+        match value {
+            Value::Object(map) => map.iter().any(|(key, value)| {
+                key.starts_with("PIP_")
+                    || key.starts_with("UV_")
+                    || key == "pip-install-flags"
+                    || (key == "key"
+                        && value
+                            .as_str()
+                            .is_some_and(|v| v.starts_with("PIP_") || v.starts_with("UV_")))
+                    || installer_variable(value)
+            }),
+            Value::Array(items) => items.iter().any(installer_variable),
+            _ => false,
+        }
+    }
+    installer_variable(hatch)
 }

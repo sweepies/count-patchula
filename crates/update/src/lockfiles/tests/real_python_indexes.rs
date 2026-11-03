@@ -11,6 +11,10 @@
 //! declared, what it is for, how a pin is written and where the project
 //! sits, rather than from cases picked by hand.
 //!
+//! The tool resolves each project first, and the Count then reads it with the
+//! lockfile the tool wrote, as it finds it in a repository: a check of which
+//! lockfile it reads, and how, against the tool's own output.
+//!
 //! The Count may be stricter than a tool (an ambiguous or unusable index
 //! fails its lookup), but where it names an index it must be the tool's, and
 //! where it names none the tool must not take the package from an index the
@@ -348,17 +352,25 @@ fn real_python_index_choices_match_uv_and_poetry() {
                 .iter()
                 .map(|(path, text)| (path.clone(), only(path, text, package, &base)))
                 .collect();
-            let Some(expected) = expected(&scanner, &files, &case.project, package, &case.name)
-            else {
-                continue;
-            };
             let dir = temp.path().join(format!("{number}-{package}"));
             for (path, text) in &files {
                 let path = dir.join(path);
                 std::fs::create_dir_all(path.parent().unwrap()).unwrap();
                 std::fs::write(path, text).unwrap();
             }
+            // The tool resolves first; the Count then reads the project with
+            // the lockfile the tool wrote, as it would in the repository.
             let (observed, log) = resolve(case.tool, &dir, temp.path(), package, &base);
+            let mut files = files;
+            for lock in ["uv.lock", "poetry.lock"] {
+                if let Ok(text) = std::fs::read_to_string(dir.join(lock)) {
+                    files.insert(lock.to_owned(), text);
+                }
+            }
+            let Some(expected) = expected(&scanner, &files, &case.project, package, &case.name)
+            else {
+                continue;
+            };
             compared += 1;
             let agrees = match (&expected, &observed) {
                 (Expect::Index(url), Observed::Local(local)) => url == local,

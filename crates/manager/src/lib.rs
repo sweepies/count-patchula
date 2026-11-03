@@ -684,7 +684,10 @@ fn requirements_name(path: &str) -> bool {
     else {
         return false;
     };
-    stem.contains("requirements") || path.contains("requirements/")
+    stem.contains("requirements")
+        || path
+            .rsplit_once('/')
+            .is_some_and(|(dir, _)| dir.split('/').any(|part| part == "requirements"))
 }
 
 #[cfg(test)]
