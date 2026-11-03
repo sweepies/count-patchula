@@ -265,17 +265,12 @@ fn indexes(
             poetry_names.insert(name, named.clone());
         }
         let legacy = |key: &str| source.get(key).and_then(Item::as_bool) == Some(true);
-        let priority =
-            source
-                .get("priority")
-                .and_then(Item::as_str)
-                .unwrap_or(if legacy("default") {
-                    "default"
-                } else if legacy("secondary") {
-                    "supplemental"
-                } else {
-                    "primary"
-                });
+        let priority = match source.get("priority").and_then(Item::as_str) {
+            Some(priority) => priority,
+            None if legacy("default") => "default",
+            None if legacy("secondary") => "supplemental",
+            None => "primary",
+        };
         match priority {
             "explicit" => {}
             "supplemental" | "secondary" => indexes.extras.push(named),
