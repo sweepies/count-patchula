@@ -214,7 +214,10 @@ async fn every_ecosystem_resolves_its_own_metadata_conditionally_without_credent
     for _ in 0..2 {
         for (source, package, expected) in cases {
             let found = client
-                .source_repository(source, package, "2.0.0")
+                .source_repository(
+                    &patchula_config::PackageId::public(source, package),
+                    "2.0.0",
+                )
                 .await
                 .unwrap()
                 .unwrap();
@@ -282,7 +285,11 @@ async fn range_merges_releases_and_package_changelog_and_reuses_blob_across_clie
         let client = client(routes.clone(), cache.clone()).await;
         for _ in 0..2 {
             let notes = client
-                .release_notes(Source::Npm, "@scope/pkg", "1.0.0", "2.0.0")
+                .release_notes(
+                    &patchula_config::PackageId::public(Source::Npm, "@scope/pkg"),
+                    "1.0.0",
+                    "2.0.0",
+                )
                 .await
                 .unwrap();
             assert_eq!(
@@ -349,28 +356,32 @@ async fn publication_batch_deduplicates_overlapping_upstream_reads_and_next_batc
     batch
         .prepare_release_notes(&[
             (
-                Source::Mise,
-                "node".into(),
+                patchula_config::PackageId::public(Source::Mise, "node"),
                 "22.9.0".into(),
                 "22.23.3".into(),
             ),
             (
-                Source::GithubTags,
-                "nodejs/node".into(),
+                patchula_config::PackageId::public(Source::GithubTags, "nodejs/node"),
                 "22.20.0".into(),
                 "22.23.3".into(),
             ),
         ])
         .await;
     let clone = batch.clone();
+    let node = patchula_config::PackageId::public(Source::Mise, "node");
+    let nodejs = patchula_config::PackageId::public(Source::GithubTags, "nodejs/node");
     let (mise, github) = tokio::join!(
-        batch.release_notes(Source::Mise, "node", "22.9.0", "22.23.3"),
-        clone.release_notes(Source::GithubTags, "nodejs/node", "22.20.0", "22.23.3")
+        batch.release_notes(&node, "22.9.0", "22.23.3"),
+        clone.release_notes(&nodejs, "22.20.0", "22.23.3")
     );
     assert_eq!(mise.unwrap().sections.len(), 2);
     assert_eq!(github.unwrap().sections.len(), 1);
     let go = batch
-        .release_notes(Source::Go, "github.com/nodejs/node", "22.9.0", "22.23.3")
+        .release_notes(
+            &patchula_config::PackageId::public(Source::Go, "github.com/nodejs/node"),
+            "22.9.0",
+            "22.23.3",
+        )
         .await
         .unwrap();
     assert_eq!(go.sections.len(), 2);
@@ -391,7 +402,11 @@ async fn publication_batch_deduplicates_overlapping_upstream_reads_and_next_batc
     }
     source
         .notes_batch()
-        .release_notes(Source::Mise, "node", "22.9.0", "22.23.3")
+        .release_notes(
+            &patchula_config::PackageId::public(Source::Mise, "node"),
+            "22.9.0",
+            "22.23.3",
+        )
         .await
         .unwrap();
     let reads = routes.requests.lock().unwrap();
@@ -409,14 +424,12 @@ async fn release_body_batches_validate_timestamps_and_fetch_only_edited_bodies_a
     let original = range_routes();
     let ranges = vec![
         (
-            Source::Npm,
-            "@scope/pkg".into(),
+            patchula_config::PackageId::public(Source::Npm, "@scope/pkg"),
             "1.0.0".into(),
             "2.0.0".into(),
         ),
         (
-            Source::Npm,
-            "@scope/pkg".into(),
+            patchula_config::PackageId::public(Source::Npm, "@scope/pkg"),
             "1.1.0".into(),
             "2.0.0".into(),
         ),
@@ -444,11 +457,8 @@ async fn release_body_batches_validate_timestamps_and_fetch_only_edited_bodies_a
         let source = client(routes.clone(), cache).await;
         let batch = source.notes_batch();
         batch.prepare_release_notes(&ranges).await;
-        for (_, package, current, target) in &ranges {
-            let notes = batch
-                .release_notes(Source::Npm, package, current, target)
-                .await
-                .unwrap();
+        for (id, current, target) in &ranges {
+            let notes = batch.release_notes(id, current, target).await.unwrap();
             let section = notes
                 .sections
                 .iter()
@@ -743,7 +753,11 @@ async fn mirror_errors_empty_and_truncation_never_fall_back_to_github_catalogs()
         ]);
         let notes = client(routes.clone(), memory().await)
             .await
-            .release_notes(Source::GithubTags, "example/empty", "1.0.0", "2.0.0")
+            .release_notes(
+                &patchula_config::PackageId::public(Source::GithubTags, "example/empty"),
+                "1.0.0",
+                "2.0.0",
+            )
             .await
             .unwrap();
         assert!(notes.incomplete);
@@ -781,7 +795,11 @@ async fn publication_batch_deduplicates_failed_note_reads_without_poisoning_the_
     let batch = source.notes_batch();
     for package in ["node", "core:node"] {
         let notes = batch
-            .release_notes(Source::Mise, package, "22.9.0", "22.23.3")
+            .release_notes(
+                &patchula_config::PackageId::public(Source::Mise, package),
+                "22.9.0",
+                "22.23.3",
+            )
             .await
             .unwrap();
         assert!(notes.incomplete);
@@ -790,7 +808,11 @@ async fn publication_batch_deduplicates_failed_note_reads_without_poisoning_the_
     assert_eq!(routes.requests.lock().unwrap().len(), 3);
     source
         .notes_batch()
-        .release_notes(Source::Mise, "node", "22.9.0", "22.23.3")
+        .release_notes(
+            &patchula_config::PackageId::public(Source::Mise, "node"),
+            "22.9.0",
+            "22.23.3",
+        )
         .await
         .unwrap();
     assert_eq!(routes.requests.lock().unwrap().len(), 6);
@@ -826,7 +848,11 @@ async fn node_per_major_changelog_and_prerelease_ranges() {
     ]);
     let notes = client(routes.clone(), memory().await)
         .await
-        .release_notes(Source::Mise, "node", "22.9.0", "22.23.3")
+        .release_notes(
+            &patchula_config::PackageId::public(Source::Mise, "node"),
+            "22.9.0",
+            "22.23.3",
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -881,7 +907,11 @@ async fn prerelease_targets_include_prereleases_but_stable_targets_exclude_them(
     ]);
     let client = client(routes.clone(), memory().await).await;
     let notes = client
-        .release_notes(Source::GithubReleases, "example/pre", "1.0.0", "2.0.0-rc.2")
+        .release_notes(
+            &patchula_config::PackageId::public(Source::GithubReleases, "example/pre"),
+            "1.0.0",
+            "2.0.0-rc.2",
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -894,7 +924,11 @@ async fn prerelease_targets_include_prereleases_but_stable_targets_exclude_them(
     );
     let before = routes.requests.lock().unwrap().len();
     let notes = client
-        .release_notes(Source::GithubReleases, "example/pre", "1.0.0", "2.0.0")
+        .release_notes(
+            &patchula_config::PackageId::public(Source::GithubReleases, "example/pre"),
+            "1.0.0",
+            "2.0.0",
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -918,7 +952,11 @@ async fn a_changed_changelog_blob_is_reparsed_once_with_new_sections() {
     let cache = memory().await;
     client(first.clone(), cache.clone())
         .await
-        .release_notes(Source::Npm, "@scope/pkg", "1.0.0", "2.0.0")
+        .release_notes(
+            &patchula_config::PackageId::public(Source::Npm, "@scope/pkg"),
+            "1.0.0",
+            "2.0.0",
+        )
         .await
         .unwrap();
     let mut bodies = first.bodies.clone();
@@ -934,7 +972,11 @@ async fn a_changed_changelog_blob_is_reparsed_once_with_new_sections() {
     let client = client(routes.clone(), cache).await;
     for _ in 0..2 {
         let notes = client
-            .release_notes(Source::Npm, "@scope/pkg", "1.0.0", "2.0.0")
+            .release_notes(
+                &patchula_config::PackageId::public(Source::Npm, "@scope/pkg"),
+                "1.0.0",
+                "2.0.0",
+            )
             .await
             .unwrap();
         assert_eq!(notes.sections[0].body, "Edited notes");
@@ -1266,7 +1308,11 @@ async fn upstream_adapters_fill_ranges_without_github_releases() {
     let routes = adapter_routes();
     let client = client(routes.clone(), memory().await).await;
     let postgres = client
-        .release_notes(Source::GithubTags, "postgres/postgres", "17.2", "17.6")
+        .release_notes(
+            &patchula_config::PackageId::public(Source::GithubTags, "postgres/postgres"),
+            "17.2",
+            "17.6",
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -1293,7 +1339,11 @@ async fn upstream_adapters_fill_ranges_without_github_releases() {
     assert!(!postgres.incomplete);
 
     let go = client
-        .release_notes(Source::GithubTags, "golang/go", "1.27.0", "1.27.2")
+        .release_notes(
+            &patchula_config::PackageId::public(Source::GithubTags, "golang/go"),
+            "1.27.0",
+            "1.27.2",
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -1322,7 +1372,11 @@ async fn unchanged_adapter_blobs_are_neither_downloaded_nor_parsed_again() {
     for _ in 0..2 {
         let client = client(routes.clone(), cache.clone()).await;
         let notes = client
-            .release_notes(Source::GithubTags, "golang/go", "1.27.0", "1.27.2")
+            .release_notes(
+                &patchula_config::PackageId::public(Source::GithubTags, "golang/go"),
+                "1.27.0",
+                "1.27.2",
+            )
             .await
             .unwrap();
         assert_eq!(notes.sections.len(), 2);
@@ -1362,7 +1416,11 @@ async fn a_range_spanning_postgres_majors_keeps_the_earlier_major_incomplete() {
     });
     let notes = client(routes.clone(), memory().await)
         .await
-        .release_notes(Source::GithubTags, "postgres/postgres", "16.9", "17")
+        .release_notes(
+            &patchula_config::PackageId::public(Source::GithubTags, "postgres/postgres"),
+            "16.9",
+            "17",
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -1407,7 +1465,11 @@ async fn a_failing_adapter_marks_the_notes_incomplete_without_failing() {
     });
     let notes = client(routes.clone(), memory().await)
         .await
-        .release_notes(Source::GithubTags, "golang/go", "1.27.0", "1.27.2")
+        .release_notes(
+            &patchula_config::PackageId::public(Source::GithubTags, "golang/go"),
+            "1.27.0",
+            "1.27.2",
+        )
         .await
         .unwrap();
     assert!(notes.sections.is_empty());
@@ -1488,7 +1550,11 @@ async fn gitlab_releases_link_to_gitlab_and_keep_references_on_that_forge() {
     ]);
     let client = client(routes.clone(), memory().await).await;
     let notes = client
-        .release_notes(Source::Npm, "gl-pkg", "1.0.0", "1.2.0")
+        .release_notes(
+            &patchula_config::PackageId::public(Source::Npm, "gl-pkg"),
+            "1.0.0",
+            "1.2.0",
+        )
         .await
         .unwrap();
     let versions: Vec<_> = notes.sections.iter().map(|s| s.version.as_str()).collect();
@@ -1543,7 +1609,11 @@ async fn gitea_without_release_text_falls_back_to_its_root_changelog() {
     ]);
     let client = client(routes, memory().await).await;
     let notes = client
-        .release_notes(Source::Npm, "cb-pkg", "1.0.0", "1.2.0")
+        .release_notes(
+            &patchula_config::PackageId::public(Source::Npm, "cb-pkg"),
+            "1.0.0",
+            "1.2.0",
+        )
         .await
         .unwrap();
     let versions: Vec<_> = notes.sections.iter().map(|s| s.version.as_str()).collect();
@@ -1584,7 +1654,10 @@ async fn forge_tags_page_newest_first_until_a_short_page() {
     ]);
     let client = client(routes, memory().await).await;
     let gitlab = client
-        .lookup(Source::ForgeTags, "gitlab.com/grp/hooks")
+        .lookup(&patchula_config::PackageId::public(
+            Source::ForgeTags,
+            "gitlab.com/grp/hooks",
+        ))
         .await
         .unwrap();
     assert_eq!(gitlab.versions.len(), 101);
@@ -1595,7 +1668,10 @@ async fn forge_tags_page_newest_first_until_a_short_page() {
     );
     assert_eq!(gitlab.versions[100].published_at, None);
     let gitea = client
-        .lookup(Source::ForgeTags, "codeberg.org/owner/hooks")
+        .lookup(&patchula_config::PackageId::public(
+            Source::ForgeTags,
+            "codeberg.org/owner/hooks",
+        ))
         .await
         .unwrap();
     assert_eq!(gitea.versions[0].version, "v0.3");
@@ -1605,7 +1681,10 @@ async fn forge_tags_page_newest_first_until_a_short_page() {
     );
     assert!(
         client
-            .lookup(Source::ForgeTags, "git.example.com/a/b")
+            .lookup(&patchula_config::PackageId::public(
+                Source::ForgeTags,
+                "git.example.com/a/b"
+            ))
             .await
             .is_err()
     );

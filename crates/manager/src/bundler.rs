@@ -19,6 +19,7 @@ fn ruby(path: &str, text: &str, start: usize, version: &str, pointer: &str) -> D
         scheme: Scheme::Loose,
         extract: None,
         included_by: None,
+        registry: None,
     }
 }
 fn numeric(version: &str) -> bool {
@@ -116,6 +117,7 @@ pub(super) fn extract(path: &str, text: &str, files: &Files) -> Result<Vec<Depen
             scheme: Scheme::Rubygems,
             extract: None,
             included_by: None,
+            registry: None,
         });
     }
     if let Some(version) = RUBY

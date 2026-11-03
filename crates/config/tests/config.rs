@@ -246,6 +246,10 @@ fn invalid_values_have_actionable_diagnostics() {
             "missing capture",
         ),
         (
+            "extractors = new Listing { new Extractor { paths = new Listing { \"*.txt\" }; patterns = new Listing { \"(?<current>.+)\" }; source = \"pypi\"; dependency = \"x\"; package = \"x\"; registry = \"https://pypi.acme.dev\" } }",
+            "take a registry",
+        ),
+        (
             "security { imagePlatforms = new Listing {} }",
             "at least one platform",
         ),

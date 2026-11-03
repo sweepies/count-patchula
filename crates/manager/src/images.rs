@@ -36,6 +36,7 @@ pub(super) fn dependency(
         scheme: Scheme::Docker,
         extract: None,
         included_by: None,
+        registry: None,
     })
 }
 

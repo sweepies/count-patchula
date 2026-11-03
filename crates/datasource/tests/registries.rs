@@ -40,7 +40,7 @@ async fn public_registry_catalogs_and_index_digest() {
     for (source, package) in packages {
         assert!(
             !client
-                .lookup(source, package)
+                .lookup(&patchula_config::PackageId::public(source, package))
                 .await
                 .unwrap()
                 .versions
@@ -65,7 +65,7 @@ async fn public_registry_catalogs_and_index_digest() {
     for (source, package) in packages {
         assert!(
             !client
-                .lookup(source, package)
+                .lookup(&patchula_config::PackageId::public(source, package))
                 .await
                 .unwrap()
                 .versions

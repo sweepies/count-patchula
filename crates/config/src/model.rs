@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 macro_rules! words {
     ($name:ident { $($variant:ident => $word:literal),+ $(,)? }) => {
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
         pub enum $name { $(#[serde(rename = $word)] $variant),+ }
     };
 }
@@ -114,6 +114,7 @@ pub struct Extractor {
     pub package: String,
     pub scheme: String,
     pub extract: Option<String>,
+    pub registry: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

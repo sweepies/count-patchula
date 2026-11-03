@@ -187,6 +187,10 @@ class Extractor {
   scheme: String = "semver"
   /// Optional tag regex with a required named `version` capture.
   extract: String? = null
+  /// The https URL of the registry to look the package up in, or a template
+  /// such as "{registry}", when it is not the source's public one. Only npm
+  /// takes a registry.
+  registry: String? = null
 }
 
 class PullRequests {

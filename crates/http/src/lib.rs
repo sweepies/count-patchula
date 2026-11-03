@@ -116,7 +116,7 @@ impl Transport for Network {
 mod cached;
 mod credentials;
 pub use cached::{Bearer, Cached, Error as CacheError, Options, Stats};
-pub use credentials::{Auth, Credential};
+pub use credentials::{Auth, Credential, prefix as url_prefix};
 mod trace;
 pub use trace::{PhaseTrace, RequestTrace};
 

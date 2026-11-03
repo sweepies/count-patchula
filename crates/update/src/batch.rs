@@ -215,6 +215,7 @@ mod tests {
 
     fn change(package: &str, value: &str) -> Change {
         Change {
+            registry: None,
             source: "npm".into(),
             package: package.into(),
             file: "package.json".into(),

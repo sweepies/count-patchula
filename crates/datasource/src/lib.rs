@@ -18,7 +18,7 @@ mod packagist;
 mod registries;
 mod rubygems;
 use patchula_cache::{Cache, Release};
-use patchula_config::Source;
+use patchula_config::{PackageId, Source};
 use patchula_github::Error as GithubError;
 use patchula_http::Cached;
 pub use patchula_report::LookupErrorKind;
@@ -129,6 +129,18 @@ impl From<Release> for Version {
         }
     }
 }
+/// npm's public registry, which a dependency without its own registry reads.
+pub const NPM_REGISTRY: &str = "https://registry.npmjs.org";
+
+/// The URL of `package`'s packument in `registry`, or in npm's public one.
+fn npm_url(registry: Option<&str>, package: &str) -> String {
+    format!(
+        "{}/{}",
+        registry.unwrap_or(NPM_REGISTRY).trim_end_matches('/'),
+        package.replace('/', "%2f")
+    )
+}
+
 #[derive(Clone)]
 pub struct Client {
     pub(crate) github: patchula_github::Client,
@@ -180,8 +192,10 @@ impl Client {
     /// Whether looking up `package` reads a registry with an operator entry's
     /// credentials, so that what it finds may be private. Only sources that
     /// carry their registry's URL can reach one.
-    pub fn credentialed(&self, source: Source, package: &str) -> bool {
+    pub fn credentialed(&self, id: &PackageId) -> bool {
+        let (source, registry, package) = (id.source, id.registry.as_deref(), id.name.as_str());
         let url = match source {
+            Source::Npm => Some(npm_url(registry, package)),
             Source::Docker | Source::Oci => docker::identity(package)
                 .ok()
                 .map(|(host, path)| format!("https://{host}/v2/{path}/tags/list")),
@@ -192,10 +206,32 @@ impl Client {
             Source::ForgeTags => forge::tags_url(package),
             _ => None,
         };
-        url.and_then(|url| self.http.credential(&url))
-            .is_some_and(|entry| entry.auth.sends())
+        // Container registry reads are never mirrored; other reads are, so a
+        // public URL behind a credentialed mirror counts.
+        let mirrored = !matches!(source, Source::Docker | Source::Oci);
+        url.and_then(|url| {
+            if mirrored {
+                self.http.read_credential(&url)
+            } else {
+                self.http.credential(&url)
+            }
+        })
+        .is_some_and(|entry| entry.auth.sends())
     }
-    pub async fn lookup(&self, source: Source, package: &str) -> Result<Catalog> {
+    /// The versions of `package`, from `registry` when it is given: an https
+    /// URL standing in for the source's public registry. Only npm takes one.
+    pub async fn lookup(&self, id: &PackageId) -> Result<Catalog> {
+        let (source, registry, package) = (id.source, id.registry.as_deref(), id.name.as_str());
+        if registry.is_some_and(|registry| {
+            source != Source::Npm || patchula_http::url_prefix(registry).is_none()
+        }) {
+            return Err(Error::Invalid);
+        }
+        // npm names are URL-safe; an escape could reach another path on a
+        // registry that decodes it.
+        if source == Source::Npm && package.contains(['%', ' ']) {
+            return Err(Error::Invalid);
+        }
         // A flake reference is a URL with a query; the runner checks its scheme.
         if source != Source::Nix
             && (package.is_empty()
@@ -205,7 +241,7 @@ impl Client {
             return Err(Error::Invalid);
         }
         match source {
-            Source::Npm => self.npm(package).await,
+            Source::Npm => self.npm(registry, package).await,
             Source::GithubReleases | Source::GithubTags => {
                 self.github_versions(source, package).await
             }
@@ -233,12 +269,11 @@ impl Client {
             Source::Nix => self.nix(package).await,
         }
     }
-    async fn npm(&self, package: &str) -> Result<Catalog> {
-        let encoded = package.replace('/', "%2f");
+    async fn npm(&self, registry: Option<&str>, package: &str) -> Result<Catalog> {
         let response = self
             .http
             .get_derived(
-                &format!("https://registry.npmjs.org/{encoded}"),
+                &npm_url(registry, package),
                 "application/json",
                 "npm-catalog-v1",
                 compact::npm,

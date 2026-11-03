@@ -12,7 +12,7 @@ quoting, comments and formatting.
 
 | Manager | Files | Lockfile the Count regenerates |
 |---|---|---|
-| `npm` | `package.json`, `pnpm-workspace.yaml` and `.yarnrc.yml` catalogs, `.nvmrc`, `.node-version` | `package-lock.json`, `npm-shrinkwrap.json`, `aube-lock.yaml`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock` |
+| `npm` | `package.json`, `pnpm-workspace.yaml` and `.yarnrc.yml` catalogs, `.nvmrc`, `.node-version`, `.npmrc` registries | `package-lock.json`, `npm-shrinkwrap.json`, `aube-lock.yaml`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock` |
 | `bun` | `package.json` when `npm` is off | `bun.lock` |
 | `github-actions` | `.github/workflows/*.yml`, `.forgejo/workflows/*.yml`, `.gitea/workflows/*.yml` (each also `.yaml`), `action.yml`, `action.yaml` | |
 | `mise` | `mise.toml`, `.mise.toml`, `.tool-versions` | `mise.lock` |
@@ -62,7 +62,8 @@ aliases (`npm:pkg@^1`), nested overrides, resolutions and `packageManager`.
 alone. Catalogs are dependencies where they are declared: `catalog` and named
 `catalogs` in `pnpm-workspace.yaml`, `.yarnrc.yml` for Yarn 4, and the root
 `package.json` for Bun. `.nvmrc` and `.node-version` pin Node; aliases such as
-`lts/*` are not versions.
+`lts/*` are not versions. `.npmrc` and `.yarnrc.yml` name each package's
+[registry](/guide/sources/#package-registries).
 
 When both `npm` and `bun` are enabled, `npm` owns `package.json` so nothing is
 updated twice. Binary `bun.lockb` is not supported; switch to text `bun.lock`.

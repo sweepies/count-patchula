@@ -125,6 +125,7 @@ impl Scan<'_> {
                 scheme: Scheme::Pep440,
                 extract: None,
                 included_by: None,
+                registry: None,
             });
         }
     }
@@ -177,6 +178,7 @@ impl Scan<'_> {
                 scheme: Scheme::Poetry,
                 extract: None,
                 included_by: None,
+                registry: None,
             });
         }
     }
@@ -305,5 +307,6 @@ fn python_version(path: &str, text: &str) -> Vec<Dependency> {
         scheme: Scheme::Loose,
         extract: None,
         included_by: None,
+        registry: None,
     }]
 }

@@ -108,7 +108,10 @@ async fn public_note_sources_and_release_range() {
         (Source::Mise, "node", "22.23.3", "nodejs/node"),
     ] {
         let found = client
-            .source_repository(source, package, version)
+            .source_repository(
+                &patchula_config::PackageId::public(source, package),
+                version,
+            )
             .await
             .unwrap()
             .unwrap();
@@ -127,7 +130,11 @@ async fn public_note_sources_and_release_range() {
         let before = github.stats().await.requests;
         let started = std::time::Instant::now();
         let notes = client
-            .release_notes(Source::Go, "github.com/google/uuid", "v1.5.0", "v1.6.0")
+            .release_notes(
+                &patchula_config::PackageId::public(Source::Go, "github.com/google/uuid"),
+                "v1.5.0",
+                "v1.6.0",
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -247,7 +254,11 @@ async fn public_sandbox_note_ranges() {
         for target in targets {
             let started = std::time::Instant::now();
             let notes = client
-                .release_notes(source, package, current, target)
+                .release_notes(
+                    &patchula_config::PackageId::public(source, package),
+                    current,
+                    target,
+                )
                 .await
                 .unwrap();
             assert!(notes.source.is_some(), "{package} source");

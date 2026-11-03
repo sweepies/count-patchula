@@ -10,6 +10,10 @@ use std::cmp::Ordering;
 /// ecosystem and the version is known exactly: from a lockfile or an exact
 /// declaration, never from the floor of a range.
 pub fn advisory_query(dep: &Dependency) -> Option<AdvisoryQuery> {
+    // OSV knows packages by name on their public registries.
+    if !dep.id().is_public() {
+        return None;
+    }
     let scheme = scheme(dep).ok()?;
     let (ecosystem, package) = match dep.source {
         Source::Npm if !dep.package.contains('|') => ("npm", dep.package.clone()),

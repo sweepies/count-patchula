@@ -260,6 +260,7 @@ impl Reader<'_> {
             scheme: Scheme::Loose,
             extract: None,
             included_by: self.included_by.map(str::to_owned),
+            registry: None,
         });
     }
 }

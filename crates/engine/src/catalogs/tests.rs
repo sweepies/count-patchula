@@ -54,7 +54,7 @@ fn engine(cache: Cache, registry: Arc<Registry>, token: &str) -> Engine {
         .with_versions_host(false)
 }
 fn key(package: &str) -> LookupKey {
-    ("false:npm".into(), package.into())
+    (false, PackageId::public(Source::Npm, package))
 }
 fn now() -> DateTime<Utc> {
     "2026-10-15T12:00:00Z".parse().unwrap()

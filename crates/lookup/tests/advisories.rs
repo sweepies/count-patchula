@@ -37,6 +37,7 @@ fn dependency(source: Source, package: &str, current: &str, resolved: Option<&st
         scheme,
         extract: None,
         included_by: None,
+        registry: None,
     }
 }
 
@@ -461,4 +462,13 @@ fn lockfile_only_crates_get_the_lowest_compatible_fix() {
     let q = advisory_query(&npm).unwrap();
     let found = vec![Arc::new(advisory("npm", "bar", ranges(&["2.0.1"]), &[]))];
     assert!(eval.transitive_fix(&npm, (&q, &found)).is_none());
+}
+
+#[test]
+fn a_package_from_its_own_registry_gets_no_public_advisories() {
+    let public = dependency(Source::Npm, "@acme/core", "1.0.0", Some("1.0.0"));
+    assert!(advisory_query(&public).is_some());
+    let mut private = public.clone();
+    private.registry = Some("https://npm.acme.dev".into());
+    assert!(advisory_query(&private).is_none());
 }

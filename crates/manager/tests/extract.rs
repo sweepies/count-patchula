@@ -2273,3 +2273,189 @@ fn mise_includes_of_the_repository_root_reach_every_task_file_below_it() {
     // Naming a file asks for that file, whatever it is called.
     assert_eq!(found("", "mise.local.toml"), ["mise.local.toml"]);
 }
+
+#[test]
+fn npm_dependencies_take_their_registry_from_the_nearest_npmrc_or_yarnrc() {
+    let files = Files::from([
+        (
+            ".npmrc".into(),
+            "# project registries\nregistry=https://npm.acme.dev/\n@acme:registry=https://acme.jfrog.io/artifactory/api/npm/npm-local\n//acme.jfrog.io/:_authToken=${NPM_TOKEN}\n@env:registry=${PRIVATE_REGISTRY}\n@plain:registry=http://insecure.acme.dev\n"
+                .into(),
+        ),
+        (
+            "package.json".into(),
+            r#"{"dependencies":{"react":"^18.0.0","@acme/ui":"^1.0.0","@env/x":"1.0.0","@plain/y":"1.0.0"},"packageManager":"pnpm@9.0.0"}"#.into(),
+        ),
+        ("tools/package.json".into(), r#"{"dependencies":{"@acme/cli":"2.0.0"}}"#.into()),
+        // A file that names no registry does not hide the root's.
+        ("tools/.npmrc".into(), "save-exact=true\nregistry=\n".into()),
+        (
+            "berry/.yarnrc.yml".into(),
+            "npmRegistryServer: \"https://registry.yarnpkg.com\"\n".into(),
+        ),
+        ("berry/package.json".into(), r#"{"dependencies":{"left-pad":"1.0.0"}}"#.into()),
+        // An old .npmrc may name public npm over plain http.
+        ("legacy/.npmrc".into(), "registry=http://registry.npmjs.org/\n".into()),
+        ("legacy/package.json".into(), r#"{"dependencies":{"is-odd":"1.0.0"}}"#.into()),
+        (
+            "package-lock.json".into(),
+            r#"{"lockfileVersion":3,"packages":{"":{"dependencies":{"@acme/ui":"^1.0.0"}},"node_modules/@acme/ui":{"version":"1.0.0"},"node_modules/@acme/core":{"version":"0.5.0"}}}"#.into(),
+        ),
+        (
+            "yarn/.yarnrc.yml".into(),
+            "npmRegistryServer: \"https://registry.npmjs.org\"\nnpmScopes:\n  acme:\n    npmRegistryServer: \"https://yarn.acme.dev/npm\"\n".into(),
+        ),
+        ("yarn/package.json".into(), r#"{"dependencies":{"@acme/ui":"1.0.0","lodash":"4.0.0"}}"#.into()),
+    ]);
+    let scanner = Scanner::new(&config()).unwrap();
+    assert!(scanner.needs(".npmrc"));
+    let extraction = scanner.extract(&files).unwrap();
+    let registry = |file: &str, name: &str| {
+        extraction
+            .dependencies
+            .iter()
+            .find(|d| d.file == file && d.name == name)
+            .unwrap_or_else(|| panic!("{file} {name}"))
+            .registry
+            .clone()
+    };
+    let acme = Some("https://acme.jfrog.io/artifactory/api/npm/npm-local".to_owned());
+    assert_eq!(
+        registry("package.json", "react").as_deref(),
+        Some("https://npm.acme.dev")
+    );
+    assert_eq!(registry("package.json", "@acme/ui"), acme);
+    // Values the Count cannot read from are kept as written, so those
+    // lookups fail instead of reading the public package of the name.
+    assert_eq!(
+        registry("package.json", "@env/x").as_deref(),
+        Some("${PRIVATE_REGISTRY}")
+    );
+    assert_eq!(
+        registry("package.json", "@plain/y").as_deref(),
+        Some("http://insecure.acme.dev")
+    );
+    // Yarn's registry serves the public packages.
+    assert_eq!(registry("berry/package.json", "left-pad"), None);
+    assert_eq!(registry("legacy/package.json", "is-odd"), None);
+    // A package only the lockfile records is looked up where its scope is.
+    let core = extraction
+        .locked
+        .iter()
+        .find(|l| l.package == "@acme/core")
+        .unwrap();
+    assert_eq!(core.registry, acme);
+    assert_eq!(core.dependency().registry, acme);
+    // Corepack does not read .npmrc.
+    assert_eq!(registry("package.json", "pnpm"), None);
+    // A manifest below reads the nearest .npmrc above it.
+    assert_eq!(registry("tools/package.json", "@acme/cli"), acme);
+    // Yarn's scopes, and npm's public registry, which is none of its own.
+    assert_eq!(
+        registry("yarn/package.json", "@acme/ui").as_deref(),
+        Some("https://yarn.acme.dev/npm")
+    );
+    assert_eq!(registry("yarn/package.json", "lodash"), None);
+}
+
+#[test]
+fn extractors_can_name_a_registry_from_a_capture() {
+    let mut config = config();
+    config.extractors.push(patchula_config::Extractor {
+        note: String::new(),
+        paths: vec!["deploy/versions.txt".into()],
+        patterns: vec![
+            r"(?<dependency>@[\w./-]+)=(?<current>\S+)(?: registry=(?<registry>\S+))?".into(),
+        ],
+        source: "npm".into(),
+        dependency: "{dependency}".into(),
+        package: "{dependency}".into(),
+        scheme: "semver".into(),
+        extract: None,
+        registry: Some("{registry}".into()),
+    });
+    let files = Files::from([(
+        "deploy/versions.txt".into(),
+        "@acme/ui=1.2.3 registry=https://npm.acme.dev/\n@acme/cli=2.0.0\n@acme/old=1.0.0 registry=http://old.acme.dev\n".into(),
+    )]);
+    let deps = Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies;
+    let registry = |name: &str| {
+        deps.iter()
+            .find(|d| d.name == name)
+            .unwrap()
+            .registry
+            .clone()
+    };
+    assert_eq!(
+        registry("@acme/ui").as_deref(),
+        Some("https://npm.acme.dev")
+    );
+    // An empty capture means the source's public registry.
+    assert_eq!(registry("@acme/cli"), None);
+    // A value the Count cannot read from is kept, so its lookup fails
+    // instead of the whole extraction.
+    assert_eq!(
+        registry("@acme/old").as_deref(),
+        Some("http://old.acme.dev")
+    );
+}
+
+#[test]
+fn npm_registry_files_are_read_whatever_files_and_exclude_select() {
+    let mut config = config();
+    config.files = vec![patchula_config::FileSet {
+        manager: Manager::Npm,
+        paths: vec!["**/package.json".into()],
+    }];
+    config.exclude.push("config/**".into());
+    let scanner = Scanner::new(&config).unwrap();
+    for path in [".npmrc", "config/.npmrc", "apps/web/.yarnrc.yml"] {
+        assert!(scanner.needs(path), "{path}");
+    }
+    // With only the regex manager, an npm extractor still needs them.
+    let mut regex_only = self::config();
+    regex_only.managers = vec![Manager::Regex];
+    regex_only.extractors.push(patchula_config::Extractor {
+        note: String::new(),
+        paths: vec!["deploy/versions.txt".into()],
+        patterns: vec![r"(?<dependency>@[\w./-]+)=(?<current>\S+)".into()],
+        source: "npm".into(),
+        dependency: "{dependency}".into(),
+        package: "{dependency}".into(),
+        scheme: "semver".into(),
+        extract: None,
+        registry: None,
+    });
+    assert!(Scanner::new(&regex_only).unwrap().needs(".npmrc"));
+    // An npm extractor without a registry template follows .npmrc too.
+    let mut config = self::config();
+    config.extractors.push(patchula_config::Extractor {
+        note: String::new(),
+        paths: vec!["deploy/versions.txt".into()],
+        patterns: vec![r"(?<dependency>@[\w./-]+)=(?<current>\S+)".into()],
+        source: "npm".into(),
+        dependency: "{dependency}".into(),
+        package: "{dependency}".into(),
+        scheme: "semver".into(),
+        extract: None,
+        registry: None,
+    });
+    let files = Files::from([
+        (
+            ".npmrc".into(),
+            "@acme:registry=https://npm.acme.dev\n".into(),
+        ),
+        ("deploy/versions.txt".into(), "@acme/ui=1.2.3\n".into()),
+    ]);
+    let deps = Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies;
+    let ui = deps.iter().find(|d| d.name == "@acme/ui").unwrap();
+    assert_eq!(ui.registry.as_deref(), Some("https://npm.acme.dev"));
+}

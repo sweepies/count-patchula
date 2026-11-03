@@ -220,6 +220,7 @@ fn setup_input(
         },
         extract: extract.map(str::to_owned),
         included_by: None,
+        registry: None,
     });
     Ok(())
 }
@@ -323,6 +324,7 @@ fn add(
         scheme: if image { Scheme::Docker } else { Scheme::Loose },
         extract: None,
         included_by: None,
+        registry: None,
     });
     Ok(())
 }
@@ -455,6 +457,7 @@ fn runners(
         scheme: Scheme::Loose,
         extract: None,
         included_by: None,
+        registry: None,
     });
     Ok(())
 }

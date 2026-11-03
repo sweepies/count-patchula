@@ -3,11 +3,11 @@ title: "JSON report"
 description: "The JSON report printed by patchula lookup --json and patchula run --json: repositories, dependencies, updates and lookup failures."
 ---
 `patchula lookup --json` and `patchula run --json` print one report for the
-whole batch. This page describes schema version 4.
+whole batch. This page describes schema version 5.
 
 ```json
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "repositories": [{
     "repository": "owner/repo",
     "status": "complete",
@@ -31,9 +31,9 @@ whole batch. This page describes schema version 4.
 ```
 
 Readers should reject any other `schemaVersion`. Unknown fields are rejected
-too, so a new field means a new version. Version 4 added the `reason` of a
-notice that is not a template update; version 3 added an image rebuild's
-`image` check.
+too, so a new field means a new version. Version 5 added a dependency's
+`registry`; version 4 added the `reason` of a notice that is not a template
+update; version 3 added an image rebuild's `image` check.
 
 ## Repositories
 
@@ -89,6 +89,7 @@ when this list is not empty.
 | `manager` | The manager name used in configuration, such as `npm` or `cargo` |
 | `name` | The name in the manifest |
 | `package` | The registry identity; differs from `name` for aliases |
+| `registry` | Optional. The [registry](/guide/sources/#package-registries) the package was looked up in, when it is not the source's public one |
 | `occurrence` | Optional. Tells apart the same name declared more than once in a file |
 | `current.value` | The text in the manifest, such as `^1.2` |
 | `current.version` | The resolved version, or null when unknown |

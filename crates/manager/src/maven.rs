@@ -196,6 +196,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
             scheme: Scheme::Maven,
             extract: None,
             included_by: None,
+            registry: None,
         });
     }
     Ok(out)

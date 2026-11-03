@@ -31,8 +31,8 @@ pub enum Action {
     Retry(String),
 }
 pub fn dependency_key(file: &str, dep: &Dependency) -> String {
-    hash(
-        serde_json::to_string(&(
+    identity(
+        serde_json::json!([
             file,
             &dep.manager,
             &dep.name,
@@ -43,14 +43,21 @@ pub fn dependency_key(file: &str, dep: &Dependency) -> String {
                 .unwrap_or(""),
             &dep.current.value,
             &dep.current.digest,
-        ))
-        .expect("dependency identity")
-        .as_bytes(),
+        ]),
+        dep.registry.as_deref(),
     )
 }
+/// A dependency's key, with its registry when it has its own, so keys of
+/// packages from the public registry stay as they were.
+fn identity(mut parts: serde_json::Value, registry: Option<&str>) -> String {
+    if let (Some(registry), Some(parts)) = (registry, parts.as_array_mut()) {
+        parts.push(registry.into());
+    }
+    hash(parts.to_string().as_bytes())
+}
 pub fn extracted_key(dep: &patchula_manager::Dependency) -> String {
-    hash(
-        serde_json::to_string(&(
+    identity(
+        serde_json::json!([
             &dep.file,
             patchula_manager::word(&dep.manager),
             &dep.name,
@@ -58,9 +65,8 @@ pub fn extracted_key(dep: &patchula_manager::Dependency) -> String {
             patchula_manager::word(&dep.source),
             Some(&dep.current),
             &dep.digest,
-        ))
-        .expect("dependency identity")
-        .as_bytes(),
+        ]),
+        dep.registry.as_deref(),
     )
 }
 /// The key of a retry box: one package from one source, whichever files

@@ -173,14 +173,52 @@ registries {
 - In the server, an entry's `allowedInstallations` limits which installations
   use it. For any other installation, requests under its prefix carry no
   credentials.
-- A redirect carries credentials only to a URL an entry covers, and a token
-  issued under an entry only within that entry's prefix.
+- A redirect carries credentials only to a URL an entry covers, and only from
+  a request that sent some: a request without credentials never gains any on
+  a redirect. A token issued under an entry stays within that entry's prefix.
 
 A dependency's source decides where its versions come from. Helm repositories,
 OCI and Docker registries, Maven repositories and GitLab, Gitea or Forgejo tags carry
-their URL, so a private one works with an entry. npm, PyPI and the other package
+their URL, so a private one works with an entry. npm dependencies can name
+their own [package registry](#package-registries). PyPI and the other package
 registries still read their public registry, or its mirror. Lockfile tools get
 no registry credentials yet.
+
+### Package registries
+
+A dependency can come from a registry of its own instead of its source's
+public one. The repository says which, and the report shows it as the
+dependency's `registry`:
+
+- npm reads `.npmrc` files at or above each `package.json`:
+  `@scope:registry=` for a scope, else `registry=` for every package, each
+  from the nearest file that sets it. Yarn Berry's `npmRegistryServer` in
+  `.yarnrc.yml`, at the top level and under `npmScopes`, works the same and
+  wins over `.npmrc` in the same directory. A file that names no registry
+  does not hide one further up. Packages only a lockfile records get the same
+  registry as a declared one would. `packageManager` stays on the public
+  registry, since Corepack does not read `.npmrc`.
+- An npm [custom extractor](/guide/configuration/#custom-extractors) can set
+  `registry`, a template such as `"{registry}"`; an empty or unmatched capture
+  means the public registry. Without it, its packages follow `.npmrc` like a
+  `package.json` beside them.
+
+These files are read whenever npm, Bun or an npm extractor is enabled,
+whatever `files` and `exclude` select. Bun's `bunfig.toml` and Yarn 1's
+`.yarnrc` are not read yet: a registry set only there is not used.
+
+npm's and Yarn's public registries (`registry.npmjs.org`,
+`registry.yarnpkg.com`, over https or plain http) count as none. A value the Count cannot read from,
+such as a `${VAR}` npm would take from the environment or a plain-http URL, is
+kept as written: that package's lookup fails, rather than reading the public
+package of its name, which may be someone else's.
+
+A repository naming a registry never brings credentials: requests to it carry
+an operator entry's, when one covers its URL, and nothing otherwise. Two
+packages with the same name from different registries are separate
+dependencies, with separate lookups and branches. A package from its own
+registry gets no [advisories](/guide/security/) and no release notes, since
+the public package of that name is a different package.
 
 ### Mirrors
 

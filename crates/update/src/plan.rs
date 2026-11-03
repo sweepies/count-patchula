@@ -1,4 +1,4 @@
-use patchula_config::Config;
+use patchula_config::{Config, PackageId};
 use patchula_manager::{Dependency, Edit, word};
 use patchula_report::{ActionStatus, BranchAction, FileAction, Repository, Update};
 use serde::{Deserialize, Serialize};
@@ -41,6 +41,9 @@ pub struct Plan {
 pub struct Change {
     pub source: String,
     pub package: String,
+    /// The registry the package comes from, when it is not the public one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
     pub file: String,
     pub current: String,
     pub current_version: Option<String>,
@@ -58,6 +61,14 @@ pub struct Change {
     /// The image SBOM comparison, for a pinned image's new digest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<patchula_report::ImageCheck>,
+}
+impl Change {
+    /// The package the change updates, or None for a source word this build
+    /// does not know.
+    pub fn id(&self) -> Option<PackageId> {
+        let source = serde_json::from_value(serde_json::Value::String(self.source.clone())).ok()?;
+        Some(PackageId::new(source, self.registry.clone(), &self.package))
+    }
 }
 pub(crate) fn hash(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -93,6 +104,10 @@ pub fn branch_name(prefix: &str, label: &str, _identity: &str) -> Result<String,
     }
     Ok(name)
 }
+/// Each branch label's packages, by source, package and registry; a label
+/// shared by several gets a prefix to tell their branches apart.
+type PackageNames = BTreeMap<String, BTreeSet<(String, String, Option<String>)>>;
+
 struct Item<'a> {
     dep: &'a Dependency,
     update: &'a Update,
@@ -110,12 +125,12 @@ pub fn plan(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Vec<Plan>, String> {
     let evaluator = patchula_lookup::Evaluator::new(config)?;
-    let mut package_names = BTreeMap::<String, BTreeSet<(String, String)>>::new();
+    let mut package_names = PackageNames::new();
     for dep in dependencies {
         package_names
             .entry(package_slug(&dep.package))
             .or_default()
-            .insert((word(&dep.source), dep.package.clone()));
+            .insert((word(&dep.source), dep.package.clone(), dep.registry.clone()));
     }
     let mut groups = BTreeMap::<String, (String, Vec<Item<'_>>)>::new();
     for file in &repo.package_files {
@@ -128,6 +143,7 @@ pub fn plan(
                         && d.package == reported.package
                         && reported.current.value.as_deref() == Some(&d.current)
                         && d.digest == reported.current.digest
+                        && d.registry == reported.registry
                 }) {
                     // One best proposal per occurrence and track avoids overlapping edits.
                     let track = |u: &Update| match u.update_type.as_str() {
@@ -368,6 +384,7 @@ fn build(
                 current_version: item.current_version.map(str::to_owned),
                 source: word(&item.dep.source),
                 package: item.dep.package.clone(),
+                registry: item.dep.registry.clone(),
                 file: item.dep.file.clone(),
                 current: format!(
                     "{}{}",
@@ -580,7 +597,7 @@ fn branch_identity(
     reported: &patchula_report::Dependency,
     update: &Update,
     dependencies: &[Dependency],
-    package_names: &BTreeMap<String, BTreeSet<(String, String)>>,
+    package_names: &PackageNames,
     snapshot: Option<&Snapshot>,
 ) -> (String, String) {
     // Pins share one branch, except reference data: a pin branch of
@@ -624,17 +641,34 @@ fn branch_identity(
     } else {
         let line = line(dep, reported, update);
         (
-            serde_json::json!(["dependency", word(&dep.source), dep.package, line]).to_string(),
+            // A package from its own registry is another branch than the public
+            // package of its name; other identities stay as they were.
+            match &dep.registry {
+                Some(registry) => serde_json::json!([
+                    "dependency",
+                    word(&dep.source),
+                    dep.package,
+                    line,
+                    registry
+                ]),
+                None => serde_json::json!(["dependency", word(&dep.source), dep.package, line]),
+            }
+            .to_string(),
             {
                 let package = package_slug(&dep.package);
-                let manager = if package_names[&package].len() > 1 {
-                    format!("{}-", manager_slug(dep))
-                } else {
-                    String::default()
+                let manager = match &dep.registry {
+                    _ if package_names[&package].len() <= 1 => String::default(),
+                    // The whole registry, path included: one host can serve several.
+                    Some(registry) => format!("{}-", slug(registry.trim_start_matches("https://"))),
+                    None => format!("{}-", manager_slug(dep)),
                 };
                 let variants: BTreeSet<_> = dependencies
                     .iter()
-                    .filter(|d| d.package == dep.package && d.source == dep.source)
+                    .filter(|d| {
+                        d.package == dep.package
+                            && d.source == dep.source
+                            && d.registry == dep.registry
+                    })
                     .map(|d| d.current.split_once('-').map(|(_, v)| v))
                     .collect();
                 let display = if variants.len() == 1 && line.contains(".x-") {

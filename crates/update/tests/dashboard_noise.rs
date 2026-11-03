@@ -169,6 +169,7 @@ fn plan(
         identity: branch.into(),
         fingerprint: String::new(),
         changes: vec![Change {
+            registry: None,
             source: "crates".into(),
             package: package.into(),
             file: file.into(),

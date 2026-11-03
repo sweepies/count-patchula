@@ -166,6 +166,7 @@ impl Scan<'_> {
             scheme: Scheme::Loose,
             extract: None,
             included_by: None,
+            registry: None,
         });
     }
     fn project(&mut self, entry: &Value, pointer: &str, host: &str) {
@@ -214,6 +215,7 @@ impl Scan<'_> {
             scheme: Scheme::Loose,
             extract: None,
             included_by: None,
+            registry: None,
         });
     }
     /// `include` holds one entry or a list; plain strings are local or remote files.

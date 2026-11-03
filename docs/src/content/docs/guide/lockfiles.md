@@ -228,17 +228,20 @@ Parent tokens, cloud credentials, Git helpers and your tool configuration are
 not inherited. Git alone gets a temporary credential header for the
 installation token, kept out of URLs, arguments and stored config. Yarn runs on
 a copy of `.yarnrc.yml` without `yarnPath`, plugins or `${VAR}` interpolations,
-since a committed Yarn release and plugins are repository code.
+since a committed Yarn release and plugins are repository code; a `${VAR}`
+registry stays, so Yarn stops on it. npm, pnpm, aube and Bun see each `.npmrc`
+with only its `registry=` and `@scope:registry=` lines, so a private scope
+resolves where your own installs would, never to the public package of its
+name.
 
 Output is kept only when something fails, at most 4 KiB of each stream.
 
 :::note[Private registries]
-Lockfile tools cannot reach private registries yet, because credentials are
-scrubbed on purpose. Lookups from sources that take a registry URL, such as
-Helm, OCI and Maven, can, with [registry
-credentials](/guide/sources/#private-registries); npm, PyPI and the other
-package registries still read only their public registry. Passing credentials
-to lockfile tools will be a separate, explicit opt-in.
+Lockfile tools get no registry credentials yet, because credentials are
+scrubbed on purpose: a lockfile that needs a private registry fails to
+regenerate rather than resolving elsewhere. Lookups can use [registry
+credentials](/guide/sources/#private-registries). Passing credentials to
+lockfile tools will be a separate, explicit opt-in.
 :::
 
 ## Lockfile maintenance

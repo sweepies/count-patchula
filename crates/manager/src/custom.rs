@@ -27,6 +27,7 @@ pub(super) fn extract(
     path: &str,
     text: &str,
     extractors: &[Extractor],
+    npmrcs: &BTreeMap<&str, npm::Npmrc>,
 ) -> Result<Vec<Dependency>, String> {
     let mut out = Vec::new();
     for extractor in extractors {
@@ -47,12 +48,13 @@ pub(super) fn extract(
                     &captures,
                 )?))
                 .map_err(|e| e.to_string())?;
+                let package = template(&extractor.package, &captures)?;
                 out.push(Dependency {
                     manager: Manager::Regex,
                     file: path.into(),
                     location: Location::new(text, current.start(), current.end(), String::new()),
                     name: template(&extractor.dependency, &captures)?,
-                    package: template(&extractor.package, &captures)?,
+                    package: package.clone(),
                     kind: DependencyKind::Production,
                     current: current.as_str().into(),
                     resolved: None,
@@ -61,6 +63,22 @@ pub(super) fn extract(
                     scheme,
                     extract: extractor.extract.clone(),
                     included_by: None,
+                    // An optional capture that did not take part, or is empty,
+                    // means the source's public registry. A value the Count
+                    // cannot read from is kept as written, so that one lookup
+                    // fails instead of reading the public package of the name.
+                    // Without a template, npm packages follow `.npmrc`.
+                    registry: match &extractor.registry {
+                        Some(registry) => match template(registry, &captures) {
+                            Ok(raw) if raw.is_empty() => None,
+                            Ok(raw) if source == Source::Npm => npm::extracted_registry(&raw),
+                            Ok(raw) => Some(registry_url(&raw).unwrap_or(raw)),
+                            Err(error) if error.starts_with("unmatched template capture") => None,
+                            Err(error) => return Err(error),
+                        },
+                        None if source == Source::Npm => npm::registry_for(path, &package, npmrcs),
+                        None => None,
+                    },
                 });
             }
         }

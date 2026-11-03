@@ -293,6 +293,7 @@ fn walk(
                     scheme: Scheme::Semver,
                     extract: None,
                     included_by: None,
+                    registry: None,
                 });
             }
         } else if let Some(table) = item.as_table_like() {

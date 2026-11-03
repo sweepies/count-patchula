@@ -721,6 +721,7 @@ mod tests {
             identity: branch.into(),
             fingerprint: String::new(),
             changes: vec![crate::Change {
+                registry: None,
                 source: "npm".into(),
                 package: "lodash".into(),
                 file: "app/package.json".into(),

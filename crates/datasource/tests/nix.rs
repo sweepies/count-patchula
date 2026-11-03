@@ -70,7 +70,10 @@ async fn a_flake_reference_resolves_to_its_locked_revision() {
     let client = client(Some(flakes.clone())).await;
     let reference = "git+https://example.com/nixpkgs.git?ref=nixos-unstable";
     for _ in 0..2 {
-        let catalog = client.lookup(Source::Nix, reference).await.unwrap();
+        let catalog = client
+            .lookup(&patchula_config::PackageId::public(Source::Nix, reference))
+            .await
+            .unwrap();
         let [version] = catalog.versions.as_slice() else {
             panic!("one version expected: {:?}", catalog.versions);
         };
@@ -94,7 +97,10 @@ async fn tarballs_use_their_nar_hash_and_lookups_need_the_store() {
     });
     let catalog = client(Some(flakes))
         .await
-        .lookup(Source::Nix, "tarball+https://example.com/a.tar.gz")
+        .lookup(&patchula_config::PackageId::public(
+            Source::Nix,
+            "tarball+https://example.com/a.tar.gz",
+        ))
         .await
         .unwrap();
     assert_eq!(catalog.versions[0].version, "sha256-tarball");
@@ -102,7 +108,10 @@ async fn tarballs_use_their_nar_hash_and_lookups_need_the_store() {
     assert!(matches!(
         client(None)
             .await
-            .lookup(Source::Nix, "github:NixOS/nixpkgs")
+            .lookup(&patchula_config::PackageId::public(
+                Source::Nix,
+                "github:NixOS/nixpkgs"
+            ))
             .await,
         Err(Error::NoNix)
     ));

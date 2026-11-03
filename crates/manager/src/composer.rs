@@ -83,6 +83,7 @@ pub(super) fn extract(path: &str, text: &str, files: &Files) -> Result<Vec<Depen
                 scheme: Scheme::Composer,
                 extract: None,
                 included_by: None,
+                registry: None,
             });
         }
     }

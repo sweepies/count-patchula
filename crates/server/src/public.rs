@@ -176,8 +176,11 @@ pub(crate) struct Recorded<'a> {
 /// `report` without what lookups made with registry credentials found. Such a
 /// dependency keeps what the repository declares, but loses its updates,
 /// held-back releases, lookup evidence, tag digests and image checks.
-/// `credentialed` answers by a dependency's source word and package.
-pub(crate) fn withheld(report: &Report, credentialed: impl Fn(&str, &str) -> bool) -> Report {
+/// `credentialed` answers for each dependency's package.
+pub(crate) fn withheld(
+    report: &Report,
+    credentialed: impl Fn(&patchula_config::PackageId) -> bool,
+) -> Report {
     let mut report = report.clone();
     for dep in report
         .repositories
@@ -188,7 +191,12 @@ pub(crate) fn withheld(report: &Report, credentialed: impl Fn(&str, &str) -> boo
         let Some(meta) = dep.metadata.as_mut() else {
             continue;
         };
-        if !credentialed(&meta.source, &dep.package) {
+        let Ok(source) = serde_json::from_value(serde_json::Value::String(meta.source.clone()))
+        else {
+            continue;
+        };
+        let id = patchula_config::PackageId::new(source, dep.registry.clone(), &dep.package);
+        if !credentialed(&id) {
             continue;
         }
         dep.updates.clear();

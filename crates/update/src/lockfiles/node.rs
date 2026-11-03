@@ -151,6 +151,26 @@ pub(super) struct NodeContext<'a> {
 impl Runner {
     /// Regenerate every Node lockfile committed in one directory.
     pub(super) async fn node(&self, context: NodeContext<'_>) -> Result<(), String> {
+        // Tools read registries from the repository's `.npmrc`, so a private
+        // scope never resolves to the public package of its name. They get
+        // only those lines, never tokens or settings that change how they
+        // run, and the committed files come back afterwards.
+        let npmrcs: Vec<_> = context
+            .baseline
+            .iter()
+            .filter(|(path, _)| path.rsplit('/').next() == Some(".npmrc"))
+            .map(|(path, blob)| (context.root.join(path), blob.content.clone()))
+            .collect();
+        for (path, text) in &npmrcs {
+            std::fs::write(path, npmrc(text)).map_err(|e| e.to_string())?;
+        }
+        let result = self.node_locks(context).await;
+        for (path, text) in &npmrcs {
+            std::fs::write(path, text).map_err(|e| e.to_string())?;
+        }
+        result
+    }
+    async fn node_locks(&self, context: NodeContext<'_>) -> Result<(), String> {
         let NodeContext {
             driver,
             root,
@@ -496,14 +516,36 @@ pub(super) fn yarn_version(
     Ok(fallback.to_string())
 }
 
+/// `.npmrc` with only the registries it names: `registry=` and
+/// `@scope:registry=` lines, as written. Tokens, and settings that change how
+/// a tool runs, are left out. A `${VAR}` registry stays, so npm stops on it
+/// rather than reading the public registry instead.
+pub(super) fn npmrc(text: &str) -> String {
+    text.lines()
+        .filter(|line| {
+            line.split_once('=').is_some_and(|(key, _)| {
+                let key = key.trim();
+                key == "registry"
+                    || (key.starts_with('@')
+                        && key.len() > "@:registry".len()
+                        && key.ends_with(":registry"))
+            })
+        })
+        .map(|line| format!("{}\n", line.trim()))
+        .collect()
+}
+
 /// `.yarnrc.yml` without repository code (`yarnPath`, `plugins`) or `${VAR}`
 /// interpolations, which would fail without the credentials they name.
 pub(super) fn yarnrc(text: &str) -> Result<String, String> {
     fn clean(value: &mut serde_yaml_ng::Value) {
         if let Some(map) = value.as_mapping_mut() {
             map.retain(|key, value| {
+                // A `${VAR}` registry stays, so Yarn stops on it rather than
+                // reading the public registry instead.
                 !matches!(key.as_str(), Some("yarnPath" | "plugins"))
-                    && !value.as_str().is_some_and(|s| s.contains("${"))
+                    && (key.as_str() == Some("npmRegistryServer")
+                        || !value.as_str().is_some_and(|s| s.contains("${")))
             });
             for (_, value) in map.iter_mut() {
                 clean(value);

@@ -56,7 +56,10 @@ async fn setup_node_uses_node_lts_membership_without_replacing_github_release_da
     .with_versions_host(false);
     for _ in 0..2 {
         let catalog = client
-            .lookup(Source::GithubReleases, "actions/node-versions")
+            .lookup(&patchula_config::PackageId::public(
+                Source::GithubReleases,
+                "actions/node-versions",
+            ))
             .await
             .unwrap();
         assert_eq!(catalog.dist_tags["lts"], "24.1.0");
@@ -111,7 +114,13 @@ async fn pypi_uses_real_metadata_shapes_and_fresh_bodies() {
     .unwrap();
     let http = Cached::new(cache.clone(), replay.clone(), 4).unwrap();
     let client = Client::new(github, http.clone(), cache).with_versions_host(false);
-    let pypi = client.lookup(Source::Pypi, "spec-cli").await.unwrap();
+    let pypi = client
+        .lookup(&patchula_config::PackageId::public(
+            Source::Pypi,
+            "spec-cli",
+        ))
+        .await
+        .unwrap();
     assert_eq!(pypi.versions.len(), 2);
     assert!(pypi.versions[0].yanked);
     assert_eq!(
@@ -120,9 +129,20 @@ async fn pypi_uses_real_metadata_shapes_and_fresh_bodies() {
     );
     assert_eq!(http.stats().requests, 1);
     replay.assert_finished().unwrap();
-    assert!(client.lookup(Source::Pypi, "../unsafe").await.is_err());
+    assert!(
+        client
+            .lookup(&patchula_config::PackageId::public(
+                Source::Pypi,
+                "../unsafe"
+            ))
+            .await
+            .is_err()
+    );
     let runners = client
-        .lookup(Source::GithubRunners, "ubuntu-arm")
+        .lookup(&patchula_config::PackageId::public(
+            Source::GithubRunners,
+            "ubuntu-arm",
+        ))
         .await
         .unwrap();
     assert!(runners.versions.iter().any(|v| v.version == "24.04"));

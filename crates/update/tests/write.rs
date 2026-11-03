@@ -481,6 +481,7 @@ fn setup(
                 name: d.name.clone(),
                 occurrence: None,
                 package: d.package.clone(),
+                registry: d.registry.clone(),
                 current: Current {
                     value: Some(d.current.clone()),
                     version: d.resolved.clone(),
@@ -2920,6 +2921,7 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
             manager: word(&dep.manager),
             name: dep.name.clone(),
             package: dep.package.clone(),
+            registry: dep.registry.clone(),
             occurrence: None,
             current: Current {
                 value: Some(dep.current.clone()),
@@ -3450,6 +3452,7 @@ fn reference_data_pins_get_their_own_branch() {
             manager: word(&dep.manager),
             name: dep.name.clone(),
             package: dep.package.clone(),
+            registry: dep.registry.clone(),
             occurrence: None,
             current: Current {
                 value: Some(dep.current.clone()),
