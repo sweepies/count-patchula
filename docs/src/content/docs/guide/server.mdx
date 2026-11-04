@@ -167,8 +167,8 @@ Each repository in the request must:
 - let you push. Read access is not enough, because on a public repository
   everyone has it.
 
-A server runs one request per user at a time, and a real run shares the queue's
-engine, so it never races a webhook batch. The repository's own `patchula.pkl`
+A server runs one request per user at a time, and a real run uses its
+installation's engine, so it never races that installation's webhook batch. The repository's own `patchula.pkl`
 applies; `--config`, `--config-dir`, `--default-config`, `--all-repos`,
 `--allow-lockfile-pending` and `--recheck` only work locally, and `--cache`,
 `--concurrency` and your local settings file are ignored. A run in progress at shutdown finishes within the
