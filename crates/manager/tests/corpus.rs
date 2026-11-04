@@ -5,7 +5,7 @@
 use patchula_manager::{Files, Scanner};
 use std::path::Path;
 
-fn walk(root: &Path, dir: &Path, scanner: &Scanner, files: &mut Files) {
+fn walk(root: &Path, dir: &Path, scanner: &Scanner, files: &mut Files, all: &mut Vec<String>) {
     let mut entries: Vec<_> = std::fs::read_dir(dir)
         .unwrap()
         .map(|e| e.unwrap())
@@ -14,7 +14,7 @@ fn walk(root: &Path, dir: &Path, scanner: &Scanner, files: &mut Files) {
     for entry in entries {
         let path = entry.path();
         if path.is_dir() {
-            walk(root, &path, scanner, files);
+            walk(root, &path, scanner, files, all);
             continue;
         }
         let relative = path
@@ -25,8 +25,9 @@ fn walk(root: &Path, dir: &Path, scanner: &Scanner, files: &mut Files) {
         if scanner.needs(&relative)
             && let Ok(text) = std::fs::read_to_string(&path)
         {
-            files.insert(relative, text);
+            files.insert(relative.clone(), text);
         }
+        all.push(relative);
     }
 }
 
@@ -36,8 +37,28 @@ fn corpus_extraction_matches_its_snapshot() {
     let config = patchula_config::load(&root).unwrap();
     let scanner = Scanner::new(&config).unwrap();
     let mut files = Files::new();
-    walk(&root, &root, &scanner, &mut files);
+    let mut all = Vec::new();
+    walk(&root, &root, &scanner, &mut files, &mut all);
+    for path in scanner.more(&files, all.iter().map(String::as_str)) {
+        let text = std::fs::read_to_string(root.join(&path)).unwrap();
+        files.insert(path, text);
+    }
     let extraction = scanner.extract(&files).unwrap();
+    // The corpus's JVM builds use public repositories alone, and their
+    // build logic (Kafka's templates, slashy regexes and publishing block)
+    // must read that way. The corpus holds manifests, not Kafka's included
+    // `api-checker` build, so that alone keeps its lookups from being taken
+    // to be public.
+    let private: Vec<_> = extraction
+        .dependencies
+        .iter()
+        .filter(|d| d.source == patchula_config::Source::Maven)
+        .filter_map(|d| d.registry.as_deref())
+        .filter(|r| {
+            *r != "an included build jvm/kafka/settings.gradle names, which the Count does not read"
+        })
+        .collect();
+    assert!(private.is_empty(), "{private:?}");
     let mut lines: Vec<String> = extraction
         .dependencies
         .iter()

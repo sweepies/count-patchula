@@ -79,6 +79,12 @@ missing, and behaviour that changes their pull requests. The
 - **The Count:** Looks it up on nuget.org only when nuget.org is the only source, or when `packageSourceMapping` maps the package there; with another source and no mapping, every NuGet lookup fails. See [package registries](/guide/sources/#package-registries)
 - **Why:** NuGet takes a package from whichever source answers, and its lockfile does not say which, so without a mapping a private package's name could be looked up on nuget.org, where it may be someone else's. Source mapping is also NuGet's own advice against dependency confusion
 
+### One other Maven repository fails every lookup {#maven-repositories}
+
+- **Renovate:** Queries every repository a POM, `settings.xml` or Gradle script names and merges what they list
+- **The Count:** Looks artifacts up on Maven Central only when no build file in the repository names another repository; with one anywhere, every lookup of that build system fails. See [package registries](/guide/sources/#package-registries)
+- **Why:** Maven and Gradle take an artifact from the first repository that has it and record nothing about which, so merging lists can propose a public artifact that shadows a private one of the same coordinates
+
 ### Registry credentials are operator settings {#registry-credentials}
 
 - **Renovate:** `hostRules` in the repository config, with secrets encrypted for the app or passed in by the self-hosted runner

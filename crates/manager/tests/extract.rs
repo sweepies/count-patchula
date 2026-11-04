@@ -3345,3 +3345,166 @@ fn nuget_packages_come_from_nuget_org_alone_or_as_source_mapping_says() {
         .unwrap();
     assert!(fails(dep.registry.clone()), "{:?}", dep.registry);
 }
+
+/// The registry the Count gives `name` from `file` when a repository holds
+/// `files`.
+fn registry_of(manager: Manager, files: &[(&str, &str)], file: &str, name: &str) -> Option<String> {
+    let files: Files = files
+        .iter()
+        .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
+        .collect();
+    let mut config = config();
+    config.managers = vec![manager];
+    let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+    extraction
+        .dependencies
+        .iter()
+        .find(|d| d.file == file && d.name == name)
+        .unwrap_or_else(|| panic!("{file} {name}"))
+        .registry
+        .clone()
+}
+
+#[test]
+fn maven_lookups_fail_when_any_build_file_names_another_repository() {
+    let pom = |extra: &str| {
+        format!(
+            "<project><modelVersion>4.0.0</modelVersion>{extra}<dependencies><dependency><groupId>com.acme</groupId><artifactId>lib</artifactId><version>1.0.0</version></dependency></dependencies></project>"
+        )
+    };
+    let lookup =
+        |files: &[(&str, &str)]| registry_of(Manager::Maven, files, "pom.xml", "com.acme:lib");
+    let plain = pom("");
+    assert_eq!(lookup(&[("pom.xml", &plain)]), None);
+    let central = pom(
+        "<repositories><repository><id>central</id><url>https://repo1.maven.org/maven2/</url></repository></repositories>",
+    );
+    assert_eq!(lookup(&[("pom.xml", &central)]), None);
+    let deploys = pom(
+        "<distributionManagement><repository><id>acme</id><url>https://repo.acme.dev/releases</url></repository></distributionManagement>",
+    );
+    assert_eq!(lookup(&[("pom.xml", &deploys)]), None);
+    let private = pom(
+        "<repositories><repository><id>acme</id><url>https://bot:s3cr3t@repo.acme.dev/maven</url></repository></repositories>", // betterleaks:allow
+    );
+    let profile = pom(
+        "<profiles><profile><id>ci</id><repositories><repository><id>acme</id><url>https://repo.acme.dev/maven</url></repository></repositories></profile></profiles>",
+    );
+    let property = pom(
+        "<repositories><repository><id>acme</id><url>${acme.url}</url></repository></repositories>",
+    );
+    let mirror = "<settings><mirrors><mirror><id>acme</id><mirrorOf>*</mirrorOf><url>https://repo.acme.dev/maven</url></mirror></mirrors></settings>";
+    for files in [
+        vec![("pom.xml", private.as_str())],
+        vec![("pom.xml", profile.as_str())],
+        vec![("pom.xml", property.as_str())],
+        // Another module's repository counts too.
+        vec![
+            ("pom.xml", plain.as_str()),
+            ("tools/pom.xml", private.as_str()),
+        ],
+        vec![
+            ("pom.xml", plain.as_str()),
+            ("ci/maven-settings.xml", mirror),
+        ],
+        vec![
+            ("pom.xml", plain.as_str()),
+            (".mvn/maven.config", "-s ci/elsewhere.xml"),
+        ],
+        vec![
+            ("pom.xml", plain.as_str()),
+            ("lib/pom.xml", patchula_manager::UNREADABLE_SETTINGS),
+        ],
+    ] {
+        let found = lookup(&files);
+        assert!(fails(found.clone()), "{files:?}: {found:?}");
+        assert!(!found.unwrap().contains("s3cr3t"));
+    }
+}
+
+#[test]
+fn gradle_lookups_fail_when_build_logic_could_add_another_repository() {
+    let build = |extra: &str| {
+        format!(
+            "plugins {{ java }}\n// maven {{ url = uri(\"https://old.acme.dev\") }}\nrepositories {{\n    mavenCentral()\n    google()\n}}\n{extra}\ndependencies {{\n    implementation(\"org.apache.maven:maven-core:3.9.0\")\n}}\n"
+        )
+    };
+    let lookup = |files: &[(&str, &str)]| {
+        registry_of(
+            Manager::Gradle,
+            files,
+            "build.gradle.kts",
+            "org.apache.maven:maven-core",
+        )
+    };
+    let plain = build("");
+    assert_eq!(lookup(&[("build.gradle.kts", &plain)]), None);
+    let publishes = build(
+        "publishing {\n    repositories {\n        maven { url = uri(\"https://repo.acme.dev/releases\") }\n    }\n}",
+    );
+    assert_eq!(lookup(&[("build.gradle.kts", &publishes)]), None);
+    // An included build is read like buildSrc.
+    let included = [
+        ("build.gradle.kts", plain.as_str()),
+        (
+            "settings.gradle.kts",
+            "pluginManagement { includeBuild(\"tools/logic\") }\n",
+        ),
+        (
+            "tools/logic/build.gradle.kts",
+            "plugins { `kotlin-dsl` }\nrepositories { gradlePluginPortal() }\n",
+        ),
+        (
+            "tools/logic/src/main/kotlin/Conventions.kt",
+            "class Conventions : Plugin<Project> { override fun apply(p: Project) {} }\n",
+        ),
+    ];
+    assert_eq!(lookup(&included), None);
+    let private = build("repositories { maven { url = uri(\"https://repo.acme.dev/maven\") } }");
+    for files in [
+        vec![("build.gradle.kts", private.as_str())],
+        vec![
+            ("build.gradle.kts", plain.as_str()),
+            (
+                "settings.gradle.kts",
+                "dependencyResolutionManagement {\n    repositories { maven(\"https://repo.acme.dev\") }\n}\n",
+            ),
+        ],
+        vec![
+            ("build.gradle.kts", plain.as_str()),
+            (
+                "buildSrc/src/main/kotlin/Conventions.kt",
+                "fun configure(p: Project) { p.repositories.mavenLocal() }\n",
+            ),
+        ],
+        vec![
+            ("build.gradle.kts", plain.as_str()),
+            ("settings.gradle.kts", "includeBuild(\"tools/logic\")\n"),
+        ],
+        vec![
+            ("build.gradle.kts", plain.as_str()),
+            (
+                "other.gradle",
+                "apply from: 'https://acme.dev/repos.gradle'\n",
+            ),
+        ],
+        vec![
+            ("build.gradle.kts", plain.as_str()),
+            ("other.gradle", "repositories {\n"),
+        ],
+        vec![
+            ("build.gradle.kts", plain.as_str()),
+            (
+                "other.gradle",
+                "def x = \"${repositories.maven { url 'x' }}\"\n",
+            ),
+        ],
+        vec![
+            ("build.gradle.kts", plain.as_str()),
+            ("lib/build.gradle", patchula_manager::UNREADABLE_SETTINGS),
+        ],
+    ] {
+        let found = lookup(&files);
+        assert!(fails(found.clone()), "{files:?}: {found:?}");
+    }
+}

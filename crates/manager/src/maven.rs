@@ -201,3 +201,94 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
     }
     Ok(out)
 }
+
+/// Whether `path` is a Maven settings file, by its name.
+pub(crate) fn settings_file(path: &str) -> bool {
+    path.rsplit('/')
+        .next()
+        .is_some_and(|leaf| leaf.to_ascii_lowercase().ends_with("settings.xml"))
+}
+
+/// Whether `path` is a file the Count reads for Maven repositories.
+pub(crate) fn repository_file(path: &str) -> bool {
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    leaf == "pom.xml"
+        || settings_file(path)
+        || path == ".mvn/maven.config"
+        || path.ends_with("/.mvn/maven.config")
+}
+
+/// Why a repository's Maven lookups cannot be taken to be Maven Central's:
+/// a repository or mirror besides Central and Google's in any POM, in any
+/// profile, or in a settings file in the repository; `.mvn/maven.config`
+/// naming settings the Count does not read; or a file it cannot read. Maven
+/// tries repositories in order and no file records which one served an
+/// artifact, so any other repository anywhere makes every lookup fail.
+pub(crate) fn private_repositories(files: &Files) -> Option<String> {
+    use crate::origins::Named;
+    for (path, text) in files.iter().filter(|(path, _)| repository_file(path)) {
+        if text.as_str() == crate::UNREADABLE_SETTINGS {
+            return Some(format!("{path}, which the Count cannot read"));
+        }
+        if path.ends_with("maven.config") {
+            // Options are read as Maven splits them, on whitespace.
+            let base = path.strip_suffix(".mvn/maven.config").unwrap_or("");
+            let mut words = text.split_whitespace();
+            while let Some(word) = words.next() {
+                let (option, value) = match word.split_once('=') {
+                    Some((option, value)) => (option, Some(value)),
+                    None => (word, None),
+                };
+                if matches!(option, "-s" | "--settings" | "-gs" | "--global-settings") {
+                    let settings = value.or_else(|| words.next()).unwrap_or("");
+                    let settings = format!("{base}{}", settings.trim_start_matches("./"));
+                    if !(settings_file(&settings) && files.contains_key(&settings)) {
+                        return Some(format!(
+                            "settings {path} names, which the Count does not read"
+                        ));
+                    }
+                }
+            }
+            continue;
+        }
+        let Ok(document) = roxmltree::Document::parse(text) else {
+            if settings_file(path) {
+                // Another tool's file that only ends in `settings.xml`.
+                continue;
+            }
+            return Some(format!("{path}, which the Count cannot read"));
+        };
+        let root = document.root_element().tag_name().name();
+        if settings_file(path) && root != "settings" {
+            continue;
+        }
+        for node in document.descendants().filter(|n| n.is_element()) {
+            let name = node.tag_name().name();
+            if !matches!(
+                name,
+                "repository" | "pluginRepository" | "snapshotRepository" | "mirror"
+            ) {
+                continue;
+            }
+            // Where the project deploys to is not where it resolves from.
+            if node
+                .ancestors()
+                .any(|a| a.tag_name().name() == "distributionManagement")
+            {
+                continue;
+            }
+            let url = node
+                .children()
+                .find(|c| c.tag_name().name() == "url")
+                .and_then(|c| c.text())
+                .map(str::trim);
+            let public = url.is_some_and(|url| {
+                Named::parse(url, &crate::gradle::MAVEN_PUBLIC) == Named::Public
+            });
+            if !public {
+                return Some(format!("a {name} in {path}"));
+            }
+        }
+    }
+    None
+}

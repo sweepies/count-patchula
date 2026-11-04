@@ -251,6 +251,24 @@ dependency's `registry`:
   `RestoreSources`, `RestoreAdditionalProjectSources`, `RestoreConfigFile`,
   `RestoreFallbackFolders`, `RestoreRootConfigDirectory` or
   `RestoreSolutionDirectory`, or that the Count cannot read.
+- Maven and Gradle artifacts come from Maven Central (or Google's Maven
+  repository for Android groups, and the Gradle Plugin Portal for plugins)
+  only when no build file in the repository could take them from anywhere
+  else. Neither tool records which repository served an artifact, and both
+  try repositories in order, so the Count does not work out which one an
+  artifact comes from: any other repository anywhere fails every lookup of
+  that build system, since private Maven repositories are not read yet.
+  For Maven, that is a `repository`, `pluginRepository` or `mirror` other
+  than Central's or Google's in any POM or profile, or in any file named
+  `*settings.xml` in the repository; one in `distributionManagement` does
+  not count. `.mvn/maven.config` naming settings the Count does not read
+  fails too. For Gradle, the Count reads every script, the sources in
+  `buildSrc`, `build-logic`, `build-conventions` and `gradle/plugins`, and
+  the sources of every build the settings include; `mavenCentral()`,
+  `google()`, `gradlePluginPortal()` and `jcenter()` are fine, while
+  `maven`, `ivy`, `flatDir`, `mavenLocal`, `exclusiveContent`, a custom
+  `ArtifactRepository` or `apply from` a URL outside a `publishing` block
+  fails every lookup, as does build logic the Count cannot read.
 - Python packages come from what the project's lockfile records. The
   Count does not work out which index uv or Poetry would pick from their
   settings; the tool already did, and wrote it down:
