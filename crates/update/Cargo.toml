@@ -42,3 +42,4 @@ patchula-process = { path = "../process" }
 tokio = { workspace = true, features = ["test-util"] }
 patchula-http = { path = "../http" }
 patchula-testkit = { path = "../testkit" }
+crc32fast = "1.5.2"
