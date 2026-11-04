@@ -2214,25 +2214,11 @@ impl Engine {
             .map_err(|_| Error::Invalid("selected file is not UTF-8".into()))
     }
     async fn blob(&self, repo: &str, sha: &str) -> Result<Vec<u8>> {
-        use base64::Engine;
-        // A blob's SHA names its content, so a cached one is never asked for
-        // again.
-        let value: Value = serde_json::from_slice(
-            &self
-                .github
-                .get_immutable(&format!("repos/{repo}/git/blobs/{sha}"))
-                .await?
-                .body,
-        )?;
-        if value["encoding"] != "base64" {
-            return Err(Error::Invalid("unsupported blob encoding".into()));
-        }
-        let content = value["content"]
-            .as_str()
-            .ok_or_else(|| Error::Invalid("blob has no content".into()))?;
-        base64::engine::general_purpose::STANDARD
-            .decode(content.replace(['\n', '\r'], ""))
-            .map_err(|_| Error::Invalid("invalid base64 blob".into()))
+        self.github
+            .blobs(repo, &[sha.to_owned()])
+            .await?
+            .remove(sha)
+            .ok_or_else(|| Error::Invalid("blob missing from the batch".into()))
     }
     async fn scan(&self, repo: &str, override_config: Option<&Config>) -> Result<Work> {
         let hint_key = ExtractionKey {

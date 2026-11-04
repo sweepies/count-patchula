@@ -23,6 +23,12 @@ fn path(repo: &str, sha: &str) -> String {
     format!("repos/{repo}/git/blobs/{sha}")
 }
 
+/// Whether `sha` is a Git object ID as GraphQL takes it: forty lowercase hex
+/// digits.
+fn object_id(sha: &str) -> bool {
+    sha.len() == 40 && sha.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 /// The Git blob SHA of `content`.
 fn blob_sha(content: &[u8]) -> String {
     let mut digest = Sha1::new();
@@ -51,20 +57,38 @@ impl Client {
     /// The content of each blob in `shas` from `repo` (`owner/name`).
     pub async fn blobs(&self, repo: &str, shas: &[String]) -> Result<BTreeMap<String, Vec<u8>>> {
         let mut out = BTreeMap::new();
+        let cached: Vec<Result<(String, Option<Response>)>> =
+            stream::iter(shas.iter().cloned().collect::<BTreeSet<String>>())
+                .map(|sha| -> Pin<Box<dyn Future<Output = _> + Send + '_>> {
+                    Box::pin(async move {
+                        let response = self
+                            .get_representation(&path(repo, &sha), None, Read::Cached)
+                            .await?;
+                        Ok((sha, response))
+                    })
+                })
+                .buffer_unordered(self.concurrency())
+                .collect()
+                .await;
         let mut missing = Vec::new();
-        for sha in shas.iter().collect::<BTreeSet<_>>() {
-            match self
-                .get_representation(&path(repo, sha), None, Read::Cached)
-                .await?
-            {
-                Some(response) => {
-                    out.insert(sha.clone(), decode(&response.body)?);
+        for item in cached {
+            match item? {
+                (sha, Some(response)) => {
+                    out.insert(sha, decode(&response.body)?);
                 }
-                None => missing.push(sha.clone()),
+                (sha, None) => missing.push(sha),
             }
         }
         if let Some((owner, name)) = repo.split_once('/') {
-            let chunks: Vec<Vec<String>> = missing.chunks(BATCH).map(<[String]>::to_vec).collect();
+            // GraphQL refuses a whole query for one malformed object ID.
+            let chunks: Vec<Vec<String>> = missing
+                .iter()
+                .filter(|sha| object_id(sha))
+                .cloned()
+                .collect::<Vec<_>>()
+                .chunks(BATCH)
+                .map(<[String]>::to_vec)
+                .collect();
             let batches: Vec<_> = stream::iter(chunks)
                 .map(|chunk| -> Pin<Box<dyn Future<Output = _> + Send + '_>> {
                     Box::pin(async move { self.graphql_blobs(owner, name, &chunk).await })
@@ -72,7 +96,12 @@ impl Client {
                 .buffer_unordered(self.concurrency())
                 .collect()
                 .await;
-            for (sha, content) in batches.into_iter().flatten() {
+            for (sha, content) in batches
+                .into_iter()
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .flatten()
+            {
                 self.store_blob(repo, &sha, &content).await?;
                 out.insert(sha, content);
             }
@@ -96,14 +125,15 @@ impl Client {
         Ok(out)
     }
 
-    /// The blobs of `shas` GraphQL gives exactly. A failed query gives none,
-    /// so REST reads them instead.
+    /// The blobs of `shas` GraphQL gives exactly. A query GitHub refuses,
+    /// limits or cannot answer gives none, so REST reads them instead, but a
+    /// refused credential stops the read.
     async fn graphql_blobs(
         &self,
         owner: &str,
         name: &str,
         shas: &[String],
-    ) -> Vec<(String, Vec<u8>)> {
+    ) -> Result<Vec<(String, Vec<u8>)>> {
         let parameters: String = (0..shas.len())
             .map(|i| format!(", $o{i}: GitObjectID!"))
             .collect();
@@ -122,10 +152,21 @@ impl Client {
         for (i, sha) in shas.iter().enumerate() {
             variables[format!("o{i}")] = sha.clone().into();
         }
-        let Ok(data) = self.graphql(&query, variables).await else {
-            return Vec::new();
+        let data = match self.graphql(&query, variables).await {
+            Ok(data) => data,
+            Err(Error::Status(status @ (401 | 403))) => return Err(Error::Status(status)),
+            Err(
+                Error::Graphql(_)
+                | Error::Status(_)
+                | Error::RateLimit
+                | Error::Transport
+                // Fixtures recorded before batching have only the REST reads.
+                | Error::Fixture(_),
+            ) => return Ok(Vec::new()),
+            Err(error) => return Err(error),
         };
-        shas.iter()
+        Ok(shas
+            .iter()
             .enumerate()
             .filter_map(|(i, sha)| {
                 let blob = &data["repository"][format!("b{i}")];
@@ -135,7 +176,7 @@ impl Client {
                 let text = blob["text"].as_str()?.as_bytes();
                 (blob_sha(text) == *sha).then(|| (sha.clone(), text.to_vec()))
             })
-            .collect()
+            .collect())
     }
 
     /// Keep `content` as the REST representation of the blob.
