@@ -230,20 +230,25 @@ dependency's `registry`:
   from anywhere else. `packages.lock.json` does not record a package's
   source, and with several sources NuGet takes a package from whichever
   answers, so the `nuget.config` files from the project's folder up to the
-  repository root decide, applied the way NuGet applies them (`<clear />`,
-  `remove` and `disabledPackageSources` included), after the nuget.org
-  source NuGet adds by default. With nuget.org alone, every package comes
-  from it. With another source, `packageSourceMapping` must say which
-  source serves each package: its most specific pattern (an exact ID, else
-  the longest prefix) decides, and a package it maps to nuget.org alone
-  comes from there. Any other package fails its lookup, since private
-  NuGet feeds are not read yet. A `Directory.Packages.props` or other
-  shared file counts every folder below it with a config of its own. A
-  config the Count cannot read or with a section it does not know, such
-  as `fallbackPackageFolders`, a config spelled other than `nuget.config`,
-  `NuGet.config` or `NuGet.Config`, or an MSBuild file that sets
-  `RestoreSources`, `RestoreAdditionalProjectSources`, `RestoreConfigFile`
-  or `RestoreFallbackFolders`, fails every lookup it could affect.
+  repository root decide. Every source they add counts, even one a closer
+  config clears or disables, along with the nuget.org source NuGet adds by
+  default. With nuget.org alone, every package comes from it. With another
+  source, `packageSourceMapping` must say which source serves each
+  package. When one config holds the mapping, its most specific pattern
+  (an exact ID, else the longest prefix) decides; with mappings in several
+  configs, every pattern that matches counts. A package mapped to
+  nuget.org alone comes from there; any other fails its lookup, since
+  private NuGet feeds are not read yet. A `Directory.Packages.props` or
+  other shared file, and a `dotnet-tools.json` manifest, count every
+  folder below them with a config of its own. Anything NuGet could read
+  differently fails every lookup it could affect: a config the Count
+  cannot read, with a section it does not know such as
+  `fallbackPackageFolders`, with `remove`, or with a pattern other than an
+  ID or a prefix ending in its only `*`; a config spelled other than
+  `nuget.config`, `NuGet.config` or `NuGet.Config`; and an MSBuild file
+  that sets `RestoreSources`, `RestoreAdditionalProjectSources`,
+  `RestoreConfigFile` or `RestoreFallbackFolders`, or that the Count
+  cannot read.
 - Python packages come from what the project's lockfile records. The
   Count does not work out which index uv or Poetry would pick from their
   settings; the tool already did, and wrote it down:

@@ -282,9 +282,9 @@ impl Scanner {
             || npm_extractors)
             && matches!(leaf, ".npmrc" | ".yarnrc.yml"))
             || (self.config.managers.contains(&Manager::Pyproject)
-                && (registry_settings(path) || matches!(leaf, "uv.lock" | "poetry.lock")))
+                && (python_settings(path) || matches!(leaf, "uv.lock" | "poetry.lock")))
             || (self.config.managers.contains(&Manager::Bundler)
-                && (registry_settings(path) || leaf == "Gemfile.lock"))
+                && (bundle_config(path) || leaf == "Gemfile.lock"))
             || (self.config.managers.contains(&Manager::Composer) && leaf == "composer.lock")
             || (self.config.managers.contains(&Manager::Nuget)
                 && (nuget::config_file(path) || nuget::msbuild_file(path)))
@@ -763,18 +763,30 @@ pub mod known {
     };
 }
 
-/// A file that can say where packages come from: a Python package index,
-/// Bundler's settings or a NuGet config. One the Count cannot read, such as a symlink or a file
+/// A file that can say where packages come from: Python settings,
+/// Bundler's settings, a NuGet config or an MSBuild file that can set
+/// restore sources. One the Count cannot read, such as a symlink or a file
 /// that is not text, must reach the scanner as unreadable, since leaving it
 /// out would make its packages the public registry's.
 pub fn registry_settings(path: &str) -> bool {
+    python_settings(path)
+        || bundle_config(path)
+        || nuget::config_file(path)
+        || nuget::msbuild_file(path)
+}
+
+/// A file that can name a Python package index.
+fn python_settings(path: &str) -> bool {
     let leaf = path.rsplit('/').next().unwrap_or(path);
     matches!(
         leaf,
         "pyproject.toml" | "uv.toml" | "pdm.toml" | "pixi.toml" | "hatch.toml"
-    ) || nuget::config_file(path)
-        || path == ".bundle/config"
-        || path.ends_with("/.bundle/config")
+    )
+}
+
+/// Bundler's settings for a project.
+fn bundle_config(path: &str) -> bool {
+    path == ".bundle/config" || path.ends_with("/.bundle/config")
 }
 
 /// The settings file a symlink at `path` could stand for: the path itself

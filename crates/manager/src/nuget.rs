@@ -12,6 +12,7 @@ use crate::origins::{Named, Origin, Origins, Public};
 use crate::*;
 use jsonc_parser::common::Ranged;
 use regex::Regex;
+use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
 fn package(
@@ -260,11 +261,12 @@ pub(crate) fn config_file(path: &str) -> bool {
         .is_some_and(|leaf| leaf.eq_ignore_ascii_case("nuget.config"))
 }
 
-/// MSBuild properties that set restore sources or another config file, which
-/// override what the repository's `nuget.config` files say.
+/// The start of MSBuild property names that set restore sources, fallback
+/// folders or another config file, which override what the repository's
+/// `nuget.config` files say.
 const RESTORE_OVERRIDES: [&str; 4] = [
     "restoresources",
-    "restoreadditionalprojectsources",
+    "restoreadditionalproject",
     "restoreconfigfile",
     "restorefallbackfolders",
 ];
@@ -273,27 +275,56 @@ const RESTORE_OVERRIDES: [&str; 4] = [
 /// restore property.
 pub(crate) fn msbuild_file(path: &str) -> bool {
     let leaf = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
-    [".props", ".targets", ".rsp", "proj"]
-        .iter()
-        .any(|suffix| leaf.ends_with(suffix))
+    [
+        ".props",
+        ".targets",
+        ".rsp",
+        "proj",
+        ".projitems",
+        ".user",
+        ".msbuild",
+    ]
+    .iter()
+    .any(|suffix| leaf.ends_with(suffix))
 }
 
-/// One change a config file makes to a collection, in file order.
-#[derive(Clone, Debug)]
-enum Change {
-    Clear,
-    Add(String, String),
-    Remove(String),
+/// `text` with XML character references (`&#83;`, `&#x53;`) decoded, so a
+/// property name written with them is still found.
+fn decoded(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("&#") {
+        out.push_str(&rest[..at]);
+        let reference = &rest[at + 2..];
+        let decoded = reference.split_once(';').and_then(|(code, _)| {
+            let value = match code.strip_prefix(['x', 'X']) {
+                Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+                None => code.parse().ok()?,
+            };
+            Some((char::from_u32(value)?, code.len() + 1))
+        });
+        match decoded {
+            Some((c, width)) => {
+                out.push(c);
+                rest = &reference[width..];
+            }
+            None => {
+                out.push_str("&#");
+                rest = reference;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// What one `nuget.config` says about package sources.
 #[derive(Clone, Debug, Default)]
 struct Config {
-    sources: Vec<Change>,
-    /// `Add(key, "true" | "false")`.
-    disabled: Vec<Change>,
-    /// `Add(source key, pattern)`.
-    mapping: Vec<Change>,
+    /// Every source it adds, as `(key, value)`.
+    sources: Vec<(String, String)>,
+    /// Its `packageSourceMapping`, as `(source key, pattern)`, when it has one.
+    mapping: Option<Vec<(String, String)>>,
 }
 
 /// Sections of a `nuget.config` that do not say where packages come from.
@@ -342,25 +373,19 @@ fn attribute(node: roxmltree::Node<'_, '_>, name: &str) -> Result<String, ()> {
     node.attribute(name).map(str::to_owned).ok_or(())
 }
 
-/// A collection section's `clear`, `add` and `remove` children, with the
-/// attribute `add` keeps its value in.
-fn changes(node: roxmltree::Node<'_, '_>, value: &str) -> Result<Vec<Change>, ()> {
-    elements(node)?
-        .into_iter()
-        .map(|child| match child.tag_name().name() {
-            "clear" => Ok(Change::Clear),
-            "add" => Ok(Change::Add(
-                attribute(child, "key")?,
-                attribute(child, value)?,
-            )),
-            "remove" => Ok(Change::Remove(attribute(child, "key")?)),
-            _ => Err(()),
-        })
-        .collect()
+/// A pattern NuGet and the Count read alike: a package ID, or a prefix
+/// ending in its only `*`, in plain ASCII without spaces.
+fn plain_pattern(pattern: &str) -> bool {
+    !pattern.is_empty()
+        && pattern
+            .bytes()
+            .all(|b| b.is_ascii_graphic() && !matches!(b, b'"' | b'\'' | b'<' | b'>'))
+        && pattern.find('*').is_none_or(|at| at == pattern.len() - 1)
 }
 
-/// Read a `nuget.config` strictly: any element the Count does not know is
-/// an error, so its packages' lookups fail.
+/// Read a `nuget.config` strictly: any element the Count does not know, and
+/// anything NuGet would read differently from the Count, is an error, so
+/// the lookups it could affect fail.
 fn config(text: &str) -> Result<Config, ()> {
     let document = roxmltree::Document::parse(text).map_err(|_| ())?;
     let root = document.root_element();
@@ -370,31 +395,61 @@ fn config(text: &str) -> Result<Config, ()> {
     let mut out = Config::default();
     for section in elements(root)? {
         match section.tag_name().name() {
-            "packageSources" => out.sources.extend(changes(section, "value")?),
-            "disabledPackageSources" => out.disabled.extend(changes(section, "value")?),
-            "packageSourceMapping" => {
+            // Sources a closer config clears or disables still count, so
+            // `clear` and `disabledPackageSources` change nothing here.
+            "packageSources" => {
                 for child in elements(section)? {
                     match child.tag_name().name() {
-                        "clear" => out.mapping.push(Change::Clear),
+                        "clear" => {}
+                        "add" => out
+                            .sources
+                            .push((attribute(child, "key")?, attribute(child, "value")?)),
+                        _ => return Err(()),
+                    }
+                }
+            }
+            "disabledPackageSources" => {
+                for child in elements(section)? {
+                    if !matches!(child.tag_name().name(), "clear" | "add") {
+                        return Err(());
+                    }
+                }
+            }
+            // NuGet drops a repeated section or source key in one file, and
+            // a `clear` after mappings in it; none is read here.
+            "packageSourceMapping" => {
+                if out.mapping.is_some() {
+                    return Err(());
+                }
+                let mut mapping = Vec::new();
+                let mut keys = BTreeSet::new();
+                for (index, child) in elements(section)?.into_iter().enumerate() {
+                    match child.tag_name().name() {
+                        "clear" if index == 0 => {}
                         "packageSource" => {
                             let key = attribute(child, "key")?;
+                            if !keys.insert(key.to_ascii_lowercase()) {
+                                return Err(());
+                            }
                             for package in elements(child)? {
-                                if package.tag_name().name() != "package" {
+                                let pattern = attribute(package, "pattern")?;
+                                if package.tag_name().name() != "package"
+                                    || !plain_pattern(&pattern)
+                                {
                                     return Err(());
                                 }
-                                out.mapping
-                                    .push(Change::Add(key.clone(), attribute(package, "pattern")?));
+                                mapping.push((key.clone(), pattern));
                             }
                         }
                         _ => return Err(()),
                     }
                 }
+                out.mapping = Some(mapping);
             }
             "config" => {
-                for change in changes(section, "value")? {
-                    if let Change::Add(key, _) | Change::Remove(key) = &change
-                        && !CONFIG_KEYS.contains(&key.as_str())
-                    {
+                for child in elements(section)? {
+                    let key = attribute(child, "key")?;
+                    if child.tag_name().name() != "add" || !CONFIG_KEYS.contains(&key.as_str()) {
                         return Err(());
                     }
                 }
@@ -412,7 +467,7 @@ pub(crate) struct Feeds {
     /// Each folder with a config, as a path prefix (`""` for the root), and
     /// what it says, or why the Count cannot read it.
     configs: BTreeMap<String, Result<Config, String>>,
-    /// An MSBuild file that sets restore sources itself.
+    /// An MSBuild file that sets restore sources itself, or cannot be read.
     overridden: Option<String>,
 }
 
@@ -431,31 +486,26 @@ impl Feeds {
             let read = if !CONFIG_NAMES.contains(&leaf) {
                 Err(format!("{path}, a name NuGet reads on some systems only"))
             } else if configs.contains_key(&dir) {
-                Err(format!(
-                    "several NuGet config files in {}",
-                    if dir.is_empty() { "the root" } else { &dir }
-                ))
+                Err(format!("several NuGet config files beside {path}"))
             } else {
                 config(text).map_err(|()| format!("{path}, which the Count cannot read"))
             };
-            match configs.get(&dir) {
-                Some(Err(_)) => {}
-                _ => {
-                    configs.insert(dir, read);
-                }
+            if !matches!(configs.get(&dir), Some(Err(_))) {
+                configs.insert(dir, read);
             }
         }
         let overridden = files
             .iter()
             .find(|(path, text)| {
-                msbuild_file(path) && {
-                    let text = text.to_ascii_lowercase();
-                    RESTORE_OVERRIDES
-                        .iter()
-                        .any(|property| text.contains(property))
-                }
+                msbuild_file(path)
+                    && (text.as_str() == crate::UNREADABLE_SETTINGS || {
+                        let text = decoded(text).to_ascii_lowercase();
+                        RESTORE_OVERRIDES
+                            .iter()
+                            .any(|property| text.contains(property))
+                    })
             })
-            .map(|(path, _)| format!("restore sources set in {path}"));
+            .map(|(path, _)| format!("restore sources {path} may set"));
         Self {
             configs,
             overridden,
@@ -463,14 +513,17 @@ impl Feeds {
     }
 
     /// Where `package` comes from for a dependency declared in `file`: for
-    /// a project there, and for any project in a folder below it with a
-    /// config of its own, since central and shared MSBuild files apply to
-    /// projects below them.
+    /// a restore there, and in any folder below it with a config of its own,
+    /// since central and shared MSBuild files apply to projects below them
+    /// and `dotnet tool restore` reads its manifest from any folder below.
     fn origin(&self, file: &str, package: &str) -> Origin {
         if let Some(reason) = &self.overridden {
             return Origin::Index(Named::Unusable(reason.clone()));
         }
-        let dir = &file[..file.rfind('/').map_or(0, |i| i + 1)];
+        let mut dir = &file[..file.rfind('/').map_or(0, |i| i + 1)];
+        if let Some(project) = dir.strip_suffix(".config/") {
+            dir = project;
+        }
         let below = self
             .configs
             .keys()
@@ -481,103 +534,85 @@ impl Feeds {
         Origin::of(origins).expect("one folder at least")
     }
 
-    /// Where `package` comes from for a restore in `dir`, applying each
-    /// config from the root down, after the nuget.org source NuGet's default
-    /// user config adds.
+    /// Where `package` comes from for a restore in `dir`, from the configs
+    /// in it and above it. Every source they add counts, with the nuget.org
+    /// source NuGet's default user config adds, so a source NuGet would
+    /// drop only ever makes the lookup fail.
     fn origin_in(&self, dir: &str, package: &str) -> Origin {
         let unusable = |reason: &str| Origin::Index(Named::Unusable(reason.to_owned()));
-        let mut sources: Vec<(String, Named)> = vec![("nuget.org".into(), Named::Public)];
-        let mut disabled = BTreeMap::<String, bool>::new();
-        let mut mapping: Vec<(String, String)> = Vec::new();
-        let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
+        let mut chain = Vec::new();
         for (folder, config) in &self.configs {
-            if !dir.starts_with(folder.as_str()) {
-                continue;
-            }
-            let config = match config {
-                Ok(config) => config,
-                Err(reason) => return unusable(reason),
-            };
-            for change in &config.sources {
-                match change {
-                    Change::Clear => sources.clear(),
-                    Change::Add(key, value) => {
-                        sources.retain(|(k, _)| !same(k, key));
-                        sources.push((key.clone(), Named::parse(value, &NUGET_ORG)));
-                    }
-                    Change::Remove(key) => sources.retain(|(k, _)| !same(k, key)),
-                }
-            }
-            for change in &config.disabled {
-                match change {
-                    Change::Clear => disabled.clear(),
-                    Change::Add(key, value) => {
-                        let off = match value.to_ascii_lowercase().as_str() {
-                            "true" => true,
-                            "false" => false,
-                            _ => {
-                                return unusable("a disabled package source the Count cannot read");
-                            }
-                        };
-                        disabled.insert(key.to_ascii_lowercase(), off);
-                    }
-                    Change::Remove(key) => {
-                        disabled.remove(&key.to_ascii_lowercase());
-                    }
-                }
-            }
-            for change in &config.mapping {
-                match change {
-                    Change::Clear => mapping.clear(),
-                    Change::Add(key, pattern) => mapping.push((key.clone(), pattern.clone())),
-                    Change::Remove(_) => {
-                        return unusable("a package source mapping the Count cannot read");
-                    }
+            if dir.starts_with(folder.as_str()) {
+                match config {
+                    Ok(config) => chain.push(config),
+                    Err(reason) => return unusable(reason),
                 }
             }
         }
-        let active: Vec<(String, Named)> = sources
-            .into_iter()
-            .filter(|(key, _)| {
-                !disabled
-                    .get(&key.to_ascii_lowercase())
-                    .copied()
-                    .unwrap_or(false)
-            })
+        let sources: Vec<(&str, Named)> = std::iter::once(("nuget.org", Named::Public))
+            .chain(chain.iter().flat_map(|config| {
+                config
+                    .sources
+                    .iter()
+                    .map(|(key, value)| (key.as_str(), Named::parse(value, &NUGET_ORG)))
+            }))
             .collect();
-        if active.is_empty() {
-            return unusable("no package source in nuget.config");
-        }
-        if active.iter().all(|(_, named)| *named == Named::Public) {
+        if sources.iter().all(|(_, named)| *named == Named::Public) {
             return Origin::Index(Named::Public);
         }
-        if mapping.is_empty() {
+        let mappings: Vec<&Vec<(String, String)>> = chain
+            .iter()
+            .filter_map(|config| config.mapping.as_ref())
+            .collect();
+        if mappings.is_empty() {
             return unusable(
                 "several package sources and no packageSourceMapping in nuget.config to say which serves it",
             );
         }
-        // The most specific pattern: an exact ID, else the longest prefix.
+        let patterns: Vec<&(String, String)> = mappings.iter().flat_map(|m| m.iter()).collect();
+        // NuGet applies an exact ID's sources to a prefix of the same text
+        // too; the Count does not, so such a pair fails.
+        let exact: BTreeSet<String> = patterns
+            .iter()
+            .filter(|(_, p)| !p.ends_with('*'))
+            .map(|(_, p)| p.to_ascii_lowercase())
+            .collect();
+        if patterns.iter().any(|(_, p)| {
+            p.strip_suffix('*')
+                .is_some_and(|prefix| exact.contains(&prefix.to_ascii_lowercase()))
+        }) {
+            return unusable("packageSourceMapping patterns NuGet reads differently");
+        }
         let specificity = |pattern: &str| match pattern.strip_suffix('*') {
             Some(prefix) => package
                 .get(..prefix.len())
                 .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
                 .then_some(prefix.len()),
-            None => same(pattern, package).then_some(usize::MAX),
+            None => pattern.eq_ignore_ascii_case(package).then_some(usize::MAX),
         };
-        let Some(best) = mapping.iter().filter_map(|(_, p)| specificity(p)).max() else {
-            return unusable("no packageSourceMapping pattern in nuget.config for it");
+        // One config's mapping says which pattern wins. Mappings from
+        // several configs merge in ways the Count does not follow, so every
+        // pattern that matches counts.
+        let keys: Vec<&str> = if mappings.len() == 1 {
+            let best = patterns.iter().filter_map(|(_, p)| specificity(p)).max();
+            patterns
+                .iter()
+                .filter(|(_, p)| best.is_some() && specificity(p) == best)
+                .map(|(key, _)| key.as_str())
+                .collect()
+        } else {
+            patterns
+                .iter()
+                .filter(|(_, p)| specificity(p).is_some())
+                .map(|(key, _)| key.as_str())
+                .collect()
         };
-        let keys: Vec<&str> = mapping
-            .iter()
-            .filter(|(_, p)| specificity(p) == Some(best))
-            .map(|(key, _)| key.as_str())
-            .collect();
-        let candidates = active
+        let candidates = sources
             .into_iter()
-            .filter(|(key, _)| keys.iter().any(|k| same(k, key)))
+            .filter(|(key, _)| keys.iter().any(|k| k.eq_ignore_ascii_case(key)))
             .map(|(_, named)| Origin::Index(named));
         Origin::of(candidates).unwrap_or_else(|| {
-            unusable("a packageSourceMapping in nuget.config to no package source")
+            unusable("no package source in nuget.config's packageSourceMapping for it")
         })
     }
 

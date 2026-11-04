@@ -3202,10 +3202,9 @@ fn nuget_packages_come_from_nuget_org_alone_or_as_source_mapping_says() {
             nuget_config(&format!("{}\n{mapping}", sources(acme))),
         ),
         ("mapped/App.csproj".into(), project(&packages)),
-        // A closer config that clears the inherited private source.
+        // A source a closer config clears or disables still counts.
         ("mapped/cleared/nuget.config".into(), nuget_config(&sources(""))),
         ("mapped/cleared/App.csproj".into(), project(&packages)),
-        // Disabling the private source leaves nuget.org alone.
         (
             "disabled/nuget.config".into(),
             nuget_config(&format!(
@@ -3228,6 +3227,53 @@ fn nuget_packages_come_from_nuget_org_alone_or_as_source_mapping_says() {
         ("fallback/App.csproj".into(), project(&packages)),
         ("spelled/NUGET.CONFIG".into(), nuget_config(&sources(""))),
         ("spelled/App.csproj".into(), project(&packages)),
+        // A private default with nuget.org for some prefixes, in one config.
+        (
+            "private-default/nuget.config".into(),
+            nuget_config(&format!(
+                "{}\n<packageSourceMapping><packageSource key=\"Acme\"><package pattern=\"*\" /></packageSource><packageSource key=\"nuget.org\"><package pattern=\"Newtonsoft.*\" /></packageSource></packageSourceMapping>",
+                sources(acme)
+            )),
+        ),
+        ("private-default/App.csproj".into(), project(&packages)),
+        // Mappings in two configs: every matching pattern counts.
+        (
+            "two-mappings/nuget.config".into(),
+            nuget_config(&format!("{}\n{mapping}", sources(acme))),
+        ),
+        (
+            "two-mappings/app/nuget.config".into(),
+            nuget_config("<packageSourceMapping><packageSource key=\"nuget.org\"><package pattern=\"Acme.Lib\" /></packageSource></packageSourceMapping>"),
+        ),
+        ("two-mappings/app/App.csproj".into(), project(&packages)),
+        // What NuGet reads differently from the Count fails.
+        (
+            "removed/nuget.config".into(),
+            nuget_config("<packageSources><remove key=\"Acme\" /></packageSources>"),
+        ),
+        ("removed/App.csproj".into(), project(&packages)),
+        (
+            "star/nuget.config".into(),
+            nuget_config(&format!(
+                "{}\n<packageSourceMapping><packageSource key=\"nuget.org\"><package pattern=\"*\" /></packageSource><packageSource key=\"Acme\"><package pattern=\"Acme*Internal\" /></packageSource></packageSourceMapping>",
+                sources(acme)
+            )),
+        ),
+        ("star/App.csproj".into(), project(&packages)),
+        (
+            "collision/nuget.config".into(),
+            nuget_config(&format!(
+                "{}\n<packageSourceMapping><packageSource key=\"nuget.org\"><package pattern=\"*\" /><package pattern=\"Acme.Lib\" /></packageSource><packageSource key=\"Acme\"><package pattern=\"Acme.Lib*\" /></packageSource></packageSourceMapping>",
+                sources(acme)
+            )),
+        ),
+        ("collision/App.csproj".into(), project(&packages)),
+        // A tool manifest restores from any folder below its own.
+        (
+            "tools/.config/dotnet-tools.json".into(),
+            "{\"version\": 1, \"isRoot\": true, \"tools\": {\"dotnet-ef\": {\"version\": \"8.0.0\", \"commands\": [\"dotnet-ef\"]}}}".into(),
+        ),
+        ("tools/src/nuget.config".into(), nuget_config(&sources(acme))),
     ]);
     let mut config = config();
     config.managers = vec![Manager::Nuget];
@@ -3241,12 +3287,7 @@ fn nuget_packages_come_from_nuget_org_alone_or_as_source_mapping_says() {
             .registry
             .clone()
     };
-    for file in [
-        "none/App.csproj",
-        "public/App.csproj",
-        "mapped/cleared/App.csproj",
-        "disabled/App.csproj",
-    ] {
+    for file in ["none/App.csproj", "public/App.csproj"] {
         for name in packages {
             assert_eq!(registry(file, name), None, "{file} {name}");
         }
@@ -3280,7 +3321,8 @@ fn nuget_packages_come_from_nuget_org_alone_or_as_source_mapping_says() {
     let mut overridden = files.clone();
     overridden.insert(
         "Directory.Build.props".into(),
-        "<Project><PropertyGroup><RestoreSources>https://nuget.acme.dev/v3/index.json</RestoreSources></PropertyGroup></Project>\n".into(),
+        // Written with a character reference, as an attribute value.
+        "<Project><Target Name=\"T\"><CreateProperty Value=\"https://nuget.acme.dev/v3/index.json\"><Output TaskParameter=\"Value\" PropertyName=\"Restore&#83;ources\" /></CreateProperty></Target></Project>\n".into(),
     );
     let extraction = Scanner::new(&config).unwrap().extract(&overridden).unwrap();
     let dep = extraction
