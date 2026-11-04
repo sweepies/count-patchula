@@ -343,6 +343,7 @@ impl Scanner {
                 && (bundle_config(path) || leaf == "Gemfile.lock"))
             || (self.config.managers.contains(&Manager::Composer) && leaf == "composer.lock")
             || (self.config.managers.contains(&Manager::Cargo) && cargo::config_file(path))
+            || (self.config.managers.contains(&Manager::Go) && go::work_file(path))
             || (self.config.managers.contains(&Manager::Nuget)
                 && (nuget::config_file(path) || nuget::msbuild_file(path)))
             || (self.config.managers.contains(&Manager::Maven) && maven::repository_file(path))
@@ -622,7 +623,7 @@ impl Scanner {
             } else if self.selected(Manager::Dockerfile, path) {
                 images::dockerfile(path, text)
             } else if self.selected(Manager::Go, path) {
-                go::extract(path, text)
+                go::extract(path, text, files, &mut result.skipped)
             } else if self.selected(Manager::Terraform, path)
                 && path.ends_with(".terraform-version")
             {
@@ -899,6 +900,7 @@ pub fn registry_settings(path: &str) -> bool {
         || gradle::build_logic(path)
         || cargo::config_file(path)
         || path.rsplit('/').next() == Some("Cargo.toml")
+        || go::work_file(path)
 }
 
 /// A file that can name a Python package index.

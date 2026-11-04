@@ -3752,3 +3752,81 @@ fn crates_patched_or_included_from_elsewhere_fail_their_lookups() {
     ];
     assert!(fails(lookup(&member, "serde")));
 }
+
+#[test]
+fn go_modules_a_replace_directive_names_are_skipped() {
+    let module = |extra: &str| {
+        format!(
+            "module example.com/app\n\ngo 1.22\n\nrequire (\n\tgithub.com/acme/fork v1.2.3\n\tgolang.org/x/text v0.14.0\n)\n{extra}"
+        )
+    };
+    let extract = |files: &[(&str, &str)]| {
+        let files: Files = files
+            .iter()
+            .map(|(p, t)| ((*p).to_owned(), (*t).to_owned()))
+            .collect();
+        let mut config = config();
+        config.managers = vec![Manager::Go];
+        Scanner::new(&config).unwrap().extract(&files).unwrap()
+    };
+    let found = |extraction: &patchula_manager::Extraction, name: &str| {
+        extraction
+            .dependencies
+            .iter()
+            .find(|d| d.file == "app/go.mod" && d.name == name)
+            .map(|d| d.registry.clone())
+    };
+    let plain = module("");
+    let extraction = extract(&[("app/go.mod", &plain)]);
+    assert_eq!(found(&extraction, "github.com/acme/fork"), Some(None));
+    for files in [
+        vec![(
+            "app/go.mod",
+            module("\nreplace github.com/acme/fork v1.2.3 => git.acme.dev/fork v1.2.4\n"),
+        )],
+        vec![(
+            "app/go.mod",
+            module("\nreplace (\n\t\"github.com/acme/fork\" => ../fork\n)\n"),
+        )],
+        vec![
+            ("app/go.mod", plain.clone()),
+            (
+                "go.work".to_owned().leak(),
+                "go 1.22\n\nuse ./app\n\nreplace github.com/acme/fork => ./fork\n".to_owned(),
+            ),
+        ],
+    ] {
+        let files: Vec<(&str, &str)> = files.iter().map(|(p, t)| (*p, t.as_str())).collect();
+        let extraction = extract(&files);
+        assert_eq!(
+            found(&extraction, "github.com/acme/fork"),
+            None,
+            "{files:?}"
+        );
+        assert!(
+            extraction
+                .skipped
+                .iter()
+                .any(|s| s.value == "github.com/acme/fork")
+        );
+        assert_eq!(found(&extraction, "golang.org/x/text"), Some(None));
+    }
+    // A replace directive the Count cannot read fails every lookup.
+    for files in [
+        vec![("app/go.mod", module("\nreplace github.com/acme/fork\n"))],
+        vec![
+            ("app/go.mod", plain.clone()),
+            (
+                "go.work".to_owned().leak(),
+                patchula_manager::UNREADABLE_SETTINGS.to_owned(),
+            ),
+        ],
+    ] {
+        let files: Vec<(&str, &str)> = files.iter().map(|(p, t)| (*p, t.as_str())).collect();
+        let extraction = extract(&files);
+        assert!(
+            fails(found(&extraction, "golang.org/x/text").flatten()),
+            "{files:?}"
+        );
+    }
+}

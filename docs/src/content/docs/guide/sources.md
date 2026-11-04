@@ -265,6 +265,12 @@ dependency's `registry`:
   in the crate's manifest, any manifest above it or an applying
   configuration, since it can stand for any crate under any name Cargo
   takes for it.
+- Go modules are looked up on `proxy.golang.org`. A module path names the
+  place its code is served from, so the proxy cannot serve someone else's
+  code under a private path; which paths are private is `GOPRIVATE` in the
+  environment, which no committed file sets, so a private module's path does
+  reach the proxy in its lookup. Modules a `replace` directive names are
+  skipped; see [Go](/guide/managers/).
 - Maven and Gradle artifacts come from Maven Central (or Google's Maven
   repository for Android groups, and the Gradle Plugin Portal for plugins)
   only when no build file in the repository could take them from anywhere
