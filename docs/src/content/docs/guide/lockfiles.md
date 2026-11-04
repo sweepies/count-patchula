@@ -250,10 +250,12 @@ Each tool gets the credentials in its own user configuration for the entry's
 URL prefix (`//host/path/:_authToken` or `_auth` for npm, aube and Bun,
 `npmRegistries` for Yarn, which needs the prefix to be the registry URL
 exactly), written with owner-only permissions for that run and removed when
-it finishes. A run stops when a committed file names the entry's host over
-plain HTTP, and the registry's secret is redacted from any tool output.
-Yarn runs with only the `.yarnrc.yml` settings that shape the lockfile, so no
-repository proxy or TLS setting applies. No other entry may sit under a
+it finishes, and the secret is redacted from any tool output. The
+repository's own registry, proxy and TLS settings apply as each tool reads
+them, and npm, aube and Bun match credentials by host and path whatever the
+scheme: a repository that names the host over plain HTTP or turns TLS checks
+off, or a registry that serves plain-HTTP tarball URLs, sends the credential
+unencrypted. No other entry may sit under a
 `tools` entry's prefix, because these tools would send the broader entry's
 credentials there. Lockfile tools read the registries the repository names,
 never a [mirror](/guide/sources/#mirrors).

@@ -2370,7 +2370,7 @@ fn lockfile_engine_pins_match_the_repository_mise_tasks() {
 /// Yarn never runs a committed release, plugins or credential interpolations.
 #[test]
 fn yarnrc_keeps_settings_but_drops_repository_code_and_credentials() {
-    let text = "nodeLinker: node-modules\nyarnPath: .yarn/releases/yarn-4.5.0.cjs\nplugins:\n  - path: .yarn/plugins/x.cjs\nnpmScopes:\n  acme:\n    npmRegistryServer: https://npm.acme.test\n    npmAuthToken: \"${NPM_TOKEN}\"\n    httpsProxy: https://proxy.test\ncatalog:\n  zod: 3.23.8\nhttpsProxy: https://proxy.test\nenableStrictSsl: false\nunsafeHttpWhitelist: [npm.acme.test]\ninjectEnvironmentFiles: [.env]\nnpmRegistries:\n  https://npm.acme.test:\n    npmAlwaysAuth: true\n";
+    let text = "nodeLinker: node-modules\nyarnPath: .yarn/releases/yarn-4.5.0.cjs\nplugins:\n  - path: .yarn/plugins/x.cjs\nnpmScopes:\n  acme:\n    npmRegistryServer: https://npm.acme.test\n    npmAuthToken: \"${NPM_TOKEN}\"\ncatalog:\n  zod: 3.23.8\n";
     let clean: serde_yaml_ng::Value =
         serde_yaml_ng::from_str(&node::yarnrc(text).unwrap()).unwrap();
     assert_eq!(clean["nodeLinker"].as_str(), Some("node-modules"));
@@ -2381,16 +2381,6 @@ fn yarnrc_keeps_settings_but_drops_repository_code_and_credentials() {
     );
     assert!(clean.get("yarnPath").is_none() && clean.get("plugins").is_none());
     assert!(clean["npmScopes"]["acme"].get("npmAuthToken").is_none());
-    assert!(clean["npmScopes"]["acme"].get("httpsProxy").is_none());
-    for key in [
-        "httpsProxy",
-        "enableStrictSsl",
-        "unsafeHttpWhitelist",
-        "injectEnvironmentFiles",
-        "npmRegistries",
-    ] {
-        assert!(clean.get(key).is_none(), "{key}");
-    }
 }
 
 /// Tools see a repository's registries, never its tokens or other settings,

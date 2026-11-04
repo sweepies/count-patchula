@@ -153,6 +153,7 @@ impl Engine {
         http_options: patchula_http::Options,
         github_options: GithubOptions,
     ) -> Result<Self> {
+        let tool_registries = http_options.credentials.clone();
         let mut engine = Self::with_http_options(
             "installation",
             cache.clone(),
@@ -168,7 +169,9 @@ impl Engine {
         )?;
         engine.sources = Sources::new(engine.github.clone(), engine.http.clone(), cache.clone());
         engine.lockfiles = cache.workspace_dir().map(|path| {
-            patchula_update::lockfiles::Runner::new(path.into(), "").with_credentials(credentials)
+            patchula_update::lockfiles::Runner::new(path.into(), "")
+                .with_credentials(credentials)
+                .with_registries(&tool_registries)
         });
         engine.look_up_mise_tools_with_runner();
         Ok(engine)

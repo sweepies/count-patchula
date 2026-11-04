@@ -166,15 +166,6 @@ impl Runner {
         }
         // Operator registry credentials the entries allow tools to use, in
         // the run's own user configuration, gone when the tools finish.
-        if !self.registries.is_empty() {
-            for (path, blob) in context.baseline {
-                if let Some(host) = cleartext(&blob.content, &self.registries) {
-                    return Err(format!(
-                        "{path} names {host} over plain HTTP, which would send its registry credentials unencrypted"
-                    ));
-                }
-            }
-        }
         let _credentials = registry_credentials(context.driver, &self.registries)?;
         let result = self.node_locks(context).await;
         for (path, text) in &npmrcs {
@@ -638,29 +629,6 @@ fn registry_credentials(
     Ok(written)
 }
 
-/// The host of `registries` that `text` names in a plain-HTTP URL, with or
-/// without a user in it, if any. npm, aube and Bun match a credential by host
-/// and path whatever the scheme, so such a URL would carry it unencrypted.
-/// This catches a registry or lockfile that names the host over HTTP by
-/// mistake; the repository itself is trusted with the credential.
-pub(super) fn cleartext<'a>(
-    text: &str,
-    registries: &'a [patchula_http::Credential],
-) -> Option<&'a str> {
-    let text = text.to_ascii_lowercase().replace("\\/", "/");
-    text.match_indices("http://").find_map(|(at, scheme)| {
-        let authority = text[at + scheme.len()..]
-            .split(|c: char| matches!(c, '/' | '?' | '#' | '"' | '\'') || c.is_whitespace())
-            .next()?;
-        let host = authority.rsplit('@').next()?.split(':').next()?;
-        let host = host.trim_end_matches('.');
-        registries
-            .iter()
-            .find(|entry| entry.host() == host)
-            .map(|entry| entry.host())
-    })
-}
-
 /// `message` without any registry entry's secret, in any form a tool might
 /// print it: a token, a password, `user:password` or its base64.
 pub(super) fn redacted(mut message: String, registries: &[patchula_http::Credential]) -> String {
@@ -704,71 +672,27 @@ pub(super) fn npmrc(text: &str) -> String {
         .collect()
 }
 
-/// The `.yarnrc.yml` settings Yarn runs with: the registries, and settings
-/// that only shape what the lockfile records.
-const YARNRC_KEYS: [&str; 13] = [
-    "npmRegistryServer",
-    "npmScopes",
-    "catalog",
-    "catalogs",
-    "packageExtensions",
-    "compressionLevel",
-    "checksumBehavior",
-    "defaultProtocol",
-    "defaultSemverRangePrefix",
-    "enableTransparentWorkspaces",
-    "nodeLinker",
-    "npmMinimalAgeGate",
-    "npmPreapprovedPackages",
-];
-
-/// `.yarnrc.yml` with only `YARNRC_KEYS`, and only `npmRegistryServer` in
-/// each scope. Everything else is left out: repository code (`yarnPath`,
-/// `plugins`), tokens, network settings (proxies, TLS, plain-HTTP hosts) and
-/// environment files. A `${VAR}` value is left out too, as it would fail
-/// without the credentials it names, except a registry's, which stays so
-/// Yarn stops on it rather than reading the public registry instead.
+/// `.yarnrc.yml` without repository code (`yarnPath`, `plugins`) or `${VAR}`
+/// interpolations, which would fail without the credentials they name.
 pub(super) fn yarnrc(text: &str) -> Result<String, String> {
-    fn plain(value: &serde_yaml_ng::Value) -> bool {
-        match value {
-            serde_yaml_ng::Value::String(s) => !s.contains("${"),
-            serde_yaml_ng::Value::Sequence(items) => items.iter().all(plain),
-            serde_yaml_ng::Value::Mapping(map) => map.iter().all(|(k, v)| plain(k) && plain(v)),
-            serde_yaml_ng::Value::Tagged(tagged) => plain(&tagged.value),
-            _ => true,
+    fn clean(value: &mut serde_yaml_ng::Value) {
+        if let Some(map) = value.as_mapping_mut() {
+            map.retain(|key, value| {
+                // A `${VAR}` registry stays, so Yarn stops on it rather than
+                // reading the public registry instead.
+                !matches!(key.as_str(), Some("yarnPath" | "plugins"))
+                    && (key.as_str() == Some("npmRegistryServer")
+                        || !value.as_str().is_some_and(|s| s.contains("${")))
+            });
+            for (_, value) in map.iter_mut() {
+                clean(value);
+            }
         }
     }
-    let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(text).map_err(|e| e.to_string())?;
-    let mut out = serde_yaml_ng::Mapping::new();
-    let map = match value {
-        serde_yaml_ng::Value::Null => serde_yaml_ng::Mapping::new(),
-        serde_yaml_ng::Value::Mapping(map) => map,
-        _ => return Err(".yarnrc.yml is not a mapping".into()),
-    };
-    for (key, value) in map {
-        match key.as_str() {
-            Some("npmRegistryServer") => {
-                out.insert(key, value);
-            }
-            Some("npmScopes") => {
-                let scopes = value.as_mapping().ok_or("npmScopes is not a mapping")?;
-                let mut kept = serde_yaml_ng::Mapping::new();
-                for (scope, settings) in scopes {
-                    let mut only = serde_yaml_ng::Mapping::new();
-                    if let Some(server) = settings.get("npmRegistryServer") {
-                        only.insert("npmRegistryServer".into(), server.clone());
-                    }
-                    kept.insert(scope.clone(), only.into());
-                }
-                out.insert(key, kept.into());
-            }
-            Some(name) if YARNRC_KEYS.contains(&name) && plain(&value) => {
-                out.insert(key, value);
-            }
-            _ => {}
-        }
-    }
-    serde_yaml_ng::to_string(&out).map_err(|e| e.to_string())
+    let mut value: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(text).map_err(|e| e.to_string())?;
+    clean(&mut value);
+    serde_yaml_ng::to_string(&value).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -855,26 +779,6 @@ mod registry_credentials {
         }
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "kept");
         assert!(!link.exists());
-    }
-
-    #[test]
-    fn a_credentialed_host_named_over_plain_http_is_found() {
-        let entries = entries();
-        for text in [
-            "registry=http://npm.acme.dev/repo/",
-            "\"resolved\": \"HTTP://ci:x@npm.acme.dev:80/repo/a.tgz\"",
-            "npmRegistryServer: http://npm.other.dev.",
-            "{\"url\":\"http:\\/\\/npm.acme.dev\\/repo\"}",
-        ] {
-            assert!(cleartext(text, &entries).is_some(), "{text}");
-        }
-        for text in [
-            "registry=https://npm.acme.dev/repo/",
-            "registry=http://npm.acme.dev.evil.test/",
-            "see http://example.com/npm.acme.dev",
-        ] {
-            assert_eq!(cleartext(text, &entries), None, "{text}");
-        }
     }
 
     #[test]

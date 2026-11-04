@@ -189,10 +189,6 @@ impl Credential {
     pub fn encloses(&self, other: &Credential) -> bool {
         covers(&self.url, &other.url)
     }
-    /// The host the entry's prefix names.
-    pub fn host(&self) -> &str {
-        self.url.host_str().unwrap_or_default()
-    }
     fn len(&self) -> usize {
         self.url.path().trim_end_matches('/').len()
     }
