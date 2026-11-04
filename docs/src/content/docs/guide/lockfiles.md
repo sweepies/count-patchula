@@ -13,7 +13,8 @@ commit. If the tool fails, nothing is published.
 |---|---|---|
 | `aube-lock.yaml`, `pnpm-lock.yaml` | aube | `aube install --lockfile-only --ignore-scripts`, once per lockfile, with aube's `default-lockfile` set to that file's name |
 | `package-lock.json`, `npm-shrinkwrap.json` | aube, or npm | `npm install --package-lock-only --ignore-scripts` |
-| `yarn.lock` | Yarn Classic or Berry | `yarn install --ignore-scripts`, or `--mode=update-lockfile` |
+| `yarn.lock` (Classic, v1) | aube | `aube install --lockfile-only --ignore-scripts`, with `default-lockfile` set to `yarn.lock` |
+| `yarn.lock` (Berry) | Yarn | `yarn install --mode=update-lockfile` |
 | `bun.lock` | Bun | `bun install --lockfile-only --ignore-scripts` |
 | `Cargo.lock` | Cargo | `cargo update -p <crate>@<old> --precise <target>` |
 | `go.sum` | Go | `go get <module>@<target>`, then `go mod download` or `go mod tidy` |
@@ -98,11 +99,12 @@ with `--with-all-dependencies --minimal-changes`.
   not an update. npm and Bun have no such command, so they only get this when
   the scheduled refresh below runs.
 
-## Why aube for npm and pnpm
+## Why aube for npm, pnpm and Yarn Classic
 
 [aube](https://aube.sh) rewrites pnpm and npm lockfiles in place about 10 to 20
 times faster than pnpm or npm (0.1 s against 1.5 to 2.5 s on a 265-package
-project), so the Count uses it for both.
+project), and Yarn Classic locks about 30 times faster than Yarn 1 (25 ms
+against 0.8 s on a 70-package project), so the Count uses it for all three.
 
 aube's npm lockfiles stay valid for `npm ci`,
 but a later `npm install` may rewrite a few lines (hoisting and `funding`
@@ -113,11 +115,17 @@ which aube cannot read. Trees with local `file:` dependencies stay with aube,
 which keeps them valid since 2.8.1
 ([aube#1796](https://github.com/aubepkg/aube/issues/1796)).
 
-`yarn.lock` stays with Yarn, because aube's Yarn Berry output is rejected by Yarn
-([aube#1794](https://github.com/aubepkg/aube/issues/1794),
+aube's Yarn Classic output matches Yarn 1's for the same update, and an
+unchanged lock stays byte for byte the same
+([aube#1885](https://github.com/aubepkg/aube/issues/1885), fixed in 2.9.0). A
+few newly locked entries may lack the `#sha1` suffix Yarn 1 adds to `resolved`
+URLs; Yarn accepts them.
+
+A Berry `yarn.lock` stays with Yarn, because aube's Berry output is rejected by
+Yarn ([aube#1794](https://github.com/aubepkg/aube/issues/1794),
 [aube#1795](https://github.com/aubepkg/aube/issues/1795)). Yarn's version comes
-from `packageManager` in `package.json`, then a `yarn` pin in `mise.toml`, then the
-committed lock's format. `bun.lock` stays with Bun.
+from `packageManager` in `package.json`, then a Yarn 2 or newer pin in
+`mise.toml`, then the default below. `bun.lock` stays with Bun.
 
 ## Which tool version
 
@@ -131,8 +139,8 @@ pinned defaults apply:
 | Tool | Default |
 |---|---|
 | Node | 26.13.0 |
-| aube | 2.8.4 |
-| Yarn | 1.22.22 (Classic), 4.18.1 (Berry) |
+| aube | 2.9.0 |
+| Yarn | 4.18.1 (Berry) |
 | Bun | 1.4.4 |
 | Rust | 1.99.1 |
 | Go | 1.27.3 |
@@ -237,9 +245,9 @@ stops on it. npm, pnpm, aube and Bun see each `.npmrc` with only its
 `registry=` and `@scope:registry=` lines, so a private scope resolves where
 your own installs would, never to the public package of its name.
 
-Install scripts are skipped wherever a tool allows it (npm, aube, Bun, Yarn
-classic, and Composer with plugins off too), because a lockfile needs none of
-them.
+Install scripts are skipped wherever a tool allows it (npm, aube, which also
+writes Yarn Classic locks, Bun, and Composer with plugins off too), because a
+lockfile needs none of them.
 
 Output is kept only when something fails, at most 4 KiB of each stream.
 
@@ -269,8 +277,8 @@ Each tool gets the credentials in the form it reads, only for its own run:
 
 | Tool | Form | Credentials | Matched by |
 | --- | --- | --- | --- |
-| aube, npm, Bun | `//host/path/:_authToken` or `:_auth` in its user configuration | bearer, basic | prefix |
-| Yarn | `npmRegistries` in its user configuration | bearer, basic | the registry URL, exactly |
+| aube (npm, pnpm and Yarn Classic locks), npm, Bun | `//host/path/:_authToken` or `:_auth` in its user configuration | bearer, basic | prefix |
+| Yarn (Berry locks) | `npmRegistries` in its user configuration | bearer, basic | the registry URL, exactly |
 | Cargo | `CARGO_REGISTRIES_<NAME>_INDEX` and `_TOKEN` | bearer, basic | the sparse index URL of each registry `.cargo/config.toml` or `.cargo/config` names |
 | dotnet | `NuGetPackageSourceCredentials_<key>` | basic | the URL of each source a `nuget.config` adds |
 | Poetry | `POETRY_HTTP_BASIC_<NAME>_USERNAME` and `_PASSWORD`, and `~/.netrc` | basic | the URL of each `[[tool.poetry.source]]`; host |

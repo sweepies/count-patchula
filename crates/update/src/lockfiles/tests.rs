@@ -16,16 +16,6 @@ fn default_version(tool: &str) -> String {
 fn default_spec(tool: &str) -> String {
     format!("{tool}@{}", default_version(tool))
 }
-/// The Yarn Berry release `defaults.toml` pins.
-fn berry() -> String {
-    tool_defaults().unwrap()["yarn"]["berry"]
-        .as_str()
-        .unwrap()
-        .to_owned()
-}
-fn berry_spec() -> String {
-    format!("yarn@{}", berry())
-}
 
 struct Fixture {
     files: BTreeMap<String, String>,
@@ -714,7 +704,7 @@ async fn node_lockfiles_use_aube_yarn_and_bun_by_lockfile_format() {
     );
     assert!(
         commands.iter().any(|(specs, command)| specs.as_slice()
-            == [default_spec("node"), berry_spec()]
+            == [default_spec("node"), default_spec("yarn")]
             && starts(command, &["yarn", "install", "--mode=update-lockfile"])),
         "missing yarn command {commands:?}"
     );
@@ -785,74 +775,52 @@ async fn the_npm_engine_setting_restores_native_npm_for_npm_locks() {
     );
 }
 
-/// Yarn's version follows `packageManager`, then the repository pin, then the
-/// format of the committed lockfile.
+/// Yarn Berry's version follows `packageManager`, then a Berry repository pin,
+/// then the pinned default.
 #[test]
 fn yarn_version_comes_from_the_package_manager_field() {
     let versions = BTreeMap::from([("yarn".to_string(), "1.22.22".to_string())]);
     let manifest = |value: &str| Some(value.to_string());
     assert_eq!(
         node::yarn_version(
-            manifest("{\"packageManager\":\"yarn@4.18.1\"}").as_deref(),
-            BERRY_LOCK,
+            manifest("{\"packageManager\":\"yarn@4.10.3\"}").as_deref(),
             &versions,
-            "1.22.22",
             "4.18.1"
         )
         .unwrap(),
-        "4.18.1"
+        "4.10.3"
     );
     // Corepack hashes are not versions.
     assert_eq!(
         node::yarn_version(
-            manifest("{\"packageManager\":\"yarn@4.18.1+sha512.abc\"}").as_deref(),
-            BERRY_LOCK,
+            manifest("{\"packageManager\":\"yarn@4.10.3+sha512.abc\"}").as_deref(),
             &versions,
-            "1.22.22",
             "4.18.1"
         )
         .unwrap(),
-        "4.18.1"
+        "4.10.3"
     );
-    // A range or dist-tag is not a version and falls back to the lock format.
+    // A range or dist-tag is not a version and falls back to the pinned default.
     assert_eq!(
         node::yarn_version(
             manifest("{\"packageManager\":\"yarn@^4.0.0\"}").as_deref(),
-            BERRY_LOCK,
             &versions,
-            "1.22.22",
             "4.18.1"
         )
         .unwrap(),
         "4.18.1"
     );
+    // A Classic repository pin is not Berry; a Berry one wins over the default.
     assert_eq!(
-        node::yarn_version(
-            manifest("{\"packageManager\":\"yarn@1.22.19\"}").as_deref(),
-            CLASSIC_LOCK,
-            &versions,
-            "1.22.22",
-            "4.18.1"
-        )
-        .unwrap(),
-        "1.22.19"
-    );
-    // Without a field the lockfile format selects the pinned default.
-    assert_eq!(
-        node::yarn_version(None, CLASSIC_LOCK, &versions, "1.22.22", "4.18.1").unwrap(),
-        "1.22.22"
-    );
-    assert_eq!(
-        node::yarn_version(None, BERRY_LOCK, &versions, "1.22.22", "4.18.1").unwrap(),
+        node::yarn_version(None, &versions, "4.18.1").unwrap(),
         "4.18.1"
     );
-    // A repository pin wins over the default when it matches the format.
     let pinned = BTreeMap::from([("yarn".to_string(), "4.10.3".to_string())]);
     assert_eq!(
-        node::yarn_version(None, BERRY_LOCK, &pinned, "1.22.22", "4.18.1").unwrap(),
+        node::yarn_version(None, &pinned, "4.18.1").unwrap(),
         "4.10.3"
     );
-    assert!(node::yarn_version(None, "not a lockfile", &versions, "1.22.22", "4.18.1").is_err());
+    assert!(node::yarn_version(None, &versions, "").is_err());
 }
 
 /// A manifest edit that changes recorded dependencies must change the lock.
@@ -1047,12 +1015,20 @@ async fn maintenance_refreshes_node_lockfiles_within_the_manifest_ranges() {
         ),
         "missing npm maintenance command {commands:?}"
     );
-    // Yarn Classic has no lock-only refresh; it reinstalls without scripts.
+    // aube refreshes the pnpm lock and the Yarn Classic one; Yarn never runs.
+    assert_eq!(
+        commands
+            .iter()
+            .filter(|(specs, _)| specs.as_slice() == [default_spec("aube")])
+            .count(),
+        2,
+        "one aube call per pnpm and Yarn Classic lock {commands:?}"
+    );
     assert!(
-        commands.iter().any(|(specs, command)| specs.as_slice()
-            == [default_spec("node"), default_spec("yarn")]
-            && starts(command, &["yarn", "install", "--ignore-scripts"])),
-        "missing yarn command {commands:?}"
+        !commands
+            .iter()
+            .any(|(_, command)| starts(command, &["yarn"])),
+        "Yarn Classic locks belong to aube {commands:?}"
     );
     assert!(
         commands
@@ -1103,11 +1079,11 @@ async fn real_tools_produce_deterministic_lockfiles_from_local_offline_fixtures(
     }
 }
 
-/// aube regenerates pnpm and npm locks in place from local offline fixtures,
-/// including npm trees with local `file:` dependencies (fixed in aube 2.8.1,
-/// aube#1796).
+/// aube regenerates pnpm, npm and Yarn Classic locks in place from local
+/// offline fixtures, including npm trees with local `file:` dependencies (fixed
+/// in aube 2.8.1, aube#1796).
 #[tokio::test]
-async fn real_aube_rewrites_pnpm_and_npm_locks_in_place() {
+async fn real_aube_rewrites_pnpm_npm_and_yarn_classic_locks_in_place() {
     let npm_seed = "{\"name\":\"fixture\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"name\":\"fixture\",\"version\":\"1.0.0\"}}}\n";
     let local = "{\"name\":\"fixture\",\"version\":\"1.0.0\",\"dependencies\":{\"local-fixture\":\"file:./local\"}}\n";
     let plain = "{\"name\":\"fixture\",\"version\":\"1.0.0\"}\n";
@@ -1132,6 +1108,13 @@ async fn real_aube_rewrites_pnpm_and_npm_locks_in_place() {
             plain,
             default_spec("aube"),
             "lockfileVersion",
+        ),
+        (
+            "yarn.lock",
+            CLASSIC_LOCK,
+            local,
+            default_spec("aube"),
+            "local-fixture",
         ),
     ] {
         let files = BTreeMap::from([
@@ -2545,8 +2528,9 @@ fn lockfile_engine_pins_match_the_repository_mise_tasks() {
         include_str!("../../../../tasks.toml").parse().unwrap();
     let tools = &tasks["test:tools"]["tools"];
     assert_eq!(tools["aube"].as_str(), defaults["tools"]["aube"].as_str());
-    assert_eq!(tools["yarn"].as_str(), defaults["yarn"]["berry"].as_str());
-    for tool in ["bun", "python", "uv", "poetry", "dotnet", "ruby", "apm"] {
+    for tool in [
+        "bun", "yarn", "python", "uv", "poetry", "dotnet", "ruby", "apm",
+    ] {
         assert_eq!(
             tools[tool].as_str(),
             defaults["tools"][tool].as_str(),
@@ -3055,7 +3039,7 @@ async fn tool_store_prunes_unused_versions_and_prewarms_defaults() {
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert!(remaining.contains_key("bun@1.3.0") && !remaining.contains_key("node@20.0.0"));
     let installed = runner.prewarm().await.unwrap();
-    assert!(installed.contains(&default_spec("uv")) && installed.contains(&berry_spec()));
+    assert!(installed.contains(&default_spec("uv")) && installed.contains(&default_spec("yarn")));
     assert!(!installed.iter().any(|s| s.starts_with("rust@")));
     assert!(installed.contains(&format!("aqua:jdx/mise@{}", pinned_mise())));
 }
