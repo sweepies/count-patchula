@@ -174,8 +174,9 @@ pub(crate) struct Recorded<'a> {
 }
 
 /// `report` without what lookups made with registry credentials found. Such a
-/// dependency keeps what the repository declares, but loses its updates,
-/// held-back releases, lookup evidence, tag digests and image checks. Whether
+/// dependency keeps what the repository declares, but loses its updates, the
+/// version its range resolved to, held-back releases, lookup evidence, tag
+/// digests and image checks. Whether
 /// a lookup carried credentials was recorded as its requests were made.
 pub(crate) fn withheld(report: &Report) -> Report {
     let mut report = report.clone();
@@ -192,6 +193,9 @@ pub(crate) fn withheld(report: &Report) -> Report {
             continue;
         }
         dep.updates.clear();
+        // The version a range resolves to came from the lookup too.
+        dep.current.version = None;
+        meta.resolution = None;
         meta.held_back.clear();
         meta.stale.clear();
         meta.tag_digests.clear();

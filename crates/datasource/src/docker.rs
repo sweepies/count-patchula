@@ -136,6 +136,9 @@ impl Client {
             entry.as_ref().map_or("", patchula_http::Credential::scope)
         );
         let authenticated = entry.is_some();
+        // A token is an account's only when the entry sends credentials for
+        // it; a withheld entry's is fetched without any.
+        let account = entry.as_ref().is_some_and(|entry| entry.auth.sends());
         let token = self.tokens.lock().await.entry(scope).or_default().clone();
         let key = token_key(host, path)?;
         let mut saved = token.lock().await;
@@ -165,7 +168,7 @@ impl Client {
                 url,
                 accept,
                 bearer.as_deref(),
-                authenticated,
+                account,
                 method.clone(),
                 derived,
             )
@@ -306,7 +309,7 @@ impl Client {
             };
             drop(saved_token);
             response = self
-                .registry_read(url, accept, Some(&next), authenticated, method, derived)
+                .registry_read(url, accept, Some(&next), account, method, derived)
                 .await?;
             if response.status == 401 {
                 *token.lock().await = None;

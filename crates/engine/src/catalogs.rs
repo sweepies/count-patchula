@@ -9,7 +9,6 @@ struct Saved {
     fetched_at: i64,
     catalog: Catalog,
     /// Whether a request made for it carried credentials.
-    #[serde(default)]
     credentialed: bool,
 }
 pub(super) type Evidence = BTreeMap<LookupKey, CatalogEvidence>;
@@ -29,7 +28,7 @@ impl Engine {
                 serde_json::to_string(&key.1).unwrap_or_default()
             ),
             default_branch_commit: self.github.credential_scope().into(),
-            config_hash: "age-catalog-v3".into(),
+            config_hash: "age-catalog-v4".into(),
         }
     }
     pub(super) async fn age_catalogs(

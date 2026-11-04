@@ -325,7 +325,8 @@ fn credentialed_lookups_leave_only_the_declared_dependency_in_public() {
         panic!("two dependencies")
     };
     assert_eq!(hidden.package, private);
-    assert_eq!(hidden.current.version.as_deref(), Some("1.0.0"));
+    assert_eq!(hidden.current.value.as_deref(), Some("1.0.0"));
+    assert_eq!(hidden.current.version, None);
     assert!(hidden.updates.is_empty());
     assert!(hidden.metadata.as_ref().unwrap().held_back.is_empty());
     assert_eq!(public, &files[0].dependencies[1]);

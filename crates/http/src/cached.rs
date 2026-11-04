@@ -109,7 +109,9 @@ struct Host {
     cooldown: Mutex<Option<Instant>>,
     pull_cooldown: Mutex<Option<Instant>>,
 }
-type Coalesced = Arc<tokio::sync::Mutex<Option<(Instant, Response)>>>;
+/// The last answer for a read, when it finished, and whether its request
+/// carried credentials, which a caller served the same answer records too.
+type Coalesced = Arc<tokio::sync::Mutex<Option<(Instant, Response, bool)>>>;
 type Derive = fn(&[u8]) -> Result<Vec<u8>, Error>;
 /// How long a digest-addressed registry document stays fresh: ten years, so
 /// only the cache's size budget evicts it.
@@ -369,16 +371,25 @@ impl Cached {
             .or_default()
             .clone();
         let mut previous = read.lock().await;
-        if let Some((finished, response)) = &*previous
+        if let Some((finished, response, credentialed)) = &*previous
             && *finished >= started
         {
+            if *credentialed {
+                crate::tracked::sent();
+            }
             return Ok(response.clone());
         }
-        let response = self
-            .get_representation(url, accept, derived, Some(token), method)
-            .await?;
+        let (response, credentialed) = crate::tracked::tracked(self.get_representation(
+            url,
+            accept,
+            derived,
+            Some(token),
+            method,
+        ))
+        .await;
+        let response = response?;
         if response.status.is_success() {
-            *previous = Some((Instant::now(), response.clone()));
+            *previous = Some((Instant::now(), response.clone(), credentialed));
         }
         Ok(response)
     }
@@ -482,15 +493,24 @@ impl Cached {
         let mut previous = read.lock().await;
         // Coalesce overlapping callers even when upstream requires revalidation.
         // A later sequential call still observes normal HTTP freshness rules.
-        if let Some((finished, response)) = &*previous
+        if let Some((finished, response, credentialed)) = &*previous
             && *finished >= started
         {
+            if *credentialed {
+                crate::tracked::sent();
+            }
             return Ok(response.clone());
         }
-        let response = self
-            .get_representation(url, accept, Some((format, derive)), None, Method::GET)
-            .await?;
-        *previous = Some((Instant::now(), response.clone()));
+        let (response, credentialed) = crate::tracked::tracked(self.get_representation(
+            url,
+            accept,
+            Some((format, derive)),
+            None,
+            Method::GET,
+        ))
+        .await;
+        let response = response?;
+        *previous = Some((Instant::now(), response.clone(), credentialed));
         Ok(response)
     }
 
