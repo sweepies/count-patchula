@@ -3166,3 +3166,182 @@ fn composer_packages_come_from_their_lockfile_or_packagist_alone() {
         }
     }
 }
+
+#[test]
+fn nuget_packages_come_from_nuget_org_alone_or_as_source_mapping_says() {
+    let project = |packages: &[&str]| {
+        let items: String = packages
+            .iter()
+            .map(|p| format!("    <PackageReference Include=\"{p}\" Version=\"1.0.0\" />\n"))
+            .collect();
+        format!(
+            "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup>\n{items}  </ItemGroup>\n</Project>\n"
+        )
+    };
+    let nuget_config = |body: &str| {
+        format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<configuration>\n{body}\n</configuration>\n"
+        )
+    };
+    let sources = |extra: &str| {
+        format!(
+            "<packageSources>\n<clear />\n<add key=\"nuget.org\" value=\"https://api.nuget.org/v3/index.json\" />\n{extra}</packageSources>"
+        )
+    };
+    let acme = "<add key=\"Acme\" value=\"https://bot:s3cr3t@nuget.acme.dev/v3/index.json\" />\n";
+    let mapping = "<packageSourceMapping>\n<packageSource key=\"nuget.org\"><package pattern=\"*\" /><package pattern=\"Acme.Public\" /></packageSource>\n<packageSource key=\"Acme\"><package pattern=\"Acme.*\" /></packageSource>\n</packageSourceMapping>";
+    let packages = ["Newtonsoft.Json", "Acme.Lib", "Acme.Public"];
+    let files = Files::from([
+        ("none/App.csproj".into(), project(&packages)),
+        ("public/nuget.config".into(), nuget_config(&sources(""))),
+        ("public/App.csproj".into(), project(&packages)),
+        ("unmapped/NuGet.Config".into(), nuget_config(&sources(acme))),
+        ("unmapped/App.csproj".into(), project(&packages)),
+        (
+            "mapped/nuget.config".into(),
+            nuget_config(&format!("{}\n{mapping}", sources(acme))),
+        ),
+        ("mapped/App.csproj".into(), project(&packages)),
+        // A source a closer config clears or disables still counts.
+        ("mapped/cleared/nuget.config".into(), nuget_config(&sources(""))),
+        ("mapped/cleared/App.csproj".into(), project(&packages)),
+        (
+            "disabled/nuget.config".into(),
+            nuget_config(&format!(
+                "{}\n<disabledPackageSources><add key=\"acme\" value=\"true\" /></disabledPackageSources>",
+                sources(acme)
+            )),
+        ),
+        ("disabled/App.csproj".into(), project(&packages)),
+        // Central versions above a project whose config adds a source.
+        (
+            "central/Directory.Packages.props".into(),
+            "<Project>\n  <ItemGroup>\n    <PackageVersion Include=\"Newtonsoft.Json\" Version=\"13.0.1\" />\n  </ItemGroup>\n</Project>\n".into(),
+        ),
+        ("central/app/nuget.config".into(), nuget_config(&sources(acme))),
+        // Sections and names the Count does not know.
+        (
+            "fallback/nuget.config".into(),
+            nuget_config("<fallbackPackageFolders><add key=\"f\" value=\"/packages\" /></fallbackPackageFolders>"),
+        ),
+        ("fallback/App.csproj".into(), project(&packages)),
+        ("spelled/NUGET.CONFIG".into(), nuget_config(&sources(""))),
+        ("spelled/App.csproj".into(), project(&packages)),
+        // A private default with nuget.org for some prefixes, in one config.
+        (
+            "private-default/nuget.config".into(),
+            nuget_config(&format!(
+                "{}\n<packageSourceMapping><packageSource key=\"Acme\"><package pattern=\"*\" /></packageSource><packageSource key=\"nuget.org\"><package pattern=\"Newtonsoft.*\" /></packageSource></packageSourceMapping>",
+                sources(acme)
+            )),
+        ),
+        ("private-default/App.csproj".into(), project(&packages)),
+        // Mappings in two configs are not merged.
+        (
+            "two-mappings/nuget.config".into(),
+            nuget_config(&format!("{}\n{mapping}", sources(acme))),
+        ),
+        (
+            "two-mappings/app/nuget.config".into(),
+            nuget_config("<packageSourceMapping><packageSource key=\"nuget.org\"><package pattern=\"Acme.Lib\" /></packageSource></packageSourceMapping>"),
+        ),
+        ("two-mappings/app/App.csproj".into(), project(&packages)),
+        // A clear in a closer mapping can turn NuGet's mapping off.
+        (
+            "mapping-clear/nuget.config".into(),
+            nuget_config(&format!(
+                "{}\n<packageSourceMapping><packageSource key=\"nuget.org\"><package pattern=\"*\" /></packageSource></packageSourceMapping>",
+                sources(acme)
+            )),
+        ),
+        (
+            "mapping-clear/app/nuget.config".into(),
+            nuget_config("<packageSourceMapping><clear /></packageSourceMapping>"),
+        ),
+        ("mapping-clear/app/App.csproj".into(), project(&packages)),
+        // What NuGet reads differently from the Count fails.
+        (
+            "removed/nuget.config".into(),
+            nuget_config("<packageSources><remove key=\"Acme\" /></packageSources>"),
+        ),
+        ("removed/App.csproj".into(), project(&packages)),
+        (
+            "star/nuget.config".into(),
+            nuget_config(&format!(
+                "{}\n<packageSourceMapping><packageSource key=\"nuget.org\"><package pattern=\"*\" /></packageSource><packageSource key=\"Acme\"><package pattern=\"Acme*Internal\" /></packageSource></packageSourceMapping>",
+                sources(acme)
+            )),
+        ),
+        ("star/App.csproj".into(), project(&packages)),
+        (
+            "collision/nuget.config".into(),
+            nuget_config(&format!(
+                "{}\n<packageSourceMapping><packageSource key=\"nuget.org\"><package pattern=\"*\" /><package pattern=\"Acme.Lib\" /></packageSource><packageSource key=\"Acme\"><package pattern=\"Acme.Lib*\" /></packageSource></packageSourceMapping>",
+                sources(acme)
+            )),
+        ),
+        ("collision/App.csproj".into(), project(&packages)),
+        // A tool manifest restores from any folder below its own.
+        (
+            "tools/.config/dotnet-tools.json".into(),
+            "{\"version\": 1, \"isRoot\": true, \"tools\": {\"dotnet-ef\": {\"version\": \"8.0.0\", \"commands\": [\"dotnet-ef\"]}}}".into(),
+        ),
+        ("tools/src/nuget.config".into(), nuget_config(&sources(acme))),
+    ]);
+    let mut config = config();
+    config.managers = vec![Manager::Nuget];
+    let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+    let registry = |file: &str, name: &str| {
+        extraction
+            .dependencies
+            .iter()
+            .find(|d| d.file == file && d.name == name)
+            .unwrap_or_else(|| panic!("{file} {name}"))
+            .registry
+            .clone()
+    };
+    for file in ["none/App.csproj", "public/App.csproj"] {
+        for name in packages {
+            assert_eq!(registry(file, name), None, "{file} {name}");
+        }
+    }
+    for name in packages {
+        let found = registry("unmapped/App.csproj", name);
+        assert!(
+            found
+                .as_deref()
+                .is_some_and(|r| r.contains("packageSourceMapping")),
+            "{found:?}"
+        );
+    }
+    assert_eq!(registry("mapped/App.csproj", "Newtonsoft.Json"), None);
+    assert_eq!(registry("mapped/App.csproj", "Acme.Public"), None);
+    let lib = registry("mapped/App.csproj", "Acme.Lib").unwrap();
+    assert!(
+        fails(Some(lib.clone())) || lib.starts_with("https://nuget.acme.dev"),
+        "{lib}"
+    );
+    assert!(!lib.contains("s3cr3t"), "{lib}");
+    assert!(fails(registry(
+        "central/Directory.Packages.props",
+        "Newtonsoft.Json"
+    )));
+    for file in ["fallback/App.csproj", "spelled/App.csproj"] {
+        assert!(fails(registry(file, "Newtonsoft.Json")), "{file}");
+    }
+
+    // An MSBuild property that sets restore sources fails every lookup.
+    let mut overridden = files.clone();
+    overridden.insert(
+        "Directory.Build.props".into(),
+        // Written with a character reference, as an attribute value.
+        "<Project><Target Name=\"T\"><CreateProperty Value=\"https://nuget.acme.dev/v3/index.json\"><Output TaskParameter=\"Value\" PropertyName=\"Restore&#83;ources\" /></CreateProperty></Target></Project>\n".into(),
+    );
+    let extraction = Scanner::new(&config).unwrap().extract(&overridden).unwrap();
+    let dep = extraction
+        .dependencies
+        .iter()
+        .find(|d| d.file == "public/App.csproj" && d.name == "Newtonsoft.Json")
+        .unwrap();
+    assert!(fails(dep.registry.clone()), "{:?}", dep.registry);
+}

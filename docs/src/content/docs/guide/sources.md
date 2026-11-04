@@ -226,6 +226,31 @@ dependency's `registry`:
   Count ignore the lock. A `composer.json` with
   comments, which Composer does not read, or a lock the Count cannot read,
   fails every lookup.
+- NuGet packages come from nuget.org only when NuGet could not take them
+  from anywhere else. `packages.lock.json` does not record a package's
+  source, and with several sources NuGet takes a package from whichever
+  answers, so the `nuget.config` files from the project's folder up to the
+  repository root decide. Every source they add counts, even one a closer
+  config clears or disables, along with the nuget.org source NuGet adds by
+  default. With nuget.org alone, every package comes from it. With another
+  source, `packageSourceMapping` must say which source serves each
+  package, from one config alone: its most specific pattern (an exact ID,
+  else the longest prefix) decides. Mappings in several configs, which
+  NuGet merges in ways the Count does not follow, fail every lookup. A package mapped to
+  nuget.org alone comes from there; any other fails its lookup, since
+  private NuGet feeds are not read yet. A `dotnet-tools.json` manifest
+  counts every folder below it with a config of its own, and a shared
+  MSBuild file such as `Directory.Packages.props`, which can be imported
+  from anywhere, counts every folder with one. Anything NuGet could read
+  differently fails every lookup it could affect: a config the Count
+  cannot read, with a section it does not know such as
+  `fallbackPackageFolders`, with `remove`, or with a pattern other than an
+  ID or a prefix ending in its only `*`; a config spelled other than
+  `nuget.config`, `NuGet.config` or `NuGet.Config`; a source or mapping
+  key with spaces around it or outside ASCII; and an MSBuild file that sets
+  `RestoreSources`, `RestoreAdditionalProjectSources`, `RestoreConfigFile`,
+  `RestoreFallbackFolders`, `RestoreRootConfigDirectory` or
+  `RestoreSolutionDirectory`, or that the Count cannot read.
 - Python packages come from what the project's lockfile records. The
   Count does not work out which index uv or Poetry would pick from their
   settings; the tool already did, and wrote it down:

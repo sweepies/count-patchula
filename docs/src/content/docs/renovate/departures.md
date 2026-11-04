@@ -73,6 +73,12 @@ missing, and behaviour that changes their pull requests. The
 - **The Count:** Skips repositories without a config. In a local checkout with no config, the CLI offers its defaults or a starter `patchula.pkl` at a terminal, and `--default-config` uses the defaults without asking
 - **Why:** Repositories opt in deliberately
 
+### NuGet sources need a source mapping {#nuget-sources}
+
+- **Renovate:** Looks a NuGet package up in every source `nuget.config` lists
+- **The Count:** Looks it up on nuget.org only when nuget.org is the only source, or when `packageSourceMapping` maps the package there; with another source and no mapping, every NuGet lookup fails. See [package registries](/guide/sources/#package-registries)
+- **Why:** NuGet takes a package from whichever source answers, and its lockfile does not say which, so without a mapping a private package's name could be looked up on nuget.org, where it may be someone else's. Source mapping is also NuGet's own advice against dependency confusion
+
 ### Registry credentials are operator settings {#registry-credentials}
 
 - **Renovate:** `hostRules` in the repository config, with secrets encrypted for the app or passed in by the self-hosted runner
