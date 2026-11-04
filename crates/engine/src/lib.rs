@@ -2551,10 +2551,12 @@ impl Engine {
             // Extraction is a function of the config and the files it reads,
             // so a commit that leaves those as they were, whatever else it
             // changes, reuses the earlier result without scanning.
+            // Unlike a commit, the same files recur across releases, so the
+            // key carries the version as well as the namespace.
             let content = ExtractionKey {
                 repo: format!("files:{repo}"),
                 default_branch_commit: hash(&serde_json::to_vec(&files)?),
-                config_hash: format!("{EXTRACTION}:{config_hash}"),
+                config_hash: format!("{EXTRACTION}:{}:{config_hash}", env!("CARGO_PKG_VERSION")),
             };
             let mut extraction = if let Some(bytes) = self.cache.extraction_get(&content).await? {
                 self.extraction_hits.fetch_add(1, Ordering::Relaxed);
@@ -2651,7 +2653,13 @@ impl Engine {
         let key = ExtractionKey {
             repo: format!("config-files:{repo}"),
             default_branch_commit: hash(&serde_json::to_vec(&(&path, &files))?),
-            config_hash: format!("v1:{}", hash(patchula_config::SCHEMA.as_bytes())),
+            // The version covers decoding and validation the schema text
+            // does not.
+            config_hash: format!(
+                "v1:{}:{}",
+                env!("CARGO_PKG_VERSION"),
+                hash(patchula_config::SCHEMA.as_bytes())
+            ),
         };
         if let Some(bytes) = self.cache.extraction_get(&key).await? {
             return Ok(serde_json::from_slice(&bytes)?);
