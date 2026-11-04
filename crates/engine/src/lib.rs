@@ -2445,10 +2445,11 @@ impl Engine {
                 controls: patchula_update::dashboard::Controls::default(),
             });
         };
+        let config_hash = hash(&serde_json::to_vec(&config)?);
         let key = ExtractionKey {
             repo: repo.into(),
             default_branch_commit: commit,
-            config_hash: format!("extract-v25:{}", hash(&serde_json::to_vec(&config)?)),
+            config_hash: format!("{EXTRACTION}:{config_hash}"),
         };
         let cached: CachedExtraction = if let Some(bytes) = self.cache.extraction_get(&key).await? {
             self.extraction_hits.fetch_add(1, Ordering::Relaxed);
@@ -2547,10 +2548,29 @@ impl Engine {
                 }
             }
             let unsupported = scanner.unsupported(paths.iter().map(String::as_str));
-            let mut extraction = tokio::task::spawn_blocking(move || scanner.extract(&files))
-                .await
-                .map_err(|e| Error::Invalid(e.to_string()))?
-                .map_err(Error::Invalid)?;
+            // Extraction is a function of the config and the files it reads,
+            // so a commit that leaves those as they were, whatever else it
+            // changes, reuses the earlier result without scanning.
+            // Unlike a commit, the same files recur across releases, so the
+            // key carries the version as well as the namespace.
+            let content = ExtractionKey {
+                repo: format!("files:{repo}"),
+                default_branch_commit: hash(&serde_json::to_vec(&files)?),
+                config_hash: format!("{EXTRACTION}:{}:{config_hash}", env!("CARGO_PKG_VERSION")),
+            };
+            let mut extraction = if let Some(bytes) = self.cache.extraction_get(&content).await? {
+                self.extraction_hits.fetch_add(1, Ordering::Relaxed);
+                serde_json::from_slice(&bytes)?
+            } else {
+                let extraction = tokio::task::spawn_blocking(move || scanner.extract(&files))
+                    .await
+                    .map_err(|e| Error::Invalid(e.to_string()))?
+                    .map_err(Error::Invalid)?;
+                self.cache
+                    .extraction_put(&content, &serde_json::to_vec(&extraction)?)
+                    .await?;
+                extraction
+            };
             extraction.skipped.extend(unsupported);
             let cached = CachedExtraction {
                 extraction,
@@ -2628,12 +2648,32 @@ impl Engine {
             files.insert(format!("/repo/{path}"), text);
         }
         let path = format!("/repo/{path}");
-        tokio::task::spawn_blocking(move || {
+        // Evaluation is a function of the modules read, so the same modules
+        // on another commit reuse it.
+        let key = ExtractionKey {
+            repo: format!("config-files:{repo}"),
+            default_branch_commit: hash(&serde_json::to_vec(&(&path, &files))?),
+            // The version covers decoding and validation the schema text
+            // does not.
+            config_hash: format!(
+                "v1:{}:{}",
+                env!("CARGO_PKG_VERSION"),
+                hash(patchula_config::SCHEMA.as_bytes())
+            ),
+        };
+        if let Some(bytes) = self.cache.extraction_get(&key).await? {
+            return Ok(serde_json::from_slice(&bytes)?);
+        }
+        let config = tokio::task::spawn_blocking(move || {
             patchula_config::load_files(&path, files).map_err(|e| e.to_string())
         })
         .await
         .map_err(|e| Error::Invalid(e.to_string()))?
-        .map_err(Error::Invalid)
+        .map_err(Error::Invalid)?;
+        self.cache
+            .extraction_put(&key, &serde_json::to_vec(&config)?)
+            .await?;
+        Ok(config)
     }
 }
 fn last_run_key(repo: &str) -> ExtractionKey {
@@ -2649,6 +2689,10 @@ fn last_run_key(repo: &str) -> ExtractionKey {
 fn lockfile_concurrency() -> usize {
     std::thread::available_parallelism().map_or(1, |cores| cores.get().min(4))
 }
+
+/// The namespace of extraction cache entries, changed whenever extraction
+/// semantics do.
+const EXTRACTION: &str = "extract-v25";
 
 fn hash(bytes: &[u8]) -> String {
     Sha256::digest(bytes)

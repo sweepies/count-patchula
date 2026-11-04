@@ -26,7 +26,12 @@ repository are rejected, and only literal import targets are supported.
 
 An unchanged commit and config fingerprint reuses the previous extraction with
 no tree or blob calls, Pkl evaluation or scanning; the fingerprint's namespace
-changes whenever extraction semantics do. Warm scans revalidate the repository
+changes whenever extraction semantics do. A new commit reads the tree and the
+selected files again, but those are cached by blob SHA, and config evaluation
+and extraction are keyed by the content of the files they read as well: a push
+that changes no file the scan reads costs one tree request and no Pkl
+evaluation or scanning. The path inventory and unsupported-file list always
+come from the current tree. Warm scans revalidate the repository
 metadata and the hinted branch in parallel, and always check the current
 default branch. Catalog, digest and ref requests are deduplicated across the
 batch. Persisted lookup hints let warm source reads overlap revalidation, but
