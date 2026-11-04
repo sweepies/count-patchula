@@ -251,6 +251,32 @@ dependency's `registry`:
   `RestoreSources`, `RestoreAdditionalProjectSources`, `RestoreConfigFile`,
   `RestoreFallbackFolders`, `RestoreRootConfigDirectory` or
   `RestoreSolutionDirectory`, or that the Count cannot read.
+- Maven and Gradle artifacts come from Maven Central (or Google's Maven
+  repository for Android groups, and the Gradle Plugin Portal for plugins)
+  only when no build file in the repository could take them from anywhere
+  else. Neither tool records which repository served an artifact, and both
+  try repositories in order, so the Count does not work out which one an
+  artifact comes from: any other repository anywhere fails every lookup of
+  that build system, since private Maven repositories are not read yet.
+  For Maven, that is a `repository`, `pluginRepository` or `mirror` other
+  than Central's or Google's in any POM or profile (including POMs a
+  `<module>`, a parent's `<relativePath>` or `.mvn/maven.config` names),
+  or in any file named `*settings.xml` in the repository or named by
+  `.mvn/maven.config`; one in `distributionManagement` does not count. For
+  Gradle, the Count reads every script, the sources in `buildSrc`,
+  `build-logic`, `build-conventions` and `gradle/plugins`, and everything
+  the settings include and the scripts apply. `mavenCentral()`, `google()`,
+  `gradlePluginPortal()` and `jcenter()` are fine, while `maven`, `ivy`,
+  `flatDir`, `mavenLocal`, `exclusiveContent` or a custom
+  `ArtifactRepository` outside a `publishing` block fails every lookup, as
+  do build logic the Count cannot read, an `includeBuild` outside the
+  settings or with a computed name, and an `apply from` other than a plain
+  path, `file(…)`, `rootProject.file(…)`, or a path under `$rootDir` or
+  `$projectDir`. Repositories that a Gradle plugin, a Maven build
+  extension, an init script or a CI machine's own settings add are not in
+  the repository's files, so the Count does not see them; Maven Central
+  and the Gradle Plugin Portal check who owns a group or plugin ID, which
+  keeps someone else from publishing your coordinates there.
 - Python packages come from what the project's lockfile records. The
   Count does not work out which index uv or Poetry would pick from their
   settings; the tool already did, and wrote it down:

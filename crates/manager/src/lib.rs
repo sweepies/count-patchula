@@ -265,6 +265,38 @@ impl Scanner {
     pub fn needs(&self, path: &str) -> bool {
         self.config.managers.iter().any(|m| self.selected(*m, path)) || self.registry_file(path)
     }
+    /// The files among `paths` that what `files` says makes the Count read
+    /// as well: the sources of the builds Gradle settings include, which can
+    /// add repositories.
+    pub fn more<'a>(&self, files: &Files, paths: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+        let (included, applied) = if self.config.managers.contains(&Manager::Gradle) {
+            gradle::wanted(files)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let referenced: std::collections::BTreeSet<String> =
+            if self.config.managers.contains(&Manager::Maven) {
+                maven::referenced(files)
+                    .into_iter()
+                    .flat_map(|(_, targets, _)| targets)
+                    .collect()
+            } else {
+                std::collections::BTreeSet::new()
+            };
+        paths
+            .into_iter()
+            .filter(|path| {
+                !files.contains_key(*path)
+                    && (gradle::logic_source(path)
+                        && included
+                            .iter()
+                            .any(|folder| path.starts_with(folder.as_str()))
+                        || referenced.contains(*path)
+                        || applied.iter().any(|script| script == path))
+            })
+            .map(str::to_owned)
+            .collect()
+    }
     /// Registry settings are read whatever `files` and `exclude` select:
     /// without them, a scoped package would be looked up on the public
     /// registry, where its name may be someone else's.
@@ -288,6 +320,41 @@ impl Scanner {
             || (self.config.managers.contains(&Manager::Composer) && leaf == "composer.lock")
             || (self.config.managers.contains(&Manager::Nuget)
                 && (nuget::config_file(path) || nuget::msbuild_file(path)))
+            || (self.config.managers.contains(&Manager::Maven) && maven::repository_file(path))
+            || (self.config.managers.contains(&Manager::Gradle) && gradle::build_logic(path))
+    }
+    /// Fail every Maven lookup of a build system whose build could take
+    /// artifacts from a repository besides the public ones; see
+    /// `maven::private_repositories` and `gradle::private_repositories`.
+    fn maven_repositories(&self, files: &Files, deps: &mut [Dependency]) {
+        for (manager, reason) in [
+            (
+                Manager::Maven,
+                self.config
+                    .managers
+                    .contains(&Manager::Maven)
+                    .then(|| maven::private_repositories(files))
+                    .flatten(),
+            ),
+            (
+                Manager::Gradle,
+                self.config
+                    .managers
+                    .contains(&Manager::Gradle)
+                    .then(|| gradle::private_repositories(files))
+                    .flatten(),
+            ),
+        ] {
+            let Some(reason) = reason else {
+                continue;
+            };
+            for dep in deps
+                .iter_mut()
+                .filter(|dep| dep.manager == manager && dep.source == Source::Maven)
+            {
+                dep.registry = origins::Named::Unusable(reason.clone()).recorded();
+            }
+        }
     }
     /// The pip requirements files among `paths`, which the Count does not
     /// maintain, as skipped entries saying why, when Python projects are
@@ -600,6 +667,7 @@ impl Scanner {
                     self.selected(Manager::Gradle, path)
                 }));
         }
+        self.maven_repositories(files, &mut result.dependencies);
         result.locked = locked::cargo(files, &cargo, &result.dependencies);
         let npm = node == Manager::Npm && self.config.managers.contains(&Manager::Npm);
         result
@@ -764,8 +832,9 @@ pub mod known {
 }
 
 /// A file that can say where packages come from: Python settings,
-/// Bundler's settings, a NuGet config or an MSBuild file that can set
-/// restore sources. One the Count cannot read, such as a symlink or a file
+/// Bundler's settings, a NuGet config, an MSBuild file that can set
+/// restore sources, or Maven or Gradle build files that can add
+/// repositories. One the Count cannot read, such as a symlink or a file
 /// that is not text, must reach the scanner as unreadable, since leaving it
 /// out would make its packages the public registry's.
 pub fn registry_settings(path: &str) -> bool {
@@ -773,6 +842,8 @@ pub fn registry_settings(path: &str) -> bool {
         || bundle_config(path)
         || nuget::config_file(path)
         || nuget::msbuild_file(path)
+        || maven::repository_file(path)
+        || gradle::build_logic(path)
 }
 
 /// A file that can name a Python package index.
@@ -790,14 +861,19 @@ fn bundle_config(path: &str) -> bool {
 }
 
 /// The settings file a symlink at `path` could stand for: the path itself
-/// when it is a settings file, or the `config` inside a linked `.bundle`
-/// directory, which Bundler follows.
+/// when it is a settings file, or one inside a linked folder the tools
+/// follow: `.bundle` for Bundler, `.mvn` for Maven, and Gradle's build-logic
+/// folders, whose contents the Count then cannot read.
 pub fn linked_settings(path: &str) -> Option<String> {
     let leaf = path.rsplit('/').next().unwrap_or(path);
     if registry_settings(path) {
-        Some(path.to_owned())
-    } else {
-        (leaf == ".bundle").then(|| format!("{path}/config"))
+        return Some(path.to_owned());
+    }
+    match leaf {
+        ".bundle" => Some(format!("{path}/config")),
+        ".mvn" => Some(format!("{path}/maven.config")),
+        _ if gradle::logic_folder(path) => Some(format!("{path}/build.gradle.kts")),
+        _ => None,
     }
 }
 

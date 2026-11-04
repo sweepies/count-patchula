@@ -196,3 +196,32 @@ fn a_symlinked_settings_file_is_unreadable_not_absent() {
         "{rake:?}"
     );
 }
+
+/// The sources of a build Gradle settings include are read in a second
+/// pass, since only the settings say where it is.
+#[test]
+fn the_sources_of_an_included_gradle_build_are_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("checkout");
+    git(dir.path(), &["init", "-q", "checkout"]);
+    write(
+        &root,
+        "settings.gradle.kts",
+        "includeBuild(\"tools/logic\")\n",
+    );
+    write(
+        &root,
+        "build.gradle.kts",
+        "repositories { mavenCentral() }\n",
+    );
+    write(
+        &root,
+        "tools/logic/src/main/kotlin/Repos.kt",
+        "fun add(p: Project) { p.repositories.mavenLocal() }\n",
+    );
+    write(&root, "app/src/main/kotlin/App.kt", "fun main() {}\n");
+    let scanner = scanner("amends \"PatchulaConfig.pkl\"\n");
+    let (_, files) = patchula_engine::read_tree(&root, &scanner).unwrap();
+    assert!(files.contains_key("tools/logic/src/main/kotlin/Repos.kt"));
+    assert!(!files.contains_key("app/src/main/kotlin/App.kt"));
+}

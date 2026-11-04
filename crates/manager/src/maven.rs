@@ -201,3 +201,242 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
     }
     Ok(out)
 }
+
+/// Whether `path` is a Maven settings file, by its name.
+pub(crate) fn settings_file(path: &str) -> bool {
+    path.rsplit('/')
+        .next()
+        .is_some_and(|leaf| leaf.to_ascii_lowercase().ends_with("settings.xml"))
+}
+
+/// Whether `path` is a file the Count reads for Maven repositories by its
+/// name; POMs other files name are found by `referenced`.
+pub(crate) fn repository_file(path: &str) -> bool {
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    leaf == "pom.xml"
+        || settings_file(path)
+        || path == ".mvn/maven.config"
+        || path.ends_with("/.mvn/maven.config")
+}
+
+/// `named`, relative to the folder of `from`, as a repository path; none
+/// when it leaves the repository.
+fn relative(from: &str, named: &str) -> Option<String> {
+    let mut parts: Vec<&str> = from.split('/').collect();
+    parts.pop();
+    for part in named.split(['/', '\\']) {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            part => parts.push(part),
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+/// The paths a module or parent named `named` from `from` can be: the file
+/// itself, and `pom.xml` in it when it is a folder.
+fn pom_at(from: &str, named: &str) -> Vec<String> {
+    let Some(path) = relative(from, named.trim()) else {
+        return Vec::new();
+    };
+    if path.to_ascii_lowercase().ends_with(".xml") {
+        vec![path]
+    } else {
+        vec![format!("{path}/pom.xml"), path]
+    }
+}
+
+/// An element's whole text, however comments split it; none when it holds
+/// elements.
+fn whole_text(node: roxmltree::Node<'_, '_>) -> Option<String> {
+    let mut out = String::new();
+    for child in node.children() {
+        if child.is_element() {
+            return None;
+        }
+        if let Some(text) = child.text().filter(|_| child.is_text()) {
+            out.push_str(text);
+        }
+    }
+    Some(out.trim().to_owned())
+}
+
+/// Short `.mvn/maven.config` options that take no value, which commons-cli
+/// lets run together, as in `-Bs settings.xml`.
+const FLAGS: &str = "BXeqoUNCcVvh";
+
+/// An option's value written in the same word, after an optional `=`.
+fn value(tail: &str) -> Option<&str> {
+    let tail = tail.strip_prefix('=').unwrap_or(tail);
+    (!tail.is_empty()).then_some(tail)
+}
+
+/// What one `.mvn/maven.config` option names: a settings file, a global
+/// settings file or a POM, with its value when written in the same word.
+fn file_option(word: &str) -> Option<(&'static str, Option<&str>)> {
+    if let Some(long) = word.strip_prefix("--") {
+        let (name, value) = match long.split_once('=') {
+            Some((name, value)) => (name, Some(value)),
+            None => (long, None),
+        };
+        // commons-cli takes an unambiguous prefix of a long option.
+        return ["settings", "global-settings", "file"]
+            .into_iter()
+            .find(|option| name.len() >= 2 && option.starts_with(name))
+            .map(|option| (option, value));
+    }
+    let short = word.strip_prefix('-')?;
+    if matches!(short, "fae" | "ff" | "fn") {
+        return None;
+    }
+    // Flags may run together before the option that takes a value.
+    let short = short.trim_start_matches(|c| FLAGS.contains(c));
+    if let Some(tail) = short.strip_prefix("gs") {
+        return Some(("global-settings", value(tail)));
+    }
+    if let Some(tail) = short.strip_prefix('s') {
+        return Some(("settings", value(tail)));
+    }
+    if let Some(tail) = short.strip_prefix('f') {
+        return Some(("file", value(tail)));
+    }
+    None
+}
+
+/// The files Maven reads that the Count only learns of from other files:
+/// POMs `.mvn/maven.config` (`-f`), a `<module>`, a `<subproject>` or a
+/// parent's `<relativePath>` names, and settings `-s` names, each with the
+/// file naming it, the paths it can be, and whether it must exist. A parent
+/// POM that is not in the repository is fetched from a repository instead,
+/// so it need not.
+pub(crate) fn referenced(files: &Files) -> Vec<(String, Vec<String>, bool)> {
+    let mut out = Vec::new();
+    for (path, text) in files {
+        if path == ".mvn/maven.config" || path.ends_with("/.mvn/maven.config") {
+            let base = path.strip_suffix(".mvn/maven.config").unwrap_or("");
+            let mut words = text.split_whitespace();
+            while let Some(word) = words.next() {
+                let Some((option, value)) = file_option(word) else {
+                    continue;
+                };
+                let named = value.or_else(|| words.next()).unwrap_or("");
+                let from = format!("{base}x");
+                let targets = match option {
+                    "file" => pom_at(&from, named),
+                    _ => relative(&from, named).into_iter().collect(),
+                };
+                out.push((path.clone(), targets, true));
+            }
+            continue;
+        }
+        if !path.to_ascii_lowercase().ends_with(".xml") {
+            continue;
+        }
+        let Ok(document) = roxmltree::Document::parse(text) else {
+            continue;
+        };
+        if document.root_element().tag_name().name() != "project" {
+            continue;
+        }
+        for node in document.descendants().filter(|n| n.is_element()) {
+            let parent = node.parent_element().map(|p| p.tag_name().name());
+            let required = match (node.tag_name().name(), parent) {
+                ("module", Some("modules")) | ("subproject", Some("subprojects")) => true,
+                ("relativePath", Some("parent")) => false,
+                _ => continue,
+            };
+            let Some(named) = whole_text(node) else {
+                out.push((path.clone(), Vec::new(), true));
+                continue;
+            };
+            if named.is_empty() {
+                continue;
+            }
+            out.push((path.clone(), pom_at(path, &named), required));
+        }
+    }
+    out
+}
+
+/// Why a repository's Maven lookups cannot be taken to be Maven Central's:
+/// a repository or mirror besides Central and Google's in any POM (named
+/// `pom.xml` or named by another), in any profile, or in a settings file in
+/// the repository; settings or a POM `.mvn/maven.config` or a module names
+/// that the Count does not read; or a file it cannot read. Maven tries
+/// repositories in order and no file records which one served an artifact,
+/// so any other repository anywhere makes every lookup fail.
+pub(crate) fn private_repositories(files: &Files) -> Option<String> {
+    use crate::origins::Named;
+    let referenced = referenced(files);
+    for (from, targets, required) in &referenced {
+        if *required && !targets.iter().any(|target| files.contains_key(target)) {
+            return Some(format!(
+                "a file {from} names, which the Count does not read"
+            ));
+        }
+    }
+    let poms: BTreeSet<&str> = referenced
+        .iter()
+        .flat_map(|(_, targets, _)| targets)
+        .map(String::as_str)
+        .filter(|target| files.contains_key(*target))
+        .collect();
+    for (path, text) in files
+        .iter()
+        .filter(|(path, _)| repository_file(path) || poms.contains(path.as_str()))
+    {
+        if text.as_str() == crate::UNREADABLE_SETTINGS {
+            return Some(format!("{path}, which the Count cannot read"));
+        }
+        if path.ends_with("maven.config") {
+            continue;
+        }
+        let Ok(document) = roxmltree::Document::parse(text) else {
+            // Another tool's file that only ends in `settings.xml`; one that
+            // looks like Maven's but does not parse here is not read.
+            if settings_file(path) && !poms.contains(path.as_str()) && !text.contains("<settings") {
+                continue;
+            }
+            return Some(format!("{path}, which the Count cannot read"));
+        };
+        let root = document.root_element().tag_name().name();
+        if settings_file(path) && !poms.contains(path.as_str()) && root != "settings" {
+            continue;
+        }
+        for node in document.descendants().filter(|n| n.is_element()) {
+            let name = node.tag_name().name();
+            // A repository where Maven reads one, not a plugin's setting of
+            // the same name.
+            let list = node.parent_element().map(|p| p.tag_name().name());
+            if !matches!(
+                (name, list),
+                ("repository", Some("repositories"))
+                    | ("pluginRepository", Some("pluginRepositories"))
+                    | ("mirror", Some("mirrors"))
+            ) {
+                continue;
+            }
+            // Where the project deploys to is not where it resolves from.
+            if node
+                .ancestors()
+                .any(|a| a.tag_name().name() == "distributionManagement")
+            {
+                continue;
+            }
+            let url = node
+                .children()
+                .find(|c| c.tag_name().name() == "url")
+                .and_then(whole_text);
+            let public = url.is_some_and(|url| {
+                Named::parse(&url, &crate::gradle::MAVEN_PUBLIC) == Named::Public
+            });
+            if !public {
+                return Some(format!("a {name} in {path}"));
+            }
+        }
+    }
+    None
+}

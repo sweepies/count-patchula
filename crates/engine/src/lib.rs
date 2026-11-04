@@ -2106,6 +2106,44 @@ impl Engine {
         }
         Ok(serde_json::from_value(value["tree"].clone())?)
     }
+    /// The blobs of `entries`. One that is not text is none when it is a
+    /// settings file, or when `guarded`, as is a symlink then: unreadable
+    /// rather than absent, as in `read_tree`. Any other selected file must
+    /// be text.
+    async fn blobs(
+        &self,
+        repo: &str,
+        entries: Vec<Entry>,
+        guarded: bool,
+    ) -> Result<Vec<(String, Option<patchula_update::Blob>)>> {
+        stream::iter(entries)
+            .map(|entry| async move {
+                if guarded && entry.mode == "120000" {
+                    return Ok((entry.path, None));
+                }
+                let bytes = self.blob(repo, &entry.sha).await?;
+                let content = match String::from_utf8(bytes) {
+                    Ok(content) => content,
+                    Err(_) if guarded || patchula_manager::registry_settings(&entry.path) => {
+                        return Ok((entry.path, None));
+                    }
+                    Err(_) => return Err(Error::Invalid("selected file is not UTF-8".into())),
+                };
+                Ok((
+                    entry.path,
+                    Some(patchula_update::Blob {
+                        sha: entry.sha,
+                        mode: entry.mode,
+                        content,
+                    }),
+                ))
+            })
+            .buffer_unordered(self.github.concurrency())
+            .collect::<Vec<Result<_>>>()
+            .await
+            .into_iter()
+            .collect()
+    }
     async fn file(&self, repo: &str, sha: &str) -> Result<String> {
         String::from_utf8(self.blob(repo, sha).await?)
             .map_err(|_| Error::Invalid("selected file is not UTF-8".into()))
@@ -2344,7 +2382,7 @@ impl Engine {
         let key = ExtractionKey {
             repo: repo.into(),
             default_branch_commit: commit,
-            config_hash: format!("extract-v21:{}", hash(&serde_json::to_vec(&config)?)),
+            config_hash: format!("extract-v22:{}", hash(&serde_json::to_vec(&config)?)),
         };
         let cached: CachedExtraction = if let Some(bytes) = self.cache.extraction_get(&key).await? {
             self.extraction_hits.fetch_add(1, Ordering::Relaxed);
@@ -2392,43 +2430,15 @@ impl Engine {
                 .filter_map(|e| patchula_manager::linked_settings(&e.path))
                 .filter(|settings| scanner.needs(settings))
                 .collect();
-            let selected: Vec<_> = entries
-                .into_iter()
-                .filter(|entry| {
-                    entry.kind == "blob"
-                        && (scanner.needs(&entry.path)
-                            || patchula_update::tooling::reads(&entry.path)
-                            || (read_manifests && patchula_update::tooling::manifest(&entry.path)))
-                })
-                .collect();
-            // A settings file that is not text is unreadable rather than
-            // absent, as in `read_tree`; any other selected file must be text.
-            let read: Vec<(String, Option<patchula_update::Blob>)> = stream::iter(selected)
-                .map(|entry| async move {
-                    let bytes = self.blob(repo, &entry.sha).await?;
-                    let content = match String::from_utf8(bytes) {
-                        Ok(content) => content,
-                        Err(_) if patchula_manager::registry_settings(&entry.path) => {
-                            return Ok((entry.path, None));
-                        }
-                        Err(_) => return Err(Error::Invalid("selected file is not UTF-8".into())),
-                    };
-                    Ok((
-                        entry.path,
-                        Some(patchula_update::Blob {
-                            sha: entry.sha,
-                            mode: entry.mode,
-                            content,
-                        }),
-                    ))
-                })
-                .buffer_unordered(self.github.concurrency())
-                .collect::<Vec<Result<_>>>()
-                .await
-                .into_iter()
-                .collect::<Result<_>>()?;
+            let (selected, rest): (Vec<_>, Vec<_>) = entries.into_iter().partition(|entry| {
+                entry.kind == "blob"
+                    && (scanner.needs(&entry.path)
+                        || patchula_update::tooling::reads(&entry.path)
+                        || (read_manifests && patchula_update::tooling::manifest(&entry.path)))
+            });
             let mut files = Files::new();
             let mut blobs = BTreeMap::<String, patchula_update::Blob>::new();
+            let read = self.blobs(repo, selected, false).await?;
             for (path, blob) in read {
                 match blob {
                     Some(blob) => {
@@ -2442,6 +2452,33 @@ impl Engine {
             }
             for settings in linked {
                 files.insert(settings, patchula_manager::UNREADABLE_SETTINGS.to_owned());
+            }
+            // What the files read so far name, such as the sources of a
+            // Gradle build the settings include, until they name nothing new.
+            let mut rest: Vec<_> = rest.into_iter().filter(|e| e.kind == "blob").collect();
+            for _ in 0..MORE_ROUNDS {
+                let more: BTreeSet<String> = scanner
+                    .more(&files, rest.iter().map(|entry| entry.path.as_str()))
+                    .into_iter()
+                    .collect();
+                if more.is_empty() {
+                    break;
+                }
+                let (wanted, left): (Vec<_>, Vec<_>) = rest
+                    .into_iter()
+                    .partition(|entry| more.contains(&entry.path));
+                rest = left;
+                for (path, blob) in self.blobs(repo, wanted, true).await? {
+                    match blob {
+                        Some(blob) => {
+                            files.insert(path.clone(), blob.content.clone());
+                            blobs.insert(path, blob);
+                        }
+                        None => {
+                            files.insert(path, patchula_manager::UNREADABLE_SETTINGS.to_owned());
+                        }
+                    }
+                }
             }
             let unsupported = scanner.unsupported(paths.iter().map(String::as_str));
             let mut extraction = tokio::task::spawn_blocking(move || scanner.extract(&files))
@@ -2571,6 +2608,11 @@ fn validate_repo(repo: &str) -> Result<()> {
 /// global excludes apply. A directory outside Git is walked whole, skipping
 /// `.git`. Non-UTF-8 files cannot hold an editable declaration, so they are
 /// left out.
+/// How many times the files read so far may name more to read: Gradle
+/// builds include builds and apply scripts, and Maven POMs name modules, a
+/// few levels deep at most.
+const MORE_ROUNDS: usize = 16;
+
 pub fn read_tree(
     dir: &std::path::Path,
     scanner: &Scanner,
@@ -2581,6 +2623,7 @@ pub fn read_tree(
     };
     let mut paths = BTreeSet::new();
     let mut files = Files::new();
+    let mut links = Vec::new();
     for relative in listed {
         let path = dir.join(&relative);
         // Deleted tracked files, symlinks and submodules are not files here,
@@ -2595,6 +2638,7 @@ pub fn read_tree(
             });
         let regular = std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file());
         if below_symlink || !regular {
+            links.push(relative.clone());
             // A settings file behind a symlink could name a registry: kept as
             // unreadable, its packages' lookups fail rather than fall back to
             // the public registry.
@@ -2623,6 +2667,29 @@ pub fn read_tree(
             }
         }
         paths.insert(relative);
+    }
+    // What the files read so far name, such as the sources of a Gradle
+    // build the settings include, until they name nothing new; any that
+    // cannot be read are unreadable.
+    for _ in 0..MORE_ROUNDS {
+        let more = scanner.more(&files, paths.iter().chain(&links).map(String::as_str));
+        if more.is_empty() {
+            break;
+        }
+        for relative in more {
+            let path = dir.join(&relative);
+            let content = if links.contains(&relative) {
+                None
+            } else {
+                std::fs::read(&path)
+                    .ok()
+                    .and_then(|bytes| String::from_utf8(bytes).ok())
+            };
+            files.insert(
+                relative,
+                content.unwrap_or_else(|| patchula_manager::UNREADABLE_SETTINGS.to_owned()),
+            );
+        }
     }
     Ok((paths, files))
 }
