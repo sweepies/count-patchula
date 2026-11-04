@@ -298,7 +298,11 @@ impl Engine {
         bool,
     ) {
         let (result, credentialed) =
-            patchula_http::tracked(sources.clone().with_versions_host(*enabled).lookup(id)).await;
+            // Boxed: lookups are large futures, and the run holds many.
+            patchula_http::tracked(Box::pin(
+                sources.clone().with_versions_host(*enabled).lookup(id),
+            ))
+            .await;
         (result.map_err(Failure::from), credentialed)
     }
     pub async fn lookup(&self, options: Options) -> Result<Report> {
@@ -1291,7 +1295,7 @@ impl Engine {
                     &self.sources
                 };
                 let (result, credentialed) =
-                    patchula_http::tracked(sources.registry_digest(&package, &tag)).await;
+                    patchula_http::tracked(Box::pin(sources.registry_digest(&package, &tag))).await;
                 if credentialed {
                     sent.lock()
                         .expect("sent packages")
@@ -1363,9 +1367,9 @@ impl Engine {
         let read_sboms = |reads: BTreeSet<(String, String, String)>| {
             stream::iter(reads)
                 .map(|(package, digest, platform)| async move {
-                    let (result, credentialed) = patchula_http::tracked(
+                    let (result, credentialed) = patchula_http::tracked(Box::pin(
                         self.sources.image_sbom(&package, &digest, &platform),
-                    )
+                    ))
                     .await;
                     if credentialed {
                         sent.lock()
@@ -2002,7 +2006,8 @@ impl Engine {
         stream::iter(keys)
             .map(|(package, reference)| async move {
                 let (result, credentialed) =
-                    patchula_http::tracked(self.sources.digest(&package, &reference)).await;
+                    patchula_http::tracked(Box::pin(self.sources.digest(&package, &reference)))
+                        .await;
                 if credentialed {
                     sent.lock()
                         .expect("sent packages")
@@ -2043,7 +2048,7 @@ impl Engine {
                 let client = sources.clone().with_versions_host(enabled);
                 let count = packages.len();
                 let (batch, credentialed) =
-                    patchula_http::tracked(client.release_catalogs(&packages)).await;
+                    patchula_http::tracked(Box::pin(client.release_catalogs(&packages))).await;
                 let catalogs: Vec<(LookupKey, (std::result::Result<_, Failure>, bool))> =
                     match batch {
                         Ok(results) => results
