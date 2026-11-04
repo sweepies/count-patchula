@@ -252,12 +252,20 @@ fn walk(
                 {
                     skipped.push(skip(match registry.as_str() {
                         Some(name) => format!(
-                            "from the alternate registry `{name}`, which the Count does not look up"
+                            "from the alternate registry `{}`, which the Count does not look up",
+                            crate::origins::shown(name)
                         ),
                         None => {
                             "from an alternate registry, which the Count does not look up".into()
                         }
                     }));
+                    continue;
+                }
+                // An index named by its URL, which may hold a secret.
+                if value.get("registry-index").is_some() {
+                    skipped.push(skip(
+                        "from an alternate registry index, which the Count does not look up".into(),
+                    ));
                     continue;
                 }
                 let version = if value.is_str() {
@@ -309,6 +317,97 @@ pub(crate) fn config_file(path: &str) -> bool {
         .any(|name| path == *name || path.ends_with(&format!("/{name}")))
 }
 
+/// The folder of the workspace `dir` belongs to: the nearest folder at or
+/// above it whose manifest has a `[workspace]` table; `dir` itself outside
+/// one.
+fn workspace_root<'a>(files: &Files, dir: &'a str) -> &'a str {
+    let mut folder = dir;
+    loop {
+        let declares = files
+            .get(&format!("{folder}Cargo.toml"))
+            .is_some_and(|text| {
+                text.parse::<toml_edit::DocumentMut>()
+                    .is_ok_and(|doc| doc.get("workspace").is_some())
+            });
+        if declares {
+            return folder;
+        }
+        if folder.is_empty() {
+            return dir;
+        }
+        let parent = folder.trim_end_matches('/');
+        folder = &parent[..parent.rfind('/').map_or(0, |i| i + 1)];
+    }
+}
+
+/// The Cargo configurations that can apply to the manifest or lockfile at
+/// `path`, parsed: those in its folder or above, and, since Cargo reads them
+/// from wherever it runs, those anywhere in its workspace.
+fn configs<'a>(files: &'a Files, path: &str) -> Vec<(&'a str, Result<toml_edit::DocumentMut, ()>)> {
+    let dir = &path[..path.rfind('/').map_or(0, |i| i + 1)];
+    let root = workspace_root(files, dir);
+    files
+        .iter()
+        .filter(|(p, _)| config_file(p))
+        .filter(|(config, _)| {
+            let folder = config
+                .strip_suffix(".cargo/config.toml")
+                .or_else(|| config.strip_suffix(".cargo/config"))
+                .unwrap_or("");
+            dir.starts_with(folder) || folder.starts_with(root)
+        })
+        .map(|(config, text)| {
+            let document = (text.as_str() != crate::UNREADABLE_SETTINGS)
+                .then(|| text.parse::<toml_edit::DocumentMut>().ok())
+                .flatten()
+                .ok_or(());
+            (config.as_str(), document)
+        })
+        .collect()
+}
+
+/// The crates the manifest at `path` takes from another registry through a
+/// `[patch.crates-io]` or `[replace]` entry, in the manifest, its
+/// workspace's or an applying configuration, each with why. A patch from
+/// git or a path keeps crates.io's crate as the one it stands for.
+pub(crate) fn patched(files: &Files, path: &str) -> BTreeMap<String, String> {
+    let dir = &path[..path.rfind('/').map_or(0, |i| i + 1)];
+    let root = workspace_root(files, dir);
+    let mut documents: Vec<(&str, toml_edit::DocumentMut)> = configs(files, path)
+        .into_iter()
+        .filter_map(|(config, document)| Some((config, document.ok()?)))
+        .collect();
+    for manifest in [format!("{dir}Cargo.toml"), format!("{root}Cargo.toml")] {
+        if let Some((name, text)) = files.get_key_value(&manifest)
+            && let Ok(document) = text.parse::<toml_edit::DocumentMut>()
+        {
+            documents.push((name.as_str(), document));
+        }
+    }
+    let mut out = BTreeMap::new();
+    for (file, document) in &documents {
+        let patches = document
+            .get("patch")
+            .and_then(|p| p.get("crates-io"))
+            .and_then(Item::as_table_like);
+        let replaces = document.get("replace").and_then(Item::as_table_like);
+        for (key, entry) in patches.into_iter().chain(replaces).flat_map(|t| t.iter()) {
+            let elsewhere =
+                entry.get("registry").is_some() || entry.get("registry-index").is_some();
+            if elsewhere {
+                // `[replace]` keys are `name:version`.
+                let name = key.split(':').next().unwrap_or(key);
+                let entry = entry.get("package").and_then(Item::as_str).unwrap_or(name);
+                out.insert(
+                    entry.to_owned(),
+                    format!("a patch in {file} from another registry"),
+                );
+            }
+        }
+    }
+    out
+}
+
 /// Why the crates.io lookups of the manifest or lockfile at `path` cannot be
 /// taken to be crates.io's: a Cargo configuration in its folder or above
 /// that replaces crates.io with another source, or one the Count cannot
@@ -319,23 +418,17 @@ pub(crate) fn config_file(path: &str) -> bool {
 /// Every definition of a source in any configuration that applies counts,
 /// so one a closer configuration overrides can only make lookups fail.
 pub(crate) fn replaced(files: &Files, path: &str) -> Option<String> {
-    let dir = &path[..path.rfind('/').map_or(0, |i| i + 1)];
     let mut sources: Vec<(String, toml_edit::Table)> = Vec::new();
-    for (config, text) in files.iter().filter(|(p, _)| config_file(p)) {
-        let folder = config
-            .strip_suffix(".cargo/config.toml")
-            .or_else(|| config.strip_suffix(".cargo/config"))
-            .unwrap_or("");
-        if !dir.starts_with(folder) {
-            continue;
-        }
+    for (config, document) in configs(files, path) {
         let unread = || Some(format!("{config}, which the Count cannot read"));
-        if text.as_str() == crate::UNREADABLE_SETTINGS {
-            return unread();
-        }
-        let Ok(document) = text.parse::<toml_edit::DocumentMut>() else {
+        let Ok(document) = document else {
             return unread();
         };
+        // A configuration that includes others says things the Count does
+        // not read.
+        if document.get("include").is_some() {
+            return unread();
+        }
         let Some(table) = document.get("source") else {
             continue;
         };

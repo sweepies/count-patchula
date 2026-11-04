@@ -3698,3 +3698,35 @@ fn crates_io_lookups_fail_where_cargo_configuration_replaces_crates_io() {
         assert!(!found.unwrap().contains("s3cr3t"));
     }
 }
+
+#[test]
+fn crates_patched_or_included_from_elsewhere_fail_their_lookups() {
+    let manifest = |extra: &str| {
+        format!(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1.0\"\nlog = \"0.4\"\n{extra}"
+        )
+    };
+    let lookup = |files: &[(&str, &str)], name: &str| {
+        registry_of(Manager::Cargo, files, "app/Cargo.toml", name)
+    };
+    let patched = manifest(
+        "\n[patch.crates-io]\nserde = { version = \"1.0\", registry = \"acme\" }\nlog = { git = \"https://github.com/acme/log\" }\n",
+    );
+    assert!(fails(lookup(&[("app/Cargo.toml", &patched)], "serde")));
+    assert_eq!(lookup(&[("app/Cargo.toml", &patched)], "log"), None);
+    let plain = manifest("");
+    let include = [
+        ("app/Cargo.toml", plain.as_str()),
+        (".cargo/config.toml", "include = [\"mirror.toml\"]\n"),
+    ];
+    assert!(fails(lookup(&include, "serde")));
+    // A member's configuration applies to the whole workspace.
+    let workspace = "[workspace]\nmembers = [\"app\", \"tool\"]\n";
+    let mirror = "[source.crates-io]\nreplace-with = \"acme\"\n\n[source.acme]\nregistry = \"https://crates.acme.dev/index\"\n";
+    let member = [
+        ("Cargo.toml", workspace),
+        ("app/Cargo.toml", plain.as_str()),
+        ("tool/.cargo/config.toml", mirror),
+    ];
+    assert!(fails(lookup(&member, "serde")));
+}

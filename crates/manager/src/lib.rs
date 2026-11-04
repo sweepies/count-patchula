@@ -585,6 +585,12 @@ impl Scanner {
                             dep.registry = origins::Named::Unusable(reason.clone()).recorded();
                         }
                     }
+                    let patched = cargo::patched(files, path);
+                    for dep in deps.iter_mut().filter(|d| d.source == Source::Crates) {
+                        if let Some(reason) = patched.get(&dep.package) {
+                            dep.registry = origins::Named::Unusable(reason.clone()).recorded();
+                        }
+                    }
                     deps
                 })
             } else if self.selected(Manager::Dockerfile, path) {
