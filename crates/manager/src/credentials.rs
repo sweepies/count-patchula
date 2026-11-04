@@ -591,7 +591,7 @@ mod tests {
             (".npmrc", "@acme:registry=https://npm.acme.dev/\n", false),
             (
                 ".npmrc",
-                "@acme:registry=https://ci:pw@npm.acme.dev/\n",
+                "@acme:registry=https://ci:pw@npm.acme.dev/\n", // betterleaks:allow
                 true,
             ), // betterleaks:allow
             (
@@ -601,7 +601,7 @@ mod tests {
             ),
             (
                 ".yarnrc.yml",
-                "npmRegistryServer: \"https://ci:pw@npm.acme.dev/\"\n",
+                "npmRegistryServer: \"https://ci:pw@npm.acme.dev/\"\n", // betterleaks:allow
                 true,
             ), // betterleaks:allow
             (
@@ -611,7 +611,7 @@ mod tests {
             ),
             (
                 "composer.json",
-                r#"{"repositories":[{"type":"composer","url":"https://ci:pw@packagist.acme.dev"}]}"#,
+                r#"{"repositories":[{"type":"composer","url":"https://ci:pw@packagist.acme.dev"}]}"#, // betterleaks:allow
                 true,
             ), // betterleaks:allow
             (
@@ -621,7 +621,7 @@ mod tests {
             ),
             (
                 "nuget.config",
-                "<configuration><packageSources><add key=\"feed\" value=\"https://ci:pw@nuget.acme.dev/v3/index.json\"/></packageSources></configuration>",
+                "<configuration><packageSources><add key=\"feed\" value=\"https://ci:pw@nuget.acme.dev/v3/index.json\"/></packageSources></configuration>", // betterleaks:allow
                 true,
             ), // betterleaks:allow
             (
@@ -631,7 +631,7 @@ mod tests {
             ),
             (
                 "pyproject.toml",
-                "[[tool.poetry.source]]\nname = \"acme\"\nurl = \"https://ci:pw@pypi.acme.dev/simple\"\n",
+                "[[tool.poetry.source]]\nname = \"acme\"\nurl = \"https://ci:pw@pypi.acme.dev/simple\"\n", // betterleaks:allow
                 true,
             ), // betterleaks:allow
             (
@@ -641,17 +641,17 @@ mod tests {
             ),
             (
                 "uv.toml",
-                "index-url = \"https://ci:pw@pypi.acme.dev/simple\"\n",
+                "index-url = \"https://ci:pw@pypi.acme.dev/simple\"\n", // betterleaks:allow
                 true,
             ), // betterleaks:allow
             (
                 "pip.conf",
-                "[global]\nindex-url = https://ci:pw@pypi.acme.dev/simple\n",
+                "[global]\nindex-url = https://ci:pw@pypi.acme.dev/simple\n", // betterleaks:allow
                 true,
             ), // betterleaks:allow
             (
                 "Gemfile",
-                "source \"https://ci:pw@gems.acme.dev\"\ngem \"rails\"\n",
+                "source \"https://ci:pw@gems.acme.dev\"\ngem \"rails\"\n", // betterleaks:allow
                 true,
             ), // betterleaks:allow
             (
@@ -661,7 +661,7 @@ mod tests {
             ),
             (
                 ".cargo/config.toml",
-                "[registries.acme]\nindex = \"sparse+https://ci:pw@index.acme.dev/\"\n",
+                "[registries.acme]\nindex = \"sparse+https://ci:pw@index.acme.dev/\"\n", // betterleaks:allow
                 true,
             ), // betterleaks:allow
             (
@@ -672,7 +672,7 @@ mod tests {
             // An escaped password is still a password once parsed.
             (
                 "composer.json",
-                "{\"repositories\":[{\"type\":\"composer\",\"url\":\"https://ci:p%40ss@packagist.acme.dev\"}]}",
+                "{\"repositories\":[{\"type\":\"composer\",\"url\":\"https://ci:p%40ss@packagist.acme.dev\"}]}", // betterleaks:allow
                 true,
             ), // betterleaks:allow
         ] {
