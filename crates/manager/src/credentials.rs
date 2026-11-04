@@ -113,6 +113,8 @@ fn keyed(path: &str, text: &str) -> Option<String> {
 /// A URL in `text` whose authority carries a user or a password, in the
 /// order they appear. A password refuses in any scheme, a user alone in any
 /// scheme but SSH's: `ssh://git@host` names a service account, not a secret.
+/// A `$VAR`, `${VAR}` or `${{ expression }}` userinfo is resolved by the
+/// environment or CI at run time and stays allowed for the same reason.
 fn credentialed_url(text: &str) -> Option<String> {
     let mut rest = text;
     while let Some(at) = rest.find("://") {
@@ -154,7 +156,20 @@ fn credentialed_url(text: &str) -> Option<String> {
             continue;
         };
         if userinfo.contains(':') {
+            // A `$VAR`, `${VAR}` or `${{ expression }}` placeholder is
+            // resolved by the environment or CI at run time; the credential
+            // is not committed.
+            if userinfo
+                .split(':')
+                .nth(1)
+                .is_some_and(|password| password.starts_with('$'))
+            {
+                continue;
+            }
             return Some("a URL with a password in it".into());
+        }
+        if userinfo.starts_with('$') {
+            continue;
         }
         let ssh =
             scheme.eq_ignore_ascii_case("ssh") || scheme.to_ascii_lowercase().ends_with("+ssh");
@@ -408,18 +423,18 @@ mod tests {
     #[test]
     fn urls_with_a_user_or_password_are_refused_in_any_file() {
         for (text, expect) in [
-            ("resolved \"https://ci:s3cret@npm.acme.dev/x.tgz\"\n", true),
+            ("resolved \"https://ci:s3cret@npm.acme.dev/x.tgz\"\n", true), // betterleaks:allow
             ("tarball = \"https://ci@npm.acme.dev/x.tgz\"\n", true),
             ("remote: https://gems.acme.dev\n", false),
-            ("source \"https://user:pw@gems.acme.dev\"\n", true),
-            ("index = \"sparse+https://user:pw@index.acme.dev/\"\n", true),
-            ("url = \"git+https://user:pw@git.acme.dev/r.git\"\n", true),
-            ("url = \"registry+https://user@index.acme.dev/\"\n", true),
+            ("source \"https://user:pw@gems.acme.dev\"\n", true), // betterleaks:allow
+            ("index = \"sparse+https://user:pw@index.acme.dev/\"\n", true), // betterleaks:allow
+            ("url = \"git+https://user:pw@git.acme.dev/r.git\"\n", true), // betterleaks:allow
+            ("url = \"registry+https://user@index.acme.dev/\"\n", true), // betterleaks:allow
             // SSH users are service accounts, not secrets.
             ("url = \"ssh://git@git.acme.dev/r.git\"\n", false),
             ("url = \"git+ssh://git@git.acme.dev/r.git\"\n", false),
             // Any password in any scheme is refused, SSH included.
-            ("url = \"ssh://git:pw@git.acme.dev/r.git\"\n", true),
+            ("url = \"ssh://git:pw@git.acme.dev/r.git\"\n", true), // betterleaks:allow
             (
                 "source \"ssh://git@git.acme.dev/r.git\" # git@ is fine\n",
                 false,
@@ -435,6 +450,17 @@ mod tests {
             ),
             // SCP-style Git addresses carry no scheme.
             ("dep = \"git@git.acme.dev:org/repo.git\"\n", false),
+            // An environment or CI placeholder is not a committed credential.
+            (
+                "clone = \"https://gitlab-bot:$DEPLOY_TOKEN@gitlab.com/acme/x.git\"\n",
+                false,
+            ),
+            (
+                "url = \"https://x:${{ secrets.TOKEN }}@git.acme.dev/x\"\n",
+                false,
+            ),
+            ("url = \"https://$API_TOKEN@npm.acme.dev/x.tgz\"\n", false),
+            ("url = \"https://ci:pa$ss@npm.acme.dev/x.tgz\"\n", true),
         ] {
             for path in [
                 "yarn.lock",
@@ -552,7 +578,7 @@ mod tests {
                 false,
             ),
             (
-                r#"{"repositories":[{"type":"vcs","url":"https://ci:pw@git.acme.dev/r"}]}"#,
+                r#"{"repositories":[{"type":"vcs","url":"https://ci:pw@git.acme.dev/r"}]}"#, // betterleaks:allow
                 true,
             ),
         ];
@@ -611,7 +637,7 @@ mod tests {
             }
         }
         // Index URLs answer to the URL rule instead.
-        let index = "[[tool.poetry.source]]\nname = \"acme\"\nurl = \"https://ci:pw@pypi.acme.dev/simple\"\n";
+        let index = "[[tool.poetry.source]]\nname = \"acme\"\nurl = \"https://ci:pw@pypi.acme.dev/simple\"\n"; // betterleaks:allow
         assert!(refused("pyproject.toml", index).is_some());
     }
 
@@ -659,7 +685,7 @@ mod tests {
 
     #[test]
     fn checksum_files_are_never_scanned() {
-        let text = "module https://ci:pw@proxy.acme.dev/x h1:abc=\n";
+        let text = "module https://ci:pw@proxy.acme.dev/x h1:abc=\n"; // betterleaks:allow
         for path in [
             "go.sum",
             "go.work.sum",

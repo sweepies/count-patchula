@@ -19,7 +19,10 @@ manager looks for them; `.forgejo/workflows` and `.gitea/workflows` hold
 Forgejo and Gitea Actions workflows the same way. Woodpecker workflows sit at
 the root for the same reason: Woodpecker's own `.woodpecker` directory, and
 webtail's `.woodpecker.yml` in the older `pipeline:` shape. The files are
-unmodified copies; their licences are those of the projects below.
+unmodified copies, except that throwaway CI credentials in `.forgejo/workflows`
+and `.github/workflows` are removed (the Count refuses repositories that commit
+credentials); their
+licences are those of the projects below.
 
 | Source | Commit | Licence | Directory |
 |---|---|---|---|
