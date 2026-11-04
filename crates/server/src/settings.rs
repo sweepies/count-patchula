@@ -165,6 +165,7 @@ impl Settings {
         }
         let mut prefixes = std::collections::BTreeSet::new();
         let mut mirrored = std::collections::BTreeSet::new();
+        let mut entries = Vec::new();
         for (prefix, registry) in &self.registries {
             let Some(normalised) =
                 patchula_http::Credential::new(prefix, patchula_http::Auth::Withheld)
@@ -218,6 +219,19 @@ impl Settings {
             if registry.tools && (registry.auth.is_none() || registry.mirror_of.is_some()) {
                 return Err("tools needs auth, and does not apply to a mirror");
             }
+            entries.push((normalised, registry.tools));
+        }
+        // npm, aube and Bun give a URL the credentials of the nearest
+        // enclosing prefix they are told about, and are told only about tools
+        // entries. An entry within a tools entry, which lookups would prefer
+        // or keep from an installation, would get its credentials there.
+        if entries.iter().any(|(outer, tools)| {
+            *tools
+                && entries
+                    .iter()
+                    .any(|(inner, _)| inner.prefix() != outer.prefix() && outer.encloses(inner))
+        }) {
+            return Err("tools entries cannot hold other registries under their prefix");
         }
         if !(1..=100).contains(&self.http.default_host_concurrency) {
             return Err("defaultHostConcurrency must be 1..100");
@@ -790,6 +804,9 @@ mod tests {
         for bad in [
             r#"registries { ["https://nexus.acme.dev"] { mirrorOf = "https://registry.npmjs.org"; tools = true } }"#,
             r#"registries { ["https://nexus.acme.dev"] { auth = "bearer"; secret { env = "T" }; mirrorOf = "https://registry.npmjs.org"; tools = true } }"#,
+            // An entry under a tools entry, for another installation or not.
+            r#"registries { ["https://nexus.acme.dev"] { auth = "bearer"; secret { env = "T" }; tools = true }; ["https://nexus.acme.dev/repository/b"] { auth = "bearer"; secret { env = "U" }; allowedInstallations { 2 } } }"#,
+            r#"registries { ["https://nexus.acme.dev"] { auth = "bearer"; secret { env = "T" }; tools = true }; ["https://nexus.acme.dev/npm-proxy"] { mirrorOf = "https://registry.npmjs.org" } }"#,
         ] {
             assert!(load(&bad.replace("; ", "\n")).is_err(), "{bad}");
         }

@@ -236,19 +236,32 @@ name.
 
 Output is kept only when something fails, at most 4 KiB of each stream.
 
-:::note[Private registries]
+:::caution[Private registries]
 Lockfile tools get a [registry entry's](/guide/sources/#private-registries)
-credentials only when the entry sets `tools = true`, and only the tools that
-run no repository or package code: aube, npm, Bun and Yarn, which run with
-lifecycle scripts and Yarn plugins off. Each gets them in its own user
-configuration for the entry's URL prefix (`//host/path/:_authToken` or
-`_auth` for npm, aube and Bun, `npmRegistries` for Yarn), written with
-owner-only permissions for that run and removed when it finishes, so no
-other tool sees them. Bundler evaluates the Gemfile, dotnet evaluates
-MSBuild, and uv and Poetry may build source distributions, so they never
-get credentials, and a lockfile of theirs that needs a private registry
-fails to regenerate rather than resolving elsewhere. Lockfile tools read
-the registries the repository names, never a [mirror](/guide/sources/#mirrors).
+credentials only when the entry sets `tools = true`, and only aube, npm, Bun
+and Yarn. Setting it trusts every repository that may use the entry, and
+every package those repositories depend on, with the credential: these tools
+run without lifecycle scripts, but they can still prepare a git dependency by
+running its build scripts, and they run unsandboxed, so that code can read the
+credential. Limit an entry with `tools = true` to the installations
+you trust with it through `allowedInstallations`.
+
+Each tool gets the credentials in its own user configuration for the entry's
+URL prefix (`//host/path/:_authToken` or `_auth` for npm, aube and Bun,
+`npmRegistries` for Yarn, which needs the prefix to be the registry URL
+exactly), written with owner-only permissions for that run and removed when
+it finishes. A run stops when a committed file names the entry's host over
+plain HTTP, and the registry's secret is redacted from any tool output.
+Yarn runs with only the `.yarnrc.yml` settings that shape the lockfile, so no
+repository proxy or TLS setting applies. No other entry may sit under a
+`tools` entry's prefix, because these tools would send the broader entry's
+credentials there. Lockfile tools read the registries the repository names,
+never a [mirror](/guide/sources/#mirrors).
+
+Bundler evaluates the Gemfile, dotnet runs MSBuild, and uv and Poetry may
+build source distributions, so they never get credentials. A lockfile of
+theirs that needs a private registry fails to regenerate rather than resolving
+elsewhere.
 :::
 
 ## Lockfile maintenance

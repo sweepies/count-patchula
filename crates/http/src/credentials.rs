@@ -113,8 +113,7 @@ pub struct Credential {
     pub auth: Auth,
     /// The public registry prefix this entry stands in for, if it is a mirror.
     mirror_of: Option<(String, Url)>,
-    /// Whether lockfile tools that run no repository or package code get
-    /// these credentials too.
+    /// Whether npm-family lockfile tools get these credentials too.
     tools: bool,
 }
 
@@ -149,8 +148,7 @@ impl Credential {
             tools: false,
         })
     }
-    /// Let lockfile tools that run no repository or package code use the
-    /// entry's credentials too.
+    /// Let npm-family lockfile tools use the entry's credentials too.
     pub fn for_tools(mut self) -> Self {
         self.tools = true;
         self
@@ -186,6 +184,14 @@ impl Credential {
     }
     pub(crate) fn covers(&self, url: &Url) -> bool {
         covers(&self.url, url)
+    }
+    /// Whether `other`'s prefix lies within this entry's, or is the same.
+    pub fn encloses(&self, other: &Credential) -> bool {
+        covers(&self.url, &other.url)
+    }
+    /// The host the entry's prefix names.
+    pub fn host(&self) -> &str {
+        self.url.host_str().unwrap_or_default()
     }
     fn len(&self) -> usize {
         self.url.path().trim_end_matches('/').len()

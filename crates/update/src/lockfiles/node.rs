@@ -166,7 +166,16 @@ impl Runner {
         }
         // Operator registry credentials the entries allow tools to use, in
         // the run's own user configuration, gone when the tools finish.
-        let _credentials = RegistryCredentials::write(context.driver, &self.registries)?;
+        if !self.registries.is_empty() {
+            for (path, blob) in context.baseline {
+                if let Some(host) = cleartext(&blob.content, &self.registries) {
+                    return Err(format!(
+                        "{path} names {host} over plain HTTP, which would send its registry credentials unencrypted"
+                    ));
+                }
+            }
+        }
+        let _credentials = registry_credentials(context.driver, &self.registries)?;
         let result = self.node_locks(context).await;
         for (path, text) in &npmrcs {
             std::fs::write(path, text).map_err(|e| e.to_string())?;
@@ -332,8 +341,10 @@ impl Runner {
     ) -> Result<(), String> {
         // aube picks the lockfile it writes from the files it finds. Name the
         // committed lockfile explicitly so a second lockfile cannot redirect it.
+        // It may hold registry credentials, which no later tool reads.
         let config = driver.join(format!("aube-{}.npmrc", hash(leaf.as_bytes())));
-        write_private(
+        let mut written = Private::default();
+        written.write(
             &config,
             &format!("default-lockfile={leaf}\n{}", npm_auth(&self.registries)),
         )?;
@@ -352,25 +363,21 @@ impl Runner {
                 "--ignore-scripts".into(),
             ]);
         }
-        let result = self
-            .tool(
-                driver,
-                Invocation {
-                    tools: vec![("aube".into(), version(versions, "aube")?)],
-                    bin: "aube".into(),
-                    cwd: None,
-                    env: vec![(
-                        "NPM_CONFIG_USERCONFIG".into(),
-                        config.to_string_lossy().into_owned(),
-                    )],
-                    args,
-                },
-            )
-            .await
-            .map(drop);
-        // It may hold registry credentials, which no later tool reads.
-        let _ = std::fs::remove_file(&config);
-        result
+        self.tool(
+            driver,
+            Invocation {
+                tools: vec![("aube".into(), version(versions, "aube")?)],
+                bin: "aube".into(),
+                cwd: None,
+                env: vec![(
+                    "NPM_CONFIG_USERCONFIG".into(),
+                    config.to_string_lossy().into_owned(),
+                )],
+                args,
+            },
+        )
+        .await
+        .map(drop)
     }
     async fn yarn(
         &self,
@@ -578,49 +585,104 @@ pub(super) fn yarn_auth(registries: &[patchula_http::Credential]) -> Result<Stri
     serde_yaml_ng::to_string(&root).map_err(|e| e.to_string())
 }
 
-/// Write `text` where only this user can read it.
-fn write_private(path: &Path, text: &str) -> Result<(), String> {
-    use std::io::Write;
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    let mut file = options.open(path).map_err(|e| e.to_string())?;
-    file.write_all(text.as_bytes()).map_err(|e| e.to_string())
-}
+/// Files only this user can read, removed when dropped, so tools that run
+/// later never see what they hold.
+#[derive(Default)]
+pub(super) struct Private(Vec<std::path::PathBuf>);
 
-/// The run's npm and Yarn user configuration holding registry credentials,
-/// removed when it is dropped, so tools that run later never see them.
-struct RegistryCredentials(Vec<std::path::PathBuf>);
-
-impl RegistryCredentials {
-    fn write(driver: &Path, registries: &[patchula_http::Credential]) -> Result<Self, String> {
-        let mut written = Self(Vec::new());
-        if registries.is_empty() {
-            return Ok(written);
+impl Private {
+    /// Write `text` to a new file at `path`, replacing whatever is there
+    /// without following it. The file is removed on drop even if writing fails.
+    pub(super) fn write(&mut self, path: &Path, text: &str) -> Result<(), String> {
+        use std::io::Write;
+        match std::fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.to_string()),
+            _ => {}
         }
-        let home = driver.join("home");
-        std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
-        let npm = npm_auth(registries);
-        // npm reads the sandbox's user configuration, Bun `~/.npmrc`.
-        for name in ["npm-user.cfg", ".npmrc"] {
-            let path = home.join(name);
-            write_private(&path, &npm)?;
-            written.0.push(path);
-        }
-        let path = home.join(".yarnrc.yml");
-        write_private(&path, &yarn_auth(registries)?)?;
-        written.0.push(path);
-        Ok(written)
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let mut file = options.open(path).map_err(|e| e.to_string())?;
+        self.0.push(path.to_path_buf());
+        file.write_all(text.as_bytes()).map_err(|e| e.to_string())
     }
 }
 
-impl Drop for RegistryCredentials {
+impl Drop for Private {
     fn drop(&mut self) {
         for path in &self.0 {
             let _ = std::fs::remove_file(path);
         }
     }
+}
+
+/// The run's npm, Bun and Yarn user configuration holding registry
+/// credentials, gone when dropped.
+fn registry_credentials(
+    driver: &Path,
+    registries: &[patchula_http::Credential],
+) -> Result<Private, String> {
+    let mut written = Private::default();
+    if registries.is_empty() {
+        return Ok(written);
+    }
+    let home = driver.join("home");
+    std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
+    let npm = npm_auth(registries);
+    // npm reads the sandbox's user configuration, Bun `~/.npmrc`.
+    for name in ["npm-user.cfg", ".npmrc"] {
+        written.write(&home.join(name), &npm)?;
+    }
+    written.write(&home.join(".yarnrc.yml"), &yarn_auth(registries)?)?;
+    Ok(written)
+}
+
+/// The host of `registries` that `text` names in a plain-HTTP URL, with or
+/// without a user in it, if any. npm, aube and Bun match a credential by host
+/// and path whatever the scheme, so such a URL would carry it unencrypted.
+/// This catches a registry or lockfile that names the host over HTTP by
+/// mistake; the repository itself is trusted with the credential.
+pub(super) fn cleartext<'a>(
+    text: &str,
+    registries: &'a [patchula_http::Credential],
+) -> Option<&'a str> {
+    let text = text.to_ascii_lowercase().replace("\\/", "/");
+    text.match_indices("http://").find_map(|(at, scheme)| {
+        let authority = text[at + scheme.len()..]
+            .split(|c: char| matches!(c, '/' | '?' | '#' | '"' | '\'') || c.is_whitespace())
+            .next()?;
+        let host = authority.rsplit('@').next()?.split(':').next()?;
+        let host = host.trim_end_matches('.');
+        registries
+            .iter()
+            .find(|entry| entry.host() == host)
+            .map(|entry| entry.host())
+    })
+}
+
+/// `message` without any registry entry's secret, in any form a tool might
+/// print it: a token, a password, `user:password` or its base64.
+pub(super) fn redacted(mut message: String, registries: &[patchula_http::Credential]) -> String {
+    use base64::Engine;
+    for entry in registries {
+        let secrets = match &entry.auth {
+            patchula_http::Auth::Bearer { token } => vec![token.clone()],
+            patchula_http::Auth::Basic { username, password } => {
+                let ident = format!("{username}:{password}");
+                vec![
+                    base64::engine::general_purpose::STANDARD.encode(&ident),
+                    ident,
+                    password.clone(),
+                ]
+            }
+            _ => Vec::new(),
+        };
+        for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
+            message = message.replace(secret.as_str(), "[redacted]");
+        }
+    }
+    message
 }
 
 /// `.npmrc` with only the registries it names: `registry=` and
@@ -642,27 +704,71 @@ pub(super) fn npmrc(text: &str) -> String {
         .collect()
 }
 
-/// `.yarnrc.yml` without repository code (`yarnPath`, `plugins`) or `${VAR}`
-/// interpolations, which would fail without the credentials they name.
+/// The `.yarnrc.yml` settings Yarn runs with: the registries, and settings
+/// that only shape what the lockfile records.
+const YARNRC_KEYS: [&str; 13] = [
+    "npmRegistryServer",
+    "npmScopes",
+    "catalog",
+    "catalogs",
+    "packageExtensions",
+    "compressionLevel",
+    "checksumBehavior",
+    "defaultProtocol",
+    "defaultSemverRangePrefix",
+    "enableTransparentWorkspaces",
+    "nodeLinker",
+    "npmMinimalAgeGate",
+    "npmPreapprovedPackages",
+];
+
+/// `.yarnrc.yml` with only `YARNRC_KEYS`, and only `npmRegistryServer` in
+/// each scope. Everything else is left out: repository code (`yarnPath`,
+/// `plugins`), tokens, network settings (proxies, TLS, plain-HTTP hosts) and
+/// environment files. A `${VAR}` value is left out too, as it would fail
+/// without the credentials it names, except a registry's, which stays so
+/// Yarn stops on it rather than reading the public registry instead.
 pub(super) fn yarnrc(text: &str) -> Result<String, String> {
-    fn clean(value: &mut serde_yaml_ng::Value) {
-        if let Some(map) = value.as_mapping_mut() {
-            map.retain(|key, value| {
-                // A `${VAR}` registry stays, so Yarn stops on it rather than
-                // reading the public registry instead.
-                !matches!(key.as_str(), Some("yarnPath" | "plugins"))
-                    && (key.as_str() == Some("npmRegistryServer")
-                        || !value.as_str().is_some_and(|s| s.contains("${")))
-            });
-            for (_, value) in map.iter_mut() {
-                clean(value);
-            }
+    fn plain(value: &serde_yaml_ng::Value) -> bool {
+        match value {
+            serde_yaml_ng::Value::String(s) => !s.contains("${"),
+            serde_yaml_ng::Value::Sequence(items) => items.iter().all(plain),
+            serde_yaml_ng::Value::Mapping(map) => map.iter().all(|(k, v)| plain(k) && plain(v)),
+            serde_yaml_ng::Value::Tagged(tagged) => plain(&tagged.value),
+            _ => true,
         }
     }
-    let mut value: serde_yaml_ng::Value =
-        serde_yaml_ng::from_str(text).map_err(|e| e.to_string())?;
-    clean(&mut value);
-    serde_yaml_ng::to_string(&value).map_err(|e| e.to_string())
+    let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(text).map_err(|e| e.to_string())?;
+    let mut out = serde_yaml_ng::Mapping::new();
+    let map = match value {
+        serde_yaml_ng::Value::Null => serde_yaml_ng::Mapping::new(),
+        serde_yaml_ng::Value::Mapping(map) => map,
+        _ => return Err(".yarnrc.yml is not a mapping".into()),
+    };
+    for (key, value) in map {
+        match key.as_str() {
+            Some("npmRegistryServer") => {
+                out.insert(key, value);
+            }
+            Some("npmScopes") => {
+                let scopes = value.as_mapping().ok_or("npmScopes is not a mapping")?;
+                let mut kept = serde_yaml_ng::Mapping::new();
+                for (scope, settings) in scopes {
+                    let mut only = serde_yaml_ng::Mapping::new();
+                    if let Some(server) = settings.get("npmRegistryServer") {
+                        only.insert("npmRegistryServer".into(), server.clone());
+                    }
+                    kept.insert(scope.clone(), only.into());
+                }
+                out.insert(key, kept.into());
+            }
+            Some(name) if YARNRC_KEYS.contains(&name) && plain(&value) => {
+                out.insert(key, value);
+            }
+            _ => {}
+        }
+    }
+    serde_yaml_ng::to_string(&out).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -714,7 +820,7 @@ mod registry_credentials {
         let driver = tempfile::tempdir().unwrap();
         let home = driver.path().join("home");
         {
-            let _written = RegistryCredentials::write(driver.path(), &entries()).unwrap();
+            let _written = registry_credentials(driver.path(), &entries()).unwrap();
             for name in ["npm-user.cfg", ".npmrc", ".yarnrc.yml"] {
                 let path = home.join(name);
                 assert!(path.is_file(), "{name}");
@@ -730,7 +836,54 @@ mod registry_credentials {
             assert!(!home.join(name).exists(), "{name}");
         }
         // With no entries, nothing is written.
-        let _none = RegistryCredentials::write(driver.path(), &[]).unwrap();
+        let _none = registry_credentials(driver.path(), &[]).unwrap();
         assert!(!home.join(".npmrc").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_credential_file_replaces_a_link_instead_of_writing_through_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        std::fs::write(&target, "kept").unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        {
+            let mut written = Private::default();
+            written.write(&link, "secret").unwrap();
+            assert!(!std::fs::symlink_metadata(&link).unwrap().is_symlink());
+        }
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "kept");
+        assert!(!link.exists());
+    }
+
+    #[test]
+    fn a_credentialed_host_named_over_plain_http_is_found() {
+        let entries = entries();
+        for text in [
+            "registry=http://npm.acme.dev/repo/",
+            "\"resolved\": \"HTTP://ci:x@npm.acme.dev:80/repo/a.tgz\"",
+            "npmRegistryServer: http://npm.other.dev.",
+            "{\"url\":\"http:\\/\\/npm.acme.dev\\/repo\"}",
+        ] {
+            assert!(cleartext(text, &entries).is_some(), "{text}");
+        }
+        for text in [
+            "registry=https://npm.acme.dev/repo/",
+            "registry=http://npm.acme.dev.evil.test/",
+            "see http://example.com/npm.acme.dev",
+        ] {
+            assert_eq!(cleartext(text, &entries), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn tool_output_never_shows_a_secret() {
+        let message =
+            "401 for t0ken; Authorization: Basic Y2k6cHc=; ident ci:pw; password pw".to_string();
+        assert_eq!(
+            redacted(message, &entries()),
+            "401 for [redacted]; Authorization: Basic [redacted]; ident [redacted]; password [redacted]"
+        );
     }
 }

@@ -572,8 +572,8 @@ impl Runner {
         self.credentials = Some(credentials);
         self
     }
-    /// Give lockfile tools that run no repository or package code the
-    /// credentials of the entries that allow it (`tools = true`).
+    /// Give the npm-family lockfile tools the credentials of the entries that
+    /// allow it (`tools = true`).
     pub fn with_registries(mut self, registries: &[patchula_http::Credential]) -> Self {
         self.registries = registries
             .iter()
@@ -1016,7 +1016,8 @@ impl Runner {
             .executor
             .run(spec)
             .await
-            .map_err(|e| format!("{bin}: {e}"))?;
+            // A registry may echo the credentials it was sent.
+            .map_err(|e| node::redacted(format!("{bin}: {e}"), &self.registries))?;
         self.record_use(&call.tools);
         Ok(output)
     }
