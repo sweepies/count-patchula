@@ -46,6 +46,12 @@ class Registry {
   /// Only `patchula serve` reads this: installation IDs that may use the
   /// entry. Empty allows every installation the server serves.
   allowedInstallations: Listing<Int> = new {}
+  /// Also give the credentials to the npm-family lockfile tools (aube, npm,
+  /// Bun, Yarn), trusting every repository that may use the entry, and every
+  /// package those repositories depend on, with them. Needs `auth`; not for a
+  /// mirror, no other entry may sit under its prefix, and the prefix cannot
+  /// hold `=` or `;`.
+  tools: Boolean = false
 }
 
 /// Exactly one of `env` and `file`.

@@ -88,7 +88,7 @@ missing, and behaviour that changes their pull requests. The
 ### Registry credentials are operator settings {#registry-credentials}
 
 - **Renovate:** `hostRules` in the repository config, with secrets encrypted for the app or passed in by the self-hosted runner
-- **The Count:** [`registries`](/guide/sources/#private-registries) in the operator settings file, keyed by URL prefix, with secrets from environment variables or files. A repository config cannot name a credential or a host to send one to. Credentials cover registry reads, version lookups and image manifest and SBOM reads alike, for the sources that take a registry URL; lockfile tools do not get them yet
+- **The Count:** [`registries`](/guide/sources/#private-registries) in the operator settings file, keyed by URL prefix, with secrets from environment variables or files. A repository config cannot name a credential or a host to send one to. Credentials cover registry reads, version lookups and image manifest and SBOM reads alike, for the sources that take a registry URL. aube, npm, Bun and Yarn get an entry's credentials only when it sets `tools = true`, which trusts the repositories that may use it and their dependencies with them; other lockfile tools never do
 - **Why:** One server serves many organisations, and a repository config can point a dependency at any URL
 
 ### Packages come from their lockfile {#lockfile-registries}
