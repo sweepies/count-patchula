@@ -152,6 +152,30 @@ impl Transport for Fake {
                     200,
                     json!({"data":{"repository":{"defaultBranchRef":{"name":"main","target":{"oid":"base","tree":{"oid":"base-tree"}}}}}}),
                 )
+            } else if body["query"]
+                .as_str()
+                .is_some_and(|query| query.contains("... on Blob"))
+            {
+                // Blobs read in one batch, as their text.
+                let mut repository = serde_json::Map::new();
+                for (key, sha) in body["variables"].as_object().unwrap() {
+                    let Some(index) = key.strip_prefix('o').filter(|i| i.parse::<usize>().is_ok())
+                    else {
+                        continue;
+                    };
+                    let text = self
+                        .files
+                        .values()
+                        .find(|c| blob_sha(c) == sha.as_str().unwrap());
+                    repository.insert(
+                        format!("b{index}"),
+                        text.map_or(
+                            Value::Null,
+                            |text| json!({"text":text,"isBinary":false,"isTruncated":false}),
+                        ),
+                    );
+                }
+                (200, json!({"data":{"repository":repository}}))
             } else if body["query"] == "query{viewer{login}}" {
                 (200, json!({"data":{"viewer":{"login":"patchula[bot]"}}}))
             } else if body["query"] == patchula_update::INVENTORY_QUERY {

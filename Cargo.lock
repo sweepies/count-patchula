@@ -2272,7 +2272,9 @@ dependencies = [
 name = "patchula-github"
 version = "0.7.0"
 dependencies = [
+ "base64 0.23.1",
  "chrono",
+ "futures-util",
  "httpdate",
  "jsonwebtoken",
  "patchula-cache",
@@ -2282,6 +2284,7 @@ dependencies = [
  "rsa",
  "serde",
  "serde_json",
+ "sha1",
  "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",

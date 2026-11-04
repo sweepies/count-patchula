@@ -12,7 +12,8 @@ repositories endpoint.
 
 Repositories run concurrently behind one GitHub governor. On a cold scan, the
 default branch, commit and tree come from one GraphQL snapshot, and only the
-selected manager files and the config modules they need are fetched as blobs.
+selected manager files and the config modules they need are fetched as blobs,
+in GraphQL batches (see [the GitHub client](/internals/github-client/#conditional-reads)).
 A truncated tree or an invalid selected file is an error for that repository.
 A repository without `patchula.pkl` at its root is skipped. A local `--config`
 applies to every selected repository and is evaluated before network access.

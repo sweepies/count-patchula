@@ -2175,12 +2175,22 @@ impl Engine {
         entries: Vec<Entry>,
         guarded: bool,
     ) -> Result<Vec<(String, Option<patchula_update::Blob>)>> {
-        stream::iter(entries)
-            .map(|entry| async move {
+        let shas: Vec<String> = entries
+            .iter()
+            .filter(|entry| !(guarded && entry.mode == "120000"))
+            .map(|entry| entry.sha.clone())
+            .collect();
+        let contents = self.github.blobs(repo, &shas).await?;
+        entries
+            .into_iter()
+            .map(|entry| {
                 if guarded && entry.mode == "120000" {
                     return Ok((entry.path, None));
                 }
-                let bytes = self.blob(repo, &entry.sha).await?;
+                let bytes = contents
+                    .get(&entry.sha)
+                    .cloned()
+                    .ok_or_else(|| Error::Invalid("blob missing from the batch".into()))?;
                 let content = match String::from_utf8(bytes) {
                     Ok(content) => content,
                     Err(_) if guarded || patchula_manager::registry_settings(&entry.path) => {
@@ -2197,10 +2207,6 @@ impl Engine {
                     }),
                 ))
             })
-            .buffer_unordered(self.github.concurrency())
-            .collect::<Vec<Result<_>>>()
-            .await
-            .into_iter()
             .collect()
     }
     async fn file(&self, repo: &str, sha: &str) -> Result<String> {
@@ -2208,25 +2214,11 @@ impl Engine {
             .map_err(|_| Error::Invalid("selected file is not UTF-8".into()))
     }
     async fn blob(&self, repo: &str, sha: &str) -> Result<Vec<u8>> {
-        use base64::Engine;
-        // A blob's SHA names its content, so a cached one is never asked for
-        // again.
-        let value: Value = serde_json::from_slice(
-            &self
-                .github
-                .get_immutable(&format!("repos/{repo}/git/blobs/{sha}"))
-                .await?
-                .body,
-        )?;
-        if value["encoding"] != "base64" {
-            return Err(Error::Invalid("unsupported blob encoding".into()));
-        }
-        let content = value["content"]
-            .as_str()
-            .ok_or_else(|| Error::Invalid("blob has no content".into()))?;
-        base64::engine::general_purpose::STANDARD
-            .decode(content.replace(['\n', '\r'], ""))
-            .map_err(|_| Error::Invalid("invalid base64 blob".into()))
+        self.github
+            .blobs(repo, &[sha.to_owned()])
+            .await?
+            .remove(sha)
+            .ok_or_else(|| Error::Invalid("blob missing from the batch".into()))
     }
     async fn scan(&self, repo: &str, override_config: Option<&Config>) -> Result<Work> {
         let hint_key = ExtractionKey {

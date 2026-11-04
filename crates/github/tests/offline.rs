@@ -104,6 +104,207 @@ async fn an_immutable_get_is_answered_from_the_cache_without_a_request() {
     assert_eq!(transport.0.load(Ordering::SeqCst), 3);
 }
 
+/// GitHub for blobs: GraphQL gives `hi\n` right, a wrong text for the second
+/// blob and nothing for a binary third; REST gives each blob as it is.
+struct Blobs {
+    graphql: AtomicUsize,
+    rest: AtomicUsize,
+}
+const HI: &str = "45b983be36b73c0788dc9cbcb76cbb80fc7bb057";
+const HO: &str = "8a3a5f1d1b5e7b8b9f1a1f2fa8ba9c2bb3f2e9f1";
+const BIN: &str = "0000000000000000000000000000000000000b1b";
+impl Transport for Blobs {
+    fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+        Box::pin(async move {
+            let body = if request.url().path() == "/graphql" {
+                self.graphql.fetch_add(1, Ordering::SeqCst);
+                let query: Value =
+                    serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
+                let mut repository = serde_json::Map::new();
+                for (key, sha) in query["variables"].as_object().unwrap() {
+                    let Some(index) = key.strip_prefix('o').filter(|i| i.parse::<usize>().is_ok())
+                    else {
+                        continue;
+                    };
+                    let blob = match sha.as_str().unwrap() {
+                        HI => json!({"text":"hi\n","isBinary":false,"isTruncated":false}),
+                        HO => json!({"text":"not ho","isBinary":false,"isTruncated":false}),
+                        _ => json!({"text":null,"isBinary":true,"isTruncated":false}),
+                    };
+                    repository.insert(format!("b{index}"), blob);
+                }
+                json!({"data":{"repository":repository}})
+            } else {
+                self.rest.fetch_add(1, Ordering::SeqCst);
+                let content = match request.url().path().rsplit('/').next().unwrap() {
+                    HO => "aG8K",
+                    _ => "AAE=",
+                };
+                json!({"encoding":"base64","content":content})
+            };
+            Ok(Response {
+                status: reqwest::StatusCode::OK,
+                headers: reqwest::header::HeaderMap::new(),
+                body: serde_json::to_vec(&body).unwrap(),
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn blobs_come_from_graphql_only_when_their_text_hashes_to_the_sha() {
+    let directory = tempfile::tempdir().unwrap();
+    let cache = Cache::open(
+        directory.path().join("cache.sqlite"),
+        CacheOptions::default(),
+    )
+    .await
+    .unwrap();
+    let transport = Arc::new(Blobs {
+        graphql: AtomicUsize::new(0),
+        rest: AtomicUsize::new(0),
+    });
+    let client =
+        Client::with_transport(TOKEN, cache, Options::default(), transport.clone()).unwrap();
+    let shas = [HI, HO, BIN].map(String::from);
+    let blobs = client.blobs("acme/app", &shas).await.unwrap();
+    assert_eq!(blobs[HI], b"hi\n");
+    // The wrong GraphQL text is not taken; REST gives the blob.
+    assert_eq!(blobs[HO], b"ho\n");
+    assert_eq!(blobs[BIN], [0, 1]);
+    assert_eq!(transport.graphql.load(Ordering::SeqCst), 1);
+    assert_eq!(transport.rest.load(Ordering::SeqCst), 2);
+    // Every blob is now cached, the GraphQL one as its REST form too.
+    let again = client.blobs("acme/app", &shas).await.unwrap();
+    assert_eq!(again, blobs);
+    assert_eq!(
+        client
+            .get_immutable(&format!("repos/acme/app/git/blobs/{HI}"))
+            .await
+            .unwrap()
+            .status,
+        200
+    );
+    assert_eq!(transport.graphql.load(Ordering::SeqCst), 1);
+    assert_eq!(transport.rest.load(Ordering::SeqCst), 2);
+}
+
+/// The Git blob SHA of `text`.
+fn git_sha(text: &str) -> String {
+    use sha1::Digest;
+    let mut digest = sha1::Sha1::new();
+    digest.update(format!("blob {}\0", text.len()));
+    digest.update(text.as_bytes());
+    digest
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// GitHub answering GraphQL blob batches by `mode`: texts, an errors payload,
+/// or a refused credential; REST always gives each blob.
+struct Batches {
+    texts: std::collections::BTreeMap<String, String>,
+    mode: &'static str,
+    graphql: AtomicUsize,
+    rest: AtomicUsize,
+}
+impl Transport for Batches {
+    fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+        Box::pin(async move {
+            let (status, body) = if request.url().path() == "/graphql" {
+                self.graphql.fetch_add(1, Ordering::SeqCst);
+                let query: Value =
+                    serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
+                let mut repository = serde_json::Map::new();
+                for (key, sha) in query["variables"].as_object().unwrap() {
+                    if let Some(index) =
+                        key.strip_prefix('o').filter(|i| i.parse::<usize>().is_ok())
+                    {
+                        let text = &self.texts[sha.as_str().unwrap()];
+                        repository.insert(
+                            format!("b{index}"),
+                            json!({"text":text,"isBinary":false,"isTruncated":false}),
+                        );
+                    }
+                }
+                match self.mode {
+                    "errors" => (
+                        200,
+                        json!({"data":null,"errors":[{"message":"Something went wrong"}]}),
+                    ),
+                    "refused" => (401, json!({"message":"Bad credentials"})),
+                    _ => (200, json!({"data":{"repository":repository}})),
+                }
+            } else {
+                self.rest.fetch_add(1, Ordering::SeqCst);
+                let sha = request.url().path().rsplit('/').next().unwrap();
+                use base64::Engine;
+                let content = base64::engine::general_purpose::STANDARD.encode(&self.texts[sha]);
+                (200, json!({"encoding":"base64","content":content}))
+            };
+            Ok(Response {
+                status: reqwest::StatusCode::from_u16(status).unwrap(),
+                headers: reqwest::header::HeaderMap::new(),
+                body: serde_json::to_vec(&body).unwrap(),
+            })
+        })
+    }
+}
+
+async fn batches(
+    mode: &'static str,
+    count: usize,
+) -> (tempfile::TempDir, Client, Arc<Batches>, Vec<String>) {
+    let directory = tempfile::tempdir().unwrap();
+    let cache = Cache::open(
+        directory.path().join("cache.sqlite"),
+        CacheOptions::default(),
+    )
+    .await
+    .unwrap();
+    let texts: std::collections::BTreeMap<_, _> = (0..count)
+        .map(|n| {
+            let text = format!("{n}\n");
+            (git_sha(&text), text)
+        })
+        .collect();
+    let shas = texts.keys().cloned().collect();
+    let transport = Arc::new(Batches {
+        texts,
+        mode,
+        graphql: AtomicUsize::new(0),
+        rest: AtomicUsize::new(0),
+    });
+    let client =
+        Client::with_transport(TOKEN, cache, Options::default(), transport.clone()).unwrap();
+    (directory, client, transport, shas)
+}
+
+#[tokio::test]
+async fn blobs_past_fifty_take_one_graphql_query_per_fifty() {
+    let (_directory, client, transport, shas) = batches("texts", 60).await;
+    let blobs = client.blobs("acme/app", &shas).await.unwrap();
+    assert_eq!(blobs.len(), 60);
+    assert_eq!(blobs[&git_sha("59\n")], b"59\n");
+    assert_eq!(transport.graphql.load(Ordering::SeqCst), 2);
+    assert_eq!(transport.rest.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_graphql_refusal_leaves_blobs_to_rest_but_a_refused_credential_stops() {
+    let (_directory, client, transport, shas) = batches("errors", 3).await;
+    assert_eq!(client.blobs("acme/app", &shas).await.unwrap().len(), 3);
+    assert_eq!(transport.graphql.load(Ordering::SeqCst), 1);
+    assert_eq!(transport.rest.load(Ordering::SeqCst), 3);
+    let (_directory, client, _, shas) = batches("refused", 3).await;
+    assert!(matches!(
+        client.blobs("acme/app", &shas).await,
+        Err(Error::Status(401))
+    ));
+}
+
 #[tokio::test(start_paused = true)]
 async fn secondary_limit_has_exponential_backoff_and_report_stats() {
     let (_directory, client, replay) = client("secondary", Options::default()).await;
