@@ -302,6 +302,102 @@ fn walk(
     }
 }
 
+/// Whether `path` is a Cargo configuration file in the repository.
+pub(crate) fn config_file(path: &str) -> bool {
+    [".cargo/config.toml", ".cargo/config"]
+        .iter()
+        .any(|name| path == *name || path.ends_with(&format!("/{name}")))
+}
+
+/// Why the crates.io lookups of the manifest or lockfile at `path` cannot be
+/// taken to be crates.io's: a Cargo configuration in its folder or above
+/// that replaces crates.io with another source, or one the Count cannot
+/// read. `Cargo.lock` records crates.io for a replaced crate all the same,
+/// so it cannot say. A replacement by a vendored `directory` source keeps
+/// crates.io's crates, as `cargo vendor` copied them.
+///
+/// Every definition of a source in any configuration that applies counts,
+/// so one a closer configuration overrides can only make lookups fail.
+pub(crate) fn replaced(files: &Files, path: &str) -> Option<String> {
+    let dir = &path[..path.rfind('/').map_or(0, |i| i + 1)];
+    let mut sources: Vec<(String, toml_edit::Table)> = Vec::new();
+    for (config, text) in files.iter().filter(|(p, _)| config_file(p)) {
+        let folder = config
+            .strip_suffix(".cargo/config.toml")
+            .or_else(|| config.strip_suffix(".cargo/config"))
+            .unwrap_or("");
+        if !dir.starts_with(folder) {
+            continue;
+        }
+        let unread = || Some(format!("{config}, which the Count cannot read"));
+        if text.as_str() == crate::UNREADABLE_SETTINGS {
+            return unread();
+        }
+        let Ok(document) = text.parse::<toml_edit::DocumentMut>() else {
+            return unread();
+        };
+        let Some(table) = document.get("source") else {
+            continue;
+        };
+        let Some(table) = table.as_table_like() else {
+            return unread();
+        };
+        for (name, source) in table.iter() {
+            let Some(source) = source.as_table_like() else {
+                return unread();
+            };
+            let mut owned = toml_edit::Table::new();
+            for (key, value) in source.iter() {
+                owned.insert(key, value.clone());
+            }
+            sources.push((name.to_owned(), owned));
+        }
+    }
+    // Follow every replacement of crates.io to where it ends.
+    let mut queue = vec!["crates-io".to_owned()];
+    let mut seen = BTreeSet::new();
+    while let Some(name) = queue.pop() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        let definitions: Vec<&toml_edit::Table> = sources
+            .iter()
+            .filter(|(n, _)| *n == name)
+            .map(|(_, table)| table)
+            .collect();
+        if definitions.is_empty() {
+            // crates.io itself, unreplaced, needs no definition; any other
+            // source is defined outside the repository.
+            if name == "crates-io" {
+                continue;
+            }
+            return Some(format!(
+                "crates.io replaced by the source `{}`, which the repository does not define",
+                crate::origins::shown(&name)
+            ));
+        }
+        for table in definitions {
+            let keys: Vec<&str> = table.iter().map(|(key, _)| key).collect();
+            match (
+                table.get("replace-with").and_then(Item::as_str),
+                keys.as_slice(),
+            ) {
+                (Some(next), _) => queue.push(next.to_owned()),
+                (None, ["directory"]) => {}
+                // crates.io's own definition holds nothing else to follow.
+                (None, _) if name == "crates-io" => {}
+                (None, _) => {
+                    return Some(format!(
+                        "crates.io replaced by the source `{}`, which the Count does not read",
+                        crate::origins::shown(&name)
+                    ));
+                }
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::glob;

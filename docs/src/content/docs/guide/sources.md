@@ -251,6 +251,14 @@ dependency's `registry`:
   `RestoreSources`, `RestoreAdditionalProjectSources`, `RestoreConfigFile`,
   `RestoreFallbackFolders`, `RestoreRootConfigDirectory` or
   `RestoreSolutionDirectory`, or that the Count cannot read.
+- Crates come from crates.io unless a dependency names another registry,
+  since Cargo never looks a crate up anywhere else; one from an alternate
+  registry, git or a path is listed as skipped. A `.cargo/config.toml` or
+  `.cargo/config` in the crate's folder or above that replaces crates.io
+  with another source fails its crates.io lookups, since `Cargo.lock`
+  records crates.io for a replaced crate all the same; a vendored
+  `directory` source, as `cargo vendor` sets up, keeps crates.io's crates
+  and is fine. A configuration the Count cannot read fails them too.
 - Maven and Gradle artifacts come from Maven Central (or Google's Maven
   repository for Android groups, and the Gradle Plugin Portal for plugins)
   only when no build file in the repository could take them from anywhere

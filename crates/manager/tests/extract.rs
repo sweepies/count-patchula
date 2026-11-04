@@ -3640,3 +3640,61 @@ fn gradle_lookups_fail_when_build_logic_could_add_another_repository() {
         assert!(fails(found.clone()), "{files:?}: {found:?}");
     }
 }
+
+#[test]
+fn crates_io_lookups_fail_where_cargo_configuration_replaces_crates_io() {
+    let manifest =
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1.0\"\n";
+    let lookup =
+        |files: &[(&str, &str)]| registry_of(Manager::Cargo, files, "app/Cargo.toml", "serde");
+    assert_eq!(lookup(&[("app/Cargo.toml", manifest)]), None);
+    let vendored = "[source.crates-io]\nreplace-with = \"vendored-sources\"\n\n[source.vendored-sources]\ndirectory = \"vendor\"\n";
+    assert_eq!(
+        lookup(&[
+            ("app/Cargo.toml", manifest),
+            (".cargo/config.toml", vendored)
+        ]),
+        None
+    );
+    // A configuration for another folder does not apply.
+    let mirror = "[source.crates-io]\nreplace-with = \"acme\"\n\n[source.acme]\nregistry = \"sparse+https://bot:s3cr3t@crates.acme.dev/index/\"\n"; // betterleaks:allow
+    assert_eq!(
+        lookup(&[
+            ("app/Cargo.toml", manifest),
+            ("tools/.cargo/config.toml", mirror)
+        ]),
+        None
+    );
+    for files in [
+        vec![("app/Cargo.toml", manifest), (".cargo/config.toml", mirror)],
+        vec![("app/Cargo.toml", manifest), ("app/.cargo/config", mirror)],
+        vec![
+            ("app/Cargo.toml", manifest),
+            (
+                ".cargo/config.toml",
+                "[source.crates-io]\nreplace-with = \"elsewhere\"\n",
+            ),
+        ],
+        // A vendored source a closer configuration redefines still counts.
+        vec![
+            ("app/Cargo.toml", manifest),
+            (".cargo/config.toml", vendored),
+            (
+                "app/.cargo/config.toml",
+                "[source.vendored-sources]\nregistry = \"https://crates.acme.dev/index\"\n",
+            ),
+        ],
+        vec![
+            ("app/Cargo.toml", manifest),
+            (".cargo/config.toml", "[source\n"),
+        ],
+        vec![
+            ("app/Cargo.toml", manifest),
+            (".cargo/config.toml", patchula_manager::UNREADABLE_SETTINGS),
+        ],
+    ] {
+        let found = lookup(&files);
+        assert!(fails(found.clone()), "{files:?}: {found:?}");
+        assert!(!found.unwrap().contains("s3cr3t"));
+    }
+}

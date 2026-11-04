@@ -318,6 +318,7 @@ impl Scanner {
             || (self.config.managers.contains(&Manager::Bundler)
                 && (bundle_config(path) || leaf == "Gemfile.lock"))
             || (self.config.managers.contains(&Manager::Composer) && leaf == "composer.lock")
+            || (self.config.managers.contains(&Manager::Cargo) && cargo::config_file(path))
             || (self.config.managers.contains(&Manager::Nuget)
                 && (nuget::config_file(path) || nuget::msbuild_file(path)))
             || (self.config.managers.contains(&Manager::Maven) && maven::repository_file(path))
@@ -578,7 +579,14 @@ impl Scanner {
             {
                 toolchains::rust(path, text)
             } else if self.selected(Manager::Cargo, path) {
-                cargo::extract(path, text, &cargo, &mut result.skipped)
+                cargo::extract(path, text, &cargo, &mut result.skipped).map(|mut deps| {
+                    if let Some(reason) = cargo::replaced(files, path) {
+                        for dep in deps.iter_mut().filter(|d| d.source == Source::Crates) {
+                            dep.registry = origins::Named::Unusable(reason.clone()).recorded();
+                        }
+                    }
+                    deps
+                })
             } else if self.selected(Manager::Dockerfile, path) {
                 images::dockerfile(path, text)
             } else if self.selected(Manager::Go, path) {
@@ -669,6 +677,11 @@ impl Scanner {
         }
         self.maven_repositories(files, &mut result.dependencies);
         result.locked = locked::cargo(files, &cargo, &result.dependencies);
+        for locked in &mut result.locked {
+            if let Some(reason) = cargo::replaced(files, &locked.file) {
+                locked.registry = Some(reason);
+            }
+        }
         let npm = node == Manager::Npm && self.config.managers.contains(&Manager::Npm);
         result
             .locked
@@ -844,6 +857,7 @@ pub fn registry_settings(path: &str) -> bool {
         || nuget::msbuild_file(path)
         || maven::repository_file(path)
         || gradle::build_logic(path)
+        || cargo::config_file(path)
 }
 
 /// A file that can name a Python package index.
@@ -872,6 +886,7 @@ pub fn linked_settings(path: &str) -> Option<String> {
     match leaf {
         ".bundle" => Some(format!("{path}/config")),
         ".mvn" => Some(format!("{path}/maven.config")),
+        ".cargo" => Some(format!("{path}/config.toml")),
         _ if gradle::logic_folder(path) => Some(format!("{path}/build.gradle.kts")),
         _ => None,
     }
