@@ -465,6 +465,72 @@ async fn a_credentialed_tool_failure_shows_no_output() {
     assert!(!reason.contains("fixture resolution failure"), "{reason}");
 }
 
+/// The fixture's tools, each taking a moment, counting how many run at once.
+struct Overlap {
+    inner: Arc<Fixture>,
+    active: std::sync::atomic::AtomicUsize,
+    most: std::sync::atomic::AtomicUsize,
+}
+impl Executor for Overlap {
+    fn run(
+        &self,
+        spec: CommandSpec,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+        use std::sync::atomic::Ordering;
+        Box::pin(async move {
+            let tool = !spec.args.iter().any(|arg| arg == "git");
+            if tool {
+                let now = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+                self.most.fetch_max(now, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            let result = self.inner.run(spec).await;
+            if tool {
+                self.active.fetch_sub(1, Ordering::SeqCst);
+            }
+            result
+        })
+    }
+}
+
+/// Plans regenerate their lockfiles side by side, each in its own tree.
+#[tokio::test]
+async fn plans_regenerate_lockfiles_side_by_side() {
+    let files = BTreeMap::from([
+        ("package.json".into(), "{}\n".into()),
+        ("bun.lock".into(), "{}\n".into()),
+    ]);
+    let executor = Arc::new(Overlap {
+        inner: fixture(files.clone(), false, false),
+        active: Default::default(),
+        most: Default::default(),
+    });
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut plans: Vec<_> = (0..3)
+        .map(|_| {
+            maintenance(&repo(), &config, &snapshot, None, monday())
+                .unwrap()
+                .unwrap()
+        })
+        .collect();
+    let finished = std::sync::atomic::AtomicUsize::new(0);
+    runner
+        .prepare_all(&mut plans, &mut snapshot, &config, 3, &|| {
+            finished.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })
+        .await;
+    assert_eq!(finished.load(std::sync::atomic::Ordering::SeqCst), 3);
+    for plan in &plans {
+        assert!(plan.lockfiles_ready, "{:?}", plan.action);
+    }
+    assert!(executor.most.load(std::sync::atomic::Ordering::SeqCst) >= 2);
+    assert!(snapshot.files.contains_key("bun.lock"));
+}
+
 #[tokio::test]
 async fn tool_failure_is_reported_without_api_writes_or_partial_scratch_files() {
     let files = BTreeMap::from([

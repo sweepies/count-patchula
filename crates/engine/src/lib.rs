@@ -558,21 +558,28 @@ impl Engine {
                 }
             };
             if !dry_run {
-                if self.lockfiles.is_some() {
+                if let Some(runner) = &self.lockfiles {
                     self.progress.stage(Stage::Lockfiles, plans.len());
-                }
-                for plan in &mut plans {
-                    if let Some(runner) = &self.lockfiles {
-                        runner.prepare(plan, &mut work.snapshot, &config).await;
-                        self.progress.advance(1);
-                    } else if plan.action.status == patchula_report::ActionStatus::Planned
-                        && !plan.lockfiles_ready
-                    {
-                        plan.action.status = patchula_report::ActionStatus::Error;
-                        plan.action.reason = Some(
-                            "lockfile generation requires a disk cache or an injected runner"
-                                .into(),
-                        );
+                    runner
+                        .prepare_all(
+                            &mut plans,
+                            &mut work.snapshot,
+                            &config,
+                            lockfile_concurrency(),
+                            &|| self.progress.advance(1),
+                        )
+                        .await;
+                } else {
+                    for plan in &mut plans {
+                        if plan.action.status == patchula_report::ActionStatus::Planned
+                            && !plan.lockfiles_ready
+                        {
+                            plan.action.status = patchula_report::ActionStatus::Error;
+                            plan.action.reason = Some(
+                                "lockfile generation requires a disk cache or an injected runner"
+                                    .into(),
+                            );
+                        }
                     }
                 }
             }
@@ -2636,6 +2643,13 @@ fn last_run_key(repo: &str) -> ExtractionKey {
         config_hash: "last-run-v1".into(),
     }
 }
+/// How many of a repository's branches regenerate their lockfiles at once:
+/// one per core, up to four, as the tools are CPU-bound and each batch of
+/// another installation runs its own.
+fn lockfile_concurrency() -> usize {
+    std::thread::available_parallelism().map_or(1, |cores| cores.get().min(4))
+}
+
 fn hash(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
