@@ -352,7 +352,8 @@ impl Scanner {
             || (self.config.managers.contains(&Manager::Go) && go::work_file(path))
             // A package backend mise runs in the project reads its settings.
             || (self.config.managers.contains(&Manager::Mise)
-                && (matches!(
+                && (mise::config_file(path)
+                    || matches!(
                     leaf,
                     ".npmrc" | ".yarnrc.yml" | "uv.toml" | "pip.conf" | "pip.ini" | "pyproject.toml"
                 ) || cargo::config_file(path)
@@ -725,9 +726,7 @@ impl Scanner {
         if self.config.managers.contains(&Manager::Mise) {
             let configs: Vec<&str> = files
                 .keys()
-                .filter(|path| {
-                    self.selected(Manager::Mise, path) && !path.ends_with(".tool-versions")
-                })
+                .filter(|path| mise::config_file(path))
                 .map(String::as_str)
                 .collect();
             for dep in result

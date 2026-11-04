@@ -269,6 +269,76 @@ impl Reader<'_> {
 /// redirect: npm and Python indexes, Cargo sources and NuGet feeds.
 const PACKAGE_BACKENDS: [&str; 6] = ["npm", "pypi", "pipx", "cargo", "gem", "dotnet"];
 
+/// Top-level tables of a mise configuration that cannot change where a tool
+/// installs from, apart from `env` and `settings`, which are read below.
+const PLAIN_TABLES: [&str; 8] = [
+    "tools",
+    "tasks",
+    "task_config",
+    "vars",
+    "env",
+    "settings",
+    "min_version",
+    "redactions",
+];
+
+/// `[settings]` keys that cannot change where a tool installs from.
+const PLAIN_SETTINGS: [&str; 18] = [
+    "experimental",
+    "lockfile",
+    "idiomatic_version_file",
+    "idiomatic_version_file_enable_tools",
+    "idiomatic_version_file_disable_tools",
+    "legacy_version_file",
+    "not_found_auto_install",
+    "auto_install",
+    "exec_auto_install",
+    "task_run_auto_install",
+    "jobs",
+    "yes",
+    "quiet",
+    "verbose",
+    "color",
+    "status",
+    "task_output",
+    "task_timings",
+];
+
+/// Whether `path` is a mise configuration file, under any name mise reads
+/// one by: `mise.toml` and `.mise.toml` with their `.local` and
+/// environment variants, `mise/` and `.mise/` folders, `.config/mise.toml`,
+/// `.config/mise/`, and their `conf.d` folders. `.miserc` files, which can
+/// choose the environment, count too.
+pub(crate) fn config_file(path: &str) -> bool {
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    let named = leaf
+        .strip_prefix('.')
+        .unwrap_or(leaf)
+        .strip_prefix("mise")
+        .is_some_and(|rest| rest == ".toml" || rest.starts_with('.') && rest.ends_with(".toml"));
+    let in_folder = ["mise/", ".mise/", ".config/mise/"].iter().any(|dir| {
+        let at = path
+            .find(dir)
+            .filter(|at| *at == 0 || path.as_bytes()[at - 1] == b'/');
+        at.is_some_and(|at| path[at + dir.len()..].ends_with(".toml"))
+    });
+    named || in_folder || path.ends_with(".config/mise.toml") || leaf.starts_with(".miserc")
+}
+
+/// The folder a mise configuration file governs: the one holding it, or
+/// the one above its `mise/`, `.mise/` or `.config/` folder.
+fn governed(config: &str) -> &str {
+    for dir in [".config/mise/", ".mise/", "mise/", ".config/"] {
+        if let Some(at) = config
+            .find(dir)
+            .filter(|at| *at == 0 || config.as_bytes()[at - 1] == b'/')
+        {
+            return &config[..at];
+        }
+    }
+    &config[..config.rfind('/').map_or(0, |i| i + 1)]
+}
+
 /// The backends `tool` can install with: its `backend:` prefix, or those
 /// mise's registry lists for a short name; `core` for one it does not list.
 fn backends(tool: &str) -> Vec<String> {
@@ -286,17 +356,40 @@ fn backends(tool: &str) -> Vec<String> {
     }
 }
 
-/// The backends a mise configuration's `[env]` and `[settings]` could send
-/// elsewhere, `*` standing for all; none when the Count cannot read it.
-fn redirected_backends(text: &str) -> Option<BTreeSet<String>> {
-    let doc = Document::parse(text).ok()?;
+/// The backends a mise configuration could send elsewhere, `*` standing
+/// for every tool; none when the Count cannot read it. Anything but the
+/// plain tables and settings above counts against every tool.
+fn redirected_backends(path: &str, text: &str) -> Option<BTreeSet<String>> {
     let mut out = BTreeSet::new();
-    let all = || PACKAGE_BACKENDS.iter().map(|b| (*b).to_owned());
-    if let Some(env) = doc.get("env").and_then(|v| v.as_table_like()) {
+    if path
+        .rsplit('/')
+        .next()
+        .is_some_and(|leaf| leaf.starts_with(".miserc"))
+    {
+        out.insert("*".to_owned());
+        return Some(out);
+    }
+    let doc = Document::parse(text).ok()?;
+    for (key, _) in doc.iter() {
+        if !PLAIN_TABLES.contains(&key) {
+            out.insert("*".to_owned());
+        }
+    }
+    if let Some(env) = doc.get("env") {
+        let env = env.as_table_like()?;
         for (key, _) in env.iter() {
             let key = key.to_ascii_uppercase();
-            let kinds: &[&str] = if key == "_" {
-                // Directives that load variables from files.
+            // Directives: `path` and `python` only set `PATH` and a virtual
+            // environment; others, such as `file` and `source`, load
+            // variables from files.
+            let loads = key == "_"
+                && env
+                    .get("_")
+                    .and_then(|d| d.as_table_like())
+                    .is_none_or(|d| d.iter().any(|(name, _)| !matches!(name, "path" | "python")));
+            let kinds: &[&str] = if key == "_" && !loads {
+                &[]
+            } else if key == "_" {
                 &PACKAGE_BACKENDS
             } else if key.starts_with("MISE_") {
                 &["*"]
@@ -316,34 +409,22 @@ fn redirected_backends(text: &str) -> Option<BTreeSet<String>> {
             out.extend(kinds.iter().map(|k| (*k).to_owned()));
         }
     }
-    if let Some(settings) = doc.get("settings").and_then(|v| v.as_table_like()) {
+    if let Some(settings) = doc.get("settings") {
+        let settings = settings.as_table_like()?;
         for (key, _) in settings.iter() {
-            match key {
-                "url_replacements" | "env_file" | "env_files" => {
-                    out.insert("*".to_owned());
-                }
-                key if PACKAGE_BACKENDS.contains(&key)
-                    || [
-                        "aqua", "ubi", "github", "gitlab", "http", "conda", "go", "spm",
-                    ]
-                    .contains(&key) =>
-                {
-                    out.insert(key.to_owned());
-                }
-                _ => {}
+            if !PLAIN_SETTINGS.contains(&key) {
+                out.insert("*".to_owned());
             }
         }
-    }
-    if out.contains("*") {
-        out.extend(all());
     }
     Some(out)
 }
 
-/// The project's own registry settings around `dir` that a package backend
-/// reads when mise runs it there: `.npmrc` and `.yarnrc.yml` naming a
-/// registry for npm, Python index settings for pypi, Cargo source
-/// replacement for cargo, and NuGet feeds for dotnet.
+/// The project's own registry settings in or below `dir`, or above it, that
+/// a package backend reads when mise runs it there: `.npmrc` and
+/// `.yarnrc.yml` naming a registry for npm, Python index settings for pypi,
+/// Cargo source replacement or registries for cargo, and NuGet feeds for
+/// dotnet. One the Count cannot read counts.
 fn project_redirect(
     kind: &str,
     dir: &str,
@@ -351,32 +432,48 @@ fn project_redirect(
     files: &Files,
     feeds: &crate::nuget::Feeds,
 ) -> Option<String> {
-    let above = |path: &str| {
+    let related = |path: &str| {
         let folder = &path[..path.rfind('/').map_or(0, |i| i + 1)];
-        dir.starts_with(folder)
+        dir.starts_with(folder) || folder.starts_with(dir)
     };
     let leaf = |path: &str| path.rsplit('/').next().unwrap_or(path).to_owned();
+    let unreadable = |text: &str| text == crate::UNREADABLE_SETTINGS;
+    let found = |test: &dyn Fn(&str, &str) -> bool, what: &str| {
+        files
+            .iter()
+            .find(|(path, text)| related(path) && test(path, text))
+            .map(|(path, _)| format!("the {what} {path} may name"))
+    };
     match kind {
-        "npm" => files
-            .iter()
-            .find(|(path, text)| {
-                above(path)
-                    && matches!(leaf(path).as_str(), ".npmrc" | ".yarnrc.yml")
-                    && text.to_ascii_lowercase().contains("registry")
-            })
-            .map(|(path, _)| format!("the npm registry {path} may name")),
-        "pypi" | "pipx" => files
-            .iter()
-            .find(|(path, text)| {
-                above(path)
-                    && match leaf(path).as_str() {
-                        "uv.toml" | "pip.conf" | "pip.ini" => true,
-                        "pyproject.toml" => text.contains("index"),
-                        _ => false,
-                    }
-            })
-            .map(|(path, _)| format!("the Python index {path} may name")),
-        "cargo" => crate::cargo::replaced(files, &format!("{dir}x")),
+        "npm" => found(
+            &|path, text| {
+                matches!(leaf(path).as_str(), ".npmrc" | ".yarnrc.yml")
+                    && (unreadable(text) || text.to_ascii_lowercase().contains("registry"))
+            },
+            "npm registry",
+        ),
+        "pypi" | "pipx" => found(
+            &|path, text| match leaf(path).as_str() {
+                "uv.toml" | "pip.conf" | "pip.ini" => true,
+                "pyproject.toml" => {
+                    unreadable(text)
+                        || ["index", "find-links", "source"]
+                            .iter()
+                            .any(|w| text.contains(w))
+                }
+                _ => false,
+            },
+            "Python index",
+        ),
+        "cargo" => crate::cargo::replaced(files, &format!("{dir}x")).or_else(|| {
+            found(
+                &|path, text| {
+                    crate::cargo::config_file(path)
+                        && (unreadable(text) || text.contains("registr"))
+                },
+                "Cargo registry",
+            )
+        }),
         "dotnet" => {
             let package = tool.split_once(':').map_or(tool, |(_, name)| name);
             match feeds.origin(&format!("{dir}x"), package) {
@@ -388,29 +485,69 @@ fn project_redirect(
     }
 }
 
+/// Options on a tool's own entry beyond its version and platforms, such as
+/// install arguments or an API URL, which can change where it comes from.
+fn tool_options(dep: &Dependency, files: &Files) -> Option<String> {
+    let doc = files
+        .get(&dep.file)
+        .and_then(|text| Document::parse(text.as_str()).ok())?;
+    let mut entries = Vec::new();
+    if let Some(tools) = doc.get("tools").and_then(|t| t.as_table_like()) {
+        entries.extend(tools.get(&dep.name));
+    }
+    let tasks = doc.get("tasks").and_then(|t| t.as_table_like());
+    for (_, task) in tasks.into_iter().flat_map(|t| t.iter()) {
+        entries.extend(task.get("tools").and_then(|t| t.get(&dep.name)));
+    }
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            entry
+                .as_table_like()
+                .map(|t| t.iter().map(|(k, _)| k.to_owned()).collect::<Vec<_>>())
+        })
+        .flatten()
+        .any(|key| !matches!(key.as_str(), "version" | "os"))
+        .then(|| {
+            format!(
+                "options on {} in {} that may move where mise installs it from",
+                crate::origins::shown(&dep.name),
+                dep.file
+            )
+        })
+}
+
 /// Why the lookup of the mise tool `dep` cannot be taken to list what mise
 /// installs: the Count lists versions in a sandbox without the project's
-/// configuration, while mise installs a package backend's tools with it.
-/// A mise configuration in the tool's folder, above it or below it whose
-/// `[env]` or `[settings]` could redirect one of the tool's backends, one
-/// the Count cannot read, or the project's own registry settings for a
-/// package backend, fails the lookup.
+/// configuration, while mise installs a tool with it. A mise configuration
+/// governing the tool's folder, one above it or one below it that holds
+/// anything but plain tables and settings, or `[env]` that could redirect
+/// one of the tool's backends; one the Count cannot read; options on the
+/// tool's own entry; or the project's own registry settings for a package
+/// backend fail the lookup.
 pub(crate) fn redirected(
     dep: &Dependency,
     configs: &[&str],
     files: &Files,
     feeds: &crate::nuget::Feeds,
 ) -> Option<String> {
-    let dir = &dep.file[..dep.file.rfind('/').map_or(0, |i| i + 1)];
+    let mut dirs = vec![&dep.file[..dep.file.rfind('/').map_or(0, |i| i + 1)]];
+    if let Some(including) = &dep.included_by {
+        dirs.push(governed(including));
+    }
     let kinds = backends(&dep.package);
     for config in configs {
-        let folder = &config[..config.rfind('/').map_or(0, |i| i + 1)];
-        if !(dir.starts_with(folder) || folder.starts_with(dir)) {
+        let folder = governed(config);
+        if !dirs
+            .iter()
+            .any(|dir| dir.starts_with(folder) || folder.starts_with(*dir))
+        {
             continue;
         }
-        let Some(redirected) = files
-            .get(*config)
-            .and_then(|text| redirected_backends(text))
+        let text = files.get(*config)?;
+        let Some(redirected) = (text.as_str() != crate::UNREADABLE_SETTINGS)
+            .then(|| redirected_backends(config, text))
+            .flatten()
         else {
             return Some(format!("{config}, which the Count cannot read"));
         };
@@ -420,7 +557,12 @@ pub(crate) fn redirected(
             ));
         }
     }
-    kinds
-        .iter()
-        .find_map(|kind| project_redirect(kind, dir, &dep.package, files, feeds))
+    if let Some(reason) = tool_options(dep, files) {
+        return Some(reason);
+    }
+    dirs.iter().find_map(|dir| {
+        kinds
+            .iter()
+            .find_map(|kind| project_redirect(kind, dir, &dep.package, files, feeds))
+    })
 }
