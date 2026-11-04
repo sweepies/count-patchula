@@ -49,7 +49,8 @@ class Registry {
   /// Also give the credentials to the npm-family lockfile tools (aube, npm,
   /// Bun, Yarn), trusting every repository that may use the entry, and every
   /// package those repositories depend on, with them. Needs `auth`; not for a
-  /// mirror, and no other entry may sit under its prefix.
+  /// mirror, no other entry may sit under its prefix, and the prefix cannot
+  /// hold `=` or `;`.
   tools: Boolean = false
 }
 
