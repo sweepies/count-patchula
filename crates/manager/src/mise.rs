@@ -267,7 +267,7 @@ impl Reader<'_> {
 
 /// Backends that install from a package registry a project's settings can
 /// redirect: npm and Python indexes, Cargo sources and NuGet feeds.
-const PACKAGE_BACKENDS: [&str; 6] = ["npm", "pypi", "pipx", "cargo", "gem", "dotnet"];
+const PACKAGE_BACKENDS: [&str; 7] = ["npm", "pypi", "pipx", "cargo", "gem", "dotnet", "go"];
 
 /// Top-level tables of a mise configuration that cannot change where a tool
 /// installs from, apart from `env` and `settings`, which are read below.
@@ -280,6 +280,12 @@ const PLAIN_TABLES: [&str; 8] = [
     "settings",
     "min_version",
     "redactions",
+];
+
+/// Core tools, whose `[settings]` tables move only themselves.
+const CORE_TOOLS: [&str; 12] = [
+    "node", "python", "ruby", "java", "go", "rust", "erlang", "elixir", "bun", "deno", "zig",
+    "swift",
 ];
 
 /// `[settings]` keys that cannot change where a tool installs from.
@@ -403,6 +409,18 @@ fn redirected_backends(path: &str, text: &str) -> Option<BTreeSet<String>> {
                 &["gem"]
             } else if key.starts_with("NUGET_") || key.starts_with("DOTNET_") {
                 &["dotnet"]
+            } else if key.starts_with("GO") {
+                &["go"]
+            } else if key.starts_with("COREPACK_") {
+                &["npm"]
+            } else if ["HOME", "PATH", "XDG_CONFIG_HOME", "XDG_DATA_HOME"].contains(&key.as_str())
+                || ["MIRROR", "DIST_SERVER", "PROXY", "_CONFIG", "RC"]
+                    .iter()
+                    .any(|part| key.contains(part))
+            {
+                // Where tools read their configuration, find commands, or
+                // download from: homes, paths, mirrors and proxies.
+                &["*"]
             } else {
                 &[]
             };
@@ -412,8 +430,27 @@ fn redirected_backends(path: &str, text: &str) -> Option<BTreeSet<String>> {
     if let Some(settings) = doc.get("settings") {
         let settings = settings.as_table_like()?;
         for (key, _) in settings.iter() {
-            if !PLAIN_SETTINGS.contains(&key) {
-                out.insert("*".to_owned());
+            // A backend's own settings move its tools only; a core tool's,
+            // such as `[settings.python]`, that tool only.
+            match key {
+                key if PLAIN_SETTINGS.contains(&key) => {}
+                "pipx" | "pypi" => {
+                    out.extend(["pypi".to_owned(), "pipx".to_owned()]);
+                }
+                key if PACKAGE_BACKENDS.contains(&key)
+                    || [
+                        "aqua", "ubi", "github", "gitlab", "http", "conda", "go", "spm",
+                    ]
+                    .contains(&key) =>
+                {
+                    out.insert(key.to_owned());
+                }
+                key if CORE_TOOLS.contains(&key) => {
+                    out.insert(format!("tool:{key}"));
+                }
+                _ => {
+                    out.insert("*".to_owned());
+                }
             }
         }
     }
@@ -487,34 +524,56 @@ fn project_redirect(
 
 /// Options on a tool's own entry beyond its version and platforms, such as
 /// install arguments or an API URL, which can change where it comes from.
-fn tool_options(dep: &Dependency, files: &Files) -> Option<String> {
-    let doc = files
-        .get(&dep.file)
-        .and_then(|text| Document::parse(text.as_str()).ok())?;
-    let mut entries = Vec::new();
-    if let Some(tools) = doc.get("tools").and_then(|t| t.as_table_like()) {
-        entries.extend(tools.get(&dep.name));
+/// Options on the tool's entry, in any of `configs` or its own file,
+/// beyond its version and platforms, such as install arguments or an API
+/// URL, which can change where it comes from.
+fn tool_options(dep: &Dependency, configs: &[&str], files: &Files) -> Option<String> {
+    let optioned = |entry: &toml_edit::Item| {
+        let keys = |table: &dyn toml_edit::TableLike| {
+            table
+                .iter()
+                .any(|(key, _)| !matches!(key, "version" | "os"))
+        };
+        match entry {
+            toml_edit::Item::Value(Value::Array(values)) => values
+                .iter()
+                .any(|v| v.as_inline_table().is_some_and(|t| keys(t))),
+            entry => entry.as_table_like().is_some_and(keys),
+        }
+    };
+    let task_tools =
+        |task: &toml_edit::Item| task.get("tools").and_then(|t| t.get(&dep.name)).cloned();
+    for file in configs.iter().copied().chain([dep.file.as_str()]) {
+        let Some(doc) = files
+            .get(file)
+            .and_then(|t| Document::parse(t.as_str()).ok())
+        else {
+            continue;
+        };
+        let mut entries = Vec::new();
+        if file == dep.file && dep.included_by.is_some() {
+            // A task file holds tasks as top-level tables.
+            entries.extend(doc.iter().filter_map(|(_, task)| task_tools(task)));
+        } else {
+            if let Some(tools) = doc.get("tools").and_then(|t| t.as_table_like()) {
+                entries.extend(tools.get(&dep.name).cloned());
+            }
+            let tasks = doc.get("tasks").and_then(|t| t.as_table_like());
+            entries.extend(
+                tasks
+                    .into_iter()
+                    .flat_map(|t| t.iter())
+                    .filter_map(|(_, task)| task_tools(task)),
+            );
+        }
+        if entries.iter().any(optioned) {
+            return Some(format!(
+                "options on {} in {file} that may move where mise installs it from",
+                crate::origins::shown(&dep.name)
+            ));
+        }
     }
-    let tasks = doc.get("tasks").and_then(|t| t.as_table_like());
-    for (_, task) in tasks.into_iter().flat_map(|t| t.iter()) {
-        entries.extend(task.get("tools").and_then(|t| t.get(&dep.name)));
-    }
-    entries
-        .into_iter()
-        .filter_map(|entry| {
-            entry
-                .as_table_like()
-                .map(|t| t.iter().map(|(k, _)| k.to_owned()).collect::<Vec<_>>())
-        })
-        .flatten()
-        .any(|key| !matches!(key.as_str(), "version" | "os"))
-        .then(|| {
-            format!(
-                "options on {} in {} that may move where mise installs it from",
-                crate::origins::shown(&dep.name),
-                dep.file
-            )
-        })
+    None
 }
 
 /// Why the lookup of the mise tool `dep` cannot be taken to list what mise
@@ -535,7 +594,9 @@ pub(crate) fn redirected(
     if let Some(including) = &dep.included_by {
         dirs.push(governed(including));
     }
-    let kinds = backends(&dep.package);
+    let mut kinds = backends(&dep.package);
+    kinds.push(format!("tool:{}", dep.package));
+    let mut related = Vec::new();
     for config in configs {
         let folder = governed(config);
         if !dirs
@@ -544,6 +605,7 @@ pub(crate) fn redirected(
         {
             continue;
         }
+        related.push(*config);
         let text = files.get(*config)?;
         let Some(redirected) = (text.as_str() != crate::UNREADABLE_SETTINGS)
             .then(|| redirected_backends(config, text))
@@ -557,7 +619,7 @@ pub(crate) fn redirected(
             ));
         }
     }
-    if let Some(reason) = tool_options(dep, files) {
+    if let Some(reason) = tool_options(dep, &related, files) {
         return Some(reason);
     }
     dirs.iter().find_map(|dir| {

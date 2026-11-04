@@ -931,6 +931,11 @@ pub fn registry_settings(path: &str) -> bool {
         || cargo::config_file(path)
         || path.rsplit('/').next() == Some("Cargo.toml")
         || go::work_file(path)
+        || mise::config_file(path)
+        || matches!(
+            path.rsplit('/').next().unwrap_or(path),
+            ".npmrc" | ".yarnrc.yml" | "pip.conf" | "pip.ini"
+        )
 }
 
 /// A file that can name a Python package index.
