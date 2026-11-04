@@ -615,10 +615,14 @@ async fn output_report(report: &Report, directory: Option<&std::path::Path>) -> 
         tokio::task::spawn_blocking(move || {
             std::fs::create_dir_all(&directory)
                 .map_err(|_| Error("cannot create report directory"))?;
+            // Batches finish side by side, so the counter keeps two in the
+            // same instant apart.
+            static REPORTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
             let name = format!(
-                "batch-{}-{}.json",
+                "batch-{}-{}-{}.json",
                 Utc::now().format("%Y%m%dT%H%M%S%.9fZ"),
-                std::process::id()
+                std::process::id(),
+                REPORTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             );
             let temporary = directory.join(format!(".{name}.tmp"));
             let file = std::fs::File::options()
@@ -647,26 +651,49 @@ async fn output_report(report: &Report, directory: Option<&std::path::Path>) -> 
 }
 
 /// `server.workers` queue workers, each claiming one installation's batch at
-/// a time. The first to fail stops them all.
+/// a time. A stop, or the first worker to fail, halts the others once their
+/// current batches finish, and the first failure is returned.
 async fn workers(
     cache: Cache,
     settings: Reload,
     runner: Arc<dyn Batch>,
-    stop: watch::Receiver<bool>,
+    mut stop: watch::Receiver<bool>,
 ) -> Result<(), Error> {
+    let (halt, halted) = watch::channel(*stop.borrow());
     let mut running = tokio::task::JoinSet::new();
     for _ in 0..settings.current().server.workers {
         running.spawn(worker(
             cache.clone(),
             settings.clone(),
             runner.clone(),
-            stop.clone(),
+            halted.clone(),
         ));
     }
-    while let Some(result) = running.join_next().await {
-        result.map_err(|_| Error("queue worker stopped unexpectedly"))??;
+    let mut failure = None;
+    let mut listening = true;
+    loop {
+        tokio::select! {
+            joined = running.join_next() => {
+                let Some(joined) = joined else { break };
+                let result = joined
+                    .map_err(|_| Error("queue worker stopped unexpectedly"))
+                    .and_then(|result| result);
+                if let Err(error) = result
+                    && failure.is_none()
+                {
+                    failure = Some(error);
+                    let _ = halt.send(true);
+                }
+            }
+            changed = stop.changed(), if listening => {
+                if changed.is_err() || *stop.borrow() {
+                    let _ = halt.send(true);
+                    listening = false;
+                }
+            }
+        }
     }
-    Ok(())
+    failure.map_or(Ok(()), Err)
 }
 
 async fn worker(
