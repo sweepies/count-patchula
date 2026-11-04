@@ -109,7 +109,9 @@ fn go_directives_requires_and_python_markers() {
         ("pyproject.toml".into(),"[project]\nname = \"spec\"\ndependencies = [\"requests[security]==2.31.0 ; python_version >= '3.8'\", \"Django>=4.2,<5\", \"six==1.16.0\"]\n".into()),
     ]);
     let deps = extract(&files);
-    assert_eq!(deps.len(), 7, "{deps:?}");
+    // example.org/lib is replaced, so it is skipped.
+    assert_eq!(deps.len(), 6, "{deps:?}");
+    assert!(!deps.iter().any(|d| d.package == "example.org/lib"));
     assert!(
         deps.iter()
             .any(|d| d.kind == DependencyKind::GoDirective && d.current == "1.24.0")

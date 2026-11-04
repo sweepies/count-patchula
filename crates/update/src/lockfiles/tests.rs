@@ -169,6 +169,17 @@ impl Executor for Fixture {
                 if spec.args.iter().any(|a| a == "bun") {
                     spec.args.push("--offline".into());
                 }
+                // A module proxy on disk for the Go fixture's module.
+                let goproxy = (spec.args.iter().any(|a| a == "go")
+                    && self
+                        .files
+                        .get("go.mod")
+                        .is_some_and(|s| s.contains(GO_FIXTURE)))
+                .then(|| {
+                    let proxy = spec.cwd.join("goproxy");
+                    go_proxy(&proxy, GO_FIXTURE, &["v1.0.0", "v1.1.0"]);
+                    format!("file://{}", proxy.display())
+                });
                 // Real tools come from the developer's mise store, where the
                 // test task installs them, not the runner's empty tool store.
                 let store = std::env::var_os("MISE_DATA_DIR").map_or_else(
@@ -187,6 +198,9 @@ impl Executor for Fixture {
                     ("GOSUMDB", "off"),
                 ] {
                     spec.env.insert(key.into(), value.into());
+                }
+                if let Some(goproxy) = goproxy {
+                    spec.env.insert("GOPROXY".into(), goproxy.into());
                 }
                 return SystemExecutor.run(spec).await;
             }
@@ -1344,25 +1358,23 @@ async fn real_cargo_and_go_targeted_updates_retain_the_selected_manifest_and_loc
                 ("Cargo.lock".into(),"version = 4\n[[package]]\nname='fixture'\nversion='1.0.0'\ndependencies=['offline-registry-fixture']\n[[package]]\nname='offline-registry-fixture'\nversion='1.0.0'\nsource='registry+https://github.com/rust-lang/crates.io-index'\n".into()),
             ]),"Cargo.toml",old.to_owned(),old.replace("fixture='1.0.0'","fixture='2.0.0'"),"offline-registry-fixture","1.0.0","2.0.0","crates")
         } else {
-            let old = "module example.com/fixture\n\ngo 1.22\n\nrequire example.com/local v1.0.0\n\nreplace example.com/local => ./local\n";
+            // A module from a proxy on disk: one a `replace` names is not
+            // updated at all.
+            let old =
+                format!("module example.com/fixture\n\ngo 1.22\n\nrequire {GO_FIXTURE} v1.0.0\n");
             (
                 BTreeMap::from([
-                    ("go.mod".into(), old.into()),
+                    ("go.mod".into(), old.clone()),
                     ("go.sum".into(), "\n".into()),
                     (
                         "main.go".into(),
-                        "package main\nimport _ \"example.com/local\"\nfunc main() {}\n".into(),
+                        format!("package main\nimport _ \"{GO_FIXTURE}\"\nfunc main() {{}}\n"),
                     ),
-                    (
-                        "local/go.mod".into(),
-                        "module example.com/local\n\ngo 1.22\n".into(),
-                    ),
-                    ("local/local.go".into(), "package local\n".into()),
                 ]),
                 "go.mod",
-                old.to_owned(),
+                old.clone(),
                 old.replace("v1.0.0", "v1.1.0"),
-                "example.com/local",
+                GO_FIXTURE,
                 "v1.0.0",
                 "v1.1.0",
                 "go",
@@ -5421,4 +5433,84 @@ fn a_batch_measures_targets_against_the_locked_release() {
     assert!(batch(ranged).is_none());
     // A newer lockfile-only target is still batched.
     assert!(batch(cargo_change("tokio", "^1.40", "1.41.0")).is_some());
+}
+
+/// The Go module the real-tool fixture serves from a module proxy on disk.
+const GO_FIXTURE: &str = "example.com/proxied";
+
+/// A Go module proxy at `dir` serving `module` at `versions`, as
+/// `GOPROXY=file://` reads one: a list, and each version's info, go.mod and
+/// zip.
+fn go_proxy(dir: &std::path::Path, module: &str, versions: &[&str]) {
+    let base = dir.join(module).join("@v");
+    std::fs::create_dir_all(&base).unwrap();
+    std::fs::write(base.join("list"), versions.join("\n") + "\n").unwrap();
+    let go_mod = format!("module {module}\n\ngo 1.22\n");
+    let leaf = module.rsplit('/').next().unwrap();
+    for version in versions {
+        std::fs::write(
+            base.join(format!("{version}.info")),
+            format!("{{\"Version\":\"{version}\",\"Time\":\"2024-01-01T00:00:00Z\"}}"),
+        )
+        .unwrap();
+        std::fs::write(base.join(format!("{version}.mod")), &go_mod).unwrap();
+        let prefix = format!("{module}@{version}");
+        let zip = stored_zip(&[
+            (format!("{prefix}/go.mod"), go_mod.as_bytes().to_vec()),
+            (
+                format!("{prefix}/{leaf}.go"),
+                format!("package {leaf}\n").into_bytes(),
+            ),
+        ]);
+        std::fs::write(base.join(format!("{version}.zip")), zip).unwrap();
+    }
+}
+
+/// A zip archive of `entries`, stored without compression.
+fn stored_zip(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut central = Vec::new();
+    for (name, data) in entries {
+        let crc = crc32fast::hash(data);
+        let offset = u32::try_from(out.len()).unwrap();
+        let size = u32::try_from(data.len()).unwrap();
+        let name_len = u16::try_from(name.len()).unwrap();
+        // Version 2.0, no flags, stored, a 1980-01-01 date.
+        let common = |buf: &mut Vec<u8>| {
+            buf.extend_from_slice(&20u16.to_le_bytes());
+            buf.extend_from_slice(&0u16.to_le_bytes());
+            buf.extend_from_slice(&0u16.to_le_bytes());
+            buf.extend_from_slice(&0u16.to_le_bytes());
+            buf.extend_from_slice(&0x21u16.to_le_bytes());
+            buf.extend_from_slice(&crc.to_le_bytes());
+            buf.extend_from_slice(&size.to_le_bytes());
+            buf.extend_from_slice(&size.to_le_bytes());
+            buf.extend_from_slice(&name_len.to_le_bytes());
+            buf.extend_from_slice(&0u16.to_le_bytes());
+        };
+        out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+        common(&mut out);
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(data);
+        central.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+        central.extend_from_slice(&20u16.to_le_bytes());
+        common(&mut central);
+        // No comment, disk 0, no attributes, then the entry's offset.
+        central.extend_from_slice(&[0; 6]);
+        central.extend_from_slice(&0u32.to_le_bytes());
+        central.extend_from_slice(&offset.to_le_bytes());
+        central.extend_from_slice(name.as_bytes());
+    }
+    let central_offset = u32::try_from(out.len()).unwrap();
+    let central_size = u32::try_from(central.len()).unwrap();
+    let count = u16::try_from(entries.len()).unwrap();
+    out.extend_from_slice(&central);
+    out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+    out.extend_from_slice(&[0; 4]);
+    out.extend_from_slice(&count.to_le_bytes());
+    out.extend_from_slice(&count.to_le_bytes());
+    out.extend_from_slice(&central_size.to_le_bytes());
+    out.extend_from_slice(&central_offset.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out
 }
