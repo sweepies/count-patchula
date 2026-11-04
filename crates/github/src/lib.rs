@@ -370,7 +370,14 @@ impl Client {
     /// Every REST GET goes to the transport with cached validators when present.
     /// A 304 returns the original status/body with refreshed response metadata.
     pub async fn get(&self, path: &str) -> Result<Response> {
-        self.get_representation(path, None).await
+        self.get_representation(path, None, false).await
+    }
+
+    /// A GET whose answer never changes, such as a Git blob by its SHA: a
+    /// cached success is returned without asking GitHub again. The cache key
+    /// carries the credential scope, so another credential never reads it.
+    pub async fn get_immutable(&self, path: &str) -> Result<Response> {
+        self.get_representation(path, None, true).await
     }
 
     /// Authoritative read used for write preconditions. Always revalidates with
@@ -417,13 +424,15 @@ impl Client {
         format: &'static str,
         derive: Derive,
     ) -> Result<Response> {
-        self.get_representation(path, Some((format, derive))).await
+        self.get_representation(path, Some((format, derive)), false)
+            .await
     }
 
     async fn get_representation(
         &self,
         path: &str,
         derived: Option<(&'static str, Derive)>,
+        immutable: bool,
     ) -> Result<Response> {
         let mut url = self.url(path)?;
         let mut visited = HashSet::new();
@@ -460,6 +469,25 @@ impl Client {
                     .await
                     .map_err(|_| Error::Cache)?
             };
+            if immutable
+                && let Some(entry) = &cached
+                && (200..300).contains(&entry.status)
+            {
+                let mut headers = header::HeaderMap::new();
+                for (name, value) in &entry.headers {
+                    if let (Ok(name), Ok(value)) = (
+                        header::HeaderName::from_bytes(name.as_bytes()),
+                        HeaderValue::from_str(value),
+                    ) {
+                        headers.insert(name, value);
+                    }
+                }
+                return Ok(Response {
+                    status: StatusCode::from_u16(entry.status).map_err(|_| Error::Cache)?,
+                    headers,
+                    body: entry.body.clone(),
+                });
+            }
             if let Some(entry) = &cached {
                 for (name, value) in [
                     (header::IF_NONE_MATCH, &entry.etag),

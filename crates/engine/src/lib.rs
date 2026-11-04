@@ -2209,7 +2209,15 @@ impl Engine {
     }
     async fn blob(&self, repo: &str, sha: &str) -> Result<Vec<u8>> {
         use base64::Engine;
-        let value = self.json(&format!("repos/{repo}/git/blobs/{sha}")).await?;
+        // A blob's SHA names its content, so a cached one is never asked for
+        // again.
+        let value: Value = serde_json::from_slice(
+            &self
+                .github
+                .get_immutable(&format!("repos/{repo}/git/blobs/{sha}"))
+                .await?
+                .body,
+        )?;
         if value["encoding"] != "base64" {
             return Err(Error::Invalid("unsupported blob encoding".into()));
         }

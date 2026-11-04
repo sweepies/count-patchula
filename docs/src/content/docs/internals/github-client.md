@@ -42,7 +42,9 @@ enables them with `-vv` or `PATCHULA_LOG=debug`.
 ## Conditional reads
 
 Every REST GET looks up validators in SQLite and sends `If-None-Match` or
-`If-Modified-Since` when it has them, even after expiry. A 304 reuses the
+`If-Modified-Since` when it has them, even after expiry. The one exception is
+a read whose answer cannot change, a Git blob by its SHA: `get_immutable`
+returns a cached success without a request. A 304 reuses the
 cached status and body and merges headers, keeping a cached pagination `Link`
 if GitHub omits it. `no-store` and `Vary: *` responses are not kept. Keys
 include the normalised URL, `Accept`, the API version, `Vary` headers and a

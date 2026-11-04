@@ -51,6 +51,59 @@ async fn every_get_uses_validators_and_304_preserves_body_and_link_metadata() {
     replay.assert_finished().unwrap();
 }
 
+/// Answers every request with the same JSON body, and counts them.
+struct Counted(AtomicUsize);
+impl Transport for Counted {
+    fn send(&self, _: reqwest::Request) -> Exchange<'_> {
+        Box::pin(async move {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert("etag", "\"blob\"".parse().unwrap());
+            Ok(Response {
+                status: reqwest::StatusCode::OK,
+                headers,
+                body: b"{\"content\":\"aGk=\"}".to_vec(),
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn an_immutable_get_is_answered_from_the_cache_without_a_request() {
+    let directory = tempfile::tempdir().unwrap();
+    let cache = || async {
+        Cache::open(
+            directory.path().join("cache.sqlite"),
+            CacheOptions::default(),
+        )
+        .await
+        .unwrap()
+    };
+    let transport = Arc::new(Counted(AtomicUsize::new(0)));
+    let client =
+        Client::with_transport(TOKEN, cache().await, Options::default(), transport.clone())
+            .unwrap();
+    let path = "repos/acme/app/git/blobs/0123456789abcdef0123456789abcdef01234567";
+    let first = client.get_immutable(path).await.unwrap();
+    let second = client.get_immutable(path).await.unwrap();
+    assert_eq!(first.body, second.body);
+    assert_eq!(second.headers["etag"], "\"blob\"");
+    assert_eq!(transport.0.load(Ordering::SeqCst), 1);
+    // An ordinary GET still revalidates.
+    client.get(path).await.unwrap();
+    assert_eq!(transport.0.load(Ordering::SeqCst), 2);
+    // Another credential has its own cache entries.
+    let other = Client::with_transport(
+        "ghp_otherTestCredential456",
+        cache().await,
+        Options::default(),
+        transport.clone(),
+    )
+    .unwrap();
+    other.get_immutable(path).await.unwrap();
+    assert_eq!(transport.0.load(Ordering::SeqCst), 3);
+}
+
 #[tokio::test(start_paused = true)]
 async fn secondary_limit_has_exponential_backoff_and_report_stats() {
     let (_directory, client, replay) = client("secondary", Options::default()).await;
