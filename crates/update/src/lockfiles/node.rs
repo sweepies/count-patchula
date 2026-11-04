@@ -151,6 +151,9 @@ pub(super) struct NodeContext<'a> {
 impl Runner {
     /// Regenerate every Node lockfile committed in one directory.
     pub(super) async fn node(&self, context: NodeContext<'_>) -> Result<(), String> {
+        // Operator registry credentials the entries allow tools to use, in
+        // the run's own user configuration, gone when the tools finish.
+        let _credentials = registry_credentials(context.driver, &self.registries)?;
         // Tools read registries from the repository's `.npmrc`, so a private
         // scope never resolves to the public package of its name. They get
         // only those lines, never tokens or settings that change how they
@@ -164,9 +167,6 @@ impl Runner {
         for (path, text) in &npmrcs {
             std::fs::write(path, npmrc(text)).map_err(|e| e.to_string())?;
         }
-        // Operator registry credentials the entries allow tools to use, in
-        // the run's own user configuration, gone when the tools finish.
-        let _credentials = registry_credentials(context.driver, &self.registries)?;
         let result = self.node_locks(context).await;
         for (path, text) in &npmrcs {
             std::fs::write(path, text).map_err(|e| e.to_string())?;
@@ -258,6 +258,19 @@ impl Runner {
         let after = std::fs::read_to_string(root.join(&lock)).unwrap_or_default();
         before == after
     }
+    /// Run an npm-family tool. When it holds registry credentials, a failure
+    /// shows none of its output, which may quote what a private registry
+    /// answered: failure reasons reach reports, dashboards and public pages.
+    async fn node_tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, String> {
+        let bin = call.bin.clone();
+        let result = self.tool(driver, call).await;
+        if self.registries.is_empty() {
+            return result;
+        }
+        result.map_err(|_| {
+            format!("{bin} failed while it held registry credentials, so its output is not shown")
+        })
+    }
     async fn bun(
         &self,
         driver: &Path,
@@ -274,7 +287,7 @@ impl Runner {
         if maintenance {
             std::fs::remove_file(cwd.join("bun.lock")).map_err(|e| e.to_string())?;
         }
-        self.tool(
+        self.node_tool(
             driver,
             Invocation {
                 tools: vec![("bun".into(), version)],
@@ -309,7 +322,7 @@ impl Runner {
             "--no-audit".into(),
             "--no-fund".into(),
         ];
-        self.tool(
+        self.node_tool(
             driver,
             Invocation {
                 tools: vec![("node".into(), version(versions, "node")?)],
@@ -354,7 +367,7 @@ impl Runner {
                 "--ignore-scripts".into(),
             ]);
         }
-        self.tool(
+        self.node_tool(
             driver,
             Invocation {
                 tools: vec![("aube".into(), version(versions, "aube")?)],
@@ -406,7 +419,7 @@ impl Runner {
             std::fs::write(&rc, yarnrc(text)?).map_err(|e| e.to_string())?;
         }
         let result = self
-            .tool(
+            .node_tool(
                 driver,
                 Invocation {
                     tools: vec![
@@ -629,30 +642,6 @@ fn registry_credentials(
     Ok(written)
 }
 
-/// `message` without any registry entry's secret, in any form a tool might
-/// print it: a token, a password, `user:password` or its base64.
-pub(super) fn redacted(mut message: String, registries: &[patchula_http::Credential]) -> String {
-    use base64::Engine;
-    for entry in registries {
-        let secrets = match &entry.auth {
-            patchula_http::Auth::Bearer { token } => vec![token.clone()],
-            patchula_http::Auth::Basic { username, password } => {
-                let ident = format!("{username}:{password}");
-                vec![
-                    base64::engine::general_purpose::STANDARD.encode(&ident),
-                    ident,
-                    password.clone(),
-                ]
-            }
-            _ => Vec::new(),
-        };
-        for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
-            message = message.replace(secret.as_str(), "[redacted]");
-        }
-    }
-    message
-}
-
 /// `.npmrc` with only the registries it names: `registry=` and
 /// `@scope:registry=` lines, as written. Tokens, and settings that change how
 /// a tool runs, are left out. A `${VAR}` registry stays, so npm stops on it
@@ -779,15 +768,5 @@ mod registry_credentials {
         }
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "kept");
         assert!(!link.exists());
-    }
-
-    #[test]
-    fn tool_output_never_shows_a_secret() {
-        let message =
-            "401 for t0ken; Authorization: Basic Y2k6cHc=; ident ci:pw; password pw".to_string();
-        assert_eq!(
-            redacted(message, &entries()),
-            "401 for [redacted]; Authorization: Basic [redacted]; ident [redacted]; password [redacted]"
-        );
     }
 }

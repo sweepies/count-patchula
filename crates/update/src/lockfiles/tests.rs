@@ -432,6 +432,39 @@ impl Transport for NoApi {
     }
 }
 
+/// A tool that held registry credentials fails without its output, which
+/// may quote what the private registry answered.
+#[tokio::test]
+async fn a_credentialed_tool_failure_shows_no_output() {
+    let files = BTreeMap::from([
+        ("package.json".into(), "{}\n".into()),
+        ("bun.lock".into(), "{}\n".into()),
+    ]);
+    let executor = fixture(files.clone(), true, false);
+    let temp = tempfile::tempdir().unwrap();
+    let entry = patchula_http::Credential::new(
+        "https://npm.acme.test",
+        patchula_http::Auth::Bearer {
+            token: "t0ken".into(),
+        },
+    )
+    .unwrap()
+    .for_tools();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone())
+        .with_registries(&[entry]);
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        .unwrap()
+        .unwrap();
+    runner.prepare(&mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+    let reason = p.action.reason.unwrap();
+    assert!(reason.contains("held registry credentials"), "{reason}");
+    assert!(!reason.contains("fixture resolution failure"), "{reason}");
+}
+
 #[tokio::test]
 async fn tool_failure_is_reported_without_api_writes_or_partial_scratch_files() {
     let files = BTreeMap::from([

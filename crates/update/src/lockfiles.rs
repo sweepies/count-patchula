@@ -1016,8 +1016,7 @@ impl Runner {
             .executor
             .run(spec)
             .await
-            // A registry may echo the credentials it was sent.
-            .map_err(|e| node::redacted(format!("{bin}: {e}"), &self.registries))?;
+            .map_err(|e| format!("{bin}: {e}"))?;
         self.record_use(&call.tools);
         Ok(output)
     }

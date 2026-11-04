@@ -243,22 +243,26 @@ and Yarn. Setting it trusts every repository that may use the entry, and
 every package those repositories depend on, with the credential: these tools
 run without lifecycle scripts, but they can still prepare a git dependency by
 running its build scripts, and they run unsandboxed, so that code can read the
-credential. Limit an entry with `tools = true` to the installations
-you trust with it through `allowedInstallations`.
+credential. In the server, limit an entry with `tools = true` to the
+installations you trust with it through `allowedInstallations`; the CLI gives
+it to every repository it runs on.
 
 Each tool gets the credentials in its own user configuration for the entry's
 URL prefix (`//host/path/:_authToken` or `_auth` for npm, aube and Bun,
 `npmRegistries` for Yarn, which needs the prefix to be the registry URL
 exactly), written with owner-only permissions for that run and removed when
-it finishes, and the secret is redacted from any tool output. The
+it finishes. When a tool fails while it holds credentials, the failure shows
+none of its output, which may quote what the private registry answered. The
 repository's own registry, proxy and TLS settings apply as each tool reads
 them, and npm, aube and Bun match credentials by host and path whatever the
 scheme: a repository that names the host over plain HTTP or turns TLS checks
 off, or a registry that serves plain-HTTP tarball URLs, sends the credential
-unencrypted. No other entry may sit under a
-`tools` entry's prefix, because these tools would send the broader entry's
-credentials there. Lockfile tools read the registries the repository names,
-never a [mirror](/guide/sources/#mirrors).
+unencrypted.
+
+No other entry may sit under a `tools` entry's prefix, because these tools
+would send the broader entry's credentials there, and the prefix cannot hold
+`=` or `;`, which `.npmrc` keys cannot. Lockfile tools read the registries
+the repository names, never a [mirror](/guide/sources/#mirrors).
 
 Bundler evaluates the Gemfile, dotnet runs MSBuild, and uv and Poetry may
 build source distributions, so they never get credentials. A lockfile of

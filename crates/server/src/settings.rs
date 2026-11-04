@@ -219,6 +219,10 @@ impl Settings {
             if registry.tools && (registry.auth.is_none() || registry.mirror_of.is_some()) {
                 return Err("tools needs auth, and does not apply to a mirror");
             }
+            // An `.npmrc` key ends at `=` and a comment starts at `;`.
+            if registry.tools && normalised.prefix().contains(['=', ';']) {
+                return Err("tools entries need a prefix without = or ;");
+            }
             entries.push((normalised, registry.tools));
         }
         // npm, aube and Bun give a URL the credentials of the nearest
@@ -807,6 +811,7 @@ mod tests {
             // An entry under a tools entry, for another installation or not.
             r#"registries { ["https://nexus.acme.dev"] { auth = "bearer"; secret { env = "T" }; tools = true }; ["https://nexus.acme.dev/repository/b"] { auth = "bearer"; secret { env = "U" }; allowedInstallations { 2 } } }"#,
             r#"registries { ["https://nexus.acme.dev"] { auth = "bearer"; secret { env = "T" }; tools = true }; ["https://nexus.acme.dev/npm-proxy"] { mirrorOf = "https://registry.npmjs.org" } }"#,
+            r#"registries { ["https://nexus.acme.dev/a=b"] { auth = "bearer"; secret { env = "T" }; tools = true } }"#,
         ] {
             assert!(load(&bad.replace("; ", "\n")).is_err(), "{bad}");
         }
