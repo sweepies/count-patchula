@@ -3,11 +3,12 @@
 //! read the mirror only where it has data. Tool lookups never read it.
 use std::{collections::BTreeMap, collections::BTreeSet, sync::LazyLock};
 
+static REGISTRY: LazyLock<BTreeMap<String, Vec<String>>> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("../registry.json")).expect("published registry snapshot")
+});
+
 static REPOSITORIES: LazyLock<BTreeSet<String>> = LazyLock::new(|| {
-    let registry: BTreeMap<String, Vec<String>> =
-        serde_json::from_str(include_str!("../registry.json"))
-            .expect("published registry snapshot");
-    registry
+    REGISTRY
         .values()
         .flatten()
         .filter_map(|backend| repository(backend))
@@ -30,6 +31,12 @@ fn repository(backend: &str) -> Option<String> {
         return None;
     }
     Some(format!("{owner}/{}", repo.trim_end_matches(".git")).to_ascii_lowercase())
+}
+
+/// The backends the registry snapshot lists for a short tool name, such as
+/// `npm:prettier` for `prettier`; none for a name it does not list.
+pub fn backends(tool: &str) -> &'static [String] {
+    REGISTRY.get(tool).map_or(&[], Vec::as_slice)
 }
 
 /// Route authenticated non-registry repositories directly, including private

@@ -9,7 +9,7 @@ mod sandbox;
 
 pub use lookup::{Lookup, PACKAGE, Query, Release};
 pub use policy::check;
-pub use registry::listed_github_repository;
+pub use registry::{backends, listed_github_repository};
 pub use sandbox::sandbox_env;
 
 #[derive(Debug, thiserror::Error)]

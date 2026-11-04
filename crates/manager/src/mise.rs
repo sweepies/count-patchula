@@ -264,3 +264,163 @@ impl Reader<'_> {
         });
     }
 }
+
+/// Backends that install from a package registry a project's settings can
+/// redirect: npm and Python indexes, Cargo sources and NuGet feeds.
+const PACKAGE_BACKENDS: [&str; 6] = ["npm", "pypi", "pipx", "cargo", "gem", "dotnet"];
+
+/// The backends `tool` can install with: its `backend:` prefix, or those
+/// mise's registry lists for a short name; `core` for one it does not list.
+fn backends(tool: &str) -> Vec<String> {
+    if let Some((backend, _)) = tool.split_once(':') {
+        return vec![backend.to_owned()];
+    }
+    let listed: Vec<String> = patchula_mise::backends(tool)
+        .iter()
+        .filter_map(|backend| backend.split_once(':').map(|(kind, _)| kind.to_owned()))
+        .collect();
+    if listed.is_empty() {
+        vec!["core".to_owned()]
+    } else {
+        listed
+    }
+}
+
+/// The backends a mise configuration's `[env]` and `[settings]` could send
+/// elsewhere, `*` standing for all; none when the Count cannot read it.
+fn redirected_backends(text: &str) -> Option<BTreeSet<String>> {
+    let doc = Document::parse(text).ok()?;
+    let mut out = BTreeSet::new();
+    let all = || PACKAGE_BACKENDS.iter().map(|b| (*b).to_owned());
+    if let Some(env) = doc.get("env").and_then(|v| v.as_table_like()) {
+        for (key, _) in env.iter() {
+            let key = key.to_ascii_uppercase();
+            let kinds: &[&str] = if key == "_" {
+                // Directives that load variables from files.
+                &PACKAGE_BACKENDS
+            } else if key.starts_with("MISE_") {
+                &["*"]
+            } else if key.starts_with("NPM_CONFIG_") || key.starts_with("YARN_") {
+                &["npm"]
+            } else if ["PIP_", "UV_", "PIPX_"].iter().any(|p| key.starts_with(p)) {
+                &["pypi", "pipx"]
+            } else if key.starts_with("CARGO_") {
+                &["cargo"]
+            } else if key.starts_with("GEM_") || key.starts_with("BUNDLE_") {
+                &["gem"]
+            } else if key.starts_with("NUGET_") || key.starts_with("DOTNET_") {
+                &["dotnet"]
+            } else {
+                &[]
+            };
+            out.extend(kinds.iter().map(|k| (*k).to_owned()));
+        }
+    }
+    if let Some(settings) = doc.get("settings").and_then(|v| v.as_table_like()) {
+        for (key, _) in settings.iter() {
+            match key {
+                "url_replacements" | "env_file" | "env_files" => {
+                    out.insert("*".to_owned());
+                }
+                key if PACKAGE_BACKENDS.contains(&key)
+                    || [
+                        "aqua", "ubi", "github", "gitlab", "http", "conda", "go", "spm",
+                    ]
+                    .contains(&key) =>
+                {
+                    out.insert(key.to_owned());
+                }
+                _ => {}
+            }
+        }
+    }
+    if out.contains("*") {
+        out.extend(all());
+    }
+    Some(out)
+}
+
+/// The project's own registry settings around `dir` that a package backend
+/// reads when mise runs it there: `.npmrc` and `.yarnrc.yml` naming a
+/// registry for npm, Python index settings for pypi, Cargo source
+/// replacement for cargo, and NuGet feeds for dotnet.
+fn project_redirect(
+    kind: &str,
+    dir: &str,
+    tool: &str,
+    files: &Files,
+    feeds: &crate::nuget::Feeds,
+) -> Option<String> {
+    let above = |path: &str| {
+        let folder = &path[..path.rfind('/').map_or(0, |i| i + 1)];
+        dir.starts_with(folder)
+    };
+    let leaf = |path: &str| path.rsplit('/').next().unwrap_or(path).to_owned();
+    match kind {
+        "npm" => files
+            .iter()
+            .find(|(path, text)| {
+                above(path)
+                    && matches!(leaf(path).as_str(), ".npmrc" | ".yarnrc.yml")
+                    && text.to_ascii_lowercase().contains("registry")
+            })
+            .map(|(path, _)| format!("the npm registry {path} may name")),
+        "pypi" | "pipx" => files
+            .iter()
+            .find(|(path, text)| {
+                above(path)
+                    && match leaf(path).as_str() {
+                        "uv.toml" | "pip.conf" | "pip.ini" => true,
+                        "pyproject.toml" => text.contains("index"),
+                        _ => false,
+                    }
+            })
+            .map(|(path, _)| format!("the Python index {path} may name")),
+        "cargo" => crate::cargo::replaced(files, &format!("{dir}x")),
+        "dotnet" => {
+            let package = tool.split_once(':').map_or(tool, |(_, name)| name);
+            match feeds.origin(&format!("{dir}x"), package) {
+                crate::origins::Origin::Index(crate::origins::Named::Public) => None,
+                _ => Some(format!("NuGet feeds around {dir} that are not nuget.org's")),
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Why the lookup of the mise tool `dep` cannot be taken to list what mise
+/// installs: the Count lists versions in a sandbox without the project's
+/// configuration, while mise installs a package backend's tools with it.
+/// A mise configuration in the tool's folder, above it or below it whose
+/// `[env]` or `[settings]` could redirect one of the tool's backends, one
+/// the Count cannot read, or the project's own registry settings for a
+/// package backend, fails the lookup.
+pub(crate) fn redirected(
+    dep: &Dependency,
+    configs: &[&str],
+    files: &Files,
+    feeds: &crate::nuget::Feeds,
+) -> Option<String> {
+    let dir = &dep.file[..dep.file.rfind('/').map_or(0, |i| i + 1)];
+    let kinds = backends(&dep.package);
+    for config in configs {
+        let folder = &config[..config.rfind('/').map_or(0, |i| i + 1)];
+        if !(dir.starts_with(folder) || folder.starts_with(dir)) {
+            continue;
+        }
+        let Some(redirected) = files
+            .get(*config)
+            .and_then(|text| redirected_backends(text))
+        else {
+            return Some(format!("{config}, which the Count cannot read"));
+        };
+        if redirected.contains("*") || kinds.iter().any(|kind| redirected.contains(kind)) {
+            return Some(format!(
+                "settings in {config} that may move where mise installs it from"
+            ));
+        }
+    }
+    kinds
+        .iter()
+        .find_map(|kind| project_redirect(kind, dir, &dep.package, files, feeds))
+}

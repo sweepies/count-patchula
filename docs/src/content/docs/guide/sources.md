@@ -93,6 +93,22 @@ What happens to a listing:
   the backend mise picks for it when that is npm, PyPI or crates.io. A tool
   whose listing and backend name no repository has no release notes.
 
+### Package backends and the project's settings
+
+The sandbox lists versions without the project's configuration, but mise
+installs a tool with it. A tool whose backend installs from a package
+registry (`npm`, `pypi` and `pipx`, `cargo`, `gem`, `dotnet`, explicitly or
+through mise's registry, as `aws-cdk` is `npm:aws-cdk`) fails its lookup
+where committed settings could send it elsewhere: a mise configuration in
+the tool's folder, above it or below it with registry variables in `[env]`
+(`NPM_CONFIG_*`, `PIP_*`, `UV_*`, `CARGO_*`, any `MISE_*`, or files loaded
+through `_`), backend `[settings]` or `url_replacements`; a mise
+configuration the Count cannot read; or the project's own `.npmrc` or
+`.yarnrc.yml` naming a registry, Python index settings, Cargo source
+replacement, or NuGet feeds other than nuget.org's. Core tools and GitHub
+and aqua backends are affected only by `MISE_*` variables and settings for
+their backend or `url_replacements`.
+
 ## mise-versions host
 
 By default (`useVersionsHost = true`), public GitHub repositories that appear in

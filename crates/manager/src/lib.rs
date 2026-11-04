@@ -350,6 +350,13 @@ impl Scanner {
             || (self.config.managers.contains(&Manager::Composer) && leaf == "composer.lock")
             || (self.config.managers.contains(&Manager::Cargo) && cargo::config_file(path))
             || (self.config.managers.contains(&Manager::Go) && go::work_file(path))
+            // A package backend mise runs in the project reads its settings.
+            || (self.config.managers.contains(&Manager::Mise)
+                && (matches!(
+                    leaf,
+                    ".npmrc" | ".yarnrc.yml" | "uv.toml" | "pip.conf" | "pip.ini" | "pyproject.toml"
+                ) || cargo::config_file(path)
+                    || nuget::config_file(path)))
             || (self.config.managers.contains(&Manager::Nuget)
                 && (nuget::config_file(path) || nuget::msbuild_file(path)))
             || (self.config.managers.contains(&Manager::Maven) && maven::repository_file(path))
@@ -715,6 +722,24 @@ impl Scanner {
                 }));
         }
         self.maven_repositories(files, &mut result.dependencies);
+        if self.config.managers.contains(&Manager::Mise) {
+            let configs: Vec<&str> = files
+                .keys()
+                .filter(|path| {
+                    self.selected(Manager::Mise, path) && !path.ends_with(".tool-versions")
+                })
+                .map(String::as_str)
+                .collect();
+            for dep in result
+                .dependencies
+                .iter_mut()
+                .filter(|d| d.manager == Manager::Mise && d.source == Source::Mise)
+            {
+                if let Some(reason) = mise::redirected(dep, &configs, files, &feeds) {
+                    dep.registry = origins::Named::Unusable(reason).recorded();
+                }
+            }
+        }
         result.locked = locked::cargo(files, &cargo, &result.dependencies);
         let mut replaced = BTreeMap::new();
         for locked in result
