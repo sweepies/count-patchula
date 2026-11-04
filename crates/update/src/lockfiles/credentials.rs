@@ -268,10 +268,11 @@ impl Runner {
 }
 
 /// Whether `field` is only characters a URL's user part holds unescaped:
-/// unreserved characters and sub-delimiters, and `:` in a password.
+/// unreserved characters and sub-delimiters but `+`, which a form decoder
+/// reads as a space, and `:` in a password.
 fn userinfo(field: &str, password: bool) -> bool {
     field.chars().all(|c| {
-        c.is_ascii_alphanumeric() || "-._~!$&'()*+,;=".contains(c) || (password && c == ':')
+        c.is_ascii_alphanumeric() || "-._~!$&'()*,;=".contains(c) || (password && c == ':')
     })
 }
 
@@ -283,6 +284,12 @@ fn plain(name: &str, extra: &[char]) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || extra.contains(&c))
 }
 
+/// Whether `node` is the element `name`, in any case or namespace, as NuGet
+/// reads it.
+fn named(node: &roxmltree::Node, name: &str) -> bool {
+    node.is_element() && node.tag_name().name().eq_ignore_ascii_case(name)
+}
+
 /// The sources a `nuget.config` adds, by key and URL, or None if the Count
 /// cannot read it.
 pub(super) fn nuget_sources(text: &str) -> Option<Definitions> {
@@ -290,14 +297,16 @@ pub(super) fn nuget_sources(text: &str) -> Option<Definitions> {
     let sources = document
         .root_element()
         .children()
-        .filter(|node| node.has_tag_name("packageSources"))
+        .filter(|node| named(node, "packageSources"))
         .flat_map(|sources| sources.children())
-        .filter(|node| node.has_tag_name("add"))
+        .filter(|node| named(node, "add"))
         .filter_map(|add| {
-            Some((
-                add.attribute("key")?.to_owned(),
-                add.attribute("value")?.to_owned(),
-            ))
+            let attribute = |name: &str| {
+                add.attributes()
+                    .find(|attribute| attribute.name().eq_ignore_ascii_case(name))
+                    .map(|attribute| attribute.value().to_owned())
+            };
+            Some((attribute("key")?, attribute("value")?))
         })
         .collect();
     Some(sources)
@@ -537,6 +546,7 @@ mod tests {
             // `BUNDLE_PATH` is a Bundler setting.
             entry("https://path", basic("ci", "pw")).for_tools(),
             entry("https://at.acme.dev", basic("ci", "p@ss")).for_tools(),
+            entry("https://plus.acme.dev", basic("ci", "a+b")).for_tools(),
         ]);
         assert_eq!(
             runner.bundler_env(),
@@ -577,6 +587,16 @@ mod tests {
             )]
         );
         assert!(nuget_sources("<configuration").is_none());
+        // NuGet reads elements and attributes in any case or namespace.
+        assert_eq!(
+            nuget_sources(
+                "<configuration xmlns=\"urn:x\"><PackageSources><Add Key=\"feed\" Value=\"https://nuget.acme.dev/\" /></PackageSources></configuration>",
+            ),
+            Some(vec![(
+                "feed".to_string(),
+                "https://nuget.acme.dev/".to_string()
+            )])
+        );
         // Keys differ in case only, or come twice in one file.
         for config in [
             "<configuration><packageSources><add key=\"Feed\" value=\"https://nuget.acme.dev/a/\" /></packageSources></configuration>",

@@ -2447,6 +2447,7 @@ dependencies = [
  "patchula-testkit",
  "patchula-versioning",
  "reqwest",
+ "roxmltree",
  "serde",
  "serde_json",
  "serde_yaml_ng",

@@ -256,8 +256,8 @@ updates off for the others.
 ## Private registries in lockfile tools
 
 Lockfile tools get a [registry entry's](/guide/sources/#private-registries)
-credentials only when the entry sets `tools = true`; APM, Nix and `mise lock`
-read no private registries and get none. In the server,
+credentials only when the entry sets `tools = true`; APM, Nix, `mise lock` and
+the Gradle wrapper read no private registries and get none. In the server,
 `allowedInstallations` decides which installations' tools are given them,
 and the CLI gives them to every repository it runs on. As lockfile tools run
 repository and package code, any repository the Count processes can read a
@@ -303,7 +303,7 @@ quotes, a backslash or `#`, a NuGet user or password with `;`, a source or
 registry name outside ASCII letters, digits, `-`, `_` and (for NuGet and
 Poetry) `.`, a Bundler or Terraform host with `_`, a Bundler host without a
 dot, a Bundler user or password with characters other than letters, digits
-and `-._~!$&'()*+,;=` (and `:` in a password),
+and `-._~!$&'()*,;=` (and `:` in a password),
 and a Cargo registry whose index is not `sparse+`. Composer puts basic credentials in the URL of the Git
 commands it runs for a VCS repository on that host, where other processes on
 the host can see them. No other entry may sit under a `tools` entry's prefix,
