@@ -87,7 +87,18 @@ impl Runner {
         );
         let home = driver.join("composer");
         let path = |p: &str| home.join(p).to_string_lossy().into_owned();
-        self.tool(
+        let mut env = vec![
+            ("COMPOSER_HOME".into(), path("home")),
+            ("COMPOSER_CACHE_DIR".into(), path("cache")),
+            ("COMPOSER_NO_AUDIT".into(), "1".into()),
+            ("COMPOSER_ALLOW_SUPERUSER".into(), "1".into()),
+        ];
+        let auth = self.composer_auth();
+        let held = auth.is_some();
+        if let Some(auth) = auth {
+            env.push(("COMPOSER_AUTH".into(), auth));
+        }
+        self.held_tool(
             driver,
             Invocation {
                 tools: tools(
@@ -97,14 +108,10 @@ impl Runner {
                 ),
                 bin: "composer".into(),
                 cwd: Some(cwd),
-                env: vec![
-                    ("COMPOSER_HOME".into(), path("home")),
-                    ("COMPOSER_CACHE_DIR".into(), path("cache")),
-                    ("COMPOSER_NO_AUDIT".into(), "1".into()),
-                    ("COMPOSER_ALLOW_SUPERUSER".into(), "1".into()),
-                ],
+                env,
                 args,
             },
+            held,
         )
         .await?;
         let before = baseline.get(&lock).map(|b| b.content.as_str());

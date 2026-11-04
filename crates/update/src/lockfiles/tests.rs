@@ -1642,7 +1642,7 @@ async fn cargo_jobs_address_the_lock_as_it_stands() {
             lock_only: false,
         };
         runner
-            .cargo_update(&driver, &cwd, "1.99.0", &job, false)
+            .cargo_update(&driver, &cwd, "1.99.0", &job, false, &[])
             .await
             .unwrap_or_else(|e| panic!("{locked} -> {target}: {e}"));
         let commands: Vec<_> = executor
@@ -1655,6 +1655,103 @@ async fn cargo_jobs_address_the_lock_as_it_stands() {
         assert_eq!(commands, expected, "{locked} -> {target}");
         let lock = std::fs::read_to_string(cwd.join("Cargo.lock")).unwrap();
         assert!(lock.contains(&format!("version = \"{after}\"")), "{lock}");
+    }
+}
+
+/// Cargo as far as the environment it gets: each call records its registry
+/// variables and refreshes the lock.
+struct CargoEnv {
+    git: Arc<Fixture>,
+    envs: Mutex<Vec<BTreeMap<String, String>>>,
+}
+impl Executor for CargoEnv {
+    fn run(
+        &self,
+        spec: CommandSpec,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+        if spec.args.iter().any(|arg| arg == "git") {
+            return self.git.run(spec);
+        }
+        Box::pin(async move {
+            self.envs.lock().unwrap().push(
+                spec.env
+                    .iter()
+                    .filter_map(|(k, v)| Some((k.to_str()?.to_owned(), v.to_str()?.to_owned())))
+                    .filter(|(k, _)| k.starts_with("CARGO_REGISTRIES_"))
+                    .collect(),
+            );
+            let at = spec.args.iter().position(|arg| arg == "cargo").unwrap();
+            let args = &spec.args[at + 1..];
+            let manifest =
+                Path::new(&args[args.iter().position(|a| a == "--manifest-path").unwrap() + 1]);
+            std::fs::write(
+                manifest.with_file_name("Cargo.lock"),
+                "version = 4\n# refreshed\n",
+            )
+            .unwrap();
+            Ok(Vec::new())
+        })
+    }
+}
+
+/// Cargo gets a tools entry's registry by name, index and token from the
+/// configuration at or above the project, and nothing from elsewhere.
+#[tokio::test]
+async fn cargo_gets_credentialed_registries_from_the_environment() {
+    let files = BTreeMap::from([
+        (
+            "app/Cargo.toml".to_string(),
+            "[package]\nname='app'\nversion='1.0.0'\n".to_string(),
+        ),
+        ("app/Cargo.lock".into(), "version = 4\n".into()),
+        (
+            ".cargo/config.toml".into(),
+            "[registries.acme]\nindex = \"sparse+https://crates.acme.test/\"\n[registries.open]\nindex = \"sparse+https://crates.open.test/\"\n".into(),
+        ),
+        (
+            "other/.cargo/config.toml".into(),
+            "[registries.side]\nindex = \"sparse+https://crates.acme.test/side/\"\n".into(),
+        ),
+    ]);
+    let executor = Arc::new(CargoEnv {
+        git: fixture(files.clone(), false, false),
+        envs: Mutex::new(Vec::new()),
+    });
+    let temp = tempfile::tempdir().unwrap();
+    let entry = patchula_http::Credential::new(
+        "https://crates.acme.test",
+        patchula_http::Auth::Bearer {
+            token: "t0ken".into(),
+        },
+    )
+    .unwrap()
+    .for_tools();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone())
+        .with_registries(&[entry]);
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        .unwrap()
+        .unwrap();
+    runner.prepare(&mut p, &mut snapshot, &config).await;
+    assert_ne!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+    let envs = executor.envs.lock().unwrap();
+    assert!(!envs.is_empty());
+    for env in envs.iter() {
+        assert_eq!(
+            *env,
+            BTreeMap::from([
+                (
+                    "CARGO_REGISTRIES_ACME_INDEX".to_string(),
+                    "sparse+https://crates.acme.test/".to_string()
+                ),
+                (
+                    "CARGO_REGISTRIES_ACME_TOKEN".to_string(),
+                    "Bearer t0ken".to_string()
+                ),
+            ])
+        );
     }
 }
 
@@ -3537,7 +3634,7 @@ async fn cargo_jobs_move_only_the_crates_io_entry_of_their_package() {
             lock_only: false,
         };
         runner
-            .cargo_update(&driver, &cwd, "1.99.0", &job, false)
+            .cargo_update(&driver, &cwd, "1.99.0", &job, false, &[])
             .await
             .unwrap_or_else(|e| panic!("git {git}, crates.io {registry}: {e}"));
         assert_eq!(

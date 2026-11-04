@@ -201,9 +201,10 @@ A dependency's source decides where its versions come from. Helm repositories,
 OCI and Docker registries, Maven repositories and GitLab, Gitea or Forgejo tags carry
 their URL, so a private one works with an entry. npm and Python dependencies
 can name their own [package registry](#package-registries). The other package
-registries still read their public registry, or its mirror. Only aube, npm,
-Bun and Yarn get registry credentials, from entries that set `tools = true`;
-see [lockfiles](/guide/lockfiles/#isolation) for what that trusts.
+registries still read their public registry, or its mirror. Lockfile tools get
+registry credentials only from entries that set `tools = true`, and only aube,
+npm, Bun, Yarn, Cargo, Composer, Go and Terraform; see [lockfiles](/guide/lockfiles/#isolation)
+for which tools get them and what that trusts.
 
 ### Package registries
 

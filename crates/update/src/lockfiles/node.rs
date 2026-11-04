@@ -258,18 +258,10 @@ impl Runner {
         let after = std::fs::read_to_string(root.join(&lock)).unwrap_or_default();
         before == after
     }
-    /// Run an npm-family tool. When it holds registry credentials, a failure
-    /// shows none of its output, which may quote what a private registry
-    /// answered: failure reasons reach reports, dashboards and public pages.
+    /// Run an npm-family tool, which holds every tools entry's credentials.
     async fn node_tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, String> {
-        let bin = call.bin.clone();
-        let result = self.tool(driver, call).await;
-        if self.registries.is_empty() {
-            return result;
-        }
-        result.map_err(|_| {
-            format!("{bin} failed while it held registry credentials, so its output is not shown")
-        })
+        self.held_tool(driver, call, !self.registries.is_empty())
+            .await
     }
     async fn bun(
         &self,

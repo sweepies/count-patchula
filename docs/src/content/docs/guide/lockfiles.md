@@ -238,31 +238,62 @@ Output is kept only when something fails, at most 4 KiB of each stream.
 
 :::caution[Private registries]
 Lockfile tools get a [registry entry's](/guide/sources/#private-registries)
-credentials only when the entry sets `tools = true`, and only aube, npm, Bun
-and Yarn. Setting it trusts every repository that may use the entry, and
-every package those repositories depend on, with the credential: these tools
-run without lifecycle scripts, but they can still prepare a git dependency by
+credentials only when the entry sets `tools = true`. Setting it trusts every
+repository that may use the entry with the credential, and for aube, npm, Bun
+and Yarn every package those repositories depend on too: these tools run
+without lifecycle scripts, but they can still prepare a git dependency by
 running its build scripts, and they run unsandboxed, so that code can read the
-credential. In the server, limit an entry with `tools = true` to the
-installations you trust with it through `allowedInstallations`; the CLI gives
-it to every repository it runs on.
+credential. Cargo, Composer (with scripts and plugins off), Go and Terraform
+run no package code while they lock. In the server, `allowedInstallations`
+decides which installations' tools are given an entry's credentials; the CLI
+gives them to every repository it runs on. Lockfile tools run unsandboxed as
+the Count's own user, though, so code one of them runs can also read what
+other runs on the same host hold at the time, and the Count's own environment
+and files: `allowedInstallations` does not bound what such code can read.
 
-Each tool gets the credentials in its own user configuration for the entry's
-URL prefix (`//host/path/:_authToken` or `_auth` for npm, aube and Bun,
-`npmRegistries` for Yarn, which needs the prefix to be the registry URL
-exactly), written with owner-only permissions for that run and removed when
-it finishes. When a tool fails while it holds credentials, the failure shows
-none of its output, which may quote what the private registry answered. The
-repository's own registry, proxy and TLS settings apply as each tool reads
-them, and npm, aube and Bun match credentials by host and path whatever the
-scheme: a repository that names the host over plain HTTP or turns TLS checks
-off, or a registry that serves plain-HTTP tarball URLs, sends the credential
+Each tool gets the credentials in the form it reads, only for its own run:
+
+| Tool | Form | Credentials | Matched by |
+| --- | --- | --- | --- |
+| aube, npm, Bun | `//host/path/:_authToken` or `:_auth` in its user configuration | bearer, basic | prefix |
+| Yarn | `npmRegistries` in its user configuration | bearer, basic | the registry URL, exactly |
+| Cargo | `CARGO_REGISTRIES_<NAME>_INDEX` and `_TOKEN` | bearer, basic | the sparse index URL of each registry `.cargo/config.toml` or `.cargo/config` names |
+| Composer | `COMPOSER_AUTH` | bearer, basic | host |
+| Go | `~/.netrc`, with the host in `GOPRIVATE` | basic | host |
+| Terraform | `TF_TOKEN_<host>` | bearer | host |
+
+Files are written with owner-only permissions and removed when the tool
+finishes. Cargo sends the token as the `Authorization` header, so it gets the
+header a lookup sends: `Bearer <token>` or `Basic <base64>`. Cargo runs
+outside the repository and reads none of its configuration; it gets each
+registry that the `.cargo/config.toml` and `.cargo/config` files at or above
+the project define under a `tools` entry, by name, index and token. A name
+defined more than one way gets nothing, and so does an index URL not written
+in its normal form (lowercase host, no user, escapes or backslashes). Go
+fetches the modules under a credentialed host from the host itself, never
+through the public module proxy or checksum database.
+
+Composer, Go and Terraform send credentials to every URL on the host, so they
+only get an entry whose prefix is a bare host, with no path or port, and that
+is the only entry on its host, for any installation. A credential a tool
+cannot take is left out without a warning, and the tool then fails on the
+registry: a bearer entry for Go, a basic one for Terraform, a Go user or
+password with whitespace, quotes, a backslash or `#`, a Terraform host with
+`_`, and a Cargo registry whose index is not `sparse+`. Composer puts basic
+credentials in the URL of the Git commands it runs for a VCS repository on
+that host, where other processes on the host can see them. No other entry may sit under a `tools` entry's prefix,
+because npm, aube and Bun would send the broader entry's credentials there,
+and the prefix cannot hold `=` or `;`, which `.npmrc` keys cannot. Lockfile
+tools read the registries the repository names, never a
+[mirror](/guide/sources/#mirrors).
+
+When a tool fails while it holds credentials, the failure shows none of its
+output, which may quote what the private registry answered. The repository's
+own registry, proxy and TLS settings apply as each tool reads them, and npm,
+aube and Bun match credentials by host and path whatever the scheme: a
+repository that names the host over plain HTTP or turns TLS checks off, or a
+registry that serves plain-HTTP tarball URLs, sends the credential
 unencrypted.
-
-No other entry may sit under a `tools` entry's prefix, because these tools
-would send the broader entry's credentials there, and the prefix cannot hold
-`=` or `;`, which `.npmrc` keys cannot. Lockfile tools read the registries
-the repository names, never a [mirror](/guide/sources/#mirrors).
 
 Bundler evaluates the Gemfile, dotnet runs MSBuild, and uv and Poetry may
 build source distributions, so they never get credentials. A lockfile of

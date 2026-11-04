@@ -1,4 +1,7 @@
-use super::{Blob, Plan, Runner, blob_sha, collect, hash, materialized, safe_path};
+use super::{
+    Blob, Ecosystem, Plan, Runner, blob_sha, cargo_config, collect, directory_of_cargo_config,
+    hash, materialized, safe_path, under,
+};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::{collections::BTreeMap, path::Path};
 
@@ -60,7 +63,7 @@ impl Runner {
         plan: &Plan,
         root: &Path,
         driver: &Path,
-    ) -> Result<BTreeMap<String, Blob>, String> {
+    ) -> Result<(BTreeMap<String, Blob>, BTreeMap<String, String>), String> {
         let clones = self.cache.join("clones");
         std::fs::create_dir_all(&clones).map_err(|e| e.to_string())?;
         let name = hash(plan.action.repository.as_bytes());
@@ -161,10 +164,12 @@ impl Runner {
             )
             .await?;
         let mut entries = BTreeMap::new();
+        let mut cargo_configs = BTreeMap::new();
         for entry in tree.split(|b| *b == 0).filter(|e| !e.is_empty()) {
             let entry = std::str::from_utf8(entry).map_err(|_| "non UTF-8 repository path")?;
             let (metadata, path) = entry.split_once('\t').ok_or("invalid Git tree entry")?;
-            if !materialized(path) && !plan.contents.contains_key(path) {
+            let cargo = self.reads_cargo_config(plan, path);
+            if !materialized(path) && !cargo && !plan.contents.contains_key(path) {
                 continue;
             }
             if !safe_path(path) {
@@ -174,7 +179,15 @@ impl Runner {
             let mode = parts.next().ok_or("missing tree mode")?;
             let kind = parts.next().ok_or("missing tree type")?;
             let oid = parts.next().ok_or("missing tree OID")?;
-            if !matches!(mode, "100644" | "100755") || kind != "blob" {
+            let regular = matches!(mode, "100644" | "100755") && kind == "blob";
+            if cargo {
+                // A linked Cargo configuration defines no registries.
+                if regular {
+                    cargo_configs.insert(path.to_owned(), oid.to_owned());
+                }
+                continue;
+            }
+            if !regular {
                 return Err(format!("unsupported checkout mode for {path}"));
             }
             entries.insert(path.to_owned(), (oid.to_owned(), mode.to_owned()));
@@ -215,6 +228,66 @@ impl Runner {
                 ));
             }
         }
-        Ok(baseline)
+        let cargo_configs = self
+            .cargo_configs(&clone, base, driver, cargo_configs)
+            .await?;
+        Ok((baseline, cargo_configs))
+    }
+
+    /// Whether `path` is a Cargo configuration at or above a project the
+    /// plan relocks, read for its registries when a tools entry may cover
+    /// them.
+    fn reads_cargo_config(&self, plan: &Plan, path: &str) -> bool {
+        !self.registries.is_empty()
+            && cargo_config(path)
+            && plan.lock_jobs.iter().any(|job| {
+                let owner = directory_of_cargo_config(path);
+                job.ecosystem == Ecosystem::Cargo
+                    && (job.directory == owner || under(&job.directory, owner))
+            })
+    }
+
+    /// The text of the Cargo configurations `oids` names, checked out apart
+    /// from the tree tools run in, so no tool reads them and no other file
+    /// depends on them. One that is not UTF-8, is over 1 MiB or does not match
+    /// its blob defines no registries.
+    async fn cargo_configs(
+        &self,
+        clone: &Path,
+        base: &str,
+        driver: &Path,
+        oids: BTreeMap<String, String>,
+    ) -> Result<BTreeMap<String, String>, String> {
+        let mut out = BTreeMap::new();
+        if oids.is_empty() {
+            return Ok(out);
+        }
+        let work = driver.join("cargo-config");
+        std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+        let paths: Vec<_> = oids.keys().cloned().collect();
+        for chunk in paths.chunks(64) {
+            let mut args = vec![
+                format!("--work-tree={}", work.display()),
+                "checkout".into(),
+                base.to_owned(),
+                "--".into(),
+            ];
+            args.extend_from_slice(chunk);
+            self.git(driver, clone, args).await?;
+        }
+        for (path, oid) in oids {
+            let Ok(bytes) = std::fs::read(work.join(&path)) else {
+                continue;
+            };
+            if bytes.len() > 1 << 20 {
+                continue;
+            }
+            if let Ok(text) = String::from_utf8(bytes)
+                && blob_sha(&text) == oid
+            {
+                out.insert(path, text);
+            }
+        }
+        Ok(out)
     }
 }
