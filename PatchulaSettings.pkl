@@ -67,6 +67,9 @@ class Server {
   sweepTimezone: String = "UTC"
   batchSize: Int = 32
   coalescingMs: Int = 1000
+  /// Installations whose batches run at once, each one batch at a time. Read
+  /// at start.
+  workers: Int = 4
   /// null emits the versioned report as a structured log event.
   reportDirectory: String? = null
   /// Empty lists allow all installations/repositories the App can access.

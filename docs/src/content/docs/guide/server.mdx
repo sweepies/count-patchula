@@ -116,14 +116,17 @@ looks it up with the App JWT and caches the answer for five minutes.
 
 ## The queue
 
-One installation batch runs at a time, with up to `concurrency` repositories
-scanned in parallel. The first event opens a coalescing window
+Batches of up to `workers` installations (4 by default) run at once, each
+installation one batch at a time, with up to `concurrency` repositories
+scanned in parallel in each. Each installation has its own GitHub rate limits,
+so they do not wait on each other; each batch runs its own lockfile tools,
+though, so lower `workers` on a small host. The first event opens a coalescing window
 (`coalescingMs`), and events that arrive during a batch fold into one follow-up
 batch. Failures retry after 60 seconds. If the default branch moves while a
 batch is writing, the stale publication is skipped and the repository is
 requeued.
 
-Queue rows survive restarts. SIGTERM stops new work, drains the current batch
+Queue rows survive restarts. SIGTERM stops new work, drains the running batches
 within `--shutdown-timeout-secs` (60 by default), and requeues the rest. A lock
 beside the cache allows one server per cache; give CLI jobs a separate cache.
 

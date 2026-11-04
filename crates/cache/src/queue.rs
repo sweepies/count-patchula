@@ -98,11 +98,13 @@ impl Cache {
             Ok(true)
         }).await
     }
-    /// One installation per batch so every repository runs with its own App token.
+    /// One installation per batch so every repository runs with its own App
+    /// token, and never one whose earlier batch is still running, so batches
+    /// of different installations can run at once.
     pub async fn claim_batch(&self, now: i64, limit: usize) -> Result<Vec<Claim>> {
         self.call(move |store| {
             let tx = store.conn.transaction()?;
-            let installation: Option<i64> = tx.query_row("SELECT installation FROM server_work WHERE claimed IS NULL AND available_at<=?1 ORDER BY available_at,installation,repo LIMIT 1", [now], |r| r.get(0)).optional()?;
+            let installation: Option<i64> = tx.query_row("SELECT installation FROM server_work WHERE claimed IS NULL AND available_at<=?1 AND installation NOT IN (SELECT installation FROM server_work WHERE claimed IS NOT NULL) ORDER BY available_at,installation,repo LIMIT 1", [now], |r| r.get(0)).optional()?;
             let Some(installation) = installation else { return Ok(Vec::new()); };
             let rows = {
                 let mut query = tx.prepare("SELECT repo,generation,check_prs FROM server_work WHERE claimed IS NULL AND available_at<=?1 AND installation=?2 ORDER BY available_at,repo LIMIT ?3")?;
@@ -256,6 +258,27 @@ mod tests {
             cache.claim_batch(0, 1).await.unwrap()[0].work.check_prs,
             None
         );
+    }
+    #[tokio::test]
+    async fn a_running_installation_is_skipped_while_another_is_claimed() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        for work in [Work::repository(1, "one/a"), Work::repository(2, "two/a")] {
+            cache.enqueue(None, vec![work], 0, 0).await.unwrap();
+        }
+        let first = cache.claim_batch(0, 1).await.unwrap();
+        assert_eq!(first[0].work.installation, 1);
+        // Installation 1 has more work, but its batch is still running.
+        cache
+            .enqueue(None, vec![Work::repository(1, "one/b")], 0, 0)
+            .await
+            .unwrap();
+        let second = cache.claim_batch(0, 10).await.unwrap();
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].work.installation, 2);
+        assert!(cache.claim_batch(0, 10).await.unwrap().is_empty());
+        cache.finish_work(first, true, 0, 0).await.unwrap();
+        let third = cache.claim_batch(0, 10).await.unwrap();
+        assert_eq!(third[0].work.repo, "one/b");
     }
     #[tokio::test]
     async fn dedupe_coalesce_and_generation_fence() {
