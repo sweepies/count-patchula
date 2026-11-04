@@ -278,7 +278,7 @@ impl Scanner {
             if self.config.managers.contains(&Manager::Maven) {
                 maven::referenced(files)
                     .into_iter()
-                    .map(|(_, target, _)| target)
+                    .flat_map(|(_, targets, _)| targets)
                     .collect()
             } else {
                 std::collections::BTreeSet::new()

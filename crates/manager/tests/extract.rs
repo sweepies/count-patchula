@@ -3394,6 +3394,9 @@ fn maven_lookups_fail_when_any_build_file_names_another_repository() {
         "<repositories><repository><id>acme</id><url>${acme.url}</url></repository></repositories>",
     );
     let modules = pom("<modules><module>alt/build-pom.xml</module></modules>");
+    let relative_parent = pom(
+        "<parent><groupId>com.acme</groupId><artifactId>base</artifactId><version>1</version><relativePath>base.pom</relativePath></parent>",
+    );
     let mirror = "<settings><mirrors><mirror><id>acme</id><mirrorOf>*</mirrorOf><url>https://repo.acme.dev/maven</url></mirror></mirrors></settings>";
     for files in [
         vec![("pom.xml", private.as_str())],
@@ -3416,6 +3419,19 @@ fn maven_lookups_fail_when_any_build_file_names_another_repository() {
             ("pom.xml", plain.as_str()),
             ("lib/pom.xml", patchula_manager::UNREADABLE_SETTINGS),
         ],
+        vec![
+            ("pom.xml", relative_parent.as_str()),
+            ("base.pom", private.as_str()),
+        ],
+        vec![(
+            "pom.xml",
+            pom("<repositories><repository><id>x</id><url>https://repo.maven.apache.org<!-- -->.evil.example/</url></repository></repositories>").as_str(),
+        )],
+        vec![("pom.xml", plain.as_str()), (".mvn/maven.config", "-Bs ci/elsewhere.xml")],
+        vec![(
+            "pom.xml",
+            pom("<subprojects><subproject>missing</subproject></subprojects>").as_str(),
+        )],
         vec![
             ("pom.xml", plain.as_str()),
             (".mvn/maven.config", "-sci/elsewhere.xml"),
@@ -3491,6 +3507,15 @@ fn gradle_lookups_fail_when_build_logic_could_add_another_repository() {
         ("gradle/deps.gradle", "ext { junit = '5.10.0' }\n"),
     ];
     assert_eq!(lookup(&applied), None);
+    // A build script in a test fixture is not the build's own.
+    let fixture = [
+        ("build.gradle.kts", plain.as_str()),
+        (
+            "src/test/resources/sample/build.gradle",
+            "repositories { maven { url 'https://repo.acme.dev' } }\n",
+        ),
+    ];
+    assert_eq!(lookup(&fixture), None);
     let private = build("repositories { maven { url = uri(\"https://repo.acme.dev/maven\") } }");
     for files in [
         vec![("build.gradle.kts", private.as_str())],
@@ -3533,6 +3558,48 @@ fn gradle_lookups_fail_when_build_logic_could_add_another_repository() {
         vec![
             ("build.gradle.kts", plain.as_str()),
             ("lib/build.gradle", patchula_manager::UNREADABLE_SETTINGS),
+        ],
+        vec![
+            ("build.gradle.kts", plain.as_str()),
+            (
+                "src/adservice/build.gradle",
+                "repositories { maven { url 'https://repo.acme.dev' } }\n",
+            ),
+        ],
+        vec![
+            ("build.gradle.kts", plain.as_str()),
+            (
+                "other.gradle.kts",
+                "repositories { `maven` { url = uri(\"https://repo.acme.dev\") } }\n",
+            ),
+        ],
+        vec![
+            ("build.gradle.kts", plain.as_str()),
+            (
+                "other.gradle",
+                "repositories { 'maven' { url 'https://repo.acme.dev' } }\n",
+            ),
+        ],
+        vec![
+            ("build.gradle.kts", plain.as_str()),
+            (
+                "other.gradle.kts",
+                "apply(mapOf(\"from\" to \"gradle/repos.gradle\"))\n",
+            ),
+        ],
+        vec![
+            ("build.gradle.kts", plain.as_str()),
+            (
+                "other.gradle",
+                "def a = ä\nfrom 'x'\nrepositories { mavenLocal() }\n",
+            ),
+        ],
+        vec![
+            ("build.gradle.kts", plain.as_str()),
+            (
+                "buildSrc/src/main/java/Repos.java",
+                "class Repos { String s = \"${\"; void f(R r) { r.maven(x); } String t = \"}\"; }\n",
+            ),
         ],
         vec![
             ("build.gradle.kts", plain.as_str()),

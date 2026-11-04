@@ -236,15 +236,42 @@ fn relative(from: &str, named: &str) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("/"))
 }
 
-/// A POM path for a module or parent named `named` from `from`: the file,
-/// or `pom.xml` in the folder.
-fn pom_at(from: &str, named: &str) -> Option<String> {
-    let path = relative(from, named.trim())?;
-    Some(if path.to_ascii_lowercase().ends_with(".xml") {
-        path
+/// The paths a module or parent named `named` from `from` can be: the file
+/// itself, and `pom.xml` in it when it is a folder.
+fn pom_at(from: &str, named: &str) -> Vec<String> {
+    let Some(path) = relative(from, named.trim()) else {
+        return Vec::new();
+    };
+    if path.to_ascii_lowercase().ends_with(".xml") {
+        vec![path]
     } else {
-        format!("{path}/pom.xml")
-    })
+        vec![format!("{path}/pom.xml"), path]
+    }
+}
+
+/// An element's whole text, however comments split it; none when it holds
+/// elements.
+fn whole_text(node: roxmltree::Node<'_, '_>) -> Option<String> {
+    let mut out = String::new();
+    for child in node.children() {
+        if child.is_element() {
+            return None;
+        }
+        if let Some(text) = child.text().filter(|_| child.is_text()) {
+            out.push_str(text);
+        }
+    }
+    Some(out.trim().to_owned())
+}
+
+/// Short `.mvn/maven.config` options that take no value, which commons-cli
+/// lets run together, as in `-Bs settings.xml`.
+const FLAGS: &str = "BXeqoUNCcVvh";
+
+/// An option's value written in the same word, after an optional `=`.
+fn value(tail: &str) -> Option<&str> {
+    let tail = tail.strip_prefix('=').unwrap_or(tail);
+    (!tail.is_empty()).then_some(tail)
 }
 
 /// What one `.mvn/maven.config` option names: a settings file, a global
@@ -265,27 +292,27 @@ fn file_option(word: &str) -> Option<(&'static str, Option<&str>)> {
     if matches!(short, "fae" | "ff" | "fn") {
         return None;
     }
+    // Flags may run together before the option that takes a value.
+    let short = short.trim_start_matches(|c| FLAGS.contains(c));
     if let Some(tail) = short.strip_prefix("gs") {
-        let tail = tail.strip_prefix('=').unwrap_or(tail);
-        return Some(("global-settings", (!tail.is_empty()).then_some(tail)));
+        return Some(("global-settings", value(tail)));
     }
     if let Some(tail) = short.strip_prefix('s') {
-        let tail = tail.strip_prefix('=').unwrap_or(tail);
-        return Some(("settings", (!tail.is_empty()).then_some(tail)));
+        return Some(("settings", value(tail)));
     }
     if let Some(tail) = short.strip_prefix('f') {
-        let tail = tail.strip_prefix('=').unwrap_or(tail);
-        return Some(("file", (!tail.is_empty()).then_some(tail)));
+        return Some(("file", value(tail)));
     }
     None
 }
 
 /// The files Maven reads that the Count only learns of from other files:
-/// POMs `.mvn/maven.config` (`-f`), a `<module>` or a parent's
-/// `<relativePath>` names, and settings `-s` names, each with the file
-/// naming it and whether it must exist. A parent POM that is not in the
-/// repository is fetched from a repository instead, so it need not.
-pub(crate) fn referenced(files: &Files) -> Vec<(String, String, bool)> {
+/// POMs `.mvn/maven.config` (`-f`), a `<module>`, a `<subproject>` or a
+/// parent's `<relativePath>` names, and settings `-s` names, each with the
+/// file naming it, the paths it can be, and whether it must exist. A parent
+/// POM that is not in the repository is fetched from a repository instead,
+/// so it need not.
+pub(crate) fn referenced(files: &Files) -> Vec<(String, Vec<String>, bool)> {
     let mut out = Vec::new();
     for (path, text) in files {
         if path == ".mvn/maven.config" || path.ends_with("/.mvn/maven.config") {
@@ -297,17 +324,15 @@ pub(crate) fn referenced(files: &Files) -> Vec<(String, String, bool)> {
                 };
                 let named = value.or_else(|| words.next()).unwrap_or("");
                 let from = format!("{base}x");
-                let target = match option {
+                let targets = match option {
                     "file" => pom_at(&from, named),
-                    _ => relative(&from, named),
+                    _ => relative(&from, named).into_iter().collect(),
                 };
-                out.push((path.clone(), target.unwrap_or_else(|| "..".into()), true));
+                out.push((path.clone(), targets, true));
             }
             continue;
         }
-        if path.rsplit('/').next() != Some("pom.xml")
-            && !path.to_ascii_lowercase().ends_with(".xml")
-        {
+        if !path.to_ascii_lowercase().ends_with(".xml") {
             continue;
         }
         let Ok(document) = roxmltree::Document::parse(text) else {
@@ -318,16 +343,19 @@ pub(crate) fn referenced(files: &Files) -> Vec<(String, String, bool)> {
         }
         for node in document.descendants().filter(|n| n.is_element()) {
             let parent = node.parent_element().map(|p| p.tag_name().name());
-            let (named, required) = match (node.tag_name().name(), parent) {
-                ("module", Some("modules")) => (node.text().unwrap_or(""), true),
-                ("relativePath", Some("parent")) => (node.text().unwrap_or(""), false),
+            let required = match (node.tag_name().name(), parent) {
+                ("module", Some("modules")) | ("subproject", Some("subprojects")) => true,
+                ("relativePath", Some("parent")) => false,
                 _ => continue,
             };
-            if named.trim().is_empty() {
+            let Some(named) = whole_text(node) else {
+                out.push((path.clone(), Vec::new(), true));
+                continue;
+            };
+            if named.is_empty() {
                 continue;
             }
-            let target = pom_at(path, named).unwrap_or_else(|| "..".into());
-            out.push((path.clone(), target, required));
+            out.push((path.clone(), pom_at(path, &named), required));
         }
     }
     out
@@ -343,8 +371,8 @@ pub(crate) fn referenced(files: &Files) -> Vec<(String, String, bool)> {
 pub(crate) fn private_repositories(files: &Files) -> Option<String> {
     use crate::origins::Named;
     let referenced = referenced(files);
-    for (from, target, required) in &referenced {
-        if *required && !files.contains_key(target) {
+    for (from, targets, required) in &referenced {
+        if *required && !targets.iter().any(|target| files.contains_key(target)) {
             return Some(format!(
                 "a file {from} names, which the Count does not read"
             ));
@@ -352,7 +380,8 @@ pub(crate) fn private_repositories(files: &Files) -> Option<String> {
     }
     let poms: BTreeSet<&str> = referenced
         .iter()
-        .map(|(_, target, _)| target.as_str())
+        .flat_map(|(_, targets, _)| targets)
+        .map(String::as_str)
         .filter(|target| files.contains_key(*target))
         .collect();
     for (path, text) in files
@@ -368,7 +397,7 @@ pub(crate) fn private_repositories(files: &Files) -> Option<String> {
         let Ok(document) = roxmltree::Document::parse(text) else {
             // Another tool's file that only ends in `settings.xml`; one that
             // looks like Maven's but does not parse here is not read.
-            if settings_file(path) && !text.contains("<settings") {
+            if settings_file(path) && !poms.contains(path.as_str()) && !text.contains("<settings") {
                 continue;
             }
             return Some(format!("{path}, which the Count cannot read"));
@@ -395,10 +424,9 @@ pub(crate) fn private_repositories(files: &Files) -> Option<String> {
             let url = node
                 .children()
                 .find(|c| c.tag_name().name() == "url")
-                .and_then(|c| c.text())
-                .map(str::trim);
+                .and_then(whole_text);
             let public = url.is_some_and(|url| {
-                Named::parse(url, &crate::gradle::MAVEN_PUBLIC) == Named::Public
+                Named::parse(&url, &crate::gradle::MAVEN_PUBLIC) == Named::Public
             });
             if !public {
                 return Some(format!("a {name} in {path}"));

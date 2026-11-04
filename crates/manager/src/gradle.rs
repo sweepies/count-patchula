@@ -355,8 +355,25 @@ pub(crate) fn build_logic(path: &str) -> bool {
     let in_logic = BUILD_LOGIC
         .iter()
         .any(|dir| path.starts_with(dir) || path.contains(&format!("/{dir}")));
-    selected(path) && (leaf.ends_with(".gradle") || leaf.ends_with(".gradle.kts"))
+    (leaf.ends_with(".gradle") || leaf.ends_with(".gradle.kts")) && !fixture(path)
         || in_logic && logic_source(path)
+}
+
+/// Whether `path` is in a source set's test or resource folder, where
+/// build scripts are fixtures rather than the build's own: under
+/// `src/<set>/` for a set named for tests, or `src/<set>/resources/` for
+/// any set but `main`. A project that only lives in a folder named `src`
+/// is not.
+fn fixture(path: &str) -> bool {
+    let parts: Vec<&str> = path.split('/').collect();
+    parts.windows(3).any(|window| {
+        let [src, set, next] = window else {
+            return false;
+        };
+        *src == "src"
+            && *set != "main"
+            && (set.to_ascii_lowercase().contains("test") || *next == "resources")
+    })
 }
 
 /// The folder an `includeBuild` in the settings script at `settings` names,
@@ -390,8 +407,10 @@ enum Reference {
 fn word_before(code: &str, at: usize) -> &str {
     let head = code[..at].trim_end_matches(|c: char| c.is_whitespace() || c == '(');
     let start = head
-        .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-        .map_or(0, |i| i + 1);
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '_'))
+        .map_or(0, |(i, c)| i + c.len_utf8());
     &head[start..]
 }
 
@@ -416,6 +435,13 @@ fn string_after<'s>(
 /// The folder of the build `path` belongs to: the nearest folder at or
 /// above it with a settings script, as a path prefix.
 fn root_folder(files: &Files, path: &str) -> Option<String> {
+    // `buildSrc` is a build of its own.
+    if let Some(at) = path
+        .find("buildSrc/")
+        .filter(|at| *at == 0 || path.as_bytes()[at - 1] == b'/')
+    {
+        return Some(path[..at + "buildSrc/".len()].to_owned());
+    }
     let mut dir = &path[..path.rfind('/').map_or(0, |i| i + 1)];
     loop {
         if ["settings.gradle", "settings.gradle.kts"]
@@ -476,12 +502,35 @@ fn applied_script(
     if tail.contains('$') || tail.contains("://") {
         return None;
     }
-    let base = if root {
-        format!("{}x", root_folder(files, path)?)
-    } else {
-        path.to_owned()
+    let resolve = |base: &str| {
+        included_folder(&format!("{base}x"), tail).map(|f| f.trim_end_matches('/').to_owned())
     };
-    included_folder(&base, tail).map(|folder| folder.trim_end_matches('/').to_owned())
+    if root {
+        return resolve(&root_folder(files, path)?);
+    }
+    // Relative to the project's folder: a build or settings script's own;
+    // for a script another applies, either its own folder or the build's,
+    // which must not name two different files.
+    let own = &path[..path.rfind('/').map_or(0, |i| i + 1)];
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    if leaf.starts_with("build.gradle") || leaf.starts_with("settings.gradle") {
+        return resolve(own);
+    }
+    let mut candidates: Vec<String> = [Some(own.to_owned()), root_folder(files, path)]
+        .into_iter()
+        .flatten()
+        .filter_map(|base| resolve(&base))
+        .collect();
+    candidates.dedup();
+    let existing: Vec<&String> = candidates
+        .iter()
+        .filter(|c| files.contains_key(*c))
+        .collect();
+    match existing.as_slice() {
+        [one] => Some((*one).clone()),
+        [] => candidates.into_iter().next(),
+        _ => None,
+    }
 }
 
 /// The builds and scripts the build logic at `path` names. Settings name
@@ -523,6 +572,29 @@ fn references(
             _ => {}
         }
     }
+    // An `apply` whose line names `from` any other way, such as
+    // `apply(mapOf("from" to …))` or `apply to: p, from: …`, applies a
+    // script the Count does not follow.
+    for (at, _) in code.match_indices("apply") {
+        let end = at + "apply".len();
+        if (at > 0 && word(bytes[at - 1])) || bytes.get(end).is_some_and(|b| word(*b)) {
+            continue;
+        }
+        let line_end = code[end..].find('\n').map_or(code.len(), |n| end + n);
+        let line = &code[end..line_end];
+        let direct = line
+            .trim_start_matches(|c: char| c.is_whitespace() || c == '(')
+            .starts_with("from");
+        let named_from = line.match_indices("from").any(|(n, _)| {
+            let b = line.as_bytes();
+            !(n > 0 && word(b[n - 1])) && !b.get(n + 4).is_some_and(|c| word(*c))
+        }) || strings
+            .iter()
+            .any(|(start, s)| *start >= end && *start < line_end && s == "from");
+        if named_from && !direct {
+            out.push(Reference::Script(None));
+        }
+    }
     out
 }
 
@@ -557,6 +629,8 @@ struct Lexer<'a> {
     strings: Vec<(usize, String)>,
     /// Kotlin: raw strings take no escapes, and backticks quote names.
     kotlin: bool,
+    /// Java: strings hold no templates, and there are no slashy strings.
+    java: bool,
 }
 
 impl Lexer<'_> {
@@ -591,16 +665,28 @@ impl Lexer<'_> {
             } else if matches!(rest[0], b'"' | b'\'') {
                 i = self.string(i, 1)?;
             } else if self.kotlin && rest[0] == b'`' {
-                // A name in backticks, such as the plugin `maven-publish`.
+                // A name in backticks: one a plain name could be, such as
+                // `maven`, stays code; any other, such as the plugin
+                // `maven-publish`, is blanked.
                 let end = i + 1 + rest[1..].iter().position(|b| matches!(b, b'`' | b'\n'))?;
                 if bytes[end] != b'`' {
                     return None;
                 }
-                self.blank(i, end + 1);
+                let name = &bytes[i + 1..end];
+                let plain = name
+                    .first()
+                    .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_')
+                    && name.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_');
+                if plain {
+                    self.blank(i, i + 1);
+                    self.blank(end, end + 1);
+                } else {
+                    self.blank(i, end + 1);
+                }
                 i = end + 1;
-            } else if rest.starts_with(b"$/") {
+            } else if !self.java && rest.starts_with(b"$/") {
                 i = self.slashy(i, b"$/", b"/$")?;
-            } else if rest[0] == b'/' && self.slashy_starts(i) {
+            } else if !self.java && rest[0] == b'/' && self.slashy_starts(i) {
                 i = self.slashy(i, b"/", b"/")?;
             } else {
                 match rest[0] {
@@ -670,7 +756,7 @@ impl Lexer<'_> {
     fn string(&mut self, start: usize, width: usize) -> Option<usize> {
         let bytes = self.bytes;
         let quote = &bytes[start..start + width];
-        let templates = quote[0] == b'"';
+        let templates = quote[0] == b'"' && !self.java;
         let mut literal = Vec::new();
         let mut i = start + width;
         loop {
@@ -712,6 +798,7 @@ fn code(path: &str, text: &str) -> Option<(String, Vec<(usize, String)>)> {
         out: text.as_bytes().to_vec(),
         strings: Vec::new(),
         kotlin: path.ends_with(".kt") || path.ends_with(".kts"),
+        java: path.ends_with(".java"),
     };
     lexer.code(0, false)?;
     // Blanking replaced whole bytes, so a multi-byte character inside a
@@ -855,6 +942,20 @@ pub(crate) fn private_repositories(files: &Files) -> Option<String> {
                 return Some(format!("a repository {path} may add"));
             }
             i = end;
+        }
+        // A repository call by a quoted name, as Groovy allows:
+        // `'maven' { … }`.
+        for (at, string) in &strings {
+            if !REPOSITORY_CALLS.contains(&string.as_str()) {
+                continue;
+            }
+            let after = at + string.len() + 2;
+            let next = code
+                .get(after..)
+                .and_then(|rest| rest.trim_start().bytes().next());
+            if matches!(next, Some(b'{' | b'(')) {
+                return Some(format!("a repository {path} may add"));
+            }
         }
     }
     None
