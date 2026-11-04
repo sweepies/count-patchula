@@ -3246,6 +3246,19 @@ fn nuget_packages_come_from_nuget_org_alone_or_as_source_mapping_says() {
             nuget_config("<packageSourceMapping><packageSource key=\"nuget.org\"><package pattern=\"Acme.Lib\" /></packageSource></packageSourceMapping>"),
         ),
         ("two-mappings/app/App.csproj".into(), project(&packages)),
+        // A clear in a closer mapping can turn NuGet's mapping off.
+        (
+            "mapping-clear/nuget.config".into(),
+            nuget_config(&format!(
+                "{}\n<packageSourceMapping><packageSource key=\"nuget.org\"><package pattern=\"*\" /></packageSource></packageSourceMapping>",
+                sources(acme)
+            )),
+        ),
+        (
+            "mapping-clear/app/nuget.config".into(),
+            nuget_config("<packageSourceMapping><clear /></packageSourceMapping>"),
+        ),
+        ("mapping-clear/app/App.csproj".into(), project(&packages)),
         // What NuGet reads differently from the Count fails.
         (
             "removed/nuget.config".into(),

@@ -236,7 +236,8 @@ dependency's `registry`:
   source, `packageSourceMapping` must say which source serves each
   package. When one config holds the mapping, its most specific pattern
   (an exact ID, else the longest prefix) decides; with mappings in several
-  configs, every pattern that matches counts. A package mapped to
+  configs, every pattern that matches counts, and a mapping `<clear />`
+  among them, which can turn NuGet's mapping off, fails the lookup. A package mapped to
   nuget.org alone comes from there; any other fails its lookup, since
   private NuGet feeds are not read yet. A `dotnet-tools.json` manifest
   counts every folder below it with a config of its own, and a shared

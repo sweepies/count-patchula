@@ -299,17 +299,31 @@ fn decoded(text: &str) -> String {
     while let Some(at) = rest.find("&#") {
         out.push_str(&rest[..at]);
         let reference = &rest[at + 2..];
-        // A reference is at most `x` and eight hex digits before its `;`,
-        // so only that far is searched, keeping a long run of `&#` linear.
-        let window = &reference.as_bytes()[..reference.len().min(10)];
-        let decoded = window.iter().position(|&b| b == b';').and_then(|end| {
-            let code = &reference[..end];
-            let value = match code.strip_prefix(['x', 'X']) {
-                Some(hex) => u32::from_str_radix(hex, 16).ok()?,
-                None => code.parse().ok()?,
-            };
-            Some((char::from_u32(value)?, end + 1))
-        });
+        // Only the digits after `&#` are read, however many leading zeros
+        // they have; a run of `&#` without them stays linear.
+        let bytes = reference.as_bytes();
+        let hex = matches!(bytes.first(), Some(b'x' | b'X'));
+        let start = usize::from(hex);
+        let digits = bytes[start..]
+            .iter()
+            .take_while(|b| {
+                if hex {
+                    b.is_ascii_hexdigit()
+                } else {
+                    b.is_ascii_digit()
+                }
+            })
+            .count();
+        let end = start + digits;
+        let decoded = (digits > 0 && bytes.get(end) == Some(&b';'))
+            .then(|| {
+                let digits = reference[start..end].trim_start_matches('0');
+                let digits = if digits.is_empty() { "0" } else { digits };
+                u32::from_str_radix(digits, if hex { 16 } else { 10 }).ok()
+            })
+            .flatten()
+            .and_then(char::from_u32)
+            .map(|c| (c, end + 1));
         match decoded {
             Some((c, width)) => {
                 out.push(c);
@@ -330,8 +344,18 @@ fn decoded(text: &str) -> String {
 struct Config {
     /// Every source it adds, as `(key, value)`.
     sources: Vec<(String, String)>,
-    /// Its `packageSourceMapping`, as `(source key, pattern)`, when it has one.
-    mapping: Option<Vec<(String, String)>>,
+    /// Its `packageSourceMapping`, when it has one.
+    mapping: Option<Mapping>,
+}
+
+/// One config's `packageSourceMapping`.
+#[derive(Clone, Debug, Default)]
+struct Mapping {
+    /// Whether it starts with `clear`, which drops the mappings of configs
+    /// farther up and can leave NuGet with none at all.
+    cleared: bool,
+    /// `(source key, pattern)`.
+    entries: Vec<(String, String)>,
 }
 
 /// Sections of a `nuget.config` that do not say where packages come from.
@@ -438,24 +462,30 @@ fn config(text: &str) -> Result<Config, ()> {
                 if out.mapping.is_some() {
                     return Err(());
                 }
-                let mut mapping = Vec::new();
+                let mut mapping = Mapping::default();
                 let mut keys = BTreeSet::new();
                 for (index, child) in elements(section)?.into_iter().enumerate() {
                     match child.tag_name().name() {
-                        "clear" if index == 0 => {}
+                        "clear" if index == 0 => mapping.cleared = true,
                         "packageSource" => {
                             let key = attribute(child, "key")?;
                             if !plain_key(&key) || !keys.insert(key.to_ascii_lowercase()) {
                                 return Err(());
                             }
-                            for package in elements(child)? {
+                            // A source with no patterns, which NuGet may
+                            // read as one that serves nothing, is not read.
+                            let packages = elements(child)?;
+                            if packages.is_empty() {
+                                return Err(());
+                            }
+                            for package in packages {
                                 let pattern = attribute(package, "pattern")?;
                                 if package.tag_name().name() != "package"
                                     || !plain_pattern(&pattern)
                                 {
                                     return Err(());
                                 }
-                                mapping.push((key.clone(), pattern));
+                                mapping.entries.push((key.clone(), pattern));
                             }
                         }
                         _ => return Err(()),
@@ -478,14 +508,34 @@ fn config(text: &str) -> Result<Config, ()> {
     Ok(out)
 }
 
-/// The package source configuration of a repository, read once: each
-/// folder's `nuget.config`, and whether an MSBuild file overrides them.
+/// The package source configuration of a repository, read once: what a
+/// restore in each folder with a config sees, and whether an MSBuild file
+/// overrides the configs.
 pub(crate) struct Feeds {
-    /// Each folder with a config, as a path prefix (`""` for the root), and
-    /// what it says, or why the Count cannot read it.
-    configs: BTreeMap<String, Result<Config, String>>,
+    /// For each folder with a config, as a path prefix (`""` for the root),
+    /// the configs from the root down to it, or why the Count cannot read
+    /// one of them.
+    chains: BTreeMap<String, Result<Chain, String>>,
     /// An MSBuild file that sets restore sources itself, or cannot be read.
     overridden: Option<String>,
+}
+
+/// What the configs from the root down to a folder say. Every source any of
+/// them adds counts, with the nuget.org source NuGet's default user config
+/// adds, so a source NuGet would drop only ever makes a lookup fail.
+#[derive(Clone, Debug)]
+struct Chain {
+    sources: Vec<(String, Named)>,
+    mappings: Vec<Mapping>,
+}
+
+impl Default for Chain {
+    fn default() -> Self {
+        Self {
+            sources: vec![("nuget.org".into(), Named::Public)],
+            mappings: Vec::new(),
+        }
+    }
 }
 
 impl Feeds {
@@ -511,6 +561,28 @@ impl Feeds {
                 configs.insert(dir, read);
             }
         }
+        // Folders sort after the folders above them, so each chain extends
+        // the nearest one above.
+        let mut chains = BTreeMap::<String, Result<Chain, String>>::new();
+        for (dir, config) in &configs {
+            let above = Self::nearest(&chains, dir.trim_end_matches('/'));
+            let chain = match (above, config) {
+                (Err(reason), _) => Err(reason),
+                (_, Err(reason)) => Err(reason.clone()),
+                (Ok(above), Ok(config)) => {
+                    let mut chain = above.clone();
+                    chain.sources.extend(
+                        config
+                            .sources
+                            .iter()
+                            .map(|(key, value)| (key.clone(), Named::parse(value, &NUGET_ORG))),
+                    );
+                    chain.mappings.extend(config.mapping.clone());
+                    Ok(chain)
+                }
+            };
+            chains.insert(dir.clone(), chain);
+        }
         let overridden = files
             .iter()
             .find(|(path, text)| {
@@ -523,9 +595,31 @@ impl Feeds {
                     })
             })
             .map(|(path, _)| format!("restore sources {path} may set"));
-        Self {
-            configs,
-            overridden,
+        Self { chains, overridden }
+    }
+
+    /// The chain of the nearest folder at or above `dir` (a path prefix, or
+    /// a path without its last `/`) with a config; the default one when none
+    /// has.
+    fn nearest(
+        chains: &BTreeMap<String, Result<Chain, String>>,
+        dir: &str,
+    ) -> Result<Chain, String> {
+        let mut prefix = dir;
+        loop {
+            let key = if prefix.is_empty() {
+                String::new()
+            } else {
+                format!("{}/", prefix.trim_end_matches('/'))
+            };
+            if let Some(chain) = chains.get(&key) {
+                return chain.clone();
+            }
+            match prefix.trim_end_matches('/').rsplit_once('/') {
+                Some((parent, _)) => prefix = parent,
+                None if !prefix.is_empty() => prefix = "",
+                None => return Ok(Chain::default()),
+            }
         }
     }
 
@@ -548,52 +642,45 @@ impl Feeds {
         if let Some(project) = dir.strip_suffix(".config/") {
             dir = project;
         }
+        let here = Self::nearest(&self.chains, dir);
         let below = self
-            .configs
-            .keys()
-            .filter(|config| config.starts_with(dir) && config.len() > dir.len());
-        let origins = std::iter::once(dir)
-            .chain(below.map(String::as_str))
-            .map(|dir| self.origin_in(dir, package));
+            .chains
+            .iter()
+            .filter(|(config, _)| config.starts_with(dir) && config.len() > dir.len())
+            .map(|(_, chain)| chain.clone());
+        let origins = std::iter::once(here).chain(below).map(|chain| match chain {
+            Ok(chain) => Self::origin_in(&chain, package),
+            Err(reason) => Origin::Index(Named::Unusable(reason)),
+        });
         Origin::of(origins).expect("one folder at least")
     }
 
-    /// Where `package` comes from for a restore in `dir`, from the configs
-    /// in it and above it. Every source they add counts, with the nuget.org
-    /// source NuGet's default user config adds, so a source NuGet would
-    /// drop only ever makes the lookup fail.
-    fn origin_in(&self, dir: &str, package: &str) -> Origin {
+    /// Where `package` comes from for a restore that sees `chain`.
+    fn origin_in(chain: &Chain, package: &str) -> Origin {
         let unusable = |reason: &str| Origin::Index(Named::Unusable(reason.to_owned()));
-        let mut chain = Vec::new();
-        for (folder, config) in &self.configs {
-            if dir.starts_with(folder.as_str()) {
-                match config {
-                    Ok(config) => chain.push(config),
-                    Err(reason) => return unusable(reason),
-                }
-            }
-        }
-        let sources: Vec<(&str, Named)> = std::iter::once(("nuget.org", Named::Public))
-            .chain(chain.iter().flat_map(|config| {
-                config
-                    .sources
-                    .iter()
-                    .map(|(key, value)| (key.as_str(), Named::parse(value, &NUGET_ORG)))
-            }))
-            .collect();
-        if sources.iter().all(|(_, named)| *named == Named::Public) {
+        if chain
+            .sources
+            .iter()
+            .all(|(_, named)| *named == Named::Public)
+        {
             return Origin::Index(Named::Public);
         }
-        let mappings: Vec<&Vec<(String, String)>> = chain
-            .iter()
-            .filter_map(|config| config.mapping.as_ref())
-            .collect();
+        let mappings = &chain.mappings;
         if mappings.is_empty() {
             return unusable(
                 "several package sources and no packageSourceMapping in nuget.config to say which serves it",
             );
         }
-        let patterns: Vec<&(String, String)> = mappings.iter().flat_map(|m| m.iter()).collect();
+        // A `clear` in one of several mappings can leave NuGet with none, so
+        // that any source serves any package; the Count does not pool such
+        // mappings.
+        if mappings.len() > 1 && mappings.iter().any(|m| m.cleared) {
+            return unusable(
+                "a packageSourceMapping clear in nuget.config the Count does not follow",
+            );
+        }
+        let patterns: Vec<&(String, String)> =
+            mappings.iter().flat_map(|m| m.entries.iter()).collect();
         // NuGet applies an exact ID's sources to a prefix of the same text
         // too; the Count does not, so such a pair fails.
         let exact: BTreeSet<String> = patterns
@@ -631,10 +718,11 @@ impl Feeds {
                 .map(|(key, _)| key.as_str())
                 .collect()
         };
-        let candidates = sources
-            .into_iter()
+        let candidates = chain
+            .sources
+            .iter()
             .filter(|(key, _)| keys.iter().any(|k| k.eq_ignore_ascii_case(key)))
-            .map(|(_, named)| Origin::Index(named));
+            .map(|(_, named)| Origin::Index(named.clone()));
         Origin::of(candidates).unwrap_or_else(|| {
             unusable("no package source in nuget.config's packageSourceMapping for it")
         })
@@ -663,6 +751,9 @@ mod tests {
         assert_eq!(decoded("Restore&#x53;ources"), "RestoreSources");
         assert_eq!(decoded("a &#; b &#xZZ; c &#"), "a &#; b &#xZZ; c &#");
         assert_eq!(decoded("é&#233;é"), "ééé");
+        assert_eq!(decoded("Restore&#0000000083;ources"), "RestoreSources");
+        assert_eq!(decoded("Restore&#x000000053;ources"), "RestoreSources");
+        assert_eq!(decoded("&#99999999999;"), "&#99999999999;");
         let hostile = "&#".repeat(200_000);
         assert_eq!(decoded(&hostile), hostile);
     }
