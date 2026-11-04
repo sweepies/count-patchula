@@ -627,7 +627,7 @@ impl Feeds {
     /// since `dotnet tool restore` reads its manifest from any folder below.
     /// A shared MSBuild file such as `Directory.Packages.props` can be
     /// imported from anywhere, so it counts every folder with a config.
-    fn origin(&self, file: &str, package: &str) -> Origin {
+    pub(crate) fn origin(&self, file: &str, package: &str) -> Origin {
         if let Some(reason) = &self.overridden {
             return Origin::Index(Named::Unusable(reason.clone()));
         }

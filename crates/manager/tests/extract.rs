@@ -3867,3 +3867,54 @@ fn go_modules_a_replace_directive_names_are_skipped() {
         );
     }
 }
+
+#[test]
+fn mise_package_tools_fail_where_the_project_redirects_their_registry() {
+    let tools = "[tools]\nnode = \"22.0.0\"\n\"npm:@acme/cli\" = \"1.0.0\"\naws-cdk = \"2.0.0\"\n\"cargo:ripgrep\" = \"14.0.0\"\n";
+    let lookup = |files: &[(&str, &str)], name: &str| {
+        registry_of(Manager::Mise, files, "app/mise.toml", name)
+    };
+    for name in ["node", "npm:@acme/cli", "aws-cdk", "cargo:ripgrep"] {
+        assert_eq!(lookup(&[("app/mise.toml", tools)], name), None, "{name}");
+    }
+    // Registry settings mise would install npm tools with.
+    let env = format!("{tools}\n[env]\nNPM_CONFIG_REGISTRY = \"https://npm.acme.dev\"\n");
+    let npmrc = [
+        ("app/mise.toml", tools),
+        (".npmrc", "@acme:registry=https://npm.acme.dev/\n"),
+    ];
+    for files in [vec![("app/mise.toml", env.as_str())], npmrc.to_vec()] {
+        for name in ["npm:@acme/cli", "aws-cdk"] {
+            assert!(fails(lookup(&files, name)), "{files:?} {name}");
+        }
+        assert_eq!(lookup(&files, "node"), None);
+        assert_eq!(lookup(&files, "cargo:ripgrep"), None);
+    }
+    // Settings that could move any tool, a mise configuration below the
+    // tool's that redirects it, and one the Count cannot read.
+    let replacements = format!(
+        "{tools}\n[settings]\nurl_replacements = {{ \"https://github.com\" = \"https://git.acme.dev\" }}\n"
+    );
+    for files in [
+        vec![("app/mise.toml", replacements.as_str())],
+        vec![
+            ("app/mise.toml", tools),
+            (
+                "app/sub/mise.toml",
+                "[env]\nMISE_CARGO_BINSTALL = \"false\"\n",
+            ),
+        ],
+        vec![("app/mise.toml", tools), ("app/sub/mise.toml", "[env\n")],
+    ] {
+        assert!(fails(lookup(&files, "cargo:ripgrep")), "{files:?}");
+    }
+    let cargo = [
+        ("app/mise.toml", tools),
+        (
+            ".cargo/config.toml",
+            "[source.crates-io]\nreplace-with = \"acme\"\n\n[source.acme]\nregistry = \"https://crates.acme.dev/index\"\n",
+        ),
+    ];
+    assert!(fails(lookup(&cargo, "cargo:ripgrep")));
+    assert_eq!(lookup(&cargo, "npm:@acme/cli"), None);
+}

@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 patchula-versioning = { path = "../versioning" }
+patchula-mise = { path = "../mise" }
 hcl-edit = "0.10.0"
 yaml-rust2 = "0.13.0"
 jsonc-parser = "0.34.0"

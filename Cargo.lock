@@ -2330,6 +2330,7 @@ dependencies = [
  "hcl-edit",
  "jsonc-parser",
  "patchula-config",
+ "patchula-mise",
  "patchula-versioning",
  "regex",
  "roxmltree",
