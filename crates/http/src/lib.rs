@@ -119,6 +119,8 @@ pub use cached::{Bearer, Cached, Error as CacheError, Options, Stats};
 pub use credentials::{Auth, Credential, prefix as url_prefix};
 mod trace;
 pub use trace::{PhaseTrace, RequestTrace};
+mod tracked;
+pub use tracked::tracked;
 
 #[cfg(test)]
 mod tests {

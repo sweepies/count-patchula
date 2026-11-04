@@ -1404,55 +1404,6 @@ async fn a_self_hosted_gitlab_registry_uses_its_token_service_entry() {
 }
 
 #[tokio::test]
-async fn credentialed_names_lookups_that_read_a_registry_with_an_entry() {
-    let dir = tempfile::tempdir().unwrap();
-    let withheld = patchula_http::Credential::new(
-        "https://acme.jfrog.io/withheld",
-        patchula_http::Auth::Withheld,
-    )
-    .unwrap();
-    let client = auth_client_with(
-        Arc::new(AuthSteps(Mutex::new(VecDeque::new()))),
-        dir.path(),
-        vec![
-            basic("https://acme.jfrog.io", "ci", "hunter2"),
-            basic("https://gitlab.acme.dev", "ci", "hunter2"),
-            withheld,
-        ],
-    )
-    .await;
-    for (source, package, expected) in [
-        (
-            Source::Helm,
-            "https://acme.jfrog.io/artifactory/api/helm/charts|app",
-            true,
-        ),
-        (Source::Docker, "acme.jfrog.io/team/app", true),
-        (Source::Oci, "acme.jfrog.io/charts/app", true),
-        (
-            Source::Maven,
-            "https://acme.jfrog.io/maven|com.acme:lib",
-            true,
-        ),
-        (Source::ForgeTags, "gitlab.acme.dev/team/tool", true),
-        (
-            Source::Helm,
-            "https://acme.jfrog.io/withheld/charts|app",
-            false,
-        ),
-        (Source::Docker, "ghcr.io/team/app", false),
-        (Source::Helm, "https://charts.example.com|app", false),
-        (Source::Npm, "acme.jfrog.io", false),
-    ] {
-        assert_eq!(
-            client.credentialed(&patchula_config::PackageId::public(source, package)),
-            expected,
-            "{source:?} {package}"
-        );
-    }
-}
-
-#[tokio::test]
 async fn an_npm_package_is_read_from_its_own_registry_with_its_credentials() {
     let packument = r#"{"name":"@acme/ui","dist-tags":{"latest":"1.1.0"},
         "versions":{"1.0.0":{"name":"@acme/ui","version":"1.0.0"},"1.1.0":{"name":"@acme/ui","version":"1.1.0"}},
@@ -1469,22 +1420,18 @@ async fn an_npm_package_is_read_from_its_own_registry_with_its_credentials() {
         vec![basic("https://npm.acme.dev", "ci", "hunter2")],
     )
     .await;
-    let catalog = client
-        .lookup(&patchula_config::PackageId::new(
+    // The lookup records that it sent the entry's credentials.
+    let (catalog, credentialed) =
+        patchula_http::tracked(client.lookup(&patchula_config::PackageId::new(
             Source::Npm,
             Some("https://npm.acme.dev/repo".into()),
             "@acme/ui",
-        ))
-        .await
-        .unwrap();
+        )))
+        .await;
+    let catalog = catalog.unwrap();
     assert!(catalog.versions.iter().any(|v| v.version == "1.1.0"));
     assert!(steps.0.lock().unwrap().is_empty());
-    assert!(client.credentialed(&patchula_config::PackageId::new(
-        Source::Npm,
-        Some("https://npm.acme.dev/repo".into()),
-        "@acme/ui"
-    )));
-    assert!(!client.credentialed(&patchula_config::PackageId::public(Source::Npm, "@acme/ui")));
+    assert!(credentialed);
     // Only npm and PyPI take a registry, and only an https one.
     for (source, registry) in [
         (Source::Crates, "https://npm.acme.dev/repo"),
@@ -1509,8 +1456,16 @@ async fn escaped_npm_names_are_refused_and_mirrored_reads_count_as_credentialed(
     let mirror = basic("https://acme.jfrog.io/api/npm/npm-remote", "ci", "hunter2")
         .mirroring("https://registry.npmjs.org")
         .unwrap();
+    let packument = r#"{"name":"react","dist-tags":{"latest":"19.0.0"},
+        "versions":{"19.0.0":{"name":"react","version":"19.0.0"}},
+        "time":{"19.0.0":"2026-01-01T00:00:00.000Z"}}"#;
+    let steps = Arc::new(AuthSteps(Mutex::new(VecDeque::from([(
+        "https://acme.jfrog.io/api/npm/npm-remote/react".to_owned(),
+        Some("Basic Y2k6aHVudGVyMg==".to_owned()),
+        response(200, packument, &[]),
+    )]))));
     let client = auth_client_with(
-        Arc::new(AuthSteps(Mutex::new(VecDeque::new()))),
+        steps.clone(),
         dir.path(),
         vec![mirror, basic("https://npm.acme.dev", "ci", "hunter2")],
     )
@@ -1530,8 +1485,14 @@ async fn escaped_npm_names_are_refused_and_mirrored_reads_count_as_credentialed(
             "{package}"
         );
     }
-    // A public package read through a credentialed mirror may be private.
-    assert!(client.credentialed(&patchula_config::PackageId::public(Source::Npm, "react")));
+    // A public package read through a credentialed mirror may be private,
+    // and the lookup records that it sent the mirror's credentials.
+    let (catalog, credentialed) = patchula_http::tracked(
+        client.lookup(&patchula_config::PackageId::public(Source::Npm, "react")),
+    )
+    .await;
+    assert!(catalog.is_ok() && credentialed);
+    assert!(steps.0.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -1597,10 +1558,11 @@ async fn a_python_package_is_read_from_its_private_index_or_not_at_all() {
     let id = |name: &str, registry: &str| {
         patchula_config::PackageId::new(Source::Pypi, Some(registry.into()), name)
     };
-    let core = client
-        .lookup(&id("acme_core", "https://pypi.acme.dev/simple/"))
-        .await
-        .unwrap();
+    let (core, credentialed) =
+        patchula_http::tracked(client.lookup(&id("acme_core", "https://pypi.acme.dev/simple/")))
+            .await;
+    let core = core.unwrap();
+    assert!(credentialed);
     assert!(
         core.versions
             .iter()
@@ -1621,7 +1583,6 @@ async fn a_python_package_is_read_from_its_private_index_or_not_at_all() {
     // Another project's file on the page lends it no version.
     assert!(auth.versions.iter().all(|v| v.version != "9.0.0"));
     assert!(steps.0.lock().unwrap().is_empty());
-    assert!(client.credentialed(&id("acme-core", "https://pypi.acme.dev/simple")));
     // An ambiguous package is never looked up, with a reason to act on.
     let ambiguous = patchula_config::PackageId::new(
         Source::Pypi,

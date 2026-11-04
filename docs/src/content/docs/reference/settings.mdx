@@ -69,7 +69,10 @@ An entry needs `auth`, `mirrorOf` or both. Set exactly one of `secret.env` and
 Versions found with credentials show like any others, in a public repository's
 dependency dashboard, pull requests and the server's [repository
 API](/guide/server/#repository-api). The API stores a private repository's run
-without them, so they do not appear if it later becomes public.
+without them, so they do not appear if it later becomes public. Whether a
+lookup sent credentials, to an entry's own registry or through a mirror, from
+the network or the cache, is recorded as its requests are made, for every
+source.
 
 ## Server
 

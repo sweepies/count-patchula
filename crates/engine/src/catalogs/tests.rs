@@ -74,6 +74,7 @@ async fn read(engine: &Engine, wait: u32, now: DateTime<Utc>, force: bool) -> (C
             now,
         )
         .await
+        .map(|(catalogs, evidence, _)| (catalogs, evidence))
         .unwrap()
 }
 async fn memory() -> Cache {

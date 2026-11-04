@@ -174,14 +174,27 @@ pub(crate) struct Recorded<'a> {
 }
 
 /// `report` without what lookups made with registry credentials found. Such a
-/// dependency keeps what the repository declares, but loses its updates,
-/// held-back releases, lookup evidence, tag digests and image checks.
-/// `credentialed` answers for each dependency's package.
-pub(crate) fn withheld(
-    report: &Report,
-    credentialed: impl Fn(&patchula_config::PackageId) -> bool,
-) -> Report {
+/// dependency keeps what the repository declares, but loses its updates, the
+/// version its range resolved to, held-back releases, lookup evidence, tag
+/// digests and image checks. Whether
+/// a lookup carried credentials was recorded as its requests were made.
+pub(crate) fn withheld(report: &Report) -> Report {
     let mut report = report.clone();
+    for repo in &mut report.repositories {
+        // Warnings and lookup failures about a dependency found with
+        // credentials can quote what the registry answered.
+        let names: Vec<String> = repo
+            .package_files
+            .iter()
+            .flat_map(|file| &file.dependencies)
+            .filter(|dep| dep.metadata.as_ref().is_some_and(|meta| meta.credentialed))
+            .flat_map(|dep| [dep.name.clone(), dep.package.clone()])
+            .collect();
+        repo.warnings
+            .retain(|warning| !names.iter().any(|name| warning.contains(name.as_str())));
+        repo.lookup_failures
+            .retain(|failure| !names.contains(&failure.package) && !names.contains(&failure.name));
+    }
     for dep in report
         .repositories
         .iter_mut()
@@ -191,15 +204,15 @@ pub(crate) fn withheld(
         let Some(meta) = dep.metadata.as_mut() else {
             continue;
         };
-        let Ok(source) = serde_json::from_value(serde_json::Value::String(meta.source.clone()))
-        else {
-            continue;
-        };
-        let id = patchula_config::PackageId::new(source, dep.registry.clone(), &dep.package);
-        if !credentialed(&id) {
+        if !meta.credentialed {
             continue;
         }
+        // Image advisories came from SBOMs read with the same credentials.
+        meta.advisories.clear();
         dep.updates.clear();
+        // The version a range resolves to came from the lookup too.
+        dep.current.version = None;
+        meta.resolution = None;
         meta.held_back.clear();
         meta.stale.clear();
         meta.tag_digests.clear();
@@ -283,11 +296,14 @@ pub(crate) async fn record(
                 })
             })
             .collect();
-        let package_files = if private {
-            &recorded.withheld.repositories[index].package_files
+        // A private repository's run is stored without what credentials
+        // found, its warnings and lookup failures included.
+        let shown = if private {
+            &recorded.withheld.repositories[index]
         } else {
-            &repo.package_files
+            repo
         };
+        let package_files = &shown.package_files;
         let dependencies = package_files.iter().flat_map(|f| &f.dependencies);
         let summary = Summary {
             status: repo.status,
@@ -303,8 +319,8 @@ pub(crate) async fn record(
             ran_at: started.to_rfc3339(),
             status: repo.status,
             reason: repo.reason.as_deref(),
-            warnings: &repo.warnings,
-            lookup_failures: &repo.lookup_failures,
+            warnings: &shown.warnings,
+            lookup_failures: &shown.lookup_failures,
             default_branch: repo.default_branch.as_deref(),
             commit: repo.commit.as_deref(),
             package_files,

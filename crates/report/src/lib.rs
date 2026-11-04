@@ -310,6 +310,11 @@ pub struct DependencyMetadata {
     /// what a rebuild fixes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<ImageCheck>,
+    /// Whether a request made to look it up carried an operator entry's
+    /// credentials or a registry account's token, so that what was found
+    /// may be private.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub credentialed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -703,6 +708,10 @@ pub fn normalize_dependencies(dependencies: Vec<Dependency>) -> Vec<Dependency> 
             .find(|d| d.package == dep.package && d.current == dep.current)
         {
             existing.updates.append(&mut dep.updates);
+            // An entry without metadata takes the other's, flags included.
+            if existing.metadata.is_none() {
+                existing.metadata = dep.metadata.take();
+            }
             if let (Some(a), Some(mut b)) = (&mut existing.metadata, dep.metadata) {
                 a.locations.append(&mut b.locations);
                 a.kinds.append(&mut b.kinds);
@@ -716,6 +725,8 @@ pub fn normalize_dependencies(dependencies: Vec<Dependency>) -> Vec<Dependency> 
                 a.advisories.append(&mut b.advisories);
                 a.advisories.sort();
                 a.advisories.dedup();
+                // Either one found with credentials makes the merged one so.
+                a.credentialed |= b.credentialed;
                 if let (Some(a), Some(b)) = (&mut a.lookup, b.lookup) {
                     a.disabled_updates
                         .retain(|kind| b.disabled_updates.contains(kind));

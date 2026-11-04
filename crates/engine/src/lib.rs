@@ -190,11 +190,6 @@ impl Engine {
         self.recheck = recheck;
         self
     }
-    /// Whether `id` was looked up with an operator entry's credentials, so that
-    /// what was found may be private.
-    pub fn credentialed(&self, id: &PackageId) -> bool {
-        self.sources.credentialed(id)
-    }
     pub fn with_transport(
         token: &str,
         cache: Cache,
@@ -293,16 +288,22 @@ impl Engine {
         }
         (enabled, id)
     }
+    /// The catalog for `key`, and whether any request made for it carried
+    /// an operator entry's credentials or a registry account's token.
     async fn lookup_key(
         sources: &Sources,
         (enabled, id): &LookupKey,
-    ) -> std::result::Result<patchula_datasource::Catalog, Failure> {
-        sources
-            .clone()
-            .with_versions_host(*enabled)
-            .lookup(id)
-            .await
-            .map_err(Failure::from)
+    ) -> (
+        std::result::Result<patchula_datasource::Catalog, Failure>,
+        bool,
+    ) {
+        let (result, credentialed) =
+            // Boxed: lookups are large futures, and the run holds many.
+            patchula_http::tracked(Box::pin(
+                sources.clone().with_versions_host(*enabled).lookup(id),
+            ))
+            .await;
+        (result.map_err(Failure::from), credentialed)
     }
     pub async fn lookup(&self, options: Options) -> Result<Report> {
         self.lookup_at(options, chrono::Utc::now()).await
@@ -757,6 +758,10 @@ impl Engine {
         }
         let local = options.local.clone();
         let sources = self.sources.clone();
+        // Packages any of whose digest, image or SBOM reads carried
+        // credentials, as their catalogs' lookups record too.
+        let sent = std::sync::Mutex::new(BTreeSet::<String>::new());
+        let sent = &sent;
         let total = Instant::now();
         let _total_span = PhaseTrace::new("total");
         let before_g = self.github.stats().await;
@@ -889,7 +894,10 @@ impl Engine {
         let prefetch = async {
             let started = Instant::now();
             let _phase = PhaseTrace::new("lookup.prefetch");
-            let result = tokio::join!(async { Catalogs::new() }, self.digests(hint.digests, false));
+            let result = tokio::join!(
+                async { Catalogs::new() },
+                self.digests(hint.digests, false, sent)
+            );
             (result, micros(started))
         };
         let ((work, extraction_time), ((mut catalogs, mut digests), prefetch_time)) =
@@ -1007,7 +1015,7 @@ impl Engine {
             .stage(Stage::Lookup, keys.len() + current_refs.len());
         let (remaining, refs, advisories) = tokio::join!(
             self.age_catalogs(keys, &waits, &retry_keys, &sources, now),
-            self.digests(current_refs, true),
+            self.digests(current_refs, true, sent),
             async {
                 if advisory_queries.is_empty() {
                     Ok(BTreeMap::new())
@@ -1032,7 +1040,7 @@ impl Engine {
             }
             BTreeMap::new()
         });
-        let (mut remaining, mut catalog_evidence) = remaining?;
+        let (mut remaining, mut catalog_evidence, mut credentialed) = remaining?;
         // A lockfile-only package joins the dependencies once it is vulnerable.
         for (repo, eval) in work.iter_mut().zip(&evaluators) {
             if eval.is_some() {
@@ -1072,7 +1080,7 @@ impl Engine {
         }
         if !vulnerable.is_empty() {
             self.progress.stage(Stage::Lookup, vulnerable.len());
-            let (fresh, evidence) = self
+            let (fresh, evidence, sent_catalogs) = self
                 .age_catalogs(
                     vulnerable,
                     &BTreeMap::new(),
@@ -1083,6 +1091,7 @@ impl Engine {
                 .await?;
             remaining.extend(fresh);
             catalog_evidence.extend(evidence);
+            credentialed.extend(sent_catalogs);
         }
         catalogs.extend(remaining);
         digests.extend(refs);
@@ -1273,7 +1282,7 @@ impl Engine {
         let pending = digest_keys.len();
         digest_keys.retain(|key| !digests.contains_key(key));
         self.progress.advance(pending - digest_keys.len());
-        digests.extend(self.digests(digest_keys, true).await);
+        digests.extend(self.digests(digest_keys, true, sent).await);
         let retry_keys = &retry_keys;
         let fresh_sources = &fresh_sources;
         let image_digests: BTreeMap<_, _> = stream::iter(image_keys)
@@ -1285,10 +1294,14 @@ impl Engine {
                 } else {
                     &self.sources
                 };
-                let result = sources
-                    .registry_digest(&package, &tag)
-                    .await
-                    .map_err(Failure::from);
+                let (result, credentialed) =
+                    patchula_http::tracked(Box::pin(sources.registry_digest(&package, &tag))).await;
+                if credentialed {
+                    sent.lock()
+                        .expect("sent packages")
+                        .insert(format!("image:{package}"));
+                }
+                let result = result.map_err(Failure::from);
                 self.progress.advance(1);
                 ((package, tag), result)
             })
@@ -1354,11 +1367,16 @@ impl Engine {
         let read_sboms = |reads: BTreeSet<(String, String, String)>| {
             stream::iter(reads)
                 .map(|(package, digest, platform)| async move {
-                    let result = self
-                        .sources
-                        .image_sbom(&package, &digest, &platform)
-                        .await
-                        .map_err(|e| e.to_string());
+                    let (result, credentialed) = patchula_http::tracked(Box::pin(
+                        self.sources.image_sbom(&package, &digest, &platform),
+                    ))
+                    .await;
+                    if credentialed {
+                        sent.lock()
+                            .expect("sent packages")
+                            .insert(format!("image:{package}"));
+                    }
+                    let result = result.map_err(|e| e.to_string());
                     ((package, digest, platform), result)
                 })
                 .buffer_unordered(16)
@@ -1915,6 +1933,17 @@ impl Engine {
                             .chain(image_advisories)
                             .collect(),
                         image: current_image,
+                        credentialed: credentialed
+                            .contains(&self.catalog_key(dep, repo.config.as_ref()))
+                            || sent.lock().expect("sent packages").contains(&format!(
+                                "{}:{}",
+                                if matches!(dep.source, Source::Docker | Source::Oci) {
+                                    "image"
+                                } else {
+                                    "git"
+                                },
+                                dep.package
+                            )),
                     }),
                 };
                 files.entry(dep.file.clone()).or_default().push(value);
@@ -1966,18 +1995,25 @@ impl Engine {
         Ok((report, work))
     }
     /// Each key's digest; `counted` advances the current progress stage per key.
+    /// The digests for `keys`, adding to `sent` each package whose read
+    /// carried credentials.
     async fn digests(
         &self,
         keys: BTreeSet<(String, String)>,
         counted: bool,
+        sent: &std::sync::Mutex<BTreeSet<String>>,
     ) -> BTreeMap<(String, String), std::result::Result<String, Failure>> {
         stream::iter(keys)
             .map(|(package, reference)| async move {
-                let result = self
-                    .sources
-                    .digest(&package, &reference)
-                    .await
-                    .map_err(Failure::from);
+                let (result, credentialed) =
+                    patchula_http::tracked(Box::pin(self.sources.digest(&package, &reference)))
+                        .await;
+                if credentialed {
+                    sent.lock()
+                        .expect("sent packages")
+                        .insert(format!("git:{package}"));
+                }
+                let result = result.map_err(Failure::from);
                 if counted {
                     self.progress.advance(1);
                 }
@@ -1988,7 +2024,13 @@ impl Engine {
             .await
     }
 
-    async fn catalogs(&self, keys: BTreeSet<LookupKey>, sources: &Sources) -> Catalogs {
+    /// The catalogs for `keys`, and the keys whose lookups carried
+    /// credentials.
+    async fn catalogs(
+        &self,
+        keys: BTreeSet<LookupKey>,
+        sources: &Sources,
+    ) -> (Catalogs, BTreeSet<LookupKey>) {
         let (releases, others): (Vec<_>, Vec<_>) = keys
             .into_iter()
             .partition(|(_, id)| id.source == Source::GithubReleases && id.is_public());
@@ -2005,29 +2047,34 @@ impl Engine {
             .map(|(enabled, packages)| async move {
                 let client = sources.clone().with_versions_host(enabled);
                 let count = packages.len();
-                let catalogs = match client.release_catalogs(&packages).await {
-                    Ok(results) => results
-                        .into_iter()
-                        .map(|(package, result)| {
-                            (
-                                (enabled, PackageId::public(Source::GithubReleases, package)),
-                                result.map_err(Failure::from),
-                            )
-                        })
-                        .collect::<Catalogs>(),
-                    Err(_) => {
-                        stream::iter(packages)
-                            .map(|package| async move {
-                                let key =
-                                    (enabled, PackageId::public(Source::GithubReleases, package));
-                                let result = Self::lookup_key(sources, &key).await;
-                                (key, result)
+                let (batch, credentialed) =
+                    patchula_http::tracked(Box::pin(client.release_catalogs(&packages))).await;
+                let catalogs: Vec<(LookupKey, (std::result::Result<_, Failure>, bool))> =
+                    match batch {
+                        Ok(results) => results
+                            .into_iter()
+                            .map(|(package, result)| {
+                                (
+                                    (enabled, PackageId::public(Source::GithubReleases, package)),
+                                    (result.map_err(Failure::from), credentialed),
+                                )
                             })
-                            .buffer_unordered(16)
-                            .collect()
-                            .await
-                    }
-                };
+                            .collect(),
+                        Err(_) => {
+                            stream::iter(packages)
+                                .map(|package| async move {
+                                    let key = (
+                                        enabled,
+                                        PackageId::public(Source::GithubReleases, package),
+                                    );
+                                    let result = Self::lookup_key(sources, &key).await;
+                                    (key, result)
+                                })
+                                .buffer_unordered(16)
+                                .collect()
+                                .await
+                        }
+                    };
                 self.progress.advance(count);
                 catalogs
             })
@@ -2040,10 +2087,17 @@ impl Engine {
                 (key, result)
             })
             .buffer_unordered(100)
-            .collect::<Catalogs>();
-        let (groups, mut results) = tokio::join!(batched, others);
-        results.extend(groups.into_iter().flatten());
-        results
+            .collect::<Vec<_>>();
+        let (groups, others) = tokio::join!(batched, others);
+        let mut results = Catalogs::new();
+        let mut credentialed = BTreeSet::new();
+        for (key, (result, sent)) in others.into_iter().chain(groups.into_iter().flatten()) {
+            if sent {
+                credentialed.insert(key.clone());
+            }
+            results.insert(key, result);
+        }
+        (results, credentialed)
     }
     async fn repositories(&self) -> Result<Vec<String>> {
         match self

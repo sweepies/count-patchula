@@ -61,11 +61,6 @@ fn page_url(forge: &notes::Forge, page: u32) -> String {
     }
 }
 
-/// The first URL a `forge-tags` lookup of `package` reads.
-pub(crate) fn tags_url(package: &str) -> Option<String> {
-    forge(package).ok().map(|forge| page_url(&forge, 1))
-}
-
 impl Client {
     pub(crate) async fn forge_tags(&self, package: &str) -> Result<Catalog> {
         let forge = forge(package)?;

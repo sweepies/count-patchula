@@ -410,8 +410,8 @@ registries {
     secret { env = "ARTIFACTORY_TOKEN" }
     mirrorOf = "https://registry.npmjs.org"
   }
-  ["https://nexus.acme.dev/repository/pypi-proxy/simple"] {
-    mirrorOf = "https://pypi.org/simple"
+  ["https://nexus.acme.dev/repository/go-proxy"] {
+    mirrorOf = "https://proxy.golang.org"
   }
 }
 ```
