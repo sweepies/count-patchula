@@ -526,6 +526,55 @@ async fn plans_regenerate_lockfiles_side_by_side() {
     assert!(snapshot.files.contains_key("go.sum"));
 }
 
+/// A registry credential committed to a file a tool reads stops the run
+/// before any tool starts; a credential in a source file, such as a test's
+/// connection string, does not.
+#[tokio::test]
+async fn committed_registry_credentials_stop_the_run_before_any_tool() {
+    // Built at runtime, so the secret scan never sees a literal.
+    let token = ["//registry.npmjs.org/:_auth", "Token=", "abc123"].concat();
+    let dsn = ["postgres://app:", "hunter2", "@localhost/db"].concat();
+    for (extra, refused) in [
+        ((".npmrc", format!("{token}\n")), true),
+        (
+            ("main.go", format!("package main\nconst dsn = \"{dsn}\"\n")),
+            false,
+        ),
+    ] {
+        let files = BTreeMap::from([
+            ("package.json".to_string(), "{}\n".to_string()),
+            ("bun.lock".into(), "{}\n".into()),
+            (extra.0.to_string(), extra.1.clone()),
+        ]);
+        let executor = fixture(files.clone(), false, false);
+        let temp = tempfile::tempdir().unwrap();
+        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+            .with_executor(executor.clone());
+        let mut snapshot = snapshot(&files);
+        let config = config();
+        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+            .unwrap()
+            .unwrap();
+        runner.prepare(&mut p, &mut snapshot, &config).await;
+        let ran_bun = executor
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|args| args.iter().any(|a| a == "bun"));
+        if refused {
+            assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+            let reason = p.action.reason.clone().unwrap();
+            assert!(reason.contains(".npmrc"), "{reason}");
+            assert!(!reason.contains("abc123"), "{reason}");
+            assert!(!ran_bun);
+        } else {
+            assert_ne!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+            assert!(ran_bun);
+        }
+    }
+}
+
 #[tokio::test]
 async fn tool_failure_is_reported_without_api_writes_or_partial_scratch_files() {
     let files = BTreeMap::from([

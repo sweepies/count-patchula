@@ -679,6 +679,10 @@ impl Runner {
                     .chain(cargo_configs.iter())
                     .map(|(path, text)| (path, text.as_str())),
             )
+            // Source files are checked out so tools can build, but no tool
+            // reads registry credentials from them; a test's connection
+            // string is not a registry credential.
+            .filter(|(path, _)| patchula_manager::credential_scope(path))
         {
             if let Some(kind) = patchula_manager::committed_credentials(path, text) {
                 return Err(patchula_manager::credential_reason(path, &kind));
