@@ -436,7 +436,12 @@ fn config(text: &str) -> Result<Config, ()> {
                             if !plain_key(&key) {
                                 return Err(());
                             }
-                            out.sources.push((key, attribute(child, "value")?));
+                            // NuGet keeps quotes the Count would trim.
+                            let value = attribute(child, "value")?;
+                            if value.trim() != value || value.contains(['"', '\'']) {
+                                return Err(());
+                            }
+                            out.sources.push((key, value));
                         }
                         _ => return Err(()),
                     }
@@ -629,19 +634,27 @@ impl Feeds {
         }
         let leaf = file.rsplit('/').next().unwrap_or(file).to_ascii_lowercase();
         let shared = leaf.ends_with(".props") || leaf.ends_with(".targets");
-        let mut dir = if shared {
-            ""
-        } else {
-            &file[..file.rfind('/').map_or(0, |i| i + 1)]
+        let folder = &file[..file.rfind('/').map_or(0, |i| i + 1)];
+        // A tool manifest sits in the `.config` folder of the project it
+        // serves.
+        let manifest = (folder == ".config/" || folder.ends_with("/.config/"))
+            .then(|| &folder[..folder.len() - ".config/".len()]);
+        let dir = match manifest {
+            _ if shared => "",
+            Some(project) => project,
+            None => folder,
         };
-        if let Some(project) = dir.strip_suffix(".config/") {
-            dir = project;
-        }
         let here = Self::nearest(&self.chains, dir);
+        // A project restores in its own folder alone; the others count every
+        // folder below too.
         let below = self
             .chains
             .iter()
-            .filter(|(config, _)| config.starts_with(dir) && config.len() > dir.len())
+            .filter(|(config, _)| {
+                (shared || manifest.is_some())
+                    && config.starts_with(dir)
+                    && config.len() > dir.len()
+            })
             .map(|(_, chain)| chain.clone());
         let origins = std::iter::once(here).chain(below).map(|chain| match chain {
             Ok(chain) => Self::origin_in(&chain, package),
