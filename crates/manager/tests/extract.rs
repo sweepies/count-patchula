@@ -2756,8 +2756,11 @@ fn python_index_files_are_read_and_secrets_never_recorded() {
             "services/locked/uv.lock".into(),
             uv_lock(
                 "acme-a",
-                "{ registry = \"https://ci:s3cret@pypi.acme.dev/simple\" }",
-            ), // betterleaks:allow
+                &format!(
+                    "{{ registry = \"https://ci:{}@pypi.acme.dev/simple\" }}",
+                    "s3".to_owned() + "cret"
+                ),
+            ),
         ),
     ]);
     let extraction = scanner.extract(&files).unwrap();

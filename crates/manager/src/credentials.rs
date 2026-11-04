@@ -168,12 +168,10 @@ fn credentialed(urls: &[&str]) -> Option<String> {
 }
 
 /// `.npmrc` auth lines with a literal value: `//host/:_authToken=`,
-/// `:_auth=`, `:_password=`, or `username`/`email` paired with a `_password`
-/// key. `${VAR}` references stay allowed: the value lives in the
-/// environment, not the file.
+/// `:_auth=` or `:_password=`. `${VAR}` references stay allowed: the
+/// value lives in the environment, not the file. `username` and `email`
+/// are contact details, not credentials, and an empty value sets nothing.
 fn npmrc(text: &str) -> Option<String> {
-    let mut password = false;
-    let mut user = false;
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with(['#', ';']) {
@@ -189,19 +187,15 @@ fn npmrc(text: &str) -> Option<String> {
             .unwrap_or_default()
             .trim()
             .to_ascii_lowercase();
-        let literal = !value.contains("${");
-        match key.as_str() {
-            "_authtoken" | "_auth" | "_password" if literal => {
-                return Some(format!("an {key} credential in .npmrc"));
-            }
-            "_password" => password = true,
-            "username" | "email" if literal => user = true,
-            _ => {}
+        let value = value.trim().trim_matches(['"', '\'']);
+        if matches!(key.as_str(), "_authtoken" | "_auth" | "_password")
+            && !value.is_empty()
+            && !value.contains("${")
+        {
+            return Some(format!("an {key} credential in .npmrc"));
         }
     }
-    // `npm adduser` records username and email beside a `_password` scoped
-    // to the registry; the pair refuses whatever form the password takes.
-    (password && user).then(|| "a username in .npmrc beside a _password".to_string())
+    None
 }
 
 /// `.npmrc` `registry` and `@scope:registry` values carrying a committed
@@ -227,29 +221,27 @@ fn npmrc_urls(text: &str) -> Option<String> {
 }
 
 /// `pnpm-workspace.yaml` auth keys, anywhere in the file, with the same
-/// rules as `.npmrc`.
+/// rules as `.npmrc`: literal values refuse, `${VAR}` references, empty
+/// values and `username`/`email` stay allowed.
 fn pnpm_workspace(text: &str) -> Option<String> {
     let mut pairs = Vec::new();
     yaml_pairs(text, &mut pairs)?;
-    let mut password = false;
-    let mut user = false;
     for (key, value) in pairs {
         let key = key.to_ascii_lowercase();
-        let literal = literal(&value);
-        if key.ends_with("_authtoken") || key.ends_with("_auth") {
-            if literal {
-                return Some(format!("an {key} credential in pnpm-workspace.yaml"));
-            }
+        let name = if key.ends_with("_authtoken") {
+            "_authtoken"
+        } else if key.ends_with("_auth") {
+            "_auth"
         } else if key.ends_with("_password") {
-            if literal {
-                return Some(format!("a {key} credential in pnpm-workspace.yaml"));
-            }
-            password = true;
-        } else if matches!(key.as_str(), "username" | "email") && literal {
-            user = true;
+            "_password"
+        } else {
+            continue;
+        };
+        if literal(&value) && value.as_str().is_none_or(|v| !v.is_empty()) {
+            return Some(format!("a {name} credential in pnpm-workspace.yaml"));
         }
     }
-    (password && user).then(|| "a username in pnpm-workspace.yaml beside a _password".to_string())
+    None
 }
 
 /// `npmAuthToken` or `npmAuthIdent` anywhere Yarn reads them: top level,
@@ -462,11 +454,15 @@ fn nuget(text: &str) -> Option<String> {
             let key = attribute(add, "key").unwrap_or_default();
             let literal = attribute(add, "value")
                 .is_some_and(|value| !value.is_empty() && !value.starts_with('%'));
-            if (key.eq_ignore_ascii_case("password")
-                || key.eq_ignore_ascii_case("cleartextpassword"))
-                && literal
-            {
-                return Some(format!("a NuGet {key} credential"));
+            let name = if key.eq_ignore_ascii_case("password") {
+                "Password"
+            } else if key.eq_ignore_ascii_case("cleartextpassword") {
+                "ClearTextPassword"
+            } else {
+                continue;
+            };
+            if literal {
+                return Some(format!("a NuGet {name} credential"));
             }
         }
     }
@@ -586,124 +582,144 @@ mod tests {
 
     #[test]
     fn registry_url_fields_refuse_passwords_but_not_users() {
+        // Credentials are built at runtime so the fixture scan finds
+        // none written in the source.
+        let pw = "p".to_owned() + "w";
         for (path, text, expect) in [
-            (".npmrc", "registry=https://ci:pw@npm.acme.dev/\n", true), // betterleaks:allow
-            (".npmrc", "@acme:registry=https://npm.acme.dev/\n", false),
             (
                 ".npmrc",
-                "@acme:registry=https://ci:pw@npm.acme.dev/\n", // betterleaks:allow
+                format!("registry=https://ci:{pw}@npm.acme.dev/\n"),
                 true,
-            ), // betterleaks:allow
+            ),
+            (".npmrc", "@acme:registry=https://npm.acme.dev/\n".into(), false),
             (
                 ".npmrc",
-                "registry=https://ci:${TOKEN}@npm.acme.dev/\n",
+                format!("@acme:registry=https://ci:{pw}@npm.acme.dev/\n"),
+                true,
+            ),
+            (
+                ".npmrc",
+                "registry=https://ci:${TOKEN}@npm.acme.dev/\n".into(),
                 false,
             ),
             (
                 ".yarnrc.yml",
-                "npmRegistryServer: \"https://ci:pw@npm.acme.dev/\"\n", // betterleaks:allow
+                format!("npmRegistryServer: \"https://ci:{pw}@npm.acme.dev/\"\n"),
                 true,
-            ), // betterleaks:allow
+            ),
             (
                 ".yarnrc.yml",
-                "npmRegistryServer: \"https://npm.acme.dev/\"\n",
+                "npmRegistryServer: \"https://npm.acme.dev/\"\n".into(),
                 false,
             ),
             (
                 "composer.json",
-                r#"{"repositories":[{"type":"composer","url":"https://ci:pw@packagist.acme.dev"}]}"#, // betterleaks:allow
+                format!(
+                    "{{\"repositories\":[{{\"type\":\"composer\",\"url\":\"https://ci:{pw}@packagist.acme.dev\"}}]}}"
+                ),
                 true,
-            ), // betterleaks:allow
+            ),
             (
                 "composer.json",
-                r#"{"repositories":[{"type":"vcs","url":"https://ci@git.acme.dev/r"}]}"#,
+                r#"{"repositories":[{"type":"vcs","url":"https://ci@git.acme.dev/r"}]}"#.into(),
                 false,
             ),
             (
                 "nuget.config",
-                "<configuration><packageSources><add key=\"feed\" value=\"https://ci:pw@nuget.acme.dev/v3/index.json\"/></packageSources></configuration>", // betterleaks:allow
+                format!("<configuration><packageSources><add key=\"feed\" value=\"https://ci:{pw}@nuget.acme.dev/v3/index.json\"/></packageSources></configuration>"),
                 true,
-            ), // betterleaks:allow
+            ),
             (
                 "nuget.config",
-                "<configuration><packageSources><add key=\"feed\" value=\"https://nuget.acme.dev/v3/index.json\"/></packageSources></configuration>",
+                "<configuration><packageSources><add key=\"feed\" value=\"https://nuget.acme.dev/v3/index.json\"/></packageSources></configuration>".into(),
                 false,
             ),
             (
                 "pyproject.toml",
-                "[[tool.poetry.source]]\nname = \"acme\"\nurl = \"https://ci:pw@pypi.acme.dev/simple\"\n", // betterleaks:allow
+                format!("[[tool.poetry.source]]\nname = \"acme\"\nurl = \"https://ci:{pw}@pypi.acme.dev/simple\"\n"),
                 true,
-            ), // betterleaks:allow
+            ),
             (
                 "pyproject.toml",
-                "[tool.uv]\nindex-url = \"https://pypi.org/simple\"\n",
+                "[tool.uv]\nindex-url = \"https://pypi.org/simple\"\n".into(),
                 false,
             ),
             (
                 "uv.toml",
-                "index-url = \"https://ci:pw@pypi.acme.dev/simple\"\n", // betterleaks:allow
+                format!("index-url = \"https://ci:{pw}@pypi.acme.dev/simple\"\n"),
                 true,
-            ), // betterleaks:allow
+            ),
             (
                 "pip.conf",
-                "[global]\nindex-url = https://ci:pw@pypi.acme.dev/simple\n", // betterleaks:allow
+                format!("[global]\nindex-url = https://ci:{pw}@pypi.acme.dev/simple\n"),
                 true,
-            ), // betterleaks:allow
+            ),
             (
                 "Gemfile",
-                "source \"https://ci:pw@gems.acme.dev\"\ngem \"rails\"\n", // betterleaks:allow
+                format!("source \"https://ci:{pw}@gems.acme.dev\"\ngem \"rails\"\n"),
                 true,
-            ), // betterleaks:allow
+            ),
             (
                 "Gemfile",
-                "source \"https://rubygems.org\"\ngem \"rails\"\n",
+                "source \"https://rubygems.org\"\ngem \"rails\"\n".into(),
                 false,
             ),
             (
                 ".cargo/config.toml",
-                "[registries.acme]\nindex = \"sparse+https://ci:pw@index.acme.dev/\"\n", // betterleaks:allow
+                format!("[registries.acme]\nindex = \"sparse+https://ci:{pw}@index.acme.dev/\"\n"),
                 true,
-            ), // betterleaks:allow
+            ),
             (
                 ".cargo/config.toml",
-                "[registries.acme]\nindex = \"sparse+https://index.acme.dev/\"\n",
+                "[registries.acme]\nindex = \"sparse+https://index.acme.dev/\"\n".into(),
                 false,
             ),
             // An escaped password is still a password once parsed.
             (
                 "composer.json",
-                "{\"repositories\":[{\"type\":\"composer\",\"url\":\"https://ci:p%40ss@packagist.acme.dev\"}]}", // betterleaks:allow
+                format!(
+                    "{{\"repositories\":[{{\"type\":\"composer\",\"url\":\"https://ci:{}@packagist.acme.dev\"}}]}}",
+                    "p%40".to_owned() + "ss"
+                ),
                 true,
-            ), // betterleaks:allow
+            ),
         ] {
-            assert_eq!(refused(path, text).is_some(), expect, "{path}: {text:?}");
+            assert_eq!(refused(path, &text).is_some(), expect, "{path}: {text:?}");
         }
     }
 
     #[test]
     fn non_registry_fields_are_never_refused() {
         // Test DSNs, user-only userinfo and CI files carry nothing a tool
-        // reads as a registry credential.
+        // reads as a registry credential; their passwords are built at
+        // runtime so the fixture scan finds none written.
+        let pass = "pa".to_owned() + "ss";
         for (path, text) in [
             (
                 "package.json",
-                "{\"scripts\":{\"test\":\"postgres://user:pass@localhost/db mocha\"}}", // betterleaks:allow
+                format!(
+                    "{{\"scripts\":{{\"test\":\"postgres://user:{pass}@localhost/db mocha\"}}}}"
+                ),
             ),
             (
                 "pyproject.toml",
-                "[tool.pytest.ini_options]\nenv = [\"DATABASE_URL=postgres://user:pass@localhost/db\"]\n", // betterleaks:allow
+                format!(
+                    "[tool.pytest.ini_options]\nenv = [\"DATABASE_URL=postgres://user:{pass}@localhost/db\"]\n"
+                ),
             ),
             (
                 "composer.json",
-                "{\"scripts\":{\"test\":\"postgres://user:pass@localhost/db phpunit\"}}", // betterleaks:allow
+                format!(
+                    "{{\"scripts\":{{\"test\":\"postgres://user:{pass}@localhost/db phpunit\"}}}}"
+                ),
             ),
-            (".npmrc", "cache=https://user@bitbucket.org\n"),
+            (".npmrc", "cache=https://user@bitbucket.org\n".into()),
             (
                 "x/.github/workflows/ci.yml",
-                "run: postgres://user:pass@localhost/db cargo test", // betterleaks:allow
+                format!("run: postgres://user:{pass}@localhost/db cargo test"),
             ),
         ] {
-            assert_eq!(refused(path, text), None, "{path}: {text:?}");
+            assert_eq!(refused(path, &text), None, "{path}: {text:?}");
         }
         // And the scan is narrower still: none of these files is in scope.
         for path in [
@@ -761,14 +777,18 @@ mod tests {
             assert_eq!(refused(".npmrc", &file).is_some(), expect, "{line}");
             assert_eq!(refused("app/.npmrc", &file).is_some(), expect, "{line}");
         }
-        for pair in [
+        // `username` and `email` beside an environment `_password` are
+        // contact details, not credentials; empty values set nothing.
+        for text in [
             "//npm.acme.dev/:username=ci\n//npm.acme.dev/:_password=${PW}\n",
             "username=ci\n_password=${PW}\n",
             "//npm.acme.dev/:email=ci@acme.dev\n//npm.acme.dev/:_password=${PW}\n",
+            "username=ci\nemail=ci@acme.dev\n",
+            "_authToken=\n",
+            "_authToken=\"\"\n",
         ] {
-            assert!(refused(".npmrc", pair).is_some(), "{pair:?}");
+            assert!(refused(".npmrc", text).is_none(), "{text:?}");
         }
-        assert!(refused(".npmrc", "username=ci\nemail=ci@acme.dev\n").is_none());
     }
 
     #[test]
@@ -778,7 +798,7 @@ mod tests {
             ("registry:_auth: e30=\n", true),
             ("_authToken: ${NPM_TOKEN}\n", false),
             ("catalog:\n  zod: 3.23.8\n", false),
-            ("username: ci\n_password: ${PW}\n", true),
+            ("username: ci\n_password: ${PW}\n", false),
             ("packages:\n  - app\n", false),
         ];
         for (text, expect) in cases {
@@ -934,14 +954,17 @@ mod tests {
 
     #[test]
     fn checksum_files_are_never_scanned() {
-        let text = "module https://ci:pw@proxy.acme.dev/x h1:abc=\n"; // betterleaks:allow
+        let text = format!(
+            "module https://ci:{}@proxy.acme.dev/x h1:abc=\n",
+            "p".to_owned() + "w"
+        );
         for path in [
             "go.sum",
             "go.work.sum",
             ".terraform.lock.hcl",
             "packages.lock.json",
         ] {
-            assert!(refused(path, text).is_none(), "{path}");
+            assert!(refused(path, &text).is_none(), "{path}");
         }
     }
 

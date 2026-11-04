@@ -651,7 +651,6 @@ pub(crate) fn manifest_public(text: &str) -> bool {
         ("optionalDependencies", false),
         ("overrides", true),
         ("resolutions", true),
-        ("catalog", false),
     ] {
         if let Some(values) = object.get_object(field)
             && !specifiers(values, nested)
@@ -659,12 +658,23 @@ pub(crate) fn manifest_public(text: &str) -> bool {
             return false;
         }
     }
-    if let Some(catalogs) = object.get_object("catalogs") {
-        for prop in &catalogs.properties {
-            if let Some(values) = prop.value.as_object()
-                && !specifiers(values, false)
-            {
-                return false;
+    // Bun declares catalogs at the top level and under `workspaces`.
+    for parent in [Some(object), object.get_object("workspaces")]
+        .into_iter()
+        .flatten()
+    {
+        if let Some(values) = parent.get_object("catalog")
+            && !specifiers(values, false)
+        {
+            return false;
+        }
+        if let Some(catalogs) = parent.get_object("catalogs") {
+            for prop in &catalogs.properties {
+                if let Some(values) = prop.value.as_object()
+                    && !specifiers(values, false)
+                {
+                    return false;
+                }
             }
         }
     }

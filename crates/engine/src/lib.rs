@@ -2350,7 +2350,7 @@ impl Engine {
             // The same refusal the API scan applies to committed credentials.
             if let Some((path, kind)) = files
                 .iter()
-                .filter(|(path, _)| patchula_manager::credential_scope(path))
+                .filter(|(path, _)| scanner.credential_checked(path))
                 .find_map(|(path, text)| {
                     patchula_manager::committed_credentials(path, text)
                         .map(|kind| (path.clone(), kind))
@@ -2595,7 +2595,7 @@ impl Engine {
             // the shared public cache partition.
             if let Some((path, kind)) = files
                 .iter()
-                .filter(|(path, _)| patchula_manager::credential_scope(path))
+                .filter(|(path, _)| scanner.credential_checked(path))
                 .find_map(|(path, text)| {
                     patchula_manager::committed_credentials(path, text)
                         .map(|kind| (path.clone(), kind))

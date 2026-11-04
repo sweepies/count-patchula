@@ -278,6 +278,16 @@ impl Scanner {
     pub fn needs(&self, path: &str) -> bool {
         self.config.managers.iter().any(|m| self.selected(*m, path)) || self.registry_file(path)
     }
+    /// Whether `path` sits under the repository's excluded paths.
+    pub fn excluded(&self, path: &str) -> bool {
+        !self.config.exclude.is_empty() && self.exclude.matches(path)
+    }
+    /// Whether `path` is one the committed-credentials scan checks: a
+    /// settings file that can hold credentials, which this repository's
+    /// scan reads. Paths `exclude` leaves out are never checked.
+    pub fn credential_checked(&self, path: &str) -> bool {
+        credential_scope(path) && !self.excluded(path) && self.needs(path)
+    }
     /// The files among `paths` that what `files` says makes the Count read
     /// as well: the sources of the builds Gradle settings include, which can
     /// add repositories.
@@ -433,9 +443,7 @@ impl Scanner {
             .collect()
     }
     fn selected(&self, manager: Manager, path: &str) -> bool {
-        if !self.config.managers.contains(&manager)
-            || (!self.config.exclude.is_empty() && self.exclude.matches(path))
-        {
+        if !self.config.managers.contains(&manager) || self.excluded(path) {
             return false;
         }
         if let Some((_, p)) = self.selections.iter().find(|(m, _)| *m == manager) {

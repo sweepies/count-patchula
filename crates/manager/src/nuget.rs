@@ -220,9 +220,14 @@ pub(super) fn selected(path: &str) -> bool {
     leaf.ends_with(".csproj")
         || leaf.ends_with(".fsproj")
         || leaf.ends_with(".vbproj")
+        || leaf.ends_with(".sln")
+        || leaf.ends_with(".slnx")
         || matches!(
             leaf,
-            "Directory.Packages.props" | "Directory.Build.props" | "global.json"
+            "Directory.Packages.props"
+                | "Directory.Build.props"
+                | "global.json"
+                | "packages.lock.json"
         )
         || path.ends_with(".config/dotnet-tools.json")
 }
@@ -747,13 +752,29 @@ pub(crate) fn config_public(text: &str) -> bool {
         .all(|(_, value)| matches!(Named::parse(value, &NUGET_ORG), Named::Public))
 }
 
+/// Whether `text`, already decoded and lowercased, holds a `<name`
+/// element start: the tag followed by whitespace, `/` or `>`, so a
+/// property such as `<TargetFramework` does not count as `<Target`.
+fn has_element(text: &str, name: &str) -> bool {
+    let open = format!("<{name}");
+    text.match_indices(&open).any(|(at, _)| {
+        text.as_bytes()
+            .get(at + open.len())
+            .is_some_and(|b| b.is_ascii_whitespace() || matches!(b, b'/' | b'>'))
+    })
+}
+
 /// Whether an MSBuild file avoids every property that can set restore
-/// sources.
+/// sources and every element that runs code the Count cannot reason
+/// about: a `<Target`, a `<UsingTask` or an `<Exec`.
 pub(crate) fn msbuild_public(text: &str) -> bool {
     let text = decoded(text).to_ascii_lowercase();
     !RESTORE_OVERRIDES
         .iter()
         .any(|property| text.contains(property))
+        && !["target", "usingtask", "exec"]
+            .iter()
+            .any(|name| has_element(&text, name))
 }
 
 #[cfg(test)]

@@ -291,12 +291,14 @@ without the private feed, and a partition warms after its first run.
 Credential files still live only in the run's own directory and are
 deleted when it finishes.
 
-The `public` partition is still a shared one: tools that run repository
-code — Bundler evaluating the Gemfile, uv or Poetry building sdists, and
-MSBuild evaluating project files — could plant content there that
-another installation's run reads. That is accepted by the trust model
-above: every installation is trusted, and lockfile tools run repository
-code anyway.
+Partitions keep honest repositories' private packages apart; they are
+not an isolation boundary. Lockfile tools run repository code
+unsandboxed — Bundler evaluating the Gemfile, uv or Poetry building
+sdists, MSBuild evaluating project files — so code from any installed
+repository can read every partition on the host, `public`, another
+installation's and another credential set's alike. That is within the
+trust model above: every installation is trusted, and lockfile tools run
+repository code anyway.
 
 A partition a run uses is held shared, so eviction never removes one in use,
 and tools whose caches are not documented for concurrent use — aube, Bun,

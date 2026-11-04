@@ -968,7 +968,7 @@ pub(crate) fn public(path: &str, text: &str) -> bool {
             // a path among them — as unreadable for lookups. For a run's
             // partition a path is local; only git and URL sources fetch
             // remote content, so they are checked on their own.
-            origins.public_only() && !remote(&tools)
+            origins.public_only() && !remote(&tools) && !url_requirements(text)
         }
         "uv.toml" => {
             let parsed = toml_edit::de::from_str::<Value>(text)
@@ -998,6 +998,53 @@ pub(crate) fn public(path: &str, text: &str) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether `pyproject.toml`'s requirement lists hold a PEP 508 URL
+/// requirement (`name @ url`), which fetches remote content no index
+/// setting describes: `[project]` dependencies and optional dependencies,
+/// `[dependency-groups]` and `[build-system]` requirements.
+fn url_requirements(text: &str) -> bool {
+    let Ok(document) = text.parse::<toml_edit::DocumentMut>() else {
+        return true;
+    };
+    let mut requirements = Vec::new();
+    let mut collect = |item: Option<&toml_edit::Item>| {
+        if let Some(array) = item.and_then(toml_edit::Item::as_array) {
+            requirements.extend(
+                array
+                    .iter()
+                    .filter_map(|value| value.as_str().map(str::to_owned)),
+            );
+        }
+    };
+    if let Some(project) = document.get("project") {
+        collect(project.get("dependencies"));
+        if let Some(optional) = project
+            .get("optional-dependencies")
+            .and_then(toml_edit::Item::as_table_like)
+        {
+            for (_, group) in optional.iter() {
+                collect(Some(group));
+            }
+        }
+    }
+    if let Some(groups) = document
+        .get("dependency-groups")
+        .and_then(toml_edit::Item::as_table_like)
+    {
+        for (_, group) in groups.iter() {
+            collect(Some(group));
+        }
+    }
+    collect(
+        document
+            .get("build-system")
+            .and_then(|build| build.get("requires")),
+    );
+    requirements
+        .iter()
+        .any(|requirement| direct_reference(requirement).is_some())
 }
 
 /// Whether uv's sources or Poetry's dependencies name a git or URL

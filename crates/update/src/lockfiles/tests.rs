@@ -6031,9 +6031,12 @@ async fn tool_caches_partition_by_installation_when_not_public() {
     );
 }
 
-/// Whether a run can share the `public` partition: every file it can
-/// read that steers a fetch must have a public-only verdict; files that
-/// cannot steer one decide nothing, and a missing verdict fails closed.
+/// Whether a run can share the `public` partition: every materialized
+/// file of its ecosystem's kinds, anywhere in the snapshot, must have a
+/// public-only verdict; files of other kinds decide nothing, and a
+/// missing verdict fails closed. A sibling project with a private
+/// source makes every directory's run not public: it can reach the
+/// run through a path dependency.
 #[test]
 fn a_run_is_public_only_when_every_file_it_reads_is() {
     let blob = || Blob {
@@ -6056,44 +6059,65 @@ fn a_run_is_public_only_when_every_file_it_reads_is() {
             ("other/package.json".into(), true),
         ])
     };
-    // Every file under `app` and the settings above it is public.
-    assert!(public_only(
-        Ecosystem::Node,
-        "app",
-        &baseline,
-        &all_public()
-    ));
-    // The root run covers `other/` too, which is public as well.
-    assert!(public_only(Ecosystem::Node, "", &baseline, &all_public()));
-    // A private verdict anywhere covered fails the run.
-    let mut verdicts = all_public();
-    verdicts.insert(".npmrc".into(), false);
-    assert!(!public_only(Ecosystem::Node, "app", &baseline, &verdicts));
-    // …but a private verdict outside the run's coverage does not.
-    let mut verdicts = all_public();
-    verdicts.insert("other/package.json".into(), false);
-    assert!(public_only(Ecosystem::Node, "app", &baseline, &verdicts));
-    assert!(!public_only(Ecosystem::Node, "", &baseline, &verdicts));
+    // Every file of the ecosystem's kinds is public, anywhere.
+    assert!(public_only(Ecosystem::Node, &baseline, &all_public()));
+    // A private verdict anywhere fails the run.
+    for path in [".npmrc", "other/package.json"] {
+        let mut verdicts = all_public();
+        verdicts.insert(path.into(), false);
+        assert!(
+            !public_only(Ecosystem::Node, &baseline, &verdicts),
+            "{path}"
+        );
+    }
     // A covered file with no verdict fails closed.
     let mut verdicts = all_public();
     verdicts.remove("app/package-lock.json");
-    assert!(!public_only(Ecosystem::Node, "app", &baseline, &verdicts));
+    assert!(!public_only(Ecosystem::Node, &baseline, &verdicts));
     // Files of another ecosystem steer nothing for a Node run.
     let baseline = BTreeMap::from([("app/pyproject.toml".into(), blob())]);
-    assert!(public_only(
-        Ecosystem::Node,
-        "app",
-        &baseline,
-        &BTreeMap::new()
-    ));
-    // Go's fetches are environment-only in the sandbox: always public.
+    assert!(public_only(Ecosystem::Node, &baseline, &BTreeMap::new()));
+    // Go fetches anonymously only without operator credentials: always
+    // public.
     let baseline = BTreeMap::from([("app/go.mod".into(), blob())]);
-    assert!(public_only(
-        Ecosystem::Go,
-        "app",
-        &baseline,
-        &BTreeMap::new()
-    ));
+    assert!(public_only(Ecosystem::Go, &baseline, &BTreeMap::new()));
+    // A `.gemspec` has no verdict — it is arbitrary Ruby — so a Ruby
+    // run that can read one fails closed.
+    let baseline = BTreeMap::from([
+        ("app/Gemfile".into(), blob()),
+        ("app/Gemfile.lock".into(), blob()),
+        ("lib/tool.gemspec".into(), blob()),
+    ]);
+    let verdicts = BTreeMap::from([
+        ("app/Gemfile".into(), true),
+        ("app/Gemfile.lock".into(), true),
+    ]);
+    assert!(!public_only(Ecosystem::Ruby, &baseline, &verdicts));
+    // Without it the same run is public.
+    let baseline = BTreeMap::from([
+        ("app/Gemfile".into(), blob()),
+        ("app/Gemfile.lock".into(), blob()),
+    ]);
+    assert!(public_only(Ecosystem::Ruby, &baseline, &verdicts));
+    // Dotnet kinds have verdicts of their own: a `.sln`, a lock and a
+    // public config make the run public; a `<Target` in a project does
+    // not (the verdicts here stand in for the extraction's).
+    let baseline = BTreeMap::from([
+        ("app/app.csproj".into(), blob()),
+        ("app/packages.lock.json".into(), blob()),
+        ("app.sln".into(), blob()),
+        ("nuget.config".into(), blob()),
+    ]);
+    let verdicts = BTreeMap::from([
+        ("app/app.csproj".into(), true),
+        ("app/packages.lock.json".into(), true),
+        ("app.sln".into(), true),
+        ("nuget.config".into(), true),
+    ]);
+    assert!(public_only(Ecosystem::Dotnet, &baseline, &verdicts));
+    let mut verdicts = verdicts.clone();
+    verdicts.insert("app/app.csproj".into(), false);
+    assert!(!public_only(Ecosystem::Dotnet, &baseline, &verdicts));
 }
 
 /// An unused partition is pruned after its age, oversized ones evict

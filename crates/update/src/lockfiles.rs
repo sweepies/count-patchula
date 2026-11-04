@@ -56,13 +56,16 @@ pub struct Job {
     /// The manifest is not edited, so the tool must be told the exact version.
     pub lock_only: bool,
 }
-/// Whether `path`, materialized for a run of `ecosystem` in `directory`,
-/// could steer what its tools fetch: a manifest, lockfile or settings
-/// file of the ecosystem in the run's directory or below it, or a
-/// settings file in a directory above it that tools read upward.
-fn steers(ecosystem: Ecosystem, path: &str, directory: &str) -> bool {
+/// Whether `path`, materialized for a run of `ecosystem`, could steer
+/// what its tools fetch: a manifest, lockfile or settings file of the
+/// ecosystem, anywhere in the snapshot. A sibling project reached
+/// through a `ProjectReference`, a `.sln`, a `file:../x`, a uv or
+/// Poetry path dependency or a Composer path repository can steer the
+/// run as much as one inside its directory, so the directory does not
+/// bound it.
+fn steers(ecosystem: Ecosystem, path: &str) -> bool {
     let leaf = path.rsplit('/').next().unwrap_or(path);
-    let kind = match ecosystem {
+    match ecosystem {
         Ecosystem::Node => matches!(
             leaf,
             "package.json"
@@ -88,8 +91,10 @@ fn steers(ecosystem: Ecosystem, path: &str, directory: &str) -> bool {
                 | "poetry.lock"
         ),
         // The repository's `.bundle/config` never steers a run: Bundler's
-        // environment overrides it.
-        Ecosystem::Ruby => matches!(leaf, "Gemfile" | "Gemfile.lock"),
+        // environment overrides it. A `.gemspec` steers nothing a verdict
+        // can prove either — it is arbitrary Ruby, so it has no verdict
+        // and a run that can read one fails closed.
+        Ecosystem::Ruby => matches!(leaf, "Gemfile" | "Gemfile.lock") || leaf.ends_with(".gemspec"),
         Ecosystem::Php => matches!(leaf, "composer.json" | "composer.lock"),
         Ecosystem::Cargo => matches!(leaf, "Cargo.toml" | "Cargo.lock"),
         Ecosystem::Dotnet => {
@@ -109,30 +114,29 @@ fn steers(ecosystem: Ecosystem, path: &str, directory: &str) -> bool {
                 .iter()
                 .any(|extension| leaf.ends_with(extension))
         }
-        // Go needs no verdicts: nothing a repository commits moves its
-        // fetches off the proxy, which is environment-only in the sandbox
-        // (GOPRIVATE and `.netrc` enter only with operator credentials,
-        // which get a private partition of their own).
-        Ecosystem::Go => return true,
-        _ => return false,
-    };
-    kind && (under(path, directory) || under(directory, self::directory(path)))
+        // Go needs no verdicts: the sandbox sets no GOPROXY, so Go uses
+        // `proxy.golang.org,direct` and can fetch anonymously from any
+        // VCS host. Nothing it can fetch without operator credentials —
+        // `.netrc` enters only with them — can be private to an
+        // installation: anonymous fetches reach only public content.
+        Ecosystem::Go => true,
+        _ => false,
+    }
 }
 
-/// Whether a run for (`ecosystem`, `directory`) can fetch only from the
-/// ecosystem's well-known public registries: every materialized file
-/// that could steer it decides public-only, and a file with no verdict
-/// is not public. Fail closed.
+/// Whether a run for `ecosystem` can fetch only from the ecosystem's
+/// well-known public registries: every materialized file of its kinds,
+/// anywhere in the snapshot, decided public-only. A file with no
+/// verdict is not public. Fail closed.
 fn public_only(
     ecosystem: Ecosystem,
-    directory: &str,
     baseline: &BTreeMap<String, Blob>,
     verdicts: &BTreeMap<String, bool>,
 ) -> bool {
     matches!(ecosystem, Ecosystem::Go)
         || baseline
             .keys()
-            .all(|path| !steers(ecosystem, path, directory) || verdicts.get(path) == Some(&true))
+            .all(|path| !steers(ecosystem, path) || verdicts.get(path) == Some(&true))
 }
 
 fn directory(path: &str) -> &str {
@@ -756,9 +760,12 @@ impl Runner {
         std::fs::create_dir_all(&driver).map_err(|e| e.to_string())?;
         std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
         let (baseline, cargo_configs) = self.checkout(plan, &root, &driver).await?;
-        // Backstop for the engine's refusal: every file the tools can read
-        // was checked before any of them runs, so a committed credential can
-        // never fetch into the shared public cache partition.
+        // Backstop for the engine's refusal: every file the tools can
+        // read and the engine would check was checked before any of them
+        // runs, so a committed credential can never fetch into the shared
+        // public cache partition. Paths the repository excludes are not
+        // checked, as the engine's are not.
+        let scanner = patchula_manager::Scanner::new(config)?;
         for (path, text) in baseline
             .iter()
             .map(|(path, blob)| (path, blob.content.as_str()))
@@ -771,7 +778,7 @@ impl Runner {
             // Source files are checked out so tools can build, but no tool
             // reads registry credentials from them; a test's connection
             // string is not a registry credential.
-            .filter(|(path, _)| patchula_manager::credential_scope(path))
+            .filter(|(path, _)| scanner.credential_checked(path))
         {
             if let Some(kind) = patchula_manager::committed_credentials(path, text) {
                 return Err(patchula_manager::credential_reason(path, &kind));
@@ -799,7 +806,7 @@ impl Runner {
             // Whether every file the run can read decided public-only, so
             // its tools may share the `public` cache partition. Fail
             // closed: any file without a verdict makes it not public.
-            let public = public_only(ecosystem, &directory, &baseline, &plan.public_only);
+            let public = public_only(ecosystem, &baseline, &plan.public_only);
             let cwd = root.join(&directory);
             match ecosystem {
                 Ecosystem::Ruby => {
@@ -961,8 +968,8 @@ impl Runner {
                                     cwd: None,
                                     env: env.clone(),
                                     credentials: credentials.clone(),
-                                    // Go always resolves through the
-                                    // sandbox's proxy: it is public-only
+                                    // Without operator credentials Go
+                                    // fetches anonymously only: public
                                     // by construction.
                                     public: true,
                                     args: vec![

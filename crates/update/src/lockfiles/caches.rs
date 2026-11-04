@@ -55,11 +55,12 @@ pub(super) fn tool(bin: &str) -> Option<Tool> {
     })
 }
 
-/// The `private-<hash>` partition credentialed runs share: a name nobody
-/// outside a run with the same entries can predict, keyed by the entries'
-/// scopes alone, never their secrets. Runs without credentials choose
-/// between `public` and `installation-<hash>` by what they can fetch, in
-/// `Runner::use_caches`.
+/// The `private-<hash>` partition credentialed runs share, keyed by the
+/// entries' scopes alone, never their secrets. The name is not a secret
+/// either — installation scopes are guessable — so a partition is
+/// protected by what it holds, not by being unfindable. Runs without
+/// credentials choose between `public` and `installation-<hash>` by what
+/// they can fetch, in `Runner::use_caches`.
 pub(super) fn partition(scopes: &[String]) -> String {
     format!("private-{}", hash(scopes.join("\n").as_bytes()))
 }
@@ -72,20 +73,50 @@ pub(super) struct Hold {
 
 /// Open (creating) `path` and lock it; a run's shared hold keeps eviction out,
 /// a serial tool's exclusive one serialises the partition between its runs.
+/// Eviction removes a lock file while holding it exclusively, so between
+/// open and flock the path may have been deleted and recreated: a lock
+/// taken on the removed inode guards nothing. When the path no longer
+/// names the file held, it is dropped and the current one is taken.
 fn lock(path: &Path, exclusive: bool) -> Result<std::fs::File, String> {
-    let file = std::fs::File::options()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(path)
-        .map_err(|e| e.to_string())?;
-    if exclusive {
-        file.lock()
-    } else {
-        file.lock_shared()
+    for _ in 0..8 {
+        let file = std::fs::File::options()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)
+            .map_err(|e| e.to_string())?;
+        if exclusive {
+            file.lock()
+        } else {
+            file.lock_shared()
+        }
+        .map_err(|e| format!("cannot lock tool cache {}: {e}", path.display()))?;
+        if same(&file, path) {
+            return Ok(file);
+        }
     }
-    .map(|()| file)
-    .map_err(|e| format!("cannot lock tool cache {}: {e}", path.display()))
+    Err(format!(
+        "cannot lock tool cache {}: replaced while locking",
+        path.display()
+    ))
+}
+
+/// Whether `path` still names the inode `file` holds.
+#[cfg(unix)]
+fn same(file: &std::fs::File, path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (file.metadata(), std::fs::metadata(path)) {
+        (Ok(held), Ok(named)) => held.ino() == named.ino() && held.dev() == named.dev(),
+        _ => false,
+    }
+}
+
+/// Whether `path` still names the file `file` holds. Other platforms
+/// cannot tell one from the other cheaply; the check exists for the
+/// Unix hosts the Count runs on.
+#[cfg(not(unix))]
+fn same(file: &std::fs::File, path: &Path) -> bool {
+    file.metadata().is_ok() && path.exists()
 }
 
 /// Mark the partition used now.
@@ -400,6 +431,34 @@ mod tests {
         assert!(evict(root, "private-x"));
         assert!(!root.join("private-x").exists());
         assert!(!root.join("private-x.lock").exists());
+    }
+
+    /// A lock file deleted and recreated while a lock on the old inode
+    /// was being taken is re-opened: the hold ends on the file the path
+    /// names, not on a removed one that guards nothing.
+    #[test]
+    fn a_replaced_lock_file_is_retaken() {
+        use std::os::unix::fs::MetadataExt;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let path = root.join("private-x.lock");
+        // The evictor holds the file exclusively, as `evict` does.
+        let evictor = std::fs::File::create(&path).unwrap();
+        evictor.lock().unwrap();
+        let path_in = path.clone();
+        let run = std::thread::spawn(move || lock(&path_in, false).unwrap());
+        // Give the run a moment to open the file and block on the lock,
+        // then evict: remove the path and recreate it under a new inode.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::fs::remove_file(&path).unwrap();
+        let recreated = std::fs::File::create(&path).unwrap();
+        drop(evictor);
+        let held = run.join().unwrap();
+        assert_eq!(
+            held.metadata().unwrap().ino(),
+            recreated.metadata().unwrap().ino(),
+            "the run must hold the file the path names now"
+        );
     }
 
     /// A partition a run still holds is not evicted, and its lock file

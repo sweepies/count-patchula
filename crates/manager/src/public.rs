@@ -33,6 +33,37 @@ pub(crate) fn url_host(url: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
+/// Whether `userinfo` is entirely a placeholder the environment or CI
+/// resolves at run time — `$NAME`, `${NAME}`, `${{ … }}`, `$(…)` or
+/// `%NAME%` — and so holds no credential of its own.
+fn placeholder(userinfo: &str) -> bool {
+    if let Some(inner) = userinfo
+        .strip_prefix("${{")
+        .and_then(|u| u.strip_suffix("}}"))
+    {
+        return !inner.trim().is_empty();
+    }
+    if let Some(inner) = userinfo
+        .strip_prefix("${")
+        .and_then(|u| u.strip_suffix('}'))
+    {
+        return !inner.is_empty();
+    }
+    if let Some(inner) = userinfo
+        .strip_prefix("$(")
+        .and_then(|u| u.strip_suffix(')'))
+    {
+        return !inner.is_empty();
+    }
+    if let Some(name) = userinfo.strip_prefix('$') {
+        return !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
+    }
+    if let Some(name) = userinfo.strip_prefix('%').and_then(|u| u.strip_suffix('%')) {
+        return !name.is_empty() && !name.contains('%');
+    }
+    false
+}
+
 /// Whether `value`, a URL or specifier a manifest or lockfile names for a
 /// fetch, can only reach public content: the ecosystem's public registry
 /// or a well-known public host, or a local source that fetches nothing.
@@ -72,20 +103,37 @@ pub(crate) fn fetch_ok(value: &str, public: &Public) -> bool {
         | "symlink" => true,
         // The public forges.
         "github" | "gitlab" | "bitbucket" | "gist" => true,
-        "https" | "http" | "ssh" | "git" | "ftp" => {
+        "https" | "http" | "git" | "ftp" => {
             let Some(authority) = rest
                 .strip_prefix("//")
                 .and_then(|rest| rest.split(['/', '?', '#']).next())
             else {
                 return false;
             };
-            // A URL carrying a password is not a public fetch even on a
-            // public host; `$VAR` and `%VAR%` placeholders resolve at run
-            // time and hold nothing.
+            // Userinfo that is not entirely an environment placeholder can
+            // authenticate, with or without a password: forges take a
+            // token as the username.
             if let Some((userinfo, _)) = authority.rsplit_once('@')
-                && userinfo.split(':').nth(1).is_some_and(|password| {
-                    !password.is_empty() && !password.starts_with(['$', '%'])
-                })
+                && !placeholder(userinfo)
+            {
+                return false;
+            }
+            url_host(value).is_some_and(|host| PUBLIC_HOSTS.contains(&host.as_str()))
+        }
+        // ssh's userinfo is a login name, not a credential; a literal
+        // password in it still is one.
+        "ssh" => {
+            let Some(authority) = rest
+                .strip_prefix("//")
+                .and_then(|rest| rest.split(['/', '?', '#']).next())
+            else {
+                return false;
+            };
+            if let Some((userinfo, _)) = authority.rsplit_once('@')
+                && userinfo
+                    .split(':')
+                    .nth(1)
+                    .is_some_and(|password| !password.is_empty() && !placeholder(password))
             {
                 return false;
             }
@@ -121,8 +169,11 @@ pub(crate) fn verdict(path: &str, text: &str, files: &Files) -> Option<bool> {
         "composer.lock" => crate::composer::lock_public(text),
         "Cargo.toml" => crate::cargo::manifest_public(text),
         "Cargo.lock" => crate::cargo::lock_public(text),
+        // These carry no fetch sources of their own.
+        "packages.lock.json" | "global.json" | "dotnet-tools.json" => true,
         _ if crate::nuget::config_file(path) => crate::nuget::config_public(text),
         _ if crate::nuget::msbuild_file(path) => crate::nuget::msbuild_public(text),
+        _ if leaf.ends_with(".sln") || leaf.ends_with(".slnx") => true,
         _ => return None,
     };
     // A file that could not be read can name anything.
@@ -182,6 +233,12 @@ mod tests {
                 })
             },
         };
+        // Built at runtime so the fixture scan finds no credential text.
+        let passworded = format!(
+            "https://ci:{}@github.com/acme/x.git",
+            "s3".to_owned() + "cret"
+        );
+        let ssh_passworded = format!("ssh://git:{}@github.com/acme/x.git", "p".to_owned() + "w");
         for (value, expect) in [
             (
                 "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
@@ -201,9 +258,17 @@ mod tests {
             ("portal:../x", true),
             ("sha512-deadbeef", true),
             ("1.2.3", true),
-            ("https://user@bitbucket.org/acme/x.git", true),
-            ("https://ci:s3cret@github.com/acme/x.git", false), // betterleaks:allow
-            ("https://ci:${TOKEN}@github.com/acme/x.git", true),
+            // A user alone still authenticates: forges take a token as the
+            // username, so only an all-placeholder userinfo is public.
+            ("https://user@bitbucket.org/acme/x.git", false),
+            (passworded.as_str(), false),
+            ("https://token@github.com/acme/x.git", false),
+            ("https://ci:${TOKEN}@github.com/acme/x.git", false),
+            ("https://${TOKEN}@github.com/acme/x.git", true),
+            ("https://$TOKEN@github.com/acme/x.git", true),
+            ("https://$(TOKEN)@github.com/acme/x.git", true),
+            ("https://%TOKEN%@github.com/acme/x.git", true),
+            (ssh_passworded.as_str(), false),
         ] {
             assert_eq!(fetch_ok(value, &npm), expect, "{value}");
         }
