@@ -542,7 +542,8 @@ impl Feeds {
     pub(crate) fn new(files: &Files) -> Self {
         let mut configs = BTreeMap::<String, Result<Config, String>>::new();
         for (path, text) in files.iter().filter(|(path, _)| config_file(path)) {
-            let (dir, leaf) = path.rsplit_once('/').unwrap_or(("", path.as_str()));
+            let whole = path.as_str();
+            let (dir, leaf) = whole.rsplit_once('/').unwrap_or(("", whole));
             let dir = if dir.is_empty() {
                 String::new()
             } else {
