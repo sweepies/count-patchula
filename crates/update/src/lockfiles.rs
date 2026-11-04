@@ -767,7 +767,7 @@ impl Runner {
                     let go = go_version(&cwd, &versions["go"])?;
                     // Credentials for Go and Git in `~/.netrc`, gone when Go
                     // finishes, and their hosts private to Go.
-                    let (netrc, hosts) = self.go_netrc();
+                    let (netrc, hosts) = self.netrc();
                     let held = !hosts.is_empty();
                     let mut _netrc = node::Private::default();
                     let mut env = Vec::new();

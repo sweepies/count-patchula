@@ -48,6 +48,18 @@ impl Runner {
         } = context;
         let cwd = root.join(directory);
         let python = python(baseline, directory, versions)?;
+        // uv reads basic credentials by host from `~/.netrc`, gone when the
+        // locks are done; Poetry reads them by source name.
+        let (netrc, hosts) = self.netrc();
+        let mut _netrc = node::Private::default();
+        if !hosts.is_empty() {
+            let home = driver.join("home");
+            std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
+            _netrc.write(&home.join(".netrc"), &netrc)?;
+        }
+        let poetry = self.poetry_env(&[std::fs::read_to_string(cwd.join("pyproject.toml"))
+            .map(|text| super::credentials::poetry_sources(&text))
+            .unwrap_or_default()]);
         for leaf in LOCKS {
             if !cwd.join(leaf).is_file() {
                 continue;
@@ -74,20 +86,23 @@ impl Runner {
                         },
                     ]);
                 }
-                Invocation {
-                    tools: vec![
-                        ("uv".into(), node::version(versions, "uv")?),
-                        ("python".into(), python.clone()),
-                    ],
-                    bin: "uv".into(),
-                    cwd: None,
-                    // Resolve with the mise interpreter; never download another.
-                    env: vec![
-                        ("UV_PYTHON_DOWNLOADS".into(), "never".into()),
-                        ("UV_NO_PROGRESS".into(), "1".into()),
-                    ],
-                    args,
-                }
+                (
+                    Invocation {
+                        tools: vec![
+                            ("uv".into(), node::version(versions, "uv")?),
+                            ("python".into(), python.clone()),
+                        ],
+                        bin: "uv".into(),
+                        cwd: None,
+                        // Resolve with the mise interpreter; never download another.
+                        env: vec![
+                            ("UV_PYTHON_DOWNLOADS".into(), "never".into()),
+                            ("UV_NO_PROGRESS".into(), "1".into()),
+                        ],
+                        args,
+                    },
+                    !hosts.is_empty(),
+                )
             } else {
                 // `poetry lock` keeps existing pins and re-resolves changed
                 // constraints; `--regenerate` refreshes everything within them.
@@ -101,19 +116,25 @@ impl Runner {
                 if maintenance {
                     args.push("--regenerate".into());
                 }
-                Invocation {
-                    tools: vec![
-                        ("poetry".into(), node::version(versions, "poetry")?),
-                        ("python".into(), python.clone()),
-                    ],
-                    bin: "poetry".into(),
-                    cwd: None,
-                    env: vec![
-                        ("POETRY_VIRTUALENVS_CREATE".into(), "false".into()),
-                        ("POETRY_NO_INTERACTION".into(), "1".into()),
-                    ],
-                    args,
-                }
+                (
+                    Invocation {
+                        tools: vec![
+                            ("poetry".into(), node::version(versions, "poetry")?),
+                            ("python".into(), python.clone()),
+                        ],
+                        bin: "poetry".into(),
+                        cwd: None,
+                        env: [
+                            ("POETRY_VIRTUALENVS_CREATE".into(), "false".into()),
+                            ("POETRY_NO_INTERACTION".into(), "1".into()),
+                        ]
+                        .into_iter()
+                        .chain(poetry.iter().cloned())
+                        .collect(),
+                        args,
+                    },
+                    !poetry.is_empty(),
+                )
             };
             // Poetry moves a package as far as its constraint allows and cannot be
             // told a version, so a package whose declaration stays as it is has
@@ -123,10 +144,11 @@ impl Runner {
             } else {
                 Pinned::none(root)
             };
-            self.tool(driver, invocation.clone()).await?;
+            let (invocation, held) = invocation;
+            self.held_tool(driver, invocation.clone(), held).await?;
             if !pinned.is_empty() {
                 pinned.restore()?;
-                self.tool(driver, invocation).await?;
+                self.held_tool(driver, invocation, held).await?;
             }
             if !cwd.join(leaf).is_file() {
                 return Err(format!("tool did not produce {leaf}"));

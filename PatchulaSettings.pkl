@@ -46,11 +46,10 @@ class Registry {
   /// Only `patchula serve` reads this: installation IDs that may use the
   /// entry. Empty allows every installation the server serves.
   allowedInstallations: Listing<Int> = new {}
-  /// Also give the credentials to the aube, npm, Bun, Yarn, Cargo, Composer,
-  /// Go and Terraform lockfile tools, trusting every repository that may use the entry, and
-  /// every npm package those repositories depend on, with them. Needs `auth`; not for a
-  /// mirror, no other entry may sit under its prefix, and the prefix cannot
-  /// hold `=` or `;`.
+  /// Also give the credentials to lockfile tools. They run repository and
+  /// package code, so any repository the Count processes can read them.
+  /// Needs `auth`; not for a mirror, no other entry may sit under its
+  /// prefix, and the prefix cannot hold `=` or `;`.
   tools: Boolean = false
 }
 

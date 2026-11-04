@@ -226,30 +226,40 @@ containing only the files the tool reads. Every process starts from an
 allowlisted environment with its own HOME, npm config, Cargo home and Go paths.
 Parent tokens, cloud credentials, Git helpers and your tool configuration are
 not inherited. Git alone gets a temporary credential header for the
-installation token, kept out of URLs, arguments and stored config. Yarn runs on
-a copy of `.yarnrc.yml` without `yarnPath`, plugins or `${VAR}` interpolations,
-since a committed Yarn release and plugins are repository code; a `${VAR}`
-registry stays, so Yarn stops on it. npm, pnpm, aube and Bun see each `.npmrc`
-with only its `registry=` and `@scope:registry=` lines, so a private scope
-resolves where your own installs would, never to the public package of its
-name.
+installation token, kept out of URLs, arguments and stored config. Yarn runs
+the release the Count pins, on a copy of `.yarnrc.yml` without `yarnPath`,
+plugins or `${VAR}` interpolations, since the scratch tree holds no `.yarn/`
+and the run has none of the variables; a `${VAR}` registry stays, so Yarn
+stops on it. npm, pnpm, aube and Bun see each `.npmrc` with only its
+`registry=` and `@scope:registry=` lines, so a private scope resolves where
+your own installs would, never to the public package of its name.
+
+Install scripts are skipped wherever a tool allows it (npm, aube, Bun, Yarn
+classic, and Composer with plugins off too), because a lockfile needs none of
+them.
 
 Output is kept only when something fails, at most 4 KiB of each stream.
 
-:::caution[Private registries]
+:::danger[Lockfile tools run repository and package code]
+Regenerating a lockfile runs code from the repository and from its
+dependencies: Bundler evaluates the Gemfile and gemspecs, dotnet evaluates
+MSBuild projects and targets, uv and Poetry build source distributions to read
+their metadata, and Yarn and npm prepare git dependencies by running their
+build scripts. The tools run unsandboxed, as the Count's own user, so that code
+can read anything the Count can: its environment and settings secrets, the
+GitHub App credentials, and what other runs on the same host hold at the time.
+Run the Count only for repositories you trust that far, or turn lockfile
+updates off for the others.
+:::
+
+## Private registries in lockfile tools
+
 Lockfile tools get a [registry entry's](/guide/sources/#private-registries)
-credentials only when the entry sets `tools = true`. Setting it trusts every
-repository that may use the entry with the credential, and for aube, npm, Bun
-and Yarn every package those repositories depend on too: these tools run
-without lifecycle scripts, but they can still prepare a git dependency by
-running its build scripts, and they run unsandboxed, so that code can read the
-credential. Cargo, Composer (with scripts and plugins off), Go and Terraform
-run no package code while they lock. In the server, `allowedInstallations`
-decides which installations' tools are given an entry's credentials; the CLI
-gives them to every repository it runs on. Lockfile tools run unsandboxed as
-the Count's own user, though, so code one of them runs can also read what
-other runs on the same host hold at the time, and the Count's own environment
-and files: `allowedInstallations` does not bound what such code can read.
+credentials only when the entry sets `tools = true`. In the server,
+`allowedInstallations` decides which installations' tools are given them,
+and the CLI gives them to every repository it runs on. As lockfile tools run
+repository and package code, any repository the Count processes can read a
+credential it holds, so neither setting is a boundary.
 
 Each tool gets the credentials in the form it reads, only for its own run:
 
@@ -258,8 +268,12 @@ Each tool gets the credentials in the form it reads, only for its own run:
 | aube, npm, Bun | `//host/path/:_authToken` or `:_auth` in its user configuration | bearer, basic | prefix |
 | Yarn | `npmRegistries` in its user configuration | bearer, basic | the registry URL, exactly |
 | Cargo | `CARGO_REGISTRIES_<NAME>_INDEX` and `_TOKEN` | bearer, basic | the sparse index URL of each registry `.cargo/config.toml` or `.cargo/config` names |
+| dotnet | `NuGetPackageSourceCredentials_<key>` | basic | the URL of each source `nuget.config` adds |
+| Poetry | `POETRY_HTTP_BASIC_<NAME>_USERNAME` and `_PASSWORD` | basic | the URL of each `[[tool.poetry.source]]` |
+| Bundler | `BUNDLE_<HOST>` | basic | host |
 | Composer | `COMPOSER_AUTH` | bearer, basic | host |
 | Go | `~/.netrc`, with the host in `GOPRIVATE` | basic | host |
+| uv | `~/.netrc` | basic | host |
 | Terraform | `TF_TOKEN_<host>` | bearer | host |
 
 Files are written with owner-only permissions and removed when the tool
@@ -267,21 +281,26 @@ finishes. Cargo sends the token as the `Authorization` header, so it gets the
 header a lookup sends: `Bearer <token>` or `Basic <base64>`. Cargo runs
 outside the repository and reads none of its configuration; it gets each
 registry that the `.cargo/config.toml` and `.cargo/config` files at or above
-the project define under a `tools` entry, by name, index and token. A name
-defined more than one way gets nothing, and so does an index URL not written
-in its normal form (lowercase host, no user, escapes or backslashes). Go
-fetches the modules under a credentialed host from the host itself, never
-through the public module proxy or checksum database.
+the project define under a `tools` entry, by name, index and token. dotnet
+reads `nuget.config` from the project up to the repository root, and Poetry
+reads the project's `pyproject.toml`. A name defined more than one way gets
+nothing, and so does a URL not written in its normal form (lowercase host, no
+user, escapes or backslashes). Go fetches the modules under a credentialed
+host from the host itself, never through the public module proxy or checksum
+database.
 
-Composer, Go and Terraform send credentials to every URL on the host, so they
-only get an entry whose prefix is a bare host, with no path or port, and that
-is the only entry on its host, for any installation. A credential a tool
-cannot take is left out without a warning, and the tool then fails on the
-registry: a bearer entry for Go, a basic one for Terraform, a Go user or
-password with whitespace, quotes, a backslash or `#`, a Terraform host with
-`_`, and a Cargo registry whose index is not `sparse+`. Composer puts basic
-credentials in the URL of the Git commands it runs for a VCS repository on
-that host, where other processes on the host can see them. No other entry may sit under a `tools` entry's prefix,
+Bundler, Composer, Go, uv and Terraform send credentials to every URL on the
+host, so they only get an entry whose prefix is a bare host, with no path or
+port, and that is the only entry on its host, for any installation. A
+credential a tool cannot take is left out without a warning, and the tool
+then fails on the registry: a bearer entry for Bundler, dotnet, Go, Poetry or
+uv, a basic one for Terraform, a `.netrc` user or password with whitespace,
+quotes, a backslash or `#`, a NuGet user or password with `;`, a source or
+registry name outside ASCII letters, digits, `-`, `_` and (for NuGet and
+Poetry) `.`, a Bundler or Terraform host with `_`, and a Cargo registry whose
+index is not `sparse+`. Composer puts basic credentials in the URL of the Git
+commands it runs for a VCS repository on that host, where other processes on
+the host can see them. No other entry may sit under a `tools` entry's prefix,
 because npm, aube and Bun would send the broader entry's credentials there,
 and the prefix cannot hold `=` or `;`, which `.npmrc` keys cannot. Lockfile
 tools read the registries the repository names, never a
@@ -294,12 +313,6 @@ aube and Bun match credentials by host and path whatever the scheme: a
 repository that names the host over plain HTTP or turns TLS checks off, or a
 registry that serves plain-HTTP tarball URLs, sends the credential
 unencrypted.
-
-Bundler evaluates the Gemfile, dotnet runs MSBuild, and uv and Poetry may
-build source distributions, so they never get credentials. A lockfile of
-theirs that needs a private registry fails to regenerate rather than resolving
-elsewhere.
-:::
 
 ## Lockfile maintenance
 

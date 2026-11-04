@@ -125,11 +125,26 @@ impl Runner {
             })
             .collect();
         let target = target(&cwd)?;
-        let env = restore_env(
+        // NuGet reads `nuget.config` from the project up to the repository
+        // root; each source under a tools entry gets its credentials by key.
+        let mut sources = Vec::new();
+        let mut at = Some(directory);
+        while let Some(dir) = at {
+            for name in ["nuget.config", "NuGet.Config"] {
+                if let Ok(text) = std::fs::read_to_string(root.join(dir).join(name)) {
+                    sources.push(super::credentials::nuget_sources(&text));
+                }
+            }
+            at = (!dir.is_empty()).then(|| super::directory(dir));
+        }
+        let credentials = self.nuget_env(&sources);
+        let held = !credentials.is_empty();
+        let mut env = restore_env(
             &driver.join("nuget-packages"),
             std::env::var(INVARIANT).ok(),
         );
-        self.tool(
+        env.extend(credentials);
+        self.held_tool(
             driver,
             Invocation {
                 tools: vec![(
@@ -145,6 +160,7 @@ impl Runner {
                     "--force-evaluate".into(),
                 ],
             },
+            held,
         )
         .await?;
         remove_intermediates(&cwd)?;
