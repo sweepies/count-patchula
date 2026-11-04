@@ -293,6 +293,8 @@ impl Scanner {
                     .flat_map(|p| {
                         let mut out = Vec::new();
                         let mut dir = &p[..p.rfind('/').map_or(0, |i| i + 1)];
+                        // The manifest beside a lockfile, then those above.
+                        out.push(format!("{dir}Cargo.toml"));
                         while !dir.is_empty() {
                             let parent = dir.trim_end_matches('/');
                             dir = &parent[..parent.rfind('/').map_or(0, |i| i + 1)];
@@ -514,8 +516,16 @@ impl Scanner {
         let mut result = Extraction::default();
         let locks = npm::locks(files)?;
         let npmrcs = npm::npmrcs(files);
+        // Only the manifests and lockfiles Cargo's selection takes: one read
+        // only for its patches, above a selected crate, does not shape
+        // extraction.
+        let cargo_files: Files = files
+            .iter()
+            .filter(|(path, _)| self.selected(Manager::Cargo, path))
+            .map(|(path, text)| (path.clone(), text.clone()))
+            .collect();
         let cargo = if self.config.managers.contains(&Manager::Cargo) {
-            cargo::documents(files)?
+            cargo::documents(&cargo_files)?
         } else {
             BTreeMap::new()
         };
