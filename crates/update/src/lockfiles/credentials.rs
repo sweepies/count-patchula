@@ -13,6 +13,10 @@ use super::Runner;
 use patchula_http::{Auth, Credential};
 use std::collections::BTreeMap;
 
+/// The names a repository's configuration gives registries, and their URLs,
+/// in the order it gives them; a name may come more than once.
+pub(super) type Definitions = Vec<(String, String)>;
+
 impl Runner {
     /// Tools entries a host-matching tool can use.
     fn by_host(&self) -> impl Iterator<Item = &Credential> {
@@ -103,43 +107,54 @@ impl Runner {
 
     /// Bundler's `BUNDLE_<HOST>` variables for basic entries, `user:password`:
     /// the host in uppercase, with dots as `__` and hyphens as `___`. A host
-    /// with `_` of its own is left out, as its variable could name another
-    /// host.
+    /// with `_` of its own, whose variable could name another host, or with
+    /// no dot, whose variable could be a Bundler setting such as
+    /// `BUNDLE_PATH`, is left out, and so is a user or password Bundler could
+    /// not put in a URL as it is.
     pub(super) fn bundler_env(&self) -> Vec<(String, String)> {
         self.by_host()
-            .filter(|entry| !entry.host().0.contains('_'))
+            .filter(|entry| !entry.host().0.contains('_') && entry.host().0.contains('.'))
             .filter_map(|entry| match &entry.auth {
-                Auth::Basic { username, password } => Some((
-                    format!(
-                        "BUNDLE_{}",
-                        entry
-                            .host()
-                            .0
-                            .to_ascii_uppercase()
-                            .replace('-', "___")
-                            .replace('.', "__")
-                    ),
-                    format!("{username}:{password}"),
-                )),
+                Auth::Basic { username, password }
+                    if [username, password].iter().all(|field| {
+                        !field
+                            .chars()
+                            .any(|c| c.is_whitespace() || matches!(c, '@' | '/' | '%' | '#' | '?'))
+                    }) =>
+                {
+                    Some((
+                        format!(
+                            "BUNDLE_{}",
+                            entry
+                                .host()
+                                .0
+                                .to_ascii_uppercase()
+                                .replace('-', "___")
+                                .replace('.', "__")
+                        ),
+                        format!("{username}:{password}"),
+                    ))
+                }
                 _ => None,
             })
             .collect()
     }
 
     /// Each name `definitions` gives a URL under a tools entry, by the
-    /// variable fragment `key` makes of it, with the definition and the
-    /// entry. `url` takes the https URL out of a definition, which counts only
-    /// when it is written as it parses: tools read the text as written and
+    /// fragment `key` makes of it, with the name, definition and entry. `url`
+    /// takes the https URL out of a definition, which counts only when it is
+    /// written as it parses: tools read the text as written and
     /// could read a backslash, escape or case differently and send the
-    /// credentials to another host. A name defined more than one way, or two
-    /// names with the same fragment, get nothing.
+    /// credentials to another host. Names with the same fragment, unless
+    /// every one is the same name with the same definition, get nothing.
     fn named<'a>(
         &'a self,
-        definitions: &'a [BTreeMap<String, String>],
+        definitions: &'a [Definitions],
         key: impl Fn(&str) -> Option<String>,
         url: impl Fn(&str) -> Option<&str>,
-    ) -> Vec<(String, &'a str, &'a Credential)> {
-        let mut by_key: BTreeMap<String, Vec<(&str, Option<&Credential>)>> = BTreeMap::new();
+    ) -> Vec<(String, &'a str, &'a str, &'a Credential)> {
+        type Definition<'a> = (&'a str, &'a str, Option<&'a Credential>);
+        let mut by_key: BTreeMap<String, Vec<Definition<'a>>> = BTreeMap::new();
         for (name, definition) in definitions.iter().flatten() {
             let Some(fragment) = key(name) else {
                 continue;
@@ -153,17 +168,20 @@ impl Runner {
             by_key
                 .entry(fragment)
                 .or_default()
-                .push((definition, entry));
+                .push((name, definition, entry));
         }
         by_key
             .into_iter()
             .filter_map(|(fragment, all)| {
-                let (definition, entry) = *all.first()?;
+                let (name, definition, entry) = *all.first()?;
                 let entry = entry?;
-                if all.iter().any(|other| *other != (definition, Some(entry))) {
+                if all
+                    .iter()
+                    .any(|other| *other != (name, definition, Some(entry)))
+                {
                     return None;
                 }
-                Some((fragment, definition, entry))
+                Some((fragment, name, definition, entry))
             })
             .collect()
     }
@@ -172,17 +190,14 @@ impl Runner {
     /// the registries `.cargo/config.toml` files define, by name and sparse
     /// index URL. Cargo sends the token as the `Authorization` header, so it
     /// is the header a lookup sends: `Bearer <token>` or `Basic <base64>`.
-    pub(super) fn cargo_env(
-        &self,
-        registries: &[BTreeMap<String, String>],
-    ) -> Vec<(String, String)> {
+    pub(super) fn cargo_env(&self, registries: &[Definitions]) -> Vec<(String, String)> {
         self.named(
             registries,
             |name| plain(name, &['-', '_']).then(|| name.to_ascii_uppercase().replace('-', "_")),
             |index| index.strip_prefix("sparse+"),
         )
         .into_iter()
-        .filter_map(|(name, index, entry)| {
+        .filter_map(|(name, _, index, entry)| {
             let header = entry.auth.header()?.to_str().ok()?.to_owned();
             Some([
                 (format!("CARGO_REGISTRIES_{name}_INDEX"), index.to_owned()),
@@ -195,16 +210,17 @@ impl Runner {
 
     /// NuGet's `NuGetPackageSourceCredentials_<key>` variables for the
     /// basic entries the `packageSources` of `nuget.config` files fall under,
-    /// by source key. The value separates fields by `;`, so a user or
+    /// by source key. NuGet compares keys without case, so keys that differ
+    /// only in case are one. The value separates fields by `;`, so a user or
     /// password holding `;` is left out.
-    pub(super) fn nuget_env(&self, sources: &[BTreeMap<String, String>]) -> Vec<(String, String)> {
+    pub(super) fn nuget_env(&self, sources: &[Definitions]) -> Vec<(String, String)> {
         self.named(
             sources,
-            |name| plain(name, &['-', '_', '.']).then(|| name.to_owned()),
+            |name| plain(name, &['-', '_', '.']).then(|| name.to_ascii_lowercase()),
             |url: &str| Some(url),
         )
         .into_iter()
-        .filter_map(|(name, _, entry)| match &entry.auth {
+        .filter_map(|(_, name, _, entry)| match &entry.auth {
             Auth::Basic { username, password }
                 if !username.contains(';') && !password.contains(';') =>
             {
@@ -224,7 +240,7 @@ impl Runner {
     /// variables for the basic entries the `[[tool.poetry.source]]` URLs of
     /// `pyproject.toml` fall under: the name in uppercase, with `-` and `.` as
     /// `_`.
-    pub(super) fn poetry_env(&self, sources: &[BTreeMap<String, String>]) -> Vec<(String, String)> {
+    pub(super) fn poetry_env(&self, sources: &[Definitions]) -> Vec<(String, String)> {
         self.named(
             sources,
             |name| {
@@ -234,7 +250,7 @@ impl Runner {
             |url: &str| Some(url),
         )
         .into_iter()
-        .filter_map(|(name, _, entry)| match &entry.auth {
+        .filter_map(|(name, _, _, entry)| match &entry.auth {
             Auth::Basic { username, password } => Some([
                 (
                     format!("POETRY_HTTP_BASIC_{name}_USERNAME"),
@@ -262,9 +278,9 @@ fn plain(name: &str, extra: &[char]) -> bool {
 
 /// The sources a `nuget.config` adds, by key and URL. A file NuGet could
 /// not read adds none.
-pub(super) fn nuget_sources(text: &str) -> BTreeMap<String, String> {
+pub(super) fn nuget_sources(text: &str) -> Definitions {
     let Ok(document) = roxmltree::Document::parse(text) else {
-        return BTreeMap::new();
+        return Vec::new();
     };
     document
         .root_element()
@@ -283,17 +299,34 @@ pub(super) fn nuget_sources(text: &str) -> BTreeMap<String, String> {
 
 /// The sources a `pyproject.toml` gives Poetry, by name and URL. A file
 /// Poetry could not read gives none.
-pub(super) fn poetry_sources(text: &str) -> BTreeMap<String, String> {
+pub(super) fn poetry_sources(text: &str) -> Definitions {
     let Ok(document) = text.parse::<toml_edit::DocumentMut>() else {
-        return BTreeMap::new();
+        return Vec::new();
     };
-    document
+    let Some(sources) = document
         .get("tool")
         .and_then(|tool| tool.get("poetry"))
         .and_then(|poetry| poetry.get("source"))
-        .and_then(|sources| sources.as_array_of_tables())
+    else {
+        return Vec::new();
+    };
+    let tables: Vec<&dyn toml_edit::TableLike> = if let Some(tables) = sources.as_array_of_tables()
+    {
+        tables
+            .iter()
+            .map(|table| table as &dyn toml_edit::TableLike)
+            .collect()
+    } else if let Some(array) = sources.as_array() {
+        array
+            .iter()
+            .filter_map(|value| value.as_inline_table())
+            .map(|table| table as &dyn toml_edit::TableLike)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    tables
         .into_iter()
-        .flat_map(|sources| sources.iter())
         .filter_map(|source| {
             Some((
                 source.get("name")?.as_str()?.to_owned(),
@@ -305,9 +338,9 @@ pub(super) fn poetry_sources(text: &str) -> BTreeMap<String, String> {
 
 /// The registries a `.cargo/config.toml` defines, by name and index URL. A
 /// file Cargo could not read defines none.
-pub(super) fn cargo_registries(text: &str) -> BTreeMap<String, String> {
+pub(super) fn cargo_registries(text: &str) -> Definitions {
     let Ok(config) = text.parse::<toml_edit::DocumentMut>() else {
-        return BTreeMap::new();
+        return Vec::new();
     };
     config
         .get("registries")
@@ -444,13 +477,13 @@ mod tests {
             "sparse+https://ci@crates.acme.dev/",
             "sparse+https://crates.acme.dev/a/../b/",
         ] {
-            let config = BTreeMap::from([("acme".to_string(), index.to_string())]);
+            let config = vec![("acme".to_string(), index.to_string())];
             assert!(runner.cargo_env(&[config]).is_empty(), "{index}");
         }
-        let odd = BTreeMap::from([(
+        let odd = vec![(
             "e_index=x".to_string(),
             "sparse+https://crates.acme.dev/".to_string(),
-        )]);
+        )];
         assert!(runner.cargo_env(&[odd]).is_empty());
     }
 
@@ -483,9 +516,10 @@ mod tests {
         let registries = cargo_registries(
             "registries.inline = { index = \"sparse+https://a.dev/\" }\n[registries.acme]\nindex = \"sparse+https://crates.acme.dev/\"\ncredential-provider = \"evil\"\n",
         );
+        let registries: BTreeMap<_, _> = registries.into_iter().collect();
         assert_eq!(registries["acme"], "sparse+https://crates.acme.dev/");
         assert_eq!(registries["inline"], "sparse+https://a.dev/");
-        assert_eq!(cargo_registries("not toml ["), BTreeMap::new());
+        assert!(cargo_registries("not toml [").is_empty());
     }
 
     #[test]
@@ -494,6 +528,9 @@ mod tests {
             entry("https://gems.acme-corp.dev", basic("ci", "pw:x")).for_tools(),
             entry("https://token.acme.dev", bearer("t")).for_tools(),
             entry("https://a_b.acme.dev", basic("ci", "pw")).for_tools(),
+            // `BUNDLE_PATH` is a Bundler setting.
+            entry("https://path", basic("ci", "pw")).for_tools(),
+            entry("https://at.acme.dev", basic("ci", "p@ss")).for_tools(),
         ]);
         assert_eq!(
             runner.bundler_env(),
@@ -533,6 +570,20 @@ mod tests {
             )]
         );
         assert!(nuget_sources("<configuration").is_empty());
+        // Keys differ in case only, or come twice in one file.
+        for config in [
+            "<configuration><packageSources><add key=\"Feed\" value=\"https://nuget.acme.dev/a/\" /></packageSources></configuration>",
+            "<configuration><packageSources><add key=\"feed\" value=\"https://nuget.acme.dev/a/\" /><add key=\"feed\" value=\"https://nuget.acme.dev/b/\" /></packageSources></configuration>",
+        ] {
+            let feed = nuget_sources(
+                "<configuration><packageSources><add key=\"feed\" value=\"https://nuget.acme.dev/a/\" /></packageSources></configuration>",
+            );
+            assert_eq!(runner.nuget_env(std::slice::from_ref(&feed)).len(), 1);
+            assert!(
+                runner.nuget_env(&[feed, nuget_sources(config)]).is_empty(),
+                "{config}"
+            );
+        }
     }
 
     #[test]
@@ -558,5 +609,9 @@ mod tests {
             ])
         );
         assert!(poetry_sources("[tool.poetry").is_empty());
+        let inline = poetry_sources(
+            "[tool.poetry]\nsource = [{ name = \"acme\", url = \"https://py.acme.dev/simple/\" }]\n",
+        );
+        assert_eq!(runner.poetry_env(&[inline]).len(), 2);
     }
 }

@@ -49,7 +49,8 @@ impl Runner {
         let cwd = root.join(directory);
         let python = python(baseline, directory, versions)?;
         // uv reads basic credentials by host from `~/.netrc`, gone when the
-        // locks are done; Poetry reads them by source name.
+        // locks are done, and Poetry by source name; Poetry's HTTP client may
+        // read `~/.netrc` too.
         let (netrc, hosts) = self.netrc();
         let mut _netrc = node::Private::default();
         if !hosts.is_empty() {

@@ -69,6 +69,28 @@ fn locks(dir: &Path, out: &mut Vec<PathBuf>) {
         }
     }
 }
+/// The text of every `nuget.config` under `dir`.
+fn nuget_configs(dir: &Path, out: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        let path = entry.path();
+        if kind.is_dir() {
+            nuget_configs(&path, out);
+        } else if kind.is_file()
+            && path
+                .file_name()
+                .is_some_and(|name| name == "nuget.config" || name == "NuGet.Config")
+            && let Ok(text) = std::fs::read_to_string(&path)
+        {
+            out.push(text);
+        }
+    }
+}
 /// Restore writes `obj/` intermediates, which never belong in a commit.
 fn remove_intermediates(dir: &Path) -> Result<(), String> {
     for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
@@ -125,18 +147,16 @@ impl Runner {
             })
             .collect();
         let target = target(&cwd)?;
-        // NuGet reads `nuget.config` from the project up to the repository
-        // root; each source under a tools entry gets its credentials by key.
-        let mut sources = Vec::new();
-        let mut at = Some(directory);
-        while let Some(dir) = at {
-            for name in ["nuget.config", "NuGet.Config"] {
-                if let Ok(text) = std::fs::read_to_string(root.join(dir).join(name)) {
-                    sources.push(super::credentials::nuget_sources(&text));
-                }
-            }
-            at = (!dir.is_empty()).then(|| super::directory(dir));
-        }
+        // Each source under a tools entry gets its credentials by key. NuGet
+        // reads `nuget.config` from the project up, and a project can name
+        // any other, so every one in the tree counts: a key defined two ways
+        // gets nothing.
+        let mut configs = Vec::new();
+        nuget_configs(root, &mut configs);
+        let sources: Vec<_> = configs
+            .iter()
+            .map(|text| super::credentials::nuget_sources(text))
+            .collect();
         let credentials = self.nuget_env(&sources);
         let held = !credentials.is_empty();
         let mut env = restore_env(

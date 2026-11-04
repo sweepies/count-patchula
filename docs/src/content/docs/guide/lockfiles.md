@@ -47,7 +47,8 @@ may still require it. The Count runs `cargo update --workspace` for it, which
 locks what the edited manifests need and moves no other package, then pins the
 entry to the target with `--precise` if Cargo locked a newer release.
 
-Lifecycle scripts never run. A lockfile that does not change after an edit that
+Install scripts are skipped (see [Isolation](#isolation) for the code that
+still runs). A lockfile that does not change after an edit that
 changed recorded dependencies fails the branch, so a tool that says "up to date"
 without re-resolving cannot publish a stale lock. An edit that cannot affect the
 lock, such as a description, is not a failure. Where the Count can read the
@@ -268,8 +269,8 @@ Each tool gets the credentials in the form it reads, only for its own run:
 | aube, npm, Bun | `//host/path/:_authToken` or `:_auth` in its user configuration | bearer, basic | prefix |
 | Yarn | `npmRegistries` in its user configuration | bearer, basic | the registry URL, exactly |
 | Cargo | `CARGO_REGISTRIES_<NAME>_INDEX` and `_TOKEN` | bearer, basic | the sparse index URL of each registry `.cargo/config.toml` or `.cargo/config` names |
-| dotnet | `NuGetPackageSourceCredentials_<key>` | basic | the URL of each source `nuget.config` adds |
-| Poetry | `POETRY_HTTP_BASIC_<NAME>_USERNAME` and `_PASSWORD` | basic | the URL of each `[[tool.poetry.source]]` |
+| dotnet | `NuGetPackageSourceCredentials_<key>` | basic | the URL of each source a `nuget.config` adds |
+| Poetry | `POETRY_HTTP_BASIC_<NAME>_USERNAME` and `_PASSWORD`, and `~/.netrc` | basic | the URL of each `[[tool.poetry.source]]`; host |
 | Bundler | `BUNDLE_<HOST>` | basic | host |
 | Composer | `COMPOSER_AUTH` | bearer, basic | host |
 | Go | `~/.netrc`, with the host in `GOPRIVATE` | basic | host |
@@ -282,9 +283,9 @@ header a lookup sends: `Bearer <token>` or `Basic <base64>`. Cargo runs
 outside the repository and reads none of its configuration; it gets each
 registry that the `.cargo/config.toml` and `.cargo/config` files at or above
 the project define under a `tools` entry, by name, index and token. dotnet
-reads `nuget.config` from the project up to the repository root, and Poetry
-reads the project's `pyproject.toml`. A name defined more than one way gets
-nothing, and so does a URL not written in its normal form (lowercase host, no
+reads every `nuget.config` in the tree, since a project can name any of them,
+and NuGet compares source keys without case. Poetry reads the project's
+`pyproject.toml`. A name defined more than one way gets nothing, and so does a URL not written in its normal form (lowercase host, no
 user, escapes or backslashes). Go fetches the modules under a credentialed
 host from the host itself, never through the public module proxy or checksum
 database.
@@ -297,8 +298,9 @@ then fails on the registry: a bearer entry for Bundler, dotnet, Go, Poetry or
 uv, a basic one for Terraform, a `.netrc` user or password with whitespace,
 quotes, a backslash or `#`, a NuGet user or password with `;`, a source or
 registry name outside ASCII letters, digits, `-`, `_` and (for NuGet and
-Poetry) `.`, a Bundler or Terraform host with `_`, and a Cargo registry whose
-index is not `sparse+`. Composer puts basic credentials in the URL of the Git
+Poetry) `.`, a Bundler or Terraform host with `_`, a Bundler host without a
+dot, a Bundler user or password with whitespace, `@`, `/`, `%`, `#` or `?`,
+and a Cargo registry whose index is not `sparse+`. Composer puts basic credentials in the URL of the Git
 commands it runs for a VCS repository on that host, where other processes on
 the host can see them. No other entry may sit under a `tools` entry's prefix,
 because npm, aube and Bun would send the broader entry's credentials there,
@@ -308,11 +310,12 @@ tools read the registries the repository names, never a
 
 When a tool fails while it holds credentials, the failure shows none of its
 output, which may quote what the private registry answered. The repository's
-own registry, proxy and TLS settings apply as each tool reads them, and npm,
-aube and Bun match credentials by host and path whatever the scheme: a
-repository that names the host over plain HTTP or turns TLS checks off, or a
-registry that serves plain-HTTP tarball URLs, sends the credential
-unencrypted.
+own registry, proxy and TLS settings apply as each tool reads them. npm,
+aube and Bun match credentials by host and path whatever the scheme, and
+Bundler, Composer, uv and Poetry by host whatever the scheme or port: a
+repository that names the host over plain HTTP or on another port, or turns
+TLS checks off, or a registry that serves plain-HTTP download URLs, sends the
+credential unencrypted or to another service on the host.
 
 ## Lockfile maintenance
 
