@@ -262,13 +262,15 @@ pub(crate) fn config_file(path: &str) -> bool {
 }
 
 /// The start of MSBuild property names that set restore sources, fallback
-/// folders or another config file, which override what the repository's
-/// `nuget.config` files say.
-const RESTORE_OVERRIDES: [&str; 4] = [
+/// folders, another config file or another folder to read configs from,
+/// which override what the repository's `nuget.config` files say.
+const RESTORE_OVERRIDES: [&str; 6] = [
     "restoresources",
     "restoreadditionalproject",
     "restoreconfigfile",
     "restorefallbackfolders",
+    "restorerootconfigdirectory",
+    "restoresolutiondirectory",
 ];
 
 /// Whether `path` is an MSBuild file or response file that could set a
@@ -283,6 +285,7 @@ pub(crate) fn msbuild_file(path: &str) -> bool {
         ".projitems",
         ".user",
         ".msbuild",
+        ".pubxml",
     ]
     .iter()
     .any(|suffix| leaf.ends_with(suffix))
@@ -296,12 +299,16 @@ fn decoded(text: &str) -> String {
     while let Some(at) = rest.find("&#") {
         out.push_str(&rest[..at]);
         let reference = &rest[at + 2..];
-        let decoded = reference.split_once(';').and_then(|(code, _)| {
+        // A reference is at most `x` and eight hex digits before its `;`,
+        // so only that far is searched, keeping a long run of `&#` linear.
+        let window = &reference.as_bytes()[..reference.len().min(10)];
+        let decoded = window.iter().position(|&b| b == b';').and_then(|end| {
+            let code = &reference[..end];
             let value = match code.strip_prefix(['x', 'X']) {
                 Some(hex) => u32::from_str_radix(hex, 16).ok()?,
                 None => code.parse().ok()?,
             };
-            Some((char::from_u32(value)?, code.len() + 1))
+            Some((char::from_u32(value)?, end + 1))
         });
         match decoded {
             Some((c, width)) => {
@@ -383,6 +390,12 @@ fn plain_pattern(pattern: &str) -> bool {
         && pattern.find('*').is_none_or(|at| at == pattern.len() - 1)
 }
 
+/// A source or mapping key NuGet and the Count compare alike: NuGet trims
+/// mapping keys but not source keys, and folds case beyond ASCII.
+fn plain_key(key: &str) -> bool {
+    !key.is_empty() && key.trim() == key && key.is_ascii()
+}
+
 /// Read a `nuget.config` strictly: any element the Count does not know, and
 /// anything NuGet would read differently from the Count, is an error, so
 /// the lookups it could affect fail.
@@ -401,9 +414,13 @@ fn config(text: &str) -> Result<Config, ()> {
                 for child in elements(section)? {
                     match child.tag_name().name() {
                         "clear" => {}
-                        "add" => out
-                            .sources
-                            .push((attribute(child, "key")?, attribute(child, "value")?)),
+                        "add" => {
+                            let key = attribute(child, "key")?;
+                            if !plain_key(&key) {
+                                return Err(());
+                            }
+                            out.sources.push((key, attribute(child, "value")?));
+                        }
                         _ => return Err(()),
                     }
                 }
@@ -428,7 +445,7 @@ fn config(text: &str) -> Result<Config, ()> {
                         "clear" if index == 0 => {}
                         "packageSource" => {
                             let key = attribute(child, "key")?;
-                            if !keys.insert(key.to_ascii_lowercase()) {
+                            if !plain_key(&key) || !keys.insert(key.to_ascii_lowercase()) {
                                 return Err(());
                             }
                             for package in elements(child)? {
@@ -514,13 +531,20 @@ impl Feeds {
 
     /// Where `package` comes from for a dependency declared in `file`: for
     /// a restore there, and in any folder below it with a config of its own,
-    /// since central and shared MSBuild files apply to projects below them
-    /// and `dotnet tool restore` reads its manifest from any folder below.
+    /// since `dotnet tool restore` reads its manifest from any folder below.
+    /// A shared MSBuild file such as `Directory.Packages.props` can be
+    /// imported from anywhere, so it counts every folder with a config.
     fn origin(&self, file: &str, package: &str) -> Origin {
         if let Some(reason) = &self.overridden {
             return Origin::Index(Named::Unusable(reason.clone()));
         }
-        let mut dir = &file[..file.rfind('/').map_or(0, |i| i + 1)];
+        let leaf = file.rsplit('/').next().unwrap_or(file).to_ascii_lowercase();
+        let shared = leaf.ends_with(".props") || leaf.ends_with(".targets");
+        let mut dir = if shared {
+            ""
+        } else {
+            &file[..file.rfind('/').map_or(0, |i| i + 1)]
+        };
         if let Some(project) = dir.strip_suffix(".config/") {
             dir = project;
         }
@@ -626,5 +650,59 @@ impl Feeds {
         // Every NuGet package has an index origin, so none is dropped.
         let dropped = origins.assign(deps, &NUGET_ORG, |dep| dep.package.clone());
         debug_assert!(dropped.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn character_references_are_decoded_and_long_runs_stay_cheap() {
+        assert_eq!(decoded("Restore&#83;ources"), "RestoreSources");
+        assert_eq!(decoded("Restore&#x53;ources"), "RestoreSources");
+        assert_eq!(decoded("a &#; b &#xZZ; c &#"), "a &#; b &#xZZ; c &#");
+        assert_eq!(decoded("é&#233;é"), "ééé");
+        let hostile = "&#".repeat(200_000);
+        assert_eq!(decoded(&hostile), hostile);
+    }
+
+    #[test]
+    fn keys_nuget_would_trim_or_fold_are_not_read() {
+        let source = |key: &str| {
+            format!(
+                "<configuration><packageSources><add key=\"{key}\" value=\"https://nuget.acme.dev/v3/index.json\" /></packageSources></configuration>"
+            )
+        };
+        assert!(config(&source("Acme Feed")).is_ok());
+        for key in ["feed ", " feed", "", "fëed"] {
+            assert!(config(&source(key)).is_err(), "{key:?}");
+        }
+        let mapping = "<configuration><packageSourceMapping><packageSource key=\"feed \"><package pattern=\"Acme.*\" /></packageSource></packageSourceMapping></configuration>";
+        assert!(config(mapping).is_err());
+    }
+
+    #[test]
+    fn msbuild_properties_that_move_the_config_override_it() {
+        for property in [
+            "RestoreSources",
+            "RestoreAdditionalProjectFallbackFolders",
+            "RestoreRootConfigDirectory",
+            "RestoreSolutionDirectory",
+            "RESTORECONFIGFILE",
+        ] {
+            let files = Files::from([(
+                "Directory.Build.props".to_owned(),
+                format!(
+                    "<Project><PropertyGroup><{property}>x</{property}></PropertyGroup></Project>"
+                ),
+            )]);
+            assert!(Feeds::new(&files).overridden.is_some(), "{property}");
+        }
+        let files = Files::from([(
+            "build/publish.pubxml".to_owned(),
+            crate::UNREADABLE_SETTINGS.to_owned(),
+        )]);
+        assert!(Feeds::new(&files).overridden.is_some());
     }
 }

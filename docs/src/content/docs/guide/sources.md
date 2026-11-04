@@ -238,17 +238,19 @@ dependency's `registry`:
   (an exact ID, else the longest prefix) decides; with mappings in several
   configs, every pattern that matches counts. A package mapped to
   nuget.org alone comes from there; any other fails its lookup, since
-  private NuGet feeds are not read yet. A `Directory.Packages.props` or
-  other shared file, and a `dotnet-tools.json` manifest, count every
-  folder below them with a config of its own. Anything NuGet could read
+  private NuGet feeds are not read yet. A `dotnet-tools.json` manifest
+  counts every folder below it with a config of its own, and a shared
+  MSBuild file such as `Directory.Packages.props`, which can be imported
+  from anywhere, counts every folder with one. Anything NuGet could read
   differently fails every lookup it could affect: a config the Count
   cannot read, with a section it does not know such as
   `fallbackPackageFolders`, with `remove`, or with a pattern other than an
   ID or a prefix ending in its only `*`; a config spelled other than
-  `nuget.config`, `NuGet.config` or `NuGet.Config`; and an MSBuild file
-  that sets `RestoreSources`, `RestoreAdditionalProjectSources`,
-  `RestoreConfigFile` or `RestoreFallbackFolders`, or that the Count
-  cannot read.
+  `nuget.config`, `NuGet.config` or `NuGet.Config`; a source or mapping
+  key with spaces around it or outside ASCII; and an MSBuild file that sets
+  `RestoreSources`, `RestoreAdditionalProjectSources`, `RestoreConfigFile`,
+  `RestoreFallbackFolders`, `RestoreRootConfigDirectory` or
+  `RestoreSolutionDirectory`, or that the Count cannot read.
 - Python packages come from what the project's lockfile records. The
   Count does not work out which index uv or Poetry would pick from their
   settings; the tool already did, and wrote it down:

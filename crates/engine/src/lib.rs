@@ -2107,6 +2107,10 @@ impl Engine {
         Ok(serde_json::from_value(value["tree"].clone())?)
     }
     async fn file(&self, repo: &str, sha: &str) -> Result<String> {
+        String::from_utf8(self.blob(repo, sha).await?)
+            .map_err(|_| Error::Invalid("selected file is not UTF-8".into()))
+    }
+    async fn blob(&self, repo: &str, sha: &str) -> Result<Vec<u8>> {
         use base64::Engine;
         let value = self.json(&format!("repos/{repo}/git/blobs/{sha}")).await?;
         if value["encoding"] != "base64" {
@@ -2115,10 +2119,9 @@ impl Engine {
         let content = value["content"]
             .as_str()
             .ok_or_else(|| Error::Invalid("blob has no content".into()))?;
-        let bytes = base64::engine::general_purpose::STANDARD
+        base64::engine::general_purpose::STANDARD
             .decode(content.replace(['\n', '\r'], ""))
-            .map_err(|_| Error::Invalid("invalid base64 blob".into()))?;
-        String::from_utf8(bytes).map_err(|_| Error::Invalid("selected file is not UTF-8".into()))
+            .map_err(|_| Error::Invalid("invalid base64 blob".into()))
     }
     async fn scan(&self, repo: &str, override_config: Option<&Config>) -> Result<Work> {
         let hint_key = ExtractionKey {
@@ -2398,16 +2401,25 @@ impl Engine {
                             || (read_manifests && patchula_update::tooling::manifest(&entry.path)))
                 })
                 .collect();
-            let blobs: BTreeMap<String, patchula_update::Blob> = stream::iter(selected)
+            // A settings file that is not text is unreadable rather than
+            // absent, as in `read_tree`; any other selected file must be text.
+            let read: Vec<(String, Option<patchula_update::Blob>)> = stream::iter(selected)
                 .map(|entry| async move {
-                    let content = self.file(repo, &entry.sha).await?;
+                    let bytes = self.blob(repo, &entry.sha).await?;
+                    let content = match String::from_utf8(bytes) {
+                        Ok(content) => content,
+                        Err(_) if patchula_manager::registry_settings(&entry.path) => {
+                            return Ok((entry.path, None));
+                        }
+                        Err(_) => return Err(Error::Invalid("selected file is not UTF-8".into())),
+                    };
                     Ok((
                         entry.path,
-                        patchula_update::Blob {
+                        Some(patchula_update::Blob {
                             sha: entry.sha,
                             mode: entry.mode,
                             content,
-                        },
+                        }),
                     ))
                 })
                 .buffer_unordered(self.github.concurrency())
@@ -2415,10 +2427,19 @@ impl Engine {
                 .await
                 .into_iter()
                 .collect::<Result<_>>()?;
-            let mut files: Files = blobs
-                .iter()
-                .map(|(p, b)| (p.clone(), b.content.clone()))
-                .collect();
+            let mut files = Files::new();
+            let mut blobs = BTreeMap::<String, patchula_update::Blob>::new();
+            for (path, blob) in read {
+                match blob {
+                    Some(blob) => {
+                        files.insert(path.clone(), blob.content.clone());
+                        blobs.insert(path, blob);
+                    }
+                    None => {
+                        files.insert(path, patchula_manager::UNREADABLE_SETTINGS.to_owned());
+                    }
+                }
+            }
             for settings in linked {
                 files.insert(settings, patchula_manager::UNREADABLE_SETTINGS.to_owned());
             }
