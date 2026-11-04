@@ -25,6 +25,13 @@ local linters = new Mapping<String, Step> {
     exclude = List("tests/corpus/**", "fixtures/**")
   }
   ["mise"] = Builtins.mise
+  // Locked installs (CI, the docs deploy, releases) refuse a tool version
+  // mise.lock does not record, so a version edit must come with its lock.
+  ["mise-lock"] {
+    glob = List("mise.toml", "tasks.toml", "mise-tasks/**", "mise.lock")
+    check = "mise lock --dry-run --json | nu --stdin -c 'if ($in | from json | is-not-empty) { error make {msg: \"mise.lock is stale; run mise lock\"} }'"
+    fix = "mise lock"
+  }
   ["pkl-format"] = Builtins.pkl_format
   ["secrets"] = (Builtins.betterleaks) {
     // Third-party files the extraction tests read, example passwords included.
