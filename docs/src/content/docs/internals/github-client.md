@@ -44,7 +44,11 @@ enables them with `-vv` or `PATCHULA_LOG=debug`.
 Every REST GET looks up validators in SQLite and sends `If-None-Match` or
 `If-Modified-Since` when it has them, even after expiry. The one exception is
 a read whose answer cannot change, a Git blob by its SHA: `get_immutable`
-returns a cached success without a request. A 304 reuses the
+returns a cached success without a request. `blobs` reads many at once: those
+the cache holds need no request, the rest go through GraphQL fifty to a query,
+and a blob counts from GraphQL only when its text hashes to the SHA asked for.
+Binary, truncated or mismatched blobs come through REST instead. Either way the
+blob is cached as its REST representation. A 304 reuses the
 cached status and body and merges headers, keeping a cached pagination `Link`
 if GitHub omits it. `no-store` and `Vary: *` responses are not kept. Keys
 include the normalised URL, `Accept`, the API version, `Vary` headers and a

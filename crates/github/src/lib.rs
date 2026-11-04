@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub mod app;
+mod blobs;
 mod credentials;
 mod governor;
 mod pagination;
@@ -370,14 +371,18 @@ impl Client {
     /// Every REST GET goes to the transport with cached validators when present.
     /// A 304 returns the original status/body with refreshed response metadata.
     pub async fn get(&self, path: &str) -> Result<Response> {
-        self.get_representation(path, None, false).await
+        self.get_representation(path, None, Read::Revalidate)
+            .await?
+            .ok_or(Error::MissingBody)
     }
 
     /// A GET whose answer never changes, such as a Git blob by its SHA: a
     /// cached success is returned without asking GitHub again. The cache key
     /// carries the credential scope, so another credential never reads it.
     pub async fn get_immutable(&self, path: &str) -> Result<Response> {
-        self.get_representation(path, None, true).await
+        self.get_representation(path, None, Read::Immutable)
+            .await?
+            .ok_or(Error::MissingBody)
     }
 
     /// Authoritative read used for write preconditions. Always revalidates with
@@ -424,16 +429,17 @@ impl Client {
         format: &'static str,
         derive: Derive,
     ) -> Result<Response> {
-        self.get_representation(path, Some((format, derive)), false)
-            .await
+        self.get_representation(path, Some((format, derive)), Read::Revalidate)
+            .await?
+            .ok_or(Error::MissingBody)
     }
 
     async fn get_representation(
         &self,
         path: &str,
         derived: Option<(&'static str, Derive)>,
-        immutable: bool,
-    ) -> Result<Response> {
+        read: Read,
+    ) -> Result<Option<Response>> {
         let mut url = self.url(path)?;
         let mut visited = HashSet::new();
         for _ in 0..10 {
@@ -469,7 +475,7 @@ impl Client {
                     .await
                     .map_err(|_| Error::Cache)?
             };
-            if immutable
+            if read != Read::Revalidate
                 && let Some(entry) = &cached
                 && (200..300).contains(&entry.status)
             {
@@ -482,11 +488,14 @@ impl Client {
                         headers.insert(name, value);
                     }
                 }
-                return Ok(Response {
+                return Ok(Some(Response {
                     status: StatusCode::from_u16(entry.status).map_err(|_| Error::Cache)?,
                     headers,
                     body: entry.body.clone(),
-                });
+                }));
+            }
+            if read == Read::Cached {
+                return Ok(None);
             }
             if let Some(entry) = &cached {
                 for (name, value) in [
@@ -607,7 +616,7 @@ impl Client {
                     }
                 }
             }
-            return Ok(response);
+            return Ok(Some(response));
         }
         Err(Error::Pagination)
     }
@@ -640,6 +649,17 @@ impl Client {
             .cloned()
             .ok_or_else(|| Error::Graphql(String::new()))
     }
+}
+
+/// How a GET treats what the cache holds.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Read {
+    /// Ask GitHub, with the cached validators.
+    Revalidate,
+    /// Return a cached success without asking: the answer cannot change.
+    Immutable,
+    /// Return a cached success, or nothing, without asking.
+    Cached,
 }
 
 /// Longest GraphQL error text kept in `Error::Graphql`, in characters.
