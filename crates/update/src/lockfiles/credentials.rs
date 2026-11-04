@@ -114,8 +114,22 @@ impl Runner {
     ) -> Vec<(String, String)> {
         let mut by_variable: BTreeMap<String, Vec<(&str, Option<&Credential>)>> = BTreeMap::new();
         for (name, index) in registries.iter().flatten() {
+            // Cargo names registries in these characters, and an index URL
+            // counts only when it is written as it parses: Cargo and curl
+            // read the text as written, and could read a backslash, escape
+            // or case differently and send the token to another host.
+            if name.is_empty()
+                || !name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+            {
+                continue;
+            }
             let entry = index
                 .strip_prefix("sparse+")
+                .filter(|url| {
+                    patchula_http::url_prefix(url).as_deref() == Some(url.trim_end_matches('/'))
+                })
                 .and_then(|url| patchula_http::entry_for(&self.entries, url))
                 .filter(|entry| self.registries.contains(entry));
             by_variable
@@ -275,6 +289,28 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
             )
         );
+    }
+
+    #[test]
+    fn a_cargo_index_written_other_than_it_parses_gets_nothing() {
+        let runner = runner(vec![
+            entry("https://crates.acme.dev", bearer("t0ken")).for_tools(),
+        ]);
+        for index in [
+            "sparse+https://crates.acme.dev\\@evil.example/",
+            "sparse+https://crates%2Eacme.dev/",
+            "sparse+https://CRATES.acme.dev/",
+            "sparse+https://ci@crates.acme.dev/",
+            "sparse+https://crates.acme.dev/a/../b/",
+        ] {
+            let config = BTreeMap::from([("acme".to_string(), index.to_string())]);
+            assert!(runner.cargo_env(&[config]).is_empty(), "{index}");
+        }
+        let odd = BTreeMap::from([(
+            "e_index=x".to_string(),
+            "sparse+https://crates.acme.dev/".to_string(),
+        )]);
+        assert!(runner.cargo_env(&[odd]).is_empty());
     }
 
     #[test]
