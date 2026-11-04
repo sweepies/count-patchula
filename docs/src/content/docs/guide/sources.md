@@ -147,7 +147,15 @@ when the origin changes.
 The operator [settings](/reference/settings/) hold credentials for private
 registries, keyed by an https URL prefix. Repository configs never name
 credentials: a `patchula.pkl` can point a dependency at any URL, so in the
-server it could otherwise read another organisation's registry.
+server it could otherwise read another organisation's registry. A
+repository that commits a credential anyway — a URL with a user or
+password in any file the Count reads, an `_authToken` in `.npmrc`, an
+`npmAuthToken` in `.yarnrc.yml`, Composer `config` auth, NuGet source
+credentials or API keys, Poetry `http-basic`/`pypi-token`, or a Cargo
+registry `token` — is refused outright: the repository's report is an
+error and nothing runs for it. Move the credential to the operator's
+`registries` settings; `${VAR}` environment references in npm- and
+Yarn-family settings stay allowed.
 
 ```pkl
 amends "PatchulaSettings.pkl"

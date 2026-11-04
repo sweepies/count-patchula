@@ -88,7 +88,7 @@ missing, and behaviour that changes their pull requests. The
 ### Registry credentials are operator settings {#registry-credentials}
 
 - **Renovate:** `hostRules` in the repository config, with secrets encrypted for the app or passed in by the self-hosted runner
-- **The Count:** [`registries`](/guide/sources/#private-registries) in the operator settings file, keyed by URL prefix, with secrets from environment variables or files. A repository config cannot name a credential or a host to send one to. Credentials cover registry reads, version lookups and image manifest and SBOM reads alike, for the sources that take a registry URL. Lockfile tools get an entry's credentials only when it sets `tools = true`, and as they run repository and package code, any repository the Count processes can then read them
+- **The Count:** [`registries`](/guide/sources/#private-registries) in the operator settings file, keyed by URL prefix, with secrets from environment variables or files. A repository config cannot name a credential or a host to send one to — and a repository that commits one anyway, in any file the Count reads, is refused outright: no lookups, no branches. Credentials cover registry reads, version lookups and image manifest and SBOM reads alike, for the sources that take a registry URL. Lockfile tools get an entry's credentials only when it sets `tools = true`, and as they run repository and package code, any repository the Count processes can then read them
 - **Why:** One server serves many organisations, and a repository config can point a dependency at any URL
 
 ### Packages come from their lockfile {#lockfile-registries}

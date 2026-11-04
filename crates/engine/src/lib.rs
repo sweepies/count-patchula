@@ -2345,8 +2345,19 @@ impl Engine {
         };
         let scanner = Scanner::new(&config).map_err(Error::Invalid)?;
         let dir = dir.to_owned();
-        let (paths, blobs, extraction) = tokio::task::spawn_blocking(move || {
+        let (paths, blobs, refusal, extraction) = tokio::task::spawn_blocking(move || {
             let (paths, files) = read_tree(&dir, &scanner)?;
+            // The same refusal the API scan applies to committed credentials.
+            if let Some((path, kind)) = files.iter().find_map(|(path, text)| {
+                patchula_manager::committed_credentials(path, text).map(|kind| (path.clone(), kind))
+            }) {
+                return std::io::Result::Ok((
+                    paths,
+                    BTreeMap::new(),
+                    Some((path, kind)),
+                    patchula_manager::Extraction::default(),
+                ));
+            }
             let blobs: BTreeMap<String, patchula_update::Blob> = files
                 .iter()
                 .map(|(path, content)| {
@@ -2364,11 +2375,26 @@ impl Engine {
             extraction
                 .skipped
                 .extend(scanner.unsupported(paths.iter().map(String::as_str)));
-            std::io::Result::Ok((paths, blobs, extraction))
+            std::io::Result::Ok((paths, blobs, None, extraction))
         })
         .await
         .map_err(|e| Error::Invalid(e.to_string()))?
         .map_err(|e| Error::Invalid(e.to_string()))?;
+        if let Some((path, kind)) = refusal {
+            return Ok(Work {
+                report: repository(
+                    repo,
+                    Status::Error,
+                    Some(patchula_manager::credential_reason(&path, &kind)),
+                ),
+                config: Some(config),
+                dependencies: Vec::new(),
+                locked: Vec::new(),
+                snapshot: patchula_update::Snapshot::default(),
+                inventory: None,
+                controls: patchula_update::dashboard::Controls::default(),
+            });
+        }
         let mut report = repository(repo, Status::Complete, None);
         report.warnings = extraction.warnings;
         report.skipped = skipped(&extraction.skipped);
@@ -2558,6 +2584,24 @@ impl Engine {
                     }
                 }
             }
+            // A repository that commits its own registry credentials is
+            // refused: its lockfile tools would fetch what they buy into
+            // the shared public cache partition.
+            if let Some((path, kind)) = files.iter().find_map(|(path, text)| {
+                patchula_manager::committed_credentials(path, text).map(|kind| (path.clone(), kind))
+            }) {
+                report.status = Status::Error;
+                report.reason = Some(patchula_manager::credential_reason(&path, &kind));
+                return Ok(Work {
+                    report,
+                    config: Some(config),
+                    dependencies: Vec::new(),
+                    locked: Vec::new(),
+                    snapshot: patchula_update::Snapshot::default(),
+                    inventory: None,
+                    controls: patchula_update::dashboard::Controls::default(),
+                });
+            }
             let unsupported = scanner.unsupported(paths.iter().map(String::as_str));
             // Extraction is a function of the config and the files it reads,
             // so a commit that leaves those as they were, whatever else it
@@ -2658,6 +2702,14 @@ impl Engine {
             }
             files.insert(format!("/repo/{path}"), text);
         }
+        for (path, text) in &files {
+            let path = path.strip_prefix("/repo/").unwrap_or(path);
+            if let Some(kind) = patchula_manager::committed_credentials(path, text) {
+                return Err(Error::Invalid(patchula_manager::credential_reason(
+                    path, &kind,
+                )));
+            }
+        }
         let path = format!("/repo/{path}");
         // Evaluation is a function of the modules read, so the same modules
         // on another commit reuse it.
@@ -2667,7 +2719,7 @@ impl Engine {
             // The version covers decoding and validation the schema text
             // does not.
             config_hash: format!(
-                "v1:{}:{}",
+                "v2:{}:{}",
                 env!("CARGO_PKG_VERSION"),
                 hash(patchula_config::SCHEMA.as_bytes())
             ),
@@ -2703,7 +2755,7 @@ fn lockfile_concurrency() -> usize {
 
 /// The namespace of extraction cache entries, changed whenever extraction
 /// semantics do.
-const EXTRACTION: &str = "extract-v25";
+const EXTRACTION: &str = "extract-v26";
 
 fn hash(bytes: &[u8]) -> String {
     Sha256::digest(bytes)

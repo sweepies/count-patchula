@@ -2113,3 +2113,48 @@ async fn tooling_warnings_reach_the_pr_and_dashboard_and_clear_with_the_conditio
         "unreadable protection never warns"
     );
 }
+
+/// A repository that commits its own registry credentials is refused during
+/// extraction: no lookup and no write happens for it.
+#[tokio::test(start_paused = true)]
+async fn a_repository_that_commits_credentials_is_refused() {
+    let mut fixture = Fake::new(false);
+    fixture.files.insert(
+        ".npmrc".into(),
+        "//npm.acme.test/:_authToken=t0ken\n".into(),
+    );
+    let fake = Arc::new(fixture);
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    let report = engine
+        .run(
+            Options {
+                repositories: vec!["demo/sandbox".into()],
+                ..Default::default()
+            },
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(report.repositories[0].status, Status::Error, "{report:?}");
+    let reason = report.repositories[0].reason.as_deref().unwrap();
+    assert!(
+        reason.contains(".npmrc holds a credential in repository config"),
+        "{reason}"
+    );
+    // No package lookup and no API write: extraction refused the repository.
+    assert!(
+        !fake
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, path, _)| path == "/fixture"),
+        "{:?}",
+        fake.requests.lock().unwrap()
+    );
+    assert!(fake.writes.lock().unwrap().is_empty());
+}
