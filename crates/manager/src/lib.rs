@@ -269,18 +269,30 @@ impl Scanner {
     /// as well: the sources of the builds Gradle settings include, which can
     /// add repositories.
     pub fn more<'a>(&self, files: &Files, paths: impl IntoIterator<Item = &'a str>) -> Vec<String> {
-        if !self.config.managers.contains(&Manager::Gradle) {
-            return Vec::new();
-        }
-        let included = gradle::included_builds(files);
+        let (included, applied) = if self.config.managers.contains(&Manager::Gradle) {
+            gradle::wanted(files)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let referenced: std::collections::BTreeSet<String> =
+            if self.config.managers.contains(&Manager::Maven) {
+                maven::referenced(files)
+                    .into_iter()
+                    .map(|(_, target, _)| target)
+                    .collect()
+            } else {
+                std::collections::BTreeSet::new()
+            };
         paths
             .into_iter()
             .filter(|path| {
                 !files.contains_key(*path)
-                    && gradle::logic_source(path)
-                    && included
-                        .iter()
-                        .any(|folder| path.starts_with(folder.as_str()))
+                    && (gradle::logic_source(path)
+                        && included
+                            .iter()
+                            .any(|folder| path.starts_with(folder.as_str()))
+                        || referenced.contains(*path)
+                        || applied.iter().any(|script| script == path))
             })
             .map(str::to_owned)
             .collect()
@@ -849,14 +861,19 @@ fn bundle_config(path: &str) -> bool {
 }
 
 /// The settings file a symlink at `path` could stand for: the path itself
-/// when it is a settings file, or the `config` inside a linked `.bundle`
-/// directory, which Bundler follows.
+/// when it is a settings file, or one inside a linked folder the tools
+/// follow: `.bundle` for Bundler, `.mvn` for Maven, and Gradle's build-logic
+/// folders, whose contents the Count then cannot read.
 pub fn linked_settings(path: &str) -> Option<String> {
     let leaf = path.rsplit('/').next().unwrap_or(path);
     if registry_settings(path) {
-        Some(path.to_owned())
-    } else {
-        (leaf == ".bundle").then(|| format!("{path}/config"))
+        return Some(path.to_owned());
+    }
+    match leaf {
+        ".bundle" => Some(format!("{path}/config")),
+        ".mvn" => Some(format!("{path}/maven.config")),
+        _ if gradle::logic_folder(path) => Some(format!("{path}/build.gradle.kts")),
+        _ => None,
     }
 }
 

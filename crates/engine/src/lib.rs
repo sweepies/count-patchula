@@ -2454,28 +2454,29 @@ impl Engine {
                 files.insert(settings, patchula_manager::UNREADABLE_SETTINGS.to_owned());
             }
             // What the files read so far name, such as the sources of a
-            // Gradle build the settings include.
-            let more: BTreeSet<String> = scanner
-                .more(
-                    &files,
-                    rest.iter()
-                        .filter(|entry| entry.kind == "blob")
-                        .map(|entry| entry.path.as_str()),
-                )
-                .into_iter()
-                .collect();
-            let more: Vec<_> = rest
-                .into_iter()
-                .filter(|entry| entry.kind == "blob" && more.contains(&entry.path))
-                .collect();
-            for (path, blob) in self.blobs(repo, more, true).await? {
-                match blob {
-                    Some(blob) => {
-                        files.insert(path.clone(), blob.content.clone());
-                        blobs.insert(path, blob);
-                    }
-                    None => {
-                        files.insert(path, patchula_manager::UNREADABLE_SETTINGS.to_owned());
+            // Gradle build the settings include, until they name nothing new.
+            let mut rest: Vec<_> = rest.into_iter().filter(|e| e.kind == "blob").collect();
+            for _ in 0..MORE_ROUNDS {
+                let more: BTreeSet<String> = scanner
+                    .more(&files, rest.iter().map(|entry| entry.path.as_str()))
+                    .into_iter()
+                    .collect();
+                if more.is_empty() {
+                    break;
+                }
+                let (wanted, left): (Vec<_>, Vec<_>) = rest
+                    .into_iter()
+                    .partition(|entry| more.contains(&entry.path));
+                rest = left;
+                for (path, blob) in self.blobs(repo, wanted, true).await? {
+                    match blob {
+                        Some(blob) => {
+                            files.insert(path.clone(), blob.content.clone());
+                            blobs.insert(path, blob);
+                        }
+                        None => {
+                            files.insert(path, patchula_manager::UNREADABLE_SETTINGS.to_owned());
+                        }
                     }
                 }
             }
@@ -2607,6 +2608,11 @@ fn validate_repo(repo: &str) -> Result<()> {
 /// global excludes apply. A directory outside Git is walked whole, skipping
 /// `.git`. Non-UTF-8 files cannot hold an editable declaration, so they are
 /// left out.
+/// How many times the files read so far may name more to read: Gradle
+/// builds include builds and apply scripts, and Maven POMs name modules, a
+/// few levels deep at most.
+const MORE_ROUNDS: usize = 16;
+
 pub fn read_tree(
     dir: &std::path::Path,
     scanner: &Scanner,
@@ -2663,21 +2669,27 @@ pub fn read_tree(
         paths.insert(relative);
     }
     // What the files read so far name, such as the sources of a Gradle
-    // build the settings include; any that cannot be read are unreadable.
-    let more = scanner.more(&files, paths.iter().chain(&links).map(String::as_str));
-    for relative in more {
-        let path = dir.join(&relative);
-        let content = if links.contains(&relative) {
-            None
-        } else {
-            std::fs::read(&path)
-                .ok()
-                .and_then(|bytes| String::from_utf8(bytes).ok())
-        };
-        files.insert(
-            relative,
-            content.unwrap_or_else(|| patchula_manager::UNREADABLE_SETTINGS.to_owned()),
-        );
+    // build the settings include, until they name nothing new; any that
+    // cannot be read are unreadable.
+    for _ in 0..MORE_ROUNDS {
+        let more = scanner.more(&files, paths.iter().chain(&links).map(String::as_str));
+        if more.is_empty() {
+            break;
+        }
+        for relative in more {
+            let path = dir.join(&relative);
+            let content = if links.contains(&relative) {
+                None
+            } else {
+                std::fs::read(&path)
+                    .ok()
+                    .and_then(|bytes| String::from_utf8(bytes).ok())
+            };
+            files.insert(
+                relative,
+                content.unwrap_or_else(|| patchula_manager::UNREADABLE_SETTINGS.to_owned()),
+            );
+        }
     }
     Ok((paths, files))
 }

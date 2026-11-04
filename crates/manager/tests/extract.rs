@@ -3393,6 +3393,7 @@ fn maven_lookups_fail_when_any_build_file_names_another_repository() {
     let property = pom(
         "<repositories><repository><id>acme</id><url>${acme.url}</url></repository></repositories>",
     );
+    let modules = pom("<modules><module>alt/build-pom.xml</module></modules>");
     let mirror = "<settings><mirrors><mirror><id>acme</id><mirrorOf>*</mirrorOf><url>https://repo.acme.dev/maven</url></mirror></mirrors></settings>";
     for files in [
         vec![("pom.xml", private.as_str())],
@@ -3415,6 +3416,26 @@ fn maven_lookups_fail_when_any_build_file_names_another_repository() {
             ("pom.xml", plain.as_str()),
             ("lib/pom.xml", patchula_manager::UNREADABLE_SETTINGS),
         ],
+        vec![
+            ("pom.xml", plain.as_str()),
+            (".mvn/maven.config", "-sci/elsewhere.xml"),
+        ],
+        vec![
+            ("pom.xml", plain.as_str()),
+            (".mvn/maven.config", "--sett ci/elsewhere.xml"),
+        ],
+        vec![
+            ("pom.xml", plain.as_str()),
+            (
+                "settings.xml",
+                "<settings><mirrors><mirror><name>a&nbsp;b</name><url>https://repo.acme.dev</url></mirror></mirrors></settings>",
+            ),
+        ],
+        vec![
+            ("pom.xml", modules.as_str()),
+            ("alt/build-pom.xml", private.as_str()),
+        ],
+        vec![("pom.xml", modules.as_str())],
     ] {
         let found = lookup(&files);
         assert!(fails(found.clone()), "{files:?}: {found:?}");
@@ -3460,6 +3481,16 @@ fn gradle_lookups_fail_when_build_logic_could_add_another_repository() {
         ),
     ];
     assert_eq!(lookup(&included), None);
+    // A plugin id in backticks, and a script applied by name, are read.
+    let applied = [
+        ("build.gradle.kts", plain.as_str()),
+        (
+            "other.gradle.kts",
+            "plugins { `maven-publish` }\napply(from = \"gradle/deps.gradle\")\n",
+        ),
+        ("gradle/deps.gradle", "ext { junit = '5.10.0' }\n"),
+    ];
+    assert_eq!(lookup(&applied), None);
     let private = build("repositories { maven { url = uri(\"https://repo.acme.dev/maven\") } }");
     for files in [
         vec![("build.gradle.kts", private.as_str())],
@@ -3502,6 +3533,26 @@ fn gradle_lookups_fail_when_build_logic_could_add_another_repository() {
         vec![
             ("build.gradle.kts", plain.as_str()),
             ("lib/build.gradle", patchula_manager::UNREADABLE_SETTINGS),
+        ],
+        vec![
+            ("build.gradle.kts", plain.as_str()),
+            ("gradle/composite.gradle", "includeBuild 'tools'\n"),
+        ],
+        vec![
+            ("build.gradle.kts", plain.as_str()),
+            ("other.gradle", "apply from: \"$corp/repos.gradle\"\n"),
+        ],
+        vec![
+            ("build.gradle.kts", plain.as_str()),
+            ("other.gradle", "apply from: 'gradle/missing.gradle'\n"),
+        ],
+        vec![
+            ("build.gradle.kts", plain.as_str()),
+            ("other.gradle", "apply from: 'gradle/repos.txt'\n"),
+            (
+                "gradle/repos.txt",
+                "repositories { maven { url 'https://repo.acme.dev' } }\n",
+            ),
         ],
     ] {
         let found = lookup(&files);

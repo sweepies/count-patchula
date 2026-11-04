@@ -39,9 +39,15 @@ fn corpus_extraction_matches_its_snapshot() {
     let mut files = Files::new();
     let mut all = Vec::new();
     walk(&root, &root, &scanner, &mut files, &mut all);
-    for path in scanner.more(&files, all.iter().map(String::as_str)) {
-        let text = std::fs::read_to_string(root.join(&path)).unwrap();
-        files.insert(path, text);
+    loop {
+        let more = scanner.more(&files, all.iter().map(String::as_str));
+        if more.is_empty() {
+            break;
+        }
+        for path in more {
+            let text = std::fs::read_to_string(root.join(&path)).unwrap();
+            files.insert(path, text);
+        }
     }
     let extraction = scanner.extract(&files).unwrap();
     // The corpus's JVM builds use public repositories alone, and their
@@ -55,7 +61,7 @@ fn corpus_extraction_matches_its_snapshot() {
         .filter(|d| d.source == patchula_config::Source::Maven)
         .filter_map(|d| d.registry.as_deref())
         .filter(|r| {
-            *r != "an included build jvm/kafka/settings.gradle names, which the Count does not read"
+            *r != "a build or script jvm/kafka/settings.gradle names, which the Count does not read"
         })
         .collect();
     assert!(private.is_empty(), "{private:?}");

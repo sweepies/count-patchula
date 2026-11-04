@@ -330,6 +330,14 @@ const BUILD_LOGIC: [&str; 4] = [
     "gradle/plugins/",
 ];
 
+/// Whether `path` is a folder Gradle build logic conventionally lives in.
+pub(crate) fn logic_folder(path: &str) -> bool {
+    let path = format!("{}/", path.trim_end_matches('/'));
+    BUILD_LOGIC
+        .iter()
+        .any(|dir| path == *dir || path.ends_with(&format!("/{dir}")))
+}
+
 /// Whether `path` is a source file build logic can be written in.
 pub(crate) fn logic_source(path: &str) -> bool {
     let leaf = path.rsplit('/').next().unwrap_or(path);
@@ -368,41 +376,174 @@ fn included_folder(settings: &str, named: &str) -> Option<String> {
     (!parts.is_empty()).then(|| format!("{}/", parts.join("/")))
 }
 
-/// The folders of builds the repository's Gradle settings include, as path
-/// prefixes, with the settings file naming each; none for one whose name
-/// the Count cannot resolve.
-fn includes(files: &Files) -> Vec<(String, Option<String>)> {
+/// What one piece of build logic points Gradle at besides itself.
+enum Reference {
+    /// A build it includes, as a folder prefix; none when the Count cannot
+    /// resolve its name, such as one built from a template or a call.
+    Build(Option<String>),
+    /// A script it applies, as a repository path; none when the Count
+    /// cannot resolve it, such as a URL or a computed name.
+    Script(Option<String>),
+}
+
+/// The identifier ending just before `at` in `code`, past spaces and `(`.
+fn word_before(code: &str, at: usize) -> &str {
+    let head = code[..at].trim_end_matches(|c: char| c.is_whitespace() || c == '(');
+    let start = head
+        .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .map_or(0, |i| i + 1);
+    &head[start..]
+}
+
+/// The string right after `end` in `code`, past spaces and `separators`.
+fn string_after<'s>(
+    code: &str,
+    strings: &'s [(usize, String)],
+    end: usize,
+    separators: &[u8],
+) -> Option<&'s str> {
+    strings
+        .iter()
+        .find(|(at, _)| {
+            *at >= end
+                && code[end..*at]
+                    .bytes()
+                    .all(|b| b.is_ascii_whitespace() || separators.contains(&b))
+        })
+        .map(|(_, string)| string.as_str())
+}
+
+/// The folder of the build `path` belongs to: the nearest folder at or
+/// above it with a settings script, as a path prefix.
+fn root_folder(files: &Files, path: &str) -> Option<String> {
+    let mut dir = &path[..path.rfind('/').map_or(0, |i| i + 1)];
+    loop {
+        if ["settings.gradle", "settings.gradle.kts"]
+            .iter()
+            .any(|name| files.contains_key(&format!("{dir}{name}")))
+        {
+            return Some(dir.to_owned());
+        }
+        if dir.is_empty() {
+            return None;
+        }
+        let parent = dir.trim_end_matches('/');
+        dir = &parent[..parent.rfind('/').map_or(0, |i| i + 1)];
+    }
+}
+
+/// The script an `apply from` ending at `end` applies, as a repository
+/// path: a plain string, a project's or the root project's `file(…)`, or a
+/// string starting with the project's or root project's folder (`$rootDir`,
+/// `${rootDir}`, `$projectDir`, `${projectDir}`); none for anything else.
+fn applied_script(
+    files: &Files,
+    path: &str,
+    text: &str,
+    code: &str,
+    strings: &[(usize, String)],
+    end: usize,
+) -> Option<String> {
+    let (start, literal) = strings.iter().find(|(at, _)| *at >= end)?;
+    let between: String = code[end..*start]
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    let between = between.trim_start_matches([':', '=', '(']);
+    let mut root = match between {
+        "" | "file(" | "project.file(" => false,
+        "rootProject.file(" => true,
+        _ => return None,
+    };
+    let raw = text.get(start + 1..)?;
+    if text[*start..].starts_with("\"\"\"") || text[*start..].starts_with("'''") {
+        return None;
+    }
+    let mut tail = literal.as_str();
+    for (prefix, folded, at_root) in [
+        ("${rootDir}/", "$/", true),
+        ("${rootProject.rootDir}/", "$/", true),
+        ("${projectDir}/", "$/", false),
+        ("$rootDir/", "$rootDir/", true),
+        ("$projectDir/", "$projectDir/", false),
+    ] {
+        if raw.starts_with(prefix) {
+            tail = literal.strip_prefix(folded)?;
+            root = at_root;
+            break;
+        }
+    }
+    if tail.contains('$') || tail.contains("://") {
+        return None;
+    }
+    let base = if root {
+        format!("{}x", root_folder(files, path)?)
+    } else {
+        path.to_owned()
+    };
+    included_folder(&base, tail).map(|folder| folder.trim_end_matches('/').to_owned())
+}
+
+/// The builds and scripts the build logic at `path` names. Settings name
+/// included builds relative to their own folder; anywhere else the Count
+/// does not resolve them.
+fn references(
+    files: &Files,
+    path: &str,
+    text: &str,
+    code: &str,
+    strings: &[(usize, String)],
+) -> Vec<Reference> {
+    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let bytes = code.as_bytes();
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    let settings = matches!(leaf, "settings.gradle" | "settings.gradle.kts");
+    let plain = |s: &str| !s.contains('$') && !s.contains("://");
     let mut out = Vec::new();
-    for (path, text) in files {
-        let leaf = path.rsplit('/').next().unwrap_or(path);
-        if !matches!(leaf, "settings.gradle" | "settings.gradle.kts") {
+    for (name, at) in ["includeBuild", "from"]
+        .iter()
+        .flat_map(|name| code.match_indices(name).map(move |(at, _)| (*name, at)))
+    {
+        let end = at + name.len();
+        if (at > 0 && word(bytes[at - 1])) || bytes.get(end).is_some_and(|b| word(*b)) {
             continue;
         }
-        let Some((code, strings)) = code(text) else {
-            continue;
-        };
-        for (at, _) in code.match_indices("includeBuild") {
-            let end = at + "includeBuild".len();
-            let named = strings.iter().find(|(start, _)| {
-                *start >= end
-                    && code[end..*start]
-                        .bytes()
-                        .all(|b| b.is_ascii_whitespace() || b == b'(')
-            });
-            let folder = named.and_then(|(_, named)| included_folder(path, named));
-            out.push((path.clone(), folder));
+        match name {
+            "includeBuild" => {
+                let named = string_after(code, strings, end, b"(").filter(|s| plain(s));
+                let folder = named
+                    .filter(|_| settings)
+                    .and_then(|named| included_folder(path, named));
+                out.push(Reference::Build(folder));
+            }
+            _ if word_before(code, at) == "apply" => {
+                let script = applied_script(files, path, text, code, strings, end);
+                out.push(Reference::Script(script));
+            }
+            _ => {}
         }
     }
     out
 }
 
-/// The folders of builds the repository's Gradle settings include, whose
-/// sources the Count reads for repositories too.
-pub(crate) fn included_builds(files: &Files) -> Vec<String> {
-    includes(files)
-        .into_iter()
-        .filter_map(|(_, folder)| folder)
-        .collect()
+/// The files the build logic among `files` names that the Count must read
+/// too: the sources of included builds and scripts applied by name.
+pub(crate) fn wanted(files: &Files) -> (Vec<String>, Vec<String>) {
+    let mut builds = Vec::new();
+    let mut scripts = Vec::new();
+    for (path, text) in files.iter().filter(|(path, _)| logic_source(path)) {
+        let Some((code, strings)) = code(path, text) else {
+            continue;
+        };
+        for reference in references(files, path, text, &code, &strings) {
+            match reference {
+                Reference::Build(Some(folder)) => builds.push(folder),
+                Reference::Script(Some(script)) => scripts.push(script),
+                _ => {}
+            }
+        }
+    }
+    (builds, scripts)
 }
 
 /// A lexer for Groovy and Kotlin build logic: comments and the literal text
@@ -411,8 +552,11 @@ pub(crate) fn included_builds(files: &Files) -> Vec<String> {
 struct Lexer<'a> {
     bytes: &'a [u8],
     out: Vec<u8>,
-    /// Each string's start and literal text, templates left out.
+    /// Each string's start and literal text, with `$` standing for each
+    /// template.
     strings: Vec<(usize, String)>,
+    /// Kotlin: raw strings take no escapes, and backticks quote names.
+    kotlin: bool,
 }
 
 impl Lexer<'_> {
@@ -446,6 +590,14 @@ impl Lexer<'_> {
                 i = self.string(i, 3)?;
             } else if matches!(rest[0], b'"' | b'\'') {
                 i = self.string(i, 1)?;
+            } else if self.kotlin && rest[0] == b'`' {
+                // A name in backticks, such as the plugin `maven-publish`.
+                let end = i + 1 + rest[1..].iter().position(|b| matches!(b, b'`' | b'\n'))?;
+                if bytes[end] != b'`' {
+                    return None;
+                }
+                self.blank(i, end + 1);
+                i = end + 1;
             } else if rest.starts_with(b"$/") {
                 i = self.slashy(i, b"$/", b"/$")?;
             } else if rest[0] == b'/' && self.slashy_starts(i) {
@@ -530,12 +682,14 @@ impl Lexer<'_> {
                     .push((start, String::from_utf8_lossy(&literal).into_owned()));
                 return Some(i + width);
             }
-            if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            let raw = self.kotlin && width == 3;
+            if bytes[i] == b'\\' && !raw && i + 1 < bytes.len() {
                 literal.extend_from_slice(&bytes[i..i + 2]);
                 self.blank(i, i + 2);
                 i += 2;
             } else if templates && bytes[i..].starts_with(b"${") {
                 // The template's code stays; its braces are the template's.
+                literal.push(b'$');
                 self.blank(i, i + 2);
                 let end = self.code(i + 2, true)?;
                 self.blank(end - 1, end);
@@ -552,11 +706,12 @@ impl Lexer<'_> {
 /// Code with comments and the literal text of strings blanked, keeping
 /// offsets, and the strings' literal text with where they start; none when
 /// a comment, string or template does not end, or braces do not balance.
-fn code(text: &str) -> Option<(String, Vec<(usize, String)>)> {
+fn code(path: &str, text: &str) -> Option<(String, Vec<(usize, String)>)> {
     let mut lexer = Lexer {
         bytes: text.as_bytes(),
         out: text.as_bytes().to_vec(),
         strings: Vec::new(),
+        kotlin: path.ends_with(".kt") || path.ends_with(".kts"),
     };
     lexer.code(0, false)?;
     // Blanking replaced whole bytes, so a multi-byte character inside a
@@ -630,42 +785,57 @@ fn without_publishing(code: &str) -> Option<String> {
 
 /// Why a Gradle build's Maven lookups cannot be taken to be public: build
 /// logic that could add a repository besides Maven Central, Google's and the
-/// Gradle Plugin Portal, an included build the Count does not read, or a
-/// file it cannot read. Gradle tries repositories in order and filters them
-/// by content; the Count does not follow that, so any other repository
-/// anywhere makes every lookup fail.
+/// Gradle Plugin Portal, a build it includes or a script it applies that the
+/// Count does not read, or a file it cannot read. Gradle tries repositories
+/// in order and filters them by content; the Count does not follow that, so
+/// any other repository anywhere makes every lookup fail.
+///
+/// Build logic is read from the scripts and build-logic folders, then from
+/// what they include and apply, until nothing new is named.
 pub(crate) fn private_repositories(files: &Files) -> Option<String> {
-    // An included build is read like `buildSrc`, so its files must be here.
-    let includes = includes(files);
-    for (settings, folder) in &includes {
-        let read = folder
-            .as_ref()
-            .is_some_and(|folder| files.keys().any(|path| path.starts_with(folder.as_str())));
-        if !read {
-            return Some(format!(
-                "an included build {settings} names, which the Count does not read"
-            ));
-        }
-    }
-    let included: Vec<&str> = includes
-        .iter()
-        .filter_map(|(_, folder)| folder.as_deref())
+    let mut queue: Vec<&str> = files
+        .keys()
+        .filter(|path| build_logic(path))
+        .map(String::as_str)
         .collect();
-    let logic = |path: &str| {
-        build_logic(path)
-            || logic_source(path) && included.iter().any(|folder| path.starts_with(folder))
-    };
-    for (path, text) in files.iter().filter(|(path, _)| logic(path)) {
+    let mut seen: BTreeSet<&str> = queue.iter().copied().collect();
+    while let Some(path) = queue.pop() {
+        let text = &files[path];
         if text.as_str() == crate::UNREADABLE_SETTINGS {
             return Some(format!("{path}, which the Count cannot read"));
         }
         let unread = || Some(format!("build logic in {path} the Count cannot read"));
-        let Some((code, strings)) = code(text) else {
+        let Some((code, strings)) = code(path, text) else {
             return unread();
         };
         let Some(code) = without_publishing(&code) else {
             return unread();
         };
+        for reference in references(files, path, text, &code, &strings) {
+            let named: Vec<&str> = match reference {
+                Reference::Build(Some(folder)) => files
+                    .keys()
+                    .filter(|p| p.starts_with(folder.as_str()) && logic_source(p))
+                    .map(String::as_str)
+                    .collect(),
+                Reference::Script(Some(script)) => files
+                    .get_key_value(&script)
+                    .map(|(p, _)| p.as_str())
+                    .into_iter()
+                    .collect(),
+                Reference::Build(None) | Reference::Script(None) => Vec::new(),
+            };
+            if named.is_empty() {
+                return Some(format!(
+                    "a build or script {path} names, which the Count does not read"
+                ));
+            }
+            for next in named {
+                if seen.insert(next) {
+                    queue.push(next);
+                }
+            }
+        }
         let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
         let bytes = code.as_bytes();
         let mut i = 0;
@@ -683,18 +853,6 @@ pub(crate) fn private_repositories(files: &Files) -> Option<String> {
                 || token.contains("RepositoryHandler")
             {
                 return Some(format!("a repository {path} may add"));
-            }
-            // `apply from: "https://…"` and `apply(from = "https://…")`.
-            if token == "from"
-                && let Some((_, string)) = strings.iter().find(|(at, _)| {
-                    *at >= end
-                        && code[end..*at]
-                            .bytes()
-                            .all(|b| b.is_ascii_whitespace() || b"=:(".contains(&b))
-                })
-                && string.contains("://")
-            {
-                return Some(format!("a script {path} applies from elsewhere"));
             }
             i = end;
         }
