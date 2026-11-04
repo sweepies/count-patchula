@@ -478,10 +478,7 @@ fn applied_script(
     end: usize,
 ) -> Option<String> {
     let (start, literal) = strings.iter().find(|(at, _)| *at >= end)?;
-    let between: String = code[end..*start]
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect();
+    let between: String = code[end..*start].split_whitespace().collect();
     let between = between.trim_start_matches([':', '=', '(']);
     let mut root = match between {
         "" | "file(" | "project.file(" => false,
@@ -942,15 +939,14 @@ pub(crate) fn private_repositories(files: &Files) -> Option<String> {
         }
         let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
         let bytes = code.as_bytes();
+        let len = bytes.len();
         let mut i = 0;
-        while i < bytes.len() {
+        while i < len {
             if !word(bytes[i]) || (i > 0 && word(bytes[i - 1])) {
                 i += 1;
                 continue;
             }
-            let end = (i..bytes.len())
-                .find(|&j| !word(bytes[j]))
-                .unwrap_or(bytes.len());
+            let end = (i..len).find(|&j| !word(bytes[j])).unwrap_or(len);
             let token = &code[i..end];
             if REPOSITORY_CALLS.contains(&token)
                 || token.contains("ArtifactRepository")
