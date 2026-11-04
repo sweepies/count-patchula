@@ -30,6 +30,8 @@ struct Fake {
     deletion_race: std::sync::atomic::AtomicBool,
     /// GitHub refuses native auto-merge for a PR it finds mergeable already.
     auto_merge_refusal: Mutex<Option<String>>,
+    /// The default branch's commit; its tree is always `base-tree`.
+    head: Mutex<String>,
 }
 
 struct Rotating(std::sync::atomic::AtomicUsize);
@@ -107,6 +109,7 @@ impl Fake {
         merge_settings: Mutex::new(json!({"id":"repo-id","autoMergeAllowed":false,"squashMergeAllowed":true,"mergeCommitAllowed":true,"rebaseMergeAllowed":true,"deleteBranchOnMerge":false})),
         checks: Mutex::new(vec![json!({"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"})]),
         change_head_on_checks: Default::default(), merge_refused: Default::default(), deletion_race: Default::default(), auto_merge_refusal: Default::default(),
+        head: Mutex::new("base".into()),
     }
     }
     fn tree(&self) -> Value {
@@ -150,7 +153,7 @@ impl Transport for Fake {
             if body["query"] == patchula_engine::REPOSITORY_HEAD_QUERY {
                 (
                     200,
-                    json!({"data":{"repository":{"defaultBranchRef":{"name":"main","target":{"oid":"base","tree":{"oid":"base-tree"}}}}}}),
+                    json!({"data":{"repository":{"defaultBranchRef":{"name":"main","target":{"oid":*self.head.lock().unwrap(),"tree":{"oid":"base-tree"}}}}}}),
                 )
             } else if body["query"]
                 .as_str()
@@ -420,7 +423,7 @@ impl Transport for Fake {
         } else if path.ends_with("/branches/main") {
             (
                 200,
-                json!({"commit":{"sha":"base","commit":{"tree":{"sha":"base-tree"}}}}),
+                json!({"commit":{"sha":*self.head.lock().unwrap(),"commit":{"tree":{"sha":"base-tree"}}}}),
             )
         } else {
             panic!("unexpected read {path}");
@@ -434,6 +437,56 @@ impl Transport for Fake {
             })
         })
     }
+}
+
+/// A new commit that leaves the files the scan reads as they were reuses the
+/// earlier extraction and config, and reads no blob again.
+#[tokio::test]
+async fn a_commit_that_changes_no_read_file_reuses_the_extraction() {
+    let fake = Arc::new(Fake::new(false));
+    let directory = tempfile::tempdir().unwrap();
+    let cache = Cache::open(directory.path().join("cache.sqlite"), Default::default())
+        .await
+        .unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    let run = || {
+        engine.run(
+            Options {
+                repositories: vec!["demo/sandbox".into()],
+                ..Default::default()
+            },
+            true,
+            false,
+        )
+    };
+    let first = run().await.unwrap();
+    assert_eq!(first.stats.as_ref().unwrap().extraction_hits, 0);
+    *fake.head.lock().unwrap() = "moved".into();
+    fake.requests.lock().unwrap().clear();
+    let second = run().await.unwrap();
+    assert_eq!(second.repositories[0].commit.as_deref(), Some("moved"));
+    assert_eq!(second.stats.as_ref().unwrap().extraction_hits, 1);
+    let reads = fake.requests.lock().unwrap();
+    assert!(
+        !reads
+            .iter()
+            .any(|(_, path, body)| path.contains("/git/blobs/")
+                || body["query"]
+                    .as_str()
+                    .is_some_and(|q| q.contains("... on Blob"))),
+        "{reads:?}"
+    );
+    let found = |report: &patchula_report::Report| {
+        report.repositories[0]
+            .package_files
+            .iter()
+            .flat_map(|file| &file.dependencies)
+            .map(|dep| (dep.name.clone(), dep.current.clone(), dep.updates.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(found(&second), found(&first));
 }
 
 #[tokio::test(start_paused = true)]
