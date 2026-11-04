@@ -1,14 +1,68 @@
 //! Credentials committed to the repository. A repository that holds its own
 //! registry credentials is refused outright: its packages could come from a
 //! registry meant for another installation, and lockfile tools would fetch
-//! them into the shared `public` cache partition. Every file the Count reads
-//! is scanned for a URL carrying a user or password, and the settings files
-//! each tool reads credentials from are checked against that tool's own
-//! documented settings. The checks fail closed; a file of a structured
-//! format that does not parse is refused only when the URL rule also
-//! matches, and is otherwise left to the tool.
+//! them into the shared `public` cache partition. The files a lockfile tool
+//! or a package-registry lookup reads — [`credential_scope`] — are scanned
+//! for a URL carrying a user or password, and the settings files each tool
+//! reads credentials from are checked against that tool's own documented
+//! settings. The checks fail closed; a file of a structured format that
+//! does not parse is refused only when the URL rule also matches, and is
+//! otherwise left to the tool.
 //!
 //! Everything returned names what was found, never the value.
+
+/// Whether a committed credential in `path` could steer a package tool or a
+/// registry lookup: `path`'s format is a registry settings file, a package
+/// manifest or a lockfile a lockfile tool or lookup reads. Everything else —
+/// CI workflows, Dockerfiles, Compose, Kubernetes and Helm manifests,
+/// Terraform — is out of scope: no tool the Count runs reads it and no
+/// lookup follows it, so a credential there is the repository's own
+/// business. The engine scans only these files; the lockfile runner's
+/// backstop scans every file it materializes, since those are exactly what
+/// its tools read.
+pub fn credential_scope(path: &str) -> bool {
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    crate::nuget::config_file(path)
+        || crate::nuget::msbuild_file(path)
+        || crate::cargo::config_file(path)
+        || crate::mise::config_file(path)
+        || crate::go::work_file(path)
+        || crate::bundle_config(path)
+        || matches!(
+            leaf,
+            // Node registry settings, manifests and lockfiles.
+            ".npmrc"
+                | ".yarnrc.yml"
+                | "pnpm-workspace.yaml"
+                | "package.json"
+                | "package-lock.json"
+                | "npm-shrinkwrap.json"
+                | "aube-lock.yaml"
+                | "pnpm-lock.yaml"
+                | "yarn.lock"
+                | "bun.lock"
+                // Python settings and lockfiles. pip requirements files are
+                // not read for index URLs, so they stay out.
+                | "pyproject.toml"
+                | "uv.toml"
+                | "poetry.toml"
+                | "pip.conf"
+                | "pip.ini"
+                | "uv.lock"
+                | "poetry.lock"
+                // Composer.
+                | "composer.json"
+                | "composer.lock"
+                // Bundler.
+                | "Gemfile"
+                | "Gemfile.lock"
+                // Cargo.
+                | "Cargo.toml"
+                | "Cargo.lock"
+                // Go.
+                | "go.mod"
+        )
+}
 
 /// Whether `path`'s text is checked for committed credentials, as a Boolean:
 /// `true` scans it, `false` skips it because its format can hold nothing
@@ -420,8 +474,15 @@ mod tests {
         committed_credentials(path, text)
     }
 
+    /// The refusal a file in `credential_scope` with `text` produces.
+    fn scoped_refusal(path: &str, text: &str) -> Option<String> {
+        credential_scope(path)
+            .then(|| committed_credentials(path, text))
+            .flatten()
+    }
+
     #[test]
-    fn urls_with_a_user_or_password_are_refused_in_any_file() {
+    fn urls_with_a_user_or_password_are_refused() {
         for (text, expect) in [
             ("resolved \"https://ci:s3cret@npm.acme.dev/x.tgz\"\n", true), // betterleaks:allow
             ("tarball = \"https://ci@npm.acme.dev/x.tgz\"\n", true),
@@ -460,6 +521,11 @@ mod tests {
                 false,
             ),
             ("url = \"https://$API_TOKEN@npm.acme.dev/x.tgz\"\n", false),
+            // A command substitution reads its secret at run time too.
+            (
+                "url = \"https://ci:$(cat /run/secrets/token)@npm.acme.dev/x\"\n",
+                false,
+            ),
             ("url = \"https://ci:pa$ss@npm.acme.dev/x.tgz\"\n", true),
         ] {
             for path in [
@@ -693,6 +759,75 @@ mod tests {
             "packages.lock.json",
         ] {
             assert!(refused(path, text).is_none(), "{path}");
+        }
+    }
+
+    /// The repository scan checks only files a lockfile tool or a
+    /// package-registry lookup reads. A credentialed URL anywhere else — a
+    /// CI workflow, a Dockerfile, a Helm values file — is the repository's
+    /// own business.
+    #[test]
+    fn only_tool_and_lookup_files_are_scanned() {
+        // Built at runtime so no credential-shaped string sits in the tree.
+        let url = format!(
+            "https://{}:{}@registry.acme.test/x",
+            "ci",
+            "s3".to_owned() + "cret"
+        );
+        for path in [
+            ".github/workflows/ci.yml",
+            ".forgejo/workflows/integration.yml",
+            ".gitlab-ci.yml",
+            "Dockerfile",
+            "compose.yaml",
+            "chart/values.yaml",
+            "chart/templates/deployment.yaml",
+            "main.tf",
+            "README.md",
+            // pip requirements files are not read for index URLs.
+            "requirements.txt",
+            "docs/dev-requirements.in",
+        ] {
+            assert!(!credential_scope(path), "{path} should be out of scope");
+            assert_eq!(scoped_refusal(path, &url), None, "{path}: {url}");
+        }
+        for path in [
+            ".npmrc",
+            ".yarnrc.yml",
+            "pnpm-workspace.yaml",
+            "package.json",
+            "package-lock.json",
+            "npm-shrinkwrap.json",
+            "aube-lock.yaml",
+            "pnpm-lock.yaml",
+            "yarn.lock",
+            "bun.lock",
+            "pyproject.toml",
+            "uv.toml",
+            "poetry.toml",
+            "pip.conf",
+            "app/pip.ini",
+            "uv.lock",
+            "poetry.lock",
+            "composer.json",
+            "composer.lock",
+            "nuget.config",
+            "NuGet.Config",
+            "Directory.Packages.props",
+            "app/app.csproj",
+            "Gemfile",
+            "Gemfile.lock",
+            ".bundle/config",
+            "Cargo.toml",
+            "Cargo.lock",
+            ".cargo/config.toml",
+            "go.mod",
+            "go.work",
+            "mise.toml",
+            ".mise.toml",
+        ] {
+            assert!(credential_scope(path), "{path} should be in scope");
+            assert!(scoped_refusal(path, &url).is_some(), "{path}: {url}");
         }
     }
 }

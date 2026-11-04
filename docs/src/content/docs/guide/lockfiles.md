@@ -277,7 +277,9 @@ still live only in the run's own directory and are deleted when it
 finishes.
 
 The shared `public` partition is safe to share because the Count refuses
-repositories that commit credentials of their own (see [private
+repositories that commit credentials of their own in a file a lockfile tool
+or a registry lookup reads — a registry settings file, a package manifest
+or a lockfile (see [private
 registries](/guide/sources/#private-registries)): nothing a credential
 fetched can enter it. A repository's own code could still plant content
 another installation's run reads, but that stays within the trust model

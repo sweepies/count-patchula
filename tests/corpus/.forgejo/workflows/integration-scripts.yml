@@ -25,7 +25,7 @@ jobs:
           forgejo.sh setup root admin1234 ${{ matrix.info.image }} ${{ matrix.info.version }}
           forgejo-runner.sh setup
           export FORGEJO_RUNNER_LOGS=forgejo-runner.log
-          url=http://$(cat forgejo-ip):3000
+          url=http://root:admin1234@$(cat forgejo-ip):3000
           token=$(cat forgejo-token)
 
           echo "============================ demo ==================="

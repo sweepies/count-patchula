@@ -1075,7 +1075,7 @@ jobs:
         ports:
           - 3306:3306
         env:
-          MYSQL_ROOT_PASSWORD: password  # betterleaks:allow
+          MYSQL_ROOT_PASSWORD: password
         options: >-
           --health-cmd="if command -v mariadb-admin >/dev/null; then mariadb-admin ping -uroot -ppassword; else mysqladmin ping -uroot -ppassword; fi"
           --health-interval=5s --health-timeout=2s --health-retries=3
@@ -1167,7 +1167,7 @@ jobs:
             --durations-min=10 \
             -p no:sugar \
             --exclude-warning-annotations \
-            --dburl=mysql://127.0.0.1/homeassistant-test \
+            --dburl=mysql://root:password@127.0.0.1/homeassistant-test \
             ${RECORDER_TEST_DIRS} \
               2>&1 | tee pytest-${PYTHON_VERSION}-${mariadb}.txt
       - name: Upload pytest output
@@ -1214,7 +1214,7 @@ jobs:
         ports:
           - 5432:5432
         env:
-          POSTGRES_PASSWORD: password  # betterleaks:allow
+          POSTGRES_PASSWORD: password
           # 18+ images default PGDATA to /var/lib/postgresql/<major>/docker,
           # which is not covered by the tmpfs below
           PGDATA: /var/lib/postgresql/data
@@ -1316,7 +1316,7 @@ jobs:
             --durations-min=10 \
             -p no:sugar \
             --exclude-warning-annotations \
-            --dburl=postgresql://127.0.0.1/homeassistant-test \
+            --dburl=postgresql://postgres:password@127.0.0.1/homeassistant-test \
             ${RECORDER_TEST_DIRS} \
               2>&1 | tee pytest-${PYTHON_VERSION}-${postgresql}.txt
       - name: Upload pytest output

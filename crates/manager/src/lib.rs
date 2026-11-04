@@ -12,7 +12,9 @@ pub use mise::included_files;
 mod cargo;
 mod composer;
 mod credentials;
-pub use credentials::{committed_credentials, credential_check, credential_reason};
+pub use credentials::{
+    committed_credentials, credential_check, credential_reason, credential_scope,
+};
 mod custom;
 mod devcontainer;
 mod gitlabci;

@@ -2348,9 +2348,14 @@ impl Engine {
         let (paths, blobs, refusal, extraction) = tokio::task::spawn_blocking(move || {
             let (paths, files) = read_tree(&dir, &scanner)?;
             // The same refusal the API scan applies to committed credentials.
-            if let Some((path, kind)) = files.iter().find_map(|(path, text)| {
-                patchula_manager::committed_credentials(path, text).map(|kind| (path.clone(), kind))
-            }) {
+            if let Some((path, kind)) = files
+                .iter()
+                .filter(|(path, _)| patchula_manager::credential_scope(path))
+                .find_map(|(path, text)| {
+                    patchula_manager::committed_credentials(path, text)
+                        .map(|kind| (path.clone(), kind))
+                })
+            {
                 return std::io::Result::Ok((
                     paths,
                     BTreeMap::new(),
@@ -2587,9 +2592,14 @@ impl Engine {
             // A repository that commits its own registry credentials is
             // refused: its lockfile tools would fetch what they buy into
             // the shared public cache partition.
-            if let Some((path, kind)) = files.iter().find_map(|(path, text)| {
-                patchula_manager::committed_credentials(path, text).map(|kind| (path.clone(), kind))
-            }) {
+            if let Some((path, kind)) = files
+                .iter()
+                .filter(|(path, _)| patchula_manager::credential_scope(path))
+                .find_map(|(path, text)| {
+                    patchula_manager::committed_credentials(path, text)
+                        .map(|kind| (path.clone(), kind))
+                })
+            {
                 report.status = Status::Error;
                 report.reason = Some(patchula_manager::credential_reason(&path, &kind));
                 return Ok(Work {

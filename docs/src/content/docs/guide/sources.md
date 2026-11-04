@@ -149,13 +149,28 @@ registries, keyed by an https URL prefix. Repository configs never name
 credentials: a `patchula.pkl` can point a dependency at any URL, so in the
 server it could otherwise read another organisation's registry. A
 repository that commits a credential anyway — a URL with a user or
-password in any file the Count reads, an `_authToken` in `.npmrc`, an
-`npmAuthToken` in `.yarnrc.yml`, Composer `config` auth, NuGet source
-credentials or API keys, Poetry `http-basic`/`pypi-token`, or a Cargo
-registry `token` — is refused outright: the repository's report is an
-error and nothing runs for it. Move the credential to the operator's
-`registries` settings; `${VAR}` environment references in npm- and
-Yarn-family settings stay allowed.
+password in a file a lockfile tool or a registry lookup reads, an
+`_authToken` in `.npmrc`, an `npmAuthToken` in `.yarnrc.yml`, Composer
+`config` auth, NuGet source credentials or API keys, Poetry
+`http-basic`/`pypi-token`, or a Cargo registry `token` — is refused
+outright: the repository's report is an error and nothing runs for it.
+Move the credential to the operator's `registries` settings; `${VAR}`-style
+environment references and `$()` command substitutions stay allowed, since
+the secret lives outside the file.
+
+The URL rule covers exactly the files a lockfile tool or a package-registry
+lookup reads: `.npmrc`, `.yarnrc.yml` and `pnpm-workspace.yaml`,
+`package.json` and the Node lockfiles (`package-lock.json`,
+`npm-shrinkwrap.json`, `aube-lock.yaml`, `pnpm-lock.yaml`, `yarn.lock`,
+`bun.lock`), `pyproject.toml`, `uv.toml`, `poetry.toml`, `pip.conf` and
+`pip.ini`, `uv.lock` and `poetry.lock`, `composer.json` and
+`composer.lock`, `nuget.config` and the MSBuild files that can set restore
+sources (`Directory.Packages.props`, project files and their kin),
+`Gemfile`, `Gemfile.lock` and `.bundle/config`, `Cargo.toml`, `Cargo.lock`
+and `.cargo/config`, `go.mod` and `go.work`, and mise configuration files.
+CI workflows, Dockerfiles, Compose, Kubernetes and Helm manifests and
+Terraform files are not checked: nothing the Count runs reads them, so a
+credential committed there steers no fetch of its.
 
 ```pkl
 amends "PatchulaSettings.pkl"
