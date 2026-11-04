@@ -283,14 +283,38 @@ impl Scanner {
             } else {
                 std::collections::BTreeSet::new()
             };
+        // The manifests above a crate's, which can patch it as its
+        // workspace, whatever `exclude` leaves out.
+        let ancestors: std::collections::BTreeSet<String> =
+            if self.config.managers.contains(&Manager::Cargo) {
+                files
+                    .keys()
+                    .filter(|p| p.ends_with("Cargo.toml") || p.ends_with("Cargo.lock"))
+                    .flat_map(|p| {
+                        let mut out = Vec::new();
+                        let mut dir = &p[..p.rfind('/').map_or(0, |i| i + 1)];
+                        // The manifest beside a lockfile, then those above.
+                        out.push(format!("{dir}Cargo.toml"));
+                        while !dir.is_empty() {
+                            let parent = dir.trim_end_matches('/');
+                            dir = &parent[..parent.rfind('/').map_or(0, |i| i + 1)];
+                            out.push(format!("{dir}Cargo.toml"));
+                        }
+                        out
+                    })
+                    .collect()
+            } else {
+                std::collections::BTreeSet::new()
+            };
         paths
             .into_iter()
             .filter(|path| {
                 !files.contains_key(*path)
-                    && (gradle::logic_source(path)
-                        && included
-                            .iter()
-                            .any(|folder| path.starts_with(folder.as_str()))
+                    && (ancestors.contains(*path)
+                        || gradle::logic_source(path)
+                            && included
+                                .iter()
+                                .any(|folder| path.starts_with(folder.as_str()))
                         || referenced.contains(*path)
                         || applied.iter().any(|script| script == path))
             })
@@ -318,6 +342,7 @@ impl Scanner {
             || (self.config.managers.contains(&Manager::Bundler)
                 && (bundle_config(path) || leaf == "Gemfile.lock"))
             || (self.config.managers.contains(&Manager::Composer) && leaf == "composer.lock")
+            || (self.config.managers.contains(&Manager::Cargo) && cargo::config_file(path))
             || (self.config.managers.contains(&Manager::Nuget)
                 && (nuget::config_file(path) || nuget::msbuild_file(path)))
             || (self.config.managers.contains(&Manager::Maven) && maven::repository_file(path))
@@ -491,8 +516,16 @@ impl Scanner {
         let mut result = Extraction::default();
         let locks = npm::locks(files)?;
         let npmrcs = npm::npmrcs(files);
+        // Only the manifests and lockfiles Cargo's selection takes: one read
+        // only for its patches, above a selected crate, does not shape
+        // extraction.
+        let cargo_files: Files = files
+            .iter()
+            .filter(|(path, _)| self.selected(Manager::Cargo, path))
+            .map(|(path, text)| (path.clone(), text.clone()))
+            .collect();
         let cargo = if self.config.managers.contains(&Manager::Cargo) {
-            cargo::documents(files)?
+            cargo::documents(&cargo_files)?
         } else {
             BTreeMap::new()
         };
@@ -578,7 +611,14 @@ impl Scanner {
             {
                 toolchains::rust(path, text)
             } else if self.selected(Manager::Cargo, path) {
-                cargo::extract(path, text, &cargo, &mut result.skipped)
+                cargo::extract(path, text, &cargo, &mut result.skipped).map(|mut deps| {
+                    if let Some(reason) = cargo::replaced(files, path) {
+                        for dep in deps.iter_mut().filter(|d| d.source == Source::Crates) {
+                            dep.registry = origins::Named::Unusable(reason.clone()).recorded();
+                        }
+                    }
+                    deps
+                })
             } else if self.selected(Manager::Dockerfile, path) {
                 images::dockerfile(path, text)
             } else if self.selected(Manager::Go, path) {
@@ -669,6 +709,19 @@ impl Scanner {
         }
         self.maven_repositories(files, &mut result.dependencies);
         result.locked = locked::cargo(files, &cargo, &result.dependencies);
+        let mut replaced = BTreeMap::new();
+        for locked in result
+            .locked
+            .iter_mut()
+            .filter(|l| l.manager == Manager::Cargo)
+        {
+            let reason = replaced
+                .entry(locked.file.clone())
+                .or_insert_with(|| cargo::replaced(files, &locked.file));
+            if let Some(reason) = reason {
+                locked.registry = Some(reason.clone());
+            }
+        }
         let npm = node == Manager::Npm && self.config.managers.contains(&Manager::Npm);
         result
             .locked
@@ -844,6 +897,8 @@ pub fn registry_settings(path: &str) -> bool {
         || nuget::msbuild_file(path)
         || maven::repository_file(path)
         || gradle::build_logic(path)
+        || cargo::config_file(path)
+        || path.rsplit('/').next() == Some("Cargo.toml")
 }
 
 /// A file that can name a Python package index.
@@ -872,6 +927,7 @@ pub fn linked_settings(path: &str) -> Option<String> {
     match leaf {
         ".bundle" => Some(format!("{path}/config")),
         ".mvn" => Some(format!("{path}/maven.config")),
+        ".cargo" => Some(format!("{path}/config.toml")),
         _ if gradle::logic_folder(path) => Some(format!("{path}/build.gradle.kts")),
         _ => None,
     }

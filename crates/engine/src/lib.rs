@@ -2382,7 +2382,7 @@ impl Engine {
         let key = ExtractionKey {
             repo: repo.into(),
             default_branch_commit: commit,
-            config_hash: format!("extract-v22:{}", hash(&serde_json::to_vec(&config)?)),
+            config_hash: format!("extract-v23:{}", hash(&serde_json::to_vec(&config)?)),
         };
         let cached: CachedExtraction = if let Some(bytes) = self.cache.extraction_get(&key).await? {
             self.extraction_hits.fetch_add(1, Ordering::Relaxed);
@@ -2644,7 +2644,9 @@ pub fn read_tree(
             // the public registry.
             if let Some(settings) = patchula_manager::linked_settings(&relative)
                 && scanner.needs(&settings)
-                && std::fs::metadata(dir.join(&settings)).is_ok_and(|meta| meta.is_file())
+                // The link's target exists: a settings file, or a folder
+                // whose settings the Count then cannot read.
+                && std::fs::metadata(dir.join(&relative)).is_ok()
             {
                 files.insert(settings, patchula_manager::UNREADABLE_SETTINGS.to_owned());
             }

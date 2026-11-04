@@ -3640,3 +3640,115 @@ fn gradle_lookups_fail_when_build_logic_could_add_another_repository() {
         assert!(fails(found.clone()), "{files:?}: {found:?}");
     }
 }
+
+#[test]
+fn crates_io_lookups_fail_where_cargo_configuration_replaces_crates_io() {
+    let manifest =
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1.0\"\n";
+    let lookup =
+        |files: &[(&str, &str)]| registry_of(Manager::Cargo, files, "app/Cargo.toml", "serde");
+    assert_eq!(lookup(&[("app/Cargo.toml", manifest)]), None);
+    let vendored = "[source.crates-io]\nreplace-with = \"vendored-sources\"\n\n[source.vendored-sources]\ndirectory = \"vendor\"\n";
+    assert_eq!(
+        lookup(&[
+            ("app/Cargo.toml", manifest),
+            (".cargo/config.toml", vendored)
+        ]),
+        None
+    );
+    // A configuration for another folder does not apply.
+    let mirror = "[source.crates-io]\nreplace-with = \"acme\"\n\n[source.acme]\nregistry = \"sparse+https://bot:s3cr3t@crates.acme.dev/index/\"\n"; // betterleaks:allow
+    assert_eq!(
+        lookup(&[
+            ("app/Cargo.toml", manifest),
+            ("tools/.cargo/config.toml", mirror)
+        ]),
+        None
+    );
+    for files in [
+        vec![("app/Cargo.toml", manifest), (".cargo/config.toml", mirror)],
+        vec![("app/Cargo.toml", manifest), ("app/.cargo/config", mirror)],
+        vec![
+            ("app/Cargo.toml", manifest),
+            (
+                ".cargo/config.toml",
+                "[source.crates-io]\nreplace-with = \"elsewhere\"\n",
+            ),
+        ],
+        // A vendored source a closer configuration redefines still counts.
+        vec![
+            ("app/Cargo.toml", manifest),
+            (".cargo/config.toml", vendored),
+            (
+                "app/.cargo/config.toml",
+                "[source.vendored-sources]\nregistry = \"https://crates.acme.dev/index\"\n",
+            ),
+        ],
+        vec![
+            ("app/Cargo.toml", manifest),
+            (".cargo/config.toml", "[source\n"),
+        ],
+        vec![
+            ("app/Cargo.toml", manifest),
+            (".cargo/config.toml", patchula_manager::UNREADABLE_SETTINGS),
+        ],
+    ] {
+        let found = lookup(&files);
+        assert!(fails(found.clone()), "{files:?}: {found:?}");
+        assert!(!found.unwrap().contains("s3cr3t"));
+    }
+}
+
+#[test]
+fn crates_patched_or_included_from_elsewhere_fail_their_lookups() {
+    let manifest = |extra: &str| {
+        format!(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1.0\"\nlog = \"0.4\"\n{extra}"
+        )
+    };
+    let lookup = |files: &[(&str, &str)], name: &str| {
+        registry_of(Manager::Cargo, files, "app/Cargo.toml", name)
+    };
+    let patched = manifest(
+        "\n[patch.crates-io]\nserde = { version = \"1.0\", registry = \"acme\" }\nlog = { git = \"https://github.com/acme/log\" }\n",
+    );
+    // A patch from another registry can stand for any crate under any
+    // name Cargo takes for it, so every lookup fails; one from git does not.
+    assert!(fails(lookup(&[("app/Cargo.toml", &patched)], "serde")));
+    assert!(fails(lookup(&[("app/Cargo.toml", &patched)], "log")));
+    let git = manifest("\n[patch.crates-io]\nlog = { git = \"https://github.com/acme/log\" }\n");
+    assert_eq!(lookup(&[("app/Cargo.toml", &git)], "serde"), None);
+    let by_url = manifest(
+        "\n[patch.\"https://github.com/rust-lang/crates.io-index\"]\nserde_json = { version = \"1.0\", registry = \"acme\" }\n",
+    );
+    assert!(fails(lookup(&[("app/Cargo.toml", &by_url)], "serde")));
+    // So does one in the workspace's root manifest.
+    let root = [
+        (
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"app\"]\n\n[patch.crates-io]\nserde = { version = \"1.0\", registry-index = \"https://crates.acme.dev/index\" }\n",
+        ),
+        ("app/Cargo.toml", git.as_str()),
+    ];
+    assert!(fails(lookup(&root, "serde")));
+    let unreadable = [
+        ("Cargo.toml", patchula_manager::UNREADABLE_SETTINGS),
+        ("app/Cargo.toml", git.as_str()),
+    ];
+    assert!(fails(lookup(&unreadable, "serde")));
+    let plain = manifest("");
+    let include = [
+        ("app/Cargo.toml", plain.as_str()),
+        (".cargo/config.toml", "include = [\"mirror.toml\"]\n"),
+    ];
+    assert!(fails(lookup(&include, "serde")));
+    // A member's configuration applies to the whole workspace.
+    let workspace = "[workspace]\nmembers = [\"app\", \"tool\"]\n";
+    let mirror = "[source.crates-io]\nreplace-with = \"acme\"\n\n[source.acme]\nregistry = \"https://crates.acme.dev/index\"\n";
+    let member = [
+        ("Cargo.toml", workspace),
+        ("app/Cargo.toml", plain.as_str()),
+        ("tool/.cargo/config.toml", mirror),
+    ];
+    assert!(fails(lookup(&member, "serde")));
+}
