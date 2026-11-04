@@ -263,6 +263,32 @@ Run the Count only for repositories you trust that far, or turn lockfile
 updates off for the others.
 :::
 
+## Tool caches
+
+Lockfile tools keep the package data they download in `tool-caches/` under
+the cache directory, split into partitions so a run never shares what its
+credentials fetched. A run that holds no registry credentials caches in
+`public`, shared by every installation and the CLI; a run that holds them
+caches in a `private-<hash>` partition the credentials' scopes name. Go and
+NuGet runs in a private partition also read the public one as a lower layer
+they cannot write to. Credential files still live only in the run's own
+directory and are deleted when it finishes.
+
+A partition a run uses is held shared, so eviction never removes one in use,
+and tools whose caches are not documented for concurrent use — aube, Bun,
+Yarn, Composer, Poetry, NuGet and Bundler — run one at a time in it.
+Partitions unused for 14 days are pruned, and `lockfiles.cacheGiB` (default
+20, `0` turns the caches off) caps their size: the least recently used
+private partitions go first, `public` last.
+
+:::danger[The public cache is shared]
+The public partition is shared across installations, so code one
+installation's lockfile tools run could plant content another installation's
+run reads. That fits the trust model above — lockfile tools run repository
+code and every installation is assumed trusted — but a private partition
+keeps what credentials fetched from ever reaching it.
+:::
+
 ## Private registries in lockfile tools
 
 Lockfile tools get a [registry entry's](/guide/sources/#private-registries)

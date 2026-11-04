@@ -269,9 +269,9 @@ impl Runner {
         before == after
     }
     /// Run an npm-family tool, which holds every tools entry's credentials.
-    async fn node_tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, String> {
-        self.held_tool(driver, call, !self.registries.is_empty())
-            .await
+    async fn node_tool(&self, driver: &Path, mut call: Invocation) -> Result<Vec<u8>, String> {
+        call.credentials = credentials::scopes(self.registries.iter());
+        self.held_tool(driver, call).await
     }
     async fn bun(
         &self,
@@ -296,6 +296,7 @@ impl Runner {
                 bin: "bun".into(),
                 cwd: None,
                 env: Vec::new(),
+                credentials: Vec::new(),
                 args: vec![
                     "install".into(),
                     "--cwd".into(),
@@ -331,6 +332,7 @@ impl Runner {
                 bin: "npm".into(),
                 cwd: None,
                 env: Vec::new(),
+                credentials: Vec::new(),
                 args,
             },
         )
@@ -379,6 +381,7 @@ impl Runner {
                     "NPM_CONFIG_USERCONFIG".into(),
                     config.to_string_lossy().into_owned(),
                 )],
+                credentials: Vec::new(),
                 args,
             },
         )
@@ -428,11 +431,8 @@ impl Runner {
                         ("YARN_IGNORE_PATH".into(), "1".into()),
                         ("YARN_ENABLE_TELEMETRY".into(), "0".into()),
                         ("YARN_ENABLE_PROGRESS_BARS".into(), "0".into()),
-                        (
-                            "YARN_GLOBAL_FOLDER".into(),
-                            driver.join("home/yarn").to_string_lossy().into_owned(),
-                        ),
                     ],
+                    credentials: Vec::new(),
                     args,
                 },
             )

@@ -89,6 +89,8 @@ pub struct Options {
 }
 pub struct Engine {
     lockfiles: Option<patchula_update::lockfiles::Runner>,
+    /// The persistent tool caches' size cap in GiB, applied to the runner.
+    lockfile_cache_gib: u64,
     github: Github,
     http: Cached,
     sources: Sources,
@@ -185,6 +187,13 @@ impl Engine {
         self.recheck = recheck;
         Ok(())
     }
+    /// The persistent tool caches' size cap in GiB; 0 turns them off.
+    pub fn set_lockfile_cache_limit(&mut self, cache_gib: u64) {
+        self.lockfile_cache_gib = cache_gib;
+        if let Some(runner) = &mut self.lockfiles {
+            runner.set_cache_limit(cache_gib);
+        }
+    }
     /// A server sets this between batches as its settings change.
     pub fn set_advertised_server(&mut self, url: Option<String>) {
         self.advertised_server = url;
@@ -230,6 +239,7 @@ impl Engine {
         });
         let mut engine = Self {
             lockfiles,
+            lockfile_cache_gib: patchula_update::lockfiles::DEFAULT_CACHE_GIB,
             github,
             http,
             sources,
@@ -256,7 +266,11 @@ impl Engine {
                 .with_nix(std::sync::Arc::new(runner.clone()));
         }
     }
-    pub fn with_lockfile_runner(mut self, runner: patchula_update::lockfiles::Runner) -> Self {
+    pub fn with_lockfile_runner(
+        mut self,
+        mut runner: patchula_update::lockfiles::Runner,
+    ) -> Self {
+        runner.set_cache_limit(self.lockfile_cache_gib);
         self.lockfiles = Some(runner);
         self.look_up_mise_tools_with_runner();
         self

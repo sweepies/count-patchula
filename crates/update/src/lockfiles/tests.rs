@@ -23,6 +23,7 @@ struct Fixture {
     real: bool,
     leaf: Option<String>,
     calls: Mutex<Vec<Vec<String>>>,
+    envs: Mutex<Vec<BTreeMap<std::ffi::OsString, std::ffi::OsString>>>,
     /// A manifest whose content is recorded at every tool call.
     watch: Option<String>,
     watched: Mutex<Vec<String>>,
@@ -36,6 +37,7 @@ impl Executor for Fixture {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
         Box::pin(async move {
             self.calls.lock().unwrap().push(spec.args.clone());
+            self.envs.lock().unwrap().push(spec.env.clone());
             // Real tools come from the developer's store, which tests never
             // modify; the runner's own store starts empty.
             if spec.args.iter().any(|s| s == "uninstall") {
@@ -374,6 +376,7 @@ fn fixture_with(
         real,
         leaf,
         calls: Mutex::new(Vec::new()),
+        envs: Mutex::new(Vec::new()),
         watch: None,
         watched: Mutex::new(Vec::new()),
         lock: None,
@@ -486,9 +489,14 @@ impl Executor for Overlap {
 /// Plans regenerate their lockfiles side by side, each in its own tree.
 #[tokio::test]
 async fn plans_regenerate_lockfiles_side_by_side() {
+    // Go's module cache documents concurrent use, so its runs share a
+    // partition without serialising: the plans really overlap.
     let files = BTreeMap::from([
-        ("package.json".into(), "{}\n".into()),
-        ("bun.lock".into(), "{}\n".into()),
+        (
+            "go.mod".into(),
+            "module acme.dev/x\n\ngo 1.21\n".into(),
+        ),
+        ("go.sum".into(), "{}\n".into()),
     ]);
     let executor = Arc::new(Overlap {
         inner: fixture(files.clone(), false, false),
@@ -518,7 +526,7 @@ async fn plans_regenerate_lockfiles_side_by_side() {
         assert!(plan.lockfiles_ready, "{:?}", plan.action);
     }
     assert!(executor.most.load(std::sync::atomic::Ordering::SeqCst) >= 2);
-    assert!(snapshot.files.contains_key("bun.lock"));
+    assert!(snapshot.files.contains_key("go.sum"));
 }
 
 #[tokio::test]
@@ -1211,6 +1219,7 @@ async fn real_aube_regenerates_a_stale_aube_lock_that_aube_ci_accepts() {
                 bin: "aube".into(),
                 cwd: None,
                 env: Vec::new(),
+                credentials: Vec::new(),
                 args: vec![
                     "-C".into(),
                     tree.to_string_lossy().into_owned(),
@@ -1691,7 +1700,7 @@ async fn cargo_jobs_address_the_lock_as_it_stands() {
             lock_only: false,
         };
         runner
-            .cargo_update(&driver, &cwd, "1.99.0", &job, false, &[])
+            .cargo_update(&driver, &cwd, "1.99.0", &job, false, (&[], &[]))
             .await
             .unwrap_or_else(|e| panic!("{locked} -> {target}: {e}"));
         let commands: Vec<_> = executor
@@ -3407,6 +3416,7 @@ async fn first_tool_use_allows_for_the_install() {
         bin: "uv".into(),
         cwd: None,
         env: Vec::new(),
+        credentials: Vec::new(),
         args: vec!["lock".into()],
     };
     runner.tool(&driver, call()).await.unwrap();
@@ -3684,7 +3694,7 @@ async fn cargo_jobs_move_only_the_crates_io_entry_of_their_package() {
             lock_only: false,
         };
         runner
-            .cargo_update(&driver, &cwd, "1.99.0", &job, false, &[])
+            .cargo_update(&driver, &cwd, "1.99.0", &job, false, (&[], &[]))
             .await
             .unwrap_or_else(|e| panic!("git {git}, crates.io {registry}: {e}"));
         assert_eq!(
@@ -4492,12 +4502,10 @@ async fn a_failed_mise_install_says_why() {
 /// the image sets because it has no ICU, and nothing when the server has none.
 #[test]
 fn dotnet_restore_passes_on_invariant_globalization() {
-    let packages = Path::new("/driver/nuget-packages");
-    let invariant = dotnet::restore_env(packages, Some("1".into()));
+    let invariant = dotnet::restore_env(Some("1".into()));
     assert!(invariant.contains(&("DOTNET_SYSTEM_GLOBALIZATION_INVARIANT".into(), "1".into())));
-    assert!(invariant.contains(&("NUGET_PACKAGES".into(), "/driver/nuget-packages".into())));
     assert!(
-        !dotnet::restore_env(packages, None)
+        !dotnet::restore_env(None)
             .iter()
             .any(|(key, _)| key == "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT")
     );
@@ -4820,6 +4828,7 @@ async fn lock_only_jobs_reach_their_exact_target_in_every_lockfile_tool() {
                 real: false,
                 leaf: Some(lock.clone()),
                 calls: Mutex::new(Vec::new()),
+                envs: Mutex::new(Vec::new()),
                 watch: Some(manifest.into()),
                 watched: Mutex::new(Vec::new()),
                 lock: Some(lock_recording(
@@ -5693,4 +5702,192 @@ fn stored_zip(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
     out.extend_from_slice(&central_offset.to_le_bytes());
     out.extend_from_slice(&0u16.to_le_bytes());
     out
+}
+
+/// A run's cache partition is `public` without credentials and
+/// `private-<hash of the credentials' scopes>` with them: two sets of
+/// credentials get different partitions, one set gets the same one twice and
+/// a Go run that sees only npm credentials stays public.
+#[tokio::test]
+async fn tool_caches_partition_by_the_credentials_a_run_gets() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("cache/tool-caches");
+    let npm = patchula_http::Credential::new(
+        "https://npm.acme.dev",
+        patchula_http::Auth::Bearer {
+            token: "secret".into(),
+        },
+    )
+    .unwrap()
+    .for_tools();
+    let executor = fixture(
+        BTreeMap::from([("go.mod".into(), "module acme.dev/x\n\ngo 1.21\n".into())]),
+        false,
+        false,
+    );
+    let runner = Runner::new(temp.path().join("cache"), "x")
+        .with_registries(std::slice::from_ref(&npm))
+        .with_executor(executor.clone());
+    let driver = temp.path().join("driver");
+    std::fs::create_dir_all(&driver).unwrap();
+    let call = |bin: &str, credentials: Vec<String>| Invocation {
+        tools: vec![(bin.into(), "1.0".into())],
+        bin: bin.into(),
+        cwd: None,
+        env: Vec::new(),
+        credentials,
+        args: vec!["x".into()],
+    };
+    // The npm-only entry never reaches Go's `.netrc`, so Go stays public.
+    let (env, _) = runner.use_caches(&call("go", Vec::new())).await.unwrap();
+    assert_eq!(
+        env,
+        [(
+            "GOMODCACHE".into(),
+            root.join("public/gomod").to_string_lossy().into_owned()
+        )]
+    );
+    runner.tool(&driver, call("go", Vec::new())).await.unwrap();
+    assert_eq!(
+        executor.envs.lock().unwrap().last().unwrap()[&std::ffi::OsString::from("GOMODCACHE")],
+        root.join("public/gomod").to_string_lossy().into_owned().as_str()
+    );
+    // With the registry it does get, npm goes private, named by its scope.
+    let (env, _) = runner
+        .use_caches(&call("npm", credentials::scopes([npm.clone()].iter())))
+        .await
+        .unwrap();
+    let partition = env[0].1.clone();
+    let partition = Path::new(&partition)
+        .parent()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        partition.starts_with(root.join("private-").to_str().unwrap()),
+        "{partition}"
+    );
+    assert!(!partition.contains("secret"));
+    // Every cacheable tool's environment lands inside the partition it was
+    // given, and private Go and NuGet runs read the public partition as a
+    // read-only lower layer.
+    for (bin, key) in [
+        ("cargo", "CARGO_HOME"),
+        ("go", "GOMODCACHE"),
+        ("npm", "NPM_CONFIG_CACHE"),
+        ("aube", "AUBE_CACHE_DIR"),
+        ("bun", "BUN_INSTALL_CACHE_DIR"),
+        ("yarn", "YARN_GLOBAL_FOLDER"),
+        ("composer", "COMPOSER_CACHE_DIR"),
+        ("uv", "UV_CACHE_DIR"),
+        ("poetry", "POETRY_CACHE_DIR"),
+        ("dotnet", "NUGET_PACKAGES"),
+        ("bundle", "BUNDLE_USER_CACHE"),
+    ] {
+        let (env, hold) = runner
+            .use_caches(&call(bin, credentials::scopes([npm.clone()].iter())))
+            .await
+            .unwrap();
+        assert!(env.iter().any(|(k, _)| k == key), "{bin}");
+        assert!(
+            env.iter()
+                .all(|(k, v)| v.starts_with(&partition) || matches!(k.as_str(), "GOPROXY" | "NUGET_FALLBACK_PACKAGES")),
+            "{bin}: {env:?}"
+        );
+        drop(hold);
+    }
+    let (go, _) = runner
+        .use_caches(&call("go", credentials::scopes([npm.clone()].iter())))
+        .await
+        .unwrap();
+    assert_eq!(
+        go.iter().find(|(k, _)| k == "GOPROXY").unwrap().1,
+        format!(
+            "file://{},https://proxy.golang.org,direct",
+            root.join("public/gomod/cache/download").display()
+        )
+    );
+    let (dotnet, _) = runner
+        .use_caches(&call("dotnet", credentials::scopes([npm.clone()].iter())))
+        .await
+        .unwrap();
+    assert_eq!(
+        dotnet
+            .iter()
+            .find(|(k, _)| k == "NUGET_FALLBACK_PACKAGES")
+            .unwrap()
+            .1,
+        root.join("public/nuget/packages")
+            .to_string_lossy()
+            .into_owned()
+    );
+    // Credential files stay in the per-run HOME: nothing a run writes under a
+    // partition names a credential file.
+    fn names(dir: &Path, files: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                names(&path, files);
+            } else {
+                files.push(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+    }
+    let mut files = Vec::new();
+    names(&root, &mut files);
+    assert!(
+        !files
+            .iter()
+            .any(|f| matches!(f.as_str(), ".netrc" | ".npmrc" | "npm-user.cfg" | "auth.json")),
+        "{files:?}"
+    );
+}
+
+/// An unused partition is pruned after its age, oversized ones evict
+/// least-recently-used private partitions first and `public` last, and a
+/// partition a run holds is never removed.
+#[test]
+fn tool_cache_partitions_prune_by_age_size_and_use() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("tool-caches");
+    let now = std::time::SystemTime::now();
+    let make = |name: &str, age: std::time::Duration, bytes: usize| {
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("data"), vec![0u8; bytes]).unwrap();
+        let used = std::fs::File::options()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(dir.join(".used"))
+            .unwrap();
+        used.set_modified(now - age).unwrap();
+    };
+    let day = std::time::Duration::from_secs(86_400);
+    make("private-stale", day * 15, 1);
+    make("private-older", day, 10);
+    make("private-newer", std::time::Duration::ZERO, 10);
+    make("private-held", day * 15, 1);
+    make("public", std::time::Duration::ZERO, 10);
+    // A run holds private-held, so even stale it stays.
+    let held = std::fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(root.join("private-held.lock"))
+        .unwrap();
+    held.lock_shared().unwrap();
+    // Stale goes; the cap (21 bytes) then evicts private-older, the least
+    // recently used private partition, before private-newer, and a further
+    // cap below everything evicts public last.
+    caches::prune(&root, 21, now).unwrap();
+    assert!(!root.join("private-stale").exists());
+    assert!(!root.join("private-older").exists());
+    assert!(root.join("private-newer").exists());
+    assert!(root.join("private-held").exists());
+    assert!(root.join("public").exists());
+    caches::prune(&root, 0, now).unwrap();
+    assert!(!root.join("public").exists());
+    assert!(root.join("private-held").exists());
+    assert!(root.join("private-held.lock").exists());
 }

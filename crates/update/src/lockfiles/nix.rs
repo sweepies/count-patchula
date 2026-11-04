@@ -151,6 +151,7 @@ impl Runner {
                     ("XDG_CACHE_HOME".into(), path(&store.join("cache"))),
                     ("NIX_CONFIG".into(), config),
                 ],
+                credentials: Vec::new(),
                 args: call,
             },
         )

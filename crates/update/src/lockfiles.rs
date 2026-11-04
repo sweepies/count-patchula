@@ -1,5 +1,6 @@
 //! Real ecosystem tools run before any Git Data mutation, in disposable trees.
 mod apm;
+mod caches;
 mod checkout;
 mod credentials;
 mod dotnet;
@@ -511,7 +512,14 @@ pub struct Runner {
     /// Held by the first nix call while it installs nix, so concurrent
     /// lookups neither install it twice nor clear each other's install.
     nix_install: Arc<tokio::sync::Mutex<()>>,
+    /// The persistent tool caches' size cap in GiB; 0 turns them off.
+    cache_gib: u64,
+    /// When the tool caches were last pruned by this process.
+    cache_pruned: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
 }
+
+/// The persistent tool caches' default size cap in GiB.
+pub const DEFAULT_CACHE_GIB: u64 = 20;
 impl Runner {
     pub fn new(cache: PathBuf, token: &str) -> Self {
         let home = std::env::var_os("HOME").map_or_else(std::env::temp_dir, PathBuf::from);
@@ -542,6 +550,8 @@ impl Runner {
             usage: Default::default(),
             seed: None,
             nix_install: Default::default(),
+            cache_gib: DEFAULT_CACHE_GIB,
+            cache_pruned: Default::default(),
         }
     }
     /// Borrow tool versions from this mise data directory, usually the user's
@@ -576,6 +586,10 @@ impl Runner {
     pub fn with_credentials(mut self, credentials: Arc<dyn patchula_github::Credentials>) -> Self {
         self.credentials = Some(credentials);
         self
+    }
+    /// Set the persistent tool caches' size cap in GiB; 0 turns them off.
+    pub fn set_cache_limit(&mut self, cache_gib: u64) {
+        self.cache_gib = cache_gib;
     }
     /// Give lockfile tools the credentials of the entries that allow it
     /// (`tools = true`), among all of `registries`.
@@ -646,6 +660,7 @@ impl Runner {
         config: &Config,
     ) -> Result<BTreeMap<String, Blob>, String> {
         std::fs::create_dir_all(&self.cache).map_err(|e| e.to_string())?;
+        self.prune_caches();
         let run = tempfile::Builder::new()
             .prefix("run-")
             .tempdir_in(&self.cache)
@@ -790,7 +805,8 @@ impl Runner {
                         })
                         .map(|(_, text)| credentials::cargo_registries(text))
                         .collect();
-                    let env = self.cargo_env(&registries);
+                    let (env, entries) = self.cargo_env(&registries);
+                    let credentials = credentials::scopes(entries.iter().copied());
                     for job in jobs {
                         self.cargo_update(
                             &driver,
@@ -798,7 +814,7 @@ impl Runner {
                             &versions["rust"],
                             job,
                             plan.maintenance,
-                            &env,
+                            (&env, &credentials),
                         )
                         .await?;
                     }
@@ -807,7 +823,8 @@ impl Runner {
                     let go = go_version(&cwd, &versions["go"])?;
                     // Credentials for Go and Git in `~/.netrc`, gone when Go
                     // finishes, and their hosts private to Go.
-                    let (netrc, hosts) = self.netrc();
+                    let (netrc, hosts, entries) = self.netrc();
+                    let credentials = credentials::scopes(entries.iter().copied());
                     let held = !hosts.is_empty();
                     let mut _netrc = node::Private::default();
                     let mut env = Vec::new();
@@ -826,6 +843,7 @@ impl Runner {
                                     bin: "go".into(),
                                     cwd: None,
                                     env: env.clone(),
+                                    credentials: credentials.clone(),
                                     args: vec![
                                         "-C".into(),
                                         cwd.to_string_lossy().into_owned(),
@@ -837,7 +855,6 @@ impl Runner {
                                         ),
                                     ],
                                 },
-                                held,
                             )
                             .await?;
                         }
@@ -859,9 +876,9 @@ impl Runner {
                             bin: "go".into(),
                             cwd: None,
                             env,
+                            credentials,
                             args,
                         },
-                        held,
                     )
                     .await?;
                 }
@@ -870,8 +887,7 @@ impl Runner {
                         std::fs::remove_file(cwd.join(".terraform.lock.hcl"))
                             .map_err(|e| e.to_string())?;
                     }
-                    let env = self.terraform_env();
-                    let held = !env.is_empty();
+                    let (env, entries) = self.terraform_env();
                     self.held_tool(
                         &driver,
                         Invocation {
@@ -879,13 +895,13 @@ impl Runner {
                             bin: "terraform".into(),
                             cwd: None,
                             env,
+                            credentials: credentials::scopes(entries.iter().copied()),
                             args: vec![
                                 format!("-chdir={}", cwd.display()),
                                 "providers".into(),
                                 "lock".into(),
                             ],
                         },
-                        held,
                     )
                     .await?;
                 }
@@ -968,7 +984,7 @@ impl Runner {
         rust: &str,
         job: &Job,
         maintenance: bool,
-        env: &[(String, String)],
+        (env, credentials): (&[(String, String)], &[String]),
     ) -> Result<(), String> {
         let update = |args: Vec<String>| {
             let mut all = vec![
@@ -984,9 +1000,9 @@ impl Runner {
                     bin: "cargo".into(),
                     cwd: None,
                     env: env.to_vec(),
+                    credentials: credentials.to_vec(),
                     args: all,
                 },
-                !env.is_empty(),
             )
         };
         let Some(package) = &job.package else {
@@ -1032,6 +1048,58 @@ impl Runner {
         }
         Ok(())
     }
+    /// Evict aged and oversized tool-cache partitions, at most once an hour
+    /// per process, without holding the generation up. Lock files outlive the
+    /// partitions they guard.
+    fn prune_caches(&self) {
+        {
+            let mut last = self
+                .cache_pruned
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if last.is_some_and(|ran: std::time::Instant| ran.elapsed() < caches::EVERY) {
+                return;
+            }
+            *last = Some(std::time::Instant::now());
+        }
+        let root = self.cache.join(caches::ROOT);
+        let cap = self.cache_gib.saturating_mul(1 << 30);
+        tokio::task::spawn_blocking(move || {
+            if let Err(error) = caches::prune(&root, cap, std::time::SystemTime::now()) {
+                tracing::warn!(%error, "tool cache pruning failed");
+            }
+        });
+    }
+    /// The tool's persistent cache partition and its environment, held for the
+    /// run. A run's partition is `public` unless it receives registry
+    /// credentials, in which case their scopes name it.
+    async fn use_caches(
+        &self,
+        call: &Invocation,
+    ) -> Result<(Vec<(String, String)>, Option<caches::Hold>), String> {
+        if self.cache_gib == 0 {
+            return Ok((Vec::new(), None));
+        }
+        let Some(tool) = caches::tool(&call.bin) else {
+            return Ok((Vec::new(), None));
+        };
+        let mut scopes = call.credentials.clone();
+        scopes.sort_unstable();
+        scopes.dedup();
+        let name = caches::partition(&scopes);
+        let root = self.cache.join(caches::ROOT);
+        let bin = call.bin.clone();
+        let goproxy = call
+            .env
+            .iter()
+            .find(|(key, _)| key == "GOPROXY")
+            .map(|(_, value)| value.clone())
+            .unwrap_or_else(|| "https://proxy.golang.org,direct".into());
+        tokio::task::spawn_blocking(move || caches::acquire(&root, &name, &tool, &bin, &goproxy))
+            .await
+            .map_err(|e| e.to_string())?
+            .map(|(env, hold)| (env, Some(hold)))
+    }
     async fn tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, String> {
         let mut spec = self.command(driver);
         // A first use installs the tool inside this call, from scratch.
@@ -1055,6 +1123,10 @@ impl Runner {
             spec.complete_output = true;
         }
         for (key, value) in &call.env {
+            spec.env.insert(key.into(), value.into());
+        }
+        let (cache_env, _caches) = self.use_caches(&call).await?;
+        for (key, value) in cache_env {
             spec.env.insert(key.into(), value.into());
         }
         spec.args.push("exec".into());
@@ -1108,13 +1180,9 @@ impl Runner {
     /// Run a tool that may hold registry credentials. When it does, a failure
     /// shows none of its output, which may quote what a private registry
     /// answered: failure reasons reach reports, dashboards and public pages.
-    async fn held_tool(
-        &self,
-        driver: &Path,
-        call: Invocation,
-        held: bool,
-    ) -> Result<Vec<u8>, String> {
+    async fn held_tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, String> {
         let bin = call.bin.clone();
+        let held = !call.credentials.is_empty();
         let result = self.tool(driver, call).await;
         if !held {
             return result;
@@ -1133,6 +1201,9 @@ struct Invocation {
     bin: String,
     cwd: Option<PathBuf>,
     env: Vec<(String, String)>,
+    /// The `Credential::scope()`s of the registry entries this run receives.
+    /// They decide its cache partition and whether a failure shows its output.
+    credentials: Vec<String>,
     args: Vec<String>,
 }
 

@@ -51,16 +51,17 @@ impl Runner {
         // uv reads basic credentials by host from `~/.netrc`, gone when the
         // locks are done, and Poetry by source name; Poetry's HTTP client may
         // read `~/.netrc` too.
-        let (netrc, hosts) = self.netrc();
+        let (netrc, hosts, netrc_entries) = self.netrc();
         let mut _netrc = node::Private::default();
         if !hosts.is_empty() {
             let home = driver.join("home");
             std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
             _netrc.write(&home.join(".netrc"), &netrc)?;
         }
-        let poetry = self.poetry_env(&[std::fs::read_to_string(cwd.join("pyproject.toml"))
+        let sources = [std::fs::read_to_string(cwd.join("pyproject.toml"))
             .map(|text| super::credentials::poetry_sources(&text))
-            .unwrap_or_default()]);
+            .unwrap_or_default()];
+        let (poetry, poetry_entries) = self.poetry_env(&sources);
         for leaf in LOCKS {
             if !cwd.join(leaf).is_file() {
                 continue;
@@ -100,6 +101,7 @@ impl Runner {
                             ("UV_PYTHON_DOWNLOADS".into(), "never".into()),
                             ("UV_NO_PROGRESS".into(), "1".into()),
                         ],
+                        credentials: credentials::scopes(netrc_entries.iter().copied()),
                         args,
                     },
                     !hosts.is_empty(),
@@ -132,6 +134,9 @@ impl Runner {
                         .into_iter()
                         .chain(poetry.iter().cloned())
                         .collect(),
+                        credentials: credentials::scopes(
+                            poetry_entries.iter().chain(netrc_entries.iter()).copied(),
+                        ),
                         args,
                     },
                     !poetry.is_empty() || !hosts.is_empty(),
@@ -145,11 +150,11 @@ impl Runner {
             } else {
                 Pinned::none(root)
             };
-            let (invocation, held) = invocation;
-            self.held_tool(driver, invocation.clone(), held).await?;
+            let (invocation, _) = invocation;
+            self.held_tool(driver, invocation.clone()).await?;
             if !pinned.is_empty() {
                 pinned.restore()?;
-                self.held_tool(driver, invocation, held).await?;
+                self.held_tool(driver, invocation).await?;
             }
             if !cwd.join(leaf).is_file() {
                 return Err(format!("tool did not produce {leaf}"));

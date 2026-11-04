@@ -17,7 +17,17 @@ pub struct Settings {
     pub recheck: Option<String>,
     pub http: Http,
     pub registries: BTreeMap<String, Registry>,
+    pub lockfiles: Lockfiles,
     pub server: Server,
+}
+/// Lockfile tooling settings.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Lockfiles {
+    /// GiB of persistent package caches lockfile tools share between runs; 0
+    /// turns them off.
+    #[serde(rename = "cacheGiB")]
+    pub cache_gib: u64,
 }
 /// A private registry entry. It names where its secret lives, never the secret.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,6 +121,7 @@ impl Default for Settings {
                 go_freshness_secs: 3600,
             },
             registries: BTreeMap::new(),
+            lockfiles: Lockfiles { cache_gib: 20 },
             server: Server {
                 triggers: Triggers {
                     push: true,
@@ -245,6 +256,9 @@ impl Settings {
         self.http_options()
             .validate()
             .map_err(|_| "hostConcurrency needs lowercase hostnames and limits 1..100")?;
+        if self.lockfiles.cache_gib > 1_000_000 {
+            return Err("lockfiles.cacheGiB must be 0..1000000");
+        }
         let server = &self.server;
         if !(1..=1000).contains(&server.batch_size) {
             return Err("batchSize must be 1..1000");
@@ -653,6 +667,11 @@ mod tests {
             Settings::load(&path)
         };
         assert_eq!(load("").unwrap(), Settings::default());
+        assert_eq!(
+            load("lockfiles { cacheGiB = 0 }").unwrap().lockfiles.cache_gib,
+            0
+        );
+        assert!(load("lockfiles { cacheGiB = -1 }").is_err());
         let http = load(
             "http {\n  hostConcurrency { [\"api.github.com\"] = 8 }\n  goFreshnessSecs = 0\n}",
         )
