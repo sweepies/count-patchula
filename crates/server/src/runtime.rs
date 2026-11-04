@@ -306,11 +306,16 @@ trait Batch: Send + Sync + 'static {
 /// What an installation engine was built from: the `http` settings and its
 /// registry credentials.
 type EngineKey = (crate::settings::Http, Vec<patchula_http::Credential>);
+/// An installation's engine and the settings it was built from, once built.
+type Slot = Arc<Mutex<Option<(EngineKey, Engine)>>>;
+
 struct Engines {
     app: Arc<App>,
     transport: Arc<dyn Transport>,
     cache: Cache,
-    engines: Mutex<BTreeMap<u64, (EngineKey, Engine)>>,
+    /// Each installation's engine, behind its own lock: batches of different
+    /// installations run at once, and a remote run waits only for its own.
+    engines: Mutex<BTreeMap<u64, Slot>>,
     recheck: Option<String>,
     bot_login: String,
     /// The server URL from the App's webhook URL, for `advertise`.
@@ -421,8 +426,8 @@ impl Batch for Engines {
             }
             let started = Utc::now();
             let (result, withheld) = {
-                let mut engines = self.engines.lock().await;
-                let engine = self.engine(&mut engines, id, settings)?;
+                let mut slot = self.engine(id, settings).await?;
+                let (_, engine) = slot.as_mut().ok_or(Error("missing batch engine"))?;
                 let result = engine
                     .run(
                         patchula_engine::Options {
@@ -497,22 +502,20 @@ impl Engines {
     /// secret applies without a restart. A change to the `http` settings or to
     /// the installation's credentials replaces the engine, since its clients
     /// are built from them.
-    fn engine<'a>(
+    async fn engine(
         &self,
-        engines: &'a mut BTreeMap<u64, (EngineKey, Engine)>,
         id: u64,
         settings: &Settings,
-    ) -> Result<&'a mut Engine, Error> {
+    ) -> Result<tokio::sync::OwnedMutexGuard<Option<(EngineKey, Engine)>>, Error> {
         let (credentials, failed) = settings.credentials(Some(id));
         for (prefix, reason) in &failed {
             tracing::error!(target: "patchula_server", installation = id, registry = %prefix, reason = %reason,
                 "registry credentials unavailable; its lookups run without them");
         }
         let key = (settings.http.clone(), credentials);
-        if engines.get(&id).is_some_and(|(built, _)| *built != key) {
-            engines.remove(&id);
-        }
-        if let std::collections::btree_map::Entry::Vacant(entry) = engines.entry(id) {
+        let slot = self.engines.lock().await.entry(id).or_default().clone();
+        let mut slot = slot.lock_owned().await;
+        if slot.as_ref().is_none_or(|(built, _)| *built != key) {
             let mut http = settings.http_options();
             http.credentials.clone_from(&key.1);
             let engine = Engine::with_credentials(
@@ -525,9 +528,9 @@ impl Engines {
             )
             .map_err(|_| Error("cannot create batch engine"))?
             .with_advisories();
-            entry.insert((key, engine));
+            *slot = Some((key, engine));
         }
-        let (_, engine) = engines.get_mut(&id).expect("installation engine");
+        let (_, engine) = slot.as_mut().ok_or(Error("missing batch engine"))?;
         engine
             .set_batch_options(
                 settings.concurrency,
@@ -539,7 +542,7 @@ impl Engines {
                 .advertised(self.derived_url.as_deref())
                 .filter(|_| self.signs_in),
         );
-        Ok(engine)
+        Ok(slot)
     }
 }
 impl crate::remote::Runner for Engines {
@@ -555,11 +558,10 @@ impl crate::remote::Runner for Engines {
         Box::pin(async move {
             let started = Utc::now();
             let (report, withheld) = {
-                // The same lock as queued batches, so a remote run never races one.
-                let mut engines = self.engines.lock().await;
-                let engine = self
-                    .engine(&mut engines, installation, settings)
-                    .map_err(|e| e.0)?;
+                // The installation's own lock, so a remote run never races its
+                // queued batches.
+                let mut slot = self.engine(installation, settings).await.map_err(|e| e.0)?;
+                let (_, engine) = slot.as_mut().ok_or("missing batch engine")?;
                 let options = patchula_engine::Options {
                     repositories,
                     ..patchula_engine::Options::default()
@@ -644,6 +646,29 @@ async fn output_report(report: &Report, directory: Option<&std::path::Path>) -> 
     Ok(())
 }
 
+/// `server.workers` queue workers, each claiming one installation's batch at
+/// a time. The first to fail stops them all.
+async fn workers(
+    cache: Cache,
+    settings: Reload,
+    runner: Arc<dyn Batch>,
+    stop: watch::Receiver<bool>,
+) -> Result<(), Error> {
+    let mut running = tokio::task::JoinSet::new();
+    for _ in 0..settings.current().server.workers {
+        running.spawn(worker(
+            cache.clone(),
+            settings.clone(),
+            runner.clone(),
+            stop.clone(),
+        ));
+    }
+    while let Some(result) = running.join_next().await {
+        result.map_err(|_| Error("queue worker stopped unexpectedly"))??;
+    }
+    Ok(())
+}
+
 async fn worker(
     cache: Cache,
     settings: Reload,
@@ -718,7 +743,7 @@ async fn run_until(
     stopped: watch::Receiver<bool>,
 ) -> Result<(), Error> {
     let cache = webhook.cache.clone();
-    let mut worker = tokio::spawn(worker(
+    let mut worker = tokio::spawn(workers(
         cache.clone(),
         webhook.settings.clone(),
         runner,

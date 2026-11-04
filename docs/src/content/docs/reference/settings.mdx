@@ -84,6 +84,7 @@ source.
 | `sweepTimezone` | `String` | `"UTC"` | IANA timezone for the sweep |
 | `batchSize` | `Int` | `32` | queue entries per batch, 1 to 1000 |
 | `coalescingMs` | `Int` | `1000` | how long the first event waits for related events, 0 to 60000 |
+| `workers` | `Int` | `4` | installations whose batches run at once, 1 to 64, each one batch at a time; read at start. Each runs its own lockfile tools, so lower it on a small host |
 | `reportDirectory` | `String?` | `null` | write each report to a file here instead of logging it |
 | `allowedInstallations` | `Listing<Int>` | any | installation IDs to serve |
 | `allowedRepositories` | `Listing<String>` | any | `owner/repo` names to serve, case-insensitive |

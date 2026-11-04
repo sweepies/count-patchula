@@ -78,6 +78,8 @@ pub struct Server {
     pub sweep_timezone: String,
     pub batch_size: usize,
     pub coalescing_ms: u64,
+    /// Installations whose batches run at once, each one batch at a time.
+    pub workers: usize,
     pub report_directory: Option<PathBuf>,
     pub allowed_installations: Vec<u64>,
     pub allowed_repositories: Vec<String>,
@@ -122,6 +124,7 @@ impl Default for Settings {
                 sweep_timezone: "UTC".into(),
                 batch_size: 32,
                 coalescing_ms: 1000,
+                workers: 4,
                 report_directory: None,
                 allowed_installations: Vec::new(),
                 allowed_repositories: Vec::new(),
@@ -248,6 +251,9 @@ impl Settings {
         }
         if server.coalescing_ms > 60_000 {
             return Err("coalescingMs must be 0..60000");
+        }
+        if !(1..=64).contains(&server.workers) {
+            return Err("workers must be 1..64");
         }
         if let Some(cron) = &server.sweep_cron {
             patchula_config::schedule(cron, true)
