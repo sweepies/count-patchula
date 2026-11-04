@@ -54,7 +54,10 @@ jobs:
       - name: Check the tag matches the crate version
         if: github.event_name == 'push'
         run: |
-          version=$(cargo metadata --no-deps --format-version 1 | mise exec jq@1.8.2 -- jq -r '.packages[] | select(.name == "patchula-cli") | .version')
+          # `path+file:///…/crates/cli#patchula-cli@0.7.0`: the version is the
+          # last field.
+          id=$(cargo pkgid --locked -p patchula-cli)
+          version=${id##*[@#]}
           if [ "$GITHUB_REF_NAME" != "v$version" ]; then
             echo "Tag $GITHUB_REF_NAME does not match patchula-cli $version" >&2
             exit 1
