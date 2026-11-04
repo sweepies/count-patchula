@@ -244,9 +244,12 @@ and Yarn every package those repositories depend on too: these tools run
 without lifecycle scripts, but they can still prepare a git dependency by
 running its build scripts, and they run unsandboxed, so that code can read the
 credential. Cargo, Composer (with scripts and plugins off), Go and Terraform
-run no package code while they lock. In the server, limit an entry with
-`tools = true` to the installations you trust with it through
-`allowedInstallations`; the CLI gives it to every repository it runs on.
+run no package code while they lock. In the server, `allowedInstallations`
+decides which installations' tools are given an entry's credentials; the CLI
+gives them to every repository it runs on. Lockfile tools run unsandboxed as
+the Count's own user, though, so code one of them runs can also read what
+other runs on the same host hold at the time, and the Count's own environment
+and files: `allowedInstallations` does not bound what such code can read.
 
 Each tool gets the credentials in the form it reads, only for its own run:
 
@@ -254,16 +257,18 @@ Each tool gets the credentials in the form it reads, only for its own run:
 | --- | --- | --- | --- |
 | aube, npm, Bun | `//host/path/:_authToken` or `:_auth` in its user configuration | bearer, basic | prefix |
 | Yarn | `npmRegistries` in its user configuration | bearer, basic | the registry URL, exactly |
-| Cargo | `CARGO_REGISTRIES_<NAME>_TOKEN` | bearer, basic | the sparse index URL of each registry `.cargo/config.toml` names |
+| Cargo | `CARGO_REGISTRIES_<NAME>_INDEX` and `_TOKEN` | bearer, basic | the sparse index URL of each registry `.cargo/config.toml` names |
 | Composer | `COMPOSER_AUTH` | bearer, basic | host |
 | Go | `~/.netrc`, with the host in `GOPRIVATE` | basic | host |
 | Terraform | `TF_TOKEN_<host>` | bearer | host |
 
 Files are written with owner-only permissions and removed when the tool
 finishes. Cargo sends the token as the `Authorization` header, so it gets the
-header a lookup sends: `Bearer <token>` or `Basic <base64>`. Cargo reads only
-the `registries` of the repository's `.cargo/config.toml` files, and a
-registry name defined under more than one entry gets no credentials. Go
+header a lookup sends: `Bearer <token>` or `Basic <base64>`. Cargo runs
+outside the repository and reads none of its configuration; it gets each
+registry that the `.cargo/config.toml` files at or above the project define
+under a `tools` entry, by name, index and token, and a name defined more than
+one way gets nothing. Go
 fetches the modules under a credentialed host from the host itself, never
 through the public module proxy or checksum database.
 

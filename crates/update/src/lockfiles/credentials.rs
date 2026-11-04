@@ -70,8 +70,8 @@ impl Runner {
     /// Go's `.netrc` for basic entries, and the hosts it covers, which go to
     /// `GOPRIVATE` so their modules are fetched from the host itself, never
     /// asked of the public module proxy or checksum database. `.netrc`
-    /// separates fields by whitespace, so a user or password holding any is
-    /// left out.
+    /// separates fields by whitespace, and readers differ on quotes,
+    /// backslashes and `#`, so a user or password holding any is left out.
     pub(super) fn go_netrc(&self) -> (String, Vec<String>) {
         let mut netrc = String::new();
         let mut hosts = Vec::new();
@@ -79,10 +79,11 @@ impl Runner {
             let Auth::Basic { username, password } = &entry.auth else {
                 continue;
             };
-            if [username, password]
-                .iter()
-                .any(|field| field.chars().any(char::is_whitespace))
-            {
+            if [username, password].iter().any(|field| {
+                field
+                    .chars()
+                    .any(|c| c.is_whitespace() || matches!(c, '"' | '\'' | '\\' | '#'))
+            }) {
                 continue;
             }
             let host = entry.host().0;
@@ -94,17 +95,17 @@ impl Runner {
         (netrc, hosts)
     }
 
-    /// Cargo's `CARGO_REGISTRIES_<NAME>_TOKEN` variables for the registries
-    /// `.cargo/config.toml` files define, by name and sparse index URL. Cargo
-    /// sends the token as the `Authorization` header, so it is the header a
-    /// lookup sends: `Bearer <token>` or `Basic <base64>`. A name defined
-    /// under more than one entry, or two names Cargo would read from the same
-    /// variable, get nothing.
+    /// Cargo's `CARGO_REGISTRIES_<NAME>_INDEX` and `_TOKEN` variables for
+    /// the registries `.cargo/config.toml` files define, by name and sparse
+    /// index URL, under a tools entry. Cargo sends the token as the
+    /// `Authorization` header, so it is the header a lookup sends: `Bearer
+    /// <token>` or `Basic <base64>`. A name defined more than one way, or two
+    /// names Cargo would read from the same variables, get nothing.
     pub(super) fn cargo_env(
         &self,
         registries: &[BTreeMap<String, String>],
     ) -> Vec<(String, String)> {
-        let mut by_variable: BTreeMap<String, Vec<Option<&Credential>>> = BTreeMap::new();
+        let mut by_variable: BTreeMap<String, Vec<(&str, Option<&Credential>)>> = BTreeMap::new();
         for (name, index) in registries.iter().flatten() {
             let entry = index
                 .strip_prefix("sparse+")
@@ -112,22 +113,30 @@ impl Runner {
                 .filter(|entry| self.registries.contains(entry));
             by_variable
                 .entry(format!(
-                    "CARGO_REGISTRIES_{}_TOKEN",
+                    "CARGO_REGISTRIES_{}",
                     name.to_ascii_uppercase().replace('-', "_")
                 ))
                 .or_default()
-                .push(entry);
+                .push((index, entry));
         }
         by_variable
             .into_iter()
-            .filter_map(|(variable, entries)| {
-                let first = (*entries.first()?)?;
-                if entries.iter().any(|entry| *entry != Some(first)) {
+            .filter_map(|(variable, definitions)| {
+                let (index, entry) = *definitions.first()?;
+                let entry = entry?;
+                if definitions
+                    .iter()
+                    .any(|definition| *definition != (index, Some(entry)))
+                {
                     return None;
                 }
-                let header = first.auth.header()?;
-                Some((variable, header.to_str().ok()?.to_owned()))
+                let header = entry.auth.header()?.to_str().ok()?.to_owned();
+                Some([
+                    (format!("{variable}_INDEX"), index.to_owned()),
+                    (format!("{variable}_TOKEN"), header),
+                ])
             })
+            .flatten()
             .collect()
     }
 }
@@ -147,22 +156,6 @@ pub(super) fn cargo_registries(text: &str) -> BTreeMap<String, String> {
             Some((name.to_owned(), registry.get("index")?.as_str()?.to_owned()))
         })
         .collect()
-}
-
-/// A `.cargo/config.toml` that only defines `registries`: no credential
-/// provider, source replacement, proxy, alias or anything else of the
-/// repository's.
-pub(super) fn cargo_config(registries: &BTreeMap<String, String>) -> String {
-    let mut table = toml_edit::Table::new();
-    table.set_implicit(true);
-    for (name, index) in registries {
-        let mut registry = toml_edit::Table::new();
-        registry.insert("index", toml_edit::value(index.as_str()));
-        table.insert(name, toml_edit::Item::Table(registry));
-    }
-    let mut config = toml_edit::DocumentMut::new();
-    config.insert("registries", toml_edit::Item::Table(table));
-    config.to_string()
 }
 
 #[cfg(test)]
@@ -230,6 +223,8 @@ mod tests {
     fn go_leaves_out_what_netrc_cannot_hold() {
         let runner = runner(vec![
             entry("https://go.acme.dev", basic("ci", "two words")).for_tools(),
+            entry("https://go2.acme.dev", basic("ci", "a#b")).for_tools(),
+            entry("https://go3.acme.dev", basic("ci", "a\"b")).for_tools(),
         ]);
         assert_eq!(runner.go_netrc(), (String::new(), Vec::new()));
     }
@@ -249,18 +244,24 @@ mod tests {
              [registries.basic-one]\nindex = \"sparse+https://basic.acme.dev/\"\n\
              [source.crates-io]\nreplace-with = \"acme\"\n",
         );
+        let env: BTreeMap<_, _> = runner.cargo_env(&[config]).into_iter().collect();
         assert_eq!(
-            runner.cargo_env(&[config]),
-            [
-                (
-                    "CARGO_REGISTRIES_ACME_TOKEN".to_string(),
-                    "Bearer t0ken".to_string()
-                ),
-                (
-                    "CARGO_REGISTRIES_BASIC_ONE_TOKEN".to_string(),
-                    "Basic Y2k6cHc=".to_string()
-                ),
-            ]
+            env,
+            BTreeMap::from(
+                [
+                    (
+                        "CARGO_REGISTRIES_ACME_INDEX",
+                        "sparse+https://crates.acme.dev/index/"
+                    ),
+                    ("CARGO_REGISTRIES_ACME_TOKEN", "Bearer t0ken"),
+                    (
+                        "CARGO_REGISTRIES_BASIC_ONE_INDEX",
+                        "sparse+https://basic.acme.dev/"
+                    ),
+                    ("CARGO_REGISTRIES_BASIC_ONE_TOKEN", "Basic Y2k6cHc="),
+                ]
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+            )
         );
     }
 
@@ -275,6 +276,13 @@ mod tests {
         let nested =
             cargo_registries("[registries.acme]\nindex = \"sparse+https://crates.other.dev/\"\n");
         assert!(runner.cargo_env(&[root.clone(), nested]).is_empty());
+        // The same entry, but two index URLs.
+        let elsewhere = cargo_registries(
+            "[registries.acme]\nindex = \"sparse+https://crates.acme.dev/other/\"\n",
+        );
+        assert!(runner.cargo_env(&[root.clone(), elsewhere]).is_empty());
+        // The same definition twice is one.
+        assert_eq!(runner.cargo_env(&[root.clone(), root.clone()]).len(), 2);
         let dashed = cargo_registries(
             "[registries.a-b]\nindex = \"sparse+https://crates.acme.dev/\"\n[registries.a_b]\nindex = \"sparse+https://crates.other.dev/\"\n",
         );
@@ -282,14 +290,12 @@ mod tests {
     }
 
     #[test]
-    fn cargo_config_keeps_only_registries() {
+    fn cargo_registries_read_tables_and_inline_tables() {
         let registries = cargo_registries(
-            "[registries.acme]\nindex = \"sparse+https://crates.acme.dev/\"\ncredential-provider = \"evil\"\n[build]\nrustc-wrapper = \"evil\"\n",
+            "registries.inline = { index = \"sparse+https://a.dev/\" }\n[registries.acme]\nindex = \"sparse+https://crates.acme.dev/\"\ncredential-provider = \"evil\"\n",
         );
-        let config = cargo_config(&registries);
-        assert!(!config.contains("evil"), "{config}");
-        assert_eq!(cargo_registries(&config), registries);
         assert_eq!(registries["acme"], "sparse+https://crates.acme.dev/");
+        assert_eq!(registries["inline"], "sparse+https://a.dev/");
         assert_eq!(cargo_registries("not toml ["), BTreeMap::new());
     }
 }

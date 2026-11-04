@@ -62,7 +62,7 @@ A `registries` key is an https URL prefix without a user, query or fragment.
 | `secret.file` | `String?` | `null` | file holding the secret; trailing line breaks are dropped |
 | `mirrorOf` | `String?` | `null` | a public registry's https URL prefix this entry [stands in for](/guide/sources/#mirrors) |
 | `allowedInstallations` | `Listing<Int>` | all | server only: installations that may use the entry |
-| `tools` | `Boolean` | `false` | also give the credentials to [lockfile tools](/guide/lockfiles/#isolation) other than Bundler, dotnet, uv and Poetry, trusting every repository that may use the entry, and its npm dependencies, with them; needs `auth`, not for a mirror, no other entry may sit under its prefix, and the prefix cannot hold `=` or `;` |
+| `tools` | `Boolean` | `false` | also give the credentials to the npm-family, Cargo, Composer, Go and Terraform [lockfile tools](/guide/lockfiles/#isolation), trusting every repository that may use the entry, and its npm dependencies, with them; needs `auth`, not for a mirror, no other entry may sit under its prefix, and the prefix cannot hold `=` or `;` |
 
 An entry needs `auth`, `mirrorOf` or both. Set exactly one of `secret.env` and
 `secret.file`. The settings file names where a secret lives, never the secret.

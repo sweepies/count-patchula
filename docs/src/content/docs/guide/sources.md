@@ -202,8 +202,8 @@ OCI and Docker registries, Maven repositories and GitLab, Gitea or Forgejo tags 
 their URL, so a private one works with an entry. npm and Python dependencies
 can name their own [package registry](#package-registries). The other package
 registries still read their public registry, or its mirror. Lockfile tools get
-registry credentials only from entries that set `tools = true`, and Bundler,
-dotnet, uv and Poetry never do; see [lockfiles](/guide/lockfiles/#isolation)
+registry credentials only from entries that set `tools = true`, and only aube,
+npm, Bun, Yarn, Cargo, Composer, Go and Terraform; see [lockfiles](/guide/lockfiles/#isolation)
 for which tools get them and what that trusts.
 
 ### Package registries

@@ -738,43 +738,32 @@ impl Runner {
                     .await?;
                 }
                 Ecosystem::Cargo => {
-                    // Cargo reads the repository's `.cargo/config.toml` files
-                    // for their `registries` alone, and the committed files
-                    // come back afterwards. A link is not followed: its
-                    // registries stay undefined, so Cargo stops on them.
-                    let configs: Vec<_> = baseline
+                    // Cargo runs outside the repository and reads none of its
+                    // configuration. It gets each credentialed registry the
+                    // `.cargo/config.toml` files at or above the project
+                    // define, by name, from the environment.
+                    let registries: Vec<_> = baseline
                         .iter()
-                        .filter(|(path, blob)| cargo_config(path) && blob.mode != "120000")
-                        .map(|(path, blob)| (root.join(path), blob.content.clone()))
+                        .filter(|(path, _)| {
+                            cargo_config(path) && {
+                                let owner = directory_of_cargo_config(path);
+                                owner == directory || under(&directory, owner)
+                            }
+                        })
+                        .map(|(_, blob)| credentials::cargo_registries(&blob.content))
                         .collect();
-                    let mut registries = Vec::new();
-                    for (path, text) in &configs {
-                        let defined = credentials::cargo_registries(text);
-                        std::fs::write(path, credentials::cargo_config(&defined))
-                            .map_err(|e| e.to_string())?;
-                        registries.push(defined);
-                    }
                     let env = self.cargo_env(&registries);
-                    let mut result = Ok(());
                     for job in jobs {
-                        result = self
-                            .cargo_update(
-                                &driver,
-                                &cwd,
-                                &versions["rust"],
-                                job,
-                                plan.maintenance,
-                                &env,
-                            )
-                            .await;
-                        if result.is_err() {
-                            break;
-                        }
+                        self.cargo_update(
+                            &driver,
+                            &cwd,
+                            &versions["rust"],
+                            job,
+                            plan.maintenance,
+                            &env,
+                        )
+                        .await?;
                     }
-                    for (path, text) in &configs {
-                        std::fs::write(path, text).map_err(|e| e.to_string())?;
-                    }
-                    result?;
                 }
                 Ecosystem::Go => {
                     let go = go_version(&cwd, &versions["go"])?;
@@ -1407,7 +1396,6 @@ fn materialized(path: &str) -> bool {
                 | "flake.nix"
                 | "apm.yml"
         )
-        || cargo_config(path)
         || path.ends_with(".go")
         || path.ends_with(".rs")
         || [".csproj", ".fsproj", ".vbproj", ".sln", ".slnx", ".gemspec"]
@@ -1418,12 +1406,15 @@ fn materialized(path: &str) -> bool {
             Some("Directory.Build.targets" | "nuget.config" | "NuGet.Config")
         )
 }
-/// A Cargo configuration file, which the runner only lets Cargo read for its
-/// `registries`.
+/// A Cargo configuration file, read only for its `registries`.
 fn cargo_config(path: &str) -> bool {
     [".cargo/config.toml", ".cargo/config"]
         .iter()
         .any(|leaf| path == *leaf || path.ends_with(&format!("/{leaf}")))
+}
+/// The directory whose `.cargo` holds `path`, a Cargo configuration file.
+fn directory_of_cargo_config(path: &str) -> &str {
+    directory(directory(path))
 }
 fn safe_path(path: &str) -> bool {
     !path.is_empty()

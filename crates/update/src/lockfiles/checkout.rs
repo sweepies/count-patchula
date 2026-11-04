@@ -1,4 +1,4 @@
-use super::{Blob, Plan, Runner, blob_sha, collect, hash, materialized, safe_path};
+use super::{Blob, Plan, Runner, blob_sha, cargo_config, collect, hash, materialized, safe_path};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::{collections::BTreeMap, path::Path};
 
@@ -164,7 +164,10 @@ impl Runner {
         for entry in tree.split(|b| *b == 0).filter(|e| !e.is_empty()) {
             let entry = std::str::from_utf8(entry).map_err(|_| "non UTF-8 repository path")?;
             let (metadata, path) = entry.split_once('\t').ok_or("invalid Git tree entry")?;
-            if !materialized(path) && !plan.contents.contains_key(path) {
+            // Cargo's configuration is read for credentialed registries
+            // only, so it is fetched only when there can be any.
+            let cargo = cargo_config(path) && !self.registries.is_empty();
+            if !materialized(path) && !cargo && !plan.contents.contains_key(path) {
                 continue;
             }
             if !safe_path(path) {
@@ -175,6 +178,10 @@ impl Runner {
             let kind = parts.next().ok_or("missing tree type")?;
             let oid = parts.next().ok_or("missing tree OID")?;
             if !matches!(mode, "100644" | "100755") || kind != "blob" {
+                // A linked Cargo configuration defines no registries.
+                if cargo {
+                    continue;
+                }
                 return Err(format!("unsupported checkout mode for {path}"));
             }
             entries.insert(path.to_owned(), (oid.to_owned(), mode.to_owned()));
