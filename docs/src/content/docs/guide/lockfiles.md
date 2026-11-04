@@ -245,9 +245,9 @@ stops on it. npm, pnpm, aube and Bun see each `.npmrc` with only its
 `registry=` and `@scope:registry=` lines, so a private scope resolves where
 your own installs would, never to the public package of its name.
 
-Install scripts are skipped wherever a tool allows it (npm, aube, Bun, Yarn
-classic, and Composer with plugins off too), because a lockfile needs none of
-them.
+Install scripts are skipped wherever a tool allows it (npm, aube, which also
+writes Yarn Classic locks, Bun, and Composer with plugins off too), because a
+lockfile needs none of them.
 
 Output is kept only when something fails, at most 4 KiB of each stream.
 
@@ -277,8 +277,8 @@ Each tool gets the credentials in the form it reads, only for its own run:
 
 | Tool | Form | Credentials | Matched by |
 | --- | --- | --- | --- |
-| aube, npm, Bun | `//host/path/:_authToken` or `:_auth` in its user configuration | bearer, basic | prefix |
-| Yarn | `npmRegistries` in its user configuration | bearer, basic | the registry URL, exactly |
+| aube (npm, pnpm and Yarn Classic locks), npm, Bun | `//host/path/:_authToken` or `:_auth` in its user configuration | bearer, basic | prefix |
+| Yarn (Berry locks) | `npmRegistries` in its user configuration | bearer, basic | the registry URL, exactly |
 | Cargo | `CARGO_REGISTRIES_<NAME>_INDEX` and `_TOKEN` | bearer, basic | the sparse index URL of each registry `.cargo/config.toml` or `.cargo/config` names |
 | dotnet | `NuGetPackageSourceCredentials_<key>` | basic | the URL of each source a `nuget.config` adds |
 | Poetry | `POETRY_HTTP_BASIC_<NAME>_USERNAME` and `_PASSWORD`, and `~/.netrc` | basic | the URL of each `[[tool.poetry.source]]`; host |
