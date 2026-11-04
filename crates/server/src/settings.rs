@@ -668,7 +668,10 @@ mod tests {
         };
         assert_eq!(load("").unwrap(), Settings::default());
         assert_eq!(
-            load("lockfiles { cacheGiB = 0 }").unwrap().lockfiles.cache_gib,
+            load("lockfiles { cacheGiB = 0 }")
+                .unwrap()
+                .lockfiles
+                .cache_gib,
             0
         );
         assert!(load("lockfiles { cacheGiB = -1 }").is_err());

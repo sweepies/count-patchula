@@ -670,7 +670,8 @@ mod tests {
             assert!(
                 runner
                     .nuget_env(&[feed, nuget_sources(config).unwrap()])
-                    .0.is_empty(),
+                    .0
+                    .is_empty(),
                 "{config}"
             );
         }

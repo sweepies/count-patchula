@@ -121,12 +121,7 @@ fn touch(partition: &Path) -> Result<(), String> {
 /// The environment placing `bin`'s cache inside `partition`, with `lower` the
 /// public partition a private run reads through. `goproxy` is the proxy list
 /// the run would use anyway, after the file proxy.
-fn env(
-    bin: &str,
-    partition: &Path,
-    lower: Option<&Path>,
-    goproxy: &str,
-) -> Vec<(String, String)> {
+fn env(bin: &str, partition: &Path, lower: Option<&Path>, goproxy: &str) -> Vec<(String, String)> {
     let path = |path: &str| partition.join(path).to_string_lossy().into_owned();
     match bin {
         // Cargo keeps credentials out of CARGO_HOME; tokens are env vars.
@@ -162,10 +157,7 @@ fn env(
             if let Some(lower) = lower {
                 env.push((
                     "NUGET_FALLBACK_PACKAGES".into(),
-                    lower
-                        .join("nuget/packages")
-                        .to_string_lossy()
-                        .into_owned(),
+                    lower.join("nuget/packages").to_string_lossy().into_owned(),
                 ));
             }
             env

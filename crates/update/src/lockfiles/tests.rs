@@ -492,10 +492,7 @@ async fn plans_regenerate_lockfiles_side_by_side() {
     // Go's module cache documents concurrent use, so its runs share a
     // partition without serialising: the plans really overlap.
     let files = BTreeMap::from([
-        (
-            "go.mod".into(),
-            "module acme.dev/x\n\ngo 1.21\n".into(),
-        ),
+        ("go.mod".into(), "module acme.dev/x\n\ngo 1.21\n".into()),
         ("go.sum".into(), "{}\n".into()),
     ]);
     let executor = Arc::new(Overlap {
@@ -5750,7 +5747,10 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
     runner.tool(&driver, call("go", Vec::new())).await.unwrap();
     assert_eq!(
         executor.envs.lock().unwrap().last().unwrap()[&std::ffi::OsString::from("GOMODCACHE")],
-        root.join("public/gomod").to_string_lossy().into_owned().as_str()
+        root.join("public/gomod")
+            .to_string_lossy()
+            .into_owned()
+            .as_str()
     );
     // With the registry it does get, npm goes private, named by its scope.
     let (env, _) = runner
@@ -5790,8 +5790,8 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
             .unwrap();
         assert!(env.iter().any(|(k, _)| k == key), "{bin}");
         assert!(
-            env.iter()
-                .all(|(k, v)| v.starts_with(&partition) || matches!(k.as_str(), "GOPROXY" | "NUGET_FALLBACK_PACKAGES")),
+            env.iter().all(|(k, v)| v.starts_with(&partition)
+                || matches!(k.as_str(), "GOPROXY" | "NUGET_FALLBACK_PACKAGES")),
             "{bin}: {env:?}"
         );
         drop(hold);
@@ -5836,9 +5836,10 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
     let mut files = Vec::new();
     names(&root, &mut files);
     assert!(
-        !files
-            .iter()
-            .any(|f| matches!(f.as_str(), ".netrc" | ".npmrc" | "npm-user.cfg" | "auth.json")),
+        !files.iter().any(|f| matches!(
+            f.as_str(),
+            ".netrc" | ".npmrc" | "npm-user.cfg" | "auth.json"
+        )),
         "{files:?}"
     );
 }

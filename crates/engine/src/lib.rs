@@ -266,10 +266,7 @@ impl Engine {
                 .with_nix(std::sync::Arc::new(runner.clone()));
         }
     }
-    pub fn with_lockfile_runner(
-        mut self,
-        mut runner: patchula_update::lockfiles::Runner,
-    ) -> Self {
+    pub fn with_lockfile_runner(mut self, mut runner: patchula_update::lockfiles::Runner) -> Self {
         runner.set_cache_limit(self.lockfile_cache_gib);
         self.lockfiles = Some(runner);
         self.look_up_mise_tools_with_runner();
