@@ -316,6 +316,7 @@ fn credentialed_lookups_leave_only_the_declared_dependency_in_public() {
     let report: Report = serde_json::from_value(json!({"schemaVersion": 5, "repositories": [{
         "repository": "acme/app", "status": "complete", "reason": null,
         "defaultBranch": "main", "commit": "c".repeat(40),
+        "warnings": [format!("digest of {private}:2.0.0: not found"), "a config warning".to_owned()],
         "packageFiles": [{"path": "deploy.yaml",
             "dependencies": [dependency(private, "helm", true), dependency("nginx", "docker", false)]}]}]}))
     .unwrap();
@@ -330,6 +331,8 @@ fn credentialed_lookups_leave_only_the_declared_dependency_in_public() {
     assert!(hidden.updates.is_empty());
     assert!(hidden.metadata.as_ref().unwrap().held_back.is_empty());
     assert_eq!(public, &files[0].dependencies[1]);
+    // A warning that names it could quote what the registry answered.
+    assert_eq!(shown.repositories[0].warnings, ["a config warning"]);
 }
 
 #[tokio::test]

@@ -1293,7 +1293,9 @@ impl Engine {
                 let (result, credentialed) =
                     patchula_http::tracked(sources.registry_digest(&package, &tag)).await;
                 if credentialed {
-                    sent.lock().expect("sent packages").insert(package.clone());
+                    sent.lock()
+                        .expect("sent packages")
+                        .insert(format!("image:{package}"));
                 }
                 let result = result.map_err(Failure::from);
                 self.progress.advance(1);
@@ -1366,7 +1368,9 @@ impl Engine {
                     )
                     .await;
                     if credentialed {
-                        sent.lock().expect("sent packages").insert(package.clone());
+                        sent.lock()
+                            .expect("sent packages")
+                            .insert(format!("image:{package}"));
                     }
                     let result = result.map_err(|e| e.to_string());
                     ((package, digest, platform), result)
@@ -1927,7 +1931,15 @@ impl Engine {
                         image: current_image,
                         credentialed: credentialed
                             .contains(&self.catalog_key(dep, repo.config.as_ref()))
-                            || sent.lock().expect("sent packages").contains(&dep.package),
+                            || sent.lock().expect("sent packages").contains(&format!(
+                                "{}:{}",
+                                if matches!(dep.source, Source::Docker | Source::Oci) {
+                                    "image"
+                                } else {
+                                    "git"
+                                },
+                                dep.package
+                            )),
                     }),
                 };
                 files.entry(dep.file.clone()).or_default().push(value);
@@ -1992,7 +2004,9 @@ impl Engine {
                 let (result, credentialed) =
                     patchula_http::tracked(self.sources.digest(&package, &reference)).await;
                 if credentialed {
-                    sent.lock().expect("sent packages").insert(package.clone());
+                    sent.lock()
+                        .expect("sent packages")
+                        .insert(format!("git:{package}"));
                 }
                 let result = result.map_err(Failure::from);
                 if counted {

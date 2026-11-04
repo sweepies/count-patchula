@@ -122,6 +122,7 @@ when this list is not empty.
 | `image` | Optional. For a pinned image, the current digest's warning state, in the same shape as an update's `image` |
 | `advisories` | Optional. OSV advisories affecting the current version: `id`, `aliases` (CVE IDs among them), `severity`, `summary`, `url` and `fixedIn`, the lowest fixed release above the current one |
 | `stale` | Registry data used past its freshness because the registry was rate-limited, with the time it was fetched |
+| `credentialed` | Optional, `true` when a request made to look the dependency up, read its digests or read its image carried an operator registry's credentials or a registry account's token, directly or through a mirror; such a dependency's lookup data is withheld from the [repository API](/guide/server/#repository-api) |
 
 ## Actions
 

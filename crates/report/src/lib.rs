@@ -721,6 +721,8 @@ pub fn normalize_dependencies(dependencies: Vec<Dependency>) -> Vec<Dependency> 
                 a.advisories.append(&mut b.advisories);
                 a.advisories.sort();
                 a.advisories.dedup();
+                // Either one found with credentials makes the merged one so.
+                a.credentialed |= b.credentialed;
                 if let (Some(a), Some(b)) = (&mut a.lookup, b.lookup) {
                     a.disabled_updates
                         .retain(|kind| b.disabled_updates.contains(kind));
