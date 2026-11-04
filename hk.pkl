@@ -29,7 +29,9 @@ local linters = new Mapping<String, Step> {
   // mise.lock does not record, so a version edit must come with its lock.
   ["mise-lock"] {
     glob = List("mise.toml", "tasks.toml", "mise-tasks/**", "mise.lock")
-    check = "mise lock --dry-run --json | nu --stdin -c 'if ($in | from json | is-not-empty) { error make {msg: \"mise.lock is stale; run mise lock\"} }'"
+    // CI's lint job installs no nu, so the check compares the output as is:
+    // `[]` when nothing would change.
+    check = #"test "$(mise lock --dry-run --json)" = "[]""#
     fix = "mise lock"
   }
   ["pkl-format"] = Builtins.pkl_format
