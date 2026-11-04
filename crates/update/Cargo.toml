@@ -30,6 +30,7 @@ cron = "0.17"
 tokio.workspace = true
 tempfile = "3"
 toml_edit = "0.25.17"
+roxmltree = "0.21.2"
 serde_yaml_ng = "0.10.0"
 globset = "0.4"
 base64 = "0.23"

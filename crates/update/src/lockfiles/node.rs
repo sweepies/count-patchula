@@ -402,8 +402,8 @@ impl Runner {
         // The manifest as planned, before Yarn may rewrite it in its own layout.
         let planned = manifest.clone();
         // Yarn reads registries, cache keys and catalogs from `.yarnrc.yml`, but
-        // its `yarnPath` release and `plugins` are repository code, and `${VAR}`
-        // references need credentials the runner never passes. Run Yarn on a
+        // the scratch tree holds no `.yarn/` for a `yarnPath` release or
+        // `plugins`, and `${VAR}` references name variables the run never has. Run Yarn on a
         // copy without them and restore the committed file afterwards.
         let rc = cwd.join(".yarnrc.yml");
         let committed = std::fs::read_to_string(&rc).ok();
@@ -653,8 +653,8 @@ pub(super) fn npmrc(text: &str) -> String {
         .collect()
 }
 
-/// `.yarnrc.yml` without repository code (`yarnPath`, `plugins`) or `${VAR}`
-/// interpolations, which would fail without the credentials they name.
+/// `.yarnrc.yml` without what the scratch tree lacks: a `yarnPath` release,
+/// `plugins`, and the variables `${VAR}` interpolations name.
 pub(super) fn yarnrc(text: &str) -> Result<String, String> {
     fn clean(value: &mut serde_yaml_ng::Value) {
         if let Some(map) = value.as_mapping_mut() {

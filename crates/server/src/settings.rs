@@ -28,8 +28,7 @@ pub struct Registry {
     pub secret: Option<Secret>,
     pub mirror_of: Option<String>,
     pub allowed_installations: Vec<u64>,
-    /// Whether lockfile tools get the entry's credentials: the npm family,
-    /// Cargo, Composer, Go and Terraform.
+    /// Whether lockfile tools get the entry's credentials.
     #[serde(default)]
     pub tools: bool,
 }
