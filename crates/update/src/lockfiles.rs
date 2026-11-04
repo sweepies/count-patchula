@@ -1,6 +1,7 @@
 //! Real ecosystem tools run before any Git Data mutation, in disposable trees.
 mod apm;
 mod checkout;
+mod credentials;
 mod dotnet;
 mod mise;
 mod nix;
@@ -488,9 +489,11 @@ pub async fn record_refresh(
 #[derive(Clone)]
 pub struct Runner {
     credentials: Option<Arc<dyn patchula_github::Credentials>>,
-    /// Operator registry entries whose credentials lockfile tools that run
-    /// no repository or package code may use.
+    /// Operator registry entries whose credentials lockfile tools may use.
     registries: Vec<patchula_http::Credential>,
+    /// Every operator registry entry, which decides which of `registries`
+    /// a URL or host falls under.
+    entries: Vec<patchula_http::Credential>,
     cache: PathBuf,
     token: String,
     executor: Arc<dyn Executor>,
@@ -526,6 +529,7 @@ impl Runner {
         Self {
             credentials: None,
             registries: Vec::new(),
+            entries: Vec::new(),
             cache,
             token: token.into(),
             executor: Arc::new(SystemExecutor),
@@ -572,9 +576,10 @@ impl Runner {
         self.credentials = Some(credentials);
         self
     }
-    /// Give the npm-family lockfile tools the credentials of the entries that
-    /// allow it (`tools = true`).
+    /// Give lockfile tools the credentials of the entries that allow it
+    /// (`tools = true`), among all of `registries`.
     pub fn with_registries(mut self, registries: &[patchula_http::Credential]) -> Self {
+        self.entries = registries.to_vec();
         self.registries = registries
             .iter()
             .filter(|entry| entry.tools() && entry.auth.sends() && entry.mirror_of().is_none())
@@ -733,22 +738,67 @@ impl Runner {
                     .await?;
                 }
                 Ecosystem::Cargo => {
-                    for job in jobs {
-                        self.cargo_update(&driver, &cwd, &versions["rust"], job, plan.maintenance)
-                            .await?;
+                    // Cargo reads the repository's `.cargo/config.toml` files
+                    // for their `registries` alone, and the committed files
+                    // come back afterwards. A link is not followed: its
+                    // registries stay undefined, so Cargo stops on them.
+                    let configs: Vec<_> = baseline
+                        .iter()
+                        .filter(|(path, blob)| cargo_config(path) && blob.mode != "120000")
+                        .map(|(path, blob)| (root.join(path), blob.content.clone()))
+                        .collect();
+                    let mut registries = Vec::new();
+                    for (path, text) in &configs {
+                        let defined = credentials::cargo_registries(text);
+                        std::fs::write(path, credentials::cargo_config(&defined))
+                            .map_err(|e| e.to_string())?;
+                        registries.push(defined);
                     }
+                    let env = self.cargo_env(&registries);
+                    let mut result = Ok(());
+                    for job in jobs {
+                        result = self
+                            .cargo_update(
+                                &driver,
+                                &cwd,
+                                &versions["rust"],
+                                job,
+                                plan.maintenance,
+                                &env,
+                            )
+                            .await;
+                        if result.is_err() {
+                            break;
+                        }
+                    }
+                    for (path, text) in &configs {
+                        std::fs::write(path, text).map_err(|e| e.to_string())?;
+                    }
+                    result?;
                 }
                 Ecosystem::Go => {
                     let go = go_version(&cwd, &versions["go"])?;
+                    // Credentials for Go and Git in `~/.netrc`, gone when Go
+                    // finishes, and their hosts private to Go.
+                    let (netrc, hosts) = self.go_netrc();
+                    let held = !hosts.is_empty();
+                    let mut _netrc = node::Private::default();
+                    let mut env = Vec::new();
+                    if held {
+                        let home = driver.join("home");
+                        std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
+                        _netrc.write(&home.join(".netrc"), &netrc)?;
+                        env.push(("GOPRIVATE".to_string(), hosts.join(",")));
+                    }
                     for job in jobs {
                         if let Some(package) = &job.package {
-                            self.tool(
+                            self.held_tool(
                                 &driver,
                                 Invocation {
                                     tools: vec![("go".into(), go.clone())],
                                     bin: "go".into(),
                                     cwd: None,
-                                    env: Vec::new(),
+                                    env: env.clone(),
                                     args: vec![
                                         "-C".into(),
                                         cwd.to_string_lossy().into_owned(),
@@ -760,6 +810,7 @@ impl Runner {
                                         ),
                                     ],
                                 },
+                                held,
                             )
                             .await?;
                         }
@@ -774,15 +825,16 @@ impl Runner {
                             "download".into()
                         },
                     ];
-                    self.tool(
+                    self.held_tool(
                         &driver,
                         Invocation {
                             tools: vec![("go".into(), go.clone())],
                             bin: "go".into(),
                             cwd: None,
-                            env: Vec::new(),
+                            env,
                             args,
                         },
+                        held,
                     )
                     .await?;
                 }
@@ -791,19 +843,22 @@ impl Runner {
                         std::fs::remove_file(cwd.join(".terraform.lock.hcl"))
                             .map_err(|e| e.to_string())?;
                     }
-                    self.tool(
+                    let env = self.terraform_env();
+                    let held = !env.is_empty();
+                    self.held_tool(
                         &driver,
                         Invocation {
                             tools: vec![("terraform".into(), versions["terraform"].clone())],
                             bin: "terraform".into(),
                             cwd: None,
-                            env: Vec::new(),
+                            env,
                             args: vec![
                                 format!("-chdir={}", cwd.display()),
                                 "providers".into(),
                                 "lock".into(),
                             ],
                         },
+                        held,
                     )
                     .await?;
                 }
@@ -885,6 +940,7 @@ impl Runner {
         rust: &str,
         job: &Job,
         maintenance: bool,
+        env: &[(String, String)],
     ) -> Result<(), String> {
         let update = |args: Vec<String>| {
             let mut all = vec![
@@ -893,15 +949,16 @@ impl Runner {
                 cwd.join("Cargo.toml").to_string_lossy().into_owned(),
             ];
             all.extend(args);
-            self.tool(
+            self.held_tool(
                 driver,
                 Invocation {
                     tools: vec![("rust".into(), rust.into())],
                     bin: "cargo".into(),
                     cwd: None,
-                    env: Vec::new(),
+                    env: env.to_vec(),
                     args: all,
                 },
+                !env.is_empty(),
             )
         };
         let Some(package) = &job.package else {
@@ -1019,6 +1076,24 @@ impl Runner {
             .map_err(|e| format!("{bin}: {e}"))?;
         self.record_use(&call.tools);
         Ok(output)
+    }
+    /// Run a tool that may hold registry credentials. When it does, a failure
+    /// shows none of its output, which may quote what a private registry
+    /// answered: failure reasons reach reports, dashboards and public pages.
+    async fn held_tool(
+        &self,
+        driver: &Path,
+        call: Invocation,
+        held: bool,
+    ) -> Result<Vec<u8>, String> {
+        let bin = call.bin.clone();
+        let result = self.tool(driver, call).await;
+        if !held {
+            return result;
+        }
+        result.map_err(|_| {
+            format!("{bin} failed while it held registry credentials, so its output is not shown")
+        })
     }
 }
 
@@ -1332,6 +1407,7 @@ fn materialized(path: &str) -> bool {
                 | "flake.nix"
                 | "apm.yml"
         )
+        || cargo_config(path)
         || path.ends_with(".go")
         || path.ends_with(".rs")
         || [".csproj", ".fsproj", ".vbproj", ".sln", ".slnx", ".gemspec"]
@@ -1341,6 +1417,13 @@ fn materialized(path: &str) -> bool {
             path.rsplit('/').next(),
             Some("Directory.Build.targets" | "nuget.config" | "NuGet.Config")
         )
+}
+/// A Cargo configuration file, which the runner only lets Cargo read for its
+/// `registries`.
+fn cargo_config(path: &str) -> bool {
+    [".cargo/config.toml", ".cargo/config"]
+        .iter()
+        .any(|leaf| path == *leaf || path.ends_with(&format!("/{leaf}")))
 }
 fn safe_path(path: &str) -> bool {
     !path.is_empty()

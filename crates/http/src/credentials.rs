@@ -113,7 +113,7 @@ pub struct Credential {
     pub auth: Auth,
     /// The public registry prefix this entry stands in for, if it is a mirror.
     mirror_of: Option<(String, Url)>,
-    /// Whether npm-family lockfile tools get these credentials too.
+    /// Whether lockfile tools get these credentials too.
     tools: bool,
 }
 
@@ -148,7 +148,7 @@ impl Credential {
             tools: false,
         })
     }
-    /// Let npm-family lockfile tools use the entry's credentials too.
+    /// Let lockfile tools use the entry's credentials too.
     pub fn for_tools(mut self) -> Self {
         self.tools = true;
         self
@@ -189,6 +189,10 @@ impl Credential {
     pub fn encloses(&self, other: &Credential) -> bool {
         covers(&self.url, &other.url)
     }
+    /// The host the prefix names, and its port when it is not https's own.
+    pub fn host(&self) -> (&str, Option<u16>) {
+        (self.url.host_str().unwrap_or_default(), self.url.port())
+    }
     fn len(&self) -> usize {
         self.url.path().trim_end_matches('/').len()
     }
@@ -205,6 +209,12 @@ pub(crate) fn mirrored(credentials: &[Credential], url: &Url) -> Option<Url> {
         .max_by_key(|(_, (_, public))| public.path().trim_end_matches('/').len())?;
     let rest = url.as_str().strip_prefix(public.0.as_str())?;
     Url::parse(&format!("{}{rest}", entry.prefix)).ok()
+}
+
+/// The entry a request for `url` would use: the one with the longest
+/// matching prefix, mirrors and entries without credentials included.
+pub fn entry_for<'a>(credentials: &'a [Credential], url: &str) -> Option<&'a Credential> {
+    matching(credentials, &Url::parse(url).ok()?)
 }
 
 /// The entry for `url`: the one with the longest matching prefix.
