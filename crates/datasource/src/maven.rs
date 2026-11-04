@@ -64,13 +64,6 @@ fn base(package: &str) -> Result<String> {
     ))
 }
 
-/// The URL a Maven lookup of `package` reads.
-pub(crate) fn metadata_url(package: &str) -> Option<String> {
-    base(package)
-        .ok()
-        .map(|base| format!("{base}/maven-metadata.xml"))
-}
-
 impl Client {
     pub(crate) async fn maven(&self, package: &str) -> Result<Catalog> {
         let (_, _, artifact) = coordinates(package)?;

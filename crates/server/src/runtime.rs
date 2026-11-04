@@ -433,10 +433,7 @@ impl Batch for Engines {
                         false,
                     )
                     .await;
-                let withheld = result
-                    .as_ref()
-                    .ok()
-                    .map(|report| crate::public::withheld(report, |id| engine.credentialed(id)));
+                let withheld = result.as_ref().ok().map(crate::public::withheld);
                 (result, withheld)
             };
             if let (Ok(report), Some(withheld)) = (&result, withheld) {
@@ -573,7 +570,7 @@ impl crate::remote::Runner for Engines {
                     Mode::Run => engine.run(options, false, false).await,
                 }
                 .map_err(|_| "the run failed on the server")?;
-                let withheld = crate::public::withheld(&report, |id| engine.credentialed(id));
+                let withheld = crate::public::withheld(&report);
                 (report, withheld)
             };
             if mode == Mode::Run {

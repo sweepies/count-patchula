@@ -302,12 +302,13 @@ async fn settings_hide_repositories_or_the_whole_api() {
 
 #[test]
 fn credentialed_lookups_leave_only_the_declared_dependency_in_public() {
-    let dependency = |package: &str, source: &str| {
+    let dependency = |package: &str, source: &str, credentialed: bool| {
         json!({"manager": "regex", "name": package, "package": package,
             "current": {"value": "1.0.0", "version": "1.0.0", "digest": null},
             "updates": [{"newValue": "1.1.0", "newVersion": "1.1.0", "newDigest": null,
                 "updateType": "minor", "group": null}],
             "metadata": {"source": source, "kinds": [], "locations": [],
+                "credentialed": credentialed,
                 "heldBack": [{"version": "2.0.0", "updateType": "major",
                     "publishedAt": "2026-11-01T00:00:00Z", "eligibleAt": "2026-11-02T00:00:00Z"}]}})
     };
@@ -316,11 +317,9 @@ fn credentialed_lookups_leave_only_the_declared_dependency_in_public() {
         "repository": "acme/app", "status": "complete", "reason": null,
         "defaultBranch": "main", "commit": "c".repeat(40),
         "packageFiles": [{"path": "deploy.yaml",
-            "dependencies": [dependency(private, "helm"), dependency("nginx", "docker")]}]}]}))
+            "dependencies": [dependency(private, "helm", true), dependency("nginx", "docker", false)]}]}]}))
     .unwrap();
-    let shown = withheld(&report, |id| {
-        id.source == patchula_config::Source::Helm && id.name == private
-    });
+    let shown = withheld(&report);
     let files = &report.repositories[0].package_files;
     let [hidden, public] = &shown.repositories[0].package_files[0].dependencies[..] else {
         panic!("two dependencies")
@@ -343,7 +342,7 @@ async fn only_a_private_repository_is_stored_without_what_credentials_found() {
                 "current": {"value": "1.0.0", "version": "1.0.0", "digest": null},
                 "updates": [{"newValue": "1.1.0", "newVersion": "1.1.0", "newDigest": null,
                     "updateType": "minor", "group": null}],
-                "metadata": {"source": "helm", "kinds": [], "locations": []}}]}]})
+                "metadata": {"source": "helm", "kinds": [], "locations": [], "credentialed": true}}]}]})
     };
     let report: Report = serde_json::from_value(json!({"schemaVersion": 5,
         "repositories": [repository("acme/app"), repository("acme/secret")]}))
@@ -369,9 +368,7 @@ async fn only_a_private_repository_is_stored_without_what_credentials_found() {
         1,
         &Recorded {
             report: &report,
-            withheld: withheld(&report, |id| {
-                id.source == patchula_config::Source::Helm && id.name == chart
-            }),
+            withheld: withheld(&report),
         },
         Utc::now(),
         &|_: String| Box::pin(async { false }),

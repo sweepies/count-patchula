@@ -8,6 +8,9 @@ use patchula_report::CatalogEvidence;
 struct Saved {
     fetched_at: i64,
     catalog: Catalog,
+    /// Whether a request made for it carried credentials.
+    #[serde(default)]
+    credentialed: bool,
 }
 pub(super) type Evidence = BTreeMap<LookupKey, CatalogEvidence>;
 
@@ -36,9 +39,10 @@ impl Engine {
         force: &BTreeSet<LookupKey>,
         sources: &Sources,
         now: DateTime<Utc>,
-    ) -> Result<(Catalogs, Evidence)> {
+    ) -> Result<(Catalogs, Evidence, BTreeSet<LookupKey>)> {
         let mut results = Catalogs::new();
         let mut evidence = Evidence::new();
+        let mut credentialed = BTreeSet::new();
         let mut ordinary = BTreeSet::new();
         let mut forced = BTreeSet::new();
         let cached = stream::iter(keys)
@@ -72,6 +76,9 @@ impl Engine {
                 let fetched_at = DateTime::from_timestamp_millis(saved.fetched_at)
                     .ok_or_else(|| Error::Invalid("invalid catalog timestamp".into()))?;
                 self.progress.advance(1);
+                if saved.credentialed {
+                    credentialed.insert(key.clone());
+                }
                 results.insert(key.clone(), Ok(saved.catalog));
                 evidence.insert(
                     key,
@@ -87,11 +94,13 @@ impl Engine {
             }
         }
         let fresh = sources.revalidating();
-        let (mut fetched, forced) = tokio::join!(
+        let ((mut fetched, sent), (forced, sent_forced)) = tokio::join!(
             self.catalogs(ordinary, sources),
             self.catalogs(forced, &fresh)
         );
         fetched.extend(forced);
+        credentialed.extend(sent);
+        credentialed.extend(sent_forced);
         for (key, result) in &fetched {
             if let Ok(catalog) = result {
                 // Quota fallbacks may expose an older registry snapshot. Never
@@ -114,13 +123,14 @@ impl Engine {
                         &serde_json::to_vec(&Saved {
                             fetched_at: now.timestamp_millis(),
                             catalog: catalog.clone(),
+                            credentialed: credentialed.contains(key),
                         })?,
                     )
                     .await?;
             }
         }
         results.extend(fetched);
-        Ok((results, evidence))
+        Ok((results, evidence, credentialed))
     }
 }
 

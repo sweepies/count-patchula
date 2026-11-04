@@ -310,6 +310,11 @@ pub struct DependencyMetadata {
     /// what a rebuild fixes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<ImageCheck>,
+    /// Whether a request made to look it up carried an operator entry's
+    /// credentials or a registry account's token, so that what was found
+    /// may be private.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub credentialed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

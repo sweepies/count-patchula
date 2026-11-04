@@ -291,6 +291,7 @@ impl Cached {
         if let Some(value) =
             matching(&self.0.options.credentials, &url).and_then(|entry| entry.auth.header())
         {
+            crate::tracked::sent();
             headers.insert(header::AUTHORIZATION, value);
         }
         if let Some(body) = body {
@@ -401,6 +402,7 @@ impl Cached {
         let trace = RequestTrace::new("GET", &url);
         let mut request = Request::new(Method::GET, url.clone());
         if let Some((username, password)) = credentials {
+            crate::tracked::sent();
             use base64::Engine;
             let encoded =
                 base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"));
@@ -526,6 +528,13 @@ impl Cached {
             key = key.representation(format);
         }
         let credential = matching(&self.0.options.credentials, &url).cloned();
+        // Whether the answer comes from the network or the cache, whose
+        // entries are kept per credential, it is one these credentials read.
+        if credential.as_ref().is_some_and(|entry| entry.auth.sends())
+            || registry.flatten().is_some_and(|bearer| bearer.account)
+        {
+            crate::tracked::sent();
+        }
         let scope = credential.as_ref().map(Credential::scope);
         if let Some(id) = scope {
             key = key.credential(id);

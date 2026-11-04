@@ -191,43 +191,6 @@ impl Client {
             .cloned()
             .unwrap_or_default()
     }
-    /// Whether looking up `package` reads a registry with an operator entry's
-    /// credentials, so that what it finds may be private. Only sources that
-    /// carry their registry's URL can reach one.
-    pub fn credentialed(&self, id: &PackageId) -> bool {
-        let (source, registry, package) = (id.source, id.registry.as_deref(), id.name.as_str());
-        let url = match source {
-            Source::Npm => Some(npm_url(registry, package)),
-            Source::Pypi => {
-                registries::normalize_python(package)
-                    .ok()
-                    .map(|package| match registry {
-                        Some(index) => format!("{}/{package}/", index.trim_end_matches('/')),
-                        None => format!("https://pypi.org/pypi/{package}/json"),
-                    })
-            }
-            Source::Docker | Source::Oci => docker::identity(package)
-                .ok()
-                .map(|(host, path)| format!("https://{host}/v2/{path}/tags/list")),
-            Source::Helm => package
-                .rsplit_once('|')
-                .map(|(repo, _)| format!("{}/index.yaml", repo.trim_end_matches('/'))),
-            Source::Maven => maven::metadata_url(package),
-            Source::ForgeTags => forge::tags_url(package),
-            _ => None,
-        };
-        // Container registry reads are never mirrored; other reads are, so a
-        // public URL behind a credentialed mirror counts.
-        let mirrored = !matches!(source, Source::Docker | Source::Oci);
-        url.and_then(|url| {
-            if mirrored {
-                self.http.read_credential(&url)
-            } else {
-                self.http.credential(&url)
-            }
-        })
-        .is_some_and(|entry| entry.auth.sends())
-    }
     /// The versions of `package`, from `registry` when it is given: an https
     /// URL standing in for the source's public registry. npm and PyPI take one;
     /// an ambiguous or unusable registry fails without a request.
