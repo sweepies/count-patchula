@@ -7,6 +7,9 @@ pub(super) fn documents(files: &Files) -> Result<BTreeMap<&str, Document<&str>>,
     files
         .iter()
         .filter(|(p, _)| p.ends_with("Cargo.toml") || p.ends_with("Cargo.lock"))
+        // One the Count could not read fails its crates' lookups instead;
+        // see `replaced`.
+        .filter(|(_, t)| t.as_str() != crate::UNREADABLE_SETTINGS)
         .map(|(p, t)| {
             Ok((
                 p.as_str(),
@@ -24,7 +27,9 @@ pub(super) fn extract(
     if !path.ends_with("Cargo.toml") {
         return Ok(Vec::new());
     }
-    let doc = files.get(path).expect("selected manifest parsed once");
+    let Some(doc) = files.get(path) else {
+        return Ok(Vec::new());
+    };
     let base = path.strip_suffix("Cargo.toml").expect("manifest suffix");
     let mut workspace = BTreeMap::new();
     // The nearest ancestor workspace supplies inherited declarations. Their
@@ -366,48 +371,6 @@ fn configs<'a>(files: &'a Files, path: &str) -> Vec<(&'a str, Result<toml_edit::
         .collect()
 }
 
-/// The crates the manifest at `path` takes from another registry through a
-/// `[patch.crates-io]` or `[replace]` entry, in the manifest, its
-/// workspace's or an applying configuration, each with why. A patch from
-/// git or a path keeps crates.io's crate as the one it stands for.
-pub(crate) fn patched(files: &Files, path: &str) -> BTreeMap<String, String> {
-    let dir = &path[..path.rfind('/').map_or(0, |i| i + 1)];
-    let root = workspace_root(files, dir);
-    let mut documents: Vec<(&str, toml_edit::DocumentMut)> = configs(files, path)
-        .into_iter()
-        .filter_map(|(config, document)| Some((config, document.ok()?)))
-        .collect();
-    for manifest in [format!("{dir}Cargo.toml"), format!("{root}Cargo.toml")] {
-        if let Some((name, text)) = files.get_key_value(&manifest)
-            && let Ok(document) = text.parse::<toml_edit::DocumentMut>()
-        {
-            documents.push((name.as_str(), document));
-        }
-    }
-    let mut out = BTreeMap::new();
-    for (file, document) in &documents {
-        let patches = document
-            .get("patch")
-            .and_then(|p| p.get("crates-io"))
-            .and_then(Item::as_table_like);
-        let replaces = document.get("replace").and_then(Item::as_table_like);
-        for (key, entry) in patches.into_iter().chain(replaces).flat_map(|t| t.iter()) {
-            let elsewhere =
-                entry.get("registry").is_some() || entry.get("registry-index").is_some();
-            if elsewhere {
-                // `[replace]` keys are `name:version`.
-                let name = key.split(':').next().unwrap_or(key);
-                let entry = entry.get("package").and_then(Item::as_str).unwrap_or(name);
-                out.insert(
-                    entry.to_owned(),
-                    format!("a patch in {file} from another registry"),
-                );
-            }
-        }
-    }
-    out
-}
-
 /// Why the crates.io lookups of the manifest or lockfile at `path` cannot be
 /// taken to be crates.io's: a Cargo configuration in its folder or above
 /// that replaces crates.io with another source, or one the Count cannot
@@ -418,12 +381,57 @@ pub(crate) fn patched(files: &Files, path: &str) -> BTreeMap<String, String> {
 /// Every definition of a source in any configuration that applies counts,
 /// so one a closer configuration overrides can only make lookups fail.
 pub(crate) fn replaced(files: &Files, path: &str) -> Option<String> {
+    // A patch from another registry, in any manifest at or above the crate's
+    // folder (its workspace's included) or any applying configuration, may
+    // stand for any crate, under any of the names Cargo takes for it.
+    let dir = &path[..path.rfind('/').map_or(0, |i| i + 1)];
+    let mut manifests = Vec::new();
+    let mut folder = dir;
+    loop {
+        if let Some((name, text)) = files.get_key_value(&format!("{folder}Cargo.toml")) {
+            let document = (text.as_str() != crate::UNREADABLE_SETTINGS)
+                .then(|| text.parse::<toml_edit::DocumentMut>().ok())
+                .flatten();
+            let Some(document) = document else {
+                return Some(format!("{name}, which the Count cannot read"));
+            };
+            manifests.push((name.as_str(), document));
+        }
+        if folder.is_empty() {
+            break;
+        }
+        let parent = folder.trim_end_matches('/');
+        folder = &parent[..parent.rfind('/').map_or(0, |i| i + 1)];
+    }
     let mut sources: Vec<(String, toml_edit::Table)> = Vec::new();
-    for (config, document) in configs(files, path) {
-        let unread = || Some(format!("{config}, which the Count cannot read"));
+    let configs = configs(files, path);
+    let mut documents = Vec::new();
+    for (config, document) in configs {
         let Ok(document) = document else {
-            return unread();
+            return Some(format!("{config}, which the Count cannot read"));
         };
+        documents.push((config, document));
+    }
+    for (file, document) in manifests.iter().chain(&documents) {
+        let elsewhere = |entries: Option<&dyn toml_edit::TableLike>| {
+            entries.is_some_and(|entries| {
+                entries.iter().any(|(_, entry)| {
+                    entry.get("registry").is_some() || entry.get("registry-index").is_some()
+                })
+            })
+        };
+        let patches = document.get("patch").and_then(Item::as_table_like);
+        let patched = patches.is_some_and(|patches| {
+            patches
+                .iter()
+                .any(|(_, source)| elsewhere(source.as_table_like()))
+        });
+        if patched || elsewhere(document.get("replace").and_then(Item::as_table_like)) {
+            return Some(format!("a patch in {file} from another registry"));
+        }
+    }
+    for (config, document) in &documents {
+        let unread = || Some(format!("{config}, which the Count cannot read"));
         // A configuration that includes others says things the Count does
         // not read.
         if document.get("include").is_some() {

@@ -3712,8 +3712,30 @@ fn crates_patched_or_included_from_elsewhere_fail_their_lookups() {
     let patched = manifest(
         "\n[patch.crates-io]\nserde = { version = \"1.0\", registry = \"acme\" }\nlog = { git = \"https://github.com/acme/log\" }\n",
     );
+    // A patch from another registry can stand for any crate under any
+    // name Cargo takes for it, so every lookup fails; one from git does not.
     assert!(fails(lookup(&[("app/Cargo.toml", &patched)], "serde")));
-    assert_eq!(lookup(&[("app/Cargo.toml", &patched)], "log"), None);
+    assert!(fails(lookup(&[("app/Cargo.toml", &patched)], "log")));
+    let git = manifest("\n[patch.crates-io]\nlog = { git = \"https://github.com/acme/log\" }\n");
+    assert_eq!(lookup(&[("app/Cargo.toml", &git)], "serde"), None);
+    let by_url = manifest(
+        "\n[patch.\"https://github.com/rust-lang/crates.io-index\"]\nserde_json = { version = \"1.0\", registry = \"acme\" }\n",
+    );
+    assert!(fails(lookup(&[("app/Cargo.toml", &by_url)], "serde")));
+    // So does one in the workspace's root manifest.
+    let root = [
+        (
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"app\"]\n\n[patch.crates-io]\nserde = { version = \"1.0\", registry-index = \"https://crates.acme.dev/index\" }\n",
+        ),
+        ("app/Cargo.toml", git.as_str()),
+    ];
+    assert!(fails(lookup(&root, "serde")));
+    let unreadable = [
+        ("Cargo.toml", patchula_manager::UNREADABLE_SETTINGS),
+        ("app/Cargo.toml", git.as_str()),
+    ];
+    assert!(fails(lookup(&unreadable, "serde")));
     let plain = manifest("");
     let include = [
         ("app/Cargo.toml", plain.as_str()),

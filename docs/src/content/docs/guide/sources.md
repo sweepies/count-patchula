@@ -260,9 +260,11 @@ dependency's `registry`:
   `directory` source, as `cargo vendor` sets up, keeps crates.io's crates
   and is fine. Cargo reads configuration from wherever it runs, so one
   anywhere in the crate's workspace counts. A configuration the Count
-  cannot read, or one that includes others, fails them too, and a crate a
-  `[patch.crates-io]` or `[replace]` entry takes from another registry
-  fails its lookup.
+  cannot read, or one that includes others, fails them too, and so does
+  a `[patch]` or `[replace]` entry taking a crate from another registry,
+  in the crate's manifest, any manifest above it or an applying
+  configuration, since it can stand for any crate under any name Cargo
+  takes for it.
 - Maven and Gradle artifacts come from Maven Central (or Google's Maven
   repository for Android groups, and the Gradle Plugin Portal for plugins)
   only when no build file in the repository could take them from anywhere

@@ -283,14 +283,36 @@ impl Scanner {
             } else {
                 std::collections::BTreeSet::new()
             };
+        // The manifests above a crate's, which can patch it as its
+        // workspace, whatever `exclude` leaves out.
+        let ancestors: std::collections::BTreeSet<String> =
+            if self.config.managers.contains(&Manager::Cargo) {
+                files
+                    .keys()
+                    .filter(|p| p.ends_with("Cargo.toml") || p.ends_with("Cargo.lock"))
+                    .flat_map(|p| {
+                        let mut out = Vec::new();
+                        let mut dir = &p[..p.rfind('/').map_or(0, |i| i + 1)];
+                        while !dir.is_empty() {
+                            let parent = dir.trim_end_matches('/');
+                            dir = &parent[..parent.rfind('/').map_or(0, |i| i + 1)];
+                            out.push(format!("{dir}Cargo.toml"));
+                        }
+                        out
+                    })
+                    .collect()
+            } else {
+                std::collections::BTreeSet::new()
+            };
         paths
             .into_iter()
             .filter(|path| {
                 !files.contains_key(*path)
-                    && (gradle::logic_source(path)
-                        && included
-                            .iter()
-                            .any(|folder| path.starts_with(folder.as_str()))
+                    && (ancestors.contains(*path)
+                        || gradle::logic_source(path)
+                            && included
+                                .iter()
+                                .any(|folder| path.starts_with(folder.as_str()))
                         || referenced.contains(*path)
                         || applied.iter().any(|script| script == path))
             })
@@ -585,12 +607,6 @@ impl Scanner {
                             dep.registry = origins::Named::Unusable(reason.clone()).recorded();
                         }
                     }
-                    let patched = cargo::patched(files, path);
-                    for dep in deps.iter_mut().filter(|d| d.source == Source::Crates) {
-                        if let Some(reason) = patched.get(&dep.package) {
-                            dep.registry = origins::Named::Unusable(reason.clone()).recorded();
-                        }
-                    }
                     deps
                 })
             } else if self.selected(Manager::Dockerfile, path) {
@@ -683,9 +699,17 @@ impl Scanner {
         }
         self.maven_repositories(files, &mut result.dependencies);
         result.locked = locked::cargo(files, &cargo, &result.dependencies);
-        for locked in &mut result.locked {
-            if let Some(reason) = cargo::replaced(files, &locked.file) {
-                locked.registry = Some(reason);
+        let mut replaced = BTreeMap::new();
+        for locked in result
+            .locked
+            .iter_mut()
+            .filter(|l| l.manager == Manager::Cargo)
+        {
+            let reason = replaced
+                .entry(locked.file.clone())
+                .or_insert_with(|| cargo::replaced(files, &locked.file));
+            if let Some(reason) = reason {
+                locked.registry = Some(reason.clone());
             }
         }
         let npm = node == Manager::Npm && self.config.managers.contains(&Manager::Npm);
@@ -864,6 +888,7 @@ pub fn registry_settings(path: &str) -> bool {
         || maven::repository_file(path)
         || gradle::build_logic(path)
         || cargo::config_file(path)
+        || path.rsplit('/').next() == Some("Cargo.toml")
 }
 
 /// A file that can name a Python package index.
