@@ -5739,10 +5739,13 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
     let (env, _) = runner.use_caches(&call("go", Vec::new())).await.unwrap();
     assert_eq!(
         env,
-        [(
-            "GOMODCACHE".into(),
-            root.join("public/gomod").to_string_lossy().into_owned()
-        )]
+        [
+            (
+                "GOMODCACHE".into(),
+                root.join("public/gomod").to_string_lossy().into_owned()
+            ),
+            ("GOFLAGS".into(), "-modcacherw".into()),
+        ]
     );
     runner.tool(&driver, call("go", Vec::new())).await.unwrap();
     assert_eq!(
@@ -5769,8 +5772,8 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
     );
     assert!(!partition.contains("secret"));
     // Every cacheable tool's environment lands inside the partition it was
-    // given, and private Go and NuGet runs read the public partition as a
-    // read-only lower layer.
+    // given; a private run never touches `public` — there is no read-only
+    // lower layer.
     for (bin, key) in [
         ("cargo", "CARGO_HOME"),
         ("go", "GOMODCACHE"),
@@ -5790,8 +5793,8 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
             .unwrap();
         assert!(env.iter().any(|(k, _)| k == key), "{bin}");
         assert!(
-            env.iter().all(|(k, v)| v.starts_with(&partition)
-                || matches!(k.as_str(), "GOPROXY" | "NUGET_FALLBACK_PACKAGES")),
+            env.iter()
+                .all(|(k, v)| v.starts_with(&partition) || k == "GOFLAGS"),
             "{bin}: {env:?}"
         );
         drop(hold);
@@ -5800,26 +5803,30 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
         .use_caches(&call("go", credentials::scopes([npm.clone()].iter())))
         .await
         .unwrap();
+    assert!(
+        !go.iter().any(|(k, _)| k == "GOPROXY"),
+        "no read-only file:// proxy: {go:?}"
+    );
+    // `-modcacherw` keeps the module cache removable, merged with any
+    // GOFLAGS the call already had.
     assert_eq!(
-        go.iter().find(|(k, _)| k == "GOPROXY").unwrap().1,
-        format!(
-            "file://{},https://proxy.golang.org,direct",
-            root.join("public/gomod/cache/download").display()
-        )
+        go.iter().find(|(k, _)| k == "GOFLAGS").unwrap().1,
+        "-modcacherw"
+    );
+    let mut flagged = call("go", credentials::scopes([npm.clone()].iter()));
+    flagged.env = vec![("GOFLAGS".into(), "-mod=mod".into())];
+    let (go, _) = runner.use_caches(&flagged).await.unwrap();
+    assert_eq!(
+        go.iter().find(|(k, _)| k == "GOFLAGS").unwrap().1,
+        "-mod=mod -modcacherw"
     );
     let (dotnet, _) = runner
         .use_caches(&call("dotnet", credentials::scopes([npm.clone()].iter())))
         .await
         .unwrap();
-    assert_eq!(
-        dotnet
-            .iter()
-            .find(|(k, _)| k == "NUGET_FALLBACK_PACKAGES")
-            .unwrap()
-            .1,
-        root.join("public/nuget/packages")
-            .to_string_lossy()
-            .into_owned()
+    assert!(
+        !dotnet.iter().any(|(k, _)| k == "NUGET_FALLBACK_PACKAGES"),
+        "no shared fallback feed: {dotnet:?}"
     );
     // Credential files stay in the per-run HOME: nothing a run writes under a
     // partition names a credential file.
@@ -5891,4 +5898,122 @@ fn tool_cache_partitions_prune_by_age_size_and_use() {
     assert!(!root.join("public").exists());
     assert!(root.join("private-held").exists());
     assert!(root.join("private-held.lock").exists());
+}
+
+/// A repository that commits its own registry credentials is refused before
+/// any tool runs: the shared public partition must never hold what those
+/// credentials fetched.
+#[tokio::test]
+async fn a_repository_that_commits_credentials_runs_no_tool() {
+    let files = BTreeMap::from([
+        ("package.json".into(), "{}\n".into()),
+        ("bun.lock".into(), "{}\n".into()),
+        (
+            ".npmrc".into(),
+            "//npm.acme.test/:_authToken=t0ken\n".into(),
+        ),
+    ]);
+    let executor = fixture(files.clone(), false, false);
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        .unwrap()
+        .unwrap();
+    runner.prepare(&mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+    let reason = p.action.reason.unwrap();
+    assert!(
+        reason.contains(".npmrc holds a credential in repository config"),
+        "{reason}"
+    );
+    // Only the checkout's git calls ran; no tool did.
+    let calls = executor.calls.lock().unwrap();
+    assert!(
+        recorded(&calls)
+            .iter()
+            .all(|(_, command)| command.first().map(String::as_str) == Some("git")),
+        "{calls:?}"
+    );
+}
+
+/// Eviction removes a partition whose files and directories are read-only,
+/// as an older Go module cache wrote them.
+#[test]
+fn tool_cache_eviction_removes_read_only_partitions() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("tool-caches");
+    let partition = root.join("private-old");
+    let nested = partition.join("gomod/cache/download/acme.dev/x/@v");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(nested.join("list"), "v1.0.0\n").unwrap();
+    let mut read_only = std::fs::metadata(&nested).unwrap().permissions();
+    read_only.set_readonly(true);
+    for path in [&partition, &nested, &nested.join("list")] {
+        std::fs::set_permissions(path, read_only.clone()).unwrap();
+    }
+    let now = std::time::SystemTime::now();
+    caches::prune(&root, 0, now).unwrap();
+    assert!(!partition.exists());
+}
+
+/// A held `tool-caches/prune.lock` skips the prune entirely, so two prunes
+/// never race their size accounting.
+#[test]
+fn a_held_prune_lock_skips_the_prune() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("tool-caches");
+    std::fs::create_dir_all(&root).unwrap();
+    let now = std::time::SystemTime::now();
+    let stale = root.join("private-stale");
+    std::fs::create_dir_all(&stale).unwrap();
+    let used = std::fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(stale.join(".used"))
+        .unwrap();
+    used.set_modified(now - std::time::Duration::from_secs(15 * 86_400))
+        .unwrap();
+    let guard = std::fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(root.join("prune.lock"))
+        .unwrap();
+    guard.try_lock().unwrap();
+    caches::prune(&root, 0, now).unwrap();
+    assert!(stale.exists());
+    drop(guard);
+    caches::prune(&root, 0, now).unwrap();
+    assert!(!stale.exists());
+}
+
+/// Every file type `materialized` puts in a tool's tree has an explicit
+/// credential decision in `patchula_manager::credential_check`: scanned, or
+/// documented as unable to hold credentials. A new type without one fails
+/// here rather than slipping credentials into a tool run.
+#[test]
+fn every_materialized_file_has_a_credential_decision() {
+    let mut names: Vec<String> = WRITABLE_LEAVES
+        .iter()
+        .chain(READ_LEAVES)
+        .map(|leaf| leaf.to_string())
+        .collect();
+    names.push("nuget.config".into());
+    names.push("NuGet.Config".into());
+    names.extend(
+        READ_EXTENSIONS
+            .iter()
+            .map(|extension| format!("file{extension}")),
+    );
+    for name in &names {
+        assert!(materialized(name), "{name} should be materialized");
+        assert!(
+            patchula_manager::credential_check(name).is_some(),
+            "{name} has no credential decision"
+        );
+    }
 }

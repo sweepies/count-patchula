@@ -514,8 +514,6 @@ pub struct Runner {
     nix_install: Arc<tokio::sync::Mutex<()>>,
     /// The persistent tool caches' size cap in GiB; 0 turns them off.
     cache_gib: u64,
-    /// When the tool caches were last pruned by this process.
-    cache_pruned: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
 }
 
 /// The persistent tool caches' default size cap in GiB.
@@ -551,7 +549,6 @@ impl Runner {
             seed: None,
             nix_install: Default::default(),
             cache_gib: DEFAULT_CACHE_GIB,
-            cache_pruned: Default::default(),
         }
     }
     /// Borrow tool versions from this mise data directory, usually the user's
@@ -670,6 +667,23 @@ impl Runner {
         std::fs::create_dir_all(&driver).map_err(|e| e.to_string())?;
         std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
         let (baseline, cargo_configs) = self.checkout(plan, &root, &driver).await?;
+        // Backstop for the engine's refusal: every file the tools can read
+        // was checked before any of them runs, so a committed credential can
+        // never fetch into the shared public cache partition.
+        for (path, text) in baseline
+            .iter()
+            .map(|(path, blob)| (path, blob.content.as_str()))
+            .chain(
+                plan.contents
+                    .iter()
+                    .chain(cargo_configs.iter())
+                    .map(|(path, text)| (path, text.as_str())),
+            )
+        {
+            if let Some(kind) = patchula_manager::committed_credentials(path, text) {
+                return Err(patchula_manager::credential_reason(path, &kind));
+            }
+        }
         for (path, content) in &plan.contents {
             write(&root, path, content)?;
         }
@@ -1049,20 +1063,13 @@ impl Runner {
         Ok(())
     }
     /// Evict aged and oversized tool-cache partitions, at most once an hour
-    /// per process, without holding the generation up. Lock files outlive the
-    /// partitions they guard.
+    /// per cache root per process, without holding the generation up. Lock
+    /// files outlive the partitions they guard.
     fn prune_caches(&self) {
-        {
-            let mut last = self
-                .cache_pruned
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if last.is_some_and(|ran: std::time::Instant| ran.elapsed() < caches::EVERY) {
-                return;
-            }
-            *last = Some(std::time::Instant::now());
-        }
         let root = self.cache.join(caches::ROOT);
+        if !caches::due(&root) {
+            return;
+        }
         let cap = self.cache_gib.saturating_mul(1 << 30);
         tokio::task::spawn_blocking(move || {
             if let Err(error) = caches::prune(&root, cap, std::time::SystemTime::now()) {
@@ -1089,16 +1096,25 @@ impl Runner {
         let name = caches::partition(&scopes);
         let root = self.cache.join(caches::ROOT);
         let bin = call.bin.clone();
-        let goproxy = call
+        // `-modcacherw` keeps the module cache writable for eviction; merge
+        // it with any GOFLAGS the call already set.
+        let goflags = call
             .env
             .iter()
-            .find(|(key, _)| key == "GOPROXY")
-            .map(|(_, value)| value.clone())
-            .unwrap_or_else(|| "https://proxy.golang.org,direct".into());
-        tokio::task::spawn_blocking(move || caches::acquire(&root, &name, &tool, &bin, &goproxy))
-            .await
-            .map_err(|e| e.to_string())?
-            .map(|(env, hold)| (env, Some(hold)))
+            .find(|(key, _)| key == "GOFLAGS")
+            .map(|(_, value)| value.clone());
+        let (mut env, hold) =
+            tokio::task::spawn_blocking(move || caches::acquire(&root, &name, &tool, &bin))
+                .await
+                .map_err(|e| e.to_string())??;
+        if let Some(flags) = goflags.filter(|flags| !flags.is_empty()) {
+            for (key, value) in &mut env {
+                if key == "GOFLAGS" {
+                    *value = format!("{flags} {value}");
+                }
+            }
+        }
+        Ok((env, Some(hold)))
     }
     async fn tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, String> {
         let mut spec = self.command(driver);
@@ -1455,66 +1471,70 @@ fn go_version(cwd: &Path, pinned: &str) -> Result<String, String> {
 fn tool_defaults() -> Result<toml_edit::Document<&'static str>, String> {
     toml_edit::Document::parse(include_str!("lockfiles/defaults.toml")).map_err(|e| e.to_string())
 }
+/// Manifest and lockfile leaf names a tool may modify: `writable`, minus the
+/// `*.tf` extension.
+const WRITABLE_LEAVES: &[&str] = &[
+    "package.json",
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "aube-lock.yaml",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "bun.lock",
+    "Cargo.toml",
+    "Cargo.lock",
+    "go.mod",
+    "go.sum",
+    ".terraform.lock.hcl",
+    "mise.lock",
+    "pyproject.toml",
+    "gradle-wrapper.properties",
+    "packages.lock.json",
+    "Gemfile",
+    "Gemfile.lock",
+    "Directory.Packages.props",
+    "Directory.Build.props",
+    "dotnet-tools.json",
+    "global.json",
+    "uv.lock",
+    "poetry.lock",
+    "composer.json",
+    "composer.lock",
+    "flake.lock",
+    "apm.lock.yaml",
+];
+/// Leaf names tools read but never modify.
+const READ_LEAVES: &[&str] = &[
+    "mise.toml",
+    ".mise.toml",
+    ".tool-versions",
+    "go.work",
+    "go.work.sum",
+    "pnpm-workspace.yaml",
+    ".yarnrc.yml",
+    ".npmrc",
+    ".python-version",
+    "uv.toml",
+    "poetry.toml",
+    "flake.nix",
+    "apm.yml",
+    "Directory.Build.targets",
+];
+/// Extensions of files tools read (and `*.tf`, which they may modify).
+const READ_EXTENSIONS: &[&str] = &[
+    ".tf", ".go", ".rs", ".csproj", ".fsproj", ".vbproj", ".sln", ".slnx", ".gemspec",
+];
 fn writable(path: &str) -> bool {
-    matches!(
-        path.rsplit('/').next().unwrap_or(path),
-        "package.json"
-            | "package-lock.json"
-            | "npm-shrinkwrap.json"
-            | "aube-lock.yaml"
-            | "pnpm-lock.yaml"
-            | "yarn.lock"
-            | "bun.lock"
-            | "Cargo.toml"
-            | "Cargo.lock"
-            | "go.mod"
-            | "go.sum"
-            | ".terraform.lock.hcl"
-            | "mise.lock"
-            | "pyproject.toml"
-            | "gradle-wrapper.properties"
-            | "packages.lock.json"
-            | "Gemfile"
-            | "Gemfile.lock"
-            | "Directory.Packages.props"
-            | "Directory.Build.props"
-            | "dotnet-tools.json"
-            | "global.json"
-            | "uv.lock"
-            | "poetry.lock"
-            | "composer.json"
-            | "composer.lock"
-            | "flake.lock"
-            | "apm.lock.yaml"
-    ) || path.ends_with(".tf")
+    WRITABLE_LEAVES.contains(&path.rsplit('/').next().unwrap_or(path)) || path.ends_with(".tf")
 }
 fn materialized(path: &str) -> bool {
+    let leaf = path.rsplit('/').next().unwrap_or(path);
     writable(path)
-        || matches!(
-            path.rsplit('/').next().unwrap_or(path),
-            "mise.toml"
-                | ".mise.toml"
-                | ".tool-versions"
-                | "go.work"
-                | "go.work.sum"
-                | "pnpm-workspace.yaml"
-                | ".yarnrc.yml"
-                | ".npmrc"
-                | ".python-version"
-                | "uv.toml"
-                | "poetry.toml"
-                | "flake.nix"
-                | "apm.yml"
-        )
-        || path.ends_with(".go")
-        || path.ends_with(".rs")
-        || [".csproj", ".fsproj", ".vbproj", ".sln", ".slnx", ".gemspec"]
+        || READ_LEAVES.contains(&leaf)
+        || READ_EXTENSIONS
             .iter()
-            .any(|e| path.ends_with(e))
-        || matches!(
-            path.rsplit('/').next(),
-            Some("Directory.Build.targets" | "nuget.config" | "NuGet.Config")
-        )
+            .any(|extension| path.ends_with(extension))
+        || leaf.eq_ignore_ascii_case("nuget.config")
 }
 /// A Cargo configuration file, read only for its `registries`.
 fn cargo_config(path: &str) -> bool {

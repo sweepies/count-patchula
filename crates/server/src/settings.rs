@@ -24,8 +24,7 @@ pub struct Settings {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Lockfiles {
-    /// GiB of persistent package caches lockfile tools share between runs; 0
-    /// turns them off.
+    /// GiB of persistent package caches lockfile tools share between runs.
     #[serde(rename = "cacheGiB")]
     pub cache_gib: u64,
 }
@@ -256,8 +255,8 @@ impl Settings {
         self.http_options()
             .validate()
             .map_err(|_| "hostConcurrency needs lowercase hostnames and limits 1..100")?;
-        if self.lockfiles.cache_gib > 1_000_000 {
-            return Err("lockfiles.cacheGiB must be 0..1000000");
+        if !(1..=1_000_000).contains(&self.lockfiles.cache_gib) {
+            return Err("lockfiles.cacheGiB must be 1..1000000");
         }
         let server = &self.server;
         if !(1..=1000).contains(&server.batch_size) {
@@ -668,12 +667,13 @@ mod tests {
         };
         assert_eq!(load("").unwrap(), Settings::default());
         assert_eq!(
-            load("lockfiles { cacheGiB = 0 }")
+            load("lockfiles { cacheGiB = 1 }")
                 .unwrap()
                 .lockfiles
                 .cache_gib,
-            0
+            1
         );
+        assert!(load("lockfiles { cacheGiB = 0 }").is_err());
         assert!(load("lockfiles { cacheGiB = -1 }").is_err());
         let http = load(
             "http {\n  hostConcurrency { [\"api.github.com\"] = 8 }\n  goFreshnessSecs = 0\n}",

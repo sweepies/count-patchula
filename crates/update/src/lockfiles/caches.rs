@@ -5,10 +5,13 @@
 //! registry credentials, shared by every installation and the CLI, or
 //! `private-<hash>` when it does, keyed by the sorted `Credential::scope()`s
 //! of the entries that run receives, so packages fetched with one
-//! installation's credentials never reach another's cache. Where a tool has a
-//! documented read-only lower layer (Go's module proxy layout, NuGet's
-//! fallback folders) a private run reads the public partition's content
-//! without writing to it; it holds a shared lock on both partitions.
+//! installation's credentials never reach another's cache. There is no
+//! read-only lower layer: a private run does not touch `public`, since a
+//! public package of the same name could then satisfy it without the
+//! private feed (dependency confusion), and a stale proxy listing could
+//! resolve `latest` wrong. A private partition warms after its first run.
+//! Repositories that commit their own credentials are refused upstream, so
+//! nothing credentialed enters `public`.
 //!
 //! A run holds its partition's lock file, `tool-caches/<name>.lock`, shared,
 //! so eviction never removes a partition in use. Tools whose caches document
@@ -25,17 +28,14 @@ const PUBLIC: &str = "public";
 const USED: &str = ".used";
 /// A partition unused for this long is pruned.
 const AGE: Duration = Duration::from_secs(14 * 86_400);
-/// How often one process prunes, at most.
+/// How often one process prunes each root, at most.
 pub(super) const EVERY: Duration = Duration::from_secs(3600);
 
-/// A tool whose package data persists: whether its own cache is documented as
-/// safe for concurrent use, and the public directories a private run may use
-/// as a read-only lower layer.
+/// A tool whose package data persists: whether its own cache is documented
+/// as safe for concurrent use.
 pub(super) struct Tool {
     /// Take the partition's `<tool>.lock` exclusively while it runs.
     serial: bool,
-    /// Directories inside `public` the tool reads through a lower layer.
-    lower: &'static [&'static str],
 }
 
 /// How a tool's cache is wired, or `None` for one with no cache to keep.
@@ -44,27 +44,11 @@ pub(super) fn tool(bin: &str) -> Option<Tool> {
         // Documented concurrent-safe caches, shared freely within a partition:
         // Cargo locks its package cache itself, the Go module cache is
         // designed for concurrent use, and so are npm's cacache and uv's cache.
-        "cargo" | "npm" | "uv" => Tool {
-            serial: false,
-            lower: &[],
-        },
-        "go" => Tool {
-            serial: false,
-            // A module cache's `cache/download` tree is a module proxy: a
-            // private run lists it first in GOPROXY as a read-only file://
-            // proxy, so public modules never download twice.
-            lower: &["gomod/cache/download"],
-        },
-        "dotnet" => Tool {
-            serial: true,
-            // Fallback package folders are read-only by contract.
-            lower: &["nuget/packages"],
-        },
+        "cargo" | "go" | "npm" | "uv" => Tool { serial: false },
         // No documented concurrency guarantee: one run at a time per partition.
-        "aube" | "bun" | "yarn" | "composer" | "poetry" | "bundle" => Tool {
-            serial: true,
-            lower: &[],
-        },
+        "aube" | "bun" | "yarn" | "composer" | "poetry" | "bundle" | "dotnet" => {
+            Tool { serial: true }
+        }
         // Terraform's `providers lock` keeps no package cache, and nix and apm
         // keep their own.
         _ => return None,
@@ -85,7 +69,6 @@ pub(super) fn partition(scopes: &[String]) -> String {
 /// The locks a run holds on its partition, dropped when it finishes.
 pub(super) struct Hold {
     _shared: std::fs::File,
-    _lower: Option<std::fs::File>,
     _serial: Option<std::fs::File>,
 }
 
@@ -118,27 +101,18 @@ fn touch(partition: &Path) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// The environment placing `bin`'s cache inside `partition`, with `lower` the
-/// public partition a private run reads through. `goproxy` is the proxy list
-/// the run would use anyway, after the file proxy.
-fn env(bin: &str, partition: &Path, lower: Option<&Path>, goproxy: &str) -> Vec<(String, String)> {
+/// The environment placing `bin`'s cache inside `partition`.
+fn env(bin: &str, partition: &Path) -> Vec<(String, String)> {
     let path = |path: &str| partition.join(path).to_string_lossy().into_owned();
     match bin {
         // Cargo keeps credentials out of CARGO_HOME; tokens are env vars.
         "cargo" => vec![("CARGO_HOME".into(), path("cargo"))],
-        "go" => {
-            let mut env = vec![("GOMODCACHE".into(), path("gomod"))];
-            if let Some(lower) = lower {
-                env.push((
-                    "GOPROXY".into(),
-                    format!(
-                        "file://{},{goproxy}",
-                        lower.join("gomod/cache/download").display()
-                    ),
-                ));
-            }
-            env
-        }
+        "go" => vec![
+            ("GOMODCACHE".into(), path("gomod")),
+            // The module cache is read-only by default, which eviction could
+            // not remove; `-modcacherw` keeps it writable.
+            ("GOFLAGS".into(), "-modcacherw".into()),
+        ],
         "npm" => vec![("NPM_CONFIG_CACHE".into(), path("npm"))],
         "aube" => vec![
             ("AUBE_CACHE_DIR".into(), path("aube/cache")),
@@ -149,53 +123,31 @@ fn env(bin: &str, partition: &Path, lower: Option<&Path>, goproxy: &str) -> Vec<
         "composer" => vec![("COMPOSER_CACHE_DIR".into(), path("composer"))],
         "uv" => vec![("UV_CACHE_DIR".into(), path("uv"))],
         "poetry" => vec![("POETRY_CACHE_DIR".into(), path("poetry"))],
-        "dotnet" => {
-            let mut env = vec![
-                ("NUGET_PACKAGES".into(), path("nuget/packages")),
-                ("NUGET_HTTP_CACHE_PATH".into(), path("nuget/http-cache")),
-            ];
-            if let Some(lower) = lower {
-                env.push((
-                    "NUGET_FALLBACK_PACKAGES".into(),
-                    lower.join("nuget/packages").to_string_lossy().into_owned(),
-                ));
-            }
-            env
-        }
+        "dotnet" => vec![
+            ("NUGET_PACKAGES".into(), path("nuget/packages")),
+            ("NUGET_HTTP_CACHE_PATH".into(), path("nuget/http-cache")),
+        ],
         "bundle" => vec![("BUNDLE_USER_CACHE".into(), path("bundler"))],
         _ => Vec::new(),
     }
 }
 
-/// Hold `name`'s partition (and `public`'s for a private run with a lower
-/// layer) for one `bin` run, and return its environment. Blocking, so callers
-/// run it off the async runtime.
+/// Hold `name`'s partition for one `bin` run, and return its environment.
+/// Blocking, so callers run it off the async runtime.
 pub(super) fn acquire(
     root: &Path,
     name: &str,
     tool: &Tool,
     bin: &str,
-    goproxy: &str,
 ) -> Result<(Vec<(String, String)>, Hold), String> {
     std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
     let shared = lock(&root.join(format!("{name}.lock")), false)?;
     let partition = root.join(name);
     std::fs::create_dir_all(&partition).map_err(|e| e.to_string())?;
     touch(&partition)?;
-    let (lower_dir, lower) = if name != PUBLIC && !tool.lower.is_empty() {
-        let file = lock(&root.join(format!("{PUBLIC}.lock")), false)?;
-        let public = root.join(PUBLIC);
-        for dir in tool.lower {
-            std::fs::create_dir_all(public.join(dir)).map_err(|e| e.to_string())?;
-        }
-        touch(&public)?;
-        (Some(public), Some(file))
-    } else {
-        (None, None)
-    };
-    let env = env(bin, &partition, lower_dir.as_deref(), goproxy);
+    let env = env(bin, &partition);
     for (key, value) in &env {
-        if key != "GOPROXY" {
+        if key != "GOFLAGS" {
             std::fs::create_dir_all(value).map_err(|e| e.to_string())?;
         }
     }
@@ -207,7 +159,6 @@ pub(super) fn acquire(
         env,
         Hold {
             _shared: shared,
-            _lower: lower,
             _serial: serial,
         },
     ))
@@ -242,6 +193,49 @@ fn size(dir: &Path) -> u64 {
     total
 }
 
+/// Restore the owner's write permission on `path`, where a tool wrote it
+/// read-only, as a Go module cache does without `-modcacherw`.
+fn unreadonly(path: &Path) {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return;
+    };
+    let permissions = meta.permissions();
+    if !permissions.readonly() {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(
+            path,
+            std::fs::Permissions::from_mode(permissions.mode() | 0o200),
+        );
+    }
+    #[cfg(not(unix))]
+    {
+        let mut permissions = permissions;
+        permissions.set_readonly(false);
+        let _ = std::fs::set_permissions(path, permissions);
+    }
+}
+
+/// Restore write permission everywhere under `dir`, so a partition written
+/// by a tool whose cache is read-only (an older Go module cache) can still
+/// be removed.
+fn writable(dir: &Path) {
+    unreadonly(dir);
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        unreadonly(&path);
+        if entry.metadata().is_ok_and(|meta| meta.is_dir()) {
+            writable(&path);
+        }
+    }
+}
+
 /// Remove `name`'s partition when nothing holds it: the lock is only tried
 /// exclusively, so a run's shared hold keeps it.
 fn evict(root: &Path, name: &str) -> bool {
@@ -256,7 +250,9 @@ fn evict(root: &Path, name: &str) -> bool {
     if file.try_lock().is_err() {
         return false;
     }
-    match std::fs::remove_dir_all(root.join(name)) {
+    let partition = root.join(name);
+    writable(&partition);
+    match std::fs::remove_dir_all(&partition) {
         Ok(()) => true,
         Err(error) => {
             tracing::warn!(%error, partition = %name, "tool cache partition was not removed");
@@ -265,15 +261,42 @@ fn evict(root: &Path, name: &str) -> bool {
     }
 }
 
+/// Whether it is time to prune `root` again: at most once per `EVERY` per
+/// root per process. The server builds one Runner per installation, so the
+/// record is process-wide, keyed by root, not per Runner.
+pub(super) fn due(root: &Path) -> bool {
+    static PRUNED: std::sync::Mutex<BTreeMap<PathBuf, std::time::Instant>> =
+        std::sync::Mutex::new(BTreeMap::new());
+    let mut last = PRUNED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if last.get(root).is_some_and(|ran| ran.elapsed() < EVERY) {
+        return false;
+    }
+    last.insert(root.to_path_buf(), std::time::Instant::now());
+    true
+}
+
 /// Drop partitions unused for `AGE`, then least-recently-used private ones,
 /// then `public`, until `root` is within `cap` bytes. A partition a run holds
-/// is never removed.
+/// is never removed. One prune runs per root at a time, across processes too:
+/// a concurrent prune could over-evict, so a held `prune.lock` skips this one.
 pub(super) fn prune(root: &Path, cap: u64, now: SystemTime) -> Result<(), String> {
     let entries = match std::fs::read_dir(root) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e.to_string()),
     };
+    let guard = std::fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(root.join("prune.lock"))
+        .map_err(|e| e.to_string())?;
+    if guard.try_lock().is_err() {
+        return Ok(());
+    }
+    let _guard = guard;
     let mut partitions = Vec::new();
     for entry in entries.flatten() {
         let Ok(kind) = entry.file_type() else {
