@@ -370,9 +370,10 @@ fn fixture(path: &str) -> bool {
         let [src, set, next] = window else {
             return false;
         };
-        *src == "src"
-            && *set != "main"
-            && (set.to_ascii_lowercase().contains("test") || *next == "resources")
+        // A set named for tests: `test`, `testFixtures`, `functionalTest`;
+        // not `latest` or `contest`.
+        let tests = set.starts_with("test") || set.contains("Test");
+        *src == "src" && *set != "main" && (tests || *next == "resources")
     })
 }
 
@@ -435,12 +436,18 @@ fn string_after<'s>(
 /// The folder of the build `path` belongs to: the nearest folder at or
 /// above it with a settings script, as a path prefix.
 fn root_folder(files: &Files, path: &str) -> Option<String> {
-    // `buildSrc` is a build of its own.
+    // `buildSrc` is a build of its own, for its own scripts; its plugins
+    // run in the main build.
     if let Some(at) = path
         .find("buildSrc/")
         .filter(|at| *at == 0 || path.as_bytes()[at - 1] == b'/')
     {
-        return Some(path[..at + "buildSrc/".len()].to_owned());
+        let rest = &path[at + "buildSrc/".len()..];
+        if !rest.contains('/')
+            && (rest.starts_with("build.gradle") || rest.starts_with("settings.gradle"))
+        {
+            return Some(path[..at + "buildSrc/".len()].to_owned());
+        }
     }
     let mut dir = &path[..path.rfind('/').map_or(0, |i| i + 1)];
     loop {
@@ -578,6 +585,16 @@ fn references(
     for (at, _) in code.match_indices("apply") {
         let end = at + "apply".len();
         if (at > 0 && word(bytes[at - 1])) || bytes.get(end).is_some_and(|b| word(*b)) {
+            continue;
+        }
+        // A call of Gradle's `apply`, not a method of that name on an
+        // object (`.apply { … }`) or its definition.
+        let before = code[..at].trim_end();
+        let next = code[end..].trim_start().bytes().next();
+        if before.ends_with('.')
+            || ["fun", "def", "void"].iter().any(|w| before.ends_with(w))
+            || next == Some(b'{')
+        {
             continue;
         }
         let line_end = code[end..].find('\n').map_or(code.len(), |n| end + n);

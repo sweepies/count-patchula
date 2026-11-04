@@ -408,9 +408,14 @@ pub(crate) fn private_repositories(files: &Files) -> Option<String> {
         }
         for node in document.descendants().filter(|n| n.is_element()) {
             let name = node.tag_name().name();
+            // A repository where Maven reads one, not a plugin's setting of
+            // the same name.
+            let list = node.parent_element().map(|p| p.tag_name().name());
             if !matches!(
-                name,
-                "repository" | "pluginRepository" | "snapshotRepository" | "mirror"
+                (name, list),
+                ("repository", Some("repositories"))
+                    | ("pluginRepository", Some("pluginRepositories"))
+                    | ("mirror", Some("mirrors"))
             ) {
                 continue;
             }

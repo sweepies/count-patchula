@@ -3384,6 +3384,11 @@ fn maven_lookups_fail_when_any_build_file_names_another_repository() {
         "<distributionManagement><repository><id>acme</id><url>https://repo.acme.dev/releases</url></repository></distributionManagement>",
     );
     assert_eq!(lookup(&[("pom.xml", &deploys)]), None);
+    // A plugin's setting named repository is not a repository.
+    let configured = pom(
+        "<build><plugins><plugin><groupId>org.acme</groupId><artifactId>release</artifactId><version>1</version><configuration><repository>releases</repository></configuration></plugin></plugins></build>",
+    );
+    assert_eq!(lookup(&[("pom.xml", &configured)]), None);
     let private = pom(
         "<repositories><repository><id>acme</id><url>https://bot:s3cr3t@repo.acme.dev/maven</url></repository></repositories>", // betterleaks:allow
     );
@@ -3516,6 +3521,15 @@ fn gradle_lookups_fail_when_build_logic_could_add_another_repository() {
         ),
     ];
     assert_eq!(lookup(&fixture), None);
+    // A Kotlin `.apply { from(…) }` is not Gradle's apply.
+    let copy = [
+        ("build.gradle.kts", plain.as_str()),
+        (
+            "other.gradle.kts",
+            "tasks.register<Copy>(\"c\").apply { from(layout.projectDirectory) }\n",
+        ),
+    ];
+    assert_eq!(lookup(&copy), None);
     let private = build("repositories { maven { url = uri(\"https://repo.acme.dev/maven\") } }");
     for files in [
         vec![("build.gradle.kts", private.as_str())],
