@@ -344,19 +344,12 @@ fn decoded(text: &str) -> String {
 struct Config {
     /// Every source it adds, as `(key, value)`.
     sources: Vec<(String, String)>,
-    /// Its `packageSourceMapping`, when it has one.
+    /// Its `packageSourceMapping`, as `(source key, pattern)`, when it has one.
     mapping: Option<Mapping>,
 }
 
-/// One config's `packageSourceMapping`.
-#[derive(Clone, Debug, Default)]
-struct Mapping {
-    /// Whether it starts with `clear`, which drops the mappings of configs
-    /// farther up and can leave NuGet with none at all.
-    cleared: bool,
-    /// `(source key, pattern)`.
-    entries: Vec<(String, String)>,
-}
+/// One config's `packageSourceMapping`, as `(source key, pattern)`.
+type Mapping = Vec<(String, String)>;
 
 /// Sections of a `nuget.config` that do not say where packages come from.
 /// `fallbackPackageFolders`, which can supply packages, is not among them.
@@ -466,7 +459,9 @@ fn config(text: &str) -> Result<Config, ()> {
                 let mut keys = BTreeSet::new();
                 for (index, child) in elements(section)?.into_iter().enumerate() {
                     match child.tag_name().name() {
-                        "clear" if index == 0 => mapping.cleared = true,
+                        // Only a mapping one config alone holds is read, so
+                        // a leading `clear` drops nothing.
+                        "clear" if index == 0 => {}
                         "packageSource" => {
                             let key = attribute(child, "key")?;
                             if !plain_key(&key) || !keys.insert(key.to_ascii_lowercase()) {
@@ -485,7 +480,7 @@ fn config(text: &str) -> Result<Config, ()> {
                                 {
                                     return Err(());
                                 }
-                                mapping.entries.push((key.clone(), pattern));
+                                mapping.push((key.clone(), pattern));
                             }
                         }
                         _ => return Err(()),
@@ -671,16 +666,15 @@ impl Feeds {
                 "several package sources and no packageSourceMapping in nuget.config to say which serves it",
             );
         }
-        // A `clear` in one of several mappings can leave NuGet with none, so
-        // that any source serves any package; the Count does not pool such
-        // mappings.
-        if mappings.len() > 1 && mappings.iter().any(|m| m.cleared) {
+        // NuGet merges mappings from several configs, replacing, dropping
+        // and clearing in ways the Count does not follow, so only a mapping
+        // that one config alone holds is read.
+        let [mapping] = mappings.as_slice() else {
             return unusable(
-                "a packageSourceMapping clear in nuget.config the Count does not follow",
+                "packageSourceMapping in several nuget.config files, which the Count does not merge",
             );
-        }
-        let patterns: Vec<&(String, String)> =
-            mappings.iter().flat_map(|m| m.entries.iter()).collect();
+        };
+        let patterns: Vec<&(String, String)> = mapping.iter().collect();
         // NuGet applies an exact ID's sources to a prefix of the same text
         // too; the Count does not, so such a pair fails.
         let exact: BTreeSet<String> = patterns
@@ -701,23 +695,12 @@ impl Feeds {
                 .then_some(prefix.len()),
             None => pattern.eq_ignore_ascii_case(package).then_some(usize::MAX),
         };
-        // One config's mapping says which pattern wins. Mappings from
-        // several configs merge in ways the Count does not follow, so every
-        // pattern that matches counts.
-        let keys: Vec<&str> = if mappings.len() == 1 {
-            let best = patterns.iter().filter_map(|(_, p)| specificity(p)).max();
-            patterns
-                .iter()
-                .filter(|(_, p)| best.is_some() && specificity(p) == best)
-                .map(|(key, _)| key.as_str())
-                .collect()
-        } else {
-            patterns
-                .iter()
-                .filter(|(_, p)| specificity(p).is_some())
-                .map(|(key, _)| key.as_str())
-                .collect()
-        };
+        let best = patterns.iter().filter_map(|(_, p)| specificity(p)).max();
+        let keys: Vec<&str> = patterns
+            .iter()
+            .filter(|(_, p)| best.is_some() && specificity(p) == best)
+            .map(|(key, _)| key.as_str())
+            .collect();
         let candidates = chain
             .sources
             .iter()

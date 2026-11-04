@@ -3236,7 +3236,7 @@ fn nuget_packages_come_from_nuget_org_alone_or_as_source_mapping_says() {
             )),
         ),
         ("private-default/App.csproj".into(), project(&packages)),
-        // Mappings in two configs: every matching pattern counts.
+        // Mappings in two configs are not merged.
         (
             "two-mappings/nuget.config".into(),
             nuget_config(&format!("{}\n{mapping}", sources(acme))),
