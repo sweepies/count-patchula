@@ -226,6 +226,24 @@ dependency's `registry`:
   Count ignore the lock. A `composer.json` with
   comments, which Composer does not read, or a lock the Count cannot read,
   fails every lookup.
+- NuGet packages come from nuget.org only when NuGet could not take them
+  from anywhere else. `packages.lock.json` does not record a package's
+  source, and with several sources NuGet takes a package from whichever
+  answers, so the `nuget.config` files from the project's folder up to the
+  repository root decide, applied the way NuGet applies them (`<clear />`,
+  `remove` and `disabledPackageSources` included), after the nuget.org
+  source NuGet adds by default. With nuget.org alone, every package comes
+  from it. With another source, `packageSourceMapping` must say which
+  source serves each package: its most specific pattern (an exact ID, else
+  the longest prefix) decides, and a package it maps to nuget.org alone
+  comes from there. Any other package fails its lookup, since private
+  NuGet feeds are not read yet. A `Directory.Packages.props` or other
+  shared file counts every folder below it with a config of its own. A
+  config the Count cannot read or with a section it does not know, such
+  as `fallbackPackageFolders`, a config spelled other than `nuget.config`,
+  `NuGet.config` or `NuGet.Config`, or an MSBuild file that sets
+  `RestoreSources`, `RestoreAdditionalProjectSources`, `RestoreConfigFile`
+  or `RestoreFallbackFolders`, fails every lookup it could affect.
 - Python packages come from what the project's lockfile records. The
   Count does not work out which index uv or Poetry would pick from their
   settings; the tool already did, and wrote it down:

@@ -22,3 +22,4 @@ serde_yaml_ng = "0.10.0"
 toml_edit = { version = "0.25.17", features = ["serde"] }
 globset = "0.4"
 url = "2.5.8"
+roxmltree = "0.21.2"

@@ -286,6 +286,8 @@ impl Scanner {
             || (self.config.managers.contains(&Manager::Bundler)
                 && (registry_settings(path) || leaf == "Gemfile.lock"))
             || (self.config.managers.contains(&Manager::Composer) && leaf == "composer.lock")
+            || (self.config.managers.contains(&Manager::Nuget)
+                && (nuget::config_file(path) || nuget::msbuild_file(path)))
     }
     /// The pip requirements files among `paths`, which the Count does not
     /// maintain, as skipped entries saying why, when Python projects are
@@ -427,6 +429,7 @@ impl Scanner {
         } else {
             BTreeMap::new()
         };
+        let feeds = nuget::Feeds::new(files);
         let terraform = if self.config.managers.contains(&Manager::Terraform) {
             terraform::documents(files)?
         } else {
@@ -526,7 +529,10 @@ impl Scanner {
             } else if self.selected(Manager::Bundler, path) {
                 bundler::extract(path, text, files, &mut result.skipped)
             } else if self.selected(Manager::Nuget, path) {
-                nuget::extract(path, text)
+                nuget::extract(path, text).map(|mut deps| {
+                    feeds.assign(&mut deps);
+                    deps
+                })
             } else if self.selected(Manager::Gradle, path) {
                 gradle::extract(path, text)
             } else if self.selected(Manager::Maven, path) {
@@ -757,8 +763,8 @@ pub mod known {
     };
 }
 
-/// A file that can say where packages come from: a Python package index or
-/// Bundler's settings. One the Count cannot read, such as a symlink or a file
+/// A file that can say where packages come from: a Python package index,
+/// Bundler's settings or a NuGet config. One the Count cannot read, such as a symlink or a file
 /// that is not text, must reach the scanner as unreadable, since leaving it
 /// out would make its packages the public registry's.
 pub fn registry_settings(path: &str) -> bool {
@@ -766,7 +772,8 @@ pub fn registry_settings(path: &str) -> bool {
     matches!(
         leaf,
         "pyproject.toml" | "uv.toml" | "pdm.toml" | "pixi.toml" | "hatch.toml"
-    ) || path == ".bundle/config"
+    ) || nuget::config_file(path)
+        || path == ".bundle/config"
         || path.ends_with("/.bundle/config")
 }
 
