@@ -274,6 +274,11 @@ impl Scanner {
         } else {
             (Vec::new(), Vec::new())
         };
+        let workspace_modules: Vec<String> = if self.config.managers.contains(&Manager::Go) {
+            go::workspace_modules(files)
+        } else {
+            Vec::new()
+        };
         let referenced: std::collections::BTreeSet<String> =
             if self.config.managers.contains(&Manager::Maven) {
                 maven::referenced(files)
@@ -311,6 +316,7 @@ impl Scanner {
             .filter(|path| {
                 !files.contains_key(*path)
                     && (ancestors.contains(*path)
+                        || workspace_modules.iter().any(|module| module == path)
                         || gradle::logic_source(path)
                             && included
                                 .iter()

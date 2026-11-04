@@ -119,8 +119,9 @@ pub(super) fn extract(
     Ok(out)
 }
 
-/// Why a module a `replace` directive names is skipped.
-const REPLACED: &str = "replaced by a `replace` directive, so its requirement is not what the build uses; updating it could move the build off the replacement";
+/// Why a module a `replace` directive names, or a workspace's own, is
+/// skipped.
+const REPLACED: &str = "replaced by a `replace` directive or taken from the workspace, so its requirement is not what the build uses; updating it could move the build off the replacement";
 
 /// The modules `replace` directives in `text` (a `go.mod` or `go.work`)
 /// name on their left, whatever version they replace; none when a
@@ -164,9 +165,82 @@ fn replaced(text: &str) -> Option<BTreeSet<String>> {
     (!block).then_some(out)
 }
 
-/// The modules replaced for the `go.mod` at `path`, by itself or a
-/// `go.work` in its folder or above, which Go uses for the modules it
-/// lists; why, when one cannot be read.
+/// The folders a `go.work` at `path` lists in `use`, as path prefixes;
+/// none when one is not a folder in the repository the Count can resolve.
+fn uses(path: &str, text: &str) -> Option<Vec<String>> {
+    let base = &path[..path.rfind('/').map_or(0, |i| i + 1)];
+    let mut out = Vec::new();
+    let mut block = false;
+    for line in text.lines() {
+        let code = line.split("//").next().unwrap_or("").trim();
+        let named = if block {
+            if code == ")" {
+                block = false;
+                continue;
+            }
+            code
+        } else if let Some(rest) = code.strip_prefix("use") {
+            if !rest.starts_with([' ', '\t', '(']) {
+                continue;
+            }
+            let rest = rest.trim();
+            if rest == "(" {
+                block = true;
+                continue;
+            }
+            rest
+        } else {
+            continue;
+        };
+        if named.is_empty() {
+            continue;
+        }
+        let named = named.trim_matches(['"', '`']);
+        if named.starts_with('/') || named.contains(char::is_whitespace) {
+            return None;
+        }
+        let mut parts: Vec<&str> = base.split('/').filter(|p| !p.is_empty()).collect();
+        for part in named.split('/') {
+            match part {
+                "" | "." => {}
+                ".." => {
+                    parts.pop()?;
+                }
+                part => parts.push(part),
+            }
+        }
+        out.push(parts.iter().map(|p| format!("{p}/")).collect());
+    }
+    (!block).then_some(out)
+}
+
+/// The `go.mod` files the `go.work` files among `files` list in `use`.
+pub(crate) fn workspace_modules(files: &Files) -> Vec<String> {
+    files
+        .iter()
+        .filter(|(path, _)| work_file(path))
+        .filter_map(|(path, text)| uses(path, text))
+        .flatten()
+        .map(|dir| format!("{dir}go.mod"))
+        .collect()
+}
+
+/// The module path a `go.mod` declares.
+fn module_path(text: &str) -> Option<&str> {
+    text.lines()
+        .map(|line| line.split("//").next().unwrap_or("").trim())
+        .find_map(|code| {
+            code.strip_prefix("module")
+                .filter(|rest| rest.starts_with([' ', '\t']))
+        })
+        .map(|rest| rest.trim().trim_matches(['"', '`']))
+}
+
+/// The modules the build of the `go.mod` at `path` does not take from its
+/// requirements: those it or a `go.work` in its folder or above replaces,
+/// and in a workspace, those any module the workspace uses replaces and
+/// the workspace's own modules, which Go takes from their folders; why,
+/// when one of those files cannot be read.
 fn replacements(path: &str, text: &str, files: &Files) -> Result<BTreeSet<String>, String> {
     let mut out = replaced(text)
         .ok_or_else(|| format!("a replace directive in {path} the Count cannot read"))?;
@@ -174,11 +248,26 @@ fn replacements(path: &str, text: &str, files: &Files) -> Result<BTreeSet<String
     loop {
         let work = format!("{dir}go.work");
         if let Some(text) = files.get(&work) {
-            let read = (text.as_str() != crate::UNREADABLE_SETTINGS)
-                .then(|| replaced(text))
-                .flatten()
-                .ok_or_else(|| format!("{work}, which the Count cannot read"))?;
-            out.extend(read);
+            let unread = || format!("{work}, which the Count cannot read");
+            if text.as_str() == crate::UNREADABLE_SETTINGS {
+                return Err(unread());
+            }
+            out.extend(replaced(text).ok_or_else(unread)?);
+            for folder in uses(&work, text).ok_or_else(unread)? {
+                let module = format!("{folder}go.mod");
+                let text = files
+                    .get(&module)
+                    .filter(|text| text.as_str() != crate::UNREADABLE_SETTINGS)
+                    .ok_or_else(|| {
+                        format!("{module}, which {work} uses and the Count cannot read")
+                    })?;
+                out.extend(replaced(text).ok_or_else(|| {
+                    format!("a replace directive in {module} the Count cannot read")
+                })?);
+                if let Some(name) = module_path(text) {
+                    out.insert(name.to_owned());
+                }
+            }
         }
         if dir.is_empty() {
             break;

@@ -172,11 +172,12 @@ points at. Without a `version` it is ignored. A dependency from an alternate
 Go reads `require` blocks and single directives, plus the `go` directive (kind
 `go-directive`, the minimum language version) and `toolchain`. Indirect
 requirements are maintained too. A module a `replace` directive names, in
-`go.mod` or a `go.work` in its folder or above, is listed as skipped: its
-requirement is not what the build uses, and moving it past a version-specific
-replacement would take the build off the replacement. A `replace` directive
-the Count cannot read, or a `go.work` it cannot read, fails every lookup of
-that module.
+`go.mod`, a `go.work` in its folder or above, or any module that workspace
+uses, is listed as skipped, and so is a module the workspace itself holds:
+its requirement is not what the build uses, and moving it past a
+version-specific replacement would take the build off the replacement. A
+`replace` directive, `go.work` or used module the Count cannot read fails
+every lookup of that module.
 
 Terraform reads providers, registry modules and the provider lock with a real
 HCL parser; `.terraform-version` pins Terraform itself.

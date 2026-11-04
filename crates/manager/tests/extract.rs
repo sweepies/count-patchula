@@ -3811,8 +3811,45 @@ fn go_modules_a_replace_directive_names_are_skipped() {
         );
         assert_eq!(found(&extraction, "golang.org/x/text"), Some(None));
     }
-    // A replace directive the Count cannot read fails every lookup.
+    // In a workspace, a sibling module's replace counts, and so does a
+    // module the workspace takes from its own folder.
     for files in [
+        vec![
+            ("app/go.mod", plain.clone()),
+            (
+                "go.work",
+                "go 1.22\n\nuse (\n\t./app\n\t./tool\n)\n".to_owned(),
+            ),
+            (
+                "tool/go.mod",
+                "module example.com/tool\n\nreplace github.com/acme/fork => ../fork\n".to_owned(),
+            ),
+        ],
+        vec![
+            ("app/go.mod", plain.clone()),
+            ("go.work", "go 1.22\n\nuse ./app\nuse ./fork\n".to_owned()),
+            ("fork/go.mod", "module github.com/acme/fork\n".to_owned()),
+        ],
+    ] {
+        let files: Vec<(&str, &str)> = files.iter().map(|(p, t)| (*p, t.as_str())).collect();
+        let extraction = extract(&files);
+        assert_eq!(
+            found(&extraction, "github.com/acme/fork"),
+            None,
+            "{files:?}"
+        );
+        assert_eq!(found(&extraction, "golang.org/x/text"), Some(None));
+    }
+    // A replace directive, go.work or used module the Count cannot read
+    // fails every lookup.
+    for files in [
+        vec![
+            ("app/go.mod", plain.clone()),
+            (
+                "go.work",
+                "go 1.22\n\nuse ./app\nuse ./missing\n".to_owned(),
+            ),
+        ],
         vec![("app/go.mod", module("\nreplace github.com/acme/fork\n"))],
         vec![
             ("app/go.mod", plain.clone()),
