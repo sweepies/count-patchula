@@ -237,11 +237,18 @@ name.
 Output is kept only when something fails, at most 4 KiB of each stream.
 
 :::note[Private registries]
-Lockfile tools get no registry credentials yet, because credentials are
-scrubbed on purpose: a lockfile that needs a private registry fails to
-regenerate rather than resolving elsewhere. Lookups can use [registry
-credentials](/guide/sources/#private-registries). Passing credentials to
-lockfile tools will be a separate, explicit opt-in.
+Lockfile tools get a [registry entry's](/guide/sources/#private-registries)
+credentials only when the entry sets `tools = true`, and only the tools that
+run no repository or package code: aube, npm, Bun and Yarn, which run with
+lifecycle scripts and Yarn plugins off. Each gets them in its own user
+configuration for the entry's URL prefix (`//host/path/:_authToken` or
+`_auth` for npm, aube and Bun, `npmRegistries` for Yarn), written with
+owner-only permissions for that run and removed when it finishes, so no
+other tool sees them. Bundler evaluates the Gemfile, dotnet evaluates
+MSBuild, and uv and Poetry may build source distributions, so they never
+get credentials, and a lockfile of theirs that needs a private registry
+fails to regenerate rather than resolving elsewhere. Lockfile tools read
+the registries the repository names, never a [mirror](/guide/sources/#mirrors).
 :::
 
 ## Lockfile maintenance

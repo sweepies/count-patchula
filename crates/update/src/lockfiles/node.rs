@@ -164,6 +164,9 @@ impl Runner {
         for (path, text) in &npmrcs {
             std::fs::write(path, npmrc(text)).map_err(|e| e.to_string())?;
         }
+        // Operator registry credentials the entries allow tools to use, in
+        // the run's own user configuration, gone when the tools finish.
+        let _credentials = RegistryCredentials::write(context.driver, &self.registries)?;
         let result = self.node_locks(context).await;
         for (path, text) in &npmrcs {
             std::fs::write(path, text).map_err(|e| e.to_string())?;
@@ -330,7 +333,10 @@ impl Runner {
         // aube picks the lockfile it writes from the files it finds. Name the
         // committed lockfile explicitly so a second lockfile cannot redirect it.
         let config = driver.join(format!("aube-{}.npmrc", hash(leaf.as_bytes())));
-        std::fs::write(&config, format!("default-lockfile={leaf}\n")).map_err(|e| e.to_string())?;
+        write_private(
+            &config,
+            &format!("default-lockfile={leaf}\n{}", npm_auth(&self.registries)),
+        )?;
         let mut args = vec!["-C".into(), cwd.to_string_lossy().into_owned()];
         if maintenance {
             args.extend([
@@ -346,21 +352,25 @@ impl Runner {
                 "--ignore-scripts".into(),
             ]);
         }
-        self.tool(
-            driver,
-            Invocation {
-                tools: vec![("aube".into(), version(versions, "aube")?)],
-                bin: "aube".into(),
-                cwd: None,
-                env: vec![(
-                    "NPM_CONFIG_USERCONFIG".into(),
-                    config.to_string_lossy().into_owned(),
-                )],
-                args,
-            },
-        )
-        .await
-        .map(drop)
+        let result = self
+            .tool(
+                driver,
+                Invocation {
+                    tools: vec![("aube".into(), version(versions, "aube")?)],
+                    bin: "aube".into(),
+                    cwd: None,
+                    env: vec![(
+                        "NPM_CONFIG_USERCONFIG".into(),
+                        config.to_string_lossy().into_owned(),
+                    )],
+                    args,
+                },
+            )
+            .await
+            .map(drop);
+        // It may hold registry credentials, which no later tool reads.
+        let _ = std::fs::remove_file(&config);
+        result
     }
     async fn yarn(
         &self,
@@ -516,6 +526,103 @@ pub(super) fn yarn_version(
     Ok(fallback.to_string())
 }
 
+/// `.npmrc` lines giving each registry entry its credentials, keyed by its
+/// prefix as npm, aube and Bun match them: `//host/path/:_authToken=` for a
+/// bearer token, which registry entries hold only in the plain characters
+/// bearer tokens use, and `//host/path/:_auth=` for a user and password.
+pub(super) fn npm_auth(registries: &[patchula_http::Credential]) -> String {
+    use base64::Engine;
+    let mut out = String::new();
+    for entry in registries {
+        let Some(rest) = entry.prefix().strip_prefix("https:") else {
+            continue;
+        };
+        let key = format!("{}/", rest.trim_end_matches('/'));
+        match &entry.auth {
+            patchula_http::Auth::Bearer { token } => {
+                out.push_str(&format!("{key}:_authToken={token}\n"));
+            }
+            patchula_http::Auth::Basic { username, password } => {
+                let encoded = base64::engine::general_purpose::STANDARD
+                    .encode(format!("{username}:{password}"));
+                out.push_str(&format!("{key}:_auth={encoded}\n"));
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Yarn's user configuration giving each registry entry its credentials.
+pub(super) fn yarn_auth(registries: &[patchula_http::Credential]) -> Result<String, String> {
+    let mut entries = serde_yaml_ng::Mapping::new();
+    for entry in registries {
+        let mut auth = serde_yaml_ng::Mapping::new();
+        match &entry.auth {
+            patchula_http::Auth::Bearer { token } => {
+                auth.insert("npmAuthToken".into(), token.clone().into());
+            }
+            patchula_http::Auth::Basic { username, password } => {
+                auth.insert(
+                    "npmAuthIdent".into(),
+                    format!("{username}:{password}").into(),
+                );
+            }
+            _ => continue,
+        }
+        auth.insert("npmAlwaysAuth".into(), true.into());
+        entries.insert(entry.prefix().trim_end_matches('/').into(), auth.into());
+    }
+    let mut root = serde_yaml_ng::Mapping::new();
+    root.insert("npmRegistries".into(), entries.into());
+    serde_yaml_ng::to_string(&root).map_err(|e| e.to_string())
+}
+
+/// Write `text` where only this user can read it.
+fn write_private(path: &Path, text: &str) -> Result<(), String> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(path).map_err(|e| e.to_string())?;
+    file.write_all(text.as_bytes()).map_err(|e| e.to_string())
+}
+
+/// The run's npm and Yarn user configuration holding registry credentials,
+/// removed when it is dropped, so tools that run later never see them.
+struct RegistryCredentials(Vec<std::path::PathBuf>);
+
+impl RegistryCredentials {
+    fn write(driver: &Path, registries: &[patchula_http::Credential]) -> Result<Self, String> {
+        let mut written = Self(Vec::new());
+        if registries.is_empty() {
+            return Ok(written);
+        }
+        let home = driver.join("home");
+        std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
+        let npm = npm_auth(registries);
+        // npm reads the sandbox's user configuration, Bun `~/.npmrc`.
+        for name in ["npm-user.cfg", ".npmrc"] {
+            let path = home.join(name);
+            write_private(&path, &npm)?;
+            written.0.push(path);
+        }
+        let path = home.join(".yarnrc.yml");
+        write_private(&path, &yarn_auth(registries)?)?;
+        written.0.push(path);
+        Ok(written)
+    }
+}
+
+impl Drop for RegistryCredentials {
+    fn drop(&mut self) {
+        for path in &self.0 {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 /// `.npmrc` with only the registries it names: `registry=` and
 /// `@scope:registry=` lines, as written. Tokens, and settings that change how
 /// a tool runs, are left out. A `${VAR}` registry stays, so npm stops on it
@@ -556,4 +663,74 @@ pub(super) fn yarnrc(text: &str) -> Result<String, String> {
         serde_yaml_ng::from_str(text).map_err(|e| e.to_string())?;
     clean(&mut value);
     serde_yaml_ng::to_string(&value).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod registry_credentials {
+    use super::*;
+
+    fn entries() -> Vec<patchula_http::Credential> {
+        let token = patchula_http::Credential::new(
+            "https://npm.acme.dev/repo",
+            patchula_http::Auth::Bearer {
+                token: "t0ken".into(),
+            },
+        )
+        .unwrap()
+        .for_tools();
+        let basic = patchula_http::Credential::new(
+            "https://npm.other.dev",
+            patchula_http::Auth::Basic {
+                username: "ci".into(),
+                password: "pw".into(),
+            },
+        )
+        .unwrap()
+        .for_tools();
+        vec![token, basic]
+    }
+
+    #[test]
+    fn npm_and_yarn_get_each_registrys_credentials_by_its_prefix() {
+        let npm = npm_auth(&entries());
+        assert_eq!(
+            npm,
+            "//npm.acme.dev/repo/:_authToken=t0ken\n//npm.other.dev/:_auth=Y2k6cHc=\n"
+        );
+        let yarn: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(&yarn_auth(&entries()).unwrap()).unwrap();
+        assert_eq!(
+            yarn["npmRegistries"]["https://npm.acme.dev/repo"]["npmAuthToken"],
+            "t0ken"
+        );
+        assert_eq!(
+            yarn["npmRegistries"]["https://npm.other.dev"]["npmAuthIdent"],
+            "ci:pw"
+        );
+    }
+
+    #[test]
+    fn credential_files_are_private_and_gone_when_the_tools_finish() {
+        let driver = tempfile::tempdir().unwrap();
+        let home = driver.path().join("home");
+        {
+            let _written = RegistryCredentials::write(driver.path(), &entries()).unwrap();
+            for name in ["npm-user.cfg", ".npmrc", ".yarnrc.yml"] {
+                let path = home.join(name);
+                assert!(path.is_file(), "{name}");
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+                    assert_eq!(mode & 0o077, 0, "{name}");
+                }
+            }
+        }
+        for name in ["npm-user.cfg", ".npmrc", ".yarnrc.yml"] {
+            assert!(!home.join(name).exists(), "{name}");
+        }
+        // With no entries, nothing is written.
+        let _none = RegistryCredentials::write(driver.path(), &[]).unwrap();
+        assert!(!home.join(".npmrc").exists());
+    }
 }

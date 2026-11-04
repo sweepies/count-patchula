@@ -113,6 +113,9 @@ pub struct Credential {
     pub auth: Auth,
     /// The public registry prefix this entry stands in for, if it is a mirror.
     mirror_of: Option<(String, Url)>,
+    /// Whether lockfile tools that run no repository or package code get
+    /// these credentials too.
+    tools: bool,
 }
 
 /// Whether `prefix` covers `url`: same origin, and the path continues the
@@ -143,7 +146,18 @@ impl Credential {
             prefix: normalised,
             auth,
             mirror_of: None,
+            tools: false,
         })
+    }
+    /// Let lockfile tools that run no repository or package code use the
+    /// entry's credentials too.
+    pub fn for_tools(mut self) -> Self {
+        self.tools = true;
+        self
+    }
+    /// Whether lockfile tools get the entry's credentials.
+    pub fn tools(&self) -> bool {
+        self.tools
     }
     /// Make the entry a mirror of the public registry under `public`: requests
     /// there are sent to this entry's prefix instead. None if `public` is not

@@ -217,12 +217,14 @@ impl Engine {
             },
             transport.clone(),
         )?;
+        let tool_registries = http_options.credentials.clone();
         let http = Cached::with_options(cache.clone(), transport, http_options)
             .map_err(|e| Error::Invalid(e.to_string()))?;
         let sources = Sources::new(github.clone(), http.clone(), cache.clone());
-        let lockfiles = cache
-            .workspace_dir()
-            .map(|path| patchula_update::lockfiles::Runner::new(path.into(), token));
+        let lockfiles = cache.workspace_dir().map(|path| {
+            patchula_update::lockfiles::Runner::new(path.into(), token)
+                .with_registries(&tool_registries)
+        });
         let mut engine = Self {
             lockfiles,
             github,

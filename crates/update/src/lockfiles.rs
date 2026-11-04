@@ -488,6 +488,9 @@ pub async fn record_refresh(
 #[derive(Clone)]
 pub struct Runner {
     credentials: Option<Arc<dyn patchula_github::Credentials>>,
+    /// Operator registry entries whose credentials lockfile tools that run
+    /// no repository or package code may use.
+    registries: Vec<patchula_http::Credential>,
     cache: PathBuf,
     token: String,
     executor: Arc<dyn Executor>,
@@ -522,6 +525,7 @@ impl Runner {
             std::env::var_os("RUSTUP_HOME").map_or_else(|| home.join(".rustup"), PathBuf::from);
         Self {
             credentials: None,
+            registries: Vec::new(),
             cache,
             token: token.into(),
             executor: Arc::new(SystemExecutor),
@@ -566,6 +570,16 @@ impl Runner {
     }
     pub fn with_credentials(mut self, credentials: Arc<dyn patchula_github::Credentials>) -> Self {
         self.credentials = Some(credentials);
+        self
+    }
+    /// Give lockfile tools that run no repository or package code the
+    /// credentials of the entries that allow it (`tools = true`).
+    pub fn with_registries(mut self, registries: &[patchula_http::Credential]) -> Self {
+        self.registries = registries
+            .iter()
+            .filter(|entry| entry.tools() && entry.auth.sends() && entry.mirror_of().is_none())
+            .cloned()
+            .collect();
         self
     }
     pub async fn prepare(&self, plan: &mut Plan, snapshot: &mut Snapshot, config: &Config) {

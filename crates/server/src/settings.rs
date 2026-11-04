@@ -28,6 +28,10 @@ pub struct Registry {
     pub secret: Option<Secret>,
     pub mirror_of: Option<String>,
     pub allowed_installations: Vec<u64>,
+    /// Whether lockfile tools that run no repository or package code get the
+    /// entry's credentials.
+    #[serde(default)]
+    pub tools: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -209,6 +213,11 @@ impl Settings {
             {
                 return Err("allowedInstallations IDs must be positive");
             }
+            // Lockfile tools read the public registry, never a mirror, and an
+            // entry without credentials has nothing to give them.
+            if registry.tools && (registry.auth.is_none() || registry.mirror_of.is_some()) {
+                return Err("tools needs auth, and does not apply to a mirror");
+            }
         }
         if !(1..=100).contains(&self.http.default_host_concurrency) {
             return Err("defaultHostConcurrency must be 1..100");
@@ -316,6 +325,13 @@ impl Settings {
             };
             match auth.and_then(|auth| {
                 patchula_http::Credential::new(prefix, auth)
+                    .map(|entry| {
+                        if registry.tools {
+                            entry.for_tools()
+                        } else {
+                            entry
+                        }
+                    })
                     .and_then(mirror)
                     .ok_or_else(|| "secret cannot be sent in a header".to_owned())
             }) {
@@ -735,6 +751,45 @@ mod tests {
             r#"registries { ["https://nexus.acme.dev"] { mirrorOf = "https://nexus.acme.dev/" } }"#,
             r#"registries { ["https://nexus.acme.dev"] { mirrorOf = "http://registry.npmjs.org" } }"#,
             r#"registries { ["https://nexus.acme.dev/a"] { mirrorOf = "https://registry.npmjs.org" } ["https://nexus.acme.dev/b"] { mirrorOf = "https://registry.npmjs.org/" } }"#,
+        ] {
+            assert!(load(&bad.replace("; ", "\n")).is_err(), "{bad}");
+        }
+    }
+    #[test]
+    fn tools_take_an_entrys_credentials_only_when_it_allows_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.pkl");
+        let token = dir.path().join("token");
+        std::fs::write(&token, "t0ken\n").unwrap();
+        let load = |body: &str| {
+            std::fs::write(&path, format!("amends \"PatchulaSettings.pkl\"\n{body}\n")).unwrap();
+            Settings::load(&path)
+        };
+        let settings = load(
+            &r#"registries {
+  ["https://npm.acme.dev"] {
+    auth = "bearer"
+    secret { file = "TOKEN" }
+    tools = true
+  }
+  ["https://npm.other.dev"] {
+    auth = "bearer"
+    secret { file = "TOKEN" }
+  }
+}"#
+            .replace("TOKEN", &token.to_string_lossy()),
+        )
+        .unwrap();
+        let (entries, _) = settings.credentials(None);
+        let tools: Vec<_> = entries
+            .iter()
+            .filter(|e| e.tools())
+            .map(|e| e.prefix())
+            .collect();
+        assert_eq!(tools, ["https://npm.acme.dev"]);
+        for bad in [
+            r#"registries { ["https://nexus.acme.dev"] { mirrorOf = "https://registry.npmjs.org"; tools = true } }"#,
+            r#"registries { ["https://nexus.acme.dev"] { auth = "bearer"; secret { env = "T" }; mirrorOf = "https://registry.npmjs.org"; tools = true } }"#,
         ] {
             assert!(load(&bad.replace("; ", "\n")).is_err(), "{bad}");
         }
