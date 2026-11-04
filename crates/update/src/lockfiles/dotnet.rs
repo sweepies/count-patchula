@@ -132,6 +132,7 @@ impl Runner {
         directory: &str,
         versions: &BTreeMap<String, String>,
         edited: bool,
+        public: bool,
     ) -> Result<(), String> {
         let cwd = root.join(directory);
         let mut before = Vec::new();
@@ -179,6 +180,7 @@ impl Runner {
                 cwd: Some(cwd.clone()),
                 env,
                 credentials: credentials::scopes(entries.iter().copied()),
+                public,
                 args: vec![
                     "restore".into(),
                     target.to_string_lossy().into_owned(),

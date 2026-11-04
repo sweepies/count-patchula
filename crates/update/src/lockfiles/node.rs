@@ -156,6 +156,9 @@ pub(super) struct NodeContext<'a> {
     pub config: &'a Config,
     pub versions: &'a BTreeMap<String, String>,
     pub maintenance: bool,
+    /// Whether every file the run can read decided public-only, so its
+    /// tools may share the `public` cache partition.
+    pub public: bool,
 }
 
 impl Runner {
@@ -192,6 +195,7 @@ impl Runner {
             config,
             versions,
             maintenance,
+            public,
         } = context;
         let cwd = root.join(directory);
         for leaf in LOCKS {
@@ -206,10 +210,19 @@ impl Runner {
                 engine = Engine::Npm;
             }
             match engine {
-                Engine::Bun => self.bun(driver, &cwd, versions, maintenance).await?,
-                Engine::Npm => self.npm(driver, &cwd, versions, maintenance).await?,
-                Engine::Aube => self.aube(driver, &cwd, leaf, versions, maintenance).await?,
-                Engine::Yarn => self.yarn(driver, &cwd, versions).await?,
+                Engine::Bun => {
+                    self.bun(driver, &cwd, versions, maintenance, public)
+                        .await?
+                }
+                Engine::Npm => {
+                    self.npm(driver, &cwd, versions, maintenance, public)
+                        .await?
+                }
+                Engine::Aube => {
+                    self.aube(driver, &cwd, leaf, versions, maintenance, public)
+                        .await?
+                }
+                Engine::Yarn => self.yarn(driver, &cwd, versions, public).await?,
             }
             if !cwd.join(leaf).is_file() {
                 return Err(format!("tool did not produce {leaf}"));
@@ -279,6 +292,7 @@ impl Runner {
         cwd: &Path,
         versions: &BTreeMap<String, String>,
         maintenance: bool,
+        public: bool,
     ) -> Result<(), String> {
         let version = version(versions, "bun")?;
         if bun_too_old(&version) {
@@ -297,6 +311,7 @@ impl Runner {
                 cwd: None,
                 env: Vec::new(),
                 credentials: Vec::new(),
+                public,
                 args: vec![
                     "install".into(),
                     "--cwd".into(),
@@ -315,6 +330,7 @@ impl Runner {
         cwd: &Path,
         versions: &BTreeMap<String, String>,
         maintenance: bool,
+        public: bool,
     ) -> Result<(), String> {
         let args = vec![
             if maintenance { "update" } else { "install" }.to_string(),
@@ -333,6 +349,7 @@ impl Runner {
                 cwd: None,
                 env: Vec::new(),
                 credentials: Vec::new(),
+                public,
                 args,
             },
         )
@@ -346,6 +363,7 @@ impl Runner {
         leaf: &str,
         versions: &BTreeMap<String, String>,
         maintenance: bool,
+        public: bool,
     ) -> Result<(), String> {
         // aube picks the lockfile it writes from the files it finds. Name the
         // committed lockfile explicitly so a second lockfile cannot redirect it.
@@ -382,6 +400,7 @@ impl Runner {
                     config.to_string_lossy().into_owned(),
                 )],
                 credentials: Vec::new(),
+                public,
                 args,
             },
         )
@@ -393,6 +412,7 @@ impl Runner {
         driver: &Path,
         cwd: &Path,
         versions: &BTreeMap<String, String>,
+        public: bool,
     ) -> Result<(), String> {
         let manifest = std::fs::read_to_string(cwd.join("package.json")).ok();
         let lock = std::fs::read_to_string(cwd.join("yarn.lock")).unwrap_or_default();
@@ -433,6 +453,7 @@ impl Runner {
                         ("YARN_ENABLE_PROGRESS_BARS".into(), "0".into()),
                     ],
                     credentials: Vec::new(),
+                    public,
                     args,
                 },
             )

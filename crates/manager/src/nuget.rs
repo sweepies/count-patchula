@@ -238,7 +238,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
 }
 
 /// nuget.org, for `crate::origins`.
-const NUGET_ORG: Public = Public {
+pub(crate) const NUGET_ORG: Public = Public {
     source: Source::Nuget,
     label: "https://api.nuget.org/v3/index.json",
     is_public: |url| {
@@ -734,6 +734,26 @@ impl Feeds {
         let dropped = origins.assign(deps, &NUGET_ORG, |dep| dep.package.clone());
         debug_assert!(dropped.is_empty());
     }
+}
+
+/// Whether a `nuget.config` names only nuget.org sources.
+pub(crate) fn config_public(text: &str) -> bool {
+    let Ok(config) = config(text) else {
+        return false;
+    };
+    config
+        .sources
+        .iter()
+        .all(|(_, value)| matches!(Named::parse(value, &NUGET_ORG), Named::Public))
+}
+
+/// Whether an MSBuild file avoids every property that can set restore
+/// sources.
+pub(crate) fn msbuild_public(text: &str) -> bool {
+    let text = decoded(text).to_ascii_lowercase();
+    !RESTORE_OVERRIDES
+        .iter()
+        .any(|property| text.contains(property))
 }
 
 #[cfg(test)]

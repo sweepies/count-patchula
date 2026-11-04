@@ -23,7 +23,7 @@ use std::time::{Duration, SystemTime};
 
 /// The partitions' directory inside the runner's cache.
 pub(super) const ROOT: &str = "tool-caches";
-const PUBLIC: &str = "public";
+pub(super) const PUBLIC: &str = "public";
 /// The file inside a partition whose mtime records its last use.
 const USED: &str = ".used";
 /// A partition unused for this long is pruned.
@@ -55,15 +55,13 @@ pub(super) fn tool(bin: &str) -> Option<Tool> {
     })
 }
 
-/// The partition `scopes` shares: `public` without credentials, else a name
-/// nobody outside a run with the same entries can predict, keyed by the
-/// entries' scopes alone, never their secrets.
+/// The `private-<hash>` partition credentialed runs share: a name nobody
+/// outside a run with the same entries can predict, keyed by the entries'
+/// scopes alone, never their secrets. Runs without credentials choose
+/// between `public` and `installation-<hash>` by what they can fetch, in
+/// `Runner::use_caches`.
 pub(super) fn partition(scopes: &[String]) -> String {
-    if scopes.is_empty() {
-        PUBLIC.into()
-    } else {
-        format!("private-{}", hash(scopes.join("\n").as_bytes()))
-    }
+    format!("private-{}", hash(scopes.join("\n").as_bytes()))
 }
 
 /// The locks a run holds on its partition, dropped when it finishes.
@@ -194,11 +192,16 @@ fn size(dir: &Path) -> u64 {
 }
 
 /// Restore the owner's write permission on `path`, where a tool wrote it
-/// read-only, as a Go module cache does without `-modcacherw`.
+/// read-only, as a Go module cache does without `-modcacherw`. A symlink
+/// is never followed: its mode is its target's concern, not the
+/// partition's, and removing the link is enough.
 fn unreadonly(path: &Path) {
-    let Ok(meta) = std::fs::metadata(path) else {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
         return;
     };
+    if meta.file_type().is_symlink() {
+        return;
+    }
     let permissions = meta.permissions();
     if !permissions.readonly() {
         return;
@@ -230,7 +233,9 @@ fn writable(dir: &Path) {
     for entry in entries.flatten() {
         let path = entry.path();
         unreadonly(&path);
-        if entry.metadata().is_ok_and(|meta| meta.is_dir()) {
+        // `file_type` does not follow a link, so a symlinked directory
+        // under the partition is removed, never descended into.
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
             writable(&path);
         }
     }
@@ -253,7 +258,13 @@ fn evict(root: &Path, name: &str) -> bool {
     let partition = root.join(name);
     writable(&partition);
     match std::fs::remove_dir_all(&partition) {
-        Ok(()) => true,
+        Ok(()) => {
+            // The lock file goes with its partition while the exclusive
+            // hold lasts, so a new partition of the name cannot race a
+            // leftover lock.
+            let _ = std::fs::remove_file(root.join(format!("{name}.lock")));
+            true
+        }
         Err(error) => {
             tracing::warn!(%error, partition = %name, "tool cache partition was not removed");
             false
@@ -263,18 +274,27 @@ fn evict(root: &Path, name: &str) -> bool {
 
 /// Whether it is time to prune `root` again: at most once per `EVERY` per
 /// root per process. The server builds one Runner per installation, so the
-/// record is process-wide, keyed by root, not per Runner.
+/// record is process-wide, keyed by root, not per Runner. A prune records
+/// itself only when it actually ran — when `prune.lock` is held elsewhere,
+/// a skipped call must stay eligible.
 pub(super) fn due(root: &Path) -> bool {
-    static PRUNED: std::sync::Mutex<BTreeMap<PathBuf, std::time::Instant>> =
-        std::sync::Mutex::new(BTreeMap::new());
-    let mut last = PRUNED
+    PRUNED
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if last.get(root).is_some_and(|ran| ran.elapsed() < EVERY) {
-        return false;
-    }
-    last.insert(root.to_path_buf(), std::time::Instant::now());
-    true
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(root)
+        .is_none_or(|ran| ran.elapsed() >= EVERY)
+}
+
+/// When the last prune of `root` ran.
+static PRUNED: std::sync::Mutex<BTreeMap<PathBuf, std::time::Instant>> =
+    std::sync::Mutex::new(BTreeMap::new());
+
+/// Mark `root` pruned: called only by a prune that ran.
+fn record(root: &Path) {
+    PRUNED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(root.to_path_buf(), std::time::Instant::now());
 }
 
 /// Drop partitions unused for `AGE`, then least-recently-used private ones,
@@ -297,6 +317,7 @@ pub(super) fn prune(root: &Path, cap: u64, now: SystemTime) -> Result<(), String
         return Ok(());
     }
     let _guard = guard;
+    record(root);
     let mut partitions = Vec::new();
     for entry in entries.flatten() {
         let Ok(kind) = entry.file_type() else {
@@ -306,7 +327,7 @@ pub(super) fn prune(root: &Path, cap: u64, now: SystemTime) -> Result<(), String
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name != PUBLIC && !name.starts_with("private-") {
+        if name != PUBLIC && !name.starts_with("private-") && !name.starts_with("installation-") {
             continue;
         }
         partitions.push((name, entry.path(), used_at(&entry.path())));
@@ -343,4 +364,73 @@ pub(super) fn prune(root: &Path, cap: u64, now: SystemTime) -> Result<(), String
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// Restoring write permission never follows a symlink: the link is
+    /// skipped, so its target outside the partition keeps its mode.
+    #[test]
+    fn unreadonly_never_follows_symlinks() {
+        let temp = tempfile::tempdir().unwrap();
+        let outside = temp.path().join("outside");
+        std::fs::write(&outside, "x").unwrap();
+        let mut permissions = std::fs::metadata(&outside).unwrap().permissions();
+        permissions.set_mode(0o444);
+        std::fs::set_permissions(&outside, permissions).unwrap();
+        let partition = temp.path().join("public");
+        std::fs::create_dir_all(&partition).unwrap();
+        std::os::unix::fs::symlink(&outside, partition.join("link")).unwrap();
+        writable(&partition);
+        let mode = std::fs::metadata(&outside).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o444, "the symlink's target was followed");
+    }
+
+    /// Removing a partition removes its lock file too, while the
+    /// eviction still holds the lock exclusively.
+    #[test]
+    fn an_evicted_partitions_lock_file_is_removed() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        std::fs::create_dir_all(root.join("private-x")).unwrap();
+        std::fs::File::create(root.join("private-x.lock")).unwrap();
+        assert!(evict(root, "private-x"));
+        assert!(!root.join("private-x").exists());
+        assert!(!root.join("private-x.lock").exists());
+    }
+
+    /// A partition a run still holds is not evicted, and its lock file
+    /// stays put.
+    #[test]
+    fn a_held_partition_keeps_its_lock_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        std::fs::create_dir_all(root.join("private-x")).unwrap();
+        let file = std::fs::File::create(root.join("private-x.lock")).unwrap();
+        file.lock_shared().unwrap();
+        assert!(!evict(root, "private-x"));
+        assert!(root.join("private-x").exists());
+        assert!(root.join("private-x.lock").exists());
+    }
+
+    /// `due` stays true while `prune.lock` is held — the skipped prune
+    /// never ran, so it records nothing — and goes false after a prune
+    /// that ran.
+    #[test]
+    fn a_prune_marks_due_only_when_it_ran() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("tool-caches-due-test");
+        std::fs::create_dir_all(&root).unwrap();
+        assert!(due(&root));
+        let guard = std::fs::File::create(root.join("prune.lock")).unwrap();
+        guard.lock().unwrap();
+        prune(&root, 0, SystemTime::now()).unwrap();
+        assert!(due(&root), "a skipped prune still counts as due");
+        drop(guard);
+        prune(&root, 0, SystemTime::now()).unwrap();
+        assert!(!due(&root), "a real prune marks itself done");
+    }
 }

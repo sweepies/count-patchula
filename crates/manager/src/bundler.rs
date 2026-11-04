@@ -102,7 +102,9 @@ pub(super) fn extract(
     });
     let lock_text = files.get(&format!("{path}.lock"));
     let lock = lock_text.map(|l| locked(l)).unwrap_or_default();
-    let Gemfile { mut origins, gems } = gemfile(path, text);
+    let Gemfile {
+        mut origins, gems, ..
+    } = gemfile(path, text);
     origins.locks.extend(lock_text.map(|l| lock_origins(l)));
     origins.uncertain.extend(bundle_config(
         dir,
@@ -167,7 +169,7 @@ pub(super) fn extract(
 }
 
 /// RubyGems, for `crate::origins`.
-const RUBYGEMS: Public = Public {
+pub(crate) const RUBYGEMS: Public = Public {
     source: Source::Rubygems,
     label: "https://rubygems.org",
     is_public: |url| {
@@ -181,6 +183,8 @@ const RUBYGEMS: Public = Public {
 struct Gemfile {
     origins: Origins,
     gems: BTreeSet<String>,
+    /// The URLs of the gems' remote (non-`path`) source options.
+    remote: Vec<String>,
 }
 
 /// Read a Gemfile's lines. When every line is one of the plain forms
@@ -201,6 +205,7 @@ fn gemfile(path: &str, text: &str) -> Gemfile {
         blocks,
         globals,
         gems,
+        remote,
     } = reading;
     if !read || !blocks.is_empty() {
         origins.configured.push(Named::Unusable(format!(
@@ -220,7 +225,11 @@ fn gemfile(path: &str, text: &str) -> Gemfile {
             }
         }
         let gems = gems.into_iter().map(|(name, _)| name).collect();
-        return Gemfile { origins, gems };
+        return Gemfile {
+            origins,
+            gems,
+            remote,
+        };
     }
     // Several top-level sources leave a gem outside a block to the lock.
     let global = match globals.as_slice() {
@@ -243,7 +252,11 @@ fn gemfile(path: &str, text: &str) -> Gemfile {
         .filter_map(|(name, origin)| Some((name, origin?)))
         .collect();
     let gems = gems.into_iter().map(|(name, _)| name).collect();
-    Gemfile { origins, gems }
+    Gemfile {
+        origins,
+        gems,
+        remote,
+    }
 }
 
 /// The state of reading a Gemfile line by line.
@@ -257,6 +270,8 @@ struct Reading {
     globals: Vec<Named>,
     /// Each `gem` line's gem, with the source its option or block names.
     gems: Vec<(String, Option<Named>)>,
+    /// The URLs of remote (non-`path`) source options.
+    remote: Vec<String>,
 }
 
 /// Gem options that leave the gem on its source.
@@ -344,6 +359,11 @@ impl Reading {
                             }
                             _ => return false,
                         },
+                        "git" | "github" | "gist" | "bitbucket" | "gitlab" => {
+                            if let Value::Str(url) = value {
+                                self.remote.push(url.clone());
+                            }
+                        }
                         key if GEM_KEYS.contains(&key) || OUTSIDE_KEYS.contains(&key) => {}
                         key if outside && GIT_KEYS.contains(&key) => {}
                         _ => return false,
@@ -681,6 +701,82 @@ fn lock_origins(lock: &str) -> BTreeMap<String, Origin> {
         .into_iter()
         .filter_map(|(name, entries)| Some((name, Origin::of(entries)?)))
         .collect()
+}
+
+/// Whether a Gemfile — its `source` lines, its gems' source and remote
+/// options, and the lockfile beside it that Bundler resolves against —
+/// steers a run only to RubyGems, a public forge or local sources. The
+/// repository's `.bundle/config` never decides it: the runner's Bundler
+/// never reads that file.
+pub(crate) fn public_only(path: &str, text: &str, files: &Files) -> bool {
+    let Gemfile {
+        origins, remote, ..
+    } = gemfile(path, text);
+    origins.public_only()
+        && remote
+            .iter()
+            .all(|url| crate::public::fetch_ok(url, &RUBYGEMS))
+        && files
+            .get(&format!("{path}.lock"))
+            .is_none_or(|lock| lock_public(lock))
+}
+
+/// Whether `Gemfile.lock` records only RubyGems remotes, public-forge
+/// git or plugin sources and local path sources.
+pub(crate) fn lock_public(lock: &str) -> bool {
+    let mut section = "";
+    for line in lock.lines() {
+        if !line.starts_with(' ') {
+            section = line.trim();
+            continue;
+        }
+        let Some(remote) = line.trim().strip_prefix("remote:") else {
+            continue;
+        };
+        let url = remote.trim();
+        let ok = match section {
+            "GEM" => Named::parse(url, &RUBYGEMS) == Named::Public,
+            // Git and plugin sources fetch remote content; a public
+            // forge serves only public content.
+            "GIT" | "PLUGIN" => crate::public::fetch_ok(url, &RUBYGEMS),
+            _ => true,
+        };
+        if !ok {
+            return false;
+        }
+    }
+    true
+}
+
+/// The URLs a Gemfile's `source` directives and `gem` `source:` options
+/// name, as written.
+pub(crate) fn source_urls(text: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    for line in text.lines() {
+        let Some(call) = tokens(line).and_then(|tokens| call(&tokens)) else {
+            continue;
+        };
+        match call.head.as_str() {
+            "source" => {
+                for value in &call.positional {
+                    if let Value::Str(url) = value {
+                        urls.push(url.clone());
+                    }
+                }
+            }
+            "gem" => {
+                for (key, value) in &call.options {
+                    if key == "source"
+                        && let Value::Str(url) = value
+                    {
+                        urls.push(url.clone());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    urls
 }
 
 #[cfg(test)]

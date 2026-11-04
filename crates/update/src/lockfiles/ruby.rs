@@ -46,6 +46,7 @@ impl Runner {
             config,
             versions,
             maintenance,
+            public,
         } = context;
         let cwd = root.join(directory);
         let lock = node::join(directory, "Gemfile.lock");
@@ -75,6 +76,7 @@ impl Runner {
             .chain(credentials.iter().cloned())
             .collect(),
             credentials: scopes.clone(),
+            public,
             args,
         };
         // Bundler moves a gem as far as its requirement allows and cannot be

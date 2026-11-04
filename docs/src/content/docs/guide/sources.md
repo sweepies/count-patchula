@@ -147,30 +147,35 @@ when the origin changes.
 The operator [settings](/reference/settings/) hold credentials for private
 registries, keyed by an https URL prefix. Repository configs never name
 credentials: a `patchula.pkl` can point a dependency at any URL, so in the
-server it could otherwise read another organisation's registry. A
-repository that commits a credential anyway — a URL with a user or
-password in a file a lockfile tool or a registry lookup reads, an
-`_authToken` in `.npmrc`, an `npmAuthToken` in `.yarnrc.yml`, Composer
-`config` auth, NuGet source credentials or API keys, Poetry
-`http-basic`/`pypi-token`, or a Cargo registry `token` — is refused
+server it could otherwise read another organisation's registry. As
+hygiene, a repository that commits a credential anyway is refused
 outright: the repository's report is an error and nothing runs for it.
-Move the credential to the operator's `registries` settings; `${VAR}`-style
-environment references and `$()` command substitutions stay allowed, since
-the secret lives outside the file.
+Move the credential to the operator's `registries` settings;
+`${VAR}`-style environment references and `$()` command substitutions
+stay allowed, since the secret lives outside the file.
 
-The URL rule covers exactly the files a lockfile tool or a package-registry
-lookup reads: `.npmrc`, `.yarnrc.yml` and `pnpm-workspace.yaml`,
-`package.json` and the Node lockfiles (`package-lock.json`,
-`npm-shrinkwrap.json`, `aube-lock.yaml`, `pnpm-lock.yaml`, `yarn.lock`,
-`bun.lock`), `pyproject.toml`, `uv.toml`, `poetry.toml`, `pip.conf` and
-`pip.ini`, `uv.lock` and `poetry.lock`, `composer.json` and
-`composer.lock`, `nuget.config` and the MSBuild files that can set restore
-sources (`Directory.Packages.props`, project files and their kin),
-`Gemfile`, `Gemfile.lock` and `.bundle/config`, `Cargo.toml`, `Cargo.lock`
-and `.cargo/config`, `go.mod` and `go.work`, and mise configuration files.
-CI workflows, Dockerfiles, Compose, Kubernetes and Helm manifests and
-Terraform files are not checked: nothing the Count runs reads them, so a
-credential committed there steers no fetch of its.
+The refusal is hygiene, not a security boundary — only the settings a
+tool or a registry lookup reads as a credential are checked, with each
+format's parser so escapes cannot hide one: `_authToken`, `_auth` and
+`_password` keys in `.npmrc` or `pnpm-workspace.yaml` with literal values;
+`npmAuthToken` and `npmAuthIdent` in `.yarnrc.yml`; Composer `config` auth
+keys (`http-basic`, `bearer`, `github-oauth`, `gitlab-oauth`,
+`gitlab-token`, `bitbucket-oauth`, `forgejo-oauth`/`forgejo-token`,
+`gitea-oauth`/`gitea-token`); `Password` and `ClearTextPassword` in a
+`nuget.config` `packageSourceCredentials` (`%VAR%` references allowed);
+Poetry `http-basic` and `pypi-token` literals in `poetry.toml` or
+`pyproject.toml`; a Cargo registry `token` in `.cargo/config*`; and a URL
+carrying a user **and** password in a field that names a registry, index
+or source URL — `.npmrc` `registry`/`@scope:registry`, `.yarnrc.yml`
+`npmRegistryServer`, pyproject/uv/poetry index and source URLs, Composer
+`repositories[].url`, `nuget.config` `packageSources`, pip index URLs,
+Gemfile `source` lines, and Cargo registry `index` values.
+
+Everything else is left alone: a database DSN in a test script, a
+user-only userinfo like `https://user@bitbucket.org`, `.bundle/config`
+`BUNDLE_*` keys (no tool of the Count's reads them), empty values, lockfile
+`resolved` URLs and CI workflows — none of those is a credential a tool
+reads, so none refuses a repository.
 
 ```pkl
 amends "PatchulaSettings.pkl"

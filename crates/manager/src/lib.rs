@@ -25,6 +25,7 @@ mod helm;
 mod images;
 mod locked;
 mod origins;
+mod public;
 mod pypi;
 pub use locked::Locked;
 mod maven;
@@ -155,6 +156,14 @@ pub struct Extraction {
     pub locked: Vec<Locked>,
     #[serde(default)]
     pub skipped: Vec<Skipped>,
+    /// For each file that can steer a lockfile tool's fetches, whether it
+    /// can fetch only from the ecosystem's well-known public registry:
+    /// every configured and locked origin is public and nothing is
+    /// uncertain or unreadable. A run may share the `public` cache
+    /// partition only when every file it reads decides so; a missing
+    /// verdict is not public.
+    #[serde(default)]
+    pub public_only: BTreeMap<String, bool>,
 }
 /// A declaration the Count found but cannot read as a version, such as an
 /// image built from a variable. Unlike a warning, it leaves branch cleanup on.
@@ -767,6 +776,11 @@ impl Scanner {
                 .extend(locked::npm(files, &locks, &result.dependencies));
         }
         npm::assign_locked_registries(&mut result.locked, &npmrcs);
+        for (path, text) in files {
+            if let Some(flag) = public::verdict(path, text, files) {
+                result.public_only.insert(path.clone(), flag);
+            }
+        }
         Ok(result)
     }
 }

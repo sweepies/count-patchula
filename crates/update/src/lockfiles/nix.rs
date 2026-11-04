@@ -152,6 +152,7 @@ impl Runner {
                     ("NIX_CONFIG".into(), config),
                 ],
                 credentials: Vec::new(),
+                public: false,
                 args: call,
             },
         )

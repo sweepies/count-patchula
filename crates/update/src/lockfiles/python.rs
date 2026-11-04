@@ -45,6 +45,7 @@ impl Runner {
             config,
             versions,
             maintenance,
+            public,
         } = context;
         let cwd = root.join(directory);
         let python = python(baseline, directory, versions)?;
@@ -102,6 +103,7 @@ impl Runner {
                             ("UV_NO_PROGRESS".into(), "1".into()),
                         ],
                         credentials: credentials::scopes(netrc_entries.iter().copied()),
+                        public,
                         args,
                     },
                     !hosts.is_empty(),
@@ -137,6 +139,7 @@ impl Runner {
                         credentials: credentials::scopes(
                             poetry_entries.iter().chain(netrc_entries.iter()).copied(),
                         ),
+                        public,
                         args,
                     },
                     !poetry.is_empty() || !hosts.is_empty(),

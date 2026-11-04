@@ -141,7 +141,7 @@ pub(super) fn extract(
 }
 
 /// Packagist, for `crate::origins`.
-const PACKAGIST: Public = Public {
+pub(crate) const PACKAGIST: Public = Public {
     source: Source::Packagist,
     label: "https://packagist.org",
     is_public: |url| {
@@ -300,4 +300,48 @@ fn lock(lock: &str) -> Option<Lock> {
         .filter_map(|(name, entries)| Some((name, Origin::of(entries)?)))
         .collect();
     Some(Lock { recorded, plugins })
+}
+
+/// Whether a `composer.json` — its `repositories` — steers a run only to
+/// Packagist or local sources.
+pub(crate) fn manifest_public(text: &str) -> bool {
+    match manifest("", text) {
+        Ok(manifest) => manifest
+            .configured
+            .iter()
+            .all(|named| matches!(named, Named::Public)),
+        Err(_) => false,
+    }
+}
+
+/// Whether a `composer.lock` records only Packagist packages, or packages
+/// whose dist and source URLs are public or local.
+pub(crate) fn lock_public(text: &str) -> bool {
+    let Some(lock) = lock(text) else {
+        return false;
+    };
+    if lock.plugins {
+        return false;
+    }
+    let ok = lock
+        .recorded
+        .values()
+        .all(|origin| matches!(origin, Origin::Index(Named::Public) | Origin::Other));
+    if !ok {
+        return false;
+    }
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(text) else {
+        return false;
+    };
+    ["packages", "packages-dev"]
+        .iter()
+        .flat_map(|key| json.get(key).and_then(|v| v.as_array()))
+        .flatten()
+        .all(|package| {
+            ["dist", "source"].iter().all(|field| {
+                package[field]["url"]
+                    .as_str()
+                    .is_none_or(|url| crate::public::fetch_ok(url, &PACKAGIST))
+            })
+        })
 }

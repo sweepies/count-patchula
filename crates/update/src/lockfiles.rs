@@ -56,6 +56,85 @@ pub struct Job {
     /// The manifest is not edited, so the tool must be told the exact version.
     pub lock_only: bool,
 }
+/// Whether `path`, materialized for a run of `ecosystem` in `directory`,
+/// could steer what its tools fetch: a manifest, lockfile or settings
+/// file of the ecosystem in the run's directory or below it, or a
+/// settings file in a directory above it that tools read upward.
+fn steers(ecosystem: Ecosystem, path: &str, directory: &str) -> bool {
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    let kind = match ecosystem {
+        Ecosystem::Node => matches!(
+            leaf,
+            "package.json"
+                | ".npmrc"
+                | ".yarnrc.yml"
+                | "pnpm-workspace.yaml"
+                | "package-lock.json"
+                | "npm-shrinkwrap.json"
+                | "aube-lock.yaml"
+                | "pnpm-lock.yaml"
+                | "yarn.lock"
+                | "bun.lock"
+        ),
+        Ecosystem::Python => matches!(
+            leaf,
+            "pyproject.toml"
+                | "uv.toml"
+                | "poetry.toml"
+                | "pdm.toml"
+                | "pixi.toml"
+                | "hatch.toml"
+                | "uv.lock"
+                | "poetry.lock"
+        ),
+        // The repository's `.bundle/config` never steers a run: Bundler's
+        // environment overrides it.
+        Ecosystem::Ruby => matches!(leaf, "Gemfile" | "Gemfile.lock"),
+        Ecosystem::Php => matches!(leaf, "composer.json" | "composer.lock"),
+        Ecosystem::Cargo => matches!(leaf, "Cargo.toml" | "Cargo.lock"),
+        Ecosystem::Dotnet => {
+            leaf.eq_ignore_ascii_case("nuget.config")
+                || matches!(
+                    leaf,
+                    "packages.lock.json"
+                        | "Directory.Packages.props"
+                        | "Directory.Build.props"
+                        | "Directory.Build.targets"
+                        | "global.json"
+                        | "dotnet-tools.json"
+                )
+                || [
+                    ".csproj", ".fsproj", ".vbproj", ".sln", ".slnx", ".props", ".targets",
+                ]
+                .iter()
+                .any(|extension| leaf.ends_with(extension))
+        }
+        // Go needs no verdicts: nothing a repository commits moves its
+        // fetches off the proxy, which is environment-only in the sandbox
+        // (GOPRIVATE and `.netrc` enter only with operator credentials,
+        // which get a private partition of their own).
+        Ecosystem::Go => return true,
+        _ => return false,
+    };
+    kind && (under(path, directory) || under(directory, self::directory(path)))
+}
+
+/// Whether a run for (`ecosystem`, `directory`) can fetch only from the
+/// ecosystem's well-known public registries: every materialized file
+/// that could steer it decides public-only, and a file with no verdict
+/// is not public. Fail closed.
+fn public_only(
+    ecosystem: Ecosystem,
+    directory: &str,
+    baseline: &BTreeMap<String, Blob>,
+    verdicts: &BTreeMap<String, bool>,
+) -> bool {
+    matches!(ecosystem, Ecosystem::Go)
+        || baseline
+            .keys()
+            .all(|path| !steers(ecosystem, path, directory) || verdicts.get(path) == Some(&true))
+}
+
 fn directory(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(p, _)| p)
 }
@@ -419,6 +498,7 @@ pub fn maintenance(
         cached_pr: None,
         lock_jobs: jobs.into_iter().collect(),
         lockfiles_ready: false,
+        public_only: snapshot.public_only.clone(),
         deleted: BTreeSet::new(),
         maintenance: true,
         batch: None,
@@ -514,6 +594,11 @@ pub struct Runner {
     nix_install: Arc<tokio::sync::Mutex<()>>,
     /// The persistent tool caches' size cap in GiB; 0 turns them off.
     cache_gib: u64,
+    /// The `installation-<hash>` partition name for runs that hold no
+    /// operator credentials but are not provably public-only:
+    /// `installation-<sha256 of the GitHub credentials scope>` on the
+    /// server, `installation-local` for the CLI.
+    installation: String,
 }
 
 /// The persistent tool caches' default size cap in GiB.
@@ -549,6 +634,7 @@ impl Runner {
             seed: None,
             nix_install: Default::default(),
             cache_gib: DEFAULT_CACHE_GIB,
+            installation: "installation-local".into(),
         }
     }
     /// Borrow tool versions from this mise data directory, usually the user's
@@ -581,6 +667,9 @@ impl Runner {
         ))
     }
     pub fn with_credentials(mut self, credentials: Arc<dyn patchula_github::Credentials>) -> Self {
+        // The installation's own partition, for runs that are not provably
+        // public-only but hold no operator credentials.
+        self.installation = format!("installation-{}", hash(credentials.scope().as_bytes()));
         self.credentials = Some(credentials);
         self
     }
@@ -707,6 +796,10 @@ impl Runner {
                 .iter()
                 .filter(|j| j.ecosystem == ecosystem && j.directory == directory)
                 .collect();
+            // Whether every file the run can read decided public-only, so
+            // its tools may share the `public` cache partition. Fail
+            // closed: any file without a verdict makes it not public.
+            let public = public_only(ecosystem, &directory, &baseline, &plan.public_only);
             let cwd = root.join(&directory);
             match ecosystem {
                 Ecosystem::Ruby => {
@@ -719,6 +812,7 @@ impl Runner {
                             config,
                             versions: &versions,
                             maintenance: plan.maintenance,
+                            public,
                         },
                         &jobs,
                     )
@@ -734,6 +828,7 @@ impl Runner {
                             config,
                             versions: &versions,
                             maintenance: plan.maintenance,
+                            public,
                         },
                         &jobs,
                     )
@@ -748,6 +843,7 @@ impl Runner {
                         config,
                         versions: &versions,
                         maintenance: plan.maintenance,
+                        public,
                     })
                     .await?;
                 }
@@ -762,6 +858,7 @@ impl Runner {
                         &directory,
                         &versions,
                         edited && !plan.maintenance,
+                        public,
                     )
                     .await?;
                 }
@@ -778,6 +875,7 @@ impl Runner {
                             config,
                             versions: &versions,
                             maintenance: plan.maintenance,
+                            public,
                         },
                         &jobs,
                     )
@@ -807,6 +905,7 @@ impl Runner {
                         config,
                         versions: &versions,
                         maintenance: plan.maintenance,
+                        public,
                     })
                     .await?;
                 }
@@ -832,7 +931,7 @@ impl Runner {
                             &versions["rust"],
                             job,
                             plan.maintenance,
-                            (&env, &credentials),
+                            (&env, &credentials, public),
                         )
                         .await?;
                     }
@@ -862,6 +961,10 @@ impl Runner {
                                     cwd: None,
                                     env: env.clone(),
                                     credentials: credentials.clone(),
+                                    // Go always resolves through the
+                                    // sandbox's proxy: it is public-only
+                                    // by construction.
+                                    public: true,
                                     args: vec![
                                         "-C".into(),
                                         cwd.to_string_lossy().into_owned(),
@@ -895,6 +998,7 @@ impl Runner {
                             cwd: None,
                             env,
                             credentials,
+                            public: true,
                             args,
                         },
                     )
@@ -914,6 +1018,7 @@ impl Runner {
                             cwd: None,
                             env,
                             credentials: credentials::scopes(entries.iter().copied()),
+                            public: false,
                             args: vec![
                                 format!("-chdir={}", cwd.display()),
                                 "providers".into(),
@@ -1002,7 +1107,7 @@ impl Runner {
         rust: &str,
         job: &Job,
         maintenance: bool,
-        (env, credentials): (&[(String, String)], &[String]),
+        (env, credentials, public): (&[(String, String)], &[String], bool),
     ) -> Result<(), String> {
         let update = |args: Vec<String>| {
             let mut all = vec![
@@ -1019,6 +1124,7 @@ impl Runner {
                     cwd: None,
                     env: env.to_vec(),
                     credentials: credentials.to_vec(),
+                    public,
                     args: all,
                 },
             )
@@ -1097,7 +1203,18 @@ impl Runner {
         let mut scopes = call.credentials.clone();
         scopes.sort_unstable();
         scopes.dedup();
-        let name = caches::partition(&scopes);
+        // Credentialed runs partition on the credential set as before.
+        // Uncredentialed runs share `public` only when every file they can
+        // read decided public-only; anything else gets the installation's
+        // own partition, so a run that might fetch private content never
+        // leaves it where other installations could pick it up.
+        let name = if !scopes.is_empty() {
+            caches::partition(&scopes)
+        } else if call.public {
+            caches::PUBLIC.into()
+        } else {
+            self.installation.clone()
+        };
         let root = self.cache.join(caches::ROOT);
         let bin = call.bin.clone();
         // `-modcacherw` keeps the module cache writable for eviction; merge
@@ -1224,6 +1341,10 @@ struct Invocation {
     /// The `Credential::scope()`s of the registry entries this run receives.
     /// They decide its cache partition and whether a failure shows its output.
     credentials: Vec<String>,
+    /// Whether the run can fetch only from its ecosystem's well-known
+    /// public registry, which lets it share the `public` cache partition
+    /// when it holds no operator credentials.
+    public: bool,
     args: Vec<String>,
 }
 

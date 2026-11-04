@@ -2420,6 +2420,7 @@ impl Engine {
             snapshot: patchula_update::Snapshot {
                 paths,
                 files: blobs,
+                public_only: extraction.public_only.clone(),
             },
             inventory: None,
             controls: patchula_update::dashboard::Controls::default(),
@@ -2637,11 +2638,13 @@ impl Engine {
                 extraction
             };
             extraction.skipped.extend(unsupported);
+            let public_only = extraction.public_only.clone();
             let cached = CachedExtraction {
                 extraction,
                 snapshot: patchula_update::Snapshot {
                     paths,
                     files: blobs,
+                    public_only,
                 },
             };
             self.cache
@@ -2765,7 +2768,7 @@ fn lockfile_concurrency() -> usize {
 
 /// The namespace of extraction cache entries, changed whenever extraction
 /// semantics do.
-const EXTRACTION: &str = "extract-v26";
+const EXTRACTION: &str = "extract-v27";
 
 fn hash(bytes: &[u8]) -> String {
     Sha256::digest(bytes)

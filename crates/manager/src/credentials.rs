@@ -1,66 +1,38 @@
-//! Credentials committed to the repository. A repository that holds its own
-//! registry credentials is refused outright: its packages could come from a
-//! registry meant for another installation, and lockfile tools would fetch
-//! them into the shared `public` cache partition. The files a lockfile tool
-//! or a package-registry lookup reads — [`credential_scope`] — are scanned
-//! for a URL carrying a user or password, and the settings files each tool
-//! reads credentials from are checked against that tool's own documented
-//! settings. The checks fail closed; a file of a structured format that
-//! does not parse is refused only when the URL rule also matches, and is
-//! otherwise left to the tool.
+//! Credentials committed to the repository, refused as hygiene: a
+//! repository must not carry its own registry credentials — they belong
+//! in the operator's `registries` settings. This is no longer a safety
+//! boundary for the shared `public` cache partition; a run reaches
+//! `public` only when the extraction decided every file it reads is
+//! public-only, so a credential a text scan would miss cannot smuggle a
+//! private fetch there either way.
+//!
+//! The checks are the settings keys each tool documents for credentials,
+//! plus a URL carrying a user and password in the fields that name a
+//! registry, index or source URL, read from the parsed values so escapes
+//! are decoded. Everything else — CI workflows, scripts, environment
+//! values, git dependency URLs, checksums — is out of scope: no check
+//! refuses a repository for what its tools never read as a credential.
 //!
 //! Everything returned names what was found, never the value.
 
-/// Whether a committed credential in `path` could steer a package tool or a
-/// registry lookup: `path`'s format is a registry settings file, a package
-/// manifest or a lockfile a lockfile tool or lookup reads. Everything else —
-/// CI workflows, Dockerfiles, Compose, Kubernetes and Helm manifests,
-/// Terraform — is out of scope: no tool the Count runs reads it and no
-/// lookup follows it, so a credential there is the repository's own
-/// business. The engine scans only these files; the lockfile runner's
-/// backstop scans every file it materializes, since those are exactly what
-/// its tools read.
+/// Whether `path` can hold a committed credential [`committed_credentials`]
+/// knows: a registry settings file or a manifest that names registry URLs.
 pub fn credential_scope(path: &str) -> bool {
     let leaf = path.rsplit('/').next().unwrap_or(path);
     crate::nuget::config_file(path)
-        || crate::nuget::msbuild_file(path)
         || crate::cargo::config_file(path)
-        || crate::mise::config_file(path)
-        || crate::go::work_file(path)
-        || crate::bundle_config(path)
         || matches!(
             leaf,
-            // Node registry settings, manifests and lockfiles.
             ".npmrc"
-                | ".yarnrc.yml"
                 | "pnpm-workspace.yaml"
-                | "package.json"
-                | "package-lock.json"
-                | "npm-shrinkwrap.json"
-                | "aube-lock.yaml"
-                | "pnpm-lock.yaml"
-                | "yarn.lock"
-                | "bun.lock"
-                // Python settings and lockfiles. pip requirements files are
-                // not read for index URLs, so they stay out.
+                | ".yarnrc.yml"
+                | "composer.json"
+                | "poetry.toml"
                 | "pyproject.toml"
                 | "uv.toml"
-                | "poetry.toml"
                 | "pip.conf"
                 | "pip.ini"
-                | "uv.lock"
-                | "poetry.lock"
-                // Composer.
-                | "composer.json"
-                | "composer.lock"
-                // Bundler.
                 | "Gemfile"
-                | "Gemfile.lock"
-                // Cargo.
-                | "Cargo.toml"
-                | "Cargo.lock"
-                // Go.
-                | "go.mod"
         )
 }
 
@@ -117,7 +89,6 @@ pub fn credential_check(path: &str) -> Option<bool> {
         | "poetry.toml" => true,
         _ if leaf.eq_ignore_ascii_case("nuget.config")
             || crate::cargo::config_file(path)
-            || crate::bundle_config(path)
             || [
                 ".tf", ".go", ".rs", ".csproj", ".fsproj", ".vbproj", ".sln", ".slnx", ".gemspec",
             ]
@@ -131,13 +102,13 @@ pub fn credential_check(path: &str) -> Option<bool> {
 }
 
 /// Why `text` committed at `path` refuses the repository, if it does: the
-/// kind of credential found, such as "a URL with a password in it" or "an
-/// `_authToken` in .npmrc". Never the credential itself.
+/// kind of credential found, such as "a `_authToken` in .npmrc" or "a
+/// password in a registry URL". Never the credential itself.
 pub fn committed_credentials(path: &str, text: &str) -> Option<String> {
     if credential_check(path) == Some(false) {
         return None;
     }
-    keyed(path, text).or_else(|| credentialed_url(text))
+    keyed(path, text)
 }
 
 /// The report reason for a file `committed_credentials` refused.
@@ -148,90 +119,52 @@ pub fn credential_reason(path: &str, kind: &str) -> String {
 }
 
 /// The credential kinds the settings file at `path` can hold, checked with
-/// the parser of its format. An unparseable file is left to the URL rule.
+/// the parser of its format. An unparseable file is left to the tool.
 fn keyed(path: &str, text: &str) -> Option<String> {
     let leaf = path.rsplit('/').next().unwrap_or(path);
     match leaf {
-        ".npmrc" => npmrc(text),
+        ".npmrc" => npmrc(text).or_else(|| npmrc_urls(text)),
         "pnpm-workspace.yaml" => pnpm_workspace(text),
-        ".yarnrc.yml" => yarnrc(text),
-        "composer.json" => composer(text),
-        "poetry.toml" | "pyproject.toml" => poetry(text),
-        _ if leaf.eq_ignore_ascii_case("nuget.config") => nuget(text),
-        _ if crate::cargo::config_file(path) => cargo(text),
-        _ if crate::bundle_config(path) => bundler(text),
+        ".yarnrc.yml" => yarnrc(text).or_else(|| yarnrc_urls(text)),
+        "composer.json" => composer(text).or_else(|| composer_urls(text)),
+        "poetry.toml" => poetry(text),
+        "pyproject.toml" | "uv.toml" => poetry(text).or_else(|| python_urls(path, text)),
+        "pip.conf" | "pip.ini" => pip_urls(text),
+        "Gemfile" => gemfile_urls(text),
+        _ if leaf.eq_ignore_ascii_case("nuget.config") => nuget(text).or_else(|| nuget_urls(text)),
+        _ if crate::cargo::config_file(path) => cargo(text).or_else(|| cargo_urls(text)),
         _ => None,
     }
 }
 
-/// A URL in `text` whose authority carries a user or a password, in the
-/// order they appear. A password refuses in any scheme, a user alone in any
-/// scheme but SSH's: `ssh://git@host` names a service account, not a secret.
-/// A `$VAR`, `${VAR}` or `${{ expression }}` userinfo is resolved by the
-/// environment or CI at run time and stays allowed for the same reason.
-fn credentialed_url(text: &str) -> Option<String> {
-    let mut rest = text;
-    while let Some(at) = rest.find("://") {
-        let scheme_start = rest[..at]
-            .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.'))
-            .map_or(0, |i| i + 1);
-        let scheme = &rest[scheme_start..at];
-        rest = &rest[at + 3..];
-        // The authority ends at the path, query or fragment, or a delimiter.
-        let authority = rest
-            .split(|c: char| {
-                c.is_whitespace()
-                    || matches!(
-                        c,
-                        '/' | '?'
-                            | '#'
-                            | '"'
-                            | '\''
-                            | '<'
-                            | '>'
-                            | '\\'
-                            | '`'
-                            | '|'
-                            | '('
-                            | ')'
-                            | '['
-                            | ']'
-                            | '{'
-                            | '}'
-                    )
-            })
-            .next()
-            .unwrap_or_default();
-        if !scheme.starts_with(|c: char| c.is_ascii_alphabetic()) {
-            continue;
-        }
-        // The user ends at the last `@`; earlier ones belong to it.
-        let Some((userinfo, _)) = authority.rsplit_once('@') else {
-            continue;
-        };
-        if userinfo.contains(':') {
-            // A `$VAR`, `${VAR}` or `${{ expression }}` placeholder is
-            // resolved by the environment or CI at run time; the credential
-            // is not committed.
-            if userinfo
-                .split(':')
-                .nth(1)
-                .is_some_and(|password| password.starts_with('$'))
-            {
-                continue;
-            }
-            return Some("a URL with a password in it".into());
-        }
-        if userinfo.starts_with('$') {
-            continue;
-        }
-        let ssh =
-            scheme.eq_ignore_ascii_case("ssh") || scheme.to_ascii_lowercase().ends_with("+ssh");
-        if !ssh {
-            return Some("a URL with a user in it".into());
-        }
-    }
-    None
+/// Whether `url` carries a committed password: a userinfo whose password
+/// is neither empty nor a `$VAR`, `${VAR}`, `${{ expression }}` or
+/// `%VAR%` reference, which the environment or CI resolves at run time.
+/// A user alone is not a secret (`https://user@bitbucket.org` names an
+/// account, nothing more), and neither is an empty password.
+fn passworded(url: &str) -> bool {
+    let url = url.trim().trim_matches(['"', '\'']);
+    let Some(authority) = url
+        .split("://")
+        .nth(1)
+        .and_then(|rest| rest.split(['/', '?', '#']).next())
+    else {
+        return false;
+    };
+    let Some((userinfo, _)) = authority.rsplit_once('@') else {
+        return false;
+    };
+    userinfo
+        .split(':')
+        .nth(1)
+        .is_some_and(|password| !password.is_empty() && !password.starts_with(['$', '%']))
+}
+
+/// Whether any of `urls` carries a committed password.
+fn credentialed(urls: &[&str]) -> Option<String> {
+    urls.iter()
+        .any(|url| passworded(url))
+        .then(|| "a password in a registry URL".to_string())
 }
 
 /// `.npmrc` auth lines with a literal value: `//host/:_authToken=`,
@@ -271,6 +204,28 @@ fn npmrc(text: &str) -> Option<String> {
     (password && user).then(|| "a username in .npmrc beside a _password".to_string())
 }
 
+/// `.npmrc` `registry` and `@scope:registry` values carrying a committed
+/// password.
+fn npmrc_urls(text: &str) -> Option<String> {
+    let urls: Vec<&str> = text
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.starts_with(['#', ';']) {
+                return None;
+            }
+            let (key, value) = line.split_once('=')?;
+            let key = key.trim();
+            (key == "registry"
+                || key
+                    .strip_suffix(":registry")
+                    .is_some_and(|scope| scope.starts_with('@') && scope.len() > 1))
+            .then(|| value.trim().trim_matches(['"', '\'']))
+        })
+        .collect();
+    credentialed(&urls)
+}
+
 /// `pnpm-workspace.yaml` auth keys, anywhere in the file, with the same
 /// rules as `.npmrc`.
 fn pnpm_workspace(text: &str) -> Option<String> {
@@ -308,6 +263,18 @@ fn yarnrc(text: &str) -> Option<String> {
     })
 }
 
+/// `.yarnrc.yml` `npmRegistryServer` values carrying a committed password.
+fn yarnrc_urls(text: &str) -> Option<String> {
+    let mut pairs = Vec::new();
+    yaml_pairs(text, &mut pairs)?;
+    let urls: Vec<&str> = pairs
+        .iter()
+        .filter(|(key, _)| key == "npmRegistryServer")
+        .filter_map(|(_, value)| value.as_str())
+        .collect();
+    credentialed(&urls)
+}
+
 /// The auth settings Composer documents for `config` in `composer.json`,
 /// refused when set to anything non-empty.
 fn composer(text: &str) -> Option<String> {
@@ -320,6 +287,10 @@ fn composer(text: &str) -> Option<String> {
         "gitlab-oauth",
         "gitlab-token",
         "bitbucket-oauth",
+        "forgejo-oauth",
+        "forgejo-token",
+        "gitea-oauth",
+        "gitea-token",
     ]
     .iter()
     .find_map(|key| {
@@ -330,6 +301,22 @@ fn composer(text: &str) -> Option<String> {
             || value.as_array().is_some_and(|a| a.is_empty());
         (!empty).then(|| format!("a Composer {key} credential"))
     })
+}
+
+/// `repositories` URLs in `composer.json` carrying a committed password.
+fn composer_urls(text: &str) -> Option<String> {
+    let value = serde_json::from_str::<serde_json::Value>(text).ok()?;
+    let repositories = value.get("repositories")?;
+    let entries: Vec<&serde_json::Value> = match repositories {
+        serde_json::Value::Array(entries) => entries.iter().collect(),
+        serde_json::Value::Object(entries) => entries.values().collect(),
+        _ => Vec::new(),
+    };
+    let urls: Vec<&str> = entries
+        .iter()
+        .filter_map(|entry| entry.get("url").and_then(|url| url.as_str()))
+        .collect();
+    credentialed(&urls)
 }
 
 /// `http-basic` or `pypi-token` settings with literal values, as
@@ -355,9 +342,108 @@ fn poetry(text: &str) -> Option<String> {
     })
 }
 
+/// The index and source URLs `pyproject.toml` or `uv.toml` name, checked
+/// for committed passwords.
+fn python_urls(path: &str, text: &str) -> Option<String> {
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    let document = text.parse::<toml_edit::DocumentMut>().ok()?;
+    let mut urls: Vec<String> = Vec::new();
+    let mut collect = |item: Option<&toml_edit::Item>| {
+        if let Some(value) = item.and_then(toml_edit::Item::as_str) {
+            urls.push(value.to_owned());
+        } else if let Some(array) = item.and_then(toml_edit::Item::as_array) {
+            urls.extend(
+                array
+                    .iter()
+                    .filter_map(|value| value.as_str().map(str::to_owned)),
+            );
+        }
+    };
+    let uv = if leaf == "uv.toml" {
+        Some(document.as_item())
+    } else {
+        document.get("tool").and_then(|tool| tool.get("uv"))
+    };
+    if let Some(uv) = uv {
+        collect(uv.get("index-url"));
+        collect(uv.get("extra-index-url"));
+        collect(uv.get("find-links"));
+        if let Some(index) = uv
+            .get("index")
+            .and_then(toml_edit::Item::as_array_of_tables)
+        {
+            for entry in index {
+                collect(entry.get("url"));
+            }
+        }
+        if let Some(pip) = uv.get("pip") {
+            collect(pip.get("index-url"));
+            collect(pip.get("extra-index-url"));
+            collect(pip.get("find-links"));
+        }
+    }
+    if leaf == "pyproject.toml"
+        && let Some(sources) = document
+            .get("tool")
+            .and_then(|tool| tool.get("poetry"))
+            .and_then(|poetry| poetry.get("source"))
+    {
+        let tables: Vec<&dyn toml_edit::TableLike> =
+            if let Some(tables) = sources.as_array_of_tables() {
+                tables
+                    .iter()
+                    .map(|t| t as &dyn toml_edit::TableLike)
+                    .collect()
+            } else if let Some(array) = sources.as_array() {
+                array
+                    .iter()
+                    .filter_map(|value| value.as_inline_table())
+                    .map(|t| t as &dyn toml_edit::TableLike)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+        for source in tables {
+            collect(source.get("url"));
+        }
+    }
+    let refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+    credentialed(&refs)
+}
+
+/// `index-url`, `extra-index-url` and `find-links` settings in
+/// `pip.conf`/`pip.ini` carrying a committed password.
+fn pip_urls(text: &str) -> Option<String> {
+    let urls: Vec<&str> = text
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.starts_with(['#', ';']) {
+                return None;
+            }
+            let (key, value) = line.split_once('=')?;
+            matches!(
+                key.trim().to_ascii_lowercase().as_str(),
+                "index-url" | "extra-index-url" | "find-links"
+            )
+            .then(|| value.trim())
+        })
+        .collect();
+    credentialed(&urls)
+}
+
+/// `Gemfile` `source` lines carrying a committed password, read as
+/// Bundler's DSL reads them so escapes never hide a value.
+fn gemfile_urls(text: &str) -> Option<String> {
+    let urls = crate::bundler::source_urls(text);
+    let refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+    credentialed(&refs)
+}
+
 /// A `nuget.config` with `packageSourceCredentials` `Password` or
-/// `ClearTextPassword` entries, or `apikeys` entries. Element and attribute
-/// names compare without case, as NuGet reads them.
+/// `ClearTextPassword` entries. `%VAR%` references stay allowed: the
+/// value lives in the environment. Element and attribute names compare
+/// without case, as NuGet reads them.
 fn nuget(text: &str) -> Option<String> {
     let document = roxmltree::Document::parse(text).ok()?;
     let named = |node: roxmltree::Node, name: &str| {
@@ -374,20 +460,41 @@ fn nuget(text: &str) -> Option<String> {
     {
         for add in credentials.descendants().filter(|node| named(*node, "add")) {
             let key = attribute(add, "key").unwrap_or_default();
-            if key.eq_ignore_ascii_case("password") || key.eq_ignore_ascii_case("cleartextpassword")
+            let literal = attribute(add, "value")
+                .is_some_and(|value| !value.is_empty() && !value.starts_with('%'));
+            if (key.eq_ignore_ascii_case("password")
+                || key.eq_ignore_ascii_case("cleartextpassword"))
+                && literal
             {
                 return Some(format!("a NuGet {key} credential"));
             }
         }
     }
-    if document
-        .descendants()
-        .filter(|node| named(*node, "apikeys"))
-        .any(|keys| keys.descendants().any(|node| named(node, "add")))
-    {
-        return Some("a NuGet API key".into());
-    }
     None
+}
+
+/// `packageSources` URLs in `nuget.config` carrying a committed password.
+fn nuget_urls(text: &str) -> Option<String> {
+    let document = roxmltree::Document::parse(text).ok()?;
+    let urls: Vec<String> = document
+        .descendants()
+        .filter(|node| {
+            node.is_element()
+                && node
+                    .tag_name()
+                    .name()
+                    .eq_ignore_ascii_case("packageSources")
+        })
+        .flat_map(|sources| sources.descendants())
+        .filter(|node| node.is_element() && node.tag_name().name().eq_ignore_ascii_case("add"))
+        .filter_map(|add| {
+            add.attributes()
+                .find(|a| a.name().eq_ignore_ascii_case("value"))
+                .map(|a| a.value().to_owned())
+        })
+        .collect();
+    let refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+    credentialed(&refs)
 }
 
 /// A `token` under `[registry]` or `[registries.*]` in `.cargo/config.toml`
@@ -415,23 +522,19 @@ fn cargo(text: &str) -> Option<String> {
     (registry_token || registries_token).then(|| "a Cargo registry token".to_string())
 }
 
-/// A `BUNDLE_<HOST>` credential key in `.bundle/config`: Bundler folds host
-/// dots and dashes into `__` and `___`, so a `BUNDLE_*__*` key holds
-/// `user:password` for the host it names. The Count never reads the file —
-/// it runs Bundler with `BUNDLE_APP_CONFIG` elsewhere — but the engine
-/// reads it for its sources and a committed one is refused all the same.
-fn bundler(text: &str) -> Option<String> {
-    let value = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(text).ok()?;
-    value
-        .as_mapping()?
+/// `index` URLs under `[registries.*]` carrying a committed password.
+fn cargo_urls(text: &str) -> Option<String> {
+    let document = text.parse::<toml_edit::DocumentMut>().ok()?;
+    let registries = document
+        .get("registries")
+        .and_then(toml_edit::Item::as_table_like)?;
+    let urls: Vec<String> = registries
         .iter()
-        .filter_map(|(key, value)| Some((key.as_str()?, value)))
-        .find_map(|(key, value)| {
-            (key.starts_with("BUNDLE_")
-                && key.contains("__")
-                && value.as_str().is_some_and(|v| !v.is_empty()))
-            .then(|| "a Bundler credential key".to_string())
-        })
+        .filter_map(|(_, registry)| registry.get("index"))
+        .filter_map(|index| index.as_str().map(str::to_owned))
+        .collect();
+    let refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+    credentialed(&refs)
 }
 
 /// Every key-value pair in a YAML document, recursively, or None when it
@@ -482,61 +585,160 @@ mod tests {
     }
 
     #[test]
-    fn urls_with_a_user_or_password_are_refused() {
-        for (text, expect) in [
-            ("resolved \"https://ci:s3cret@npm.acme.dev/x.tgz\"\n", true), // betterleaks:allow
-            ("tarball = \"https://ci@npm.acme.dev/x.tgz\"\n", true),
-            ("remote: https://gems.acme.dev\n", false),
-            ("source \"https://user:pw@gems.acme.dev\"\n", true), // betterleaks:allow
-            ("index = \"sparse+https://user:pw@index.acme.dev/\"\n", true), // betterleaks:allow
-            ("url = \"git+https://user:pw@git.acme.dev/r.git\"\n", true), // betterleaks:allow
-            ("url = \"registry+https://user@index.acme.dev/\"\n", true), // betterleaks:allow
-            // SSH users are service accounts, not secrets.
-            ("url = \"ssh://git@git.acme.dev/r.git\"\n", false),
-            ("url = \"git+ssh://git@git.acme.dev/r.git\"\n", false),
-            // Any password in any scheme is refused, SSH included.
-            ("url = \"ssh://git:pw@git.acme.dev/r.git\"\n", true), // betterleaks:allow
+    fn registry_url_fields_refuse_passwords_but_not_users() {
+        for (path, text, expect) in [
+            (".npmrc", "registry=https://ci:pw@npm.acme.dev/\n", true), // betterleaks:allow
+            (".npmrc", "@acme:registry=https://npm.acme.dev/\n", false),
             (
-                "source \"ssh://git@git.acme.dev/r.git\" # git@ is fine\n",
-                false,
-            ),
-            // An `@` in the path, query or fragment is not userinfo.
+                ".npmrc",
+                "@acme:registry=https://ci:pw@npm.acme.dev/\n",
+                true,
+            ), // betterleaks:allow
             (
-                "resolved \"https://npm.acme.dev/@scope/x/-/x-1.0.0.tgz\"\n",
+                ".npmrc",
+                "registry=https://ci:${TOKEN}@npm.acme.dev/\n",
                 false,
             ),
             (
-                "source = \"registry+https://github.com/rust-lang/crates.io-index\"\n",
-                false,
-            ),
-            // SCP-style Git addresses carry no scheme.
-            ("dep = \"git@git.acme.dev:org/repo.git\"\n", false),
-            // An environment or CI placeholder is not a committed credential.
+                ".yarnrc.yml",
+                "npmRegistryServer: \"https://ci:pw@npm.acme.dev/\"\n",
+                true,
+            ), // betterleaks:allow
             (
-                "clone = \"https://gitlab-bot:$DEPLOY_TOKEN@gitlab.com/acme/x.git\"\n",
+                ".yarnrc.yml",
+                "npmRegistryServer: \"https://npm.acme.dev/\"\n",
                 false,
             ),
             (
-                "url = \"https://x:${{ secrets.TOKEN }}@git.acme.dev/x\"\n",
-                false,
-            ),
-            ("url = \"https://$API_TOKEN@npm.acme.dev/x.tgz\"\n", false),
-            // A command substitution reads its secret at run time too.
+                "composer.json",
+                r#"{"repositories":[{"type":"composer","url":"https://ci:pw@packagist.acme.dev"}]}"#,
+                true,
+            ), // betterleaks:allow
             (
-                "url = \"https://ci:$(cat /run/secrets/token)@npm.acme.dev/x\"\n",
+                "composer.json",
+                r#"{"repositories":[{"type":"vcs","url":"https://ci@git.acme.dev/r"}]}"#,
                 false,
             ),
-            ("url = \"https://ci:pa$ss@npm.acme.dev/x.tgz\"\n", true),
+            (
+                "nuget.config",
+                "<configuration><packageSources><add key=\"feed\" value=\"https://ci:pw@nuget.acme.dev/v3/index.json\"/></packageSources></configuration>",
+                true,
+            ), // betterleaks:allow
+            (
+                "nuget.config",
+                "<configuration><packageSources><add key=\"feed\" value=\"https://nuget.acme.dev/v3/index.json\"/></packageSources></configuration>",
+                false,
+            ),
+            (
+                "pyproject.toml",
+                "[[tool.poetry.source]]\nname = \"acme\"\nurl = \"https://ci:pw@pypi.acme.dev/simple\"\n",
+                true,
+            ), // betterleaks:allow
+            (
+                "pyproject.toml",
+                "[tool.uv]\nindex-url = \"https://pypi.org/simple\"\n",
+                false,
+            ),
+            (
+                "uv.toml",
+                "index-url = \"https://ci:pw@pypi.acme.dev/simple\"\n",
+                true,
+            ), // betterleaks:allow
+            (
+                "pip.conf",
+                "[global]\nindex-url = https://ci:pw@pypi.acme.dev/simple\n",
+                true,
+            ), // betterleaks:allow
+            (
+                "Gemfile",
+                "source \"https://ci:pw@gems.acme.dev\"\ngem \"rails\"\n",
+                true,
+            ), // betterleaks:allow
+            (
+                "Gemfile",
+                "source \"https://rubygems.org\"\ngem \"rails\"\n",
+                false,
+            ),
+            (
+                ".cargo/config.toml",
+                "[registries.acme]\nindex = \"sparse+https://ci:pw@index.acme.dev/\"\n",
+                true,
+            ), // betterleaks:allow
+            (
+                ".cargo/config.toml",
+                "[registries.acme]\nindex = \"sparse+https://index.acme.dev/\"\n",
+                false,
+            ),
+            // An escaped password is still a password once parsed.
+            (
+                "composer.json",
+                "{\"repositories\":[{\"type\":\"composer\",\"url\":\"https://ci:p%40ss@packagist.acme.dev\"}]}",
+                true,
+            ), // betterleaks:allow
         ] {
-            for path in [
-                "yarn.lock",
-                "Gemfile.lock",
+            assert_eq!(refused(path, text).is_some(), expect, "{path}: {text:?}");
+        }
+    }
+
+    #[test]
+    fn non_registry_fields_are_never_refused() {
+        // Test DSNs, user-only userinfo and CI files carry nothing a tool
+        // reads as a registry credential.
+        for (path, text) in [
+            (
                 "package.json",
-                "go.mod",
-                "x.rs",
-            ] {
-                assert_eq!(refused(path, text).is_some(), expect, "{path}: {text:?}");
-            }
+                "{\"scripts\":{\"test\":\"postgres://user:pass@localhost/db mocha\"}}", // betterleaks:allow
+            ),
+            (
+                "pyproject.toml",
+                "[tool.pytest.ini_options]\nenv = [\"DATABASE_URL=postgres://user:pass@localhost/db\"]\n", // betterleaks:allow
+            ),
+            (
+                "composer.json",
+                "{\"scripts\":{\"test\":\"postgres://user:pass@localhost/db phpunit\"}}", // betterleaks:allow
+            ),
+            (".npmrc", "cache=https://user@bitbucket.org\n"),
+            (
+                "x/.github/workflows/ci.yml",
+                "run: postgres://user:pass@localhost/db cargo test", // betterleaks:allow
+            ),
+        ] {
+            assert_eq!(refused(path, text), None, "{path}: {text:?}");
+        }
+        // And the scan is narrower still: none of these files is in scope.
+        for path in [
+            "package.json",
+            ".github/workflows/ci.yml",
+            ".forgejo/workflows/integration.yml",
+            ".gitlab-ci.yml",
+            "Dockerfile",
+            "compose.yaml",
+            "chart/values.yaml",
+            "main.tf",
+            "README.md",
+            "requirements.txt",
+            "docs/dev-requirements.in",
+            ".bundle/config",
+            "go.mod",
+            "go.work",
+            "mise.toml",
+            ".mise.toml",
+            "package-lock.json",
+            "pnpm-lock.yaml",
+            "yarn.lock",
+            "bun.lock",
+            "aube-lock.yaml",
+            "npm-shrinkwrap.json",
+            "Cargo.toml",
+            "Cargo.lock",
+            "Gemfile.lock",
+            "composer.lock",
+            "uv.lock",
+            "poetry.lock",
+            "Directory.Packages.props",
+            "app/app.csproj",
+        ] {
+            assert!(!credential_scope(path), "{path} should be out of scope");
         }
     }
 
@@ -559,8 +761,6 @@ mod tests {
             assert_eq!(refused(".npmrc", &file).is_some(), expect, "{line}");
             assert_eq!(refused("app/.npmrc", &file).is_some(), expect, "{line}");
         }
-        // A literal username or email paired with a _password refuses, even
-        // when the password is an environment reference.
         for pair in [
             "//npm.acme.dev/:username=ci\n//npm.acme.dev/:_password=${PW}\n",
             "username=ci\n_password=${PW}\n",
@@ -568,7 +768,6 @@ mod tests {
         ] {
             assert!(refused(".npmrc", pair).is_some(), "{pair:?}");
         }
-        // Without a _password they are only contact fields.
         assert!(refused(".npmrc", "username=ci\nemail=ci@acme.dev\n").is_none());
     }
 
@@ -634,6 +833,10 @@ mod tests {
                 true,
             ),
             (
+                r#"{"config":{"forgejo-token":{"forgejo.acme.dev":"t0ken"}}}"#,
+                true,
+            ),
+            (
                 r#"{"config":{"bitbucket-oauth":{"bitbucket.org":{"consumer-key":"k","consumer-secret":"s"}}}}"#,
                 true,
             ),
@@ -643,10 +846,6 @@ mod tests {
                 r#"{"repositories":[{"type":"composer","url":"https://packagist.acme.dev"}]}"#,
                 false,
             ),
-            (
-                r#"{"repositories":[{"type":"vcs","url":"https://ci:pw@git.acme.dev/r"}]}"#, // betterleaks:allow
-                true,
-            ),
         ];
         for (text, expect) in cases {
             assert_eq!(refused("composer.json", text).is_some(), expect, "{text}");
@@ -654,7 +853,7 @@ mod tests {
     }
 
     #[test]
-    fn nuget_config_refuses_source_credentials_and_apikeys() {
+    fn nuget_config_refuses_literal_source_credentials() {
         let cases = [
             (
                 "<configuration><packageSourceCredentials><feed><add key=\"Username\" value=\"ci\"/><add key=\"ClearTextPassword\" value=\"pw\"/></feed></packageSourceCredentials></configuration>",
@@ -664,13 +863,14 @@ mod tests {
                 "<configuration><packageSourceCredentials><feed><add key=\"Password\" value=\"pw\"/></feed></packageSourceCredentials></configuration>",
                 true,
             ),
+            // An environment reference resolves at run time.
             (
-                "<configuration><packageSourceCredentials><feed><add key=\"Username\" value=\"ci\"/></feed></packageSourceCredentials></configuration>",
+                "<configuration><packageSourceCredentials><feed><add key=\"Username\" value=\"ci\"/><add key=\"Password\" value=\"%NUGET_PASSWORD%\"/></feed></packageSourceCredentials></configuration>",
                 false,
             ),
             (
-                "<configuration><apikeys><add key=\"https://nuget.acme.dev\" value=\"key\"/></apikeys></configuration>",
-                true,
+                "<configuration><packageSourceCredentials><feed><add key=\"Username\" value=\"ci\"/></feed></packageSourceCredentials></configuration>",
+                false,
             ),
             (
                 "<configuration><packageSources><add key=\"feed\" value=\"https://nuget.acme.dev/v3/index.json\"/></packageSources></configuration>",
@@ -702,9 +902,6 @@ mod tests {
                 assert_eq!(refused(path, text).is_some(), expect, "{path}: {text:?}");
             }
         }
-        // Index URLs answer to the URL rule instead.
-        let index = "[[tool.poetry.source]]\nname = \"acme\"\nurl = \"https://ci:pw@pypi.acme.dev/simple\"\n"; // betterleaks:allow
-        assert!(refused("pyproject.toml", index).is_some());
     }
 
     #[test]
@@ -736,20 +933,6 @@ mod tests {
     }
 
     #[test]
-    fn bundle_config_refuses_host_credential_keys() {
-        let cases = [
-            ("BUNDLE_GEMS__ACME__DEV: ci:pw\n", true),
-            ("BUNDLE_PATH: vendor/bundle\n", false),
-            ("BUNDLE_GEM__MIT: true\n", false),
-        ];
-        for (text, expect) in cases {
-            for path in [".bundle/config", "app/.bundle/config"] {
-                assert_eq!(refused(path, text).is_some(), expect, "{path}: {text:?}");
-            }
-        }
-    }
-
-    #[test]
     fn checksum_files_are_never_scanned() {
         let text = "module https://ci:pw@proxy.acme.dev/x h1:abc=\n"; // betterleaks:allow
         for path in [
@@ -762,72 +945,41 @@ mod tests {
         }
     }
 
-    /// The repository scan checks only files a lockfile tool or a
-    /// package-registry lookup reads. A credentialed URL anywhere else — a
-    /// CI workflow, a Dockerfile, a Helm values file — is the repository's
-    /// own business.
+    /// The repository scan checks only the settings files whose keys a
+    /// tool or lookup reads as credentials.
     #[test]
-    fn only_tool_and_lookup_files_are_scanned() {
-        // Built at runtime so no credential-shaped string sits in the tree.
+    fn only_credential_settings_are_scanned() {
         let url = format!(
             "https://{}:{}@registry.acme.test/x",
             "ci",
             "s3".to_owned() + "cret"
         );
         for path in [
-            ".github/workflows/ci.yml",
-            ".forgejo/workflows/integration.yml",
-            ".gitlab-ci.yml",
-            "Dockerfile",
-            "compose.yaml",
-            "chart/values.yaml",
-            "chart/templates/deployment.yaml",
-            "main.tf",
-            "README.md",
-            // pip requirements files are not read for index URLs.
-            "requirements.txt",
-            "docs/dev-requirements.in",
-        ] {
-            assert!(!credential_scope(path), "{path} should be out of scope");
-            assert_eq!(scoped_refusal(path, &url), None, "{path}: {url}");
-        }
-        for path in [
             ".npmrc",
             ".yarnrc.yml",
             "pnpm-workspace.yaml",
-            "package.json",
-            "package-lock.json",
-            "npm-shrinkwrap.json",
-            "aube-lock.yaml",
-            "pnpm-lock.yaml",
-            "yarn.lock",
-            "bun.lock",
             "pyproject.toml",
             "uv.toml",
             "poetry.toml",
             "pip.conf",
             "app/pip.ini",
-            "uv.lock",
-            "poetry.lock",
             "composer.json",
-            "composer.lock",
             "nuget.config",
             "NuGet.Config",
-            "Directory.Packages.props",
-            "app/app.csproj",
             "Gemfile",
-            "Gemfile.lock",
-            ".bundle/config",
-            "Cargo.toml",
-            "Cargo.lock",
             ".cargo/config.toml",
-            "go.mod",
-            "go.work",
-            "mise.toml",
-            ".mise.toml",
         ] {
             assert!(credential_scope(path), "{path} should be in scope");
-            assert!(scoped_refusal(path, &url).is_some(), "{path}: {url}");
         }
+        // A credentialed URL in a field that names a registry refuses.
+        assert!(scoped_refusal(".npmrc", &format!("registry={url}\n")).is_some());
+        // The same URL in a non-registry field does not.
+        assert_eq!(
+            scoped_refusal(
+                "composer.json",
+                &format!("{{\"scripts\":{{\"t\":\"{url}\"}}}}")
+            ),
+            None
+        );
     }
 }

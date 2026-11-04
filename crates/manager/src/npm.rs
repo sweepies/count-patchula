@@ -586,3 +586,213 @@ pub(super) fn assign_locked_registries(
         entry.registry = registry_for(&entry.file, &entry.package, npmrcs);
     }
 }
+
+/// npm's public registry, for `crate::origins` and cache partitioning.
+pub(crate) const NPM: crate::origins::Public = crate::origins::Public {
+    source: Source::Npm,
+    label: "npm",
+    is_public: public,
+};
+
+/// Whether the registry settings file `leaf` names only the public
+/// registry. A file the Count cannot read could name anything.
+pub(crate) fn settings_public(leaf: &str, text: &str) -> bool {
+    let npmrc = match leaf {
+        ".npmrc" => npmrc(text),
+        ".yarnrc.yml" => {
+            if serde_yaml_ng::from_str::<serde_yaml_ng::Value>(text).is_err() {
+                return false;
+            }
+            yarnrc(text)
+        }
+        _ => return false,
+    };
+    npmrc
+        .default
+        .iter()
+        .chain(npmrc.scopes.values())
+        .all(|named| matches!(named, Named::Public))
+}
+
+/// Whether `value` is a dependency specifier that fetches only from the
+/// public registry or a local source.
+fn specifier_ok(value: &str) -> bool {
+    registry(value) || crate::public::fetch_ok(value, &NPM)
+}
+
+/// The specifiers of one dependency object, nested overrides included.
+fn specifiers(object: &Object<'_>, nested: bool) -> bool {
+    object.properties.iter().all(|prop| {
+        if let Some(value) = prop.value.as_string_lit() {
+            specifier_ok(&value.value)
+        } else {
+            nested
+                && prop
+                    .value
+                    .as_object()
+                    .is_none_or(|object| specifiers(object, true))
+        }
+    })
+}
+
+/// Whether a `package.json`'s declarations fetch only from the public
+/// registry or local sources.
+pub(crate) fn manifest_public(text: &str) -> bool {
+    let Ok(root) = ast(text, false) else {
+        return false;
+    };
+    let Some(object) = root.as_object() else {
+        return false;
+    };
+    for (field, nested) in [
+        ("dependencies", false),
+        ("devDependencies", false),
+        ("peerDependencies", false),
+        ("optionalDependencies", false),
+        ("overrides", true),
+        ("resolutions", true),
+        ("catalog", false),
+    ] {
+        if let Some(values) = object.get_object(field)
+            && !specifiers(values, nested)
+        {
+            return false;
+        }
+    }
+    if let Some(catalogs) = object.get_object("catalogs") {
+        for prop in &catalogs.properties {
+            if let Some(values) = prop.value.as_object()
+                && !specifiers(values, false)
+            {
+                return false;
+            }
+        }
+    }
+    for namespace in ["pnpm", "aube"] {
+        if let Some(overrides) = object
+            .get_object(namespace)
+            .and_then(|inner| inner.get_object("overrides"))
+            && !specifiers(overrides, true)
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// Whether `pnpm-workspace.yaml`'s values fetch only public or local
+/// content. It sets no registry itself; its catalogs and overrides can
+/// name remote specifiers.
+pub(crate) fn workspace_public(text: &str) -> bool {
+    let Ok(value) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(text) else {
+        return false;
+    };
+    let mut out = Vec::new();
+    scalars(&value, &mut out);
+    out.iter().all(|value| specifier_ok(value))
+}
+
+/// Every scalar in a YAML document.
+fn scalars(value: &serde_yaml_ng::Value, out: &mut Vec<String>) {
+    match value {
+        serde_yaml_ng::Value::Mapping(map) => {
+            for (key, value) in map {
+                if let Some(key) = key.as_str() {
+                    out.push(key.to_owned());
+                }
+                scalars(value, out);
+            }
+        }
+        serde_yaml_ng::Value::Sequence(items) => {
+            for item in items {
+                scalars(item, out);
+            }
+        }
+        serde_yaml_ng::Value::String(value) => out.push(value.clone()),
+        _ => {}
+    }
+}
+
+/// Whether a JSON lockfile's fetch URLs are all public or local: every
+/// `resolved`, `tarball` or `url` it records. `jsonc` reads Bun's
+/// JSON-with-comments format.
+pub(crate) fn json_lock_public(text: &str, jsonc: bool) -> bool {
+    let Ok(root) = ast(text, jsonc) else {
+        return false;
+    };
+    fn walk(value: &Value<'_>, public: &crate::origins::Public) -> bool {
+        match value {
+            Value::Object(object) => object.properties.iter().all(|prop| {
+                let checked = matches!(prop.name.as_str(), "resolved" | "tarball" | "url");
+                prop.value
+                    .as_string_lit()
+                    .is_none_or(|v| !checked || crate::public::fetch_ok(&v.value, public))
+                    && walk(&prop.value, public)
+            }),
+            Value::Array(array) => array.elements.iter().all(|v| walk(v, public)),
+            _ => true,
+        }
+    }
+    walk(&root, &NPM)
+}
+
+/// Whether a `yarn.lock`'s fetch URLs are all public or local: every
+/// `resolved`, `resolution`, `tarball` or `url` value it records.
+pub(crate) fn yarn_lock_public(text: &str) -> bool {
+    for line in text.lines() {
+        let line = line.trim();
+        let key = ["resolved", "resolution", "tarball", "url"]
+            .iter()
+            .find(|key| line.starts_with(*key));
+        let Some(key) = key else { continue };
+        let value = line[key.len()..]
+            .trim_start()
+            .trim_start_matches(':')
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'');
+        if value.is_empty() {
+            continue;
+        }
+        if !crate::public::fetch_ok(value, &NPM) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Whether a YAML lockfile's fetch URLs are all public or local: every
+/// `resolved`, `resolution`, `tarball`, `url`, `repo`, `registry` or
+/// `specifier` value it records. Covers `pnpm-lock.yaml` and
+/// `aube-lock.yaml`.
+pub(crate) fn yaml_lock_public(text: &str) -> bool {
+    let Ok(value) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(text) else {
+        return false;
+    };
+    fn walk(value: &serde_yaml_ng::Value) -> bool {
+        match value {
+            serde_yaml_ng::Value::Mapping(map) => map.iter().all(|(key, value)| {
+                let checked = key.as_str().is_some_and(|key| {
+                    matches!(
+                        key,
+                        "resolved"
+                            | "resolution"
+                            | "tarball"
+                            | "url"
+                            | "repo"
+                            | "registry"
+                            | "specifier"
+                    )
+                });
+                (!checked
+                    || value
+                        .as_str()
+                        .is_none_or(|url| crate::public::fetch_ok(url, &NPM)))
+                    && walk(value)
+            }),
+            serde_yaml_ng::Value::Sequence(items) => items.iter().all(walk),
+            _ => true,
+        }
+    }
+    walk(&value)
+}

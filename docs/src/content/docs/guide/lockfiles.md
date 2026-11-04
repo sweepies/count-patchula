@@ -266,25 +266,37 @@ updates off for the others.
 ## Tool caches
 
 Lockfile tools keep the package data they download in `tool-caches/` under
-the cache directory, split into partitions so a run never shares what its
-credentials fetched. A run that holds no registry credentials caches in
-`public`, shared by every installation and the CLI; a run that holds them
-caches in a `private-<hash>` partition the credentials' scopes name. There
-is no read-only lower layer: a private run never touches `public`, since a
-public package of the same name could then satisfy it without the private
-feed, and a private partition warms after its first run. Credential files
-still live only in the run's own directory and are deleted when it
-finishes.
+the cache directory, split into partitions so a run never shares a cache
+with something it should not reach. A run chooses its partition like this:
 
-The shared `public` partition is safe to share because the Count refuses
-repositories that commit credentials of their own in a file a lockfile tool
-or a registry lookup reads — a registry settings file, a package manifest
-or a lockfile (see [private
-registries](/guide/sources/#private-registries)): nothing a credential
-fetched can enter it. A repository's own code could still plant content
-another installation's run reads, but that stays within the trust model
-above — lockfile tools run repository code and every installation is
-assumed trusted.
+- **`public`** — shared by every installation and the CLI. A run may use
+  it only when the extraction decided every file it can read is
+  public-only: every registry, index or fetch source its manifests,
+  settings and lockfiles name is the ecosystem's well-known public
+  registry, a well-known public forge, or a local source that fetches
+  nothing. Anything uncertain, unreadable or undecided fails closed.
+- **`installation-<hash>`** — one partition per installation
+  (`installation-<sha256 of the GitHub credentials scope>`, or
+  `installation-local` for the CLI), for every run that is not provably
+  public-only and holds no operator credentials: a private or unreadable
+  `.npmrc`, a Gemfury-style index URL, a lockfile `resolved` URL on a
+  non-public host — and equally two installations that happen to name the
+  same private registry, which never share a partition.
+- **`private-<hash>`** — for runs given operator credentials, named by a
+  hash of the credentials' scopes as before.
+
+There is no read-only lower layer: a run never reads a partition it did
+not choose, since a public package of the same name could then satisfy it
+without the private feed, and a partition warms after its first run.
+Credential files still live only in the run's own directory and are
+deleted when it finishes.
+
+The `public` partition is still a shared one: tools that run repository
+code — Bundler evaluating the Gemfile, uv or Poetry building sdists, and
+MSBuild evaluating project files — could plant content there that
+another installation's run reads. That is accepted by the trust model
+above: every installation is trusted, and lockfile tools run repository
+code anyway.
 
 A partition a run uses is held shared, so eviction never removes one in use,
 and tools whose caches are not documented for concurrent use — aube, Bun,

@@ -44,6 +44,7 @@ impl Runner {
             config,
             versions,
             maintenance,
+            public,
         } = context;
         let php = node::version(versions, "php")?;
         let full = php.split('.').count() == 3
@@ -108,6 +109,7 @@ impl Runner {
                 cwd: Some(cwd),
                 env,
                 credentials: credentials::scopes(entries.iter().copied()),
+                public,
                 args,
             },
         )

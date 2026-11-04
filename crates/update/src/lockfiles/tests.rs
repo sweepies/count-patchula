@@ -413,6 +413,7 @@ fn snapshot(files: &BTreeMap<String, String>) -> Snapshot {
                 )
             })
             .collect(),
+        public_only: Default::default(),
     }
 }
 fn monday() -> chrono::DateTime<chrono::Utc> {
@@ -1266,6 +1267,7 @@ async fn real_aube_regenerates_a_stale_aube_lock_that_aube_ci_accepts() {
                 cwd: None,
                 env: Vec::new(),
                 credentials: Vec::new(),
+                public: false,
                 args: vec![
                     "-C".into(),
                     tree.to_string_lossy().into_owned(),
@@ -1746,7 +1748,7 @@ async fn cargo_jobs_address_the_lock_as_it_stands() {
             lock_only: false,
         };
         runner
-            .cargo_update(&driver, &cwd, "1.99.0", &job, false, (&[], &[]))
+            .cargo_update(&driver, &cwd, "1.99.0", &job, false, (&[], &[], false))
             .await
             .unwrap_or_else(|e| panic!("{locked} -> {target}: {e}"));
         let commands: Vec<_> = executor
@@ -3463,6 +3465,7 @@ async fn first_tool_use_allows_for_the_install() {
         cwd: None,
         env: Vec::new(),
         credentials: Vec::new(),
+        public: false,
         args: vec!["lock".into()],
     };
     runner.tool(&driver, call()).await.unwrap();
@@ -3740,7 +3743,7 @@ async fn cargo_jobs_move_only_the_crates_io_entry_of_their_package() {
             lock_only: false,
         };
         runner
-            .cargo_update(&driver, &cwd, "1.99.0", &job, false, (&[], &[]))
+            .cargo_update(&driver, &cwd, "1.99.0", &job, false, (&[], &[], false))
             .await
             .unwrap_or_else(|e| panic!("git {git}, crates.io {registry}: {e}"));
         assert_eq!(
@@ -5776,16 +5779,20 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
         .with_executor(executor.clone());
     let driver = temp.path().join("driver");
     std::fs::create_dir_all(&driver).unwrap();
-    let call = |bin: &str, credentials: Vec<String>| Invocation {
+    let call = |bin: &str, credentials: Vec<String>, public: bool| Invocation {
         tools: vec![(bin.into(), "1.0".into())],
         bin: bin.into(),
         cwd: None,
         env: Vec::new(),
         credentials,
+        public,
         args: vec!["x".into()],
     };
     // The npm-only entry never reaches Go's `.netrc`, so Go stays public.
-    let (env, _) = runner.use_caches(&call("go", Vec::new())).await.unwrap();
+    let (env, _) = runner
+        .use_caches(&call("go", Vec::new(), true))
+        .await
+        .unwrap();
     assert_eq!(
         env,
         [
@@ -5796,7 +5803,10 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
             ("GOFLAGS".into(), "-modcacherw".into()),
         ]
     );
-    runner.tool(&driver, call("go", Vec::new())).await.unwrap();
+    runner
+        .tool(&driver, call("go", Vec::new(), true))
+        .await
+        .unwrap();
     assert_eq!(
         executor.envs.lock().unwrap().last().unwrap()[&std::ffi::OsString::from("GOMODCACHE")],
         root.join("public/gomod")
@@ -5806,7 +5816,11 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
     );
     // With the registry it does get, npm goes private, named by its scope.
     let (env, _) = runner
-        .use_caches(&call("npm", credentials::scopes([npm.clone()].iter())))
+        .use_caches(&call(
+            "npm",
+            credentials::scopes([npm.clone()].iter()),
+            false,
+        ))
         .await
         .unwrap();
     let partition = env[0].1.clone();
@@ -5837,7 +5851,7 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
         ("bundle", "BUNDLE_USER_CACHE"),
     ] {
         let (env, hold) = runner
-            .use_caches(&call(bin, credentials::scopes([npm.clone()].iter())))
+            .use_caches(&call(bin, credentials::scopes([npm.clone()].iter()), false))
             .await
             .unwrap();
         assert!(env.iter().any(|(k, _)| k == key), "{bin}");
@@ -5849,7 +5863,11 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
         drop(hold);
     }
     let (go, _) = runner
-        .use_caches(&call("go", credentials::scopes([npm.clone()].iter())))
+        .use_caches(&call(
+            "go",
+            credentials::scopes([npm.clone()].iter()),
+            false,
+        ))
         .await
         .unwrap();
     assert!(
@@ -5862,7 +5880,7 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
         go.iter().find(|(k, _)| k == "GOFLAGS").unwrap().1,
         "-modcacherw"
     );
-    let mut flagged = call("go", credentials::scopes([npm.clone()].iter()));
+    let mut flagged = call("go", credentials::scopes([npm.clone()].iter()), false);
     flagged.env = vec![("GOFLAGS".into(), "-mod=mod".into())];
     let (go, _) = runner.use_caches(&flagged).await.unwrap();
     assert_eq!(
@@ -5870,7 +5888,11 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
         "-mod=mod -modcacherw"
     );
     let (dotnet, _) = runner
-        .use_caches(&call("dotnet", credentials::scopes([npm.clone()].iter())))
+        .use_caches(&call(
+            "dotnet",
+            credentials::scopes([npm.clone()].iter()),
+            false,
+        ))
         .await
         .unwrap();
     assert!(
@@ -5898,6 +5920,180 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
         )),
         "{files:?}"
     );
+}
+
+/// A run that is not provably public-only and holds no operator
+/// credentials gets the installation's own partition: `installation-<hash
+/// of the credentials scope>` on the server, `installation-local` for the
+/// CLI, and a different partition for every installation.
+struct Installation(&'static str);
+impl patchula_github::Credentials for Installation {
+    fn scope(&self) -> &str {
+        self.0
+    }
+    fn token(&self) -> patchula_github::Token<'_> {
+        Box::pin(async move { Ok("token".to_owned()) })
+    }
+}
+
+#[tokio::test]
+async fn tool_caches_partition_by_installation_when_not_public() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("cache/tool-caches");
+    let executor = fixture(
+        BTreeMap::from([("go.mod".into(), "module acme.dev/x\n\ngo 1.21\n".into())]),
+        false,
+        false,
+    );
+    let call = |public: bool| Invocation {
+        tools: vec![("go".into(), "1.0".into())],
+        bin: "go".into(),
+        cwd: None,
+        env: Vec::new(),
+        credentials: Vec::new(),
+        public,
+        args: vec!["x".into()],
+    };
+    // A public-only run shares `public`; anything else gets the
+    // installation's own partition.
+    let local = Runner::new(temp.path().join("cache"), "x").with_executor(executor.clone());
+    let gomod = |env: &[(String, String)]| {
+        env.iter()
+            .find(|(k, _)| k == "GOMODCACHE")
+            .map(|(_, v)| v.clone())
+            .unwrap()
+    };
+    let (env, _) = local.use_caches(&call(true)).await.unwrap();
+    assert!(
+        gomod(&env).starts_with(&root.join("public").to_string_lossy().into_owned()),
+        "{env:?}"
+    );
+    let (env, _) = local.use_caches(&call(false)).await.unwrap();
+    assert!(
+        gomod(&env).starts_with(
+            &root
+                .join("installation-local")
+                .to_string_lossy()
+                .into_owned()
+        ),
+        "{env:?}"
+    );
+    // Two installations with the same registries and no operator
+    // credentials get different partitions.
+    let one = Runner::new(temp.path().join("cache"), "x")
+        .with_credentials(Arc::new(Installation("github-app:1/installation:10")))
+        .with_executor(executor.clone());
+    let two = Runner::new(temp.path().join("cache"), "x")
+        .with_credentials(Arc::new(Installation("github-app:1/installation:20")))
+        .with_executor(executor.clone());
+    let first = one
+        .use_caches(&call(false))
+        .await
+        .unwrap()
+        .0
+        .iter()
+        .find(|(k, _)| k == "GOMODCACHE")
+        .unwrap()
+        .1
+        .clone();
+    let second = two
+        .use_caches(&call(false))
+        .await
+        .unwrap()
+        .0
+        .iter()
+        .find(|(k, _)| k == "GOMODCACHE")
+        .unwrap()
+        .1
+        .clone();
+    let installation = |path: &str| {
+        path.strip_prefix(root.to_str().unwrap())
+            .unwrap()
+            .trim_start_matches('/')
+            .split('/')
+            .next()
+            .unwrap()
+            .to_owned()
+    };
+    let (first, second) = (installation(&first), installation(&second));
+    assert!(first.starts_with("installation-"), "{first}");
+    assert!(second.starts_with("installation-"), "{second}");
+    assert_ne!(first, second);
+    assert_eq!(
+        first,
+        format!("installation-{}", hash(b"github-app:1/installation:10"))
+    );
+    // A public-only run inside an installation still shares `public`.
+    let (env, _) = one.use_caches(&call(true)).await.unwrap();
+    assert!(
+        gomod(&env).starts_with(&root.join("public").to_string_lossy().into_owned()),
+        "{env:?}"
+    );
+}
+
+/// Whether a run can share the `public` partition: every file it can
+/// read that steers a fetch must have a public-only verdict; files that
+/// cannot steer one decide nothing, and a missing verdict fails closed.
+#[test]
+fn a_run_is_public_only_when_every_file_it_reads_is() {
+    let blob = || Blob {
+        sha: String::new(),
+        mode: "100644".into(),
+        content: String::new(),
+    };
+    let baseline = BTreeMap::from([
+        ("app/package.json".into(), blob()),
+        ("app/package-lock.json".into(), blob()),
+        (".npmrc".into(), blob()),
+        ("other/package.json".into(), blob()),
+        ("README.md".into(), blob()),
+    ]);
+    let all_public = || {
+        BTreeMap::from([
+            ("app/package.json".into(), true),
+            ("app/package-lock.json".into(), true),
+            (".npmrc".into(), true),
+            ("other/package.json".into(), true),
+        ])
+    };
+    // Every file under `app` and the settings above it is public.
+    assert!(public_only(
+        Ecosystem::Node,
+        "app",
+        &baseline,
+        &all_public()
+    ));
+    // The root run covers `other/` too, which is public as well.
+    assert!(public_only(Ecosystem::Node, "", &baseline, &all_public()));
+    // A private verdict anywhere covered fails the run.
+    let mut verdicts = all_public();
+    verdicts.insert(".npmrc".into(), false);
+    assert!(!public_only(Ecosystem::Node, "app", &baseline, &verdicts));
+    // …but a private verdict outside the run's coverage does not.
+    let mut verdicts = all_public();
+    verdicts.insert("other/package.json".into(), false);
+    assert!(public_only(Ecosystem::Node, "app", &baseline, &verdicts));
+    assert!(!public_only(Ecosystem::Node, "", &baseline, &verdicts));
+    // A covered file with no verdict fails closed.
+    let mut verdicts = all_public();
+    verdicts.remove("app/package-lock.json");
+    assert!(!public_only(Ecosystem::Node, "app", &baseline, &verdicts));
+    // Files of another ecosystem steer nothing for a Node run.
+    let baseline = BTreeMap::from([("app/pyproject.toml".into(), blob())]);
+    assert!(public_only(
+        Ecosystem::Node,
+        "app",
+        &baseline,
+        &BTreeMap::new()
+    ));
+    // Go's fetches are environment-only in the sandbox: always public.
+    let baseline = BTreeMap::from([("app/go.mod".into(), blob())]);
+    assert!(public_only(
+        Ecosystem::Go,
+        "app",
+        &baseline,
+        &BTreeMap::new()
+    ));
 }
 
 /// An unused partition is pruned after its age, oversized ones evict
