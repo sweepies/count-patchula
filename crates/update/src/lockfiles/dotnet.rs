@@ -69,8 +69,9 @@ fn locks(dir: &Path, out: &mut Vec<PathBuf>) {
         }
     }
 }
-/// The text of every `nuget.config` under `dir`.
-fn nuget_configs(dir: &Path, out: &mut Vec<String>) {
+/// The text of every `nuget.config` under `dir`, in any case, or why it
+/// could not be read.
+fn nuget_configs(dir: &Path, out: &mut Vec<std::io::Result<String>>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -81,13 +82,12 @@ fn nuget_configs(dir: &Path, out: &mut Vec<String>) {
         let path = entry.path();
         if kind.is_dir() {
             nuget_configs(&path, out);
-        } else if kind.is_file()
-            && path
-                .file_name()
-                .is_some_and(|name| name == "nuget.config" || name == "NuGet.Config")
-            && let Ok(text) = std::fs::read_to_string(&path)
+        } else if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("nuget.config"))
         {
-            out.push(text);
+            out.push(std::fs::read_to_string(&path));
         }
     }
 }
@@ -150,14 +150,24 @@ impl Runner {
         // Each source under a tools entry gets its credentials by key. NuGet
         // reads `nuget.config` from the project up, and a project can name
         // any other, so every one in the tree counts: a key defined two ways
-        // gets nothing.
-        let mut configs = Vec::new();
-        nuget_configs(root, &mut configs);
-        let sources: Vec<_> = configs
-            .iter()
-            .map(|text| super::credentials::nuget_sources(text))
-            .collect();
-        let credentials = self.nuget_env(&sources);
+        // gets nothing, and a config the Count cannot read, which could define
+        // any key, leaves every source without.
+        let credentials = if self.registries.is_empty() {
+            Vec::new()
+        } else {
+            let mut configs = Vec::new();
+            nuget_configs(root, &mut configs);
+            configs
+                .iter()
+                .map(|text| {
+                    text.as_deref()
+                        .ok()
+                        .and_then(super::credentials::nuget_sources)
+                })
+                .collect::<Option<Vec<_>>>()
+                .map(|sources| self.nuget_env(&sources))
+                .unwrap_or_default()
+        };
         let held = !credentials.is_empty();
         let mut env = restore_env(
             &driver.join("nuget-packages"),

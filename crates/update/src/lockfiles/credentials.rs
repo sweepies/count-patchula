@@ -2,8 +2,8 @@
 //! `tools = true`, in the form each tool reads them. npm, aube, Bun and Yarn
 //! get theirs from `node`.
 //!
-//! Bundler, Composer, Go, uv and Terraform match credentials by host rather
-//! than by prefix, so they only get an entry whose prefix is a bare host,
+//! Bundler, Composer, Go, uv, Terraform and, through `~/.netrc`, Poetry
+//! match credentials by host rather than by prefix, so they only get an entry whose prefix is a bare host,
 //! with no path or port, and that is the only entry on its host: a path would
 //! widen to the whole host, and another entry there, for any installation,
 //! would have its URLs given this one's credentials. Cargo, NuGet and Poetry
@@ -109,18 +109,14 @@ impl Runner {
     /// the host in uppercase, with dots as `__` and hyphens as `___`. A host
     /// with `_` of its own, whose variable could name another host, or with
     /// no dot, whose variable could be a Bundler setting such as
-    /// `BUNDLE_PATH`, is left out, and so is a user or password Bundler could
-    /// not put in a URL as it is.
+    /// `BUNDLE_PATH`, is left out, and so is a user or password with anything
+    /// but the characters a URL's user part holds as they are.
     pub(super) fn bundler_env(&self) -> Vec<(String, String)> {
         self.by_host()
             .filter(|entry| !entry.host().0.contains('_') && entry.host().0.contains('.'))
             .filter_map(|entry| match &entry.auth {
                 Auth::Basic { username, password }
-                    if [username, password].iter().all(|field| {
-                        !field
-                            .chars()
-                            .any(|c| c.is_whitespace() || matches!(c, '@' | '/' | '%' | '#' | '?'))
-                    }) =>
+                    if userinfo(username, false) && userinfo(password, true) =>
                 {
                     Some((
                         format!(
@@ -141,25 +137,28 @@ impl Runner {
     }
 
     /// Each name `definitions` gives a URL under a tools entry, by the
-    /// fragment `key` makes of it, with the name, definition and entry. `url`
+    /// fragment `fold` makes of it as the tool does, with the name,
+    /// definition and entry. Only a name `plain` accepts can get one. `url`
     /// takes the https URL out of a definition, which counts only when it is
-    /// written as it parses: tools read the text as written and
-    /// could read a backslash, escape or case differently and send the
-    /// credentials to another host. Names with the same fragment, unless
-    /// every one is the same name with the same definition, get nothing.
+    /// written as it parses: tools read the text as written and could read a
+    /// backslash, escape or case differently and send the credentials to
+    /// another host. Names with the same fragment, unless every one is the
+    /// same plain name with the same definition, get nothing, so a name the
+    /// tool folds onto a credentialed one keeps it from being given.
     fn named<'a>(
         &'a self,
         definitions: &'a [Definitions],
-        key: impl Fn(&str) -> Option<String>,
+        fold: impl Fn(&str) -> String,
+        plain: impl Fn(&str) -> bool,
         url: impl Fn(&str) -> Option<&str>,
     ) -> Vec<(String, &'a str, &'a str, &'a Credential)> {
         type Definition<'a> = (&'a str, &'a str, Option<&'a Credential>);
         let mut by_key: BTreeMap<String, Vec<Definition<'a>>> = BTreeMap::new();
         for (name, definition) in definitions.iter().flatten() {
-            let Some(fragment) = key(name) else {
-                continue;
-            };
-            let entry = url(definition)
+            let fragment = fold(name);
+            let entry = plain(name)
+                .then_some(definition.as_str())
+                .and_then(&url)
                 .filter(|url| {
                     patchula_http::url_prefix(url).as_deref() == Some(url.trim_end_matches('/'))
                 })
@@ -193,7 +192,8 @@ impl Runner {
     pub(super) fn cargo_env(&self, registries: &[Definitions]) -> Vec<(String, String)> {
         self.named(
             registries,
-            |name| plain(name, &['-', '_']).then(|| name.to_ascii_uppercase().replace('-', "_")),
+            |name| name.to_uppercase().replace('-', "_"),
+            |name| plain(name, &['-', '_']),
             |index| index.strip_prefix("sparse+"),
         )
         .into_iter()
@@ -216,7 +216,8 @@ impl Runner {
     pub(super) fn nuget_env(&self, sources: &[Definitions]) -> Vec<(String, String)> {
         self.named(
             sources,
-            |name| plain(name, &['-', '_', '.']).then(|| name.to_ascii_lowercase()),
+            str::to_uppercase,
+            |name| plain(name, &['-', '_', '.']),
             |url: &str| Some(url),
         )
         .into_iter()
@@ -243,10 +244,8 @@ impl Runner {
     pub(super) fn poetry_env(&self, sources: &[Definitions]) -> Vec<(String, String)> {
         self.named(
             sources,
-            |name| {
-                plain(name, &['-', '_', '.'])
-                    .then(|| name.to_ascii_uppercase().replace(['-', '.'], "_"))
-            },
+            |name| name.to_uppercase().replace(['-', '.'], "_"),
+            |name| plain(name, &['-', '_', '.']),
             |url: &str| Some(url),
         )
         .into_iter()
@@ -268,6 +267,14 @@ impl Runner {
     }
 }
 
+/// Whether `field` is only characters a URL's user part holds unescaped:
+/// unreserved characters and sub-delimiters, and `:` in a password.
+fn userinfo(field: &str, password: bool) -> bool {
+    field.chars().all(|c| {
+        c.is_ascii_alphanumeric() || "-._~!$&'()*+,;=".contains(c) || (password && c == ':')
+    })
+}
+
 /// Whether `name` is ASCII letters, digits and `extra` alone.
 fn plain(name: &str, extra: &[char]) -> bool {
     !name.is_empty()
@@ -276,13 +283,11 @@ fn plain(name: &str, extra: &[char]) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || extra.contains(&c))
 }
 
-/// The sources a `nuget.config` adds, by key and URL. A file NuGet could
-/// not read adds none.
-pub(super) fn nuget_sources(text: &str) -> Definitions {
-    let Ok(document) = roxmltree::Document::parse(text) else {
-        return Vec::new();
-    };
-    document
+/// The sources a `nuget.config` adds, by key and URL, or None if the Count
+/// cannot read it.
+pub(super) fn nuget_sources(text: &str) -> Option<Definitions> {
+    let document = roxmltree::Document::parse(text).ok()?;
+    let sources = document
         .root_element()
         .children()
         .filter(|node| node.has_tag_name("packageSources"))
@@ -294,7 +299,8 @@ pub(super) fn nuget_sources(text: &str) -> Definitions {
                 add.attribute("value")?.to_owned(),
             ))
         })
-        .collect()
+        .collect();
+    Some(sources)
 }
 
 /// The sources a `pyproject.toml` gives Poetry, by name and URL. A file
@@ -560,7 +566,8 @@ mod tests {
     <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
   </packageSources>
 </configuration>"#,
-        );
+        )
+        .unwrap();
         assert_eq!(sources.len(), 5);
         assert_eq!(
             runner.nuget_env(&[sources]),
@@ -569,7 +576,7 @@ mod tests {
                 "Username=ci;Password=pw;ValidAuthenticationTypes=basic".to_string()
             )]
         );
-        assert!(nuget_sources("<configuration").is_empty());
+        assert!(nuget_sources("<configuration").is_none());
         // Keys differ in case only, or come twice in one file.
         for config in [
             "<configuration><packageSources><add key=\"Feed\" value=\"https://nuget.acme.dev/a/\" /></packageSources></configuration>",
@@ -577,10 +584,13 @@ mod tests {
         ] {
             let feed = nuget_sources(
                 "<configuration><packageSources><add key=\"feed\" value=\"https://nuget.acme.dev/a/\" /></packageSources></configuration>",
-            );
+            )
+            .unwrap();
             assert_eq!(runner.nuget_env(std::slice::from_ref(&feed)).len(), 1);
             assert!(
-                runner.nuget_env(&[feed, nuget_sources(config)]).is_empty(),
+                runner
+                    .nuget_env(&[feed, nuget_sources(config).unwrap()])
+                    .is_empty(),
                 "{config}"
             );
         }
@@ -609,6 +619,19 @@ mod tests {
             ])
         );
         assert!(poetry_sources("[tool.poetry").is_empty());
+        // Poetry folds `acmeſ` onto `ACMES`, so it keeps `acmes` from its
+        // credentials.
+        let folded = vec![
+            (
+                "acmes".to_string(),
+                "https://py.acme.dev/simple/".to_string(),
+            ),
+            (
+                "acmeſ".to_string(),
+                "https://evil.example/simple/".to_string(),
+            ),
+        ];
+        assert!(runner.poetry_env(&[folded]).is_empty());
         let inline = poetry_sources(
             "[tool.poetry]\nsource = [{ name = \"acme\", url = \"https://py.acme.dev/simple/\" }]\n",
         );

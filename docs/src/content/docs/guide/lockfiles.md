@@ -256,7 +256,8 @@ updates off for the others.
 ## Private registries in lockfile tools
 
 Lockfile tools get a [registry entry's](/guide/sources/#private-registries)
-credentials only when the entry sets `tools = true`. In the server,
+credentials only when the entry sets `tools = true`; APM, Nix and `mise lock`
+read no private registries and get none. In the server,
 `allowedInstallations` decides which installations' tools are given them,
 and the CLI gives them to every repository it runs on. As lockfile tools run
 repository and package code, any repository the Count processes can read a
@@ -284,8 +285,10 @@ outside the repository and reads none of its configuration; it gets each
 registry that the `.cargo/config.toml` and `.cargo/config` files at or above
 the project define under a `tools` entry, by name, index and token. dotnet
 reads every `nuget.config` in the tree, since a project can name any of them,
-and NuGet compares source keys without case. Poetry reads the project's
-`pyproject.toml`. A name defined more than one way gets nothing, and so does a URL not written in its normal form (lowercase host, no
+and gives no source credentials if it cannot read one; NuGet compares source
+keys without case. Poetry reads the project's
+`pyproject.toml`. A name defined more than one way, or that the tool would fold onto another
+name, gets nothing, and so does a URL not written in its normal form (lowercase host, no
 user, escapes or backslashes). Go fetches the modules under a credentialed
 host from the host itself, never through the public module proxy or checksum
 database.
@@ -299,7 +302,8 @@ uv, a basic one for Terraform, a `.netrc` user or password with whitespace,
 quotes, a backslash or `#`, a NuGet user or password with `;`, a source or
 registry name outside ASCII letters, digits, `-`, `_` and (for NuGet and
 Poetry) `.`, a Bundler or Terraform host with `_`, a Bundler host without a
-dot, a Bundler user or password with whitespace, `@`, `/`, `%`, `#` or `?`,
+dot, a Bundler user or password with characters other than letters, digits
+and `-._~!$&'()*+,;=` (and `:` in a password),
 and a Cargo registry whose index is not `sparse+`. Composer puts basic credentials in the URL of the Git
 commands it runs for a VCS repository on that host, where other processes on
 the host can see them. No other entry may sit under a `tools` entry's prefix,

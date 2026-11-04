@@ -134,7 +134,7 @@ impl Runner {
                         .collect(),
                         args,
                     },
-                    !poetry.is_empty(),
+                    !poetry.is_empty() || !hosts.is_empty(),
                 )
             };
             // Poetry moves a package as far as its constraint allows and cannot be
