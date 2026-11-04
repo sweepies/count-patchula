@@ -223,7 +223,9 @@ own directory. The server never borrows.
 ## Isolation
 
 Each tool runs in a scratch tree checked out from a persistent partial clone,
-containing only the files the tool reads. Every process starts from an
+containing only the files the tool reads. A repository's branches regenerate
+their lockfiles side by side, one per CPU core up to four, each in its own
+tree; only the checkout from the shared clone takes turns. Every process starts from an
 allowlisted environment with its own HOME, npm config, Cargo home and Go paths.
 Parent tokens, cloud credentials, Git helpers and your tool configuration are
 not inherited. Git alone gets a temporary credential header for the

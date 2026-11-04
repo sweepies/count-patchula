@@ -18,6 +18,7 @@ use crate::{
     Blob, Plan, Snapshot, blob_sha,
     plan::{hash, unified},
 };
+use futures_util::StreamExt;
 use patchula_config::{Config, Manager, NpmEngine, Source};
 use patchula_manager::Dependency;
 use patchula_process::{Executor, SystemExecutor};
@@ -588,23 +589,62 @@ impl Runner {
         self
     }
     pub async fn prepare(&self, plan: &mut Plan, snapshot: &mut Snapshot, config: &Config) {
-        if plan.action.status != ActionStatus::Planned || plan.lockfiles_ready {
-            return;
+        let added = self.prepare_plan(plan, config).await;
+        for (path, blob) in added {
+            snapshot.files.entry(path).or_insert(blob);
         }
-        match self.generate(plan, snapshot, config).await {
-            Ok(()) => {}
+    }
+    /// Every plan's lockfiles, `concurrency` plans at a time, calling `done`
+    /// as each finishes. Each plan works in its own scratch tree; the base
+    /// blobs they add, the same for every plan, join `snapshot` afterwards.
+    pub async fn prepare_all(
+        &self,
+        plans: &mut [Plan],
+        snapshot: &mut Snapshot,
+        config: &Config,
+        concurrency: usize,
+        done: &(dyn Fn() + Sync),
+    ) {
+        type Task<'a> = std::pin::Pin<
+            Box<dyn std::future::Future<Output = BTreeMap<String, Blob>> + Send + 'a>,
+        >;
+        let tasks: Vec<Task<'_>> = plans
+            .iter_mut()
+            .map(|plan| -> Task<'_> {
+                Box::pin(async move {
+                    let added = self.prepare_plan(plan, config).await;
+                    done();
+                    added
+                })
+            })
+            .collect();
+        let added: Vec<BTreeMap<String, Blob>> = futures_util::stream::iter(tasks)
+            .buffer_unordered(concurrency.max(1))
+            .collect()
+            .await;
+        for (path, blob) in added.into_iter().flatten() {
+            snapshot.files.entry(path).or_insert(blob);
+        }
+    }
+    /// One plan's lockfiles, and the base blobs of the files they change.
+    async fn prepare_plan(&self, plan: &mut Plan, config: &Config) -> BTreeMap<String, Blob> {
+        if plan.action.status != ActionStatus::Planned || plan.lockfiles_ready {
+            return BTreeMap::new();
+        }
+        match self.generate(plan, config).await {
+            Ok(added) => added,
             Err(error) => {
                 plan.action.status = ActionStatus::Error;
                 plan.action.reason = Some(format!("lockfile generation failed: {error}"));
+                BTreeMap::new()
             }
         }
     }
     async fn generate(
         &self,
         plan: &mut Plan,
-        snapshot: &mut Snapshot,
         config: &Config,
-    ) -> Result<(), String> {
+    ) -> Result<BTreeMap<String, Blob>, String> {
         std::fs::create_dir_all(&self.cache).map_err(|e| e.to_string())?;
         let run = tempfile::Builder::new()
             .prefix("run-")
@@ -857,6 +897,7 @@ impl Runner {
         validate_targets(plan, config, &generated)?;
         let mut contents = plan.contents.clone();
         let mut deleted = BTreeSet::new();
+        let mut added = BTreeMap::new();
         let all: BTreeSet<_> = baseline.keys().chain(generated.keys()).cloned().collect();
         let mut files = BTreeMap::new();
         for path in all {
@@ -890,7 +931,7 @@ impl Runner {
             if after.is_none() {
                 deleted.insert(path.clone());
             }
-            snapshot.files.insert(
+            added.insert(
                 path,
                 before.cloned().unwrap_or_else(|| Blob {
                     sha: String::new(),
@@ -912,7 +953,7 @@ impl Runner {
             plan.action.status = ActionStatus::Skipped;
             plan.action.reason = Some("lockfiles already current".into());
         }
-        Ok(())
+        Ok(added)
     }
     /// Moves Cargo.lock for one job, against the lock as it stands: a job whose
     /// target is already locked has nothing to do. A package moves with
