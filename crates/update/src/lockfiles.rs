@@ -614,7 +614,7 @@ impl Runner {
         let driver = run.path().join("driver");
         std::fs::create_dir_all(&driver).map_err(|e| e.to_string())?;
         std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-        let baseline = self.checkout(plan, &root, &driver).await?;
+        let (baseline, cargo_configs) = self.checkout(plan, &root, &driver).await?;
         for (path, content) in &plan.contents {
             write(&root, path, content)?;
         }
@@ -742,15 +742,13 @@ impl Runner {
                     // configuration. It gets each credentialed registry the
                     // `.cargo/config.toml` files at or above the project
                     // define, by name, from the environment.
-                    let registries: Vec<_> = baseline
+                    let registries: Vec<_> = cargo_configs
                         .iter()
                         .filter(|(path, _)| {
-                            cargo_config(path) && {
-                                let owner = directory_of_cargo_config(path);
-                                owner == directory || under(&directory, owner)
-                            }
+                            let owner = directory_of_cargo_config(path);
+                            owner == directory || under(&directory, owner)
                         })
-                        .map(|(_, blob)| credentials::cargo_registries(&blob.content))
+                        .map(|(_, text)| credentials::cargo_registries(text))
                         .collect();
                     let env = self.cargo_env(&registries);
                     for job in jobs {

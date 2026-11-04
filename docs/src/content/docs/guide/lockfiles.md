@@ -273,8 +273,14 @@ fetches the modules under a credentialed host from the host itself, never
 through the public module proxy or checksum database.
 
 Composer, Go and Terraform send credentials to every URL on the host, so they
-only get an entry that is the only one on its host, for any installation, and
-that names no port. No other entry may sit under a `tools` entry's prefix,
+only get an entry whose prefix is a bare host, with no path or port, and that
+is the only entry on its host, for any installation. A credential a tool
+cannot take is left out without a warning, and the tool then fails on the
+registry: a bearer entry for Go, a basic one for Terraform, a Go user or
+password with whitespace, quotes, a backslash or `#`, a Terraform host with
+`_`, and a Cargo registry whose index is not `sparse+`. Composer puts basic
+credentials in the URL of the Git commands it runs for a VCS repository on
+that host, where other processes on the host can see them. No other entry may sit under a `tools` entry's prefix,
 because npm, aube and Bun would send the broader entry's credentials there,
 and the prefix cannot hold `=` or `;`, which `.npmrc` keys cannot. Lockfile
 tools read the registries the repository names, never a

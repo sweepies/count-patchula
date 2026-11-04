@@ -3,9 +3,10 @@
 //! get theirs from `node`.
 //!
 //! Composer, Go and Terraform match credentials by host rather than by
-//! prefix, so they only get an entry that is the only one on its host and
-//! names no port: one any other entry shares, or for another installation,
-//! would otherwise lend its credentials to that entry's URLs. Cargo matches
+//! prefix, so they only get an entry whose prefix is a bare host, with no
+//! path or port, and that is the only entry on its host: a path would widen
+//! to the whole host, and another entry there, for any installation, would
+//! have its URLs given this one's credentials. Cargo matches
 //! them by registry name, so a name gets the entry its index URL falls
 //! under, as a lookup would.
 use super::Runner;
@@ -18,6 +19,10 @@ impl Runner {
         self.registries.iter().filter(|entry| {
             let (host, port) = entry.host();
             port.is_none()
+                && entry
+                    .prefix()
+                    .strip_prefix("https://")
+                    .is_some_and(|rest| !rest.contains('/'))
                 && self
                     .entries
                     .iter()
@@ -51,9 +56,11 @@ impl Runner {
     }
 
     /// Terraform's `TF_TOKEN_<host>` variables, for bearer entries: dots in
-    /// the host become `_` and hyphens `__`.
+    /// the host become `_` and hyphens `__`. A host with `_` of its own is
+    /// left out, as its variable could name another host.
     pub(super) fn terraform_env(&self) -> Vec<(String, String)> {
         self.by_host()
+            .filter(|entry| !entry.host().0.contains('_'))
             .filter_map(|entry| match &entry.auth {
                 Auth::Bearer { token } => Some((
                     format!(
@@ -188,8 +195,9 @@ mod tests {
             // Shares its host with an entry that is not for tools.
             entry("https://shared.acme.dev/a", bearer("a")).for_tools(),
             entry("https://shared.acme.dev/b", bearer("b")),
-            // Names a port.
+            // Names a port, or a path.
             entry("https://port.acme.dev:8443", bearer("p")).for_tools(),
+            entry("https://path.acme.dev/team", bearer("p")).for_tools(),
             // Not for tools.
             entry("https://other.acme.dev", bearer("o")),
         ]);
@@ -215,8 +223,12 @@ mod tests {
     fn terraform_hosts_double_their_hyphens() {
         let runner = runner(vec![
             entry("https://tf-reg.acme.dev", bearer("t")).for_tools(),
+            // `TF_TOKEN_a_b_acme_dev` would name `a.b.acme.dev` too.
+            entry("https://a_b.acme.dev", bearer("u")).for_tools(),
         ]);
-        assert_eq!(runner.terraform_env()[0].0, "TF_TOKEN_tf__reg_acme_dev");
+        let env = runner.terraform_env();
+        assert_eq!(env.len(), 1, "{env:?}");
+        assert_eq!(env[0].0, "TF_TOKEN_tf__reg_acme_dev");
     }
 
     #[test]
