@@ -472,6 +472,9 @@ fn project_redirect(
 ) -> Option<String> {
     let related = |path: &str| {
         let folder = &path[..path.rfind('/').map_or(0, |i| i + 1)];
+        // A `.cargo` configuration applies to its parent's folder, Cargo
+        // reading it from wherever it runs up to the repository root.
+        let folder = folder.strip_suffix(".cargo/").unwrap_or(folder);
         dir.starts_with(folder) || folder.starts_with(dir)
     };
     let leaf = |path: &str| path.rsplit('/').next().unwrap_or(path).to_owned();

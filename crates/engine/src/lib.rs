@@ -2883,11 +2883,18 @@ pub fn read_tree(
                     );
                 }
                 // As on GitHub, any other selected file that is not UTF-8
-                // refuses the repository rather than being dropped.
-                _ => {
+                // refuses the repository rather than being dropped. A
+                // file that cannot be read refuses it with its own cause.
+                Ok(Err(_)) => {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         "selected file is not UTF-8",
+                    ));
+                }
+                Err(error) => {
+                    return Err(std::io::Error::new(
+                        error.kind(),
+                        format!("cannot read {relative}: {error}"),
                     ));
                 }
             }

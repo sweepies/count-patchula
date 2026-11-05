@@ -363,10 +363,13 @@ pub(crate) fn nonpublic_registry(text: &str) -> bool {
             let Some(entry) = entry.as_table_like() else {
                 return true;
             };
-            let public = entry
-                .get("index")
-                .and_then(Item::as_str)
-                .is_some_and(|i| i.contains("index.crates.io") || i.contains("crates.io-index"));
+            // The sparse and the git index alike, by host and by exact
+            // URL — never a substring, so a lookalike host counts.
+            let public = entry.get("index").and_then(Item::as_str).is_some_and(|i| {
+                crate::web_host(i.strip_prefix("sparse+").unwrap_or(i))
+                    .is_some_and(|host| host == "index.crates.io")
+                    || i.trim_end_matches('/') == "https://github.com/rust-lang/crates.io-index"
+            });
             let benign = entry
                 .iter()
                 .all(|(key, _)| matches!(key, "index" | "token"));
@@ -378,7 +381,9 @@ pub(crate) fn nonpublic_registry(text: &str) -> bool {
     doc.get("registry")
         .and_then(Item::as_table_like)
         .is_some_and(|r| {
-            r.get("default").is_some() || r.get("global-credential-providers").is_some()
+            r.get("default").is_some()
+                || r.get("index").is_some()
+                || r.get("global-credential-providers").is_some()
         })
 }
 

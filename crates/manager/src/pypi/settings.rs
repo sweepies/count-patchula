@@ -875,19 +875,23 @@ pub(crate) fn uv_private_index(text: &str) -> bool {
 }
 
 /// Whether `text`, a `pip.conf` or `pip.ini`, names an index besides PyPI
-/// or says something the Count does not read.
+/// or says something the Count does not read. pip's parser takes `=` and
+/// `:` alike and options case-insensitively with `-` or `_` alike, so a
+/// line with neither delimiter is one pip would reject — private, since
+/// the Count cannot say what it meant.
 pub(crate) fn pip_private_index(text: &str) -> bool {
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with(['#', ';', '[']) {
             continue;
         }
-        let Some((key, value)) = line.split_once('=') else {
+        let Some(at) = line.find(['=', ':']) else {
             return true;
         };
-        match key.trim() {
+        let key = line[..at].trim().to_ascii_lowercase().replace('_', "-");
+        match key.as_str() {
             "index-url" | "extra-index-url" => {
-                if !matches!(super::named(value), Named::Public) {
+                if !matches!(super::named(&line[at + 1..]), Named::Public) {
                     return true;
                 }
             }

@@ -3369,6 +3369,132 @@ fn nuget_packages_come_from_nuget_org_alone_or_as_source_mapping_says() {
     assert!(fails(dep.registry.clone()), "{:?}", dep.registry);
 }
 
+/// A closer `Directory.Packages.props` passes a parent's governance down
+/// when it imports it; every `*proj` extension counts as a project, only
+/// the nearest `Directory.Build.props` can opt one out, and a solution
+/// below a config can tie a governed project to it.
+#[test]
+fn nuget_central_props_governance_imports_extensions_and_solutions() {
+    let props = "<Project><ItemGroup><PackageVersion Include=\"Newtonsoft.Json\" Version=\"13.0.1\" /></ItemGroup></Project>";
+    let project = "<Project Sdk=\"Microsoft.NET.Sdk\" />";
+    let private_config = "<?xml version=\"1.0\"?><configuration><packageSources><clear /><add key=\"Acme\" value=\"https://nuget.acme.dev/v3/index.json\" /></packageSources></configuration>";
+    let registry = |files: Vec<(&str, &str)>| {
+        registry_of(
+            Manager::Nuget,
+            &files,
+            "Directory.Packages.props",
+            "Newtonsoft.Json",
+        )
+    };
+
+    // A closer props that stands alone takes over; one that imports the
+    // parent does not stop it governing the projects under it.
+    let nested = |closer: &'static str| -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("Directory.Packages.props", props),
+            ("nested/Directory.Packages.props", closer),
+            ("nested/app/App.csproj", project),
+            ("nested/nuget.config", private_config),
+        ]
+    };
+    assert_eq!(registry(nested(props)), None);
+    assert!(fails(registry(nested(
+        "<Project><Import Project=\"../Directory.Packages.props\" /><ItemGroup /></Project>"
+    ))));
+
+    // Project files of every extension ending in `proj`, whatever the
+    // case.
+    for name in ["App.CSPROJ", "App.vcxproj", "App.sqlproj", "App.proj"] {
+        let files = vec![
+            ("Directory.Packages.props", props),
+            ("sub/nuget.config", private_config),
+            (
+                Box::leak(format!("sub/app/{name}").into_boxed_str()),
+                project,
+            ),
+        ];
+        assert!(fails(registry(files)), "{name}");
+    }
+
+    // Opting out takes a literal `false` from the project or the nearest
+    // Directory.Build.props; a comment, a condition or a later element
+    // is none.
+    for text in [
+        "<Project><!-- <PropertyGroup><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally></PropertyGroup> --></Project>",
+        "<Project><PropertyGroup Condition=\"'$(X)' == '1'\"><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally></PropertyGroup></Project>",
+        "<Project><PropertyGroup><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally></PropertyGroup><Import Project=\"later.props\" /></Project>",
+        "<Project><PropertyGroup><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally><ManagePackageVersionsCentrally>$(Maybe)</ManagePackageVersionsCentrally></PropertyGroup></Project>",
+    ] {
+        let files = vec![
+            ("Directory.Packages.props", props),
+            ("sub/nuget.config", private_config),
+            ("sub/app/App.csproj", text),
+        ];
+        assert!(fails(registry(files)), "{text}");
+    }
+    // The project itself and the nearest Directory.Build.props can opt
+    // out; a farther one cannot where a nearer says nothing.
+    let build_props = "<Project><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup></Project>";
+    for extra in [
+        vec![(
+            "sub/app/App.csproj",
+            "<Project><PropertyGroup><ManagePackageVersionsCentrally>FALSE</ManagePackageVersionsCentrally></PropertyGroup></Project>",
+        )],
+        vec![
+            ("sub/app/App.csproj", project),
+            ("sub/Directory.Build.props", build_props),
+        ],
+    ] {
+        let mut files = vec![
+            ("Directory.Packages.props", props),
+            ("sub/nuget.config", private_config),
+        ];
+        files.extend(extra);
+        assert_eq!(registry(files), None);
+    }
+    let files = vec![
+        ("Directory.Packages.props", props),
+        ("Directory.Build.props", build_props),
+        ("sub/nuget.config", private_config),
+        ("sub/Directory.Build.props", "<Project />"),
+        ("sub/app/App.csproj", project),
+    ];
+    assert!(fails(registry(files)));
+
+    // A solution at or below the config naming a governed project ties
+    // the config to it, wherever the project sits.
+    let sln = "Project(\"{9A19103F-16F7-4668-BE54-9A1E7A4F7556}\") = \"App\", \"..\\app\\App.csproj\", \"{B0F5C13D-BB51-4D6B-B3D3-DE54C7C8D0BE}\"\nEndProject\n";
+    let files = vec![
+        ("Directory.Packages.props", props),
+        ("sln/nuget.config", private_config),
+        ("sln/App.sln", sln),
+        ("app/App.csproj", project),
+    ];
+    assert!(fails(registry(files)));
+    // Naming a project that opted out does not.
+    let files = vec![
+        ("Directory.Packages.props", props),
+        ("sln/nuget.config", private_config),
+        ("sln/App.sln", sln),
+        (
+            "app/App.csproj",
+            "<Project><PropertyGroup><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally></PropertyGroup></Project>",
+        ),
+    ];
+    assert_eq!(registry(files), None);
+    // A .slnx reads the same way.
+    let files = vec![
+        ("Directory.Packages.props", props),
+        ("sln/nuget.config", private_config),
+        (
+            "sln/App.slnx",
+            "<Solution><Project Path=\"../app/App.csproj\" /></Solution>",
+        ),
+        ("app/App.csproj", project),
+    ];
+    assert!(fails(registry(files)));
+}
+
 /// The registry the Count gives `name` from `file` when a repository holds
 /// `files`.
 fn registry_of(manager: Manager, files: &[(&str, &str)], file: &str, name: &str) -> Option<String> {
@@ -3940,6 +4066,42 @@ fn mise_package_tools_fail_where_the_project_redirects_their_registry() {
     ];
     assert!(fails(lookup(&cargo, "cargo:ripgrep")));
     assert_eq!(lookup(&cargo, "npm:@acme/cli"), None);
+    // An index named by a lookalike host, or by the registry table's own
+    // `index`, is not crates.io's.
+    for config in [
+        "[registries.acme]\nindex = \"https://index.crates.io.corp/\"\n",
+        "[registry]\nindex = \"sparse+https://index.crates.io/\"\n",
+        "[registries.crates-io-mirror]\nindex = \"https://github.com/rust-lang/crates.io-index.acme\"\n",
+    ] {
+        let files = [("app/mise.toml", tools), (".cargo/config.toml", config)];
+        assert!(fails(lookup(&files, "cargo:ripgrep")), "{config}");
+    }
+    // The crates.io indexes spelled exactly are public.
+    let public_index = [
+        ("app/mise.toml", tools),
+        (
+            ".cargo/config.toml",
+            "[registries.acme]\nindex = \"sparse+https://index.crates.io/\"\n\n[registries.mirror]\nindex = \"https://github.com/rust-lang/crates.io-index\"\n",
+        ),
+    ];
+    assert_eq!(lookup(&public_index, "cargo:ripgrep"), None);
+
+    // pip's index settings, however pip spells the keys and delimiters.
+    let pypi = format!("{tools}\n\"pypi:requests\" = \"25.0.0\"\n");
+    for config in [
+        "index_url = https://pypi.acme.dev/simple\n",
+        "INDEX-URL: https://pypi.acme.dev/simple\n",
+        "[global]\nextra-index-url = https://pypi.acme.dev/simple\n",
+        "[install]\nindex-url\n",
+    ] {
+        let files = [("app/mise.toml", pypi.as_str()), ("app/pip.conf", config)];
+        assert!(fails(lookup(&files, "pypi:requests")), "{config}");
+        assert_eq!(lookup(&files, "node"), None, "{config}");
+    }
+    for config in ["index-url = https://pypi.org/simple\n", "timeout = 10\n"] {
+        let files = [("app/mise.toml", pypi.as_str()), ("app/pip.conf", config)];
+        assert_eq!(lookup(&files, "pypi:requests"), None, "{config}");
+    }
 }
 
 /// A repository a `content` or `exclusiveContent` filter bounds to named
@@ -4045,6 +4207,145 @@ dependencies {
 dependencies { implementation "com.acme:lib:1.0" }
 "#;
     assert_eq!(lookup(&[("build.gradle", public)], "com.acme:lib"), None);
+
+    // An empty filter — `content { }`, or comments only — bounds nothing,
+    // so the repository still claims everything; so does one the Count
+    // does not read in a second block.
+    for filter in [
+        "content { }",
+        "content { /* a note, nothing recognised */ }",
+        "filter { }",
+        "content { includeGroup \"com.acme\" } content { }",
+        "content { includeGroup \"com.acme\" }\n        content { includeGroupByRegex(\"org\\\\..*\") }",
+    ] {
+        let build = format!(
+            "repositories {{\n    mavenCentral()\n    maven {{ url = \"https://repo.acme.dev/maven\"\n        {filter}\n    }}\n}}\ndependencies {{\n    implementation \"org.springframework:spring-core:6.1.0\"\n}}\n"
+        );
+        let found = lookup(
+            &[("build.gradle", build.as_str())],
+            "org.springframework:spring-core",
+        );
+        assert!(fails(found.clone()), "{filter}: {found:?}");
+    }
+
+    // Every content block of a repository claims: two of them union.
+    let two_blocks = r#"repositories {
+    mavenCentral()
+    maven {
+        url = "https://repo.acme.dev/maven"
+        content { includeGroup "com.acme" }
+        content { includeModule("org.other", "lib") }
+    }
+}
+dependencies {
+    implementation "org.springframework:spring-core:6.1.0"
+    implementation "com.acme:lib:1.0"
+    implementation "org.other:lib:1.0"
+}
+"#;
+    let files = [("build.gradle", two_blocks)];
+    assert_eq!(lookup(&files, "org.springframework:spring-core"), None);
+    assert!(fails(lookup(&files, "com.acme:lib")));
+    assert!(fails(lookup(&files, "org.other:lib")));
+
+    // A repository whose URL is assigned twice, conditionally or by
+    // anything but one literal serves anything the Count cannot see.
+    for repository in [
+        r#"maven { url = "https://repo.acme.dev/a"; url = "https://repo.acme.dev/b" }"#,
+        r#"maven { url "https://repo.acme.dev"; url "https://repo.acme.dev" }"#,
+        r#"maven("https://repo.acme.dev") { url "https://repo.acme.dev" }"#,
+        r#"maven { if (project.hasProperty("ci")) { url = "https://repo.acme.dev" } }"#,
+        r#"maven { url = findProperty("mavenUrl") }"#,
+        r#"maven { url = "https://repo.acme.dev" + suffix }"#,
+        r#"maven { url = "https://${host}/maven" }"#,
+    ] {
+        let build = format!(
+            "repositories {{\n    mavenCentral()\n    {repository}\n}}\ndependencies {{\n    implementation \"org.springframework:spring-core:6.1.0\"\n}}\n"
+        );
+        let found = lookup(
+            &[("build.gradle", build.as_str())],
+            "org.springframework:spring-core",
+        );
+        assert!(fails(found.clone()), "{repository}: {found:?}");
+    }
+    // The same public URL assigned twice still cannot redirect anything.
+    let same_public = r#"repositories {
+    maven("https://maven.google.com") { url = "https://maven.google.com" }
+}
+dependencies { implementation "org.springframework:spring-core:6.1.0" }
+"#;
+    assert_eq!(
+        lookup(
+            &[("build.gradle", same_public)],
+            "org.springframework:spring-core"
+        ),
+        None
+    );
+
+    // `forRepository` holds a public repository only as a lone call.
+    let exclusive_public = r#"repositories {
+    exclusiveContent {
+        forRepository { mavenCentral() }
+        filter { includeGroup "com.acme" }
+    }
+}
+dependencies {
+    implementation "com.acme:lib:1.0"
+    implementation "org.springframework:spring-core:6.1.0"
+}
+"#;
+    let files = [("build.gradle", exclusive_public)];
+    assert_eq!(lookup(&files, "com.acme:lib"), None);
+    assert_eq!(lookup(&files, "org.springframework:spring-core"), None);
+
+    // Anything else inside it is a declaration like any other: the
+    // filter still bounds it, but nothing passes as public.
+    for repository in [
+        "mavenCentral()\n            maven { url \"https://repo.acme.dev/maven\" }",
+        "google()\n            mavenCentral()",
+        "jcenter()",
+        "ivy { url \"https://repo.acme.dev/ivy\" }",
+    ] {
+        let build = format!(
+            "repositories {{\n    exclusiveContent {{\n        forRepository {{\n            {repository}\n        }}\n        filter {{ includeGroup \"com.acme\" }}\n    }}\n}}\ndependencies {{\n    implementation \"com.acme:lib:1.0\"\n    implementation \"org.springframework:spring-core:6.1.0\"\n}}\n"
+        );
+        let files = [("build.gradle", build.as_str())];
+        let found = lookup(&files, "com.acme:lib");
+        assert!(fails(found.clone()), "{repository}: {found:?}");
+        assert_eq!(
+            lookup(&files, "org.springframework:spring-core"),
+            None,
+            "{repository}"
+        );
+    }
+    // Without a filter such a repository claims everything.
+    let unfiltered = r#"repositories {
+    exclusiveContent {
+        forRepository {
+            mavenCentral()
+            maven { url "https://repo.acme.dev/maven" }
+        }
+    }
+}
+dependencies { implementation "org.springframework:spring-core:6.1.0" }
+"#;
+    assert!(fails(lookup(
+        &[("build.gradle", unfiltered)],
+        "org.springframework:spring-core"
+    )));
+    // And an empty exclusive filter bounds nothing.
+    let empty_filter = r#"repositories {
+    exclusiveContent {
+        forRepository { maven { url "https://repo.acme.dev/maven" } }
+        filter { }
+    }
+}
+dependencies { implementation "org.springframework:spring-core:6.1.0" }
+"#;
+    assert!(fails(lookup(
+        &[("build.gradle", empty_filter)],
+        "org.springframework:spring-core"
+    )));
 }
 
 /// When the include chain runs past the read rounds, the file it still
@@ -4110,5 +4411,10 @@ fn a_registry_comment_in_a_settings_file_does_not_move_a_mise_tool() {
     assert!(fails(registry(&[(
         ".yarnrc.yml",
         "npmRegistryServer: https://npm.acme.dev\n"
+    )])));
+    // One Yarn cannot parse may say anything.
+    assert!(fails(registry(&[(
+        ".yarnrc.yml",
+        "npmRegistryServer: [unclosed\n"
     )])));
 }

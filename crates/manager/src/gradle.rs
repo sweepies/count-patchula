@@ -929,18 +929,96 @@ fn string_at(strings: &[(usize, String)], at: usize) -> Option<&str> {
         .map(|(_, s)| s.as_str())
 }
 
-/// The URL a repository block or argument list names: the value of a
-/// `url` or `setUrl` statement, of a `uri(…)` call after one, or the only
-/// string argument in `maven("…")`.
-fn repo_url(
+/// The statement `at` falls in, back to the last `;`, `{`, `}` or
+/// newline, so a keyword leading it can say the statement is not a plain
+/// assignment.
+fn leading(code: &str, from: usize, at: usize) -> &str {
+    let mut start = at;
+    while start > from && !matches!(code.as_bytes()[start - 1], b';' | b'{' | b'}' | b'\n') {
+        start -= 1;
+    }
+    &code[start..at]
+}
+
+/// Whether `text` holds `name` as a whole word.
+fn has_word(text: &str, name: &str) -> bool {
+    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    text.match_indices(name).any(|(at, _)| {
+        !(at > 0 && word(text.as_bytes()[at - 1]))
+            && !text
+                .as_bytes()
+                .get(at + name.len())
+                .is_some_and(|b| word(*b))
+    })
+}
+
+/// The URLs a repository's argument list or block assigns: each `url` or
+/// `setUrl` statement's literal, and whether any assigns it another way —
+/// more than once, conditionally or by an expression — which the Count
+/// cannot read as one address.
+#[derive(Default)]
+struct Urls {
+    /// Every literal a `url` statement assigns.
+    literal: Vec<String>,
+    /// An assignment the Count cannot take for a literal: another
+    /// expression, a template, a conditional statement or a second URL.
+    suspect: bool,
+}
+
+impl Urls {
+    /// The one address every assignment names: a single literal, or
+    /// several naming the same public URL, which cannot redirect a
+    /// lookup. `None` for no assignment and for assignments the Count
+    /// cannot read as one.
+    fn resolve(&self) -> Option<String> {
+        if self.suspect {
+            return None;
+        }
+        let [first, rest @ ..] = self.literal.as_slice() else {
+            return None;
+        };
+        (rest.is_empty() || rest.iter().all(|u| u == first) && (MAVEN_PUBLIC.is_public)(first))
+            .then(|| first.clone())
+    }
+    /// Whether the repository has address assignments the Count cannot
+    /// read as one, so it may serve anything.
+    fn unusable(&self) -> bool {
+        if self.suspect {
+            return true;
+        }
+        match self.literal.as_slice() {
+            [] | [_] => false,
+            [first, rest @ ..] => {
+                !(rest.iter().all(|u| u == first) && (MAVEN_PUBLIC.is_public)(first))
+            }
+        }
+    }
+}
+
+/// The URL assignments in `range`, a repository's `url`/`setUrl`
+/// statements — `url "…"`, `url = uri("…")`, `setUrl(…)` — and, where
+/// `positional`, the strings among an argument list as `maven("…")`
+/// writes them. A statement inside a nested block such as an `if`, led by
+/// a control keyword or assigning anything but one literal, is not one
+/// the Count reads.
+fn repo_urls(
     code: &str,
     strings: &[(usize, String)],
     range: std::ops::Range<usize>,
-) -> Option<String> {
+    positional: bool,
+) -> Urls {
     let bytes = code.as_bytes();
     let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut out = Urls::default();
+    let mut named = false;
+    let mut depth = 0usize;
     let mut i = range.start;
     while i < range.end {
+        match bytes[i] {
+            b'{' => depth += 1,
+            b'}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
         if !word(bytes[i]) || (i > range.start && word(bytes[i - 1])) {
             i += 1;
             continue;
@@ -948,33 +1026,85 @@ fn repo_url(
         let end = (i..range.end)
             .find(|&j| !word(bytes[j]))
             .unwrap_or(range.end);
-        if matches!(&code[i..end], "url" | "setUrl") {
-            let mut j = skip_ws(code, end);
-            if bytes
-                .get(j)
-                .is_some_and(|b| matches!(b, b'=' | b':' | b'('))
-            {
+        if !matches!(&code[i..end], "url" | "setUrl") {
+            i = end;
+            continue;
+        }
+        named = true;
+        let before = leading(code, range.start, i);
+        if has_word(before, "def") || has_word(before, "final") {
+            // A variable named `url`, not the repository's.
+            i = end;
+            continue;
+        }
+        let conditional = depth > 0
+            || [
+                "if", "else", "for", "while", "until", "try", "catch", "switch",
+            ]
+            .iter()
+            .any(|name| has_word(before, name));
+        if conditional {
+            out.suspect = true;
+            i = end;
+            continue;
+        }
+        let mut j = skip_ws(code, end);
+        let assign = match bytes.get(j) {
+            Some(b'=' | b':') | Some(b'(') => {
+                j = skip_ws(code, j + 1);
+                true
+            }
+            Some(b'"' | b'\'') => true,
+            _ => false,
+        };
+        if !assign {
+            i = end;
+            continue;
+        }
+        // `url = uri("…")` and `setUrl(uri("…"))`.
+        if j < range.end
+            && code[j..].starts_with("uri")
+            && !bytes.get(j + 3).is_some_and(|b| word(*b))
+        {
+            j = skip_ws(code, j + 3);
+            if bytes.get(j) == Some(&b'(') {
                 j = skip_ws(code, j + 1);
             }
-            // `url = uri("…")` and `setUrl(uri("…"))`.
-            if code[j..].starts_with("uri") && !bytes.get(j + 3).is_some_and(|b| word(*b)) {
-                j = skip_ws(code, j + 3);
-                if bytes.get(j) == Some(&b'(') {
-                    j = skip_ws(code, j + 1);
-                }
-            }
-            if let Some(url) = string_at(strings, j) {
-                return Some(url.to_owned());
-            }
+        }
+        // The literal alone assigns the URL: what follows it is a
+        // statement's end — a `;`, a closing bracket, a newline — or
+        // nothing, never another expression.
+        let clean_end = |j: usize| {
+            let Some(n) = code[j + 1..range.end].find(bytes[j] as char) else {
+                return false;
+            };
+            let rest = &code[j + n + 2..range.end];
+            let next = rest.trim_start();
+            next.is_empty()
+                || rest[..rest.len() - next.len()].contains('\n')
+                || matches!(next.as_bytes()[0], b';' | b')' | b'}')
+        };
+        match string_at(strings, j).filter(|url| !url.contains('$')) {
+            Some(url) if clean_end(j) => out.literal.push(url.to_owned()),
+            _ => out.suspect = true,
         }
         i = end;
     }
-    // `maven("…")`: a single string argument names the URL.
-    let mut found = strings.iter().filter(|(at, _)| range.contains(at));
-    match (found.next(), found.next()) {
-        (Some((_, url)), None) => Some(url.clone()),
-        _ => None,
+    if positional && !named {
+        // `maven("…")`: the strings among the arguments name the URL; one
+        // inside a nested expression such as a closure does not.
+        for (_, url) in strings.iter().filter(|(at, _)| range.contains(at)) {
+            if url.contains('$') {
+                out.suspect = true;
+            } else {
+                out.literal.push(url.clone());
+            }
+        }
+        if code[range].contains('{') {
+            out.suspect = true;
+        }
     }
+    out
 }
 
 /// The groups and `group:module`s an include-only content filter claims.
@@ -1049,13 +1179,16 @@ fn filter_claims(
             modules.insert((args.swap_remove(0), args.pop()?));
         }
     }
-    Some((groups, modules))
+    // An empty block — `content { }`, or comments only — bounds nothing,
+    // so the repository still claims everything.
+    (!groups.is_empty() || !modules.is_empty()).then_some((groups, modules))
 }
 
-/// The claims of a `content { … }` or `filter { … }` block in `range`:
-/// `None` when it holds anything but literal `includeGroup` and
-/// `includeModule` statements, or when `range` has no such block — the
-/// `Option` the caller turns into claims or failure.
+/// The claims of every `content { … }` or `filter { … }` block in `range`,
+/// unioned: `None` when any holds anything but literal `includeGroup` and
+/// `includeModule` statements — an empty block, `includeGroupByRegex`,
+/// `includeVersion`, `excludeGroup` — since the repository then claims
+/// everything, and `None` too when `range` has no such block.
 fn content_filter(
     code: &str,
     strings: &[(usize, String)],
@@ -1063,6 +1196,8 @@ fn content_filter(
 ) -> Option<Option<Claims>> {
     let bytes = code.as_bytes();
     let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut union = Claims::default();
+    let mut seen = false;
     let mut i = range.start;
     while i < range.end {
         if !word(bytes[i]) || (i > range.start && word(bytes[i - 1])) {
@@ -1076,46 +1211,67 @@ fn content_filter(
             let open = skip_ws(code, end);
             if bytes.get(open) == Some(&b'{') {
                 let close = matching(code, open)?;
-                return Some(filter_claims(code, strings, open + 1..close - 1));
+                let Some((groups, modules)) = filter_claims(code, strings, open + 1..close - 1)
+                else {
+                    return Some(None);
+                };
+                union.0.extend(groups);
+                union.1.extend(modules);
+                seen = true;
+                i = close;
+                continue;
             }
         }
         i = end;
     }
-    Some(None)
+    Some(seen.then_some(union))
 }
 
 /// What a repository call's declaration says it serves.
 struct Serves {
     /// Its URL, where the Count reads one.
     url: Option<String>,
-    /// The groups and `group:module`s an include-only filter claims;
+    /// The groups and `group:module`s include-only filters claim;
     /// `None` when it can serve anything.
     claims: Option<Claims>,
-    /// A call naming a public repository, such as `mavenCentral()` inside
-    /// `forRepository`.
+    /// A call naming a public repository: `mavenCentral()`, `google()` or
+    /// `gradlePluginPortal()` alone inside `forRepository`.
     public_call: bool,
+    /// Its address is assigned in a way the Count cannot read as one: by
+    /// several statements, another expression or conditionally.
+    unusable_url: bool,
 }
 
 /// The repository a call at `end` (just past its name) declares, and the
 /// offset the Count read to: optional `(args)`, an optional `{ block }`
-/// with its `url` and `content` filter.
+/// with its `url` and `content` filters.
 fn named_repository(code: &str, strings: &[(usize, String)], end: usize) -> (Serves, usize) {
     let bytes = code.as_bytes();
     let mut named = Serves {
         url: None,
         claims: None,
         public_call: false,
+        unusable_url: false,
     };
+    let mut urls = Urls::default();
     let mut i = skip_ws(code, end);
     if bytes.get(i) == Some(&b'(') {
         let Some(close) = matching(code, i) else {
             return (named, i);
         };
-        named.url = repo_url(code, strings, i + 1..close - 1);
+        let args = repo_urls(code, strings, i + 1..close - 1, true);
+        urls.literal.extend(args.literal);
+        urls.suspect |= args.suspect;
         i = skip_ws(code, close);
     } else if matches!(bytes.get(i), Some(b'"' | b'\'')) {
         // `maven "…"` names the URL positionally.
-        named.url = string_at(strings, i).map(str::to_owned);
+        if let Some(url) = string_at(strings, i) {
+            if url.contains('$') {
+                urls.suspect = true;
+            } else {
+                urls.literal.push(url.to_owned());
+            }
+        }
         i = code[i + 1..]
             .find(bytes[i] as char)
             .map_or(i + 1, |n| i + n + 2);
@@ -1126,25 +1282,53 @@ fn named_repository(code: &str, strings: &[(usize, String)], end: usize) -> (Ser
             return (named, i);
         };
         let inner = i + 1..close - 1;
-        named.url = named.url.or_else(|| repo_url(code, strings, inner.clone()));
+        let block = repo_urls(code, strings, inner.clone(), false);
+        urls.literal.extend(block.literal);
+        urls.suspect |= block.suspect;
         named.claims = content_filter(code, strings, inner).flatten();
-        return (named, close);
+        i = close;
+        let (url, unusable) = (urls.resolve(), urls.unusable());
+        named.url = url;
+        named.unusable_url = unusable;
+        if unusable {
+            named.claims = None;
+        }
+        return (named, i);
     }
+    named.url = urls.resolve();
+    named.unusable_url = urls.unusable();
     (named, i)
 }
 
-/// Repository calls that add a public repository, and so claim nothing.
-const PUBLIC_CALLS: [&str; 4] = ["mavenCentral", "google", "gradlePluginPortal", "jcenter"];
+/// The calls `forRepository` may hold alone for its repository to stay a
+/// public one.
+const EXCLUSIVE_PUBLIC: [&str; 3] = ["mavenCentral", "google", "gradlePluginPortal"];
+
+/// Whether `range` holds exactly the call `name()`: the one statement a
+/// `forRepository` block may be for its repository to stay public.
+fn lone_call(code: &str, range: std::ops::Range<usize>, name: &str) -> bool {
+    let Some(rest) = code[range].trim().strip_prefix(name) else {
+        return false;
+    };
+    let Some(rest) = rest.trim_start().strip_prefix('(') else {
+        return false;
+    };
+    let Some(rest) = rest.trim_start().strip_prefix(')') else {
+        return false;
+    };
+    rest.trim_end().trim_end_matches(';').trim_end().is_empty()
+}
 
 /// The repository `exclusiveContent { … }` at `end` wraps and filters, and
 /// the offset the Count read to: `forRepository { … }` holds it and
-/// `filter { … }` its claims.
+/// `filter { … }` bounds what it serves.
 fn exclusive(code: &str, strings: &[(usize, String)], end: usize) -> (Serves, usize) {
     let bytes = code.as_bytes();
     let mut named = Serves {
         url: None,
         claims: None,
         public_call: false,
+        unusable_url: false,
     };
     let i = skip_ws(code, end);
     if bytes.get(i) != Some(&b'{') {
@@ -1155,9 +1339,15 @@ fn exclusive(code: &str, strings: &[(usize, String)], end: usize) -> (Serves, us
     };
     let inner = i + 1..close - 1;
     let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut declared = false;
+    // The union of the `filter` blocks' claims; a filter bounds a
+    // repository its own `content` does not.
+    let mut filters = Claims::default();
+    let mut filtered = false;
+    let mut bad_filter = false;
     let mut j = inner.start;
     while j < inner.end {
-        if !word(bytes[j]) {
+        if !word(bytes[j]) || (j > inner.start && word(bytes[j - 1])) {
             j += 1;
             continue;
         }
@@ -1174,24 +1364,51 @@ fn exclusive(code: &str, strings: &[(usize, String)], end: usize) -> (Serves, us
                     return (named, close);
                 };
                 let range = open + 1..inside - 1;
-                let mut k = range.start;
-                while k < range.end {
-                    if !word(bytes[k]) {
-                        k += 1;
-                        continue;
+                if EXCLUSIVE_PUBLIC
+                    .iter()
+                    .any(|call| lone_call(code, range.clone(), call))
+                {
+                    named.public_call = true;
+                } else {
+                    // Anything else is read as ordinary repository
+                    // declarations.
+                    let mut k = range.start;
+                    while k < range.end {
+                        if !word(bytes[k]) || (k > range.start && word(bytes[k - 1])) {
+                            k += 1;
+                            continue;
+                        }
+                        let e2 = (k..range.end)
+                            .find(|&x| !word(bytes[x]))
+                            .unwrap_or(range.end);
+                        let token = &code[k..e2];
+                        if REPOSITORY_CALLS.contains(&token) {
+                            let (repo, until) = if token == "exclusiveContent" {
+                                exclusive(code, strings, e2)
+                            } else {
+                                named_repository(code, strings, e2)
+                            };
+                            if declared {
+                                // Several declarations name no one address.
+                                named.url = None;
+                                named.claims = None;
+                                named.unusable_url = true;
+                            } else {
+                                named.url = repo.url;
+                                named.claims = repo.claims;
+                                named.unusable_url = repo.unusable_url;
+                                declared = true;
+                            }
+                            k = until.max(e2);
+                            continue;
+                        }
+                        if token.contains("ArtifactRepository")
+                            || token.contains("RepositoryHandler")
+                        {
+                            named.claims = None;
+                        }
+                        k = e2;
                     }
-                    let e2 = (k..range.end)
-                        .find(|&x| !word(bytes[x]))
-                        .unwrap_or(range.end);
-                    let token = &code[k..e2];
-                    if PUBLIC_CALLS.contains(&token) {
-                        named.public_call = true;
-                    } else if REPOSITORY_CALLS.contains(&token) {
-                        let (repo, _) = named_repository(code, strings, e2);
-                        named.url = repo.url;
-                        named.claims = repo.claims;
-                    }
-                    k = e2;
                 }
                 j = inside;
                 continue;
@@ -1204,7 +1421,14 @@ fn exclusive(code: &str, strings: &[(usize, String)], end: usize) -> (Serves, us
                 let Some(inside) = matching(code, open) else {
                     return (named, close);
                 };
-                named.claims = filter_claims(code, strings, open + 1..inside - 1);
+                filtered = true;
+                match filter_claims(code, strings, open + 1..inside - 1) {
+                    Some((groups, modules)) => {
+                        filters.0.extend(groups);
+                        filters.1.extend(modules);
+                    }
+                    None => bad_filter = true,
+                }
                 j = inside;
                 continue;
             }
@@ -1212,6 +1436,21 @@ fn exclusive(code: &str, strings: &[(usize, String)], end: usize) -> (Serves, us
         }
         j = e;
     }
+    named.claims = if named.unusable_url || bad_filter {
+        None
+    } else if !filtered {
+        named.claims
+    } else {
+        match named.claims.take() {
+            // A filter bounds a repository that claims everything.
+            None => Some(filters),
+            Some((mut groups, mut modules)) => {
+                groups.extend(filters.0);
+                modules.extend(filters.1);
+                Some((groups, modules))
+            }
+        }
+    };
     (named, close)
 }
 
@@ -1249,9 +1488,13 @@ fn record(out: &mut crate::origins::Repositories, path: &str, named: Serves) {
             }
         }
         None => {
-            let reason = match &label {
-                Some(_) => at(path),
-                None => format!("a repository {path} may add"),
+            let reason = if named.unusable_url {
+                format!("a repository in {path} whose address the Count does not read")
+            } else {
+                match &label {
+                    Some(_) => at(path),
+                    None => format!("a repository {path} may add"),
+                }
             };
             out.close(reason);
         }

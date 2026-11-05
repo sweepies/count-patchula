@@ -509,10 +509,14 @@ pub(super) fn npmrc(text: &str) -> Npmrc {
 }
 
 /// Yarn Berry's `npmRegistryServer` in `.yarnrc.yml`, at the top level and
-/// under `npmScopes`.
+/// under `npmScopes`. A file that does not parse may say anything, so its
+/// packages' lookups fail rather than fall back to the public registry.
 pub(super) fn yarnrc(text: &str) -> Npmrc {
     let mut npmrc = Npmrc::default();
     let Ok(value) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(text) else {
+        npmrc.default = Some(Named::Unusable(
+            "(a .yarnrc.yml the Count cannot read)".into(),
+        ));
         return npmrc;
     };
     let server = |value: &serde_yaml_ng::Value| {

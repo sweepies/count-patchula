@@ -215,11 +215,20 @@ fn sdk(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
     }])
 }
 
+/// Whether `path` is a project file by extension: any ending in `proj`,
+/// compared case-insensitively — `.csproj`, `.CSPROJ`, `.vcxproj`,
+/// `.sqlproj`, `.proj`.
+fn project_file(path: &str) -> bool {
+    path.rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .rsplit_once('.')
+        .is_some_and(|(_, ext)| ext.to_ascii_lowercase().ends_with("proj"))
+}
+
 pub(super) fn selected(path: &str) -> bool {
     let leaf = path.rsplit('/').next().unwrap_or(path);
-    leaf.ends_with(".csproj")
-        || leaf.ends_with(".fsproj")
-        || leaf.ends_with(".vbproj")
+    project_file(path)
         || leaf.ends_with(".sln")
         || leaf.ends_with(".slnx")
         || matches!(
@@ -609,10 +618,7 @@ impl<'a> Feeds<'a> {
         let mut central = Vec::new();
         for path in files.keys() {
             let leaf = path.rsplit('/').next().unwrap_or(path);
-            if [".csproj", ".fsproj", ".vbproj"]
-                .iter()
-                .any(|e| leaf.ends_with(e))
-            {
+            if project_file(path) {
                 projects.push(path.clone());
             } else if leaf == "Directory.Packages.props" {
                 central.push(path.clone());
@@ -628,64 +634,90 @@ impl<'a> Feeds<'a> {
     }
 
     /// Whether some project at or below `config_dir` is governed by the
-    /// `Directory.Packages.props` in `props_dir`: it sits below that props,
-    /// below no closer one, and nothing says a literal
-    /// `ImportDirectoryPackagesProps` or `ManagePackageVersionsCentrally`
-    /// false — in the project or a `Directory.Build.props` between it and
-    /// the config. A condition, a variable or an unreadable file counts
-    /// (fail closed).
+    /// `Directory.Packages.props` in `props_dir`, or a `.sln`/`.slnx` at
+    /// or below `config_dir` names one it governs anywhere — NuGet may
+    /// read a solution's folder config for it.
     fn governs(&self, props_dir: &str, config_dir: &str) -> bool {
         self.projects.iter().any(|project| {
             let pdir = &project[..project.rfind('/').map_or(0, |i| i + 1)];
-            pdir.starts_with(config_dir)
-                && pdir.starts_with(props_dir)
-                && !self.central.iter().any(|props| {
-                    let dir = &props[..props.rfind('/').map_or(0, |i| i + 1)];
-                    dir.len() > props_dir.len() && pdir.starts_with(dir)
-                })
-                && !self.opted_out(project, config_dir)
+            pdir.starts_with(config_dir) && self.governs_project(props_dir, project)
+        }) || self.files.iter().any(|(path, text)| {
+            let leaf = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
+            (leaf.ends_with(".sln") || leaf.ends_with(".slnx"))
+                && path.starts_with(config_dir)
+                && (crate::unreadable_text(text)
+                    || solution_projects(text).any(|reference| {
+                        match resolve_path(
+                            &path[..path.rfind('/').map_or(0, |i| i + 1)],
+                            &reference,
+                        ) {
+                            Some(target) if self.projects.contains(&target) => {
+                                self.governs_project(props_dir, &target)
+                            }
+                            // A project the Count cannot place may be
+                            // governed.
+                            _ => true,
+                        }
+                    }))
         })
     }
 
-    /// Whether a literal `ImportDirectoryPackagesProps` or
-    /// `ManagePackageVersionsCentrally` `false` opts `project` (which sits
-    /// at or below `config_dir`) out of central package management, in the
-    /// project or a `Directory.Build.props` from its folder up to the
-    /// config's.
-    fn opted_out(&self, project: &str, config_dir: &str) -> bool {
-        static OPT_OUT: LazyLock<Regex> = LazyLock::new(|| {
-            Regex::new(
-                r"(?s)<(ImportDirectoryPackagesProps|ManagePackageVersionsCentrally)\b([^>]*)>\s*([^<]*?)\s*</",
-            )
-            .expect("opt-out pattern")
-        });
+    /// Whether the `Directory.Packages.props` in `props_dir` governs
+    /// `project`: the project sits below it, below no closer one that
+    /// does not itself import — a closer one with an `Import`, the usual
+    /// `GetPathOfFileAbove`, passes its governance down — and nothing
+    /// opts the project out. A condition, a variable, an import that may
+    /// override or an unreadable file counts (fail closed).
+    fn governs_project(&self, props_dir: &str, project: &str) -> bool {
         let pdir = &project[..project.rfind('/').map_or(0, |i| i + 1)];
-        let mut check = vec![project.to_owned()];
-        let mut dir = pdir;
+        pdir.starts_with(props_dir)
+            && !self.central.iter().any(|props| {
+                let dir = &props[..props.rfind('/').map_or(0, |i| i + 1)];
+                dir.len() > props_dir.len() && pdir.starts_with(dir) && self.self_contained(props)
+            })
+            && !self.opted_out(project)
+    }
+
+    /// Whether the `Directory.Packages.props` at `path` stands alone, so
+    /// it stops one above from governing the projects under it: it holds
+    /// no `Import` element at all. One the Count cannot read may import.
+    fn self_contained(&self, props: &str) -> bool {
+        let Some(text) = self.files.get(props) else {
+            return true;
+        };
+        if crate::unreadable_text(text) {
+            return false;
+        }
+        let Ok(document) = roxmltree::Document::parse(text) else {
+            return false;
+        };
+        !document
+            .descendants()
+            .any(|node| node.is_element() && node.tag_name().name().eq_ignore_ascii_case("import"))
+    }
+
+    /// Whether a literal `ImportDirectoryPackagesProps` or
+    /// `ManagePackageVersionsCentrally` `false` opts `project` out of
+    /// central package management, set by the project itself or, since
+    /// MSBuild imports only the nearest, by the nearest
+    /// `Directory.Build.props` above it.
+    fn opted_out(&self, project: &str) -> bool {
+        if let Some(verdict) = self.files.get(project).map(|text| opt_out(text))
+            && let Some(opted) = verdict
+        {
+            return opted;
+        }
+        let mut dir = &project[..project.rfind('/').map_or(0, |i| i + 1)];
         loop {
-            check.push(format!("{dir}Directory.Build.props"));
-            if dir == config_dir || dir.is_empty() {
-                break;
+            if let Some(text) = self.files.get(&format!("{dir}Directory.Build.props")) {
+                return opt_out(text).unwrap_or(false);
+            }
+            if dir.is_empty() {
+                return false;
             }
             let parent = dir.trim_end_matches('/');
             dir = &parent[..parent.rfind('/').map_or(0, |i| i + 1)];
         }
-        for file in check {
-            let Some(text) = self.files.get(&file) else {
-                continue;
-            };
-            if crate::unreadable_text(text) {
-                continue;
-            }
-            for c in OPT_OUT.captures_iter(text) {
-                // A condition or a non-literal value is not a literal
-                // `false`; those count the config instead.
-                if !c[2].contains("Condition") && c[3].trim().eq_ignore_ascii_case("false") {
-                    return true;
-                }
-            }
-        }
-        false
     }
 
     /// The chain of the nearest folder at or above `dir` (a path prefix, or
@@ -829,6 +861,88 @@ impl<'a> Feeds<'a> {
         let dropped = origins.assign(deps, &NUGET_ORG, |dep| dep.package.clone());
         debug_assert!(dropped.is_empty());
     }
+}
+
+/// What `text`, a project file or `Directory.Build.props`, says about
+/// central package management: `Some(true)` when it opts out — the last
+/// `ManagePackageVersionsCentrally` or `ImportDirectoryPackagesProps`
+/// element is a literal `false` in a `PropertyGroup` with no `Condition`
+/// on it or an ancestor, and no later `Import` could set it back —
+/// `Some(false)` when it says anything else, and `None` when it is
+/// silent. A file the Count cannot parse counts as saying something.
+fn opt_out(text: &str) -> Option<bool> {
+    let Ok(document) = roxmltree::Document::parse(text) else {
+        return Some(false);
+    };
+    let named = |name: &str| -> Vec<roxmltree::Node<'_, '_>> {
+        document
+            .descendants()
+            .filter(|node| node.is_element() && node.tag_name().name().eq_ignore_ascii_case(name))
+            .collect()
+    };
+    let mut seen = false;
+    let mut opted = false;
+    for name in [
+        "ManagePackageVersionsCentrally",
+        "ImportDirectoryPackagesProps",
+    ] {
+        let Some(last) = named(name).into_iter().last() else {
+            continue;
+        };
+        seen = true;
+        let literal = last
+            .text()
+            .is_some_and(|text| text.trim().eq_ignore_ascii_case("false"));
+        let grouped = last.parent().is_some_and(|parent| {
+            parent.is_element()
+                && parent
+                    .tag_name()
+                    .name()
+                    .eq_ignore_ascii_case("propertygroup")
+        });
+        let conditioned = std::iter::once(last).chain(last.ancestors()).any(|node| {
+            node.attributes()
+                .any(|a| a.name().eq_ignore_ascii_case("condition"))
+        });
+        let imported = named("Import")
+            .iter()
+            .any(|import| import.range().start > last.range().start);
+        opted = opted || (literal && grouped && !conditioned && !imported);
+    }
+    if opted {
+        Some(true)
+    } else {
+        seen.then_some(false)
+    }
+}
+
+/// The project paths a `.sln` or `.slnx` names: quoted references whose
+/// extension ends in `proj`, case-insensitively, with `\` read as `/`.
+fn solution_projects(text: &str) -> impl Iterator<Item = String> + '_ {
+    static QUOTED: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#""([^"]*)""#).expect("quoted pattern"));
+    QUOTED.captures_iter(text).filter_map(|c| {
+        let path = c.get(1).unwrap().as_str().replace('\\', "/");
+        path.rsplit_once('.')
+            .is_some_and(|(_, ext)| ext.to_ascii_lowercase().ends_with("proj"))
+            .then_some(path)
+    })
+}
+
+/// `reference`, a path relative to `dir`, resolved to a repository path;
+/// `None` when it leaves the repository.
+fn resolve_path(dir: &str, reference: &str) -> Option<String> {
+    let mut parts: Vec<&str> = dir.split('/').filter(|p| !p.is_empty()).collect();
+    for part in reference.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            part => parts.push(part),
+        }
+    }
+    Some(parts.join("/"))
 }
 
 /// Whether `text`, already decoded and lowercased, holds a `<name`
