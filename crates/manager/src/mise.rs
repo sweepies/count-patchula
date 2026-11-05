@@ -487,22 +487,23 @@ fn project_redirect(
     };
     match kind {
         "npm" => found(
+            // npm's own config parser accepts forms the Count's reader does
+            // not (quoted keys, lone `\r` line breaks), so any mention of a
+            // registry counts.
             &|path, text| {
-                let read = match leaf(path).as_str() {
-                    ".npmrc" => crate::npm::npmrc(text),
-                    ".yarnrc.yml" => crate::npm::yarnrc(text),
-                    _ => return false,
-                };
-                unreadable(text) || read.names_private()
+                matches!(leaf(path).as_str(), ".npmrc" | ".yarnrc.yml")
+                    && (unreadable(text) || text.to_ascii_lowercase().contains("registry"))
             },
             "npm registry",
         ),
         "pypi" | "pipx" => found(
             &|path, text| match leaf(path).as_str() {
                 "uv.toml" => unreadable(text) || crate::pypi::settings::uv_private_index(text),
-                "pip.conf" | "pip.ini" => {
-                    unreadable(text) || crate::pypi::settings::pip_private_index(text)
-                }
+                // pip's config parser accepts more than the Count could
+                // check safely (`--` key prefixes, lone `\r`, Unicode case
+                // folding, options that pull in requirement files), so any
+                // pip configuration counts.
+                "pip.conf" | "pip.ini" => true,
                 "pyproject.toml" => unreadable(text) || crate::pypi::settings::private_index(text),
                 _ => false,
             },

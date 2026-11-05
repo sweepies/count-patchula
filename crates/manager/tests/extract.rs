@@ -3223,9 +3223,10 @@ fn nuget_packages_come_from_nuget_org_alone_or_as_source_mapping_says() {
         ),
         ("central/app/nuget.config".into(), nuget_config(&sources(acme))),
         ("central/app/App.csproj".into(), project(&[])),
-        // A config below a central props that governs nothing: the project
-        // under it opted out in a Directory.Build.props, as Arcade's
-        // eng/common/internal does.
+        // A config below a central props joins its sources even where the
+        // projects under it opt out of central package management, as
+        // Arcade's eng/common/internal does: the opt-out cannot be proven
+        // to keep every restore there off the shared file.
         (
             "opted/Directory.Packages.props".into(),
             "<Project>\n  <ItemGroup>\n    <PackageVersion Include=\"Newtonsoft.Json\" Version=\"13.0.1\" />\n  </ItemGroup>\n</Project>\n".into(),
@@ -3343,8 +3344,7 @@ fn nuget_packages_come_from_nuget_org_alone_or_as_source_mapping_says() {
         "central/Directory.Packages.props",
         "Newtonsoft.Json"
     )));
-    // The internal config governs nothing below it, so it does not join;
-    // the repository's other private configs still do.
+    // The internal config's private source joins.
     assert!(fails(registry(
         "opted/Directory.Packages.props",
         "Newtonsoft.Json"
@@ -3367,240 +3367,6 @@ fn nuget_packages_come_from_nuget_org_alone_or_as_source_mapping_says() {
         .find(|d| d.file == "public/App.csproj" && d.name == "Newtonsoft.Json")
         .unwrap();
     assert!(fails(dep.registry.clone()), "{:?}", dep.registry);
-}
-
-/// A `nuget.config` joins a shared MSBuild file's sources unless it is
-/// proven to govern nothing below its folder: no project file and no
-/// `.sln`, `.slnx` or `.slnf` at or below it — Aspire's
-/// tests/PolyglotAppHosts shape — or every project there opted out of
-/// central package management by its single nearest
-/// `Directory.Build.props` setting `ImportDirectoryPackagesProps` to the
-/// literal `false` unconditionally, Arcade's `eng/common/internal`
-/// shape. A solution below, a project not proven out, a condition, a
-/// variable or an import the Count cannot follow keeps the config in.
-#[test]
-fn nuget_a_nested_config_counts_unless_proven_inert() {
-    let props = "<Project><ItemGroup><PackageVersion Include=\"Newtonsoft.Json\" Version=\"13.0.1\" /></ItemGroup></Project>";
-    let project = "<Project Sdk=\"Microsoft.NET.Sdk\" />";
-    let private_config = "<?xml version=\"1.0\"?><configuration><packageSources><clear /><add key=\"Acme\" value=\"https://nuget.acme.dev/v3/index.json\" /></packageSources></configuration>";
-    let registry = |files: Vec<(&str, &str)>| {
-        registry_of(
-            Manager::Nuget,
-            &files,
-            "Directory.Packages.props",
-            "Newtonsoft.Json",
-        )
-    };
-
-    // No project and no solution at or below the config: it governs
-    // nothing, so its private source does not join.
-    assert_eq!(
-        registry(vec![
-            ("Directory.Packages.props", props),
-            ("tests/PolyglotAppHosts/nuget.config", private_config),
-        ]),
-        None
-    );
-
-    // Every extension ending in `proj` is a project file, whatever the
-    // case, and one below the config keeps it in.
-    for name in ["App.CSPROJ", "App.vcxproj", "App.sqlproj", "App.proj"] {
-        let path: &'static str = Box::leak(format!("sub/app/{name}").into_boxed_str());
-        assert!(
-            fails(registry(vec![
-                ("Directory.Packages.props", props),
-                ("sub/nuget.config", private_config),
-                (path, project),
-            ])),
-            "{name}"
-        );
-    }
-
-    // A `.sln`, `.slnx` or `.slnf` at or below the config keeps it in
-    // whatever it names — here with the only project proven out.
-    let build_props = "<Project><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup></Project>";
-    for solution in ["sub/App.sln", "sub/deep/App.slnx", "sub/App.slnf"] {
-        assert!(
-            fails(registry(vec![
-                ("Directory.Packages.props", props),
-                ("sub/nuget.config", private_config),
-                ("sub/Directory.Build.props", build_props),
-                ("sub/app/App.csproj", project),
-                (solution, ""),
-            ])),
-            "{solution}"
-        );
-    }
-
-    // Arcade's eng/common/internal pattern: the project's single nearest
-    // Directory.Build.props sets the property unconditionally, so the
-    // project — and the config — is out wherever it sits below it.
-    let opted = |build_props: &'static str, extra: Vec<(&'static str, &'static str)>| {
-        let mut files = vec![
-            ("Directory.Packages.props", props),
-            ("eng/common/internal/nuget.config", private_config),
-            ("eng/common/internal/Directory.Build.props", build_props),
-            ("eng/common/internal/tools/Tools.csproj", project),
-        ];
-        files.extend(extra);
-        files
-    };
-    assert_eq!(registry(opted(build_props, vec![])), None);
-    // A project elsewhere does not count toward the config's folder.
-    assert_eq!(
-        registry(opted(build_props, vec![("app/App.csproj", project)])),
-        None
-    );
-    // Imports the property overrides do not count; only ones after it do.
-    assert_eq!(
-        registry(opted(
-            "<Project><Import Project=\"$(Nowhere)/anything.props\" /><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup></Project>",
-            vec![]
-        )),
-        None
-    );
-    // A literal import after it resolves inside the repository to files
-    // that set neither property, transitively.
-    assert_eq!(
-        registry(opted(
-            "<Project><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup><Import Project=\"more.props\" /></Project>",
-            vec![
-                (
-                    "eng/common/internal/more.props",
-                    "<Project><Import Project=\"..\\other.props\" /><PropertyGroup><TreatWarningsAsErrors>true</TreatWarningsAsErrors></PropertyGroup></Project>"
-                ),
-                (
-                    "eng/common/other.props",
-                    "<Project><PropertyGroup /></Project>"
-                ),
-            ]
-        )),
-        None
-    );
-
-    // Anything else leaves the config in: the property elsewhere, under a
-    // condition, in another position or another value; the project's own
-    // say — a comment, a condition — counts for nothing without the
-    // nearest Directory.Build.props proving it.
-    for (build_props, extra) in [
-        (
-            "<Project Condition=\"'$(X)' == '1'\"><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup></Project>",
-            vec![],
-        ),
-        (
-            "<Project><PropertyGroup Condition=\"'$(X)' == '1'\"><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup></Project>",
-            vec![],
-        ),
-        (
-            "<Project><PropertyGroup><ImportDirectoryPackagesProps Condition=\"'$(X)' == '1'\">false</ImportDirectoryPackagesProps></PropertyGroup></Project>",
-            vec![],
-        ),
-        (
-            "<Project><Choose><Otherwise><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup></Otherwise></Choose></Project>",
-            vec![],
-        ),
-        (
-            "<Project><Target Name=\"T\"><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup></Target></Project>",
-            vec![],
-        ),
-        (
-            "<Project><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></Project>",
-            vec![],
-        ),
-        (
-            "<Project><PropertyGroup><ImportDirectoryPackagesProps>$(Maybe)</ImportDirectoryPackagesProps></PropertyGroup></Project>",
-            vec![],
-        ),
-        (
-            "<Project><PropertyGroup><ImportDirectoryPackagesProps>true</ImportDirectoryPackagesProps></PropertyGroup></Project>",
-            vec![],
-        ),
-        (
-            "<Project><PropertyGroup><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally></PropertyGroup></Project>",
-            vec![],
-        ),
-        (
-            "<Project><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps><ImportDirectoryPackagesProps>$(Maybe)</ImportDirectoryPackagesProps></PropertyGroup></Project>",
-            vec![],
-        ),
-        (
-            "<Project><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup><Import Project=\"$(MSBuildThisFileDirectory)more.props\" /></Project>",
-            vec![],
-        ),
-        (
-            "<Project><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup><Import Project=\"*.props\" /></Project>",
-            vec![],
-        ),
-        (
-            "<Project><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup><Import Project=\"more.props\" Condition=\"'$(X)' == '1'\" /></Project>",
-            vec![],
-        ),
-        (
-            "<Project><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup><Import Project=\"../../../../outside.props\" /></Project>",
-            vec![],
-        ),
-        (
-            "<Project><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup><Import Project=\"more.props\" /></Project>",
-            vec![(
-                "eng/common/internal/more.props",
-                "<Project><PropertyGroup><DirectoryPackagesPropsPath>other.props</DirectoryPackagesPropsPath></PropertyGroup></Project>",
-            )],
-        ),
-        (
-            "<Project><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup><Import Project=\"more.props\" /></Project>",
-            vec![(
-                "eng/common/internal/more.props",
-                "<Project><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup></Project>",
-            )],
-        ),
-        (
-            "<Project><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup><Import Project=\"more.props\" /></Project>",
-            vec![(
-                "eng/common/internal/more.props",
-                "<Project><Import Project=\"nested.props\" /></Project>",
-            )],
-        ),
-    ] {
-        assert!(fails(registry(opted(build_props, extra))), "{build_props}");
-    }
-    // The real Arcade file resolves its import through the SDK, outside
-    // the repository, so it cannot be proven: the config stays in.
-    assert!(fails(registry(opted(
-        "<Project><PropertyGroup><ImportDirectoryBuildTargets>false</ImportDirectoryBuildTargets><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup><Import Project=\"Sdk.props\" Sdk=\"Microsoft.DotNet.Arcade.Sdk\" /></Project>",
-        vec![]
-    ))));
-    // An import to a file that is not there, or that loops back, is
-    // unproven the same way.
-    assert!(fails(registry(opted(
-        "<Project><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup><Import Project=\"missing.props\" /></Project>",
-        vec![]
-    ))));
-    assert!(fails(registry(opted(
-        "<Project><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup><Import Project=\"loop.props\" /></Project>",
-        vec![(
-            "eng/common/internal/loop.props",
-            "<Project><Import Project=\"loop.props\" /></Project>"
-        )]
-    ))));
-
-    // Only the nearest Directory.Build.props counts: a farther one that
-    // opts out cannot help when a nearer says nothing, and one project
-    // not proven out keeps the config in even when another is.
-    assert!(fails(registry(vec![
-        ("Directory.Packages.props", props),
-        ("Directory.Build.props", build_props),
-        ("sub/nuget.config", private_config),
-        ("sub/Directory.Build.props", "<Project />"),
-        ("sub/app/App.csproj", project),
-    ])));
-    assert!(fails(registry(vec![
-        ("Directory.Packages.props", props),
-        ("eng/nuget.config", private_config),
-        ("eng/common/internal/Directory.Build.props", build_props),
-        ("eng/common/internal/Tools.csproj", project),
-        ("eng/tests/Directory.Build.props", "<Project />"),
-        ("eng/tests/Tests.csproj", project),
-    ])));
 }
 
 /// The registry the Count gives `name` from `file` when a repository holds
@@ -4194,32 +3960,19 @@ fn mise_package_tools_fail_where_the_project_redirects_their_registry() {
     ];
     assert_eq!(lookup(&public_index, "cargo:ripgrep"), None);
 
-    // pip's index settings, however pip spells the keys and delimiters;
-    // configparser continues a key's value onto indented lines, so one
-    // there counts too.
+    // Any pip configuration fails a mise pypi tool: pip's parser accepts
+    // more spellings than the Count can check safely.
     let pypi = format!("{tools}\n\"pypi:requests\" = \"25.0.0\"\n");
     for config in [
-        "index_url = https://pypi.acme.dev/simple\n",
-        "INDEX-URL: https://pypi.acme.dev/simple\n",
-        "[global]\nextra-index-url = https://pypi.acme.dev/simple\n",
-        "[install]\nindex-url\n",
-        "[global]\nindex-url = https://pypi.org/simple/\n    https://pypi.acme.dev/simple/\n",
-        "[global]\nextra-index-url = https://pypi.org/simple/\n    https://pypi.acme.dev/simple/\n",
-        "[global]\n  extra-index-url = https://pypi.acme.dev/simple\n",
-        "[global\nindex-url = https://pypi.org/simple/\n",
-    ] {
-        let files = [("app/mise.toml", pypi.as_str()), ("app/pip.conf", config)];
-        assert!(fails(lookup(&files, "pypi:requests")), "{config}");
-        assert_eq!(lookup(&files, "node"), None, "{config}");
-    }
-    for config in [
-        "index-url = https://pypi.org/simple\n",
         "timeout = 10\n",
-        "[global]\nindex-url = https://pypi.org/simple/\n    https://pypi.org/simple\n",
-        "[global]\nindex-url = https://pypi.org/simple/\ntimeout = 10\n",
+        "[global]\n--index-url = https://pypi.acme.dev/simple\n",
+        "[global]\n# note\rindex-url = https://pypi.acme.dev/simple\n",
     ] {
-        let files = [("app/mise.toml", pypi.as_str()), ("app/pip.conf", config)];
-        assert_eq!(lookup(&files, "pypi:requests"), None, "{config}");
+        for name in ["app/pip.conf", "pip.ini"] {
+            let files = [("app/mise.toml", pypi.as_str()), (name, config)];
+            assert!(fails(lookup(&files, "pypi:requests")), "{name}: {config}");
+            assert_eq!(lookup(&files, "node"), None, "{name}: {config}");
+        }
     }
 }
 
@@ -4304,10 +4057,11 @@ fn a_deeper_include_chain_fails_saying_the_rounds_ran_out() {
     );
 }
 
-/// An `.npmrc` that only comments on a registry does not move a mise npm
-/// tool: the registry files are parsed, not searched for the word.
+/// Any mention of a registry in an `.npmrc` or `.yarnrc.yml` fails a mise
+/// npm tool, comments included: npm's config parser accepts forms the
+/// Count's reader does not, such as quoted keys and lone `\r` line breaks.
 #[test]
-fn a_registry_comment_in_a_settings_file_does_not_move_a_mise_tool() {
+fn a_registry_in_a_settings_file_fails_a_mise_npm_tool() {
     let mut config = config();
     config.managers = vec![Manager::Mise];
     let scan = |extra: &[(&str, &str)]| {
@@ -4331,12 +4085,15 @@ fn a_registry_comment_in_a_settings_file_does_not_move_a_mise_tool() {
             .registry
             .clone()
     };
-    assert_eq!(registry(&[(".npmrc", "# our registry is public\n")]), None);
-    // One that really names a registry the Count does not read still fails.
-    assert!(fails(registry(&[(
-        ".npmrc",
-        "registry=https://npm.acme.dev/\n"
-    )])));
+    assert_eq!(registry(&[(".npmrc", "save-exact=true\n")]), None);
+    for npmrc in [
+        "# our registry is public\n",
+        "registry=https://npm.acme.dev/\n",
+        "\"registry\"=https://npm.acme.dev/\n",
+        "#x\rregistry=https://npm.acme.dev/\n",
+    ] {
+        assert!(fails(registry(&[(".npmrc", npmrc)])), "{npmrc:?}");
+    }
     assert!(fails(registry(&[(
         ".yarnrc.yml",
         "npmRegistryServer: https://npm.acme.dev\n"

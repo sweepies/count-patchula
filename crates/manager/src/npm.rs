@@ -449,10 +449,6 @@ impl Npmrc {
     fn values(&self) -> impl Iterator<Item = &Named> {
         self.default.iter().chain(self.scopes.values())
     }
-    /// Whether it names a registry besides the public one.
-    pub(super) fn names_private(&self) -> bool {
-        self.values().any(|named| !matches!(named, Named::Public))
-    }
 }
 
 /// A warning for each `.npmrc` or `.yarnrc.yml` registry that names an

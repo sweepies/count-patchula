@@ -874,62 +874,6 @@ pub(crate) fn uv_private_index(text: &str) -> bool {
     }
 }
 
-/// Whether `text`, a `pip.conf` or `pip.ini`, names an index besides PyPI
-/// or says something the Count does not read. pip's parser — configparser
-/// — takes `=` and `:` alike and options case-insensitively with `-` or
-/// `_` alike, and an indented line continues the previous key's value, so
-/// every line of an `index-url` or `extra-index-url` value is checked; a
-/// continuation with no key above it, a section header without its `]`,
-/// or a line with neither delimiter is one pip would reject — private,
-/// since the Count cannot say what it meant. Whitespace inside a value
-/// splits it into several URLs to pip, so it is private too.
-pub(crate) fn pip_private_index(text: &str) -> bool {
-    // Whether indented lines continue an index key's value.
-    let mut index_value = false;
-    for line in text.lines() {
-        if line.trim().is_empty() || line.starts_with(['#', ';']) {
-            continue;
-        }
-        if line.starts_with(|c: char| c.is_whitespace()) {
-            // configparser joins it to the previous key's value.
-            if !index_value {
-                return true;
-            }
-            let value = line.trim();
-            if value.contains(char::is_whitespace) || !matches!(super::named(value), Named::Public)
-            {
-                return true;
-            }
-            continue;
-        }
-        index_value = false;
-        if line.starts_with('[') {
-            if !line.trim_end().ends_with(']') {
-                return true;
-            }
-            continue;
-        }
-        let Some(at) = line.find(['=', ':']) else {
-            return true;
-        };
-        let key = line[..at].trim().to_ascii_lowercase().replace('_', "-");
-        match key.as_str() {
-            "index-url" | "extra-index-url" => {
-                index_value = true;
-                let value = line[at + 1..].trim();
-                if value.contains(char::is_whitespace)
-                    || !matches!(super::named(value), Named::Public)
-                {
-                    return true;
-                }
-            }
-            "find-links" | "no-index" => return true,
-            _ => {}
-        }
-    }
-    false
-}
-
 /// The package a PEP 508 requirement takes from a URL, if it does.
 pub(crate) fn direct_reference(requirement: &str) -> Option<String> {
     let name: String = requirement

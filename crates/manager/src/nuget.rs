@@ -530,12 +530,6 @@ pub(crate) struct Feeds {
     chains: BTreeMap<String, Result<Chain, String>>,
     /// An MSBuild file that sets restore sources itself, or cannot be read.
     overridden: Option<String>,
-    /// Config folders proven to govern nothing: no project file and no
-    /// `.sln`, `.slnx` or `.slnf` at or below them, or every project there
-    /// proven out of central package management. NuGet reads a config for
-    /// the projects and solutions below it, so one with none does not
-    /// join the sources another file's restore sees.
-    inert: BTreeSet<String>,
 }
 
 /// What the configs from the root down to a folder say. Every source any of
@@ -612,31 +606,7 @@ impl Feeds {
                     })
             })
             .map(|(path, _)| format!("restore sources {path} may set"));
-        let projects: Vec<&str> = files
-            .keys()
-            .filter(|path| project_file(path))
-            .map(String::as_str)
-            .collect();
-        let inert = chains
-            .keys()
-            .filter(|dir| {
-                !files.keys().any(|path| {
-                    path.starts_with(dir.as_str())
-                        && solution_file(
-                            &path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase(),
-                        )
-                }) && projects
-                    .iter()
-                    .filter(|project| project.starts_with(dir.as_str()))
-                    .all(|project| opted_out(files, project))
-            })
-            .cloned()
-            .collect();
-        Self {
-            chains,
-            overridden,
-            inert,
-        }
+        Self { chains, overridden }
     }
 
     /// The chain of the nearest folder at or above `dir` (a path prefix, or
@@ -687,7 +657,7 @@ impl Feeds {
         };
         let here = Self::nearest(&self.chains, dir);
         // A project restores in its own folder alone; the others count every
-        // folder below too, except one whose config is proven inert.
+        // folder below too.
         let below = self
             .chains
             .iter()
@@ -695,7 +665,6 @@ impl Feeds {
                 (shared || manifest.is_some())
                     && config.starts_with(dir)
                     && config.len() > dir.len()
-                    && !self.inert.contains(config.as_str())
             })
             .map(|(_, chain)| chain.clone());
         let origins = std::iter::once(here).chain(below).map(|chain| match chain {
@@ -779,186 +748,9 @@ impl Feeds {
     }
 }
 
-/// Whether `project` is proven out of central package management: its
-/// single nearest `Directory.Build.props` — MSBuild imports that file
-/// before deciding whether to import `Directory.Packages.props`, so it is
-/// where `ImportDirectoryPackagesProps` `false` takes effect, the pattern
-/// Arcade's `eng/common/internal` uses — sets it unconditionally and no
-/// import after it can set it back. What the project itself or a farther
-/// file says does not count, and anything the Count cannot prove is no
-/// opt-out.
-fn opted_out(files: &Files, project: &str) -> bool {
-    let mut dir = &project[..project.rfind('/').map_or(0, |i| i + 1)];
-    loop {
-        let props = format!("{dir}Directory.Build.props");
-        if files.contains_key(&props) {
-            return props_opts_out(files, &props, &mut BTreeSet::new());
-        }
-        if dir.is_empty() {
-            return false;
-        }
-        let parent = dir.trim_end_matches('/');
-        dir = &parent[..parent.rfind('/').map_or(0, |i| i + 1)];
-    }
-}
-
-/// Whether the `Directory.Build.props` at `path` proves the opt-out: its
-/// last `ImportDirectoryPackagesProps` element is the literal `false` in
-/// a `PropertyGroup` that is a direct child of the root `Project`, with
-/// no `Condition` on the property, the group or the project — and so not
-/// inside `Choose`, `When`, `Otherwise` or `Target` — and every `Import`
-/// after it is clean by `clean_import`'s rule. Anything else is unproven.
-fn props_opts_out(files: &Files, path: &str, visited: &mut BTreeSet<String>) -> bool {
-    visited.insert(path.to_owned());
-    let Some(text) = files.get(path) else {
-        return false;
-    };
-    if crate::unreadable_text(text) {
-        return false;
-    }
-    let Ok(document) = roxmltree::Document::parse(text) else {
-        return false;
-    };
-    let Some(last) = document.descendants().rfind(|node| {
-        node.is_element()
-            && node
-                .tag_name()
-                .name()
-                .eq_ignore_ascii_case("ImportDirectoryPackagesProps")
-    }) else {
-        return false;
-    };
-    let Some(group) = last.parent().filter(|node| {
-        node.is_element() && node.tag_name().name().eq_ignore_ascii_case("propertygroup")
-    }) else {
-        return false;
-    };
-    let Some(root) = group
-        .parent()
-        .filter(|node| node.is_element() && node.tag_name().name().eq_ignore_ascii_case("project"))
-    else {
-        return false;
-    };
-    if root.parent().is_some_and(|node| node.is_element())
-        || !last
-            .text()
-            .is_some_and(|text| text.trim().eq_ignore_ascii_case("false"))
-        || [last, group, root].iter().any(|node| {
-            node.attributes()
-                .any(|a| a.name().eq_ignore_ascii_case("condition"))
-        })
-    {
-        return false;
-    }
-    let dir = &path[..path.rfind('/').map_or(0, |i| i + 1)];
-    document
-        .descendants()
-        .filter(|node| {
-            node.is_element()
-                && node.tag_name().name().eq_ignore_ascii_case("import")
-                && node.range().start > last.range().start
-        })
-        .all(|import| clean_import(files, dir, import, visited))
-}
-
-/// Whether an `<Import>` is proven to bring in nothing that sets central
-/// package management back on: a `Project` attribute that is a literal
-/// path — no `$(…)`, no wildcard — as the element's only attribute, and
-/// no `Condition` or `Choose`/`When`/`Otherwise`/`Target` around it,
-/// resolving inside the repository to a file `props_clean` proves clean.
-/// An `Sdk` attribute or any other resolves outside the repository, so
-/// the file is unproven.
-fn clean_import(
-    files: &Files,
-    dir: &str,
-    import: roxmltree::Node<'_, '_>,
-    visited: &mut BTreeSet<String>,
-) -> bool {
-    if std::iter::once(import)
-        .chain(import.ancestors())
-        .any(|node| {
-            node.attributes()
-                .any(|a| a.name().eq_ignore_ascii_case("condition"))
-                || matches!(
-                    node.tag_name().name().to_ascii_lowercase().as_str(),
-                    "choose" | "when" | "otherwise" | "target"
-                )
-        })
-    {
-        return false;
-    }
-    let mut project = None;
-    for attribute in import.attributes() {
-        if project.is_none() && attribute.name().eq_ignore_ascii_case("project") {
-            project = Some(attribute.value());
-        } else {
-            return false;
-        }
-    }
-    let Some(project) = project else {
-        return false;
-    };
-    if project.contains('$') || project.contains(['*', '?']) {
-        return false;
-    }
-    let Some(target) = resolve_path(dir, &project.replace('\\', "/")) else {
-        return false;
-    };
-    props_clean(files, &target, visited)
-}
-
-/// Whether the file at `path` sets neither `ImportDirectoryPackagesProps`
-/// nor `DirectoryPackagesPropsPath` at all, and every `Import` it holds is
-/// clean by `clean_import`'s rule. One the Count cannot read or follow is
-/// unproven.
-fn props_clean(files: &Files, path: &str, visited: &mut BTreeSet<String>) -> bool {
-    if !visited.insert(path.to_owned()) {
-        return false;
-    }
-    let Some(text) = files.get(path) else {
-        return false;
-    };
-    if crate::unreadable_text(text) {
-        return false;
-    }
-    let Ok(document) = roxmltree::Document::parse(text) else {
-        return false;
-    };
-    if document.descendants().any(|node| {
-        node.is_element()
-            && matches!(
-                node.tag_name().name().to_ascii_lowercase().as_str(),
-                "importdirectorypackagesprops" | "directorypackagespropspath"
-            )
-    }) {
-        return false;
-    }
-    let dir = &path[..path.rfind('/').map_or(0, |i| i + 1)];
-    document
-        .descendants()
-        .filter(|node| node.is_element() && node.tag_name().name().eq_ignore_ascii_case("import"))
-        .all(|import| clean_import(files, dir, import, visited))
-}
-
 /// Whether `leaf`, already lowercased, is a solution file.
 fn solution_file(leaf: &str) -> bool {
     leaf.ends_with(".sln") || leaf.ends_with(".slnx") || leaf.ends_with(".slnf")
-}
-
-/// `reference`, a path relative to `dir`, resolved to a repository path;
-/// `None` when it leaves the repository.
-fn resolve_path(dir: &str, reference: &str) -> Option<String> {
-    let mut parts: Vec<&str> = dir.split('/').filter(|p| !p.is_empty()).collect();
-    for part in reference.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                parts.pop()?;
-            }
-            part => parts.push(part),
-        }
-    }
-    Some(parts.join("/"))
 }
 
 /// Whether `text`, already decoded and lowercased, holds a `<name`

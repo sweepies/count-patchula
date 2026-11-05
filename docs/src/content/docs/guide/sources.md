@@ -102,13 +102,13 @@ through mise's registry, as `aws-cdk` is `npm:aws-cdk`) fails its lookup
 where committed settings could send it elsewhere: registry variables in a
 mise configuration's `[env]` (`NPM_CONFIG_*`, `PIP_*`, `UV_*`, `CARGO_*` and
 the like, or variables loaded from files through `_.file` or `_.source`),
-or the project's own `.npmrc` or `.yarnrc.yml` naming a registry, Python
+or the project's own `.npmrc` or `.yarnrc.yml` mentioning a registry, any `pip.conf` or `pip.ini`, Python
 index settings, Cargo registry settings, or NuGet feeds other than
 nuget.org's, in the tool's folder, above it or below it. Every tool fails
 its lookup where a mise configuration there, under any name mise reads one
 by (`mise.local.toml`, `.config/mise/`, `conf.d` and the rest), holds
 anything but `tools`, `tasks`, `task_config`, `vars`, `env`, `settings`,
-`min_version` and `redactions`, sets a `MISE_*` variable, or sets anything
+`min_version`, `redactions` and `wrappers`, sets a `MISE_*` variable, or sets anything
 but a few plain settings such as `experimental` and `lockfile`; where a
 `.miserc` exists; where the tool's own entry has options beyond `version`
 and `os`; or where the Count cannot read the configuration.
@@ -291,15 +291,7 @@ dependency's `registry`:
   private NuGet feeds are not read yet. A `dotnet-tools.json` manifest
   counts every folder below it with a config of its own, and a shared
   MSBuild file such as `Directory.Packages.props`, which can be imported
-  from anywhere, counts every folder with one — except a config proven
-  inert: no project file (any extension ending in `proj`, case aside) and
-  no `.sln`, `.slnx` or `.slnf` at or below its folder, or every project
-  there opted out of central package management by its single nearest
-  `Directory.Build.props` setting `ImportDirectoryPackagesProps` to a
-  literal `false` unconditionally, with nothing it imports after that
-  able to set it back — Arcade's `eng/common/internal` pattern. Anything
-  undecidable — a condition, a variable, an import the Count cannot
-  follow or an unreadable file — counts the config. Anything NuGet could read
+  from anywhere, counts every folder with one. Anything NuGet could read
   differently fails every lookup it could affect: a config the Count
   cannot read, with a section it does not know such as
   `fallbackPackageFolders`, with `remove`, or with a pattern other than an
