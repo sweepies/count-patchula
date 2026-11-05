@@ -75,7 +75,8 @@ rules he can't read, means he doesn't know, and he says nothing. To find Flux
 and Argo CD manifests he reads every YAML file in the repository, but only
 when something can merge on its own and the warning isn't silenced; with more
 than 300 that no manager reads, or if one can't be fetched, delivery is unknown
-and `security-merge-without-delivery` stays quiet. Other CI files
+and `security-merge-without-delivery` stays quiet; past the 300 the report
+says so (`delivery unknown: more than 300 YAML files`). Other CI files
 are `.gitlab-ci.yml`, `.circleci/config.yml`, `Jenkinsfile`, `.buildkite/`,
 `azure-pipelines.yml` and `.travis.yml`, taken to run on every change.
 

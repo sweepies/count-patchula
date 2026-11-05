@@ -2658,6 +2658,12 @@ impl Engine {
                     patchula_manager::MORE_ROUNDS
                 ));
             }
+            if delivery && manifests > patchula_update::tooling::MANIFEST_LIMIT {
+                extraction.warnings.push(format!(
+                    "delivery unknown: more than {} YAML files",
+                    patchula_update::tooling::MANIFEST_LIMIT
+                ));
+            }
             let public_only = extraction.public_only.clone();
             let cached = CachedExtraction {
                 extraction,
