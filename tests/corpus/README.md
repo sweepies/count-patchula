@@ -31,7 +31,7 @@ unmodified copies; their licences are those of the projects below.
 | [prometheus-community/helm-charts](https://github.com/prometheus-community/helm-charts) | `740ca6d94cf1` | Apache-2.0 | `kubernetes/kube-prometheus-stack` |
 | [terraform-aws-modules/terraform-aws-eks](https://github.com/terraform-aws-modules/terraform-aws-eks) | `91b8a8d944e3` | Apache-2.0 | `terraform/eks` |
 | [spring-projects/spring-petclinic](https://github.com/spring-projects/spring-petclinic) | `500158f73241` | Apache-2.0 | `jvm/spring-petclinic` |
-| [apache/kafka](https://github.com/apache/kafka) | `9fbcd3f76cec` | Apache-2.0 | `jvm/kafka` |
+| [apache/kafka](https://github.com/apache/kafka) | `9fbcd3f76cec` | Apache-2.0 | `jvm/kafka` (with `api-checker/` and `wrapper.gradle`, the included build and script its build files name, at the same commit) |
 | [dotnet/aspire](https://github.com/dotnet/aspire) | `f4ae2cc424d5` | MIT | `dotnet/aspire` |
 | [rails/rails](https://github.com/rails/rails) | `f51657c4e4e5` | MIT | `ruby/rails` |
 | [laravel/framework](https://github.com/laravel/framework) | `2184bbe43573` | MIT | `php/laravel` |
