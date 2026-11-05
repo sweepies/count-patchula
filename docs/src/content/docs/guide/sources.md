@@ -336,17 +336,24 @@ dependency's `registry`:
   Gradle, the Count reads every script, the sources in `buildSrc`,
   `build-logic`, `build-conventions` and `gradle/plugins`, and everything
   the settings include and the scripts apply. `mavenCentral()`, `google()`,
-  `gradlePluginPortal()` and `jcenter()` are fine, while `maven`, `ivy`,
-  `flatDir`, `mavenLocal`, `exclusiveContent` or a custom
-  `ArtifactRepository` outside a `publishing` block fails every lookup, as
-  do build logic the Count cannot read, an `includeBuild` outside the
-  settings or with a computed name, and an `apply from` other than a plain
-  path, `file(…)`, `rootProject.file(…)`, or a path under `$rootDir` or
-  `$projectDir`. Repositories that a Gradle plugin, a Maven build
-  extension, an init script or a CI machine's own settings add are not in
-  the repository's files, so the Count does not see them; Maven Central
-  and the Gradle Plugin Portal check who owns a group or plugin ID, which
-  keeps someone else from publishing your coordinates there.
+  `gradlePluginPortal()` and `jcenter()` are fine. Another repository
+  bounded to named groups and modules — a `content` or `exclusiveContent`
+  `filter` holding only `includeGroup` and `includeModule` statements —
+  claims those alone: their lookups fail and the rest can still come from
+  Maven Central. Any other `maven`, `ivy`, `flatDir`, `mavenLocal`,
+  `exclusiveContent` or custom `ArtifactRepository` outside a `publishing`
+  block fails every lookup, and so does a filter with any other statement,
+  such as `includeGroupByRegex`, as do build logic the Count cannot read,
+  an `includeBuild` outside the settings or with a computed name, and an
+  `apply from` other than a plain path, `file(…)`,
+  `rootProject.file(…)`, or a path under `$rootDir` or `$projectDir`. A
+  build whose lookups fail says so once, in a warning naming the file and
+  repository, rather than once per dependency. Repositories that a Gradle
+  plugin, a Maven build extension, an init script or a CI machine's own
+  settings add are not in the repository's files, so the Count does not
+  see them; Maven Central and the Gradle Plugin Portal check who owns a
+  group or plugin ID, which keeps someone else from publishing your
+  coordinates there.
 - Python packages come from what the project's lockfile records. The
   Count does not work out which index uv or Poetry would pick from their
   settings; the tool already did, and wrote it down:

@@ -3921,3 +3921,108 @@ fn mise_package_tools_fail_where_the_project_redirects_their_registry() {
     assert!(fails(lookup(&cargo, "cargo:ripgrep")));
     assert_eq!(lookup(&cargo, "npm:@acme/cli"), None);
 }
+
+/// A repository a `content` or `exclusiveContent` filter bounds to named
+/// groups and modules claims those alone: their lookups fail and the rest
+/// can still come from Maven Central, as in Spring Boot's Shibboleth
+/// repository.
+#[test]
+fn gradle_repository_content_filters_claim_only_what_they_list() {
+    let lookup = |files: &[(&str, &str)], name: &str| {
+        registry_of(Manager::Gradle, files, "build.gradle", name)
+    };
+    let spring_boot = r#"plugins { id 'java' }
+repositories {
+    mavenCentral()
+    maven {
+        url = "https://build.shibboleth.net/maven/releases/"
+        content {
+            includeGroup "org.opensaml"
+            includeGroup "net.shibboleth"
+        }
+    }
+}
+dependencies {
+    implementation "org.springframework:spring-core:6.1.0"
+    implementation "org.opensaml:opensaml-core:4.3.0"
+}
+"#;
+    let files = [("build.gradle", spring_boot)];
+    assert_eq!(lookup(&files, "org.springframework:spring-core"), None);
+    let claimed = lookup(&files, "org.opensaml:opensaml-core").unwrap();
+    assert!(claimed.contains("claims"), "{claimed}");
+    assert!(claimed.contains("build.shibboleth.net"), "{claimed}");
+
+    // The Kotlin DSL forms, with includeModule.
+    let kotlin = r#"repositories {
+    mavenCentral()
+    maven("https://repo.acme.dev/maven") {
+        content {
+            includeGroup("com.acme")
+            includeModule("com.acme", "lib")
+        }
+    }
+}
+dependencies {
+    implementation("org.springframework:spring-core:6.1.0")
+    implementation("com.acme:lib:1.0")
+    implementation("org.other:lib:1.0")
+}
+"#;
+    let files = [("build.gradle", kotlin)];
+    assert_eq!(lookup(&files, "org.springframework:spring-core"), None);
+    assert_eq!(lookup(&files, "org.other:lib"), None);
+    assert!(fails(lookup(&files, "com.acme:lib")));
+
+    // exclusiveContent binds the repository inside forRepository to its
+    // filter.
+    let exclusive = r#"repositories {
+    mavenCentral()
+    exclusiveContent {
+        forRepository {
+            maven { url = "https://repo.acme.dev/maven" }
+        }
+        filter {
+            includeGroup "com.acme"
+        }
+    }
+}
+dependencies {
+    implementation("org.springframework:spring-core:6.1.0")
+    implementation("com.acme:lib:1.0")
+}
+"#;
+    let files = [("build.gradle", exclusive)];
+    assert_eq!(lookup(&files, "org.springframework:spring-core"), None);
+    assert!(fails(lookup(&files, "com.acme:lib")));
+
+    // Anything else in a filter — a regex, a version, an exclusion — means
+    // the repository claims everything, so every lookup fails.
+    for filter in [
+        r#"content { includeGroupByRegex("org\\..*") }"#,
+        r#"content { includeGroup("com.acme"); includeVersion("com.acme", "lib", "1.0") }"#,
+        r#"content { includeGroup("com.acme"); excludeGroup("org.bad") }"#,
+        r#"content { includeGroup "com.acme"; includeGroup "$dynamic" }"#,
+        "filter { includeGroupByRegex(\".*\") }",
+    ] {
+        let build = format!(
+            "repositories {{\n    mavenCentral()\n    maven {{ url = \"https://repo.acme.dev/maven\"\n        {filter}\n    }}\n}}\ndependencies {{\n    implementation \"org.springframework:spring-core:6.1.0\"\n}}\n"
+        );
+        let found = lookup(
+            &[("build.gradle", build.as_str())],
+            "org.springframework:spring-core",
+        );
+        assert!(fails(found.clone()), "{filter}: {found:?}");
+    }
+
+    // A filtered repository on a public URL claims nothing.
+    let public = r#"repositories {
+    maven {
+        url = "https://maven.google.com"
+        content { includeGroup "com.acme" }
+    }
+}
+dependencies { implementation "com.acme:lib:1.0" }
+"#;
+    assert_eq!(lookup(&[("build.gradle", public)], "com.acme:lib"), None);
+}

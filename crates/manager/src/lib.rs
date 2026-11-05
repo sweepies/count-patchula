@@ -388,9 +388,15 @@ impl Scanner {
     }
     /// Fail every Maven lookup of a build system whose build could take
     /// artifacts from a repository besides the public ones; see
-    /// `maven::private_repositories` and `gradle::private_repositories`.
-    fn maven_repositories(&self, files: &Files, deps: &mut [Dependency]) {
-        for (manager, reason) in [
+    /// `maven::private_repositories` and `gradle::private_repositories`. A
+    /// repository a content filter bounds claims its groups alone.
+    fn maven_repositories(
+        &self,
+        files: &Files,
+        deps: &mut [Dependency],
+        warnings: &mut Vec<String>,
+    ) {
+        for (manager, found) in [
             (
                 Manager::Maven,
                 self.config
@@ -408,14 +414,26 @@ impl Scanner {
                     .flatten(),
             ),
         ] {
-            let Some(reason) = reason else {
+            let Some(repositories) = found else {
                 continue;
             };
+            warnings.extend(repositories.warnings.iter().cloned());
             for dep in deps
                 .iter_mut()
                 .filter(|dep| dep.manager == manager && dep.source == Source::Maven)
             {
-                dep.registry = origins::Named::Unusable(reason.clone()).recorded();
+                let reason = repositories.closed.as_ref().or_else(|| {
+                    let coordinate = dep.package.rsplit('|').next().unwrap_or(&dep.package);
+                    repositories.claimed.get(coordinate).or_else(|| {
+                        coordinate
+                            .split(':')
+                            .next()
+                            .and_then(|group| repositories.claimed.get(group))
+                    })
+                });
+                if let Some(reason) = reason {
+                    dep.registry = origins::Named::Unusable(reason.clone()).recorded();
+                }
             }
         }
     }
@@ -743,7 +761,7 @@ impl Scanner {
                     self.selected(Manager::Gradle, path)
                 }));
         }
-        self.maven_repositories(files, &mut result.dependencies);
+        self.maven_repositories(files, &mut result.dependencies, &mut result.warnings);
         if self.config.managers.contains(&Manager::Mise) {
             let configs: Vec<&str> = files
                 .keys()
@@ -999,6 +1017,20 @@ pub fn linked_settings(path: &str) -> Option<String> {
 /// What a settings file the Count could not read becomes: text no TOML or
 /// YAML mapping parser accepts, so it is unreadable rather than absent.
 pub const UNREADABLE_SETTINGS: &str = "= the Count could not read this file\n";
+
+/// What a file the include chain reached but the read rounds ran out on
+/// becomes: unreadable the same way, so its packages' lookups fail.
+pub const UNREADABLE_DEEP: &str = "= the Count did not read this file: include chain too deep\n";
+
+/// How many times the files read so far may name more to read: Gradle
+/// builds include builds and apply scripts, and Maven POMs name modules, a
+/// few levels deep at most.
+pub const MORE_ROUNDS: usize = 16;
+
+/// Whether `text` is the stand-in for a file the Count did not read.
+pub(crate) fn unreadable_text(text: &str) -> bool {
+    matches!(text, UNREADABLE_SETTINGS | UNREADABLE_DEEP)
+}
 
 /// The host of an http or https `url`, lowercased and without a default
 /// port, whatever the case of its scheme.
