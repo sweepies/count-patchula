@@ -289,9 +289,15 @@ dependency's `registry`:
   NuGet merges in ways the Count does not follow, fail every lookup. A package mapped to
   nuget.org alone comes from there; any other fails its lookup, since
   private NuGet feeds are not read yet. A `dotnet-tools.json` manifest
-  counts every folder below it with a config of its own, and a shared
-  MSBuild file such as `Directory.Packages.props`, which can be imported
-  from anywhere, counts every folder with one. Anything NuGet could read
+  counts every folder below it with a config of its own. A shared MSBuild
+  file such as `Directory.Build.props`, which can be imported from
+  anywhere, counts every folder with a config; a
+  `Directory.Packages.props` counts only those whose config can govern a
+  project under it — a project below the config, not opted out by a
+  literal `ImportDirectoryPackagesProps` or `ManagePackageVersionsCentrally`
+  `false` in the project or a `Directory.Build.props` between them, and
+  not under a closer `Directory.Packages.props`. Anything undecidable —
+  a condition, a variable or an unreadable file — counts the config. Anything NuGet could read
   differently fails every lookup it could affect: a config the Count
   cannot read, with a section it does not know such as
   `fallbackPackageFolders`, with `remove`, or with a pattern other than an

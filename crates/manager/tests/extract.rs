@@ -3222,6 +3222,20 @@ fn nuget_packages_come_from_nuget_org_alone_or_as_source_mapping_says() {
             "<Project>\n  <ItemGroup>\n    <PackageVersion Include=\"Newtonsoft.Json\" Version=\"13.0.1\" />\n  </ItemGroup>\n</Project>\n".into(),
         ),
         ("central/app/nuget.config".into(), nuget_config(&sources(acme))),
+        ("central/app/App.csproj".into(), project(&[])),
+        // A config below a central props that governs nothing: the project
+        // under it opted out in a Directory.Build.props, as Arcade's
+        // eng/common/internal does.
+        (
+            "opted/Directory.Packages.props".into(),
+            "<Project>\n  <ItemGroup>\n    <PackageVersion Include=\"Newtonsoft.Json\" Version=\"13.0.1\" />\n  </ItemGroup>\n</Project>\n".into(),
+        ),
+        ("opted/eng/common/internal/nuget.config".into(), nuget_config(&sources(acme))),
+        (
+            "opted/eng/common/internal/Directory.Build.props".into(),
+            "<Project>\n  <PropertyGroup>\n    <ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps>\n  </PropertyGroup>\n</Project>\n".into(),
+        ),
+        ("opted/eng/common/internal/Sub.csproj".into(), project(&[])),
         // Sections and names the Count does not know.
         (
             "fallback/nuget.config".into(),
@@ -3329,6 +3343,12 @@ fn nuget_packages_come_from_nuget_org_alone_or_as_source_mapping_says() {
         "central/Directory.Packages.props",
         "Newtonsoft.Json"
     )));
+    // The internal config governs no central props file, so it does not
+    // join this one's sources.
+    assert_eq!(
+        registry("opted/Directory.Packages.props", "Newtonsoft.Json"),
+        None
+    );
     for file in ["fallback/App.csproj", "spelled/App.csproj"] {
         assert!(fails(registry(file, "Newtonsoft.Json")), "{file}");
     }

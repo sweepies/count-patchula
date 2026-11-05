@@ -516,13 +516,19 @@ fn config(text: &str) -> Result<Config, ()> {
 /// The package source configuration of a repository, read once: what a
 /// restore in each folder with a config sees, and whether an MSBuild file
 /// overrides the configs.
-pub(crate) struct Feeds {
+pub(crate) struct Feeds<'a> {
     /// For each folder with a config, as a path prefix (`""` for the root),
     /// the configs from the root down to it, or why the Count cannot read
     /// one of them.
     chains: BTreeMap<String, Result<Chain, String>>,
     /// An MSBuild file that sets restore sources itself, or cannot be read.
     overridden: Option<String>,
+    /// The files the scan read, for the central-package-management checks.
+    files: &'a Files,
+    /// Project files central package management can govern.
+    projects: Vec<String>,
+    /// Every `Directory.Packages.props`, for the "a closer one" check.
+    central: Vec<String>,
 }
 
 /// What the configs from the root down to a folder say. Every source any of
@@ -543,8 +549,8 @@ impl Default for Chain {
     }
 }
 
-impl Feeds {
-    pub(crate) fn new(files: &Files) -> Self {
+impl<'a> Feeds<'a> {
+    pub(crate) fn new(files: &'a Files) -> Self {
         let mut configs = BTreeMap::<String, Result<Config, String>>::new();
         for (path, text) in files.iter().filter(|(path, _)| config_file(path)) {
             let whole = path.as_str();
@@ -591,7 +597,7 @@ impl Feeds {
             .iter()
             .find(|(path, text)| {
                 msbuild_file(path)
-                    && (text.as_str() == crate::UNREADABLE_SETTINGS || {
+                    && (crate::unreadable_text(text.as_str()) || {
                         let text = decoded(text).to_ascii_lowercase();
                         RESTORE_OVERRIDES
                             .iter()
@@ -599,7 +605,87 @@ impl Feeds {
                     })
             })
             .map(|(path, _)| format!("restore sources {path} may set"));
-        Self { chains, overridden }
+        let mut projects = Vec::new();
+        let mut central = Vec::new();
+        for path in files.keys() {
+            let leaf = path.rsplit('/').next().unwrap_or(path);
+            if [".csproj", ".fsproj", ".vbproj"]
+                .iter()
+                .any(|e| leaf.ends_with(e))
+            {
+                projects.push(path.clone());
+            } else if leaf == "Directory.Packages.props" {
+                central.push(path.clone());
+            }
+        }
+        Self {
+            chains,
+            overridden,
+            files,
+            projects,
+            central,
+        }
+    }
+
+    /// Whether some project at or below `config_dir` is governed by the
+    /// `Directory.Packages.props` in `props_dir`: it sits below that props,
+    /// below no closer one, and nothing says a literal
+    /// `ImportDirectoryPackagesProps` or `ManagePackageVersionsCentrally`
+    /// false — in the project or a `Directory.Build.props` between it and
+    /// the config. A condition, a variable or an unreadable file counts
+    /// (fail closed).
+    fn governs(&self, props_dir: &str, config_dir: &str) -> bool {
+        self.projects.iter().any(|project| {
+            let pdir = &project[..project.rfind('/').map_or(0, |i| i + 1)];
+            pdir.starts_with(config_dir)
+                && pdir.starts_with(props_dir)
+                && !self.central.iter().any(|props| {
+                    let dir = &props[..props.rfind('/').map_or(0, |i| i + 1)];
+                    dir.len() > props_dir.len() && pdir.starts_with(dir)
+                })
+                && !self.opted_out(project, config_dir)
+        })
+    }
+
+    /// Whether a literal `ImportDirectoryPackagesProps` or
+    /// `ManagePackageVersionsCentrally` `false` opts `project` (which sits
+    /// at or below `config_dir`) out of central package management, in the
+    /// project or a `Directory.Build.props` from its folder up to the
+    /// config's.
+    fn opted_out(&self, project: &str, config_dir: &str) -> bool {
+        static OPT_OUT: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(
+                r"(?s)<(ImportDirectoryPackagesProps|ManagePackageVersionsCentrally)\b([^>]*)>\s*([^<]*?)\s*</",
+            )
+            .expect("opt-out pattern")
+        });
+        let pdir = &project[..project.rfind('/').map_or(0, |i| i + 1)];
+        let mut check = vec![project.to_owned()];
+        let mut dir = pdir;
+        loop {
+            check.push(format!("{dir}Directory.Build.props"));
+            if dir == config_dir || dir.is_empty() {
+                break;
+            }
+            let parent = dir.trim_end_matches('/');
+            dir = &parent[..parent.rfind('/').map_or(0, |i| i + 1)];
+        }
+        for file in check {
+            let Some(text) = self.files.get(&file) else {
+                continue;
+            };
+            if crate::unreadable_text(text) {
+                continue;
+            }
+            for c in OPT_OUT.captures_iter(text) {
+                // A condition or a non-literal value is not a literal
+                // `false`; those count the config instead.
+                if !c[2].contains("Condition") && c[3].trim().eq_ignore_ascii_case("false") {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// The chain of the nearest folder at or above `dir` (a path prefix, or
@@ -638,19 +724,22 @@ impl Feeds {
         }
         let leaf = file.rsplit('/').next().unwrap_or(file).to_ascii_lowercase();
         let shared = leaf.ends_with(".props") || leaf.ends_with(".targets");
+        let central = leaf == "directory.packages.props";
         let folder = &file[..file.rfind('/').map_or(0, |i| i + 1)];
         // A tool manifest sits in the `.config` folder of the project it
         // serves.
         let manifest = (folder == ".config/" || folder.ends_with("/.config/"))
             .then(|| &folder[..folder.len() - ".config/".len()]);
         let dir = match manifest {
+            _ if central => folder,
             _ if shared => "",
             Some(project) => project,
             None => folder,
         };
         let here = Self::nearest(&self.chains, dir);
         // A project restores in its own folder alone; the others count every
-        // folder below too.
+        // folder below too — a central props file only those that govern a
+        // project under them.
         let below = self
             .chains
             .iter()
@@ -658,6 +747,7 @@ impl Feeds {
                 (shared || manifest.is_some())
                     && config.starts_with(dir)
                     && config.len() > dir.len()
+                    && (!central || self.governs(folder, config))
             })
             .map(|(_, chain)| chain.clone());
         let origins = std::iter::once(here).chain(below).map(|chain| match chain {

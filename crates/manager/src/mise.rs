@@ -468,14 +468,14 @@ fn project_redirect(
     dir: &str,
     tool: &str,
     files: &Files,
-    feeds: &crate::nuget::Feeds,
+    feeds: &crate::nuget::Feeds<'_>,
 ) -> Option<String> {
     let related = |path: &str| {
         let folder = &path[..path.rfind('/').map_or(0, |i| i + 1)];
         dir.starts_with(folder) || folder.starts_with(dir)
     };
     let leaf = |path: &str| path.rsplit('/').next().unwrap_or(path).to_owned();
-    let unreadable = |text: &str| text == crate::UNREADABLE_SETTINGS;
+    let unreadable = crate::unreadable_text;
     let found = |test: &dyn Fn(&str, &str) -> bool, what: &str| {
         files
             .iter()
@@ -596,7 +596,7 @@ pub(crate) fn redirected(
     dep: &Dependency,
     configs: &[&str],
     files: &Files,
-    feeds: &crate::nuget::Feeds,
+    feeds: &crate::nuget::Feeds<'_>,
 ) -> Option<String> {
     let mut dirs = vec![&dep.file[..dep.file.rfind('/').map_or(0, |i| i + 1)]];
     if let Some(including) = &dep.included_by {

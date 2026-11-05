@@ -76,7 +76,7 @@ missing, and behaviour that changes their pull requests. The
 ### NuGet sources need a source mapping {#nuget-sources}
 
 - **Renovate:** Looks a NuGet package up in every source `nuget.config` lists
-- **The Count:** Looks it up on nuget.org only when nuget.org is the only source, or when `packageSourceMapping` maps the package there; with another source and no mapping, every NuGet lookup fails. See [package registries](/guide/sources/#package-registries)
+- **The Count:** Looks it up on nuget.org only when nuget.org is the only source, or when `packageSourceMapping` maps the package there; with another source and no mapping, every NuGet lookup fails. For a `Directory.Packages.props` a nested `nuget.config` counts only when it could govern a project under it — a literal `ImportDirectoryPackagesProps` or `ManagePackageVersionsCentrally` `false` between them, or a closer `Directory.Packages.props`, leaves the config out. See [package registries](/guide/sources/#package-registries)
 - **Why:** NuGet takes a package from whichever source answers, and its lockfile does not say which, so without a mapping a private package's name could be looked up on nuget.org, where it may be someone else's. Source mapping is also NuGet's own advice against dependency confusion
 
 ### One other Maven repository fails every lookup {#maven-repositories}
