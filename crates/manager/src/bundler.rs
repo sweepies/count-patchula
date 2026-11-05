@@ -718,34 +718,7 @@ pub(crate) fn public_only(path: &str, text: &str, files: &Files) -> bool {
             .all(|url| crate::public::fetch_ok(url, &RUBYGEMS))
         && files
             .get(&format!("{path}.lock"))
-            .is_none_or(|lock| lock_public(lock))
-}
-
-/// Whether `Gemfile.lock` records only RubyGems remotes, public-forge
-/// git or plugin sources and local path sources.
-pub(crate) fn lock_public(lock: &str) -> bool {
-    let mut section = "";
-    for line in lock.lines() {
-        if !line.starts_with(' ') {
-            section = line.trim();
-            continue;
-        }
-        let Some(remote) = line.trim().strip_prefix("remote:") else {
-            continue;
-        };
-        let url = remote.trim();
-        let ok = match section {
-            "GEM" => Named::parse(url, &RUBYGEMS) == Named::Public,
-            // Git and plugin sources fetch remote content; a public
-            // forge serves only public content.
-            "GIT" | "PLUGIN" => crate::public::fetch_ok(url, &RUBYGEMS),
-            _ => true,
-        };
-        if !ok {
-            return false;
-        }
-    }
-    true
+            .is_none_or(|lock| crate::public::lines_public(lock, &RUBYGEMS))
 }
 
 /// The URLs a Gemfile's `source` directives and `gem` `source:` options

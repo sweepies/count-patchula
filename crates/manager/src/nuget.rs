@@ -269,7 +269,7 @@ pub(crate) fn config_file(path: &str) -> bool {
 /// The start of MSBuild property names that set restore sources, fallback
 /// folders, another config file or another folder to read configs from,
 /// which override what the repository's `nuget.config` files say.
-const RESTORE_OVERRIDES: [&str; 6] = [
+pub(crate) const RESTORE_OVERRIDES: [&str; 6] = [
     "restoresources",
     "restoreadditionalproject",
     "restoreconfigfile",
@@ -298,7 +298,7 @@ pub(crate) fn msbuild_file(path: &str) -> bool {
 
 /// `text` with XML character references (`&#83;`, `&#x53;`) decoded, so a
 /// property name written with them is still found.
-fn decoded(text: &str) -> String {
+pub(crate) fn decoded(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(at) = rest.find("&#") {
@@ -741,40 +741,16 @@ impl Feeds {
     }
 }
 
-/// Whether a `nuget.config` names only nuget.org sources.
-pub(crate) fn config_public(text: &str) -> bool {
-    let Ok(config) = config(text) else {
-        return false;
-    };
-    config
-        .sources
-        .iter()
-        .all(|(_, value)| matches!(Named::parse(value, &NUGET_ORG), Named::Public))
-}
-
 /// Whether `text`, already decoded and lowercased, holds a `<name`
 /// element start: the tag followed by whitespace, `/` or `>`, so a
 /// property such as `<TargetFramework` does not count as `<Target`.
-fn has_element(text: &str, name: &str) -> bool {
+pub(crate) fn has_element(text: &str, name: &str) -> bool {
     let open = format!("<{name}");
     text.match_indices(&open).any(|(at, _)| {
         text.as_bytes()
             .get(at + open.len())
             .is_some_and(|b| b.is_ascii_whitespace() || matches!(b, b'/' | b'>'))
     })
-}
-
-/// Whether an MSBuild file avoids every property that can set restore
-/// sources and every element that runs code the Count cannot reason
-/// about: a `<Target`, a `<UsingTask` or an `<Exec`.
-pub(crate) fn msbuild_public(text: &str) -> bool {
-    let text = decoded(text).to_ascii_lowercase();
-    !RESTORE_OVERRIDES
-        .iter()
-        .any(|property| text.contains(property))
-        && !["target", "usingtask", "exec"]
-            .iter()
-            .any(|name| has_element(&text, name))
 }
 
 #[cfg(test)]

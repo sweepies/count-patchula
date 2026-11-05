@@ -509,47 +509,6 @@ pub(crate) const CRATES: crate::origins::Public = crate::origins::Public {
     },
 };
 
-/// Whether a Cargo manifest's dependencies fetch only from crates.io, a
-/// public forge or locally. A named registry the run cannot reach fails
-/// the run rather than fetch, so it decides nothing here.
-pub(crate) fn manifest_public(text: &str) -> bool {
-    let Ok(document) = text.parse::<toml_edit::DocumentMut>() else {
-        return false;
-    };
-    fn walk(item: &Item) -> bool {
-        let Some(table) = item.as_table_like() else {
-            return true;
-        };
-        table.iter().all(|(key, value)| {
-            !matches!(key, "git" | "registry-index")
-                || (value
-                    .as_str()
-                    .is_some_and(|url| crate::public::fetch_ok(url, &CRATES))
-                    && walk(value))
-        })
-    }
-    walk(document.as_item())
-}
-
-/// Whether `Cargo.lock` records only crates.io sources, public-forge git
-/// sources and local path packages.
-pub(crate) fn lock_public(text: &str) -> bool {
-    let Ok(document) = text.parse::<toml_edit::DocumentMut>() else {
-        return false;
-    };
-    document
-        .get("package")
-        .and_then(Item::as_array_of_tables)
-        .into_iter()
-        .flatten()
-        .all(|entry| {
-            entry
-                .get("source")
-                .and_then(Item::as_str)
-                .is_none_or(|source| crate::public::fetch_ok(source, &CRATES))
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::glob;
