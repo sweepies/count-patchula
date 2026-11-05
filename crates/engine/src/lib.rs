@@ -2768,7 +2768,7 @@ fn lockfile_concurrency() -> usize {
 
 /// The namespace of extraction cache entries, changed whenever extraction
 /// semantics do.
-const EXTRACTION: &str = "extract-v27";
+const EXTRACTION: &str = "extract-v28";
 
 fn hash(bytes: &[u8]) -> String {
     Sha256::digest(bytes)

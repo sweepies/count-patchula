@@ -18,11 +18,21 @@
 //! only public or local content; a file that does not parse, or a string
 //! the Count cannot rule on, makes the file not public.
 //!
-//! Only an explicit, small allowlist of inert metadata keys per format —
-//! `package.json`'s `homepage`, `[project]`'s `urls` and their like —
-//! goes unchecked: a URL there reaches a web page, not a download. A key
-//! missing from the allowlist can only cost performance — the run lands
-//! on the installation partition — never safety.
+//! Keys that by their format always hold a fetch location — a Composer
+//! `repositories[].url`, a Yarn `npmRegistryServer`, an index `url`, a
+//! `packageSources` value — get a stricter rule on their value alone:
+//! it must name the ecosystem's public registry itself, or be a local
+//! path where the format allows one, or carry a scheme and fetch only
+//! public or local content. A bare host, a `${VAR}` or an unparseable
+//! value there is a source a scheme-less string check would miss, so it
+//! is not public.
+//!
+//! Only an explicit, small allowlist of inert metadata keys and tables
+//! per format — `package.json`'s `homepage`, `[project]`'s `urls`, the
+//! pure-lint `[tool]` tables and their like — goes unchecked: a URL
+//! there reaches a web page, not a download. A key missing from the
+//! allowlist can only cost performance — the run lands on the
+//! installation partition — never safety.
 use crate::Files;
 use crate::origins::{Named, Public};
 use jsonc_parser::ast::Value;
@@ -222,7 +232,9 @@ pub(crate) fn fetch_ok(value: &str, public: &Public) -> bool {
 /// URL, a `git@` or protocol-prefixed source, or an npm `npm:` alias or
 /// Yarn locator (`name@reference`) whose reference carries a protocol,
 /// split the same way `fetch_ok` splits it. Anything else — a name, a
-/// version, a hash, prose — is not a source and is not checked.
+/// version, a hash, prose — is not a source and is not checked. A
+/// scheme-less value can still be a source when its key always names one;
+/// the [`Rule`] a key carries covers those.
 fn possible_source(value: &str) -> bool {
     if value.contains("://") {
         return true;
@@ -285,34 +297,249 @@ fn string_ok(value: &str, public: &Public) -> bool {
     })
 }
 
-/// Whether `key` names inert metadata: for a key missing from the
-/// allowlists the value is walked, which can only ever cost a run its
-/// `public` partition, never make an unsafe file public.
-fn no_inert(_: &[String], _: &str) -> bool {
-    false
+/// How a key at `path` treats the strings it holds. A key with no rule
+/// walks every string, which can only ever cost a run its `public`
+/// partition, never make an unsafe file public.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Rule {
+    /// Walk every string under the key.
+    Walk,
+    /// Inert metadata: the strings steer nothing and are not checked.
+    Inert,
+    /// The value names a registry: each string must be the ecosystem's
+    /// public registry itself, the rule `.npmrc` applies to `registry`.
+    Registry,
+    /// The value names a fetch location: a local path where the format
+    /// allows one, or a source carrying a scheme that `fetch_ok` accepts.
+    /// Anything else — a bare host, a `${VAR}` — is not public.
+    Location { local: bool },
+    /// The map's keys name registries: each must be the public registry.
+    /// The values are walked as usual.
+    RegistryKeys,
 }
-fn package_json_inert(path: &[String], key: &str) -> bool {
-    path.is_empty() && PACKAGE_JSON_INERT.contains(&key)
+
+/// Whether `value`, a string a registry key holds, names the ecosystem's
+/// public registry itself.
+fn registry_ok(value: &str, public: &Public) -> bool {
+    matches!(Named::parse(value, public), Named::Public)
 }
-fn composer_inert(path: &[String], key: &str) -> bool {
-    path.is_empty() && COMPOSER_INERT.contains(&key)
+
+/// A local source that fetches nothing: a relative or absolute path, or
+/// a `file:` URL.
+fn local_path(value: &str) -> bool {
+    let value = value.trim().trim_matches(['"', '\'']);
+    value.starts_with("./")
+        || value.starts_with("../")
+        || value.starts_with('/')
+        || value
+            .get(..5)
+            .is_some_and(|start| start.eq_ignore_ascii_case("file:"))
 }
-fn project_inert(path: &[String], key: &str) -> bool {
-    matches!(path, [table] if table == "project") && PROJECT_INERT.contains(&key)
+
+/// Whether `value`, a string a location key holds, is a local path where
+/// `local` allows one, or a source carrying a scheme that fetches only
+/// public or local content.
+fn location_ok(value: &str, public: &Public, local: bool) -> bool {
+    if local && local_path(value) {
+        return true;
+    }
+    let value = value.trim().trim_matches(['"', '\'']);
+    value.contains(':') && fetch_ok(value, public)
 }
-fn cargo_package_inert(path: &[String], key: &str) -> bool {
-    (matches!(path, [table] if table == "package")
+
+/// Whether `path` plus `key` is `table` or inside it.
+fn within(path: &[String], key: &str, table: &[&str]) -> bool {
+    table.len() <= path.len() + 1
+        && table
+            .iter()
+            .zip(path.iter().map(String::as_str).chain([key]))
+            .all(|(wanted, part)| *wanted == part)
+}
+
+/// `path` below `prefix`, or `None` when it is not under it.
+fn strip<'a>(path: &'a [String], prefix: &[&str]) -> Option<&'a [String]> {
+    (path.len() >= prefix.len()
+        && path[..prefix.len()]
+            .iter()
+            .zip(prefix)
+            .all(|(part, wanted)| part == wanted))
+    .then(|| &path[prefix.len()..])
+}
+
+fn no_rules(_: &[String], _: &str) -> Rule {
+    Rule::Walk
+}
+fn package_json_rule(path: &[String], key: &str) -> Rule {
+    if path.is_empty() && PACKAGE_JSON_INERT.contains(&key) {
+        Rule::Inert
+    } else {
+        Rule::Walk
+    }
+}
+/// `composer.json`'s keys: inert metadata, and `repositories`, which
+/// `composer_repositories_public` rules on entry by entry.
+fn composer_rule(path: &[String], key: &str) -> Rule {
+    if path.is_empty() && (COMPOSER_INERT.contains(&key) || key == "repositories") {
+        Rule::Inert
+    } else {
+        Rule::Walk
+    }
+}
+/// `[tool]` tables whose strings never steer a fetch, at any depth below
+/// them: the `fancy-pypi-readme` metadata hook, which writes URLs into a
+/// readme, and the pure-lint tool tables. `[tool.*]` in general is not
+/// skipped: build backends read their own tables, which can hold URLs.
+const TOOL_INERT: &[&[&str]] = &[
+    &["tool", "hatch", "metadata", "hooks", "fancy-pypi-readme"],
+    &["tool", "ruff"],
+    &["tool", "black"],
+    &["tool", "isort"],
+    &["tool", "mypy"],
+    &["tool", "pytest"],
+    &["tool", "coverage"],
+    &["tool", "pyright"],
+    &["tool", "towncrier"],
+    &["tool", "codespell"],
+];
+/// `key` at `path` below a uv settings table — `[tool.uv]` in a
+/// pyproject.toml or uv.toml's root — or its `[pip]` table: index URLs
+/// must name PyPI itself, and `find-links` may also be a local
+/// directory.
+fn uv_keys(path: &[String], key: &str) -> Rule {
+    if matches!(path, [table] if table == "index") && key == "url" {
+        return Rule::Registry;
+    }
+    if path.is_empty() || matches!(path, [table] if table == "pip") {
+        return match key {
+            "index-url" | "extra-index-url" => Rule::Registry,
+            "find-links" => Rule::Location { local: true },
+            _ => Rule::Walk,
+        };
+    }
+    Rule::Walk
+}
+/// The index settings a `[pypi-options]` table — pixi.toml's or
+/// `[tool.pixi]`'s — holds.
+fn pypi_options_key(key: &str) -> Rule {
+    match key {
+        "index-url" | "extra-index-urls" => Rule::Registry,
+        "find-links" => Rule::Location { local: true },
+        _ => Rule::Walk,
+    }
+}
+fn pyproject_rule(path: &[String], key: &str) -> Rule {
+    if matches!(path, [table] if table == "project") && PROJECT_INERT.contains(&key)
+        || TOOL_INERT.iter().any(|table| within(path, key, table))
+    {
+        return Rule::Inert;
+    }
+    if let Some(below) = strip(path, &["tool", "uv"]) {
+        return uv_keys(below, key);
+    }
+    if matches!(path.last().map(String::as_str), Some("pypi-options")) {
+        return pypi_options_key(key);
+    }
+    // `[[tool.poetry.source]]` and `[[tool.pdm.source]]` name a package
+    // index in `url`.
+    if key == "url"
+        && matches!(path, [a, b, c] if a == "tool"
+            && (b == "poetry" || b == "pdm") && c == "source")
+    {
+        return Rule::Registry;
+    }
+    Rule::Walk
+}
+fn uv_rule(path: &[String], key: &str) -> Rule {
+    uv_keys(path, key)
+}
+/// poetry.toml's `[repositories.<name>]` `url` names a package index.
+fn poetry_rule(path: &[String], key: &str) -> Rule {
+    if matches!(path, [a, _] if a == "repositories") && key == "url" {
+        return Rule::Registry;
+    }
+    Rule::Walk
+}
+/// pdm.toml's `[pypi]` `url` is the package index.
+fn pdm_rule(path: &[String], key: &str) -> Rule {
+    if matches!(path, [table] if table == "pypi") && key == "url" {
+        return Rule::Registry;
+    }
+    Rule::Walk
+}
+fn pixi_rule(path: &[String], key: &str) -> Rule {
+    if matches!(path, [table] if table == "pypi-options") {
+        return pypi_options_key(key);
+    }
+    Rule::Walk
+}
+/// `.yarnrc.yml`: `npmRegistryServer`, at the top level and under
+/// `npmScopes`, and the registries `npmRegistries` is keyed by name the
+/// npm registry or they name a private one.
+fn yarnrc_rule(path: &[String], key: &str) -> Rule {
+    if key == "npmRegistryServer"
+        && (path.is_empty() || matches!(path, [scopes, _] if scopes == "npmScopes"))
+    {
+        return Rule::Registry;
+    }
+    if path.is_empty() && key == "npmRegistries" {
+        return Rule::RegistryKeys;
+    }
+    Rule::Walk
+}
+/// pnpm-workspace.yaml: `.npmrc` settings in YAML — `registry` and
+/// `@scope:registry` keys, and a `registries` map's values — name the
+/// npm registry or they name a private one.
+fn pnpm_rule(path: &[String], key: &str) -> Rule {
+    if path.is_empty()
+        && (key == "registry"
+            || key
+                .strip_suffix(":registry")
+                .is_some_and(|scope| scope.starts_with('@') && scope.len() > 1))
+        || matches!(path, [table] if table == "registries")
+    {
+        return Rule::Registry;
+    }
+    Rule::Walk
+}
+/// Cargo.toml: `[registries.<name>]` `index`, `[source.<name>]`
+/// `registry` and a dependency's `registry-index` name the crates.io
+/// index or they name a private one.
+fn cargo_rule(path: &[String], key: &str) -> Rule {
+    if (matches!(path, [table] if table == "package")
         || matches!(path, [parent, table] if parent == "workspace" && table == "package"))
         && CARGO_PACKAGE_INERT.contains(&key)
+    {
+        return Rule::Inert;
+    }
+    if key == "registry-index"
+        || (matches!(path, [a, _] if a == "registries") && key == "index")
+        || (matches!(path, [a, _] if a == "source") && key == "registry")
+    {
+        return Rule::Registry;
+    }
+    Rule::Walk
+}
+
+/// Whether `value` — the scalar or list a source key holds — passes
+/// `check` in every string it is.
+fn json_strings(value: &Value<'_>, check: &dyn Fn(&str) -> bool) -> bool {
+    match value {
+        Value::StringLit(lit) => check(&lit.value),
+        Value::Array(array) => array
+            .elements
+            .iter()
+            .all(|element| json_strings(element, check)),
+        _ => false,
+    }
 }
 
 /// Every key and string in a JSON (or JSONC, when `jsonc`) document,
-/// recursively.
+/// recursively, with each key's [`Rule`] applied.
 fn json_public(
     text: &str,
     jsonc: bool,
     public: &Public,
-    inert: impl Fn(&[String], &str) -> bool,
+    rule: impl Fn(&[String], &str) -> Rule,
 ) -> bool {
     let Ok(root) = crate::npm::ast(text, jsonc) else {
         return false;
@@ -320,101 +547,205 @@ fn json_public(
     fn item(
         value: &Value<'_>,
         path: &mut Vec<String>,
-        inert: &dyn Fn(&[String], &str) -> bool,
+        rule: &dyn Fn(&[String], &str) -> Rule,
         public: &Public,
     ) -> bool {
         match value {
             Value::Object(object) => object.properties.iter().all(|prop| {
                 let key = prop.name.as_str();
-                string_ok(key, public)
-                    && (inert(path, key) || {
-                        path.push(key.to_owned());
-                        let ok = item(&prop.value, path, inert, public);
-                        path.pop();
-                        ok
-                    })
+                if !string_ok(key, public) {
+                    return false;
+                }
+                let nested = |path: &mut Vec<String>| {
+                    path.push(key.to_owned());
+                    let ok = item(&prop.value, path, rule, public);
+                    path.pop();
+                    ok
+                };
+                match rule(path, key) {
+                    Rule::Inert => true,
+                    Rule::Registry => json_strings(&prop.value, &|s| registry_ok(s, public)),
+                    Rule::Location { local } => {
+                        json_strings(&prop.value, &|s| location_ok(s, public, local))
+                    }
+                    Rule::RegistryKeys => match &prop.value {
+                        Value::Object(entries) => entries
+                            .properties
+                            .iter()
+                            .all(|entry| registry_ok(entry.name.as_str(), public) && nested(path)),
+                        _ => false,
+                    },
+                    Rule::Walk => nested(path),
+                }
             }),
             Value::Array(array) => array
                 .elements
                 .iter()
-                .all(|element| item(element, path, inert, public)),
+                .all(|element| item(element, path, rule, public)),
             Value::StringLit(lit) => string_ok(&lit.value, public),
             _ => true,
         }
     }
-    item(&root, &mut Vec::new(), &inert, public)
+    item(&root, &mut Vec::new(), &rule, public)
 }
 
-/// Every key and string in a TOML document, recursively.
-fn toml_public(text: &str, public: &Public, inert: impl Fn(&[String], &str) -> bool) -> bool {
+/// Whether `item` — the scalar or list a source key holds — passes
+/// `check` in every string it is.
+fn toml_strings(item: &toml_edit::Item, check: &dyn Fn(&str) -> bool) -> bool {
+    fn scalar(nested: &toml_edit::Value, check: &dyn Fn(&str) -> bool) -> bool {
+        match nested {
+            toml_edit::Value::Array(array) => array.iter().all(|v| scalar(v, check)),
+            _ => nested.as_str().is_some_and(check),
+        }
+    }
+    match item {
+        toml_edit::Item::Value(value) => scalar(value, check),
+        _ => false,
+    }
+}
+
+/// Every key and string in a TOML document, recursively, with each key's
+/// [`Rule`] applied.
+fn toml_public(text: &str, public: &Public, rule: impl Fn(&[String], &str) -> Rule) -> bool {
     fn table(
         table: &dyn toml_edit::TableLike,
         path: &mut Vec<String>,
-        inert: &dyn Fn(&[String], &str) -> bool,
+        rule: &dyn Fn(&[String], &str) -> Rule,
         public: &Public,
     ) -> bool {
         table.iter().all(|(key, nested)| {
-            string_ok(key, public)
-                && (inert(path, key) || {
-                    path.push(key.to_owned());
-                    let ok = item(nested, path, inert, public);
-                    path.pop();
-                    ok
-                })
+            if !string_ok(key, public) {
+                return false;
+            }
+            let nested_item = |path: &mut Vec<String>| {
+                path.push(key.to_owned());
+                let ok = item(nested, path, rule, public);
+                path.pop();
+                ok
+            };
+            match rule(path, key) {
+                Rule::Inert => true,
+                Rule::Registry => toml_strings(nested, &|s| registry_ok(s, public)),
+                Rule::Location { local } => {
+                    toml_strings(nested, &|s| location_ok(s, public, local))
+                }
+                Rule::RegistryKeys => {
+                    let entries = match nested {
+                        toml_edit::Item::Table(inner) => Some(inner as &dyn toml_edit::TableLike),
+                        toml_edit::Item::Value(toml_edit::Value::InlineTable(inner)) => {
+                            Some(inner as &dyn toml_edit::TableLike)
+                        }
+                        _ => None,
+                    };
+                    entries.is_some_and(|entries| {
+                        entries.iter().all(|(name, _)| registry_ok(name, public))
+                    }) && nested_item(path)
+                }
+                Rule::Walk => nested_item(path),
+            }
         })
     }
     fn scalar(
         value: &toml_edit::Value,
         path: &mut Vec<String>,
-        inert: &dyn Fn(&[String], &str) -> bool,
+        rule: &dyn Fn(&[String], &str) -> Rule,
         public: &Public,
     ) -> bool {
         match value {
-            toml_edit::Value::InlineTable(inline) => table(inline, path, inert, public),
+            toml_edit::Value::InlineTable(inline) => table(inline, path, rule, public),
             toml_edit::Value::Array(array) => array
                 .iter()
-                .all(|nested| scalar(nested, path, inert, public)),
+                .all(|nested| scalar(nested, path, rule, public)),
             _ => value.as_str().is_none_or(|s| string_ok(s, public)),
         }
     }
     fn item(
         value: &toml_edit::Item,
         path: &mut Vec<String>,
-        inert: &dyn Fn(&[String], &str) -> bool,
+        rule: &dyn Fn(&[String], &str) -> Rule,
         public: &Public,
     ) -> bool {
         match value {
-            toml_edit::Item::Table(inner) => table(inner, path, inert, public),
+            toml_edit::Item::Table(inner) => table(inner, path, rule, public),
             toml_edit::Item::ArrayOfTables(tables) => {
-                tables.iter().all(|inner| table(inner, path, inert, public))
+                tables.iter().all(|inner| table(inner, path, rule, public))
             }
-            toml_edit::Item::Value(inner) => scalar(inner, path, inert, public),
+            toml_edit::Item::Value(inner) => scalar(inner, path, rule, public),
             toml_edit::Item::None => true,
         }
     }
     let Ok(document) = text.parse::<toml_edit::DocumentMut>() else {
         return false;
     };
-    item(document.as_item(), &mut Vec::new(), &inert, public)
+    item(document.as_item(), &mut Vec::new(), &rule, public)
 }
 
-/// Every key and string in a YAML document, recursively.
-fn yaml_public(text: &str, public: &Public) -> bool {
+/// Whether `value` — the scalar or list a source key holds — passes
+/// `check` in every string it is.
+fn yaml_strings(value: &serde_yaml_ng::Value, check: &dyn Fn(&str) -> bool) -> bool {
+    match value {
+        serde_yaml_ng::Value::String(value) => check(value),
+        serde_yaml_ng::Value::Sequence(items) => items.iter().all(|v| yaml_strings(v, check)),
+        serde_yaml_ng::Value::Tagged(tagged) => yaml_strings(&tagged.value, check),
+        _ => false,
+    }
+}
+
+/// Every key and string in a YAML document, recursively, with each key's
+/// [`Rule`] applied.
+fn yaml_public(text: &str, public: &Public, rule: impl Fn(&[String], &str) -> Rule) -> bool {
     let Ok(root) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(text) else {
         return false;
     };
-    fn item(value: &serde_yaml_ng::Value, public: &Public) -> bool {
+    fn item(
+        value: &serde_yaml_ng::Value,
+        path: &mut Vec<String>,
+        rule: &dyn Fn(&[String], &str) -> Rule,
+        public: &Public,
+    ) -> bool {
         match value {
             serde_yaml_ng::Value::Mapping(map) => map.iter().all(|(key, value)| {
-                key.as_str().is_none_or(|key| string_ok(key, public)) && item(value, public)
+                let Some(name) = key.as_str() else {
+                    return item(value, path, rule, public);
+                };
+                if !string_ok(name, public) {
+                    return false;
+                }
+                let nested = |path: &mut Vec<String>| {
+                    path.push(name.to_owned());
+                    let ok = item(value, path, rule, public);
+                    path.pop();
+                    ok
+                };
+                match rule(path, name) {
+                    Rule::Inert => true,
+                    Rule::Registry => yaml_strings(value, &|s| registry_ok(s, public)),
+                    Rule::Location { local } => {
+                        yaml_strings(value, &|s| location_ok(s, public, local))
+                    }
+                    Rule::RegistryKeys => match value {
+                        serde_yaml_ng::Value::Mapping(entries) => entries.iter().all(|(k, v)| {
+                            k.as_str().is_some_and(|k| registry_ok(k, public)) && {
+                                path.push(name.to_owned());
+                                let ok = item(v, path, rule, public);
+                                path.pop();
+                                ok
+                            }
+                        }),
+                        _ => false,
+                    },
+                    Rule::Walk => nested(path),
+                }
             }),
-            serde_yaml_ng::Value::Sequence(items) => items.iter().all(|v| item(v, public)),
+            serde_yaml_ng::Value::Sequence(items) => {
+                items.iter().all(|v| item(v, path, rule, public))
+            }
             serde_yaml_ng::Value::String(value) => string_ok(value, public),
-            serde_yaml_ng::Value::Tagged(tagged) => item(&tagged.value, public),
+            serde_yaml_ng::Value::Tagged(tagged) => item(&tagged.value, path, rule, public),
             _ => true,
         }
     }
-    item(&root, public)
+    item(&root, &mut Vec::new(), &rule, public)
 }
 
 /// Every tag name, attribute and text node of one XML element, its
@@ -491,14 +822,69 @@ fn npmrc_public(text: &str) -> bool {
     true
 }
 
-/// A `composer.json`: its strings, and its `extra.merge-plugin`, which
-/// reads repositories from files the Count does not see.
+/// A `composer.json`: its `repositories` entries, its other strings, and
+/// its `extra.merge-plugin`, which reads repositories from files the
+/// Count does not see.
 fn composer_json_public(text: &str) -> bool {
     let Ok(json) = serde_json::from_str::<serde_json::Value>(text) else {
         return false;
     };
     json.pointer("/extra/merge-plugin").is_none()
-        && json_public(text, false, &crate::composer::PACKAGIST, composer_inert)
+        && composer_repositories_public(&json)
+        && json_public(text, false, &crate::composer::PACKAGIST, composer_rule)
+}
+
+/// A `composer.json`'s `repositories`: a `"packagist.org": false`-style
+/// switch, a `composer` repository naming Packagist, and `path` and
+/// `artifact` repositories naming local paths are public. Any other type
+/// — `vcs`, `git`, `package` and the rest — or a value the Count cannot
+/// rule on, such as a scheme-less URL Composer would prepend a scheme to,
+/// is not.
+fn composer_repositories_public(json: &serde_json::Value) -> bool {
+    let Some(repositories) = json.get("repositories") else {
+        return true;
+    };
+    let entries: Vec<(Option<&str>, &serde_json::Value)> = match repositories {
+        serde_json::Value::Array(entries) => entries.iter().map(|e| (None, e)).collect(),
+        serde_json::Value::Object(entries) => entries
+            .iter()
+            .map(|(key, entry)| (Some(key.as_str()), entry))
+            .collect(),
+        _ => return false,
+    };
+    let packagist = |key: &str| matches!(key, "packagist.org" | "packagist");
+    for (key, entry) in entries {
+        if let Some(key) = key
+            && !string_ok(key, &crate::composer::PACKAGIST)
+        {
+            return false;
+        }
+        let toggle = match (key, entry) {
+            (Some(key), serde_json::Value::Bool(_)) if packagist(key) => true,
+            (_, serde_json::Value::Object(map)) if map.len() == 1 => map
+                .iter()
+                .next()
+                .is_some_and(|(key, on)| packagist(key) && on.is_boolean()),
+            _ => false,
+        };
+        if toggle {
+            continue;
+        }
+        let Some(map) = entry.as_object() else {
+            return false;
+        };
+        let url = map.get("url").and_then(|url| url.as_str());
+        let public = match map.get("type").and_then(|t| t.as_str()) {
+            // `url` defaults to Packagist.
+            Some("composer") => url.is_none_or(|url| registry_ok(url, &crate::composer::PACKAGIST)),
+            Some("path" | "artifact") => url.is_some_and(local_path),
+            _ => false,
+        };
+        if !public {
+            return false;
+        }
+    }
+    true
 }
 
 /// A `composer.lock`: its strings, and that it holds no Composer plugin
@@ -506,7 +892,7 @@ fn composer_json_public(text: &str) -> bool {
 /// name.
 fn composer_lock_public(text: &str) -> bool {
     crate::composer::lock_has_plugins(text) == Some(false)
-        && json_public(text, false, &crate::composer::PACKAGIST, no_inert)
+        && json_public(text, false, &crate::composer::PACKAGIST, no_rules)
 }
 
 /// An MSBuild file: no property that moves restore sources, no element
@@ -534,6 +920,39 @@ fn msbuild_public(text: &str) -> bool {
     }
 }
 
+/// A `nuget.config`: every attribute and text node, with each
+/// `packageSources` `add` value required to be a local folder or the
+/// public feed — a bare host NuGet would fetch over its default scheme
+/// is not public.
+fn nuget_config_public(text: &str) -> bool {
+    let Ok(document) = roxmltree::Document::parse(text) else {
+        return false;
+    };
+    fn item(node: roxmltree::Node<'_, '_>, in_sources: bool, public: &Public) -> bool {
+        if !node.is_element() {
+            return true;
+        }
+        let tag = node.tag_name().name();
+        node.attributes().all(|attribute| {
+            string_ok(attribute.name(), public)
+                && if in_sources && attribute.name() == "value" {
+                    local_path(attribute.value()) || registry_ok(attribute.value(), public)
+                } else {
+                    string_ok(attribute.value(), public)
+                }
+        }) && node.children().all(|child| {
+            if child.is_comment() || child.is_pi() {
+                return true;
+            }
+            if child.is_element() {
+                return item(child, in_sources || tag == "packageSources", public);
+            }
+            child.text().is_none_or(|text| string_ok(text, public))
+        })
+    }
+    item(document.root_element(), false, &crate::nuget::NUGET_ORG)
+}
+
 /// Whether `path` can steer what a lockfile tool fetches, and if so
 /// whether every fetch it can name is public-only. Files are decided one
 /// at a time; verdicts on the settings files around a file come from the
@@ -543,29 +962,32 @@ fn msbuild_public(text: &str) -> bool {
 pub(crate) fn verdict(path: &str, text: &str, files: &Files) -> Option<bool> {
     let leaf = path.rsplit('/').next().unwrap_or(path);
     let flag = match leaf {
-        "package.json" => json_public(text, false, &crate::npm::NPM, package_json_inert),
+        "package.json" => json_public(text, false, &crate::npm::NPM, package_json_rule),
         ".npmrc" => npmrc_public(text),
-        ".yarnrc.yml" | "pnpm-workspace.yaml" | "pnpm-lock.yaml" | "aube-lock.yaml" => {
-            yaml_public(text, &crate::npm::NPM)
-        }
+        ".yarnrc.yml" => yaml_public(text, &crate::npm::NPM, yarnrc_rule),
+        "pnpm-workspace.yaml" => yaml_public(text, &crate::npm::NPM, pnpm_rule),
+        "pnpm-lock.yaml" | "aube-lock.yaml" => yaml_public(text, &crate::npm::NPM, no_rules),
         "package-lock.json" | "npm-shrinkwrap.json" => {
-            json_public(text, false, &crate::npm::NPM, no_inert)
+            json_public(text, false, &crate::npm::NPM, no_rules)
         }
-        "bun.lock" => json_public(text, true, &crate::npm::NPM, no_inert),
+        "bun.lock" => json_public(text, true, &crate::npm::NPM, no_rules),
         "yarn.lock" => lines_public(text, &crate::npm::NPM),
-        "pyproject.toml" => toml_public(text, &crate::pypi::PYPI, project_inert),
-        "uv.toml" | "poetry.toml" | "pdm.toml" | "pixi.toml" | "hatch.toml" | "uv.lock"
-        | "poetry.lock" => toml_public(text, &crate::pypi::PYPI, no_inert),
+        "pyproject.toml" => toml_public(text, &crate::pypi::PYPI, pyproject_rule),
+        "uv.toml" => toml_public(text, &crate::pypi::PYPI, uv_rule),
+        "poetry.toml" => toml_public(text, &crate::pypi::PYPI, poetry_rule),
+        "pdm.toml" => toml_public(text, &crate::pypi::PYPI, pdm_rule),
+        "pixi.toml" => toml_public(text, &crate::pypi::PYPI, pixi_rule),
+        "hatch.toml" | "uv.lock" | "poetry.lock" => toml_public(text, &crate::pypi::PYPI, no_rules),
         "Gemfile" => crate::bundler::public_only(path, text, files),
         "Gemfile.lock" => lines_public(text, &crate::bundler::RUBYGEMS),
         "composer.json" => composer_json_public(text),
         "composer.lock" => composer_lock_public(text),
-        "Cargo.toml" => toml_public(text, &crate::cargo::CRATES, cargo_package_inert),
-        "Cargo.lock" => toml_public(text, &crate::cargo::CRATES, no_inert),
+        "Cargo.toml" => toml_public(text, &crate::cargo::CRATES, cargo_rule),
+        "Cargo.lock" => toml_public(text, &crate::cargo::CRATES, no_rules),
         "packages.lock.json" | "global.json" | "dotnet-tools.json" => {
-            json_public(text, false, &crate::nuget::NUGET_ORG, no_inert)
+            json_public(text, false, &crate::nuget::NUGET_ORG, no_rules)
         }
-        _ if crate::nuget::config_file(path) => xml_public(text, &crate::nuget::NUGET_ORG, &[]),
+        _ if crate::nuget::config_file(path) => nuget_config_public(text),
         _ if crate::nuget::msbuild_file(path) => msbuild_public(text),
         _ if leaf.ends_with(".slnx") => xml_public(text, &crate::nuget::NUGET_ORG, &[]),
         _ if leaf.ends_with(".sln") => lines_public(text, &crate::nuget::NUGET_ORG),
@@ -709,9 +1131,37 @@ mod tests {
             (".npmrc", "https-proxy=http://proxy.acme.dev:8080\n", false),
             // .yarnrc.yml: registry settings plus Yarn's catalogs and
             // package extensions, which can name specifiers.
+            // `npmRegistryServer` and the registries `npmRegistries` is
+            // keyed by must name the public registry itself — a bare
+            // host, a private one or a `${VAR}` is not public.
             (
                 ".yarnrc.yml",
                 "npmRegistryServer: \"https://registry.npmjs.org\"\nnodeLinker: node-modules\n",
+                true,
+            ),
+            (
+                ".yarnrc.yml",
+                "npmRegistryServer: \"https://registry.yarnpkg.com\"\n",
+                true,
+            ),
+            (
+                ".yarnrc.yml",
+                "npmRegistryServer: registry.acme.dev\n",
+                false,
+            ),
+            (
+                ".yarnrc.yml",
+                "npmRegistryServer: \"${NPM_REGISTRY}\"\n",
+                false,
+            ),
+            (
+                ".yarnrc.yml",
+                "npmRegistries:\n  \"https://npm.acme.dev\":\n    npmAlwaysAuth: true\n",
+                false,
+            ),
+            (
+                ".yarnrc.yml",
+                "npmRegistries:\n  \"https://registry.npmjs.org\":\n    npmAlwaysAuth: true\n",
                 true,
             ),
             (
@@ -729,7 +1179,13 @@ mod tests {
                 "npmScopes:\n  acme:\n    npmRegistryServer: \"https://npm.acme.dev\"\n",
                 false,
             ),
-            // pnpm-workspace.yaml.
+            (
+                ".yarnrc.yml",
+                "npmScopes:\n  acme:\n    npmRegistryServer: npm.acme.dev\n",
+                false,
+            ),
+            // pnpm-workspace.yaml: catalogs, and the `.npmrc` registry
+            // settings it can hold, which must name the public registry.
             (
                 "pnpm-workspace.yaml",
                 "packages:\n  - 'packages/*'\ncatalog:\n  react: ^19.0.0\n",
@@ -738,6 +1194,27 @@ mod tests {
             (
                 "pnpm-workspace.yaml",
                 "packages:\n  - 'packages/*'\ncatalog:\n  x: \"git+ssh://git@git.acme.dev/x.git\"\n",
+                false,
+            ),
+            (
+                "pnpm-workspace.yaml",
+                "packages:\n  - 'packages/*'\nregistry: https://npm.acme.dev\n",
+                false,
+            ),
+            ("pnpm-workspace.yaml", "registry: npm.acme.dev\n", false),
+            (
+                "pnpm-workspace.yaml",
+                "registry: https://registry.npmjs.org\n'@acme:registry': ${NPM_REGISTRY}\n",
+                false,
+            ),
+            (
+                "pnpm-workspace.yaml",
+                "registry: https://registry.npmjs.org\n",
+                true,
+            ),
+            (
+                "pnpm-workspace.yaml",
+                "registries:\n  acme: https://npm.acme.dev\n",
                 false,
             ),
             // package-lock.json: v3 resolved URLs, and v1's `version` and
@@ -828,6 +1305,29 @@ mod tests {
                 "[package]\nname = \"app\"\n\n[registries.acme]\nindex = \"https://index.acme.dev\"\n",
                 false,
             ),
+            // A registry index must name the crates.io index itself —
+            // a bare host is not public either — and so must a
+            // dependency's `registry-index`.
+            (
+                "Cargo.toml",
+                "[package]\nname = \"app\"\n\n[registries.acme]\nindex = \"index.acme.dev\"\n",
+                false,
+            ),
+            (
+                "Cargo.toml",
+                "[package]\nname = \"app\"\n\n[registries.acme]\nindex = \"https://index.crates.io/\"\n",
+                true,
+            ),
+            (
+                "Cargo.toml",
+                "[package]\nname = \"app\"\n\n[dependencies]\nx = { version = \"1\", registry-index = \"index.acme.dev\" }\n",
+                false,
+            ),
+            (
+                "Cargo.toml",
+                "[package]\nname = \"app\"\n\n[source.acme]\nregistry = \"https://index.acme.dev\"\n",
+                false,
+            ),
             // Cargo.lock: `source` strings and `(registry+...)` dep
             // qualifiers.
             (
@@ -871,6 +1371,38 @@ mod tests {
                 "[[tool.uv.index]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\n",
                 false,
             ),
+            // An index URL must name PyPI itself: a bare host is not
+            // public either.
+            (
+                "pyproject.toml",
+                "[[tool.uv.index]]\nname = \"acme\"\nurl = \"pypi.acme.dev/simple\"\n",
+                false,
+            ),
+            (
+                "pyproject.toml",
+                "[[tool.uv.index]]\nname = \"mirror\"\nurl = \"https://pypi.org/simple\"\nexplicit = true\n",
+                true,
+            ),
+            (
+                "pyproject.toml",
+                "[tool.uv]\nindex-url = \"https://pypi.org/simple\"\nextra-index-url = [\"pypi.acme.dev/simple\"]\n",
+                false,
+            ),
+            (
+                "pyproject.toml",
+                "[tool.uv]\nindex-url = \"https://pypi.org/simple\"\nfind-links = \"./wheels\"\n",
+                true,
+            ),
+            (
+                "pyproject.toml",
+                "[tool.uv]\nfind-links = \"https://wheels.acme.dev\"\n",
+                false,
+            ),
+            (
+                "pyproject.toml",
+                "[tool.uv.pip]\nindex-url = \"pypi.acme.dev/simple\"\n",
+                false,
+            ),
             (
                 "pyproject.toml",
                 "[[tool.poetry.source]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\npriority = \"primary\"\n",
@@ -878,7 +1410,35 @@ mod tests {
             ),
             (
                 "pyproject.toml",
+                "[[tool.poetry.source]]\nname = \"acme\"\nurl = \"pypi.acme.dev/simple\"\n",
+                false,
+            ),
+            (
+                "pyproject.toml",
+                "[[tool.pdm.source]]\nname = \"acme\"\nurl = \"https://pypi.acme.dev/simple\"\n",
+                false,
+            ),
+            (
+                "pyproject.toml",
                 "[tool.poetry.dependencies]\nx = { git = \"https://git.acme.dev/x.git\" }\n",
+                false,
+            ),
+            // The readme hook's fragments and the pure-lint tool tables
+            // hold URLs that steer nothing; a build backend's table does,
+            // and stays checked.
+            (
+                "pyproject.toml",
+                "[tool.hatch.metadata.hooks.fancy-pypi-readme]\nfragments = [{text = \"see https://acme.dev/docs\"}]\nsubstitutions = [{pattern = 'x', replacement = '[x](https://acme.dev/x)'}]\n",
+                true,
+            ),
+            (
+                "pyproject.toml",
+                "[tool.ruff]\nextend-exclude = [\"x\"]\n\n[tool.pyright]\nignore = [\"https://acme.dev\"]\n",
+                true,
+            ),
+            (
+                "pyproject.toml",
+                "[tool.flit.metadata]\nhome-page = \"https://acme.dev\"\n",
                 false,
             ),
             // uv.lock / poetry.lock.
@@ -929,10 +1489,24 @@ mod tests {
                 "[http-basic.acme]\nusername = \"bot\"\n",
                 true,
             ),
-            // composer.json: repositories, and inert metadata.
+            // composer.json: repositories, and inert metadata. Only a
+            // `composer` repository naming Packagist, a `path` or
+            // `artifact` naming a local path, or a `"packagist.org":
+            // false`-style switch is public; any other type is not, nor
+            // is a scheme-less URL Composer would prepend a scheme to.
             (
                 "composer.json",
                 "{\"name\":\"acme/app\",\"description\":\"an app\",\"homepage\":\"https://acme.dev\",\"support\":{\"issues\":\"https://github.com/acme/app/issues\",\"source\":\"https://github.com/acme/app\"},\"require\":{\"php\":\"^8.3\"}}",
+                true,
+            ),
+            (
+                "composer.json",
+                "{\"repositories\":[{\"type\":\"composer\",\"url\":\"packages.acme.dev\"}]}",
+                false,
+            ),
+            (
+                "composer.json",
+                "{\"repositories\":[{\"type\":\"composer\",\"url\":\"https://repo.packagist.org\"}]}",
                 true,
             ),
             (
@@ -943,7 +1517,27 @@ mod tests {
             (
                 "composer.json",
                 "{\"repositories\":[{\"type\":\"vcs\",\"url\":\"https://github.com/acme/x\"}]}",
+                false,
+            ),
+            (
+                "composer.json",
+                "{\"repositories\":[{\"type\":\"path\",\"url\":\"../lib\"},{\"type\":\"artifact\",\"url\":\"/srv/packages\"}]}",
                 true,
+            ),
+            (
+                "composer.json",
+                "{\"repositories\":{\"packagist.org\":false}}",
+                true,
+            ),
+            (
+                "composer.json",
+                "{\"repositories\":[{\"packagist.org\":false}]}",
+                true,
+            ),
+            (
+                "composer.json",
+                "{\"repositories\":{\"acme\":{\"type\":\"package\",\"package\":{\"name\":\"x\"}}}}",
+                false,
             ),
             (
                 "composer.json",
@@ -1006,6 +1600,18 @@ mod tests {
             (
                 "nuget.config",
                 "<configuration>\n  <packageSources>\n    <add key=\"acme\" value=\"https://nuget.acme.dev/v3/index.json\" />\n  </packageSources>\n</configuration>",
+                false,
+            ),
+            // A package source is a local folder or the public feed; a
+            // bare host is not public.
+            (
+                "nuget.config",
+                "<configuration>\n  <packageSources>\n    <add key=\"local\" value=\"./packages\" />\n    <add key=\"cache\" value=\"file:///srv/nuget\" />\n  </packageSources>\n</configuration>",
+                true,
+            ),
+            (
+                "nuget.config",
+                "<configuration>\n  <packageSources>\n    <add key=\"acme\" value=\"nuget.acme.dev/v3/index.json\" />\n  </packageSources>\n</configuration>",
                 false,
             ),
             (

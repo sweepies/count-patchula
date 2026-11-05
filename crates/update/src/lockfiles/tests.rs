@@ -6181,6 +6181,105 @@ fn a_run_is_public_only_when_every_file_it_reads_is() {
     ));
 }
 
+/// In the `public` partition Go fetches only through proxy.golang.org —
+/// `direct`, which could reach a host only the server's network sees, is
+/// never set — and a run that fails there is retried in the installation
+/// partition with Go's environment as before (GOPROXY unset).
+#[tokio::test]
+async fn go_fetches_only_through_the_proxy_in_the_public_partition() {
+    let files = BTreeMap::from([
+        ("go.mod".into(), "module acme.dev/x\n\ngo 1.21\n".into()),
+        ("go.sum".into(), "\n".into()),
+    ]);
+    let goproxy = std::ffi::OsStr::new("GOPROXY");
+    let gomodcache = |env: &BTreeMap<std::ffi::OsString, std::ffi::OsString>| {
+        env[std::ffi::OsStr::new("GOMODCACHE")]
+            .to_string_lossy()
+            .into_owned()
+    };
+    let go_envs = |executor: &Fixture| {
+        let calls = executor.calls.lock().unwrap();
+        let envs = executor.envs.lock().unwrap();
+        calls
+            .iter()
+            .zip(envs.iter())
+            .filter(|(args, _)| {
+                invocation(args)
+                    .is_some_and(|(_, command)| command.first().is_some_and(|bin| bin == "go"))
+            })
+            .map(|(_, env)| env.clone())
+            .collect::<Vec<_>>()
+    };
+    let executor = fixture(files.clone(), false, false);
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("cache"), "x").with_executor(executor.clone());
+    let mut first = snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &first, None, monday())
+        .unwrap()
+        .unwrap();
+    runner.prepare(&mut p, &mut first, &config).await;
+    assert!(
+        matches!(
+            p.action.status,
+            ActionStatus::Planned | ActionStatus::Skipped
+        ),
+        "{:?}",
+        p.action
+    );
+    let root = temp.path().join("cache/tool-caches");
+    let envs = go_envs(&executor);
+    assert!(!envs.is_empty());
+    for env in &envs {
+        assert_eq!(
+            env[goproxy],
+            std::ffi::OsString::from("https://proxy.golang.org"),
+            "{env:?}"
+        );
+        assert!(
+            gomodcache(env).starts_with(&root.join("public").to_string_lossy().into_owned()),
+            "{env:?}"
+        );
+    }
+    // A failing `public` run is retried in the installation partition
+    // with GOPROXY unset, so repositories with internal modules work.
+    let executor = fixture(files.clone(), true, false);
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("cache"), "x").with_executor(executor.clone());
+    let mut failed = snapshot(&files);
+    let mut p = maintenance(&repo(), &config, &failed, None, monday())
+        .unwrap()
+        .unwrap();
+    runner.prepare(&mut p, &mut failed, &config).await;
+    assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+    let root = temp.path().join("cache/tool-caches");
+    let envs = go_envs(&executor);
+    assert!(envs.len() >= 2, "{envs:?}");
+    assert_eq!(
+        envs[0][goproxy],
+        std::ffi::OsString::from("https://proxy.golang.org"),
+        "{:?}",
+        envs[0]
+    );
+    assert!(
+        gomodcache(&envs[0]).starts_with(&root.join("public").to_string_lossy().into_owned()),
+        "{:?}",
+        envs[0]
+    );
+    for env in &envs[1..] {
+        assert!(!env.contains_key(goproxy), "{env:?}");
+        assert!(
+            gomodcache(env).starts_with(
+                &root
+                    .join("installation-local")
+                    .to_string_lossy()
+                    .into_owned()
+            ),
+            "{env:?}"
+        );
+    }
+}
+
 /// An unused partition is pruned after its age, oversized ones evict
 /// least-recently-used private partitions first and `public` last, and a
 /// partition a run holds is never removed.

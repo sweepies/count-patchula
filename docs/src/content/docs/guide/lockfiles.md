@@ -291,6 +291,14 @@ without the private feed, and a partition warms after its first run.
 Credential files still live only in the run's own directory and are
 deleted when it finishes.
 
+Go needs no file verdicts: in `public` it runs with
+`GOPROXY=https://proxy.golang.org` — no `direct`, which could fetch
+anonymously from a host only the server's network reaches — so what it
+can fetch is public by construction. A Go run that fails there, on an
+internal module the proxy cannot serve, is rerun in the installation
+partition with Go's default environment, so repositories with internal
+modules keep working.
+
 Partitions keep honest repositories' private packages apart; they are
 not an isolation boundary. Lockfile tools run repository code
 unsandboxed — Bundler evaluating the Gemfile, uv or Poetry building

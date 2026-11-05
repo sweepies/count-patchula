@@ -114,11 +114,12 @@ fn steers(ecosystem: Ecosystem, path: &str) -> bool {
                 .iter()
                 .any(|extension| leaf.ends_with(extension))
         }
-        // Go needs no verdicts: the sandbox sets no GOPROXY, so Go uses
-        // `proxy.golang.org,direct` and can fetch anonymously from any
-        // VCS host. Nothing it can fetch without operator credentials —
-        // `.netrc` enters only with them — can be private to an
-        // installation: anonymous fetches reach only public content.
+        // Go needs no verdicts: in the `public` partition it runs with
+        // `GOPROXY=https://proxy.golang.org` — no `direct`, which could
+        // fetch anonymously from a host only the server's network
+        // reaches — so a fetch is public by construction, and a run that
+        // fails there is retried in the installation partition with Go's
+        // environment as it was.
         Ecosystem::Go => true,
         _ => false,
     }
@@ -958,36 +959,21 @@ impl Runner {
                         _netrc.write(&home.join(".netrc"), &netrc)?;
                         env.push(("GOPRIVATE".to_string(), hosts.join(",")));
                     }
+                    let mut calls = Vec::new();
                     for job in jobs {
                         if let Some(package) = &job.package {
-                            self.held_tool(
-                                &driver,
-                                Invocation {
-                                    tools: vec![("go".into(), go.clone())],
-                                    bin: "go".into(),
-                                    cwd: None,
-                                    env: env.clone(),
-                                    credentials: credentials.clone(),
-                                    // Without operator credentials Go
-                                    // fetches anonymously only: public
-                                    // by construction.
-                                    public: true,
-                                    args: vec![
-                                        "-C".into(),
-                                        cwd.to_string_lossy().into_owned(),
-                                        "get".into(),
-                                        format!(
-                                            "{}@{}",
-                                            package,
-                                            job.target.as_deref().ok_or("missing Go target")?
-                                        ),
-                                    ],
-                                },
-                            )
-                            .await?;
+                            calls.push(vec![
+                                "-C".into(),
+                                cwd.to_string_lossy().into_owned(),
+                                "get".into(),
+                                format!(
+                                    "{package}@{}",
+                                    job.target.as_deref().ok_or("missing Go target")?
+                                ),
+                            ]);
                         }
                     }
-                    let args = vec![
+                    calls.push(vec![
                         "-C".into(),
                         cwd.to_string_lossy().into_owned(),
                         "mod".into(),
@@ -996,20 +982,62 @@ impl Runner {
                         } else {
                             "download".into()
                         },
-                    ];
-                    self.held_tool(
-                        &driver,
-                        Invocation {
-                            tools: vec![("go".into(), go.clone())],
-                            bin: "go".into(),
-                            cwd: None,
-                            env,
-                            credentials,
-                            public: true,
-                            args,
-                        },
-                    )
-                    .await?;
+                    ]);
+                    // What a Go run may fetch is bounded by GOPROXY, not
+                    // by file verdicts. In the `public` partition it is
+                    // `https://proxy.golang.org` alone — never `direct`,
+                    // which could fetch anonymously from a host only this
+                    // server's network reaches, such as a cluster-internal
+                    // Git host, and leave what it got in a cache every
+                    // installation shares; GOSUMDB keeps its default. A
+                    // run that fails there — an internal module the proxy
+                    // cannot serve — is rerun in the installation
+                    // partition with Go's environment as it was (GOPROXY
+                    // unset), so repositories with internal modules keep
+                    // working. A credentialed run goes straight to its
+                    // credential partition with that environment.
+                    let mut attempts = vec![(false, Vec::new())];
+                    if credentials.is_empty() {
+                        attempts.insert(
+                            0,
+                            (
+                                true,
+                                vec![("GOPROXY".into(), "https://proxy.golang.org".into())],
+                            ),
+                        );
+                    }
+                    for (public, extra) in attempts {
+                        let mut failed = None;
+                        for args in &calls {
+                            let mut run_env = env.clone();
+                            run_env.extend(extra.iter().cloned());
+                            let result = self
+                                .held_tool(
+                                    &driver,
+                                    Invocation {
+                                        tools: vec![("go".into(), go.clone())],
+                                        bin: "go".into(),
+                                        cwd: None,
+                                        env: run_env,
+                                        credentials: credentials.clone(),
+                                        public,
+                                        args: args.clone(),
+                                    },
+                                )
+                                .await;
+                            if let Err(error) = result {
+                                failed = Some(error);
+                                break;
+                            }
+                        }
+                        match failed {
+                            None => break,
+                            // The last attempt's error stands; only the
+                            // `public` attempt retries.
+                            Some(error) if !public => return Err(error),
+                            Some(_) => {}
+                        }
+                    }
                 }
                 Ecosystem::Terraform => {
                     if cwd.join(".terraform.lock.hcl").exists() {
