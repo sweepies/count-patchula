@@ -221,7 +221,23 @@ fn the_sources_of_an_included_gradle_build_are_read() {
     );
     write(&root, "app/src/main/kotlin/App.kt", "fun main() {}\n");
     let scanner = scanner("amends \"PatchulaConfig.pkl\"\n");
-    let (_, files) = patchula_engine::read_tree(&root, &scanner).unwrap();
+    let (_, files, _) = patchula_engine::read_tree(&root, &scanner).unwrap();
     assert!(files.contains_key("tools/logic/src/main/kotlin/Repos.kt"));
     assert!(!files.contains_key("app/src/main/kotlin/App.kt"));
+}
+
+/// A selected file that is not UTF-8 refuses the local read, the same way
+/// GitHub extraction refuses the repository, rather than being dropped.
+#[test]
+fn a_selected_non_utf8_file_refuses_the_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q"]);
+    write(root, "package.json", MANIFEST);
+    write(root, "app/package.json", MANIFEST);
+    std::fs::write(root.join("app/package.json"), b"{\"x\":\xff}").unwrap();
+    git(root, &["add", "."]);
+    let scanner = scanner("amends \"PatchulaConfig.pkl\"\n");
+    let error = patchula_engine::read_tree(root, &scanner).unwrap_err();
+    assert_eq!(error.to_string(), "selected file is not UTF-8");
 }

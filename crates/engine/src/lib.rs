@@ -2876,7 +2876,14 @@ pub fn read_tree(
                         patchula_manager::UNREADABLE_SETTINGS.to_owned(),
                     );
                 }
-                _ => {}
+                // As on GitHub, any other selected file that is not UTF-8
+                // refuses the repository rather than being dropped.
+                _ => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "selected file is not UTF-8",
+                    ));
+                }
             }
         }
         paths.insert(relative);
