@@ -3,6 +3,48 @@ use patchula_versioning::{Ecosystem, Versioning};
 use std::collections::BTreeSet;
 use toml_edit::{Document, Item};
 
+/// Cargo manifests and configurations, each parsed once per extraction:
+/// a manifest the Count cannot parse is kept as its error, so the lookups
+/// it shapes fail for that reason.
+#[derive(Default)]
+pub(crate) struct Parsed<'a> {
+    /// Every `Cargo.toml` and `Cargo.lock` in the manifests, by path.
+    pub manifests: BTreeMap<&'a str, Result<Document<&'a str>, String>>,
+    /// Every Cargo configuration in the files, by path.
+    pub configs: BTreeMap<&'a str, Result<toml_edit::DocumentMut, ()>>,
+}
+
+/// Parse the selected manifests and every configuration file once.
+pub(crate) fn parsed<'a>(manifests: &'a Files, files: &'a Files) -> Parsed<'a> {
+    Parsed {
+        manifests: manifests
+            .iter()
+            .filter(|(p, _)| p.ends_with("Cargo.toml") || p.ends_with("Cargo.lock"))
+            // One the Count could not read fails its crates' lookups
+            // instead; see `replaced`.
+            .filter(|(_, t)| !crate::unreadable_text(t.as_str()))
+            .map(|(p, t)| {
+                (
+                    p.as_str(),
+                    Document::parse(t.as_str()).map_err(|e| format!("{p}: {e}")),
+                )
+            })
+            .collect(),
+        configs: files
+            .iter()
+            .filter(|(p, _)| config_file(p))
+            .map(|(p, t)| {
+                (
+                    p.as_str(),
+                    (!crate::unreadable_text(t.as_str()))
+                        .then(|| t.parse::<toml_edit::DocumentMut>().ok())
+                        .flatten()
+                        .ok_or(()),
+                )
+            })
+            .collect(),
+    }
+}
 pub(super) fn documents(files: &Files) -> Result<BTreeMap<&str, Document<&str>>, String> {
     files
         .iter()
@@ -322,18 +364,49 @@ pub(crate) fn config_file(path: &str) -> bool {
         .any(|name| path == *name || path.ends_with(&format!("/{name}")))
 }
 
+/// Whether a Cargo configuration could send a bare `cargo install` to a
+/// registry besides crates.io: a `[registries]` entry naming a non-public
+/// index or one with other settings the Count does not read, or a
+/// `[registry]` table naming a default or credential provider; or a file
+/// it cannot read.
+pub(crate) fn nonpublic_registry(text: &str) -> bool {
+    let Ok(doc) = text.parse::<toml_edit::DocumentMut>() else {
+        return true;
+    };
+    if let Some(registries) = doc.get("registries").and_then(Item::as_table_like) {
+        for (_, entry) in registries.iter() {
+            let Some(entry) = entry.as_table_like() else {
+                return true;
+            };
+            let public = entry
+                .get("index")
+                .and_then(Item::as_str)
+                .is_some_and(|i| i.contains("index.crates.io") || i.contains("crates.io-index"));
+            let benign = entry
+                .iter()
+                .all(|(key, _)| matches!(key, "index" | "token"));
+            if !(public && benign) {
+                return true;
+            }
+        }
+    }
+    doc.get("registry")
+        .and_then(Item::as_table_like)
+        .is_some_and(|r| {
+            r.get("default").is_some() || r.get("global-credential-providers").is_some()
+        })
+}
+
 /// The folder of the workspace `dir` belongs to: the nearest folder at or
 /// above it whose manifest has a `[workspace]` table; `dir` itself outside
 /// one.
-fn workspace_root<'a>(files: &Files, dir: &'a str) -> &'a str {
+fn workspace_root<'a>(parsed: &Parsed<'a>, dir: &'a str) -> &'a str {
     let mut folder = dir;
     loop {
-        let declares = files
-            .get(&format!("{folder}Cargo.toml"))
-            .is_some_and(|text| {
-                text.parse::<toml_edit::DocumentMut>()
-                    .is_ok_and(|doc| doc.get("workspace").is_some())
-            });
+        let declares = parsed
+            .manifests
+            .get(format!("{folder}Cargo.toml").as_str())
+            .is_some_and(|doc| doc.as_ref().is_ok_and(|doc| doc.get("workspace").is_some()));
         if declares {
             return folder;
         }

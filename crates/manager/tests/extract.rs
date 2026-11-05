@@ -4053,3 +4053,42 @@ fn a_deeper_include_chain_fails_saying_the_rounds_ran_out() {
         "{reason}"
     );
 }
+
+/// An `.npmrc` that only comments on a registry does not move a mise npm
+/// tool: the registry files are parsed, not searched for the word.
+#[test]
+fn a_registry_comment_in_a_settings_file_does_not_move_a_mise_tool() {
+    let mut config = config();
+    config.managers = vec![Manager::Mise];
+    let scan = |extra: &[(&str, &str)]| {
+        let mut files = Files::from([(
+            "mise.toml".into(),
+            "# the registry these install from is fine\n[tools]\n\"npm:markdownlint-cli\" = \"1\"\n".into(),
+        )]);
+        files.extend(
+            extra
+                .iter()
+                .map(|(p, t)| ((*p).to_owned(), (*t).to_owned())),
+        );
+        Scanner::new(&config).unwrap().extract(&files).unwrap()
+    };
+    let registry = |extra: &[(&str, &str)]| {
+        scan(extra)
+            .dependencies
+            .iter()
+            .find(|d| d.name == "npm:markdownlint-cli")
+            .unwrap()
+            .registry
+            .clone()
+    };
+    assert_eq!(registry(&[(".npmrc", "# our registry is public\n")]), None);
+    // One that really names a registry the Count does not read still fails.
+    assert!(fails(registry(&[(
+        ".npmrc",
+        "registry=https://npm.acme.dev/\n"
+    )])));
+    assert!(fails(registry(&[(
+        ".yarnrc.yml",
+        "npmRegistryServer: https://npm.acme.dev\n"
+    )])));
+}
