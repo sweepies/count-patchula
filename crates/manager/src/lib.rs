@@ -350,22 +350,24 @@ impl Scanner {
             .map(str::to_owned)
             .collect()
     }
+    /// Whether npm dependencies, or an npm extractor, are maintained.
+    fn npm_enabled(&self) -> bool {
+        [Manager::Npm, Manager::Bun]
+            .iter()
+            .any(|m| self.config.managers.contains(m))
+            || (self.config.managers.contains(&Manager::Regex)
+                && self
+                    .config
+                    .extractors
+                    .iter()
+                    .any(|e| e.source == "npm" || e.source.contains('{')))
+    }
     /// Registry settings are read whatever `files` and `exclude` select:
     /// without them, a scoped package would be looked up on the public
     /// registry, where its name may be someone else's.
     fn registry_file(&self, path: &str) -> bool {
-        let npm_extractors = self.config.managers.contains(&Manager::Regex)
-            && self
-                .config
-                .extractors
-                .iter()
-                .any(|e| e.source == "npm" || e.source.contains('{'));
         let leaf = path.rsplit('/').next().unwrap_or(path);
-        (([Manager::Npm, Manager::Bun]
-            .iter()
-            .any(|m| self.config.managers.contains(m))
-            || npm_extractors)
-            && matches!(leaf, ".npmrc" | ".yarnrc.yml"))
+        (self.npm_enabled() && matches!(leaf, ".npmrc" | ".yarnrc.yml"))
             || (self.config.managers.contains(&Manager::Pyproject)
                 && (python_settings(path) || matches!(leaf, "uv.lock" | "poetry.lock")))
             || (self.config.managers.contains(&Manager::Bundler)
@@ -570,6 +572,9 @@ impl Scanner {
         let mut result = Extraction::default();
         let locks = npm::locks(files)?;
         let npmrcs = npm::npmrcs(files);
+        if self.npm_enabled() {
+            result.warnings.extend(npm::env_registry_warnings(files));
+        }
         // Only the manifests and lockfiles Cargo's selection takes: one read
         // only for its patches, above a selected crate, does not shape
         // extraction.

@@ -445,6 +445,39 @@ impl Npmrc {
     fn names_any(&self) -> bool {
         self.default.is_some() || !self.scopes.is_empty()
     }
+    /// Every registry it names, public or not.
+    fn values(&self) -> impl Iterator<Item = &Named> {
+        self.default.iter().chain(self.scopes.values())
+    }
+    /// Whether it names a registry besides the public one.
+    pub(super) fn names_private(&self) -> bool {
+        self.values().any(|named| !matches!(named, Named::Public))
+    }
+}
+
+/// A warning for each `.npmrc` or `.yarnrc.yml` registry that names an
+/// environment variable the Count does not have: its packages' lookups
+/// still fail, but the file's name is said once.
+pub(super) fn env_registry_warnings(files: &crate::Files) -> Vec<String> {
+    let mut out = Vec::new();
+    for (path, text) in files {
+        let leaf = path.rsplit('/').next().unwrap_or(path);
+        let npmrc = match leaf {
+            ".npmrc" => npmrc(text),
+            ".yarnrc.yml" => yarnrc(text),
+            _ => continue,
+        };
+        for value in npmrc.values() {
+            if let Named::Unusable(value) = value
+                && value.contains('$')
+            {
+                out.push(format!(
+                    "{path}: registry {value} depends on an environment variable the Count does not have"
+                ));
+            }
+        }
+    }
+    out
 }
 
 /// `registry=` and `@scope:registry=` from an `.npmrc`.
