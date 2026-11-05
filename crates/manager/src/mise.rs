@@ -271,7 +271,7 @@ const PACKAGE_BACKENDS: [&str; 7] = ["npm", "pypi", "pipx", "cargo", "gem", "dot
 
 /// Top-level tables of a mise configuration that cannot change where a tool
 /// installs from, apart from `env` and `settings`, which are read below.
-const PLAIN_TABLES: [&str; 8] = [
+const PLAIN_TABLES: [&str; 9] = [
     "tools",
     "tasks",
     "task_config",
@@ -280,6 +280,7 @@ const PLAIN_TABLES: [&str; 8] = [
     "settings",
     "min_version",
     "redactions",
+    "wrappers",
 ];
 
 /// Core tools, whose `[settings]` tables move only themselves.
@@ -471,10 +472,13 @@ fn project_redirect(
 ) -> Option<String> {
     let related = |path: &str| {
         let folder = &path[..path.rfind('/').map_or(0, |i| i + 1)];
+        // A `.cargo` configuration applies to its parent's folder, Cargo
+        // reading it from wherever it runs up to the repository root.
+        let folder = folder.strip_suffix(".cargo/").unwrap_or(folder);
         dir.starts_with(folder) || folder.starts_with(dir)
     };
     let leaf = |path: &str| path.rsplit('/').next().unwrap_or(path).to_owned();
-    let unreadable = |text: &str| text == crate::UNREADABLE_SETTINGS;
+    let unreadable = crate::unreadable_text;
     let found = |test: &dyn Fn(&str, &str) -> bool, what: &str| {
         files
             .iter()
@@ -483,6 +487,9 @@ fn project_redirect(
     };
     match kind {
         "npm" => found(
+            // npm's own config parser accepts forms the Count's reader does
+            // not (quoted keys, lone `\r` line breaks), so any mention of a
+            // registry counts.
             &|path, text| {
                 matches!(leaf(path).as_str(), ".npmrc" | ".yarnrc.yml")
                     && (unreadable(text) || text.to_ascii_lowercase().contains("registry"))
@@ -491,22 +498,27 @@ fn project_redirect(
         ),
         "pypi" | "pipx" => found(
             &|path, text| match leaf(path).as_str() {
-                "uv.toml" | "pip.conf" | "pip.ini" => true,
-                "pyproject.toml" => {
-                    unreadable(text)
-                        || ["index", "find-links", "source"]
-                            .iter()
-                            .any(|w| text.contains(w))
-                }
+                "uv.toml" => unreadable(text) || crate::pypi::settings::uv_private_index(text),
+                // pip's config parser accepts more than the Count could
+                // check safely (`--` key prefixes, lone `\r`, Unicode case
+                // folding, options that pull in requirement files), so any
+                // pip configuration counts.
+                "pip.conf" | "pip.ini" => true,
+                "pyproject.toml" => unreadable(text) || crate::pypi::settings::private_index(text),
                 _ => false,
             },
             "Python index",
         ),
-        "cargo" => crate::cargo::replaced(files, &format!("{dir}x")).or_else(|| {
+        "cargo" => crate::cargo::replaced(
+            files,
+            &crate::cargo::parsed(files, files),
+            &format!("{dir}x"),
+        )
+        .or_else(|| {
             found(
                 &|path, text| {
                     crate::cargo::config_file(path)
-                        && (unreadable(text) || text.contains("registr"))
+                        && (unreadable(text) || crate::cargo::nonpublic_registry(text))
                 },
                 "Cargo registry",
             )
@@ -532,7 +544,7 @@ fn tool_options(dep: &Dependency, configs: &[&str], files: &Files) -> Option<Str
         let keys = |table: &dyn toml_edit::TableLike| {
             table
                 .iter()
-                .any(|(key, _)| !matches!(key, "version" | "os"))
+                .any(|(key, _)| !matches!(key, "version" | "os" | "minimum_release_age"))
         };
         match entry {
             toml_edit::Item::Value(Value::Array(values)) => values
@@ -607,7 +619,7 @@ pub(crate) fn redirected(
         }
         related.push(*config);
         let text = files.get(*config)?;
-        let Some(redirected) = (text.as_str() != crate::UNREADABLE_SETTINGS)
+        let Some(redirected) = (!crate::unreadable_text(text.as_str()))
             .then(|| redirected_backends(config, text))
             .flatten()
         else {

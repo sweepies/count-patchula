@@ -82,7 +82,7 @@ missing, and behaviour that changes their pull requests. The
 ### One other Maven repository fails every lookup {#maven-repositories}
 
 - **Renovate:** Queries every repository a POM, `settings.xml` or Gradle script names and merges what they list
-- **The Count:** Looks artifacts up on Maven Central only when no build file in the repository names another repository; with one anywhere, every lookup of that build system fails. See [package registries](/guide/sources/#package-registries)
+- **The Count:** Looks artifacts up on Maven Central only when no build file in the repository names another repository; with one anywhere, every lookup of that build system fails — a warning names the file and repository once per build. See [package registries](/guide/sources/#package-registries)
 - **Why:** Maven and Gradle take an artifact from the first repository that has it and record nothing about which, so merging lists can propose a public artifact that shadows a private one of the same coordinates
 
 ### Registry credentials are operator settings {#registry-credentials}

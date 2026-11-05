@@ -841,6 +841,39 @@ fn globs(values: &[String], literal_separator: bool) -> Option<globset::GlobSet>
     set.build().ok()
 }
 
+/// Whether `text`, a `pyproject.toml`, could move a package off PyPI: an
+/// index configured or anything the Count cannot read there.
+pub(crate) fn private_index(text: &str) -> bool {
+    let mut origins = Origins::default();
+    let read = toml_edit::de::from_str::<Value>(text)
+        .ok()
+        .and_then(|value| serde_json::from_value::<PyprojectFile>(value).ok());
+    match read {
+        Some(PyprojectFile {
+            tool: Strict(Some(tools)),
+        }) => {
+            project_settings(&tools, "pyproject.toml", &mut origins);
+            !origins.public_only()
+        }
+        _ => true,
+    }
+}
+
+/// Whether `text`, a `uv.toml`, could move a package off PyPI.
+pub(crate) fn uv_private_index(text: &str) -> bool {
+    let mut origins = Origins::default();
+    let read = toml_edit::de::from_str::<Value>(text)
+        .ok()
+        .and_then(|value| serde_json::from_value::<Strict<UvSettings>>(value).ok());
+    match read {
+        Some(Strict(Some(settings))) => {
+            uv_settings(&settings, "uv.toml", &mut origins);
+            !origins.public_only()
+        }
+        _ => true,
+    }
+}
+
 /// The package a PEP 508 requirement takes from a URL, if it does.
 pub(crate) fn direct_reference(requirement: &str) -> Option<String> {
     let name: String = requirement

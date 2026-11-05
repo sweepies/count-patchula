@@ -102,13 +102,13 @@ through mise's registry, as `aws-cdk` is `npm:aws-cdk`) fails its lookup
 where committed settings could send it elsewhere: registry variables in a
 mise configuration's `[env]` (`NPM_CONFIG_*`, `PIP_*`, `UV_*`, `CARGO_*` and
 the like, or variables loaded from files through `_.file` or `_.source`),
-or the project's own `.npmrc` or `.yarnrc.yml` naming a registry, Python
+or the project's own `.npmrc` or `.yarnrc.yml` mentioning a registry, any `pip.conf` or `pip.ini`, Python
 index settings, Cargo registry settings, or NuGet feeds other than
 nuget.org's, in the tool's folder, above it or below it. Every tool fails
 its lookup where a mise configuration there, under any name mise reads one
 by (`mise.local.toml`, `.config/mise/`, `conf.d` and the rest), holds
 anything but `tools`, `tasks`, `task_config`, `vars`, `env`, `settings`,
-`min_version` and `redactions`, sets a `MISE_*` variable, or sets anything
+`min_version`, `redactions` and `wrappers`, sets a `MISE_*` variable, or sets anything
 but a few plain settings such as `experimental` and `lockfile`; where a
 `.miserc` exists; where the tool's own entry has options beyond `version`
 and `os`; or where the Count cannot read the configuration.
@@ -336,17 +336,23 @@ dependency's `registry`:
   Gradle, the Count reads every script, the sources in `buildSrc`,
   `build-logic`, `build-conventions` and `gradle/plugins`, and everything
   the settings include and the scripts apply. `mavenCentral()`, `google()`,
-  `gradlePluginPortal()` and `jcenter()` are fine, while `maven`, `ivy`,
-  `flatDir`, `mavenLocal`, `exclusiveContent` or a custom
-  `ArtifactRepository` outside a `publishing` block fails every lookup, as
-  do build logic the Count cannot read, an `includeBuild` outside the
-  settings or with a computed name, and an `apply from` other than a plain
-  path, `file(…)`, `rootProject.file(…)`, or a path under `$rootDir` or
-  `$projectDir`. Repositories that a Gradle plugin, a Maven build
-  extension, an init script or a CI machine's own settings add are not in
-  the repository's files, so the Count does not see them; Maven Central
-  and the Gradle Plugin Portal check who owns a group or plugin ID, which
-  keeps someone else from publishing your coordinates there.
+  `gradlePluginPortal()` and `jcenter()` are fine, without a body, while
+  `maven`, `ivy`, `flatDir`, `mavenLocal`, `exclusiveContent` or a
+  custom `ArtifactRepository` outside a `publishing` block fails every
+  lookup — the Count does not weigh `content` filters or
+  `exclusiveContent`, so even a repository bounded to named groups fails
+  them all — as do `repositories.all` and `repositories.add`, build
+  logic the Count cannot read, an `includeBuild` outside the settings or
+  with a computed name, and an `apply from` other than a plain path,
+  `file(…)`, `rootProject.file(…)`, or a path under `$rootDir` or
+  `$projectDir`. A build whose lookups fail says so once, in a warning
+  naming the file and, where the Count reads it, the repository's
+  address, rather than once per dependency. Repositories that a Gradle
+  plugin, a Maven build extension, an init script or a CI machine's own
+  settings add are not in the repository's files, so the Count does not
+  see them; Maven Central and the Gradle Plugin Portal check who owns a
+  group or plugin ID, which keeps someone else from publishing your
+  coordinates there.
 - Python packages come from what the project's lockfile records. The
   Count does not work out which index uv or Poetry would pick from their
   settings; the tool already did, and wrote it down:

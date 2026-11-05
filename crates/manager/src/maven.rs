@@ -368,14 +368,16 @@ pub(crate) fn referenced(files: &Files) -> Vec<(String, Vec<String>, bool)> {
 /// that the Count does not read; or a file it cannot read. Maven tries
 /// repositories in order and no file records which one served an artifact,
 /// so any other repository anywhere makes every lookup fail.
-pub(crate) fn private_repositories(files: &Files) -> Option<String> {
+pub(crate) fn private_repositories(files: &Files) -> Option<crate::origins::Repositories> {
     use crate::origins::Named;
+    let mut out = crate::origins::Repositories::default();
     let referenced = referenced(files);
     for (from, targets, required) in &referenced {
         if *required && !targets.iter().any(|target| files.contains_key(target)) {
-            return Some(format!(
+            out.close(format!(
                 "a file {from} names, which the Count does not read"
             ));
+            return Some(out);
         }
     }
     let poms: BTreeSet<&str> = referenced
@@ -388,8 +390,20 @@ pub(crate) fn private_repositories(files: &Files) -> Option<String> {
         .iter()
         .filter(|(path, _)| repository_file(path) || poms.contains(path.as_str()))
     {
-        if text.as_str() == crate::UNREADABLE_SETTINGS {
-            return Some(format!("{path}, which the Count cannot read"));
+        if matches!(
+            text.as_str(),
+            crate::UNREADABLE_SETTINGS | crate::UNREADABLE_DEEP
+        ) {
+            let reason = if text.as_str() == crate::UNREADABLE_DEEP {
+                format!(
+                    "include chain deeper than {} rounds starting at {path}; the remaining files were not read",
+                    crate::MORE_ROUNDS
+                )
+            } else {
+                format!("{path}, which the Count cannot read")
+            };
+            out.close(reason);
+            return Some(out);
         }
         if path.ends_with("maven.config") {
             continue;
@@ -400,7 +414,8 @@ pub(crate) fn private_repositories(files: &Files) -> Option<String> {
             if settings_file(path) && !poms.contains(path.as_str()) && !text.contains("<settings") {
                 continue;
             }
-            return Some(format!("{path}, which the Count cannot read"));
+            out.close(format!("{path}, which the Count cannot read"));
+            return Some(out);
         };
         let root = document.root_element().tag_name().name();
         if settings_file(path) && !poms.contains(path.as_str()) && root != "settings" {
@@ -430,13 +445,18 @@ pub(crate) fn private_repositories(files: &Files) -> Option<String> {
                 .children()
                 .find(|c| c.tag_name().name() == "url")
                 .and_then(whole_text);
-            let public = url.is_some_and(|url| {
-                Named::parse(&url, &crate::gradle::MAVEN_PUBLIC) == Named::Public
+            let public = url.as_ref().is_some_and(|url| {
+                Named::parse(url, &crate::gradle::MAVEN_PUBLIC) == Named::Public
             });
             if !public {
-                return Some(format!("a {name} in {path}"));
+                let reason = match url.as_deref().map(crate::redacted) {
+                    Some(url) => format!("a {name} in {path} at {url}"),
+                    None => format!("a {name} in {path}"),
+                };
+                out.close(reason);
+                return Some(out);
             }
         }
     }
-    None
+    out.any().then_some(out)
 }

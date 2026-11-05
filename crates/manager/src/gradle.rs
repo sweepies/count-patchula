@@ -884,16 +884,172 @@ fn without_publishing(code: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-/// Why a Gradle build's Maven lookups cannot be taken to be public: build
-/// logic that could add a repository besides Maven Central, Google's and the
-/// Gradle Plugin Portal, a build it includes or a script it applies that the
-/// Count does not read, or a file it cannot read. Gradle tries repositories
-/// in order and filters them by content; the Count does not follow that, so
-/// any other repository anywhere makes every lookup fail.
+/// The index of the first byte at or after `i` that is not whitespace.
+fn skip_ws(code: &str, mut i: usize) -> usize {
+    while code
+        .as_bytes()
+        .get(i)
+        .is_some_and(|b| b.is_ascii_whitespace())
+    {
+        i += 1;
+    }
+    i
+}
+
+/// The index just past the bracket at `open` (`{` or `(`); none when it
+/// never closes. Strings and comments are blanked in `code`, so plain
+/// counting finds the match.
+fn matching(code: &str, open: usize) -> Option<usize> {
+    let (left, right) = match code.as_bytes()[open] {
+        b'{' => (b'{', b'}'),
+        b'(' => (b'(', b')'),
+        _ => return None,
+    };
+    let mut depth = 0usize;
+    for (n, b) in code.as_bytes()[open..].iter().enumerate() {
+        match b {
+            _ if *b == left => depth += 1,
+            _ if *b == right => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(open + n + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The literal of the string starting at `at`, when one does.
+fn string_at(strings: &[(usize, String)], at: usize) -> Option<&str> {
+    strings
+        .iter()
+        .find(|(start, _)| *start == at)
+        .map(|(_, s)| s.as_str())
+}
+
+/// Calls that name a public repository: `mavenCentral()`, `google()`,
+/// `gradlePluginPortal()` and `jcenter()`. Given a body —
+/// `mavenCentral { url = "…" }` — they name one the Count does not read.
+const PUBLIC_REPOS: [&str; 4] = ["mavenCentral", "google", "gradlePluginPortal", "jcenter"];
+
+/// Whether the `repositories` call ending at `end` mutates the handler —
+/// `repositories.all { … }`, `repositories.add(…)` — which the Count does
+/// not read.
+fn handler_mutation(code: &str, end: usize) -> bool {
+    let bytes = code.as_bytes();
+    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    if bytes.get(skip_ws(code, end)) != Some(&b'.') {
+        return false;
+    }
+    let j = skip_ws(code, skip_ws(code, end) + 1);
+    let e = (j..code.len())
+        .find(|&k| !word(bytes[k]))
+        .unwrap_or(code.len());
+    matches!(&code[j..e], "all" | "add" | "addAll")
+}
+
+/// The address a repository call names, for the warning that says why the
+/// build's lookups fail: the literal a `url` or `setUrl` statement gives
+/// in its argument list or block — `url = "…"`, `setUrl("…")`,
+/// `url = uri("…")` — `maven "…"` bare, or the one literal an argument
+/// list holds, as `maven("…")`. `None` when the Count reads no address
+/// there; the lookups fail either way.
+fn repo_url(code: &str, strings: &[(usize, String)], end: usize) -> Option<String> {
+    let bytes = code.as_bytes();
+    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut i = skip_ws(code, end);
+    if matches!(bytes.get(i), Some(b'"' | b'\'')) {
+        return string_at(strings, i)
+            .filter(|url| !url.contains('$'))
+            .map(str::to_owned);
+    }
+    let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+    if bytes.get(i) == Some(&b'(') {
+        let close = matching(code, i)?;
+        ranges.push(i + 1..close - 1);
+        i = skip_ws(code, close);
+    }
+    if bytes.get(i) == Some(&b'{') {
+        let close = matching(code, i)?;
+        ranges.push(i + 1..close - 1);
+    }
+    if ranges.is_empty() {
+        return None;
+    }
+    for range in &ranges {
+        let mut j = range.start;
+        while j < range.end {
+            if !word(bytes[j]) || (j > range.start && word(bytes[j - 1])) {
+                j += 1;
+                continue;
+            }
+            let e = (j..range.end)
+                .find(|&k| !word(bytes[k]))
+                .unwrap_or(range.end);
+            if matches!(&code[j..e], "url" | "setUrl") {
+                let mut k = skip_ws(code, e);
+                if matches!(bytes.get(k), Some(b'=' | b':' | b'(')) {
+                    k = skip_ws(code, k + 1);
+                }
+                // `url = uri("…")` and `setUrl(uri("…"))`.
+                if code[k..].starts_with("uri") && !bytes.get(k + 3).is_some_and(|b| word(*b)) {
+                    k = skip_ws(code, k + 3);
+                    if bytes.get(k) == Some(&b'(') {
+                        k = skip_ws(code, k + 1);
+                    }
+                }
+                if let Some(url) = string_at(strings, k).filter(|url| !url.contains('$')) {
+                    return Some(url.to_owned());
+                }
+            }
+            j = e;
+        }
+    }
+    // `maven("…")`: the one literal a lone argument list holds.
+    let [range] = ranges.as_slice() else {
+        return None;
+    };
+    if bytes[range.start - 1] != b'(' {
+        return None;
+    }
+    let mut in_range = strings.iter().filter(|(at, _)| range.contains(at));
+    let (Some((at, url)), None) = (in_range.next(), in_range.next()) else {
+        return None;
+    };
+    let past = code[*at + 1..range.end]
+        .find(bytes[*at] as char)
+        .map(|n| at + n + 2)
+        .unwrap_or(range.end);
+    (code[range.start..*at].trim().is_empty()
+        && code[past..range.end].trim().is_empty()
+        && !url.contains('$'))
+    .then(|| url.clone())
+}
+
+/// Why a repository call ending at `end` in `path` fails the build's
+/// lookups: the address it names where the Count reads one, redacted.
+fn repository_reason(code: &str, strings: &[(usize, String)], end: usize, path: &str) -> String {
+    match repo_url(code, strings, end) {
+        Some(url) => format!("a repository in {path} at {}", crate::redacted(&url)),
+        None => format!("a repository {path} may add"),
+    }
+}
+
+/// Why a Gradle build's Maven lookups cannot be taken to be public, and
+/// the warnings that say so once per build: build logic that could add a
+/// repository besides Maven Central, Google's and the Gradle Plugin
+/// Portal, a build it includes or a script it applies that the Count does
+/// not read, or a file it cannot read. Gradle tries repositories in order
+/// and filters them by content; the Count does not follow that, so any
+/// other repository anywhere — however it is filtered — makes every
+/// lookup fail.
 ///
 /// Build logic is read from the scripts and build-logic folders, then from
 /// what they include and apply, until nothing new is named.
-pub(crate) fn private_repositories(files: &Files) -> Option<String> {
+pub(crate) fn private_repositories(files: &Files) -> Option<crate::origins::Repositories> {
+    let mut out = crate::origins::Repositories::default();
     let mut queue: Vec<&str> = files
         .keys()
         .filter(|path| build_logic(path))
@@ -902,15 +1058,29 @@ pub(crate) fn private_repositories(files: &Files) -> Option<String> {
     let mut seen: BTreeSet<&str> = queue.iter().copied().collect();
     while let Some(path) = queue.pop() {
         let text = &files[path];
-        if text.as_str() == crate::UNREADABLE_SETTINGS {
-            return Some(format!("{path}, which the Count cannot read"));
+        if matches!(
+            text.as_str(),
+            crate::UNREADABLE_SETTINGS | crate::UNREADABLE_DEEP
+        ) {
+            let reason = if text.as_str() == crate::UNREADABLE_DEEP {
+                format!(
+                    "include chain deeper than {} rounds starting at {path}; the remaining files were not read",
+                    crate::MORE_ROUNDS
+                )
+            } else {
+                format!("{path}, which the Count cannot read")
+            };
+            out.close(reason);
+            return Some(out);
         }
-        let unread = || Some(format!("build logic in {path} the Count cannot read"));
+        let unread = || format!("build logic in {path} the Count cannot read");
         let Some((code, strings)) = code(path, text) else {
-            return unread();
+            out.close(unread());
+            return Some(out);
         };
         let Some(code) = without_publishing(&code) else {
-            return unread();
+            out.close(unread());
+            return Some(out);
         };
         for reference in references(files, path, text, &code, &strings) {
             let named: Vec<&str> = match reference {
@@ -927,9 +1097,10 @@ pub(crate) fn private_repositories(files: &Files) -> Option<String> {
                 Reference::Build(None) | Reference::Script(None) => Vec::new(),
             };
             if named.is_empty() {
-                return Some(format!(
+                out.close(format!(
                     "a build or script {path} names, which the Count does not read"
                 ));
+                return Some(out);
             }
             for next in named {
                 if seen.insert(next) {
@@ -948,28 +1119,36 @@ pub(crate) fn private_repositories(files: &Files) -> Option<String> {
             }
             let end = (i..len).find(|&j| !word(bytes[j])).unwrap_or(len);
             let token = &code[i..end];
-            if REPOSITORY_CALLS.contains(&token)
-                || token.contains("ArtifactRepository")
+            if REPOSITORY_CALLS.contains(&token) {
+                out.close(repository_reason(&code, &strings, end, path));
+            } else if PUBLIC_REPOS.contains(&token) {
+                // `mavenCentral { url = "…" }` configures a repository the
+                // Count does not read; the bare `mavenCentral()` calls
+                // stay public.
+                if bytes.get(skip_ws(&code, end)) == Some(&b'{') {
+                    out.close(format!("a repository in {path} the Count does not read"));
+                }
+            } else if token.contains("ArtifactRepository")
                 || token.contains("RepositoryHandler")
+                || token == "repositories" && handler_mutation(&code, end)
             {
-                return Some(format!("a repository {path} may add"));
+                out.close(format!("a repository {path} may add"));
             }
             i = end;
         }
         // A repository call by a quoted name, as Groovy allows:
         // `'maven' { … }`.
         for (at, string) in &strings {
-            if !REPOSITORY_CALLS.contains(&string.as_str()) {
-                continue;
-            }
             let after = at + string.len() + 2;
             let next = code
                 .get(after..)
                 .and_then(|rest| rest.trim_start().bytes().next());
-            if matches!(next, Some(b'{' | b'(')) {
-                return Some(format!("a repository {path} may add"));
+            if REPOSITORY_CALLS.contains(&string.as_str()) && matches!(next, Some(b'{' | b'('))
+                || PUBLIC_REPOS.contains(&string.as_str()) && next == Some(b'{')
+            {
+                out.close(repository_reason(&code, &strings, after, path));
             }
         }
     }
-    None
+    out.any().then_some(out)
 }

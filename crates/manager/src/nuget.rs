@@ -215,19 +215,26 @@ fn sdk(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
     }])
 }
 
+/// Whether `path` is a project file by extension: any ending in `proj`,
+/// compared case-insensitively — `.csproj`, `.CSPROJ`, `.vcxproj`,
+/// `.sqlproj`, `.proj`.
+fn project_file(path: &str) -> bool {
+    path.rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .rsplit_once('.')
+        .is_some_and(|(_, ext)| ext.to_ascii_lowercase().ends_with("proj"))
+}
+
 pub(super) fn selected(path: &str) -> bool {
     let leaf = path.rsplit('/').next().unwrap_or(path);
-    leaf.ends_with(".csproj")
-        || leaf.ends_with(".fsproj")
-        || leaf.ends_with(".vbproj")
-        || leaf.ends_with(".sln")
-        || leaf.ends_with(".slnx")
+    let lower = leaf.to_ascii_lowercase();
+    project_file(path)
+        || solution_file(&lower)
+        || lower == "directory.packages.props"
         || matches!(
             leaf,
-            "Directory.Packages.props"
-                | "Directory.Build.props"
-                | "global.json"
-                | "packages.lock.json"
+            "Directory.Build.props" | "global.json" | "packages.lock.json"
         )
         || path.ends_with(".config/dotnet-tools.json")
 }
@@ -591,7 +598,7 @@ impl Feeds {
             .iter()
             .find(|(path, text)| {
                 msbuild_file(path)
-                    && (text.as_str() == crate::UNREADABLE_SETTINGS || {
+                    && (crate::unreadable_text(text.as_str()) || {
                         let text = decoded(text).to_ascii_lowercase();
                         RESTORE_OVERRIDES
                             .iter()
@@ -739,6 +746,11 @@ impl Feeds {
         let dropped = origins.assign(deps, &NUGET_ORG, |dep| dep.package.clone());
         debug_assert!(dropped.is_empty());
     }
+}
+
+/// Whether `leaf`, already lowercased, is a solution file.
+fn solution_file(leaf: &str) -> bool {
+    leaf.ends_with(".sln") || leaf.ends_with(".slnx") || leaf.ends_with(".slnf")
 }
 
 /// Whether `text`, already decoded and lowercased, holds a `<name`

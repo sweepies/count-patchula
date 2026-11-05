@@ -350,22 +350,24 @@ impl Scanner {
             .map(str::to_owned)
             .collect()
     }
+    /// Whether npm dependencies, or an npm extractor, are maintained.
+    fn npm_enabled(&self) -> bool {
+        [Manager::Npm, Manager::Bun]
+            .iter()
+            .any(|m| self.config.managers.contains(m))
+            || (self.config.managers.contains(&Manager::Regex)
+                && self
+                    .config
+                    .extractors
+                    .iter()
+                    .any(|e| e.source == "npm" || e.source.contains('{')))
+    }
     /// Registry settings are read whatever `files` and `exclude` select:
     /// without them, a scoped package would be looked up on the public
     /// registry, where its name may be someone else's.
     fn registry_file(&self, path: &str) -> bool {
-        let npm_extractors = self.config.managers.contains(&Manager::Regex)
-            && self
-                .config
-                .extractors
-                .iter()
-                .any(|e| e.source == "npm" || e.source.contains('{'));
         let leaf = path.rsplit('/').next().unwrap_or(path);
-        (([Manager::Npm, Manager::Bun]
-            .iter()
-            .any(|m| self.config.managers.contains(m))
-            || npm_extractors)
-            && matches!(leaf, ".npmrc" | ".yarnrc.yml"))
+        (self.npm_enabled() && matches!(leaf, ".npmrc" | ".yarnrc.yml"))
             || (self.config.managers.contains(&Manager::Pyproject)
                 && (python_settings(path) || matches!(leaf, "uv.lock" | "poetry.lock")))
             || (self.config.managers.contains(&Manager::Bundler)
@@ -389,8 +391,13 @@ impl Scanner {
     /// Fail every Maven lookup of a build system whose build could take
     /// artifacts from a repository besides the public ones; see
     /// `maven::private_repositories` and `gradle::private_repositories`.
-    fn maven_repositories(&self, files: &Files, deps: &mut [Dependency]) {
-        for (manager, reason) in [
+    fn maven_repositories(
+        &self,
+        files: &Files,
+        deps: &mut [Dependency],
+        warnings: &mut Vec<String>,
+    ) {
+        for (manager, found) in [
             (
                 Manager::Maven,
                 self.config
@@ -408,7 +415,11 @@ impl Scanner {
                     .flatten(),
             ),
         ] {
-            let Some(reason) = reason else {
+            let Some(repositories) = found else {
+                continue;
+            };
+            warnings.extend(repositories.warnings.iter().cloned());
+            let Some(reason) = repositories.closed else {
                 continue;
             };
             for dep in deps
@@ -552,6 +563,9 @@ impl Scanner {
         let mut result = Extraction::default();
         let locks = npm::locks(files)?;
         let npmrcs = npm::npmrcs(files);
+        if self.npm_enabled() {
+            result.warnings.extend(npm::env_registry_warnings(files));
+        }
         // Only the manifests and lockfiles Cargo's selection takes: one read
         // only for its patches, above a selected crate, does not shape
         // extraction.
@@ -561,11 +575,23 @@ impl Scanner {
             .map(|(path, text)| (path.clone(), text.clone()))
             .collect();
         let cargo = if self.config.managers.contains(&Manager::Cargo) {
-            cargo::documents(&cargo_files)?
+            cargo::parsed(&cargo_files, files)
         } else {
-            BTreeMap::new()
+            cargo::Parsed::default()
         };
+        // The manifests extraction reads; one the Count cannot parse fails
+        // the whole extraction, as before.
+        let cargo_docs: BTreeMap<&str, toml_edit::Document<&str>> = cargo
+            .manifests
+            .iter()
+            .map(|(p, r)| r.clone().map(|d| (*p, d)))
+            .collect::<Result<_, _>>()?;
         let feeds = nuget::Feeds::new(files);
+        let go_modules = if self.config.managers.contains(&Manager::Go) {
+            go::modules(files)
+        } else {
+            go::Modules::default()
+        };
         let terraform = if self.config.managers.contains(&Manager::Terraform) {
             terraform::documents(files)?
         } else {
@@ -647,8 +673,8 @@ impl Scanner {
             {
                 toolchains::rust(path, text)
             } else if self.selected(Manager::Cargo, path) {
-                cargo::extract(path, text, &cargo, &mut result.skipped).map(|mut deps| {
-                    if let Some(reason) = cargo::replaced(files, path) {
+                cargo::extract(path, text, &cargo_docs, &mut result.skipped).map(|mut deps| {
+                    if let Some(reason) = cargo::replaced(files, &cargo, path) {
                         for dep in deps.iter_mut().filter(|d| d.source == Source::Crates) {
                             dep.registry = origins::Named::Unusable(reason.clone()).recorded();
                         }
@@ -658,7 +684,7 @@ impl Scanner {
             } else if self.selected(Manager::Dockerfile, path) {
                 images::dockerfile(path, text)
             } else if self.selected(Manager::Go, path) {
-                go::extract(path, text, files, &mut result.skipped)
+                go::extract(path, text, &go_modules, &mut result.skipped)
             } else if self.selected(Manager::Terraform, path)
                 && path.ends_with(".terraform-version")
             {
@@ -743,7 +769,7 @@ impl Scanner {
                     self.selected(Manager::Gradle, path)
                 }));
         }
-        self.maven_repositories(files, &mut result.dependencies);
+        self.maven_repositories(files, &mut result.dependencies, &mut result.warnings);
         if self.config.managers.contains(&Manager::Mise) {
             let configs: Vec<&str> = files
                 .keys()
@@ -760,7 +786,7 @@ impl Scanner {
                 }
             }
         }
-        result.locked = locked::cargo(files, &cargo, &result.dependencies);
+        result.locked = locked::cargo(files, &cargo_docs, &result.dependencies);
         let mut replaced = BTreeMap::new();
         for locked in result
             .locked
@@ -769,7 +795,7 @@ impl Scanner {
         {
             let reason = replaced
                 .entry(locked.file.clone())
-                .or_insert_with(|| cargo::replaced(files, &locked.file));
+                .or_insert_with(|| cargo::replaced(files, &cargo, &locked.file));
             if let Some(reason) = reason {
                 locked.registry = Some(reason.clone());
             }
@@ -999,6 +1025,20 @@ pub fn linked_settings(path: &str) -> Option<String> {
 /// What a settings file the Count could not read becomes: text no TOML or
 /// YAML mapping parser accepts, so it is unreadable rather than absent.
 pub const UNREADABLE_SETTINGS: &str = "= the Count could not read this file\n";
+
+/// What a file the include chain reached but the read rounds ran out on
+/// becomes: unreadable the same way, so its packages' lookups fail.
+pub const UNREADABLE_DEEP: &str = "= the Count did not read this file: include chain too deep\n";
+
+/// How many times the files read so far may name more to read: Gradle
+/// builds include builds and apply scripts, and Maven POMs name modules, a
+/// few levels deep at most.
+pub const MORE_ROUNDS: usize = 16;
+
+/// Whether `text` is the stand-in for a file the Count did not read.
+pub(crate) fn unreadable_text(text: &str) -> bool {
+    matches!(text, UNREADABLE_SETTINGS | UNREADABLE_DEEP)
+}
 
 /// The host of an http or https `url`, lowercased and without a default
 /// port, whatever the case of its scheme.

@@ -3222,6 +3222,21 @@ fn nuget_packages_come_from_nuget_org_alone_or_as_source_mapping_says() {
             "<Project>\n  <ItemGroup>\n    <PackageVersion Include=\"Newtonsoft.Json\" Version=\"13.0.1\" />\n  </ItemGroup>\n</Project>\n".into(),
         ),
         ("central/app/nuget.config".into(), nuget_config(&sources(acme))),
+        ("central/app/App.csproj".into(), project(&[])),
+        // A config below a central props joins its sources even where the
+        // projects under it opt out of central package management, as
+        // Arcade's eng/common/internal does: the opt-out cannot be proven
+        // to keep every restore there off the shared file.
+        (
+            "opted/Directory.Packages.props".into(),
+            "<Project>\n  <ItemGroup>\n    <PackageVersion Include=\"Newtonsoft.Json\" Version=\"13.0.1\" />\n  </ItemGroup>\n</Project>\n".into(),
+        ),
+        ("opted/eng/common/internal/nuget.config".into(), nuget_config(&sources(acme))),
+        (
+            "opted/eng/common/internal/Directory.Build.props".into(),
+            "<Project>\n  <PropertyGroup>\n    <ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps>\n  </PropertyGroup>\n</Project>\n".into(),
+        ),
+        ("opted/eng/common/internal/Sub.csproj".into(), project(&[])),
         // Sections and names the Count does not know.
         (
             "fallback/nuget.config".into(),
@@ -3327,6 +3342,11 @@ fn nuget_packages_come_from_nuget_org_alone_or_as_source_mapping_says() {
     assert!(!lib.contains("s3cr3t"), "{lib}");
     assert!(fails(registry(
         "central/Directory.Packages.props",
+        "Newtonsoft.Json"
+    )));
+    // The internal config's private source joins.
+    assert!(fails(registry(
+        "opted/Directory.Packages.props",
         "Newtonsoft.Json"
     )));
     for file in ["fallback/App.csproj", "spelled/App.csproj"] {
@@ -3920,4 +3940,167 @@ fn mise_package_tools_fail_where_the_project_redirects_their_registry() {
     ];
     assert!(fails(lookup(&cargo, "cargo:ripgrep")));
     assert_eq!(lookup(&cargo, "npm:@acme/cli"), None);
+    // An index named by a lookalike host, or by the registry table's own
+    // `index`, is not crates.io's.
+    for config in [
+        "[registries.acme]\nindex = \"https://index.crates.io.corp/\"\n",
+        "[registry]\nindex = \"sparse+https://index.crates.io/\"\n",
+        "[registries.crates-io-mirror]\nindex = \"https://github.com/rust-lang/crates.io-index.acme\"\n",
+    ] {
+        let files = [("app/mise.toml", tools), (".cargo/config.toml", config)];
+        assert!(fails(lookup(&files, "cargo:ripgrep")), "{config}");
+    }
+    // The crates.io indexes spelled exactly are public.
+    let public_index = [
+        ("app/mise.toml", tools),
+        (
+            ".cargo/config.toml",
+            "[registries.acme]\nindex = \"sparse+https://index.crates.io/\"\n\n[registries.mirror]\nindex = \"https://github.com/rust-lang/crates.io-index\"\n",
+        ),
+    ];
+    assert_eq!(lookup(&public_index, "cargo:ripgrep"), None);
+
+    // Any pip configuration fails a mise pypi tool: pip's parser accepts
+    // more spellings than the Count can check safely.
+    let pypi = format!("{tools}\n\"pypi:requests\" = \"25.0.0\"\n");
+    for config in [
+        "timeout = 10\n",
+        "[global]\n--index-url = https://pypi.acme.dev/simple\n",
+        "[global]\n# note\rindex-url = https://pypi.acme.dev/simple\n",
+    ] {
+        for name in ["app/pip.conf", "pip.ini"] {
+            let files = [("app/mise.toml", pypi.as_str()), (name, config)];
+            assert!(fails(lookup(&files, "pypi:requests")), "{name}: {config}");
+            assert_eq!(lookup(&files, "node"), None, "{name}: {config}");
+        }
+    }
+}
+
+/// A repository besides Maven Central, Google's and the Gradle Plugin
+/// Portal fails every lookup of the build however it is filtered — the
+/// Count does not weigh `content` or `exclusiveContent` — and a warning
+/// says once which file and address did it. Spring Boot's Shibboleth
+/// repository, `includeGroup`s and all, fails the same way.
+#[test]
+fn gradle_another_repository_fails_every_lookup_once_named() {
+    let build = r#"plugins { id 'java' }
+repositories {
+    mavenCentral()
+    maven {
+        url = "https://build.shibboleth.net/maven/releases/"
+        content {
+            includeGroup "org.opensaml"
+            includeGroup "net.shibboleth"
+        }
+    }
+}
+dependencies {
+    implementation "org.springframework:spring-core:6.1.0"
+    implementation "org.opensaml:opensaml-core:4.3.0"
+}
+"#;
+    let files = Files::from([("build.gradle".into(), build.into())]);
+    let mut config = config();
+    config.managers = vec![Manager::Gradle];
+    let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+    assert_eq!(extraction.warnings.len(), 1, "{:?}", extraction.warnings);
+    let warning = &extraction.warnings[0];
+    assert!(
+        warning.contains("build.gradle")
+            && warning.contains("build.shibboleth.net")
+            && warning.contains("this build's lookups fail"),
+        "{warning}"
+    );
+    for name in [
+        "org.springframework:spring-core",
+        "org.opensaml:opensaml-core",
+    ] {
+        let reason = extraction
+            .dependencies
+            .iter()
+            .find(|d| d.name == name)
+            .unwrap_or_else(|| panic!("{name}"))
+            .registry
+            .as_deref()
+            .unwrap_or_default();
+        assert!(
+            reason.contains("build.gradle") && reason.contains("build.shibboleth.net"),
+            "{name}: {reason}"
+        );
+    }
+}
+
+/// When the include chain runs past the read rounds, the file it still
+/// names is unreadable with a reason that says so, and the build's lookups
+/// fail with that reason rather than "a file it names".
+#[test]
+fn a_deeper_include_chain_fails_saying_the_rounds_ran_out() {
+    let lookup = |files: &[(&str, &str)]| {
+        registry_of(
+            Manager::Gradle,
+            files,
+            "build.gradle",
+            "org.springframework:spring-core",
+        )
+    };
+    let files = [
+        (
+            "build.gradle",
+            "plugins { id 'java' }\nrepositories { mavenCentral() }\ndependencies { implementation \"org.springframework:spring-core:6.1.0\" }\n",
+        ),
+        ("lib/build.gradle", patchula_manager::UNREADABLE_DEEP),
+    ];
+    let reason = lookup(&files).unwrap();
+    assert!(
+        reason.contains("include chain deeper than 16 rounds starting at lib/build.gradle"),
+        "{reason}"
+    );
+}
+
+/// Any mention of a registry in an `.npmrc` or `.yarnrc.yml` fails a mise
+/// npm tool, comments included: npm's config parser accepts forms the
+/// Count's reader does not, such as quoted keys and lone `\r` line breaks.
+#[test]
+fn a_registry_in_a_settings_file_fails_a_mise_npm_tool() {
+    let mut config = config();
+    config.managers = vec![Manager::Mise];
+    let scan = |extra: &[(&str, &str)]| {
+        let mut files = Files::from([(
+            "mise.toml".into(),
+            "# the registry these install from is fine\n[tools]\n\"npm:markdownlint-cli\" = \"1\"\n".into(),
+        )]);
+        files.extend(
+            extra
+                .iter()
+                .map(|(p, t)| ((*p).to_owned(), (*t).to_owned())),
+        );
+        Scanner::new(&config).unwrap().extract(&files).unwrap()
+    };
+    let registry = |extra: &[(&str, &str)]| {
+        scan(extra)
+            .dependencies
+            .iter()
+            .find(|d| d.name == "npm:markdownlint-cli")
+            .unwrap()
+            .registry
+            .clone()
+    };
+    assert_eq!(registry(&[(".npmrc", "save-exact=true\n")]), None);
+    for npmrc in [
+        "# our registry is public\n",
+        "registry=https://npm.acme.dev/\n",
+        "\"registry\"=https://npm.acme.dev/\n",
+        "#x\rregistry=https://npm.acme.dev/\n",
+    ] {
+        assert!(fails(registry(&[(".npmrc", npmrc)])), "{npmrc:?}");
+    }
+    assert!(fails(registry(&[(
+        ".yarnrc.yml",
+        "npmRegistryServer: https://npm.acme.dev\n"
+    )])));
+    // One Yarn cannot parse may say anything.
+    assert!(fails(registry(&[(
+        ".yarnrc.yml",
+        "npmRegistryServer: [unclosed\n"
+    )])));
 }

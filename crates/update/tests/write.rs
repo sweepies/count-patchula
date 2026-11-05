@@ -3523,3 +3523,66 @@ fn reference_data_pins_get_their_own_branch() {
         "both psl branches are planned, not skipped as overlapping"
     );
 }
+
+/// Closing several obsolete PRs fetches the repository's metadata once,
+/// not once per pull.
+#[tokio::test(start_paused = true)]
+async fn obsolete_prs_fetch_repository_metadata_once() {
+    let (config, repo) = pr_config();
+    let (mut p, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut p),
+        &snapshot,
+    )
+    .await;
+    {
+        let mut s = server.0.lock().unwrap();
+        let head = p.action.commit.clone().unwrap();
+        // A second patchula PR, whose branch is not desired either.
+        let mut pr2 = s.prs[&1].clone();
+        pr2["number"] = json!(2);
+        pr2["html_url"] = json!("https://github.com/demo/app/pull/2");
+        pr2["head"]["ref"] = json!("patchula/obsolete-two");
+        pr2["head"]["sha"] = json!("obsolete-two");
+        s.prs.insert(2, pr2);
+        s.refs.insert(
+            "refs/heads/patchula/obsolete-two".into(),
+            "obsolete-two".into(),
+        );
+        let commit = s.commits[&head].clone();
+        s.commits.insert("obsolete-two".into(), commit);
+        // Move the base marker in every commit so both PRs are obsolete.
+        for commit in s.commits.values_mut() {
+            if let Some(message) = commit["message"].as_str() {
+                commit["message"] = json!(message.replace(
+                    "Patchula-Base: base",
+                    "Patchula-Base: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                ));
+            }
+        }
+    }
+    server.0.lock().unwrap().requests.clear();
+    let state = patchula_update::Lifecycle::prepare(
+        &github,
+        &repo,
+        &mut [],
+        &config,
+        chrono::Utc::now(),
+        Default::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(state.actions.len(), 2, "{:?}", state.actions);
+    let s = server.0.lock().unwrap();
+    let metas = s
+        .requests
+        .iter()
+        .filter(|(method, path)| method == "GET" && path == "/repos/demo/app")
+        .count();
+    assert_eq!(metas, 1, "{:?}", s.requests);
+}

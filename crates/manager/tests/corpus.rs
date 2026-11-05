@@ -52,17 +52,12 @@ fn corpus_extraction_matches_its_snapshot() {
     let extraction = scanner.extract(&files).unwrap();
     // The corpus's JVM builds use public repositories alone, and their
     // build logic (Kafka's templates, slashy regexes and publishing block)
-    // must read that way. The corpus holds manifests, not Kafka's included
-    // `api-checker` build, so that alone keeps its lookups from being taken
-    // to be public.
+    // must read that way.
     let private: Vec<_> = extraction
         .dependencies
         .iter()
         .filter(|d| d.source == patchula_config::Source::Maven)
         .filter_map(|d| d.registry.as_deref())
-        .filter(|r| {
-            *r != "a build or script jvm/kafka/settings.gradle names, which the Count does not read"
-        })
         .collect();
     assert!(private.is_empty(), "{private:?}");
     let mut lines: Vec<String> = extraction

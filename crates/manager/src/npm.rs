@@ -445,6 +445,35 @@ impl Npmrc {
     fn names_any(&self) -> bool {
         self.default.is_some() || !self.scopes.is_empty()
     }
+    /// Every registry it names, public or not.
+    fn values(&self) -> impl Iterator<Item = &Named> {
+        self.default.iter().chain(self.scopes.values())
+    }
+}
+
+/// A warning for each `.npmrc` or `.yarnrc.yml` registry that names an
+/// environment variable the Count does not have: its packages' lookups
+/// still fail, but the file's name is said once.
+pub(super) fn env_registry_warnings(files: &crate::Files) -> Vec<String> {
+    let mut out = Vec::new();
+    for (path, text) in files {
+        let leaf = path.rsplit('/').next().unwrap_or(path);
+        let npmrc = match leaf {
+            ".npmrc" => npmrc(text),
+            ".yarnrc.yml" => yarnrc(text),
+            _ => continue,
+        };
+        for value in npmrc.values() {
+            if let Named::Unusable(value) = value
+                && value.contains('$')
+            {
+                out.push(format!(
+                    "{path}: registry {value} depends on an environment variable the Count does not have"
+                ));
+            }
+        }
+    }
+    out
 }
 
 /// `registry=` and `@scope:registry=` from an `.npmrc`.
@@ -476,10 +505,14 @@ pub(super) fn npmrc(text: &str) -> Npmrc {
 }
 
 /// Yarn Berry's `npmRegistryServer` in `.yarnrc.yml`, at the top level and
-/// under `npmScopes`.
+/// under `npmScopes`. A file that does not parse may say anything, so its
+/// packages' lookups fail rather than fall back to the public registry.
 pub(super) fn yarnrc(text: &str) -> Npmrc {
     let mut npmrc = Npmrc::default();
     let Ok(value) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(text) else {
+        npmrc.default = Some(Named::Unusable(
+            "(a .yarnrc.yml the Count cannot read)".into(),
+        ));
         return npmrc;
     };
     let server = |value: &serde_yaml_ng::Value| {

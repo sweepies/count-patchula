@@ -8,15 +8,15 @@
 //! requirement is not what the build uses.
 use crate::*;
 use regex::Regex;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) fn extract(
     path: &str,
     text: &str,
-    files: &Files,
+    modules: &Modules,
     skipped: &mut Vec<Skipped>,
 ) -> Result<Vec<Dependency>, String> {
-    let replacements = replacements(path, text, files);
+    let replacements = replacements(path, modules);
     let require = Regex::new(
         r#"^\s*(?:require\s+)?(?P<name>[^\s"`]+|"[^"]+"|`[^`]+`)\s+(?P<version>v\d[^\s]*)"#,
     )
@@ -236,36 +236,92 @@ fn module_path(text: &str) -> Option<&str> {
         .map(|rest| rest.trim().trim_matches(['"', '`']))
 }
 
+/// What a parsed `go.work` says.
+struct Workspace {
+    /// The modules it replaces.
+    replaced: BTreeSet<String>,
+    /// The folders it uses.
+    uses: Vec<String>,
+}
+
+/// What a parsed `go.mod` says.
+struct Module {
+    /// The modules it replaces.
+    replaced: BTreeSet<String>,
+    /// The module path it declares.
+    path: Option<String>,
+}
+
+/// The `go.work` and `go.mod` files of a repository, each parsed once per
+/// extraction.
+#[derive(Default)]
+pub(crate) struct Modules {
+    works: BTreeMap<String, Result<Workspace, String>>,
+    mods: BTreeMap<String, Result<Module, String>>,
+}
+
+/// Parse every workspace and module file once; one the Count cannot read
+/// is kept as its error, so the lookups it shapes fail for that reason.
+pub(crate) fn modules(files: &Files) -> Modules {
+    let works = files
+        .iter()
+        .filter(|(path, _)| work_file(path))
+        .map(|(path, text)| {
+            let read = || Some((replaced(text)?, uses(path, text)?));
+            let entry = (!crate::unreadable_text(text.as_str()))
+                .then(read)
+                .flatten()
+                .map(|(replaced, uses)| Workspace { replaced, uses })
+                .ok_or_else(|| format!("{path}, which the Count cannot read"));
+            (path.clone(), entry)
+        })
+        .collect();
+    let mods = files
+        .iter()
+        .filter(|(path, _)| path.ends_with("go.mod"))
+        .filter(|(_, text)| !crate::unreadable_text(text.as_str()))
+        .map(|(path, text)| {
+            let entry = replaced(text)
+                .map(|replaced| Module {
+                    replaced,
+                    path: module_path(text).map(str::to_owned),
+                })
+                .ok_or_else(|| format!("a replace directive in {path} the Count cannot read"));
+            (path.clone(), entry)
+        })
+        .collect();
+    Modules { works, mods }
+}
+
 /// The modules the build of the `go.mod` at `path` does not take from its
 /// requirements: those it or a `go.work` in its folder or above replaces,
 /// and in a workspace, those any module the workspace uses replaces and
 /// the workspace's own modules, which Go takes from their folders; why,
 /// when one of those files cannot be read.
-fn replacements(path: &str, text: &str, files: &Files) -> Result<BTreeSet<String>, String> {
-    let mut out = replaced(text)
-        .ok_or_else(|| format!("a replace directive in {path} the Count cannot read"))?;
+fn replacements(path: &str, modules: &Modules) -> Result<BTreeSet<String>, String> {
+    let mut out = modules
+        .mods
+        .get(path)
+        .ok_or_else(|| format!("a replace directive in {path} the Count cannot read"))?
+        .as_ref()
+        .map_err(Clone::clone)?
+        .replaced
+        .clone();
     let mut dir = &path[..path.rfind('/').map_or(0, |i| i + 1)];
     loop {
         let work = format!("{dir}go.work");
-        if let Some(text) = files.get(&work) {
-            let unread = || format!("{work}, which the Count cannot read");
-            if text.as_str() == crate::UNREADABLE_SETTINGS {
-                return Err(unread());
-            }
-            out.extend(replaced(text).ok_or_else(unread)?);
-            for folder in uses(&work, text).ok_or_else(unread)? {
+        if let Some(workspace) = modules.works.get(&work) {
+            let workspace = workspace.as_ref().map_err(Clone::clone)?;
+            out.extend(workspace.replaced.iter().cloned());
+            for folder in &workspace.uses {
                 let module = format!("{folder}go.mod");
-                let text = files
-                    .get(&module)
-                    .filter(|text| text.as_str() != crate::UNREADABLE_SETTINGS)
-                    .ok_or_else(|| {
-                        format!("{module}, which {work} uses and the Count cannot read")
-                    })?;
-                out.extend(replaced(text).ok_or_else(|| {
-                    format!("a replace directive in {module} the Count cannot read")
-                })?);
-                if let Some(name) = module_path(text) {
-                    out.insert(name.to_owned());
+                let module_ref = modules.mods.get(&module).ok_or_else(|| {
+                    format!("{module}, which {work} uses and the Count cannot read")
+                })?;
+                let module_entry = module_ref.as_ref().map_err(Clone::clone)?;
+                out.extend(module_entry.replaced.iter().cloned());
+                if let Some(name) = &module_entry.path {
+                    out.insert(name.clone());
                 }
             }
         }
