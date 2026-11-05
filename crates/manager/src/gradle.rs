@@ -1145,9 +1145,7 @@ fn repo_urls(
         }
     }
     if (range.start..range.end).any(|i| {
-        uncovered(i)
-            && !matches!(bytes[i], b';' | b')')
-            && !bytes[i].is_ascii_whitespace()
+        uncovered(i) && !matches!(bytes[i], b';' | b')') && !bytes[i].is_ascii_whitespace()
     }) {
         out.suspect = true;
     }
@@ -1388,7 +1386,9 @@ fn handler_mutation(code: &str, end: usize) -> bool {
         return false;
     }
     let j = skip_ws(code, skip_ws(code, end) + 1);
-    let e = (j..code.len()).find(|&k| !word(bytes[k])).unwrap_or(code.len());
+    let e = (j..code.len())
+        .find(|&k| !word(bytes[k]))
+        .unwrap_or(code.len());
     matches!(&code[j..e], "all" | "add" | "addAll")
 }
 
@@ -1723,8 +1723,7 @@ pub(crate) fn private_repositories(files: &Files) -> Option<crate::origins::Repo
             let next = code
                 .get(after..)
                 .and_then(|rest| rest.trim_start().bytes().next());
-            if REPOSITORY_CALLS.contains(&string.as_str())
-                && matches!(next, Some(b'{' | b'('))
+            if REPOSITORY_CALLS.contains(&string.as_str()) && matches!(next, Some(b'{' | b'('))
                 || PUBLIC_REPOS.contains(&string.as_str()) && next == Some(b'{')
             {
                 out.close(format!("a repository {path} may add"));

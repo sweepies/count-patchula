@@ -805,9 +805,7 @@ impl<'a> Feeds<'a> {
                 if config.starts_with(dir) && config.len() > dir.len() {
                     return !central || self.governs(folder, config);
                 }
-                central
-                    && !dir.starts_with(config.as_str())
-                    && self.solution_config(folder, config)
+                central && !dir.starts_with(config.as_str()) && self.solution_config(folder, config)
             })
             .map(|(_, chain)| chain.clone());
         let origins = std::iter::once(here).chain(below).map(|chain| match chain {
@@ -900,16 +898,13 @@ fn opts_out(text: &str) -> bool {
     let Ok(document) = roxmltree::Document::parse(text) else {
         return false;
     };
-    let Some(last) = document
-        .descendants()
-        .rfind(|node| {
-            node.is_element()
-                && node
-                    .tag_name()
-                    .name()
-                    .eq_ignore_ascii_case("ImportDirectoryPackagesProps")
-        })
-    else {
+    let Some(last) = document.descendants().rfind(|node| {
+        node.is_element()
+            && node
+                .tag_name()
+                .name()
+                .eq_ignore_ascii_case("ImportDirectoryPackagesProps")
+    }) else {
         return false;
     };
     let literal = last
