@@ -76,13 +76,13 @@ missing, and behaviour that changes their pull requests. The
 ### NuGet sources need a source mapping {#nuget-sources}
 
 - **Renovate:** Looks a NuGet package up in every source `nuget.config` lists
-- **The Count:** Looks it up on nuget.org only when nuget.org is the only source, or when `packageSourceMapping` maps the package there; with another source and no mapping, every NuGet lookup fails. For a `Directory.Packages.props` a nested `nuget.config` counts only when it could govern a project under it — an unconditional `ImportDirectoryPackagesProps` `false` in the nearest `Directory.Build.props` between them, or a closer `Directory.Packages.props`, leaves the config out — as does a config at or above a solution naming a governed project. See [package registries](/guide/sources/#package-registries)
+- **The Count:** Looks it up on nuget.org only when nuget.org is the only source, or when `packageSourceMapping` maps the package there; with another source and no mapping, every NuGet lookup fails. For a shared MSBuild file a nested `nuget.config` counts unless it is proven inert — no project file and no `.sln`, `.slnx` or `.slnf` at or below it, or every project there opted out by an unconditional literal `ImportDirectoryPackagesProps` `false` in its nearest `Directory.Build.props`. See [package registries](/guide/sources/#package-registries)
 - **Why:** NuGet takes a package from whichever source answers, and its lockfile does not say which, so without a mapping a private package's name could be looked up on nuget.org, where it may be someone else's. Source mapping is also NuGet's own advice against dependency confusion
 
 ### One other Maven repository fails every lookup {#maven-repositories}
 
 - **Renovate:** Queries every repository a POM, `settings.xml` or Gradle script names and merges what they list
-- **The Count:** Looks artifacts up on Maven Central only when no build file in the repository names another repository; with one anywhere, every lookup of that build system fails — a warning names the file and repository once per build. A Gradle repository an include-only `content` or `exclusiveContent` filter bounds claims its groups and modules alone, so only their lookups fail. See [package registries](/guide/sources/#package-registries)
+- **The Count:** Looks artifacts up on Maven Central only when no build file in the repository names another repository; with one anywhere, every lookup of that build system fails — a warning names the file and repository once per build. See [package registries](/guide/sources/#package-registries)
 - **Why:** Maven and Gradle take an artifact from the first repository that has it and record nothing about which, so merging lists can propose a public artifact that shadows a private one of the same coordinates
 
 ### Registry credentials are operator settings {#registry-credentials}

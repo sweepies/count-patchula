@@ -929,450 +929,8 @@ fn string_at(strings: &[(usize, String)], at: usize) -> Option<&str> {
         .map(|(_, s)| s.as_str())
 }
 
-/// The statement `at` falls in, back to the last `;`, `{`, `}` or
-/// newline, so a keyword leading it can say the statement is not a plain
-/// assignment.
-fn leading(code: &str, from: usize, at: usize) -> &str {
-    let mut start = at;
-    while start > from && !matches!(code.as_bytes()[start - 1], b';' | b'{' | b'}' | b'\n') {
-        start -= 1;
-    }
-    &code[start..at]
-}
-
-/// Whether `text` holds `name` as a whole word.
-fn has_word(text: &str, name: &str) -> bool {
-    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-    text.match_indices(name).any(|(at, _)| {
-        !(at > 0 && word(text.as_bytes()[at - 1]))
-            && !text
-                .as_bytes()
-                .get(at + name.len())
-                .is_some_and(|b| word(*b))
-    })
-}
-
-/// The URLs a repository's argument list or block assigns: each `url` or
-/// `setUrl` statement's literal, and whether any assigns it another way —
-/// more than once, conditionally or by an expression — which the Count
-/// cannot read as one address.
-#[derive(Default)]
-struct Urls {
-    /// Every literal a `url` statement assigns.
-    literal: Vec<String>,
-    /// An assignment the Count cannot take for a literal: another
-    /// expression, a template, a conditional statement or a second URL.
-    suspect: bool,
-}
-
-impl Urls {
-    /// The one address every assignment names: a single literal, or
-    /// several naming the same public URL, which cannot redirect a
-    /// lookup. `None` for no assignment and for assignments the Count
-    /// cannot read as one.
-    fn resolve(&self) -> Option<String> {
-        if self.suspect {
-            return None;
-        }
-        let [first, rest @ ..] = self.literal.as_slice() else {
-            return None;
-        };
-        (rest.is_empty() || rest.iter().all(|u| u == first) && (MAVEN_PUBLIC.is_public)(first))
-            .then(|| first.clone())
-    }
-    /// Whether the repository has address assignments the Count cannot
-    /// read as one, so it may serve anything.
-    fn unusable(&self) -> bool {
-        if self.suspect {
-            return true;
-        }
-        match self.literal.as_slice() {
-            [] | [_] => false,
-            [first, rest @ ..] => {
-                !(rest.iter().all(|u| u == first) && (MAVEN_PUBLIC.is_public)(first))
-            }
-        }
-    }
-}
-
-/// The URL assignments in `range`, a repository's `url`/`setUrl`
-/// statements — `url "…"`, `url = uri("…")`, `setUrl(…)` — and, where
-/// `positional`, the one literal an argument list may be, as `maven("…")`
-/// or `maven(url = "…")` write it. A statement inside a nested block such
-/// as an `if`, led by a control keyword or assigning anything but one
-/// literal, is not one the Count reads; an argument list that is anything
-/// but literals and url statements — an identifier, an Elvis, a
-/// concatenation — cannot be read either.
-fn repo_urls(
-    code: &str,
-    strings: &[(usize, String)],
-    range: std::ops::Range<usize>,
-    positional: bool,
-) -> Urls {
-    let bytes = code.as_bytes();
-    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-    let mut out = Urls::default();
-    let mut named = false;
-    // The spans accepted `url` statements consumed: a positional argument
-    // list must hold nothing else.
-    let mut consumed: Vec<std::ops::Range<usize>> = Vec::new();
-    let mut depth = 0usize;
-    let mut i = range.start;
-    while i < range.end {
-        match bytes[i] {
-            b'{' => depth += 1,
-            b'}' => depth = depth.saturating_sub(1),
-            _ => {}
-        }
-        if !word(bytes[i]) || (i > range.start && word(bytes[i - 1])) {
-            i += 1;
-            continue;
-        }
-        let end = (i..range.end)
-            .find(|&j| !word(bytes[j]))
-            .unwrap_or(range.end);
-        if matches!(&code[i..end], "artifactUrls" | "setArtifactUrls") {
-            // Alternate artifact locations the Count does not read.
-            out.suspect = true;
-            i = end;
-            continue;
-        }
-        if !matches!(&code[i..end], "url" | "setUrl") {
-            i = end;
-            continue;
-        }
-        named = true;
-        let before = leading(code, range.start, i);
-        if has_word(before, "def") || has_word(before, "final") {
-            // A variable named `url`, not the repository's.
-            i = end;
-            continue;
-        }
-        let conditional = depth > 0
-            || [
-                "if", "else", "for", "while", "until", "try", "catch", "switch",
-            ]
-            .iter()
-            .any(|name| has_word(before, name));
-        if conditional {
-            out.suspect = true;
-            i = end;
-            continue;
-        }
-        let mut j = skip_ws(code, end);
-        let assign = match bytes.get(j) {
-            Some(b'=' | b':') | Some(b'(') => {
-                j = skip_ws(code, j + 1);
-                true
-            }
-            Some(b'"' | b'\'') => true,
-            _ => false,
-        };
-        if !assign {
-            i = end;
-            continue;
-        }
-        // `url = uri("…")` and `setUrl(uri("…"))`.
-        if j < range.end
-            && code[j..].starts_with("uri")
-            && !bytes.get(j + 3).is_some_and(|b| word(*b))
-        {
-            j = skip_ws(code, j + 3);
-            if bytes.get(j) == Some(&b'(') {
-                j = skip_ws(code, j + 1);
-            }
-        }
-        // The literal alone assigns the URL: what follows it is a
-        // statement's end — a `;`, a closing bracket, a newline — or
-        // nothing, never another expression.
-        let clean_end = |j: usize| {
-            let Some(n) = code[j + 1..range.end].find(bytes[j] as char) else {
-                return false;
-            };
-            let rest = &code[j + n + 2..range.end];
-            let next = rest.trim_start();
-            next.is_empty()
-                || rest[..rest.len() - next.len()].contains('\n')
-                || matches!(next.as_bytes()[0], b';' | b')' | b'}')
-        };
-        match string_at(strings, j).filter(|url| !url.contains('$')) {
-            Some(url) if clean_end(j) => {
-                out.literal.push(url.to_owned());
-                if let Some(n) = code[j + 1..range.end].find(bytes[j] as char) {
-                    consumed.push(i..j + n + 2);
-                }
-            }
-            _ => out.suspect = true,
-        }
-        i = end;
-    }
-    if !positional {
-        return out;
-    }
-    if !named {
-        // `maven("…")`: the argument list is exactly one string literal —
-        // `maven(repoUrl ?: "…")`, `maven("a", "b")` or any other
-        // expression claims everything.
-        let mut in_range = strings.iter().filter(|(at, _)| range.contains(at));
-        match (in_range.next(), in_range.next()) {
-            (Some((at, url)), None) => {
-                let close = code[*at + 1..range.end]
-                    .find(bytes[*at] as char)
-                    .map(|n| at + n + 2)
-                    .unwrap_or(range.end);
-                if code[range.start..*at].trim().is_empty()
-                    && code[close..range.end].trim().is_empty()
-                    && !url.contains('$')
-                {
-                    out.literal.push(url.clone());
-                } else {
-                    out.suspect = true;
-                }
-            }
-            (None, None) if !code[range].trim().is_empty() => out.suspect = true,
-            (None, None) => {}
-            _ => out.suspect = true,
-        }
-        return out;
-    }
-    // `maven(url = "…")`: the `url` statements are the whole argument
-    // list, so a string they did not consume, or anything past spaces,
-    // `;` and the `)` of `uri(…)`, claims everything.
-    let uncovered = |i: usize| !consumed.iter().any(|r| r.contains(&i));
-    for (at, _) in strings.iter().filter(|(at, _)| range.contains(at)) {
-        if uncovered(*at) {
-            out.suspect = true;
-        }
-    }
-    if (range.start..range.end).any(|i| {
-        uncovered(i) && !matches!(bytes[i], b';' | b')') && !bytes[i].is_ascii_whitespace()
-    }) {
-        out.suspect = true;
-    }
-    out
-}
-
-/// The groups and `group:module`s an include-only content filter claims.
-type Claims = (BTreeSet<String>, BTreeSet<(String, String)>);
-
-/// The groups and `group:module`s an include-only filter block claims:
-/// `includeGroup "g"`, `includeModule "g", "m"` and the Kotlin forms
-/// `includeGroup("g")`, `includeModule("g", "m")`, and nothing else. `None`
-/// for any other statement — `includeGroupByRegex`, `includeVersion`,
-/// `excludeGroup` — since the repository then claims everything.
-fn filter_claims(
-    code: &str,
-    strings: &[(usize, String)],
-    range: std::ops::Range<usize>,
-) -> Option<Claims> {
-    let bytes = code.as_bytes();
-    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-    let mut groups = BTreeSet::new();
-    let mut modules = BTreeSet::new();
-    let mut i = range.start;
-    while i < range.end {
-        i = skip_ws(code, i);
-        while bytes.get(i) == Some(&b';') {
-            i = skip_ws(code, i + 1);
-        }
-        if i >= range.end {
-            break;
-        }
-        if !word(bytes[i]) {
-            return None;
-        }
-        let end = (i..range.end)
-            .find(|&j| !word(bytes[j]))
-            .unwrap_or(range.end);
-        let count = match &code[i..end] {
-            "includeGroup" => 1,
-            "includeModule" => 2,
-            _ => return None,
-        };
-        i = skip_ws(code, end);
-        if bytes.get(i) == Some(&b'(') {
-            i = skip_ws(code, i + 1);
-        }
-        let mut args = Vec::new();
-        for n in 0..count {
-            if n > 0 {
-                if bytes.get(i) != Some(&b',') {
-                    return None;
-                }
-                i = skip_ws(code, i + 1);
-            }
-            if !matches!(bytes.get(i), Some(b'"' | b'\'')) {
-                return None;
-            }
-            let arg = string_at(strings, i)?;
-            // A template or escape is a group the Count does not know.
-            if arg.contains('$') || arg.contains('\\') {
-                return None;
-            }
-            args.push(arg.to_owned());
-            i = code[i + 1..range.end]
-                .find(bytes[i] as char)
-                .map(|n| i + n + 2)?;
-            i = skip_ws(code, i);
-        }
-        if bytes.get(i) == Some(&b')') {
-            i = skip_ws(code, i + 1);
-        }
-        if count == 1 {
-            groups.insert(args.pop()?);
-        } else {
-            modules.insert((args.swap_remove(0), args.pop()?));
-        }
-    }
-    // An empty block — `content { }`, or comments only — bounds nothing,
-    // so the repository still claims everything.
-    (!groups.is_empty() || !modules.is_empty()).then_some((groups, modules))
-}
-
-/// The claims of every `content { … }` block a repository declares
-/// itself, unioned: `None` when any holds anything but literal
-/// `includeGroup` and `includeModule` statements — an empty block,
-/// `includeGroupByRegex`, `includeVersion`, `excludeGroup` — since the
-/// repository then claims everything. A `content`/`filter` call in
-/// parentheses `content(action)`, or a block nested inside any other
-/// closure, is one the Count does not read, as is `filter` outside
-/// `exclusiveContent` (handled in `exclusive`): all claim everything.
-/// `None` too when `range` has no such block.
-fn content_filter(
-    code: &str,
-    strings: &[(usize, String)],
-    range: std::ops::Range<usize>,
-) -> Option<Option<Claims>> {
-    let bytes = code.as_bytes();
-    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-    let mut union = Claims::default();
-    let mut seen = false;
-    let mut depth = 0usize;
-    let mut i = range.start;
-    while i < range.end {
-        match bytes[i] {
-            b'{' => depth += 1,
-            b'}' => depth = depth.saturating_sub(1),
-            _ => {}
-        }
-        if !word(bytes[i]) || (i > range.start && word(bytes[i - 1])) {
-            i += 1;
-            continue;
-        }
-        let end = (i..range.end)
-            .find(|&j| !word(bytes[j]))
-            .unwrap_or(range.end);
-        let token = &code[i..end];
-        if matches!(token, "content" | "filter") {
-            let open = skip_ws(code, end);
-            if token == "content" && depth == 0 && bytes.get(open) == Some(&b'{') {
-                let close = matching(code, open)?;
-                let Some((groups, modules)) = filter_claims(code, strings, open + 1..close - 1)
-                else {
-                    return Some(None);
-                };
-                union.0.extend(groups);
-                union.1.extend(modules);
-                seen = true;
-                i = close;
-                continue;
-            }
-            if matches!(bytes.get(open), Some(b'{' | b'(')) {
-                return Some(None);
-            }
-        }
-        i = end;
-    }
-    Some(seen.then_some(union))
-}
-
-/// What a repository call's declaration says it serves.
-struct Serves {
-    /// Its URL, where the Count reads one.
-    url: Option<String>,
-    /// The groups and `group:module`s include-only filters claim;
-    /// `None` when it can serve anything.
-    claims: Option<Claims>,
-    /// A call naming a public repository: `mavenCentral()`, `google()` or
-    /// `gradlePluginPortal()` alone inside `forRepository`.
-    public_call: bool,
-    /// Its address is assigned in a way the Count cannot read as one: by
-    /// several statements, another expression or conditionally.
-    unusable_url: bool,
-}
-
-/// The repository a call at `end` (just past its name) declares, and the
-/// offset the Count read to: optional `(args)`, an optional `{ block }`
-/// with its `url` and `content` filters.
-fn named_repository(code: &str, strings: &[(usize, String)], end: usize) -> (Serves, usize) {
-    let bytes = code.as_bytes();
-    let mut named = Serves {
-        url: None,
-        claims: None,
-        public_call: false,
-        unusable_url: false,
-    };
-    let mut urls = Urls::default();
-    let mut i = skip_ws(code, end);
-    if bytes.get(i) == Some(&b'(') {
-        let Some(close) = matching(code, i) else {
-            return (named, i);
-        };
-        let args = repo_urls(code, strings, i + 1..close - 1, true);
-        urls.literal.extend(args.literal);
-        urls.suspect |= args.suspect;
-        i = skip_ws(code, close);
-    } else if matches!(bytes.get(i), Some(b'"' | b'\'')) {
-        // `maven "…"` names the URL positionally: one literal is the
-        // whole argument, ended by a statement's end or the block.
-        if let Some(url) = string_at(strings, i) {
-            let after = code[i + 1..]
-                .find(bytes[i] as char)
-                .map_or(i + 1, |n| i + n + 2);
-            let rest = &code[after..];
-            let next = rest.trim_start();
-            let clean = next.is_empty()
-                || rest[..rest.len() - next.len()].contains('\n')
-                || matches!(next.as_bytes()[0], b';' | b')' | b'}' | b'{');
-            if clean && !url.contains('$') {
-                urls.literal.push(url.to_owned());
-            } else {
-                urls.suspect = true;
-            }
-            i = skip_ws(code, after);
-        } else {
-            i += 1;
-        }
-    }
-    if bytes.get(i) == Some(&b'{') {
-        let Some(close) = matching(code, i) else {
-            return (named, i);
-        };
-        let inner = i + 1..close - 1;
-        let block = repo_urls(code, strings, inner.clone(), false);
-        urls.literal.extend(block.literal);
-        urls.suspect |= block.suspect;
-        named.claims = content_filter(code, strings, inner).flatten();
-        i = close;
-        let (url, unusable) = (urls.resolve(), urls.unusable());
-        named.url = url;
-        named.unusable_url = unusable;
-        if unusable {
-            named.claims = None;
-        }
-        return (named, i);
-    }
-    named.url = urls.resolve();
-    named.unusable_url = urls.unusable();
-    (named, i)
-}
-
-/// The calls `forRepository` may hold alone for its repository to stay a
-/// public one.
-const EXCLUSIVE_PUBLIC: [&str; 3] = ["mavenCentral", "google", "gradlePluginPortal"];
-
-/// Calls that name a public repository: `mavenCentral()`,
-/// `google()`, `gradlePluginPortal()` and `jcenter()`. Given a body —
+/// Calls that name a public repository: `mavenCentral()`, `google()`,
+/// `gradlePluginPortal()` and `jcenter()`. Given a body —
 /// `mavenCentral { url = "…" }` — they name one the Count does not read.
 const PUBLIC_REPOS: [&str; 4] = ["mavenCentral", "google", "gradlePluginPortal", "jcenter"];
 
@@ -1392,220 +950,90 @@ fn handler_mutation(code: &str, end: usize) -> bool {
     matches!(&code[j..e], "all" | "add" | "addAll")
 }
 
-/// Whether `range` holds exactly the call `name()`: the one statement a
-/// `forRepository` block may be for its repository to stay public.
-fn lone_call(code: &str, range: std::ops::Range<usize>, name: &str) -> bool {
-    let Some(rest) = code[range].trim().strip_prefix(name) else {
-        return false;
-    };
-    let Some(rest) = rest.trim_start().strip_prefix('(') else {
-        return false;
-    };
-    let Some(rest) = rest.trim_start().strip_prefix(')') else {
-        return false;
-    };
-    rest.trim_end().trim_end_matches(';').trim_end().is_empty()
-}
-
-/// The repository `exclusiveContent { … }` at `end` wraps and filters, and
-/// the offset the Count read to: `forRepository { … }` holds it and
-/// `filter { … }` bounds what it serves.
-fn exclusive(code: &str, strings: &[(usize, String)], end: usize) -> (Serves, usize) {
+/// The address a repository call names, for the warning that says why the
+/// build's lookups fail: the literal a `url` or `setUrl` statement gives
+/// in its argument list or block — `url = "…"`, `setUrl("…")`,
+/// `url = uri("…")` — `maven "…"` bare, or the one literal an argument
+/// list holds, as `maven("…")`. `None` when the Count reads no address
+/// there; the lookups fail either way.
+fn repo_url(code: &str, strings: &[(usize, String)], end: usize) -> Option<String> {
     let bytes = code.as_bytes();
-    let mut named = Serves {
-        url: None,
-        claims: None,
-        public_call: false,
-        unusable_url: false,
-    };
-    let i = skip_ws(code, end);
-    if bytes.get(i) != Some(&b'{') {
-        return (named, end);
-    }
-    let Some(close) = matching(code, i) else {
-        return (named, i);
-    };
-    let inner = i + 1..close - 1;
     let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-    let mut declared = false;
-    // The union of the `filter` blocks' claims; a filter bounds a
-    // repository its own `content` does not.
-    let mut filters = Claims::default();
-    let mut filtered = false;
-    let mut bad_filter = false;
-    let mut depth = 0usize;
-    let mut j = inner.start;
-    while j < inner.end {
-        match bytes[j] {
-            b'{' => depth += 1,
-            b'}' => depth = depth.saturating_sub(1),
-            _ => {}
-        }
-        if !word(bytes[j]) || (j > inner.start && word(bytes[j - 1])) {
-            j += 1;
-            continue;
-        }
-        let e = (j..inner.end)
-            .find(|&k| !word(bytes[k]))
-            .unwrap_or(inner.end);
-        match &code[j..e] {
-            "forRepository" if depth == 0 => {
-                let open = skip_ws(code, e);
-                if bytes.get(open) != Some(&b'{') {
-                    return (named, close);
-                }
-                let Some(inside) = matching(code, open) else {
-                    return (named, close);
-                };
-                let range = open + 1..inside - 1;
-                if EXCLUSIVE_PUBLIC
-                    .iter()
-                    .any(|call| lone_call(code, range.clone(), call))
-                {
-                    named.public_call = true;
-                } else {
-                    // Anything else is read as ordinary repository
-                    // declarations.
-                    let mut k = range.start;
-                    while k < range.end {
-                        if !word(bytes[k]) || (k > range.start && word(bytes[k - 1])) {
-                            k += 1;
-                            continue;
-                        }
-                        let e2 = (k..range.end)
-                            .find(|&x| !word(bytes[x]))
-                            .unwrap_or(range.end);
-                        let token = &code[k..e2];
-                        if REPOSITORY_CALLS.contains(&token) {
-                            let (repo, until) = if token == "exclusiveContent" {
-                                exclusive(code, strings, e2)
-                            } else {
-                                named_repository(code, strings, e2)
-                            };
-                            if declared {
-                                // Several declarations name no one address.
-                                named.url = None;
-                                named.claims = None;
-                                named.unusable_url = true;
-                            } else {
-                                named.url = repo.url;
-                                named.claims = repo.claims;
-                                named.unusable_url = repo.unusable_url;
-                                declared = true;
-                            }
-                            k = until.max(e2);
-                            continue;
-                        }
-                        if token.contains("ArtifactRepository")
-                            || token.contains("RepositoryHandler")
-                            || PUBLIC_REPOS.contains(&token)
-                                && bytes.get(skip_ws(code, e2)) == Some(&b'{')
-                            || token == "repositories" && handler_mutation(code, e2)
-                            || matches!(token, "content" | "filter" | "forRepository")
-                                && matches!(bytes.get(skip_ws(code, e2)), Some(b'{' | b'('))
-                        {
-                            named.claims = None;
-                            named.unusable_url = true;
-                        }
-                        k = e2;
-                    }
-                }
-                j = inside;
-                continue;
-            }
-            "filter" if depth == 0 => {
-                let open = skip_ws(code, e);
-                if bytes.get(open) != Some(&b'{') {
-                    return (named, close);
-                }
-                let Some(inside) = matching(code, open) else {
-                    return (named, close);
-                };
-                filtered = true;
-                match filter_claims(code, strings, open + 1..inside - 1) {
-                    Some((groups, modules)) => {
-                        filters.0.extend(groups);
-                        filters.1.extend(modules);
-                    }
-                    None => bad_filter = true,
-                }
-                j = inside;
-                continue;
-            }
-            // A repository or filter call nested inside another closure
-            // or given an action in parentheses is one the Count does
-            // not read.
-            "forRepository" | "filter" | "content" | "exclusiveContent"
-                if matches!(bytes.get(skip_ws(code, e)), Some(b'{' | b'(')) =>
-            {
-                bad_filter = true;
-            }
-            _ => {}
-        }
-        j = e;
+    let mut i = skip_ws(code, end);
+    if matches!(bytes.get(i), Some(b'"' | b'\'')) {
+        return string_at(strings, i)
+            .filter(|url| !url.contains('$'))
+            .map(str::to_owned);
     }
-    named.claims = if named.unusable_url || bad_filter {
-        None
-    } else if !filtered {
-        named.claims
-    } else {
-        match named.claims.take() {
-            // A filter bounds a repository that claims everything.
-            None => Some(filters),
-            Some((mut groups, mut modules)) => {
-                groups.extend(filters.0);
-                modules.extend(filters.1);
-                Some((groups, modules))
+    let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+    if bytes.get(i) == Some(&b'(') {
+        let close = matching(code, i)?;
+        ranges.push(i + 1..close - 1);
+        i = skip_ws(code, close);
+    }
+    if bytes.get(i) == Some(&b'{') {
+        let close = matching(code, i)?;
+        ranges.push(i + 1..close - 1);
+    }
+    if ranges.is_empty() {
+        return None;
+    }
+    for range in &ranges {
+        let mut j = range.start;
+        while j < range.end {
+            if !word(bytes[j]) || (j > range.start && word(bytes[j - 1])) {
+                j += 1;
+                continue;
             }
+            let e = (j..range.end)
+                .find(|&k| !word(bytes[k]))
+                .unwrap_or(range.end);
+            if matches!(&code[j..e], "url" | "setUrl") {
+                let mut k = skip_ws(code, e);
+                if matches!(bytes.get(k), Some(b'=' | b':' | b'(')) {
+                    k = skip_ws(code, k + 1);
+                }
+                // `url = uri("…")` and `setUrl(uri("…"))`.
+                if code[k..].starts_with("uri") && !bytes.get(k + 3).is_some_and(|b| word(*b)) {
+                    k = skip_ws(code, k + 3);
+                    if bytes.get(k) == Some(&b'(') {
+                        k = skip_ws(code, k + 1);
+                    }
+                }
+                if let Some(url) = string_at(strings, k).filter(|url| !url.contains('$')) {
+                    return Some(url.to_owned());
+                }
+            }
+            j = e;
         }
+    }
+    // `maven("…")`: the one literal a lone argument list holds.
+    let [range] = ranges.as_slice() else {
+        return None;
     };
-    (named, close)
+    if bytes[range.start - 1] != b'(' {
+        return None;
+    }
+    let mut in_range = strings.iter().filter(|(at, _)| range.contains(at));
+    let (Some((at, url)), None) = (in_range.next(), in_range.next()) else {
+        return None;
+    };
+    let past = code[*at + 1..range.end]
+        .find(bytes[*at] as char)
+        .map(|n| at + n + 2)
+        .unwrap_or(range.end);
+    (code[range.start..*at].trim().is_empty()
+        && code[past..range.end].trim().is_empty()
+        && !url.contains('$'))
+    .then(|| url.clone())
 }
 
-/// Record what one repository declaration means for the build: nothing
-/// when it is public, claims when an include-only filter bounds it, and
-/// failure for every lookup otherwise.
-fn record(out: &mut crate::origins::Repositories, path: &str, named: Serves) {
-    if named.public_call
-        || named
-            .url
-            .as_deref()
-            .is_some_and(|url| (MAVEN_PUBLIC.is_public)(url))
-    {
-        return;
-    }
-    let label = named.url.as_deref().map(crate::redacted);
-    let at = |path: &str| match &label {
-        Some(url) => format!("a repository in {path} at {url}"),
-        None => format!("a repository in {path} at an address the Count does not read"),
-    };
-    match named.claims {
-        Some((groups, modules)) => {
-            out.warnings.push(format!(
-                "{} claims only some artifacts; lookups for what it claims fail",
-                at(path)
-            ));
-            let reason = format!("{} claims it", at(path));
-            for group in groups {
-                out.claimed.entry(group).or_insert_with(|| reason.clone());
-            }
-            for (group, module) in modules {
-                out.claimed
-                    .entry(format!("{group}:{module}"))
-                    .or_insert_with(|| reason.clone());
-            }
-        }
-        None => {
-            let reason = if named.unusable_url {
-                format!("a repository in {path} whose address the Count does not read")
-            } else {
-                match &label {
-                    Some(_) => at(path),
-                    None => format!("a repository {path} may add"),
-                }
-            };
-            out.close(reason);
-        }
+/// Why a repository call ending at `end` in `path` fails the build's
+/// lookups: the address it names where the Count reads one, redacted.
+fn repository_reason(code: &str, strings: &[(usize, String)], end: usize, path: &str) -> String {
+    match repo_url(code, strings, end) {
+        Some(url) => format!("a repository in {path} at {}", crate::redacted(&url)),
+        None => format!("a repository {path} may add"),
     }
 }
 
@@ -1614,10 +1042,9 @@ fn record(out: &mut crate::origins::Repositories, path: &str, named: Serves) {
 /// repository besides Maven Central, Google's and the Gradle Plugin
 /// Portal, a build it includes or a script it applies that the Count does
 /// not read, or a file it cannot read. Gradle tries repositories in order
-/// and filters them by content, so a repository `content` or
-/// `exclusiveContent` limits to named groups and modules claims only
-/// those — lookups for them fail — while any other repository anywhere
-/// makes every lookup fail.
+/// and filters them by content; the Count does not follow that, so any
+/// other repository anywhere — however it is filtered — makes every
+/// lookup fail.
 ///
 /// Build logic is read from the scripts and build-logic folders, then from
 /// what they include and apply, until nothing new is named.
@@ -1692,15 +1119,8 @@ pub(crate) fn private_repositories(files: &Files) -> Option<crate::origins::Repo
             }
             let end = (i..len).find(|&j| !word(bytes[j])).unwrap_or(len);
             let token = &code[i..end];
-            if token == "exclusiveContent" {
-                let (named, until) = exclusive(&code, &strings, end);
-                record(&mut out, path, named);
-                i = until.max(end);
-                continue;
-            }
             if REPOSITORY_CALLS.contains(&token) {
-                let (named, _) = named_repository(&code, &strings, end);
-                record(&mut out, path, named);
+                out.close(repository_reason(&code, &strings, end, path));
             } else if PUBLIC_REPOS.contains(&token) {
                 // `mavenCentral { url = "…" }` configures a repository the
                 // Count does not read; the bare `mavenCentral()` calls
@@ -1726,7 +1146,7 @@ pub(crate) fn private_repositories(files: &Files) -> Option<crate::origins::Repo
             if REPOSITORY_CALLS.contains(&string.as_str()) && matches!(next, Some(b'{' | b'('))
                 || PUBLIC_REPOS.contains(&string.as_str()) && next == Some(b'{')
             {
-                out.close(format!("a repository {path} may add"));
+                out.close(repository_reason(&code, &strings, after, path));
             }
         }
     }

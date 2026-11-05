@@ -523,19 +523,19 @@ fn config(text: &str) -> Result<Config, ()> {
 /// The package source configuration of a repository, read once: what a
 /// restore in each folder with a config sees, and whether an MSBuild file
 /// overrides the configs.
-pub(crate) struct Feeds<'a> {
+pub(crate) struct Feeds {
     /// For each folder with a config, as a path prefix (`""` for the root),
     /// the configs from the root down to it, or why the Count cannot read
     /// one of them.
     chains: BTreeMap<String, Result<Chain, String>>,
     /// An MSBuild file that sets restore sources itself, or cannot be read.
     overridden: Option<String>,
-    /// The files the scan read, for the central-package-management checks.
-    files: &'a Files,
-    /// Project files central package management can govern.
-    projects: Vec<String>,
-    /// Every `Directory.Packages.props`, for the "a closer one" check.
-    central: Vec<String>,
+    /// Config folders proven to govern nothing: no project file and no
+    /// `.sln`, `.slnx` or `.slnf` at or below them, or every project there
+    /// proven out of central package management. NuGet reads a config for
+    /// the projects and solutions below it, so one with none does not
+    /// join the sources another file's restore sees.
+    inert: BTreeSet<String>,
 }
 
 /// What the configs from the root down to a folder say. Every source any of
@@ -556,8 +556,8 @@ impl Default for Chain {
     }
 }
 
-impl<'a> Feeds<'a> {
-    pub(crate) fn new(files: &'a Files) -> Self {
+impl Feeds {
+    pub(crate) fn new(files: &Files) -> Self {
         let mut configs = BTreeMap::<String, Result<Config, String>>::new();
         for (path, text) in files.iter().filter(|(path, _)| config_file(path)) {
             let whole = path.as_str();
@@ -612,134 +612,30 @@ impl<'a> Feeds<'a> {
                     })
             })
             .map(|(path, _)| format!("restore sources {path} may set"));
-        let mut projects = Vec::new();
-        let mut central = Vec::new();
-        for path in files.keys() {
-            let leaf = path.rsplit('/').next().unwrap_or(path);
-            if project_file(path) {
-                projects.push(path.clone());
-            } else if leaf.eq_ignore_ascii_case("directory.packages.props") {
-                central.push(path.clone());
-            }
-        }
+        let projects: Vec<&str> = files
+            .keys()
+            .filter(|path| project_file(path))
+            .map(String::as_str)
+            .collect();
+        let inert = chains
+            .keys()
+            .filter(|dir| {
+                !files.keys().any(|path| {
+                    path.starts_with(dir.as_str())
+                        && solution_file(
+                            &path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase(),
+                        )
+                }) && projects
+                    .iter()
+                    .filter(|project| project.starts_with(dir.as_str()))
+                    .all(|project| opted_out(files, project))
+            })
+            .cloned()
+            .collect();
         Self {
             chains,
             overridden,
-            files,
-            projects,
-            central,
-        }
-    }
-
-    /// Whether some project at or below `config_dir` is governed by the
-    /// `Directory.Packages.props` in `props_dir`, or a `.sln`/`.slnx` at
-    /// or below `config_dir` names one it governs anywhere — NuGet may
-    /// read a solution's folder config for it.
-    fn governs(&self, props_dir: &str, config_dir: &str) -> bool {
-        self.projects.iter().any(|project| {
-            let pdir = &project[..project.rfind('/').map_or(0, |i| i + 1)];
-            pdir.starts_with(config_dir) && self.governs_project(props_dir, project)
-        }) || self.files.iter().any(|(path, text)| {
-            let leaf = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
-            solution_file(&leaf)
-                && path.starts_with(config_dir)
-                && (crate::unreadable_text(text)
-                    || solution_projects(text).any(|reference| {
-                        match resolve_path(
-                            &path[..path.rfind('/').map_or(0, |i| i + 1)],
-                            &reference,
-                        ) {
-                            Some(target) if self.projects.contains(&target) => {
-                                self.governs_project(props_dir, &target)
-                            }
-                            // A project the Count cannot place may be
-                            // governed.
-                            _ => true,
-                        }
-                    }))
-        })
-    }
-
-    /// Whether a config in `config_dir` joins `props_dir`'s central
-    /// sources through a solution file it is not below: the config sits
-    /// at or above a `.sln`/`.slnx`/`.slnf` anywhere in the tree that
-    /// names a project `props_dir` governs — a restore at the solution
-    /// reads the config for the governed project.
-    fn solution_config(&self, props_dir: &str, config_dir: &str) -> bool {
-        self.files.iter().any(|(path, text)| {
-            let leaf = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
-            if !solution_file(&leaf) {
-                return false;
-            }
-            let sdir = &path[..path.rfind('/').map_or(0, |i| i + 1)];
-            sdir.starts_with(config_dir)
-                && (crate::unreadable_text(text)
-                    || solution_projects(text).any(|reference| {
-                        match resolve_path(sdir, &reference) {
-                            Some(target) if self.projects.contains(&target) => {
-                                self.governs_project(props_dir, &target)
-                            }
-                            // A project the Count cannot place may be
-                            // governed.
-                            _ => true,
-                        }
-                    }))
-        })
-    }
-
-    /// Whether the `Directory.Packages.props` in `props_dir` governs
-    /// `project`: the project sits below it, below no closer one that
-    /// does not itself import — a closer one with an `Import`, the usual
-    /// `GetPathOfFileAbove`, passes its governance down — and nothing
-    /// opts the project out. A condition, a variable, an import that may
-    /// override or an unreadable file counts (fail closed).
-    fn governs_project(&self, props_dir: &str, project: &str) -> bool {
-        let pdir = &project[..project.rfind('/').map_or(0, |i| i + 1)];
-        pdir.starts_with(props_dir)
-            && !self.central.iter().any(|props| {
-                let dir = &props[..props.rfind('/').map_or(0, |i| i + 1)];
-                dir.len() > props_dir.len() && pdir.starts_with(dir) && self.self_contained(props)
-            })
-            && !self.opted_out(project)
-    }
-
-    /// Whether the `Directory.Packages.props` at `path` stands alone, so
-    /// it stops one above from governing the projects under it: it holds
-    /// no `Import` element at all. One the Count cannot read may import.
-    fn self_contained(&self, props: &str) -> bool {
-        let Some(text) = self.files.get(props) else {
-            return true;
-        };
-        if crate::unreadable_text(text) {
-            return false;
-        }
-        let Ok(document) = roxmltree::Document::parse(text) else {
-            return false;
-        };
-        !document
-            .descendants()
-            .any(|node| node.is_element() && node.tag_name().name().eq_ignore_ascii_case("import"))
-    }
-
-    /// Whether `project` opts out of central package management through
-    /// the single nearest `Directory.Build.props` above it — MSBuild
-    /// imports that file before deciding whether to import
-    /// `Directory.Packages.props`, so it is where
-    /// `ImportDirectoryPackagesProps` `false` takes effect, the pattern
-    /// Arcade's eng/common/internal uses. What the project itself or a
-    /// farther file says does not count: `Directory.Packages.props` or
-    /// later evaluation can override it.
-    fn opted_out(&self, project: &str) -> bool {
-        let mut dir = &project[..project.rfind('/').map_or(0, |i| i + 1)];
-        loop {
-            if let Some(text) = self.files.get(&format!("{dir}Directory.Build.props")) {
-                return opts_out(text);
-            }
-            if dir.is_empty() {
-                return false;
-            }
-            let parent = dir.trim_end_matches('/');
-            dir = &parent[..parent.rfind('/').map_or(0, |i| i + 1)];
+            inert,
         }
     }
 
@@ -779,33 +675,27 @@ impl<'a> Feeds<'a> {
         }
         let leaf = file.rsplit('/').next().unwrap_or(file).to_ascii_lowercase();
         let shared = leaf.ends_with(".props") || leaf.ends_with(".targets");
-        let central = leaf == "directory.packages.props";
         let folder = &file[..file.rfind('/').map_or(0, |i| i + 1)];
         // A tool manifest sits in the `.config` folder of the project it
         // serves.
         let manifest = (folder == ".config/" || folder.ends_with("/.config/"))
             .then(|| &folder[..folder.len() - ".config/".len()]);
         let dir = match manifest {
-            _ if central => folder,
             _ if shared => "",
             Some(project) => project,
             None => folder,
         };
         let here = Self::nearest(&self.chains, dir);
         // A project restores in its own folder alone; the others count every
-        // folder below too — a central props file only those that govern a
-        // project under them, or that sit at or above a solution naming one.
+        // folder below too, except one whose config is proven inert.
         let below = self
             .chains
             .iter()
             .filter(|(config, _)| {
-                if !(shared || manifest.is_some()) {
-                    return false;
-                }
-                if config.starts_with(dir) && config.len() > dir.len() {
-                    return !central || self.governs(folder, config);
-                }
-                central && !dir.starts_with(config.as_str()) && self.solution_config(folder, config)
+                (shared || manifest.is_some())
+                    && config.starts_with(dir)
+                    && config.len() > dir.len()
+                    && !self.inert.contains(config.as_str())
             })
             .map(|(_, chain)| chain.clone());
         let origins = std::iter::once(here).chain(below).map(|chain| match chain {
@@ -889,12 +779,43 @@ impl<'a> Feeds<'a> {
     }
 }
 
-/// Whether `text`, a `Directory.Build.props`, opts the projects under it
-/// out of central package management: the last `ImportDirectoryPackagesProps`
-/// element is a literal `false` in a `PropertyGroup`, unconditional — no
-/// `Condition` on it or an ancestor, and not inside `Choose`/`When`/
-/// `Otherwise`. A file the Count cannot parse does not opt out.
-fn opts_out(text: &str) -> bool {
+/// Whether `project` is proven out of central package management: its
+/// single nearest `Directory.Build.props` — MSBuild imports that file
+/// before deciding whether to import `Directory.Packages.props`, so it is
+/// where `ImportDirectoryPackagesProps` `false` takes effect, the pattern
+/// Arcade's `eng/common/internal` uses — sets it unconditionally and no
+/// import after it can set it back. What the project itself or a farther
+/// file says does not count, and anything the Count cannot prove is no
+/// opt-out.
+fn opted_out(files: &Files, project: &str) -> bool {
+    let mut dir = &project[..project.rfind('/').map_or(0, |i| i + 1)];
+    loop {
+        let props = format!("{dir}Directory.Build.props");
+        if files.contains_key(&props) {
+            return props_opts_out(files, &props, &mut BTreeSet::new());
+        }
+        if dir.is_empty() {
+            return false;
+        }
+        let parent = dir.trim_end_matches('/');
+        dir = &parent[..parent.rfind('/').map_or(0, |i| i + 1)];
+    }
+}
+
+/// Whether the `Directory.Build.props` at `path` proves the opt-out: its
+/// last `ImportDirectoryPackagesProps` element is the literal `false` in
+/// a `PropertyGroup` that is a direct child of the root `Project`, with
+/// no `Condition` on the property, the group or the project — and so not
+/// inside `Choose`, `When`, `Otherwise` or `Target` — and every `Import`
+/// after it is clean by `clean_import`'s rule. Anything else is unproven.
+fn props_opts_out(files: &Files, path: &str, visited: &mut BTreeSet<String>) -> bool {
+    visited.insert(path.to_owned());
+    let Some(text) = files.get(path) else {
+        return false;
+    };
+    if crate::unreadable_text(text) {
+        return false;
+    }
     let Ok(document) = roxmltree::Document::parse(text) else {
         return false;
     };
@@ -907,43 +828,121 @@ fn opts_out(text: &str) -> bool {
     }) else {
         return false;
     };
-    let literal = last
-        .text()
-        .is_some_and(|text| text.trim().eq_ignore_ascii_case("false"));
-    let grouped = last.parent().is_some_and(|parent| {
-        parent.is_element()
-            && parent
-                .tag_name()
-                .name()
-                .eq_ignore_ascii_case("propertygroup")
-    });
-    let conditioned = std::iter::once(last).chain(last.ancestors()).any(|node| {
-        node.attributes()
-            .any(|a| a.name().eq_ignore_ascii_case("condition"))
-            || matches!(
+    let Some(group) = last.parent().filter(|node| {
+        node.is_element() && node.tag_name().name().eq_ignore_ascii_case("propertygroup")
+    }) else {
+        return false;
+    };
+    let Some(root) = group
+        .parent()
+        .filter(|node| node.is_element() && node.tag_name().name().eq_ignore_ascii_case("project"))
+    else {
+        return false;
+    };
+    if root.parent().is_some_and(|node| node.is_element())
+        || !last
+            .text()
+            .is_some_and(|text| text.trim().eq_ignore_ascii_case("false"))
+        || [last, group, root].iter().any(|node| {
+            node.attributes()
+                .any(|a| a.name().eq_ignore_ascii_case("condition"))
+        })
+    {
+        return false;
+    }
+    let dir = &path[..path.rfind('/').map_or(0, |i| i + 1)];
+    document
+        .descendants()
+        .filter(|node| {
+            node.is_element()
+                && node.tag_name().name().eq_ignore_ascii_case("import")
+                && node.range().start > last.range().start
+        })
+        .all(|import| clean_import(files, dir, import, visited))
+}
+
+/// Whether an `<Import>` is proven to bring in nothing that sets central
+/// package management back on: a `Project` attribute that is a literal
+/// path — no `$(…)`, no wildcard — as the element's only attribute, and
+/// no `Condition` or `Choose`/`When`/`Otherwise`/`Target` around it,
+/// resolving inside the repository to a file `props_clean` proves clean.
+/// An `Sdk` attribute or any other resolves outside the repository, so
+/// the file is unproven.
+fn clean_import(
+    files: &Files,
+    dir: &str,
+    import: roxmltree::Node<'_, '_>,
+    visited: &mut BTreeSet<String>,
+) -> bool {
+    if std::iter::once(import)
+        .chain(import.ancestors())
+        .any(|node| {
+            node.attributes()
+                .any(|a| a.name().eq_ignore_ascii_case("condition"))
+                || matches!(
+                    node.tag_name().name().to_ascii_lowercase().as_str(),
+                    "choose" | "when" | "otherwise" | "target"
+                )
+        })
+    {
+        return false;
+    }
+    let mut project = None;
+    for attribute in import.attributes() {
+        if project.is_none() && attribute.name().eq_ignore_ascii_case("project") {
+            project = Some(attribute.value());
+        } else {
+            return false;
+        }
+    }
+    let Some(project) = project else {
+        return false;
+    };
+    if project.contains('$') || project.contains(['*', '?']) {
+        return false;
+    }
+    let Some(target) = resolve_path(dir, &project.replace('\\', "/")) else {
+        return false;
+    };
+    props_clean(files, &target, visited)
+}
+
+/// Whether the file at `path` sets neither `ImportDirectoryPackagesProps`
+/// nor `DirectoryPackagesPropsPath` at all, and every `Import` it holds is
+/// clean by `clean_import`'s rule. One the Count cannot read or follow is
+/// unproven.
+fn props_clean(files: &Files, path: &str, visited: &mut BTreeSet<String>) -> bool {
+    if !visited.insert(path.to_owned()) {
+        return false;
+    }
+    let Some(text) = files.get(path) else {
+        return false;
+    };
+    if crate::unreadable_text(text) {
+        return false;
+    }
+    let Ok(document) = roxmltree::Document::parse(text) else {
+        return false;
+    };
+    if document.descendants().any(|node| {
+        node.is_element()
+            && matches!(
                 node.tag_name().name().to_ascii_lowercase().as_str(),
-                "choose" | "when" | "otherwise"
+                "importdirectorypackagesprops" | "directorypackagespropspath"
             )
-    });
-    literal && grouped && !conditioned
+    }) {
+        return false;
+    }
+    let dir = &path[..path.rfind('/').map_or(0, |i| i + 1)];
+    document
+        .descendants()
+        .filter(|node| node.is_element() && node.tag_name().name().eq_ignore_ascii_case("import"))
+        .all(|import| clean_import(files, dir, import, visited))
 }
 
 /// Whether `leaf`, already lowercased, is a solution file.
 fn solution_file(leaf: &str) -> bool {
     leaf.ends_with(".sln") || leaf.ends_with(".slnx") || leaf.ends_with(".slnf")
-}
-
-/// The project paths a `.sln` or `.slnx` names: quoted references whose
-/// extension ends in `proj`, case-insensitively, with `\` read as `/`.
-fn solution_projects(text: &str) -> impl Iterator<Item = String> + '_ {
-    static QUOTED: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r#""([^"]*)""#).expect("quoted pattern"));
-    QUOTED.captures_iter(text).filter_map(|c| {
-        let path = c.get(1).unwrap().as_str().replace('\\', "/");
-        path.rsplit_once('.')
-            .is_some_and(|(_, ext)| ext.to_ascii_lowercase().ends_with("proj"))
-            .then_some(path)
-    })
 }
 
 /// `reference`, a path relative to `dir`, resolved to a repository path;

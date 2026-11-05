@@ -182,8 +182,8 @@ impl Origins {
 }
 
 /// What a build's own repository declarations mean for its Maven lookups:
-/// once-per-build warnings, a reason every lookup fails, and the groups a
-/// filtered repository claims.
+/// once-per-build warnings, and why every lookup fails when a repository's
+/// reach is unbounded or the Count cannot read the build.
 #[derive(Debug, Default)]
 pub(crate) struct Repositories {
     /// Once-per-build warnings naming each repository that is not public.
@@ -191,9 +191,6 @@ pub(crate) struct Repositories {
     /// Why every lookup fails, when a repository's reach is unbounded or
     /// the Count cannot read the build.
     pub closed: Option<String>,
-    /// The groups and `group:module`s a repository with an include-only
-    /// content filter claims, each with the reason its lookups fail.
-    pub claimed: BTreeMap<String, String>,
 }
 
 impl Repositories {
@@ -206,7 +203,7 @@ impl Repositories {
     }
     /// Whether anything makes a lookup fail.
     pub(crate) fn any(&self) -> bool {
-        self.closed.is_some() || !self.claimed.is_empty()
+        self.closed.is_some()
     }
 }
 

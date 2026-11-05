@@ -468,7 +468,7 @@ fn project_redirect(
     dir: &str,
     tool: &str,
     files: &Files,
-    feeds: &crate::nuget::Feeds<'_>,
+    feeds: &crate::nuget::Feeds,
 ) -> Option<String> {
     let related = |path: &str| {
         let folder = &path[..path.rfind('/').map_or(0, |i| i + 1)];
@@ -599,7 +599,7 @@ pub(crate) fn redirected(
     dep: &Dependency,
     configs: &[&str],
     files: &Files,
-    feeds: &crate::nuget::Feeds<'_>,
+    feeds: &crate::nuget::Feeds,
 ) -> Option<String> {
     let mut dirs = vec![&dep.file[..dep.file.rfind('/').map_or(0, |i| i + 1)]];
     if let Some(including) = &dep.included_by {

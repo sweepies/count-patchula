@@ -881,7 +881,8 @@ pub(crate) fn uv_private_index(text: &str) -> bool {
 /// every line of an `index-url` or `extra-index-url` value is checked; a
 /// continuation with no key above it, a section header without its `]`,
 /// or a line with neither delimiter is one pip would reject — private,
-/// since the Count cannot say what it meant.
+/// since the Count cannot say what it meant. Whitespace inside a value
+/// splits it into several URLs to pip, so it is private too.
 pub(crate) fn pip_private_index(text: &str) -> bool {
     // Whether indented lines continue an index key's value.
     let mut index_value = false;
@@ -894,7 +895,9 @@ pub(crate) fn pip_private_index(text: &str) -> bool {
             if !index_value {
                 return true;
             }
-            if !matches!(super::named(line.trim()), Named::Public) {
+            let value = line.trim();
+            if value.contains(char::is_whitespace) || !matches!(super::named(value), Named::Public)
+            {
                 return true;
             }
             continue;
@@ -913,7 +916,10 @@ pub(crate) fn pip_private_index(text: &str) -> bool {
         match key.as_str() {
             "index-url" | "extra-index-url" => {
                 index_value = true;
-                if !matches!(super::named(&line[at + 1..]), Named::Public) {
+                let value = line[at + 1..].trim();
+                if value.contains(char::is_whitespace)
+                    || !matches!(super::named(value), Named::Public)
+                {
                     return true;
                 }
             }

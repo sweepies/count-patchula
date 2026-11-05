@@ -390,8 +390,7 @@ impl Scanner {
     }
     /// Fail every Maven lookup of a build system whose build could take
     /// artifacts from a repository besides the public ones; see
-    /// `maven::private_repositories` and `gradle::private_repositories`. A
-    /// repository a content filter bounds claims its groups alone.
+    /// `maven::private_repositories` and `gradle::private_repositories`.
     fn maven_repositories(
         &self,
         files: &Files,
@@ -420,22 +419,14 @@ impl Scanner {
                 continue;
             };
             warnings.extend(repositories.warnings.iter().cloned());
+            let Some(reason) = repositories.closed else {
+                continue;
+            };
             for dep in deps
                 .iter_mut()
                 .filter(|dep| dep.manager == manager && dep.source == Source::Maven)
             {
-                let reason = repositories.closed.as_ref().or_else(|| {
-                    let coordinate = dep.package.rsplit('|').next().unwrap_or(&dep.package);
-                    repositories.claimed.get(coordinate).or_else(|| {
-                        coordinate
-                            .split(':')
-                            .next()
-                            .and_then(|group| repositories.claimed.get(group))
-                    })
-                });
-                if let Some(reason) = reason {
-                    dep.registry = origins::Named::Unusable(reason.clone()).recorded();
-                }
+                dep.registry = origins::Named::Unusable(reason.clone()).recorded();
             }
         }
     }

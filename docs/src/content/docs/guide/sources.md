@@ -289,16 +289,17 @@ dependency's `registry`:
   NuGet merges in ways the Count does not follow, fail every lookup. A package mapped to
   nuget.org alone comes from there; any other fails its lookup, since
   private NuGet feeds are not read yet. A `dotnet-tools.json` manifest
-  counts every folder below it with a config of its own. A shared MSBuild
-  file such as `Directory.Build.props`, which can be imported from
-  anywhere, counts every folder with a config; a
-  `Directory.Packages.props` counts only those whose config can govern a
-  project under it — a project below the config, not opted out by an
-  unconditional literal `ImportDirectoryPackagesProps` `false` in the
-  nearest `Directory.Build.props` above it, and not under a closer
-  `Directory.Packages.props` — or that sits at or above the folder of a
-  `.sln`, `.slnx` or `.slnf` naming a governed project. Anything undecidable —
-  a condition, a variable or an unreadable file — counts the config. Anything NuGet could read
+  counts every folder below it with a config of its own, and a shared
+  MSBuild file such as `Directory.Packages.props`, which can be imported
+  from anywhere, counts every folder with one — except a config proven
+  inert: no project file (any extension ending in `proj`, case aside) and
+  no `.sln`, `.slnx` or `.slnf` at or below its folder, or every project
+  there opted out of central package management by its single nearest
+  `Directory.Build.props` setting `ImportDirectoryPackagesProps` to a
+  literal `false` unconditionally, with nothing it imports after that
+  able to set it back — Arcade's `eng/common/internal` pattern. Anything
+  undecidable — a condition, a variable, an import the Count cannot
+  follow or an unreadable file — counts the config. Anything NuGet could read
   differently fails every lookup it could affect: a config the Count
   cannot read, with a section it does not know such as
   `fallbackPackageFolders`, with `remove`, or with a pattern other than an
@@ -343,25 +344,18 @@ dependency's `registry`:
   Gradle, the Count reads every script, the sources in `buildSrc`,
   `build-logic`, `build-conventions` and `gradle/plugins`, and everything
   the settings include and the scripts apply. `mavenCentral()`, `google()`,
-  `gradlePluginPortal()` and `jcenter()` are fine, without a body. Another
-  repository bounded to named groups and modules — a `content { … }`
-  block that is a direct child of the repository's, or an
-  `exclusiveContent` `filter { … }`, holding only `includeGroup` and
-  `includeModule` statements — claims those alone: their lookups fail and
-  the rest can still come from Maven Central. Any other `maven`, `ivy`,
-  `flatDir`, `mavenLocal`, `exclusiveContent` or custom
-  `ArtifactRepository` outside a `publishing` block fails every lookup, as
-  do a filter nested in another closure, a `content(…)` call, or a filter
-  with any other statement such as `includeGroupByRegex`; so does a
-  repository whose address is anything but a single literal — an
-  identifier, an Elvis, a conditional or a template — `artifactUrls`,
-  `repositories.all` or `repositories.add`, as do build logic the Count
-  cannot read,
-  an `includeBuild` outside the settings or with a computed name, and an
-  `apply from` other than a plain path, `file(…)`,
-  `rootProject.file(…)`, or a path under `$rootDir` or `$projectDir`. A
-  build whose lookups fail says so once, in a warning naming the file and
-  repository, rather than once per dependency. Repositories that a Gradle
+  `gradlePluginPortal()` and `jcenter()` are fine, without a body, while
+  `maven`, `ivy`, `flatDir`, `mavenLocal`, `exclusiveContent` or a
+  custom `ArtifactRepository` outside a `publishing` block fails every
+  lookup — the Count does not weigh `content` filters or
+  `exclusiveContent`, so even a repository bounded to named groups fails
+  them all — as do `repositories.all` and `repositories.add`, build
+  logic the Count cannot read, an `includeBuild` outside the settings or
+  with a computed name, and an `apply from` other than a plain path,
+  `file(…)`, `rootProject.file(…)`, or a path under `$rootDir` or
+  `$projectDir`. A build whose lookups fail says so once, in a warning
+  naming the file and, where the Count reads it, the repository's
+  address, rather than once per dependency. Repositories that a Gradle
   plugin, a Maven build extension, an init script or a CI machine's own
   settings add are not in the repository's files, so the Count does not
   see them; Maven Central and the Gradle Plugin Portal check who owns a
