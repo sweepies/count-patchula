@@ -228,15 +228,13 @@ fn project_file(path: &str) -> bool {
 
 pub(super) fn selected(path: &str) -> bool {
     let leaf = path.rsplit('/').next().unwrap_or(path);
+    let lower = leaf.to_ascii_lowercase();
     project_file(path)
-        || leaf.ends_with(".sln")
-        || leaf.ends_with(".slnx")
+        || solution_file(&lower)
+        || lower == "directory.packages.props"
         || matches!(
             leaf,
-            "Directory.Packages.props"
-                | "Directory.Build.props"
-                | "global.json"
-                | "packages.lock.json"
+            "Directory.Build.props" | "global.json" | "packages.lock.json"
         )
         || path.ends_with(".config/dotnet-tools.json")
 }
@@ -620,7 +618,7 @@ impl<'a> Feeds<'a> {
             let leaf = path.rsplit('/').next().unwrap_or(path);
             if project_file(path) {
                 projects.push(path.clone());
-            } else if leaf == "Directory.Packages.props" {
+            } else if leaf.eq_ignore_ascii_case("directory.packages.props") {
                 central.push(path.clone());
             }
         }
@@ -643,7 +641,7 @@ impl<'a> Feeds<'a> {
             pdir.starts_with(config_dir) && self.governs_project(props_dir, project)
         }) || self.files.iter().any(|(path, text)| {
             let leaf = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
-            (leaf.ends_with(".sln") || leaf.ends_with(".slnx"))
+            solution_file(&leaf)
                 && path.starts_with(config_dir)
                 && (crate::unreadable_text(text)
                     || solution_projects(text).any(|reference| {
@@ -651,6 +649,33 @@ impl<'a> Feeds<'a> {
                             &path[..path.rfind('/').map_or(0, |i| i + 1)],
                             &reference,
                         ) {
+                            Some(target) if self.projects.contains(&target) => {
+                                self.governs_project(props_dir, &target)
+                            }
+                            // A project the Count cannot place may be
+                            // governed.
+                            _ => true,
+                        }
+                    }))
+        })
+    }
+
+    /// Whether a config in `config_dir` joins `props_dir`'s central
+    /// sources through a solution file it is not below: the config sits
+    /// at or above a `.sln`/`.slnx`/`.slnf` anywhere in the tree that
+    /// names a project `props_dir` governs — a restore at the solution
+    /// reads the config for the governed project.
+    fn solution_config(&self, props_dir: &str, config_dir: &str) -> bool {
+        self.files.iter().any(|(path, text)| {
+            let leaf = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
+            if !solution_file(&leaf) {
+                return false;
+            }
+            let sdir = &path[..path.rfind('/').map_or(0, |i| i + 1)];
+            sdir.starts_with(config_dir)
+                && (crate::unreadable_text(text)
+                    || solution_projects(text).any(|reference| {
+                        match resolve_path(sdir, &reference) {
                             Some(target) if self.projects.contains(&target) => {
                                 self.governs_project(props_dir, &target)
                             }
@@ -696,21 +721,19 @@ impl<'a> Feeds<'a> {
             .any(|node| node.is_element() && node.tag_name().name().eq_ignore_ascii_case("import"))
     }
 
-    /// Whether a literal `ImportDirectoryPackagesProps` or
-    /// `ManagePackageVersionsCentrally` `false` opts `project` out of
-    /// central package management, set by the project itself or, since
-    /// MSBuild imports only the nearest, by the nearest
-    /// `Directory.Build.props` above it.
+    /// Whether `project` opts out of central package management through
+    /// the single nearest `Directory.Build.props` above it — MSBuild
+    /// imports that file before deciding whether to import
+    /// `Directory.Packages.props`, so it is where
+    /// `ImportDirectoryPackagesProps` `false` takes effect, the pattern
+    /// Arcade's eng/common/internal uses. What the project itself or a
+    /// farther file says does not count: `Directory.Packages.props` or
+    /// later evaluation can override it.
     fn opted_out(&self, project: &str) -> bool {
-        if let Some(verdict) = self.files.get(project).map(|text| opt_out(text))
-            && let Some(opted) = verdict
-        {
-            return opted;
-        }
         let mut dir = &project[..project.rfind('/').map_or(0, |i| i + 1)];
         loop {
             if let Some(text) = self.files.get(&format!("{dir}Directory.Build.props")) {
-                return opt_out(text).unwrap_or(false);
+                return opts_out(text);
             }
             if dir.is_empty() {
                 return false;
@@ -771,15 +794,20 @@ impl<'a> Feeds<'a> {
         let here = Self::nearest(&self.chains, dir);
         // A project restores in its own folder alone; the others count every
         // folder below too — a central props file only those that govern a
-        // project under them.
+        // project under them, or that sit at or above a solution naming one.
         let below = self
             .chains
             .iter()
             .filter(|(config, _)| {
-                (shared || manifest.is_some())
-                    && config.starts_with(dir)
-                    && config.len() > dir.len()
-                    && (!central || self.governs(folder, config))
+                if !(shared || manifest.is_some()) {
+                    return false;
+                }
+                if config.starts_with(dir) && config.len() > dir.len() {
+                    return !central || self.governs(folder, config);
+                }
+                central
+                    && !dir.starts_with(config.as_str())
+                    && self.solution_config(folder, config)
             })
             .map(|(_, chain)| chain.clone());
         let origins = std::iter::once(here).chain(below).map(|chain| match chain {
@@ -863,57 +891,51 @@ impl<'a> Feeds<'a> {
     }
 }
 
-/// What `text`, a project file or `Directory.Build.props`, says about
-/// central package management: `Some(true)` when it opts out — the last
-/// `ManagePackageVersionsCentrally` or `ImportDirectoryPackagesProps`
-/// element is a literal `false` in a `PropertyGroup` with no `Condition`
-/// on it or an ancestor, and no later `Import` could set it back —
-/// `Some(false)` when it says anything else, and `None` when it is
-/// silent. A file the Count cannot parse counts as saying something.
-fn opt_out(text: &str) -> Option<bool> {
+/// Whether `text`, a `Directory.Build.props`, opts the projects under it
+/// out of central package management: the last `ImportDirectoryPackagesProps`
+/// element is a literal `false` in a `PropertyGroup`, unconditional — no
+/// `Condition` on it or an ancestor, and not inside `Choose`/`When`/
+/// `Otherwise`. A file the Count cannot parse does not opt out.
+fn opts_out(text: &str) -> bool {
     let Ok(document) = roxmltree::Document::parse(text) else {
-        return Some(false);
+        return false;
     };
-    let named = |name: &str| -> Vec<roxmltree::Node<'_, '_>> {
-        document
-            .descendants()
-            .filter(|node| node.is_element() && node.tag_name().name().eq_ignore_ascii_case(name))
-            .collect()
-    };
-    let mut seen = false;
-    let mut opted = false;
-    for name in [
-        "ManagePackageVersionsCentrally",
-        "ImportDirectoryPackagesProps",
-    ] {
-        let Some(last) = named(name).into_iter().last() else {
-            continue;
-        };
-        seen = true;
-        let literal = last
-            .text()
-            .is_some_and(|text| text.trim().eq_ignore_ascii_case("false"));
-        let grouped = last.parent().is_some_and(|parent| {
-            parent.is_element()
-                && parent
+    let Some(last) = document
+        .descendants()
+        .rfind(|node| {
+            node.is_element()
+                && node
                     .tag_name()
                     .name()
-                    .eq_ignore_ascii_case("propertygroup")
-        });
-        let conditioned = std::iter::once(last).chain(last.ancestors()).any(|node| {
-            node.attributes()
-                .any(|a| a.name().eq_ignore_ascii_case("condition"))
-        });
-        let imported = named("Import")
-            .iter()
-            .any(|import| import.range().start > last.range().start);
-        opted = opted || (literal && grouped && !conditioned && !imported);
-    }
-    if opted {
-        Some(true)
-    } else {
-        seen.then_some(false)
-    }
+                    .eq_ignore_ascii_case("ImportDirectoryPackagesProps")
+        })
+    else {
+        return false;
+    };
+    let literal = last
+        .text()
+        .is_some_and(|text| text.trim().eq_ignore_ascii_case("false"));
+    let grouped = last.parent().is_some_and(|parent| {
+        parent.is_element()
+            && parent
+                .tag_name()
+                .name()
+                .eq_ignore_ascii_case("propertygroup")
+    });
+    let conditioned = std::iter::once(last).chain(last.ancestors()).any(|node| {
+        node.attributes()
+            .any(|a| a.name().eq_ignore_ascii_case("condition"))
+            || matches!(
+                node.tag_name().name().to_ascii_lowercase().as_str(),
+                "choose" | "when" | "otherwise"
+            )
+    });
+    literal && grouped && !conditioned
+}
+
+/// Whether `leaf`, already lowercased, is a solution file.
+fn solution_file(leaf: &str) -> bool {
+    leaf.ends_with(".sln") || leaf.ends_with(".slnx") || leaf.ends_with(".slnf")
 }
 
 /// The project paths a `.sln` or `.slnx` names: quoted references whose

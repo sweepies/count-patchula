@@ -3416,14 +3416,18 @@ fn nuget_central_props_governance_imports_extensions_and_solutions() {
         assert!(fails(registry(files)), "{name}");
     }
 
-    // Opting out takes a literal `false` from the project or the nearest
-    // Directory.Build.props; a comment, a condition or a later element
-    // is none.
+    // Opting out takes only an unconditional `ImportDirectoryPackagesProps`
+    // `false` in the nearest Directory.Build.props: what the project file
+    // itself says — a comment, a condition, a later element — and
+    // `ManagePackageVersionsCentrally` anywhere are none.
     for text in [
-        "<Project><!-- <PropertyGroup><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally></PropertyGroup> --></Project>",
-        "<Project><PropertyGroup Condition=\"'$(X)' == '1'\"><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally></PropertyGroup></Project>",
-        "<Project><PropertyGroup><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally></PropertyGroup><Import Project=\"later.props\" /></Project>",
-        "<Project><PropertyGroup><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally><ManagePackageVersionsCentrally>$(Maybe)</ManagePackageVersionsCentrally></PropertyGroup></Project>",
+        "<Project><!-- <PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup> --></Project>",
+        "<Project><PropertyGroup Condition=\"'$(X)' == '1'\"><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup></Project>",
+        "<Project><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup><Import Project=\"later.props\" /></Project>",
+        "<Project><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps><ImportDirectoryPackagesProps>$(Maybe)</ImportDirectoryPackagesProps></PropertyGroup></Project>",
+        "<Project><Choose><Otherwise><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup></Otherwise></Choose></Project>",
+        "<Project><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup></Project>",
+        "<Project><PropertyGroup><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally></PropertyGroup></Project>",
     ] {
         let files = vec![
             ("Directory.Packages.props", props),
@@ -3432,26 +3436,33 @@ fn nuget_central_props_governance_imports_extensions_and_solutions() {
         ];
         assert!(fails(registry(files)), "{text}");
     }
-    // The project itself and the nearest Directory.Build.props can opt
-    // out; a farther one cannot where a nearer says nothing.
-    let build_props = "<Project><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup></Project>";
-    for extra in [
-        vec![(
-            "sub/app/App.csproj",
-            "<Project><PropertyGroup><ManagePackageVersionsCentrally>FALSE</ManagePackageVersionsCentrally></PropertyGroup></Project>",
-        )],
-        vec![
-            ("sub/app/App.csproj", project),
-            ("sub/Directory.Build.props", build_props),
-        ],
+    // The same holds in a Directory.Build.props: only
+    // `ImportDirectoryPackagesProps` opts out, only unconditionally.
+    for build_props in [
+        "<Project><PropertyGroup><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally></PropertyGroup></Project>",
+        "<Project><Choose><When Condition=\"'$(X)' == '1'\"><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup></When></Choose></Project>",
+        "<Project><PropertyGroup><ImportDirectoryPackagesProps Condition=\"'$(X)' == '1'\">false</ImportDirectoryPackagesProps></PropertyGroup></Project>",
+        "<Project><PropertyGroup><ImportDirectoryPackagesProps>true</ImportDirectoryPackagesProps></PropertyGroup></Project>",
+        "<Project><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></Project>",
     ] {
-        let mut files = vec![
+        let files = vec![
             ("Directory.Packages.props", props),
             ("sub/nuget.config", private_config),
+            ("sub/Directory.Build.props", build_props),
+            ("sub/app/App.csproj", project),
         ];
-        files.extend(extra);
-        assert_eq!(registry(files), None);
+        assert!(fails(registry(files)), "{build_props}");
     }
+    // The nearest Directory.Build.props opts out; a farther one cannot
+    // where a nearer says nothing.
+    let build_props = "<Project><PropertyGroup><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps></PropertyGroup></Project>";
+    let files = vec![
+        ("Directory.Packages.props", props),
+        ("sub/nuget.config", private_config),
+        ("sub/Directory.Build.props", build_props),
+        ("sub/app/App.csproj", project),
+    ];
+    assert_eq!(registry(files), None);
     let files = vec![
         ("Directory.Packages.props", props),
         ("Directory.Build.props", build_props),
@@ -3476,23 +3487,76 @@ fn nuget_central_props_governance_imports_extensions_and_solutions() {
         ("Directory.Packages.props", props),
         ("sln/nuget.config", private_config),
         ("sln/App.sln", sln),
-        (
-            "app/App.csproj",
-            "<Project><PropertyGroup><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally></PropertyGroup></Project>",
-        ),
+        ("app/Directory.Build.props", build_props),
+        ("app/App.csproj", project),
     ];
     assert_eq!(registry(files), None);
-    // A .slnx reads the same way.
-    let files = vec![
-        ("Directory.Packages.props", props),
-        ("sln/nuget.config", private_config),
+    // A .slnx or .slnf reads the same way.
+    for (solution, body) in [
         (
             "sln/App.slnx",
             "<Solution><Project Path=\"../app/App.csproj\" /></Solution>",
         ),
-        ("app/App.csproj", project),
+        (
+            "sln/App.slnf",
+            "{\"solution\": {\"path\": \"App.sln\", \"projects\": [\"..\\\\app\\\\App.csproj\"]}}",
+        ),
+    ] {
+        let files = vec![
+            ("Directory.Packages.props", props),
+            ("sln/nuget.config", private_config),
+            (solution, body),
+            ("app/App.csproj", project),
+        ];
+        assert!(fails(registry(files)), "{solution}");
+    }
+
+    // A config outside the props's subtree still joins through a
+    // solution it sits at or above: build/App.sln names a governed
+    // project in src/.
+    let in_src = |files: Vec<(&'static str, &'static str)>| {
+        registry_of(
+            Manager::Nuget,
+            &files,
+            "src/Directory.Packages.props",
+            "Newtonsoft.Json",
+        )
+    };
+    let sibling_sln = "Project(\"{9A19103F-16F7-4668-BE54-9A1E7A4F7556}\") = \"P\", \"..\\src\\P\\P.csproj\", \"{B0F5C13D-BB51-4D6B-B3D3-DE54C7C8D0BE}\"\nEndProject\n";
+    let files = vec![
+        ("src/Directory.Packages.props", props),
+        ("build/nuget.config", private_config),
+        ("build/App.sln", sibling_sln),
+        ("src/P/P.csproj", project),
     ];
-    assert!(fails(registry(files)));
+    assert!(fails(in_src(files)));
+    // A reference the Count cannot place counts too — it may name a
+    // governed project — but one naming a real project the props does
+    // not govern does not.
+    let files = vec![
+        ("src/Directory.Packages.props", props),
+        ("build/nuget.config", private_config),
+        ("build/App.sln", sibling_sln),
+        ("other/P/P.csproj", project),
+    ];
+    assert!(fails(in_src(files)));
+    let sibling_sln = "Project(\"{9A19103F-16F7-4668-BE54-9A1E7A4F7556}\") = \"P\", \"P\\P.csproj\", \"{B0F5C13D-BB51-4D6B-B3D3-DE54C7C8D0BE}\"\nEndProject\n";
+    let files = vec![
+        ("src/Directory.Packages.props", props),
+        ("build/nuget.config", private_config),
+        ("build/App.sln", sibling_sln),
+        ("build/P/P.csproj", project),
+    ];
+    assert_eq!(in_src(files), None);
+
+    // Directory.Packages.props counts however it is spelled.
+    let files = vec![
+        ("Directory.Packages.props", props),
+        ("nested/directory.PACKAGES.props", props),
+        ("nested/app/App.csproj", project),
+        ("nested/nuget.config", private_config),
+    ];
+    assert_eq!(registry(files), None);
 }
 
 /// The registry the Count gives `name` from `file` when a repository holds
@@ -4086,19 +4150,30 @@ fn mise_package_tools_fail_where_the_project_redirects_their_registry() {
     ];
     assert_eq!(lookup(&public_index, "cargo:ripgrep"), None);
 
-    // pip's index settings, however pip spells the keys and delimiters.
+    // pip's index settings, however pip spells the keys and delimiters;
+    // configparser continues a key's value onto indented lines, so one
+    // there counts too.
     let pypi = format!("{tools}\n\"pypi:requests\" = \"25.0.0\"\n");
     for config in [
         "index_url = https://pypi.acme.dev/simple\n",
         "INDEX-URL: https://pypi.acme.dev/simple\n",
         "[global]\nextra-index-url = https://pypi.acme.dev/simple\n",
         "[install]\nindex-url\n",
+        "[global]\nindex-url = https://pypi.org/simple/\n    https://pypi.acme.dev/simple/\n",
+        "[global]\nextra-index-url = https://pypi.org/simple/\n    https://pypi.acme.dev/simple/\n",
+        "[global]\n  extra-index-url = https://pypi.acme.dev/simple\n",
+        "[global\nindex-url = https://pypi.org/simple/\n",
     ] {
         let files = [("app/mise.toml", pypi.as_str()), ("app/pip.conf", config)];
         assert!(fails(lookup(&files, "pypi:requests")), "{config}");
         assert_eq!(lookup(&files, "node"), None, "{config}");
     }
-    for config in ["index-url = https://pypi.org/simple\n", "timeout = 10\n"] {
+    for config in [
+        "index-url = https://pypi.org/simple\n",
+        "timeout = 10\n",
+        "[global]\nindex-url = https://pypi.org/simple/\n    https://pypi.org/simple\n",
+        "[global]\nindex-url = https://pypi.org/simple/\ntimeout = 10\n",
+    ] {
         let files = [("app/mise.toml", pypi.as_str()), ("app/pip.conf", config)];
         assert_eq!(lookup(&files, "pypi:requests"), None, "{config}");
     }
@@ -4228,6 +4303,47 @@ dependencies { implementation "com.acme:lib:1.0" }
         assert!(fails(found.clone()), "{filter}: {found:?}");
     }
 
+    // A filter is a bound only as a direct child of the repository's
+    // block: one nested in another closure, given as a call's argument,
+    // or called `filter` outside `exclusiveContent` is one the Count
+    // does not read — the repository claims everything.
+    for filter in [
+        "if (ci) {\n            content { includeGroup \"com.acme\" }\n        }",
+        "configurations.each {\n            content { includeGroup \"com.acme\" }\n        }",
+        "content { includeGroup \"com.acme\" }\n        if (ci) {\n            content { includeGroup \"org.other\" }\n        }",
+        "content(declareFilter)",
+        "content(Action { includeGroup \"com.acme\" })",
+        "filter { includeGroup \"com.acme\" }",
+    ] {
+        let build = format!(
+            "repositories {{\n    mavenCentral()\n    maven {{\n        url = \"https://repo.acme.dev/maven\"\n        {filter}\n    }}\n}}\ndependencies {{\n    implementation \"org.springframework:spring-core:6.1.0\"\n}}\n"
+        );
+        let found = lookup(
+            &[("build.gradle", build.as_str())],
+            "org.springframework:spring-core",
+        );
+        assert!(fails(found.clone()), "{filter}: {found:?}");
+    }
+
+    // A public repository call with a body configures a repository the
+    // Count does not read, as does mutating the handler itself.
+    for repository in [
+        "mavenCentral { url = \"https://repo.acme.dev/maven\" }",
+        "google { url = \"https://repo.acme.dev/maven\" }",
+        "gradlePluginPortal { url = \"https://repo.acme.dev/maven\" }",
+        "mavenCentral()\n    repositories.all { it.url = \"https://repo.acme.dev/maven\" }",
+        "mavenCentral()\n    project.repositories.add(acme)",
+    ] {
+        let build = format!(
+            "repositories {{\n    {repository}\n}}\ndependencies {{\n    implementation \"org.springframework:spring-core:6.1.0\"\n}}\n"
+        );
+        let found = lookup(
+            &[("build.gradle", build.as_str())],
+            "org.springframework:spring-core",
+        );
+        assert!(fails(found.clone()), "{repository}: {found:?}");
+    }
+
     // Every content block of a repository claims: two of them union.
     let two_blocks = r#"repositories {
     mavenCentral()
@@ -4249,7 +4365,8 @@ dependencies {
     assert!(fails(lookup(&files, "org.other:lib")));
 
     // A repository whose URL is assigned twice, conditionally or by
-    // anything but one literal serves anything the Count cannot see.
+    // anything but one literal serves anything the Count cannot see — the
+    // literal alone does not, however public it looks.
     for repository in [
         r#"maven { url = "https://repo.acme.dev/a"; url = "https://repo.acme.dev/b" }"#,
         r#"maven { url "https://repo.acme.dev"; url "https://repo.acme.dev" }"#,
@@ -4258,6 +4375,13 @@ dependencies {
         r#"maven { url = findProperty("mavenUrl") }"#,
         r#"maven { url = "https://repo.acme.dev" + suffix }"#,
         r#"maven { url = "https://${host}/maven" }"#,
+        r#"maven(repoUrl ?: "https://repo.maven.apache.org/maven2")"#,
+        r#"maven(if (ci) a else "https://maven.google.com")"#,
+        r#"maven("https://repo.acme.dev/a", "https://repo.acme.dev/b")"#,
+        r#"maven "https://repo.acme.dev/a", "https://repo.acme.dev/b""#,
+        r#"maven("https://repo.acme.dev", url = "https://maven.google.com")"#,
+        r#"maven(url = "https://maven.google.com", name = "acme")"#,
+        r#"maven { url = "https://maven.google.com"; artifactUrls = ["https://repo.acme.dev"] }"#,
     ] {
         let build = format!(
             "repositories {{\n    mavenCentral()\n    {repository}\n}}\ndependencies {{\n    implementation \"org.springframework:spring-core:6.1.0\"\n}}\n"

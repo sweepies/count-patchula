@@ -293,10 +293,11 @@ dependency's `registry`:
   file such as `Directory.Build.props`, which can be imported from
   anywhere, counts every folder with a config; a
   `Directory.Packages.props` counts only those whose config can govern a
-  project under it — a project below the config, not opted out by a
-  literal `ImportDirectoryPackagesProps` or `ManagePackageVersionsCentrally`
-  `false` in the project or a `Directory.Build.props` between them, and
-  not under a closer `Directory.Packages.props`. Anything undecidable —
+  project under it — a project below the config, not opted out by an
+  unconditional literal `ImportDirectoryPackagesProps` `false` in the
+  nearest `Directory.Build.props` above it, and not under a closer
+  `Directory.Packages.props` — or that sits at or above the folder of a
+  `.sln`, `.slnx` or `.slnf` naming a governed project. Anything undecidable —
   a condition, a variable or an unreadable file — counts the config. Anything NuGet could read
   differently fails every lookup it could affect: a config the Count
   cannot read, with a section it does not know such as
@@ -342,14 +343,20 @@ dependency's `registry`:
   Gradle, the Count reads every script, the sources in `buildSrc`,
   `build-logic`, `build-conventions` and `gradle/plugins`, and everything
   the settings include and the scripts apply. `mavenCentral()`, `google()`,
-  `gradlePluginPortal()` and `jcenter()` are fine. Another repository
-  bounded to named groups and modules — a `content` or `exclusiveContent`
-  `filter` holding only `includeGroup` and `includeModule` statements —
-  claims those alone: their lookups fail and the rest can still come from
-  Maven Central. Any other `maven`, `ivy`, `flatDir`, `mavenLocal`,
-  `exclusiveContent` or custom `ArtifactRepository` outside a `publishing`
-  block fails every lookup, and so does a filter with any other statement,
-  such as `includeGroupByRegex`, as do build logic the Count cannot read,
+  `gradlePluginPortal()` and `jcenter()` are fine, without a body. Another
+  repository bounded to named groups and modules — a `content { … }`
+  block that is a direct child of the repository's, or an
+  `exclusiveContent` `filter { … }`, holding only `includeGroup` and
+  `includeModule` statements — claims those alone: their lookups fail and
+  the rest can still come from Maven Central. Any other `maven`, `ivy`,
+  `flatDir`, `mavenLocal`, `exclusiveContent` or custom
+  `ArtifactRepository` outside a `publishing` block fails every lookup, as
+  do a filter nested in another closure, a `content(…)` call, or a filter
+  with any other statement such as `includeGroupByRegex`; so does a
+  repository whose address is anything but a single literal — an
+  identifier, an Elvis, a conditional or a template — `artifactUrls`,
+  `repositories.all` or `repositories.add`, as do build logic the Count
+  cannot read,
   an `includeBuild` outside the settings or with a computed name, and an
   `apply from` other than a plain path, `file(…)`,
   `rootProject.file(…)`, or a path under `$rootDir` or `$projectDir`. A
