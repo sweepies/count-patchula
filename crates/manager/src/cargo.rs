@@ -499,6 +499,16 @@ pub(crate) fn replaced(files: &Files, path: &str) -> Option<String> {
     None
 }
 
+/// crates.io, for `crate::origins` and cache partitioning.
+pub(crate) const CRATES: crate::origins::Public = crate::origins::Public {
+    source: Source::Crates,
+    label: "crates.io",
+    is_public: |url| {
+        crate::web_host(url)
+            .is_some_and(|host| matches!(host.as_str(), "index.crates.io" | "crates.io"))
+    },
+};
+
 #[cfg(test)]
 mod tests {
     use super::glob;

@@ -4,7 +4,7 @@ use jsonc_parser::{
     common::Ranged,
 };
 
-fn ast(text: &str, jsonc: bool) -> Result<Value<'_>, String> {
+pub(crate) fn ast(text: &str, jsonc: bool) -> Result<Value<'_>, String> {
     let options = jsonc_parser::ParseOptions {
         allow_comments: jsonc,
         allow_trailing_commas: jsonc,
@@ -586,3 +586,10 @@ pub(super) fn assign_locked_registries(
         entry.registry = registry_for(&entry.file, &entry.package, npmrcs);
     }
 }
+
+/// npm's public registry, for `crate::origins` and cache partitioning.
+pub(crate) const NPM: crate::origins::Public = crate::origins::Public {
+    source: Source::Npm,
+    label: "npm",
+    is_public: public,
+};

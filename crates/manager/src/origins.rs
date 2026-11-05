@@ -132,6 +132,24 @@ impl Origins {
             None => Origin::Index(Named::Public),
         }
     }
+    /// Whether every registry a tool run could fetch from is a well-known
+    /// public one: nothing configured or locked but `Named::Public`, and
+    /// nothing the Count cannot read or follow. Sources that are not
+    /// registries at all — a git remote, a path, a workspace member — do
+    /// not decide it either way; the caller rules on their remoteness for
+    /// its ecosystem, since a local source fetches nothing.
+    pub(crate) fn public_only(&self) -> bool {
+        let public =
+            |origin: &Origin| matches!(origin, Origin::Index(Named::Public) | Origin::Other);
+        self.uncertain.is_empty()
+            && self
+                .configured
+                .iter()
+                .all(|named| matches!(named, Named::Public))
+            && self.declared.values().all(&public)
+            && self.locks.iter().all(|lock| lock.values().all(&public))
+    }
+
     /// Give each dependency of `public`'s source in `deps` its registry,
     /// keyed by `package`, and drop those that do not come from a registry,
     /// returning them.

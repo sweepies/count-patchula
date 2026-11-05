@@ -11,6 +11,10 @@ pub use edit::{Edit, apply, edits};
 pub use mise::included_files;
 mod cargo;
 mod composer;
+mod credentials;
+pub use credentials::{
+    committed_credentials, credential_check, credential_reason, credential_scope,
+};
 mod custom;
 mod devcontainer;
 mod gitlabci;
@@ -21,6 +25,7 @@ mod helm;
 mod images;
 mod locked;
 mod origins;
+mod public;
 mod pypi;
 pub use locked::Locked;
 mod maven;
@@ -151,6 +156,14 @@ pub struct Extraction {
     pub locked: Vec<Locked>,
     #[serde(default)]
     pub skipped: Vec<Skipped>,
+    /// For each file that can steer a lockfile tool's fetches, whether it
+    /// can fetch only from the ecosystem's well-known public registry:
+    /// every configured and locked origin is public and nothing is
+    /// uncertain or unreadable. A run may share the `public` cache
+    /// partition only when every file it reads decides so; a missing
+    /// verdict is not public.
+    #[serde(default)]
+    pub public_only: BTreeMap<String, bool>,
 }
 /// A declaration the Count found but cannot read as a version, such as an
 /// image built from a variable. Unlike a warning, it leaves branch cleanup on.
@@ -264,6 +277,16 @@ impl Scanner {
     }
     pub fn needs(&self, path: &str) -> bool {
         self.config.managers.iter().any(|m| self.selected(*m, path)) || self.registry_file(path)
+    }
+    /// Whether `path` sits under the repository's excluded paths.
+    pub fn excluded(&self, path: &str) -> bool {
+        !self.config.exclude.is_empty() && self.exclude.matches(path)
+    }
+    /// Whether `path` is one the committed-credentials scan checks: a
+    /// settings file that can hold credentials, which this repository's
+    /// scan reads. Paths `exclude` leaves out are never checked.
+    pub fn credential_checked(&self, path: &str) -> bool {
+        credential_scope(path) && !self.excluded(path) && self.needs(path)
     }
     /// The files among `paths` that what `files` says makes the Count read
     /// as well: the sources of the builds Gradle settings include, which can
@@ -420,9 +443,7 @@ impl Scanner {
             .collect()
     }
     fn selected(&self, manager: Manager, path: &str) -> bool {
-        if !self.config.managers.contains(&manager)
-            || (!self.config.exclude.is_empty() && self.exclude.matches(path))
-        {
+        if !self.config.managers.contains(&manager) || self.excluded(path) {
             return false;
         }
         if let Some((_, p)) = self.selections.iter().find(|(m, _)| *m == manager) {
@@ -763,6 +784,11 @@ impl Scanner {
                 .extend(locked::npm(files, &locks, &result.dependencies));
         }
         npm::assign_locked_registries(&mut result.locked, &npmrcs);
+        for (path, text) in files {
+            if let Some(flag) = public::verdict(path, text, files) {
+                result.public_only.insert(path.clone(), flag);
+            }
+        }
         Ok(result)
     }
 }

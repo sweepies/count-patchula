@@ -27,6 +27,8 @@ impl Runner {
                 cwd: Some(root.join(directory)),
                 // APM clones each package from its own local bare cache.
                 env: vec![("GIT_ALLOW_PROTOCOL".into(), "https:file".into())],
+                credentials: Vec::new(),
+                public: false,
                 args,
             },
         )

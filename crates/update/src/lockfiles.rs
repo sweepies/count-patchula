@@ -1,5 +1,6 @@
 //! Real ecosystem tools run before any Git Data mutation, in disposable trees.
 mod apm;
+mod caches;
 mod checkout;
 mod credentials;
 mod dotnet;
@@ -55,6 +56,90 @@ pub struct Job {
     /// The manifest is not edited, so the tool must be told the exact version.
     pub lock_only: bool,
 }
+/// Whether `path`, materialized for a run of `ecosystem`, could steer
+/// what its tools fetch: a manifest, lockfile or settings file of the
+/// ecosystem, anywhere in the snapshot. A sibling project reached
+/// through a `ProjectReference`, a `.sln`, a `file:../x`, a uv or
+/// Poetry path dependency or a Composer path repository can steer the
+/// run as much as one inside its directory, so the directory does not
+/// bound it.
+fn steers(ecosystem: Ecosystem, path: &str) -> bool {
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    match ecosystem {
+        Ecosystem::Node => matches!(
+            leaf,
+            "package.json"
+                | ".npmrc"
+                | ".yarnrc.yml"
+                | "pnpm-workspace.yaml"
+                | "package-lock.json"
+                | "npm-shrinkwrap.json"
+                | "aube-lock.yaml"
+                | "pnpm-lock.yaml"
+                | "yarn.lock"
+                | "bun.lock"
+        ),
+        Ecosystem::Python => matches!(
+            leaf,
+            "pyproject.toml"
+                | "uv.toml"
+                | "poetry.toml"
+                | "pdm.toml"
+                | "pixi.toml"
+                | "hatch.toml"
+                | "uv.lock"
+                | "poetry.lock"
+        ),
+        // The repository's `.bundle/config` never steers a run: Bundler's
+        // environment overrides it. A `.gemspec` steers nothing a verdict
+        // can prove either — it is arbitrary Ruby, so it has no verdict
+        // and a run that can read one fails closed.
+        Ecosystem::Ruby => matches!(leaf, "Gemfile" | "Gemfile.lock") || leaf.ends_with(".gemspec"),
+        Ecosystem::Php => matches!(leaf, "composer.json" | "composer.lock"),
+        Ecosystem::Cargo => matches!(leaf, "Cargo.toml" | "Cargo.lock"),
+        Ecosystem::Dotnet => {
+            leaf.eq_ignore_ascii_case("nuget.config")
+                || matches!(
+                    leaf,
+                    "packages.lock.json"
+                        | "Directory.Packages.props"
+                        | "Directory.Build.props"
+                        | "Directory.Build.targets"
+                        | "global.json"
+                        | "dotnet-tools.json"
+                )
+                || [
+                    ".csproj", ".fsproj", ".vbproj", ".sln", ".slnx", ".props", ".targets",
+                ]
+                .iter()
+                .any(|extension| leaf.ends_with(extension))
+        }
+        // Go needs no verdicts: in the `public` partition it runs with
+        // `GOPROXY=https://proxy.golang.org` — no `direct`, which could
+        // fetch anonymously from a host only the server's network
+        // reaches — so a fetch is public by construction, and a run that
+        // fails there is retried in the installation partition with Go's
+        // environment as it was.
+        Ecosystem::Go => true,
+        _ => false,
+    }
+}
+
+/// Whether a run for `ecosystem` can fetch only from the ecosystem's
+/// well-known public registries: every materialized file of its kinds,
+/// anywhere in the snapshot, decided public-only. A file with no
+/// verdict is not public. Fail closed.
+fn public_only(
+    ecosystem: Ecosystem,
+    baseline: &BTreeMap<String, Blob>,
+    verdicts: &BTreeMap<String, bool>,
+) -> bool {
+    matches!(ecosystem, Ecosystem::Go)
+        || baseline
+            .keys()
+            .all(|path| !steers(ecosystem, path) || verdicts.get(path) == Some(&true))
+}
+
 fn directory(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(p, _)| p)
 }
@@ -418,6 +503,7 @@ pub fn maintenance(
         cached_pr: None,
         lock_jobs: jobs.into_iter().collect(),
         lockfiles_ready: false,
+        public_only: snapshot.public_only.clone(),
         deleted: BTreeSet::new(),
         maintenance: true,
         batch: None,
@@ -511,7 +597,17 @@ pub struct Runner {
     /// Held by the first nix call while it installs nix, so concurrent
     /// lookups neither install it twice nor clear each other's install.
     nix_install: Arc<tokio::sync::Mutex<()>>,
+    /// The persistent tool caches' size cap in GiB; 0 turns them off.
+    cache_gib: u64,
+    /// The `installation-<hash>` partition name for runs that hold no
+    /// operator credentials but are not provably public-only:
+    /// `installation-<sha256 of the GitHub credentials scope>` on the
+    /// server, `installation-local` for the CLI.
+    installation: String,
 }
+
+/// The persistent tool caches' default size cap in GiB.
+pub const DEFAULT_CACHE_GIB: u64 = 20;
 impl Runner {
     pub fn new(cache: PathBuf, token: &str) -> Self {
         let home = std::env::var_os("HOME").map_or_else(std::env::temp_dir, PathBuf::from);
@@ -542,6 +638,8 @@ impl Runner {
             usage: Default::default(),
             seed: None,
             nix_install: Default::default(),
+            cache_gib: DEFAULT_CACHE_GIB,
+            installation: "installation-local".into(),
         }
     }
     /// Borrow tool versions from this mise data directory, usually the user's
@@ -574,8 +672,15 @@ impl Runner {
         ))
     }
     pub fn with_credentials(mut self, credentials: Arc<dyn patchula_github::Credentials>) -> Self {
+        // The installation's own partition, for runs that are not provably
+        // public-only but hold no operator credentials.
+        self.installation = format!("installation-{}", hash(credentials.scope().as_bytes()));
         self.credentials = Some(credentials);
         self
+    }
+    /// Set the persistent tool caches' size cap in GiB; 0 turns them off.
+    pub fn set_cache_limit(&mut self, cache_gib: u64) {
+        self.cache_gib = cache_gib;
     }
     /// Give lockfile tools the credentials of the entries that allow it
     /// (`tools = true`), among all of `registries`.
@@ -646,6 +751,7 @@ impl Runner {
         config: &Config,
     ) -> Result<BTreeMap<String, Blob>, String> {
         std::fs::create_dir_all(&self.cache).map_err(|e| e.to_string())?;
+        self.prune_caches();
         let run = tempfile::Builder::new()
             .prefix("run-")
             .tempdir_in(&self.cache)
@@ -655,6 +761,30 @@ impl Runner {
         std::fs::create_dir_all(&driver).map_err(|e| e.to_string())?;
         std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
         let (baseline, cargo_configs) = self.checkout(plan, &root, &driver).await?;
+        // Backstop for the engine's refusal: every file the tools can
+        // read and the engine would check was checked before any of them
+        // runs, so a committed credential can never fetch into the shared
+        // public cache partition. Paths the repository excludes are not
+        // checked, as the engine's are not.
+        let scanner = patchula_manager::Scanner::new(config)?;
+        for (path, text) in baseline
+            .iter()
+            .map(|(path, blob)| (path, blob.content.as_str()))
+            .chain(
+                plan.contents
+                    .iter()
+                    .chain(cargo_configs.iter())
+                    .map(|(path, text)| (path, text.as_str())),
+            )
+            // Source files are checked out so tools can build, but no tool
+            // reads registry credentials from them; a test's connection
+            // string is not a registry credential.
+            .filter(|(path, _)| scanner.credential_checked(path))
+        {
+            if let Some(kind) = patchula_manager::committed_credentials(path, text) {
+                return Err(patchula_manager::credential_reason(path, &kind));
+            }
+        }
         for (path, content) in &plan.contents {
             write(&root, path, content)?;
         }
@@ -674,6 +804,10 @@ impl Runner {
                 .iter()
                 .filter(|j| j.ecosystem == ecosystem && j.directory == directory)
                 .collect();
+            // Whether every file the run can read decided public-only, so
+            // its tools may share the `public` cache partition. Fail
+            // closed: any file without a verdict makes it not public.
+            let public = public_only(ecosystem, &baseline, &plan.public_only);
             let cwd = root.join(&directory);
             match ecosystem {
                 Ecosystem::Ruby => {
@@ -686,6 +820,7 @@ impl Runner {
                             config,
                             versions: &versions,
                             maintenance: plan.maintenance,
+                            public,
                         },
                         &jobs,
                     )
@@ -701,6 +836,7 @@ impl Runner {
                             config,
                             versions: &versions,
                             maintenance: plan.maintenance,
+                            public,
                         },
                         &jobs,
                     )
@@ -715,6 +851,7 @@ impl Runner {
                         config,
                         versions: &versions,
                         maintenance: plan.maintenance,
+                        public,
                     })
                     .await?;
                 }
@@ -729,6 +866,7 @@ impl Runner {
                         &directory,
                         &versions,
                         edited && !plan.maintenance,
+                        public,
                     )
                     .await?;
                 }
@@ -745,6 +883,7 @@ impl Runner {
                             config,
                             versions: &versions,
                             maintenance: plan.maintenance,
+                            public,
                         },
                         &jobs,
                     )
@@ -774,6 +913,7 @@ impl Runner {
                         config,
                         versions: &versions,
                         maintenance: plan.maintenance,
+                        public,
                     })
                     .await?;
                 }
@@ -790,7 +930,8 @@ impl Runner {
                         })
                         .map(|(_, text)| credentials::cargo_registries(text))
                         .collect();
-                    let env = self.cargo_env(&registries);
+                    let (env, entries) = self.cargo_env(&registries);
+                    let credentials = credentials::scopes(entries.iter().copied());
                     for job in jobs {
                         self.cargo_update(
                             &driver,
@@ -798,7 +939,7 @@ impl Runner {
                             &versions["rust"],
                             job,
                             plan.maintenance,
-                            &env,
+                            (&env, &credentials, public),
                         )
                         .await?;
                     }
@@ -807,7 +948,8 @@ impl Runner {
                     let go = go_version(&cwd, &versions["go"])?;
                     // Credentials for Go and Git in `~/.netrc`, gone when Go
                     // finishes, and their hosts private to Go.
-                    let (netrc, hosts) = self.netrc();
+                    let (netrc, hosts, entries) = self.netrc();
+                    let credentials = credentials::scopes(entries.iter().copied());
                     let held = !hosts.is_empty();
                     let mut _netrc = node::Private::default();
                     let mut env = Vec::new();
@@ -817,32 +959,21 @@ impl Runner {
                         _netrc.write(&home.join(".netrc"), &netrc)?;
                         env.push(("GOPRIVATE".to_string(), hosts.join(",")));
                     }
+                    let mut calls = Vec::new();
                     for job in jobs {
                         if let Some(package) = &job.package {
-                            self.held_tool(
-                                &driver,
-                                Invocation {
-                                    tools: vec![("go".into(), go.clone())],
-                                    bin: "go".into(),
-                                    cwd: None,
-                                    env: env.clone(),
-                                    args: vec![
-                                        "-C".into(),
-                                        cwd.to_string_lossy().into_owned(),
-                                        "get".into(),
-                                        format!(
-                                            "{}@{}",
-                                            package,
-                                            job.target.as_deref().ok_or("missing Go target")?
-                                        ),
-                                    ],
-                                },
-                                held,
-                            )
-                            .await?;
+                            calls.push(vec![
+                                "-C".into(),
+                                cwd.to_string_lossy().into_owned(),
+                                "get".into(),
+                                format!(
+                                    "{package}@{}",
+                                    job.target.as_deref().ok_or("missing Go target")?
+                                ),
+                            ]);
                         }
                     }
-                    let args = vec![
+                    calls.push(vec![
                         "-C".into(),
                         cwd.to_string_lossy().into_owned(),
                         "mod".into(),
@@ -851,27 +982,69 @@ impl Runner {
                         } else {
                             "download".into()
                         },
-                    ];
-                    self.held_tool(
-                        &driver,
-                        Invocation {
-                            tools: vec![("go".into(), go.clone())],
-                            bin: "go".into(),
-                            cwd: None,
-                            env,
-                            args,
-                        },
-                        held,
-                    )
-                    .await?;
+                    ]);
+                    // What a Go run may fetch is bounded by GOPROXY, not
+                    // by file verdicts. In the `public` partition it is
+                    // `https://proxy.golang.org` alone — never `direct`,
+                    // which could fetch anonymously from a host only this
+                    // server's network reaches, such as a cluster-internal
+                    // Git host, and leave what it got in a cache every
+                    // installation shares; GOSUMDB keeps its default. A
+                    // run that fails there — an internal module the proxy
+                    // cannot serve — is rerun in the installation
+                    // partition with Go's environment as it was (GOPROXY
+                    // unset), so repositories with internal modules keep
+                    // working. A credentialed run goes straight to its
+                    // credential partition with that environment.
+                    let mut attempts = vec![(false, Vec::new())];
+                    if credentials.is_empty() {
+                        attempts.insert(
+                            0,
+                            (
+                                true,
+                                vec![("GOPROXY".into(), "https://proxy.golang.org".into())],
+                            ),
+                        );
+                    }
+                    for (public, extra) in attempts {
+                        let mut failed = None;
+                        for args in &calls {
+                            let mut run_env = env.clone();
+                            run_env.extend(extra.iter().cloned());
+                            let result = self
+                                .held_tool(
+                                    &driver,
+                                    Invocation {
+                                        tools: vec![("go".into(), go.clone())],
+                                        bin: "go".into(),
+                                        cwd: None,
+                                        env: run_env,
+                                        credentials: credentials.clone(),
+                                        public,
+                                        args: args.clone(),
+                                    },
+                                )
+                                .await;
+                            if let Err(error) = result {
+                                failed = Some(error);
+                                break;
+                            }
+                        }
+                        match failed {
+                            None => break,
+                            // The last attempt's error stands; only the
+                            // `public` attempt retries.
+                            Some(error) if !public => return Err(error),
+                            Some(_) => {}
+                        }
+                    }
                 }
                 Ecosystem::Terraform => {
                     if cwd.join(".terraform.lock.hcl").exists() {
                         std::fs::remove_file(cwd.join(".terraform.lock.hcl"))
                             .map_err(|e| e.to_string())?;
                     }
-                    let env = self.terraform_env();
-                    let held = !env.is_empty();
+                    let (env, entries) = self.terraform_env();
                     self.held_tool(
                         &driver,
                         Invocation {
@@ -879,13 +1052,14 @@ impl Runner {
                             bin: "terraform".into(),
                             cwd: None,
                             env,
+                            credentials: credentials::scopes(entries.iter().copied()),
+                            public: false,
                             args: vec![
                                 format!("-chdir={}", cwd.display()),
                                 "providers".into(),
                                 "lock".into(),
                             ],
                         },
-                        held,
                     )
                     .await?;
                 }
@@ -968,7 +1142,7 @@ impl Runner {
         rust: &str,
         job: &Job,
         maintenance: bool,
-        env: &[(String, String)],
+        (env, credentials, public): (&[(String, String)], &[String], bool),
     ) -> Result<(), String> {
         let update = |args: Vec<String>| {
             let mut all = vec![
@@ -984,9 +1158,10 @@ impl Runner {
                     bin: "cargo".into(),
                     cwd: None,
                     env: env.to_vec(),
+                    credentials: credentials.to_vec(),
+                    public,
                     args: all,
                 },
-                !env.is_empty(),
             )
         };
         let Some(package) = &job.package else {
@@ -1032,6 +1207,71 @@ impl Runner {
         }
         Ok(())
     }
+    /// Evict aged and oversized tool-cache partitions, at most once an hour
+    /// per cache root per process, without holding the generation up. Lock
+    /// files outlive the partitions they guard.
+    fn prune_caches(&self) {
+        let root = self.cache.join(caches::ROOT);
+        if !caches::due(&root) {
+            return;
+        }
+        let cap = self.cache_gib.saturating_mul(1 << 30);
+        tokio::task::spawn_blocking(move || {
+            if let Err(error) = caches::prune(&root, cap, std::time::SystemTime::now()) {
+                tracing::warn!(%error, "tool cache pruning failed");
+            }
+        });
+    }
+    /// The tool's persistent cache partition and its environment, held for the
+    /// run. A run's partition is `public` unless it receives registry
+    /// credentials, in which case their scopes name it.
+    async fn use_caches(
+        &self,
+        call: &Invocation,
+    ) -> Result<(Vec<(String, String)>, Option<caches::Hold>), String> {
+        if self.cache_gib == 0 {
+            return Ok((Vec::new(), None));
+        }
+        let Some(tool) = caches::tool(&call.bin) else {
+            return Ok((Vec::new(), None));
+        };
+        let mut scopes = call.credentials.clone();
+        scopes.sort_unstable();
+        scopes.dedup();
+        // Credentialed runs partition on the credential set as before.
+        // Uncredentialed runs share `public` only when every file they can
+        // read decided public-only; anything else gets the installation's
+        // own partition, so a run that might fetch private content never
+        // leaves it where other installations could pick it up.
+        let name = if !scopes.is_empty() {
+            caches::partition(&scopes)
+        } else if call.public {
+            caches::PUBLIC.into()
+        } else {
+            self.installation.clone()
+        };
+        let root = self.cache.join(caches::ROOT);
+        let bin = call.bin.clone();
+        // `-modcacherw` keeps the module cache writable for eviction; merge
+        // it with any GOFLAGS the call already set.
+        let goflags = call
+            .env
+            .iter()
+            .find(|(key, _)| key == "GOFLAGS")
+            .map(|(_, value)| value.clone());
+        let (mut env, hold) =
+            tokio::task::spawn_blocking(move || caches::acquire(&root, &name, &tool, &bin))
+                .await
+                .map_err(|e| e.to_string())??;
+        if let Some(flags) = goflags.filter(|flags| !flags.is_empty()) {
+            for (key, value) in &mut env {
+                if key == "GOFLAGS" {
+                    *value = format!("{flags} {value}");
+                }
+            }
+        }
+        Ok((env, Some(hold)))
+    }
     async fn tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, String> {
         let mut spec = self.command(driver);
         // A first use installs the tool inside this call, from scratch.
@@ -1055,6 +1295,10 @@ impl Runner {
             spec.complete_output = true;
         }
         for (key, value) in &call.env {
+            spec.env.insert(key.into(), value.into());
+        }
+        let (cache_env, _caches) = self.use_caches(&call).await?;
+        for (key, value) in cache_env {
             spec.env.insert(key.into(), value.into());
         }
         spec.args.push("exec".into());
@@ -1108,13 +1352,9 @@ impl Runner {
     /// Run a tool that may hold registry credentials. When it does, a failure
     /// shows none of its output, which may quote what a private registry
     /// answered: failure reasons reach reports, dashboards and public pages.
-    async fn held_tool(
-        &self,
-        driver: &Path,
-        call: Invocation,
-        held: bool,
-    ) -> Result<Vec<u8>, String> {
+    async fn held_tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, String> {
         let bin = call.bin.clone();
+        let held = !call.credentials.is_empty();
         let result = self.tool(driver, call).await;
         if !held {
             return result;
@@ -1133,6 +1373,13 @@ struct Invocation {
     bin: String,
     cwd: Option<PathBuf>,
     env: Vec<(String, String)>,
+    /// The `Credential::scope()`s of the registry entries this run receives.
+    /// They decide its cache partition and whether a failure shows its output.
+    credentials: Vec<String>,
+    /// Whether the run can fetch only from its ecosystem's well-known
+    /// public registry, which lets it share the `public` cache partition
+    /// when it holds no operator credentials.
+    public: bool,
     args: Vec<String>,
 }
 
@@ -1384,66 +1631,70 @@ fn go_version(cwd: &Path, pinned: &str) -> Result<String, String> {
 fn tool_defaults() -> Result<toml_edit::Document<&'static str>, String> {
     toml_edit::Document::parse(include_str!("lockfiles/defaults.toml")).map_err(|e| e.to_string())
 }
+/// Manifest and lockfile leaf names a tool may modify: `writable`, minus the
+/// `*.tf` extension.
+const WRITABLE_LEAVES: &[&str] = &[
+    "package.json",
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "aube-lock.yaml",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "bun.lock",
+    "Cargo.toml",
+    "Cargo.lock",
+    "go.mod",
+    "go.sum",
+    ".terraform.lock.hcl",
+    "mise.lock",
+    "pyproject.toml",
+    "gradle-wrapper.properties",
+    "packages.lock.json",
+    "Gemfile",
+    "Gemfile.lock",
+    "Directory.Packages.props",
+    "Directory.Build.props",
+    "dotnet-tools.json",
+    "global.json",
+    "uv.lock",
+    "poetry.lock",
+    "composer.json",
+    "composer.lock",
+    "flake.lock",
+    "apm.lock.yaml",
+];
+/// Leaf names tools read but never modify.
+const READ_LEAVES: &[&str] = &[
+    "mise.toml",
+    ".mise.toml",
+    ".tool-versions",
+    "go.work",
+    "go.work.sum",
+    "pnpm-workspace.yaml",
+    ".yarnrc.yml",
+    ".npmrc",
+    ".python-version",
+    "uv.toml",
+    "poetry.toml",
+    "flake.nix",
+    "apm.yml",
+    "Directory.Build.targets",
+];
+/// Extensions of files tools read (and `*.tf`, which they may modify).
+const READ_EXTENSIONS: &[&str] = &[
+    ".tf", ".go", ".rs", ".csproj", ".fsproj", ".vbproj", ".sln", ".slnx", ".gemspec",
+];
 fn writable(path: &str) -> bool {
-    matches!(
-        path.rsplit('/').next().unwrap_or(path),
-        "package.json"
-            | "package-lock.json"
-            | "npm-shrinkwrap.json"
-            | "aube-lock.yaml"
-            | "pnpm-lock.yaml"
-            | "yarn.lock"
-            | "bun.lock"
-            | "Cargo.toml"
-            | "Cargo.lock"
-            | "go.mod"
-            | "go.sum"
-            | ".terraform.lock.hcl"
-            | "mise.lock"
-            | "pyproject.toml"
-            | "gradle-wrapper.properties"
-            | "packages.lock.json"
-            | "Gemfile"
-            | "Gemfile.lock"
-            | "Directory.Packages.props"
-            | "Directory.Build.props"
-            | "dotnet-tools.json"
-            | "global.json"
-            | "uv.lock"
-            | "poetry.lock"
-            | "composer.json"
-            | "composer.lock"
-            | "flake.lock"
-            | "apm.lock.yaml"
-    ) || path.ends_with(".tf")
+    WRITABLE_LEAVES.contains(&path.rsplit('/').next().unwrap_or(path)) || path.ends_with(".tf")
 }
 fn materialized(path: &str) -> bool {
+    let leaf = path.rsplit('/').next().unwrap_or(path);
     writable(path)
-        || matches!(
-            path.rsplit('/').next().unwrap_or(path),
-            "mise.toml"
-                | ".mise.toml"
-                | ".tool-versions"
-                | "go.work"
-                | "go.work.sum"
-                | "pnpm-workspace.yaml"
-                | ".yarnrc.yml"
-                | ".npmrc"
-                | ".python-version"
-                | "uv.toml"
-                | "poetry.toml"
-                | "flake.nix"
-                | "apm.yml"
-        )
-        || path.ends_with(".go")
-        || path.ends_with(".rs")
-        || [".csproj", ".fsproj", ".vbproj", ".sln", ".slnx", ".gemspec"]
+        || READ_LEAVES.contains(&leaf)
+        || READ_EXTENSIONS
             .iter()
-            .any(|e| path.ends_with(e))
-        || matches!(
-            path.rsplit('/').next(),
-            Some("Directory.Build.targets" | "nuget.config" | "NuGet.Config")
-        )
+            .any(|extension| path.ends_with(extension))
+        || leaf.eq_ignore_ascii_case("nuget.config")
 }
 /// A Cargo configuration file, read only for its `registries`.
 fn cargo_config(path: &str) -> bool {

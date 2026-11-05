@@ -13,6 +13,7 @@ http: Http = new {}
 /// prefix, matched by whole path segments, carries that entry's credentials;
 /// the longest prefix wins.
 registries: Mapping<String, Registry> = new {}
+lockfiles: Lockfiles = new {}
 /// Only `patchula serve` reads this section.
 server: Server = new {}
 
@@ -51,6 +52,13 @@ class Registry {
   /// Needs `auth`; not for a mirror, no other entry may sit under its
   /// prefix, and the prefix cannot hold `=` or `;`.
   tools: Boolean = false
+}
+
+class Lockfiles {
+  /// GiB to keep of the package caches lockfile tools share between runs,
+  /// evicting least recently used private partitions first, then the public
+  /// one. 0 turns the persistent caches off.
+  cacheGiB: Int = 20
 }
 
 /// Exactly one of `env` and `file`.

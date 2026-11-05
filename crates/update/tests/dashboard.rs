@@ -548,6 +548,7 @@ fn updates_held_by_the_pr_limits_are_listed_with_their_reason_and_a_box() {
         input_fingerprint: package.into(),
         lock_jobs: Vec::new(),
         lockfiles_ready: true,
+        public_only: Default::default(),
         deleted: Default::default(),
         maintenance: false,
         batch: None,

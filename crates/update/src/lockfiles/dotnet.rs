@@ -110,16 +110,13 @@ const INVARIANT: &str = "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT";
 
 /// The restore's environment. The server image has no ICU and sets
 /// `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT` instead; the tool's environment
-/// starts empty, so the server's setting is passed on.
-pub(super) fn restore_env(packages: &Path, invariant: Option<String>) -> Vec<(String, String)> {
+/// starts empty, so the server's setting is passed on. The NuGet caches are
+/// the cache partition's.
+pub(super) fn restore_env(invariant: Option<String>) -> Vec<(String, String)> {
     let mut env = vec![
         ("DOTNET_CLI_TELEMETRY_OPTOUT".into(), "1".into()),
         ("DOTNET_NOLOGO".into(), "1".into()),
         ("DOTNET_SKIP_FIRST_TIME_EXPERIENCE".into(), "1".into()),
-        (
-            "NUGET_PACKAGES".into(),
-            packages.to_string_lossy().into_owned(),
-        ),
     ];
     if let Some(invariant) = invariant {
         env.push((INVARIANT.into(), invariant));
@@ -135,6 +132,7 @@ impl Runner {
         directory: &str,
         versions: &BTreeMap<String, String>,
         edited: bool,
+        public: bool,
     ) -> Result<(), String> {
         let cwd = root.join(directory);
         let mut before = Vec::new();
@@ -153,7 +151,7 @@ impl Runner {
         // gets nothing, and a config the Count cannot read, which could define
         // any key, leaves every source without.
         let credentials = if self.registries.is_empty() {
-            Vec::new()
+            (Vec::new(), Vec::new())
         } else {
             let mut configs = Vec::new();
             nuget_configs(root, &mut configs);
@@ -168,11 +166,8 @@ impl Runner {
                 .map(|sources| self.nuget_env(&sources))
                 .unwrap_or_default()
         };
-        let held = !credentials.is_empty();
-        let mut env = restore_env(
-            &driver.join("nuget-packages"),
-            std::env::var(INVARIANT).ok(),
-        );
+        let (credentials, entries) = credentials;
+        let mut env = restore_env(std::env::var(INVARIANT).ok());
         env.extend(credentials);
         self.held_tool(
             driver,
@@ -184,13 +179,14 @@ impl Runner {
                 bin: "dotnet".into(),
                 cwd: Some(cwd.clone()),
                 env,
+                credentials: credentials::scopes(entries.iter().copied()),
+                public,
                 args: vec![
                     "restore".into(),
                     target.to_string_lossy().into_owned(),
                     "--force-evaluate".into(),
                 ],
             },
-            held,
         )
         .await?;
         remove_intermediates(&cwd)?;

@@ -141,7 +141,7 @@ pub(super) fn extract(
 }
 
 /// Packagist, for `crate::origins`.
-const PACKAGIST: Public = Public {
+pub(crate) const PACKAGIST: Public = Public {
     source: Source::Packagist,
     label: "https://packagist.org",
     is_public: |url| {
@@ -300,4 +300,11 @@ fn lock(lock: &str) -> Option<Lock> {
         .filter_map(|(name, entries)| Some((name, Origin::of(entries)?)))
         .collect();
     Some(Lock { recorded, plugins })
+}
+
+/// Whether `text` parses as `composer.lock` and holds a Composer plugin
+/// package, which can add repositories and run code the file does not
+/// name.
+pub(crate) fn lock_has_plugins(text: &str) -> Option<bool> {
+    lock(text).map(|lock| lock.plugins)
 }

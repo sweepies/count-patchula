@@ -44,6 +44,7 @@ impl Runner {
             config,
             versions,
             maintenance,
+            public,
         } = context;
         let php = node::version(versions, "php")?;
         let full = php.split('.').count() == 3
@@ -89,12 +90,10 @@ impl Runner {
         let path = |p: &str| home.join(p).to_string_lossy().into_owned();
         let mut env = vec![
             ("COMPOSER_HOME".into(), path("home")),
-            ("COMPOSER_CACHE_DIR".into(), path("cache")),
             ("COMPOSER_NO_AUDIT".into(), "1".into()),
             ("COMPOSER_ALLOW_SUPERUSER".into(), "1".into()),
         ];
-        let auth = self.composer_auth();
-        let held = auth.is_some();
+        let (auth, entries) = self.composer_auth();
         if let Some(auth) = auth {
             env.push(("COMPOSER_AUTH".into(), auth));
         }
@@ -109,9 +108,10 @@ impl Runner {
                 bin: "composer".into(),
                 cwd: Some(cwd),
                 env,
+                credentials: credentials::scopes(entries.iter().copied()),
+                public,
                 args,
             },
-            held,
         )
         .await?;
         let before = baseline.get(&lock).map(|b| b.content.as_str());

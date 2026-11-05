@@ -1141,6 +1141,7 @@ async fn report(
         .map_err(|e| (1, miette::miette!("{e}")))?
         .with_recheck(recheck)
         .with_advisories();
+    engine.set_lockfile_cache_limit(settings.lockfiles.cache_gib);
     if let Some(spinner) = &spinner {
         engine = engine.with_progress(spinner.clone());
     }

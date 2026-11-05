@@ -46,6 +46,7 @@ impl Runner {
             config,
             versions,
             maintenance,
+            public,
         } = context;
         let cwd = root.join(directory);
         let lock = node::join(directory, "Gemfile.lock");
@@ -57,8 +58,8 @@ impl Runner {
         let home = driver.join("ruby");
         let path = |p: &str| home.join(p).to_string_lossy().into_owned();
         let ruby = ruby_version(&cwd, &node::version(versions, "ruby")?);
-        let credentials = self.bundler_env();
-        let held = !credentials.is_empty();
+        let (credentials, entries) = self.bundler_env();
+        let scopes = credentials::scopes(entries.iter().copied());
         let invocation = |args| Invocation {
             tools: vec![("ruby".into(), ruby.clone())],
             bin: "bundle".into(),
@@ -74,16 +75,18 @@ impl Runner {
             .into_iter()
             .chain(credentials.iter().cloned())
             .collect(),
+            credentials: scopes.clone(),
+            public,
             args,
         };
         // Bundler moves a gem as far as its requirement allows and cannot be
         // told a version, so a package whose declaration stays as it is has
         // the requirement pinned for one resolution and restored for the next.
         let pinned = Pinned::apply(root, directory, config, Manager::Bundler, jobs)?;
-        self.held_tool(driver, invocation(args), held).await?;
+        self.held_tool(driver, invocation(args)).await?;
         if !pinned.is_empty() {
             pinned.restore()?;
-            self.held_tool(driver, invocation(vec!["lock".to_string()]), held)
+            self.held_tool(driver, invocation(vec!["lock".to_string()]))
                 .await?;
         }
         let before = baseline.get(&lock).map(|b| b.content.as_str());

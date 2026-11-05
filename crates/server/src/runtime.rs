@@ -537,6 +537,7 @@ impl Engines {
                 settings.recheck(self.recheck.as_deref()),
             )
             .map_err(|_| Error("invalid batch options"))?;
+        engine.set_lockfile_cache_limit(settings.lockfiles.cache_gib);
         engine.set_advertised_server(
             settings
                 .advertised(self.derived_url.as_deref())

@@ -528,6 +528,7 @@ mod tests {
                     )
                 })
                 .collect(),
+            public_only: Default::default(),
         }
     }
 
@@ -754,6 +755,7 @@ mod tests {
             input_fingerprint: String::new(),
             lock_jobs: Vec::new(),
             lockfiles_ready: true,
+            public_only: Default::default(),
             deleted: Default::default(),
             maintenance: false,
             batch: None,

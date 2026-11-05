@@ -11,7 +11,13 @@ level 3.
 A cache is a directory. `Cache::open_dir` creates it and opens
 `cache.sqlite` (with SQLite's `-wal` and `-shm` files) inside it. The partial
 clones for lockfile tools go in `worktrees/` and the tool store in `tools/`,
-unless `PATCHULA_TOOLS_DIR` moves it. The server also keeps `server.lock`
+unless `PATCHULA_TOOLS_DIR` moves it. The package caches the tools share
+between runs go in `tool-caches/`, partitioned by the credentials a run
+holds: `public` for a run without any (safe to share because repositories
+that commit credentials are refused), `private-<hash of the entries'
+scopes>` otherwise, with no read-only lower layer between them. Pruning is
+throttled per cache root and takes `tool-caches/prune.lock` so concurrent
+prunes never over-evict. The server also keeps `server.lock`
 there. The CLI's default directory is shared by every checkout on the machine,
 so concurrent local runs use one database through WAL and the busy timeout.
 Opening takes an exclusive lock on `cache.lock` while it checks and migrates

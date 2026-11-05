@@ -263,6 +263,58 @@ Run the Count only for repositories you trust that far, or turn lockfile
 updates off for the others.
 :::
 
+## Tool caches
+
+Lockfile tools keep the package data they download in `tool-caches/` under
+the cache directory, split into partitions so a run never shares a cache
+with something it should not reach. A run chooses its partition like this:
+
+- **`public`** — shared by every installation and the CLI. A run may use
+  it only when the extraction decided every file it can read is
+  public-only: every registry, index or fetch source its manifests,
+  settings and lockfiles name is the ecosystem's well-known public
+  registry, a well-known public forge, or a local source that fetches
+  nothing. Anything uncertain, unreadable or undecided fails closed.
+- **`installation-<hash>`** — one partition per installation
+  (`installation-<sha256 of the GitHub credentials scope>`, or
+  `installation-local` for the CLI), for every run that is not provably
+  public-only and holds no operator credentials: a private or unreadable
+  `.npmrc`, a Gemfury-style index URL, a lockfile `resolved` URL on a
+  non-public host — and equally two installations that happen to name the
+  same private registry, which never share a partition.
+- **`private-<hash>`** — for runs given operator credentials, named by a
+  hash of the credentials' scopes as before.
+
+There is no read-only lower layer: a run never reads a partition it did
+not choose, since a public package of the same name could then satisfy it
+without the private feed, and a partition warms after its first run.
+Credential files still live only in the run's own directory and are
+deleted when it finishes.
+
+Go needs no file verdicts: in `public` it runs with
+`GOPROXY=https://proxy.golang.org` — no `direct`, which could fetch
+anonymously from a host only the server's network reaches — so what it
+can fetch is public by construction. A Go run that fails there, on an
+internal module the proxy cannot serve, is rerun in the installation
+partition with Go's default environment, so repositories with internal
+modules keep working.
+
+Partitions keep honest repositories' private packages apart; they are
+not an isolation boundary. Lockfile tools run repository code
+unsandboxed — Bundler evaluating the Gemfile, uv or Poetry building
+sdists, MSBuild evaluating project files — so code from any installed
+repository can read every partition on the host, `public`, another
+installation's and another credential set's alike. That is within the
+trust model above: every installation is trusted, and lockfile tools run
+repository code anyway.
+
+A partition a run uses is held shared, so eviction never removes one in use,
+and tools whose caches are not documented for concurrent use — aube, Bun,
+Yarn, Composer, Poetry, NuGet and Bundler — run one at a time in it.
+Partitions unused for 14 days are pruned, and `lockfiles.cacheGiB` (default
+20, minimum 1) caps their size: the least recently used private partitions
+go first, `public` last.
+
 ## Private registries in lockfile tools
 
 Lockfile tools get a [registry entry's](/guide/sources/#private-registries)

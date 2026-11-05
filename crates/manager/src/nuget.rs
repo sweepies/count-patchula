@@ -220,9 +220,14 @@ pub(super) fn selected(path: &str) -> bool {
     leaf.ends_with(".csproj")
         || leaf.ends_with(".fsproj")
         || leaf.ends_with(".vbproj")
+        || leaf.ends_with(".sln")
+        || leaf.ends_with(".slnx")
         || matches!(
             leaf,
-            "Directory.Packages.props" | "Directory.Build.props" | "global.json"
+            "Directory.Packages.props"
+                | "Directory.Build.props"
+                | "global.json"
+                | "packages.lock.json"
         )
         || path.ends_with(".config/dotnet-tools.json")
 }
@@ -238,7 +243,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
 }
 
 /// nuget.org, for `crate::origins`.
-const NUGET_ORG: Public = Public {
+pub(crate) const NUGET_ORG: Public = Public {
     source: Source::Nuget,
     label: "https://api.nuget.org/v3/index.json",
     is_public: |url| {
@@ -264,7 +269,7 @@ pub(crate) fn config_file(path: &str) -> bool {
 /// The start of MSBuild property names that set restore sources, fallback
 /// folders, another config file or another folder to read configs from,
 /// which override what the repository's `nuget.config` files say.
-const RESTORE_OVERRIDES: [&str; 6] = [
+pub(crate) const RESTORE_OVERRIDES: [&str; 6] = [
     "restoresources",
     "restoreadditionalproject",
     "restoreconfigfile",
@@ -293,7 +298,7 @@ pub(crate) fn msbuild_file(path: &str) -> bool {
 
 /// `text` with XML character references (`&#83;`, `&#x53;`) decoded, so a
 /// property name written with them is still found.
-fn decoded(text: &str) -> String {
+pub(crate) fn decoded(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(at) = rest.find("&#") {
@@ -734,6 +739,18 @@ impl Feeds {
         let dropped = origins.assign(deps, &NUGET_ORG, |dep| dep.package.clone());
         debug_assert!(dropped.is_empty());
     }
+}
+
+/// Whether `text`, already decoded and lowercased, holds a `<name`
+/// element start: the tag followed by whitespace, `/` or `>`, so a
+/// property such as `<TargetFramework` does not count as `<Target`.
+pub(crate) fn has_element(text: &str, name: &str) -> bool {
+    let open = format!("<{name}");
+    text.match_indices(&open).any(|(at, _)| {
+        text.as_bytes()
+            .get(at + open.len())
+            .is_some_and(|b| b.is_ascii_whitespace() || matches!(b, b'/' | b'>'))
+    })
 }
 
 #[cfg(test)]

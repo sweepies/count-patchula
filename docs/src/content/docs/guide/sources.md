@@ -147,7 +147,35 @@ when the origin changes.
 The operator [settings](/reference/settings/) hold credentials for private
 registries, keyed by an https URL prefix. Repository configs never name
 credentials: a `patchula.pkl` can point a dependency at any URL, so in the
-server it could otherwise read another organisation's registry.
+server it could otherwise read another organisation's registry. As
+hygiene, a repository that commits a credential anyway is refused
+outright: the repository's report is an error and nothing runs for it.
+Move the credential to the operator's `registries` settings;
+`${VAR}`-style environment references and `$()` command substitutions
+stay allowed, since the secret lives outside the file.
+
+The refusal is hygiene, not a security boundary — only the settings a
+tool or a registry lookup reads as a credential are checked, with each
+format's parser so escapes cannot hide one: `_authToken`, `_auth` and
+`_password` keys in `.npmrc` or `pnpm-workspace.yaml` with literal values;
+`npmAuthToken` and `npmAuthIdent` in `.yarnrc.yml`; Composer `config` auth
+keys (`http-basic`, `bearer`, `github-oauth`, `gitlab-oauth`,
+`gitlab-token`, `bitbucket-oauth`, `forgejo-oauth`/`forgejo-token`,
+`gitea-oauth`/`gitea-token`); `Password` and `ClearTextPassword` in a
+`nuget.config` `packageSourceCredentials` (`%VAR%` references allowed);
+Poetry `http-basic` and `pypi-token` literals in `poetry.toml` or
+`pyproject.toml`; a Cargo registry `token` in `.cargo/config*`; and a URL
+carrying a user **and** password in a field that names a registry, index
+or source URL — `.npmrc` `registry`/`@scope:registry`, `.yarnrc.yml`
+`npmRegistryServer`, pyproject/uv/poetry index and source URLs, Composer
+`repositories[].url`, `nuget.config` `packageSources`, pip index URLs,
+Gemfile `source` lines, and Cargo registry `index` values.
+
+Everything else is left alone: a database DSN in a test script, a
+user-only userinfo like `https://user@bitbucket.org`, `.bundle/config`
+`BUNDLE_*` keys (no tool of the Count's reads them), empty values, lockfile
+`resolved` URLs and CI workflows — none of those is a credential a tool
+reads, so none refuses a repository.
 
 ```pkl
 amends "PatchulaSettings.pkl"

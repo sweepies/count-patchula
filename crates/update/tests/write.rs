@@ -462,6 +462,7 @@ fn setup(
                 content: text.into(),
             },
         )]),
+        public_only: Default::default(),
     };
     let report = Repository {
         repository: "demo/app".into(),
@@ -2864,6 +2865,7 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
                 )
             })
             .collect(),
+        public_only: Default::default(),
     };
     snapshot.paths.insert("bun.lock".into());
     repo.package_files.clear();
@@ -3438,6 +3440,7 @@ fn reference_data_pins_get_their_own_branch() {
                 )
             })
             .collect(),
+        public_only: Default::default(),
     };
     snapshot.paths.insert("bun.lock".into());
     repo.package_files.clear();

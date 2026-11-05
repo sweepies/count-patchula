@@ -10,6 +10,12 @@ pub struct Snapshot {
     /// Includes unselected lockfile paths, for conservative write gating.
     pub paths: BTreeSet<String>,
     pub files: BTreeMap<String, Blob>,
+    /// For each file that can steer a lockfile tool's fetches, whether it
+    /// can fetch only from the ecosystem's well-known public registry. A
+    /// run may share the `public` cache partition only when every file it
+    /// reads decides so; a missing verdict is not public.
+    #[serde(default)]
+    pub public_only: BTreeMap<String, bool>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Blob {
@@ -30,6 +36,9 @@ pub struct Plan {
     pub input_fingerprint: String,
     pub lock_jobs: Vec<crate::lockfiles::Job>,
     pub lockfiles_ready: bool,
+    /// The snapshot's public-only verdicts, for the lockfile runs'
+    /// cache-partition choice.
+    pub public_only: BTreeMap<String, bool>,
     pub deleted: BTreeSet<String>,
     pub maintenance: bool,
     /// The batch PR's items; `None` for every other plan.
@@ -428,6 +437,7 @@ fn build(
         input_fingerprint: fingerprint.clone(),
         lockfiles_ready: lock_jobs.is_empty(),
         lock_jobs: lock_jobs.into_iter().collect(),
+        public_only: snapshot.public_only.clone(),
         deleted: BTreeSet::new(),
         maintenance: false,
         batch: None,
