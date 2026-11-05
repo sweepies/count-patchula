@@ -45,21 +45,6 @@ pub(crate) fn parsed<'a>(manifests: &'a Files, files: &'a Files) -> Parsed<'a> {
             .collect(),
     }
 }
-pub(super) fn documents(files: &Files) -> Result<BTreeMap<&str, Document<&str>>, String> {
-    files
-        .iter()
-        .filter(|(p, _)| p.ends_with("Cargo.toml") || p.ends_with("Cargo.lock"))
-        // One the Count could not read fails its crates' lookups instead;
-        // see `replaced`.
-        .filter(|(_, t)| t.as_str() != crate::UNREADABLE_SETTINGS)
-        .map(|(p, t)| {
-            Ok((
-                p.as_str(),
-                Document::parse(t.as_str()).map_err(|e| format!("{p}: {e}"))?,
-            ))
-        })
-        .collect()
-}
 pub(super) fn extract(
     path: &str,
     text: &str,
@@ -421,12 +406,15 @@ fn workspace_root<'a>(parsed: &Parsed<'a>, dir: &'a str) -> &'a str {
 /// The Cargo configurations that can apply to the manifest or lockfile at
 /// `path`, parsed: those in its folder or above, and, since Cargo reads them
 /// from wherever it runs, those anywhere in its workspace.
-fn configs<'a>(files: &'a Files, path: &str) -> Vec<(&'a str, Result<toml_edit::DocumentMut, ()>)> {
+fn configs<'a>(
+    parsed: &'a Parsed<'a>,
+    path: &str,
+) -> Vec<(&'a str, &'a Result<toml_edit::DocumentMut, ()>)> {
     let dir = &path[..path.rfind('/').map_or(0, |i| i + 1)];
-    let root = workspace_root(files, dir);
-    files
+    let root = workspace_root(parsed, dir);
+    parsed
+        .configs
         .iter()
-        .filter(|(p, _)| config_file(p))
         .filter(|(config, _)| {
             let folder = config
                 .strip_suffix(".cargo/config.toml")
@@ -434,13 +422,7 @@ fn configs<'a>(files: &'a Files, path: &str) -> Vec<(&'a str, Result<toml_edit::
                 .unwrap_or("");
             dir.starts_with(folder) || folder.starts_with(root)
         })
-        .map(|(config, text)| {
-            let document = (text.as_str() != crate::UNREADABLE_SETTINGS)
-                .then(|| text.parse::<toml_edit::DocumentMut>().ok())
-                .flatten()
-                .ok_or(());
-            (config.as_str(), document)
-        })
+        .map(|(config, document)| (*config, document))
         .collect()
 }
 
@@ -453,7 +435,7 @@ fn configs<'a>(files: &'a Files, path: &str) -> Vec<(&'a str, Result<toml_edit::
 ///
 /// Every definition of a source in any configuration that applies counts,
 /// so one a closer configuration overrides can only make lookups fail.
-pub(crate) fn replaced(files: &Files, path: &str) -> Option<String> {
+pub(crate) fn replaced(files: &Files, parsed: &Parsed, path: &str) -> Option<String> {
     // A patch from another registry, in any manifest at or above the crate's
     // folder (its workspace's included) or any applying configuration, may
     // stand for any crate, under any of the names Cargo takes for it.
@@ -461,14 +443,12 @@ pub(crate) fn replaced(files: &Files, path: &str) -> Option<String> {
     let mut manifests = Vec::new();
     let mut folder = dir;
     loop {
-        if let Some((name, text)) = files.get_key_value(&format!("{folder}Cargo.toml")) {
-            let document = (text.as_str() != crate::UNREADABLE_SETTINGS)
-                .then(|| text.parse::<toml_edit::DocumentMut>().ok())
-                .flatten();
-            let Some(document) = document else {
+        if let Some((name, _)) = files.get_key_value(&format!("{folder}Cargo.toml")) {
+            let document = parsed.manifests.get(name.as_str());
+            let Some(Ok(document)) = document else {
                 return Some(format!("{name}, which the Count cannot read"));
             };
-            manifests.push((name.as_str(), document));
+            manifests.push((name.as_str(), document.as_table()));
         }
         if folder.is_empty() {
             break;
@@ -477,13 +457,13 @@ pub(crate) fn replaced(files: &Files, path: &str) -> Option<String> {
         folder = &parent[..parent.rfind('/').map_or(0, |i| i + 1)];
     }
     let mut sources: Vec<(String, toml_edit::Table)> = Vec::new();
-    let configs = configs(files, path);
+    let configs = configs(parsed, path);
     let mut documents = Vec::new();
     for (config, document) in configs {
         let Ok(document) = document else {
             return Some(format!("{config}, which the Count cannot read"));
         };
-        documents.push((config, document));
+        documents.push((config, document.as_table()));
     }
     for (file, document) in manifests.iter().chain(&documents) {
         let elsewhere = |entries: Option<&dyn toml_edit::TableLike>| {

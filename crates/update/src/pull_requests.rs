@@ -349,6 +349,9 @@ impl Lifecycle {
             server: None,
         };
         let desired: BTreeSet<_> = plans.iter().map(|p| p.action.branch.as_str()).collect();
+        // The repository metadata does not change between pulls, so it is
+        // fetched once for all obsolete PRs, on the first that needs it.
+        let mut meta = None;
         for pr in &mut state.prs {
             if repository.degraded()
                 || pr["state"] != "open"
@@ -391,11 +394,17 @@ impl Lifecycle {
                 continue;
             }
             // The base lease on deletion remains authoritative; don't close on
-            // a stale extraction either.
-            let meta = client
-                .get_fresh(&format!("repos/{repo}"))
-                .await
-                .map_err(|e| e.to_string())?;
+            // a stale extraction either. The repository's metadata does not
+            // change between pulls, so it is fetched once for them all.
+            if meta.is_none() {
+                meta = Some(
+                    client
+                        .get_fresh(&format!("repos/{repo}"))
+                        .await
+                        .map_err(|e| e.to_string())?,
+                );
+            }
+            let meta = meta.as_ref().unwrap();
             if meta["default_branch"] != default_branch {
                 return Err("default branch changed before PR closure; rerun".into());
             }

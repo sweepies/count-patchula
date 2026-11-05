@@ -584,11 +584,23 @@ impl Scanner {
             .map(|(path, text)| (path.clone(), text.clone()))
             .collect();
         let cargo = if self.config.managers.contains(&Manager::Cargo) {
-            cargo::documents(&cargo_files)?
+            cargo::parsed(&cargo_files, files)
         } else {
-            BTreeMap::new()
+            cargo::Parsed::default()
         };
+        // The manifests extraction reads; one the Count cannot parse fails
+        // the whole extraction, as before.
+        let cargo_docs: BTreeMap<&str, toml_edit::Document<&str>> = cargo
+            .manifests
+            .iter()
+            .map(|(p, r)| r.clone().map(|d| (*p, d)))
+            .collect::<Result<_, _>>()?;
         let feeds = nuget::Feeds::new(files);
+        let go_modules = if self.config.managers.contains(&Manager::Go) {
+            go::modules(files)
+        } else {
+            go::Modules::default()
+        };
         let terraform = if self.config.managers.contains(&Manager::Terraform) {
             terraform::documents(files)?
         } else {
@@ -670,8 +682,8 @@ impl Scanner {
             {
                 toolchains::rust(path, text)
             } else if self.selected(Manager::Cargo, path) {
-                cargo::extract(path, text, &cargo, &mut result.skipped).map(|mut deps| {
-                    if let Some(reason) = cargo::replaced(files, path) {
+                cargo::extract(path, text, &cargo_docs, &mut result.skipped).map(|mut deps| {
+                    if let Some(reason) = cargo::replaced(files, &cargo, path) {
                         for dep in deps.iter_mut().filter(|d| d.source == Source::Crates) {
                             dep.registry = origins::Named::Unusable(reason.clone()).recorded();
                         }
@@ -681,7 +693,7 @@ impl Scanner {
             } else if self.selected(Manager::Dockerfile, path) {
                 images::dockerfile(path, text)
             } else if self.selected(Manager::Go, path) {
-                go::extract(path, text, files, &mut result.skipped)
+                go::extract(path, text, &go_modules, &mut result.skipped)
             } else if self.selected(Manager::Terraform, path)
                 && path.ends_with(".terraform-version")
             {
@@ -783,7 +795,7 @@ impl Scanner {
                 }
             }
         }
-        result.locked = locked::cargo(files, &cargo, &result.dependencies);
+        result.locked = locked::cargo(files, &cargo_docs, &result.dependencies);
         let mut replaced = BTreeMap::new();
         for locked in result
             .locked
@@ -792,7 +804,7 @@ impl Scanner {
         {
             let reason = replaced
                 .entry(locked.file.clone())
-                .or_insert_with(|| cargo::replaced(files, &locked.file));
+                .or_insert_with(|| cargo::replaced(files, &cargo, &locked.file));
             if let Some(reason) = reason {
                 locked.registry = Some(reason.clone());
             }
