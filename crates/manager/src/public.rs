@@ -328,12 +328,16 @@ fn registry_ok(value: &str, public: &Public) -> bool {
 /// a `file:` URL.
 fn local_path(value: &str) -> bool {
     let value = value.trim().trim_matches(['"', '\'']);
-    value.starts_with("./")
-        || value.starts_with("../")
-        || value.starts_with('/')
-        || value
-            .get(..5)
-            .is_some_and(|start| start.eq_ignore_ascii_case("file:"))
+    // A relative path only: an absolute one, or a `file:` URL to one, could
+    // name a directory outside the checkout, such as another run's cache.
+    let path = match value.get(..5) {
+        Some(start) if start.eq_ignore_ascii_case("file:") => &value[5..],
+        _ => value,
+    };
+    (path.starts_with("./") || path.starts_with("../") || (value != path && !path.is_empty()))
+        && !path.starts_with('/')
+        && !path.starts_with('\\')
+        && !path.contains(":\\")
 }
 
 /// Whether `value`, a string a location key holds, is a local path where
@@ -935,7 +939,7 @@ fn nuget_config_public(text: &str) -> bool {
         let tag = node.tag_name().name();
         node.attributes().all(|attribute| {
             string_ok(attribute.name(), public)
-                && if in_sources && attribute.name() == "value" {
+                && if in_sources && attribute.name().eq_ignore_ascii_case("value") {
                     local_path(attribute.value()) || registry_ok(attribute.value(), public)
                 } else {
                     string_ok(attribute.value(), public)
@@ -945,7 +949,12 @@ fn nuget_config_public(text: &str) -> bool {
                 return true;
             }
             if child.is_element() {
-                return item(child, in_sources || tag == "packageSources", public);
+                // NuGet reads element and attribute names in any case.
+                return item(
+                    child,
+                    in_sources || tag.eq_ignore_ascii_case("packageSources"),
+                    public,
+                );
             }
             child.text().is_none_or(|text| string_ok(text, public))
         })
@@ -1521,8 +1530,14 @@ mod tests {
             ),
             (
                 "composer.json",
-                "{\"repositories\":[{\"type\":\"path\",\"url\":\"../lib\"},{\"type\":\"artifact\",\"url\":\"/srv/packages\"}]}",
+                "{\"repositories\":[{\"type\":\"path\",\"url\":\"../lib\"},{\"type\":\"artifact\",\"url\":\"./packages\"}]}",
                 true,
+            ),
+            // An absolute artifact folder could be outside the checkout.
+            (
+                "composer.json",
+                "{\"repositories\":[{\"type\":\"artifact\",\"url\":\"/srv/packages\"}]}",
+                false,
             ),
             (
                 "composer.json",
@@ -1606,8 +1621,26 @@ mod tests {
             // bare host is not public.
             (
                 "nuget.config",
-                "<configuration>\n  <packageSources>\n    <add key=\"local\" value=\"./packages\" />\n    <add key=\"cache\" value=\"file:///srv/nuget\" />\n  </packageSources>\n</configuration>",
+                "<configuration>\n  <packageSources>\n    <add key=\"local\" value=\"./packages\" />\n  </packageSources>\n</configuration>",
                 true,
+            ),
+            // An absolute folder, a UNC share or a drive path could be
+            // outside the checkout.
+            (
+                "nuget.config",
+                "<configuration>\n  <packageSources>\n    <add key=\"cache\" value=\"file:///srv/nuget\" />\n  </packageSources>\n</configuration>",
+                false,
+            ),
+            // NuGet reads element and attribute names in any case.
+            (
+                "nuget.config",
+                "<configuration>\n  <PackageSources>\n    <add key=\"share\" Value=\"\\\\fileserver\\share\" />\n  </PackageSources>\n</configuration>",
+                false,
+            ),
+            (
+                "nuget.config",
+                "<configuration>\n  <PACKAGESOURCES>\n    <add key=\"d\" value=\"D:\\feed\" />\n  </PACKAGESOURCES>\n</configuration>",
+                false,
             ),
             (
                 "nuget.config",
