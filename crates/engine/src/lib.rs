@@ -2346,7 +2346,7 @@ impl Engine {
         let scanner = Scanner::new(&config).map_err(Error::Invalid)?;
         let dir = dir.to_owned();
         let (paths, blobs, refusal, extraction) = tokio::task::spawn_blocking(move || {
-            let (paths, files) = read_tree(&dir, &scanner)?;
+            let (paths, files, deep) = read_tree(&dir, &scanner)?;
             // The same refusal the API scan applies to committed credentials.
             if let Some((path, kind)) = files
                 .iter()
@@ -2380,6 +2380,12 @@ impl Engine {
             extraction
                 .skipped
                 .extend(scanner.unsupported(paths.iter().map(String::as_str)));
+            for path in &deep {
+                extraction.warnings.push(format!(
+                    "include chain deeper than {} rounds starting at {path}; the remaining files were not read",
+                    patchula_manager::MORE_ROUNDS
+                ));
+            }
             std::io::Result::Ok((paths, blobs, None, extraction))
         })
         .await
@@ -2566,7 +2572,7 @@ impl Engine {
             // What the files read so far name, such as the sources of a
             // Gradle build the settings include, until they name nothing new.
             let mut rest: Vec<_> = rest.into_iter().filter(|e| e.kind == "blob").collect();
-            for _ in 0..MORE_ROUNDS {
+            for _ in 0..patchula_manager::MORE_ROUNDS {
                 let more: BTreeSet<String> = scanner
                     .more(&files, rest.iter().map(|entry| entry.path.as_str()))
                     .into_iter()
@@ -2589,6 +2595,14 @@ impl Engine {
                         }
                     }
                 }
+            }
+            // What the chain still names when the rounds run out: marked
+            // unreadable, so its lookups fail saying why rather than "a
+            // build or script names, which the Count does not read".
+            let deep: Vec<String> =
+                scanner.more(&files, rest.iter().map(|entry| entry.path.as_str()));
+            for path in &deep {
+                files.insert(path.clone(), patchula_manager::UNREADABLE_DEEP.to_owned());
             }
             // A repository that commits its own registry credentials is
             // refused: its lockfile tools would fetch what they buy into
@@ -2638,6 +2652,12 @@ impl Engine {
                 extraction
             };
             extraction.skipped.extend(unsupported);
+            for path in &deep {
+                extraction.warnings.push(format!(
+                    "include chain deeper than {} rounds starting at {path}; the remaining files were not read",
+                    patchula_manager::MORE_ROUNDS
+                ));
+            }
             let public_only = extraction.public_only.clone();
             let cached = CachedExtraction {
                 extraction,
@@ -2801,15 +2821,13 @@ fn validate_repo(repo: &str) -> Result<()> {
 /// global excludes apply. A directory outside Git is walked whole, skipping
 /// `.git`. Non-UTF-8 files cannot hold an editable declaration, so they are
 /// left out.
-/// How many times the files read so far may name more to read: Gradle
-/// builds include builds and apply scripts, and Maven POMs name modules, a
-/// few levels deep at most.
-const MORE_ROUNDS: usize = 16;
-
+/// The paths found, the files read, and the paths the include chain still
+/// named when the read rounds ran out: read for extraction from a local
+/// checkout, what GitHub extraction reads through the API.
 pub fn read_tree(
     dir: &std::path::Path,
     scanner: &Scanner,
-) -> std::io::Result<(BTreeSet<String>, Files)> {
+) -> std::io::Result<(BTreeSet<String>, Files, Vec<String>)> {
     let listed = match git_files(dir)? {
         Some(listed) => listed,
         None => walk(dir)?,
@@ -2866,7 +2884,7 @@ pub fn read_tree(
     // What the files read so far name, such as the sources of a Gradle
     // build the settings include, until they name nothing new; any that
     // cannot be read are unreadable.
-    for _ in 0..MORE_ROUNDS {
+    for _ in 0..patchula_manager::MORE_ROUNDS {
         let more = scanner.more(&files, paths.iter().chain(&links).map(String::as_str));
         if more.is_empty() {
             break;
@@ -2886,7 +2904,13 @@ pub fn read_tree(
             );
         }
     }
-    Ok((paths, files))
+    // What the chain still names when the rounds run out is unreadable the
+    // same way, so its lookups fail saying why.
+    let deep = scanner.more(&files, paths.iter().chain(&links).map(String::as_str));
+    for path in &deep {
+        files.insert(path.clone(), patchula_manager::UNREADABLE_DEEP.to_owned());
+    }
+    Ok((paths, files, deep))
 }
 
 /// The files Git would carry from this directory, relative to it, or none

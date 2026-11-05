@@ -4026,3 +4026,30 @@ dependencies { implementation "com.acme:lib:1.0" }
 "#;
     assert_eq!(lookup(&[("build.gradle", public)], "com.acme:lib"), None);
 }
+
+/// When the include chain runs past the read rounds, the file it still
+/// names is unreadable with a reason that says so, and the build's lookups
+/// fail with that reason rather than "a file it names".
+#[test]
+fn a_deeper_include_chain_fails_saying_the_rounds_ran_out() {
+    let lookup = |files: &[(&str, &str)]| {
+        registry_of(
+            Manager::Gradle,
+            files,
+            "build.gradle",
+            "org.springframework:spring-core",
+        )
+    };
+    let files = [
+        (
+            "build.gradle",
+            "plugins { id 'java' }\nrepositories { mavenCentral() }\ndependencies { implementation \"org.springframework:spring-core:6.1.0\" }\n",
+        ),
+        ("lib/build.gradle", patchula_manager::UNREADABLE_DEEP),
+    ];
+    let reason = lookup(&files).unwrap();
+    assert!(
+        reason.contains("include chain deeper than 16 rounds starting at lib/build.gradle"),
+        "{reason}"
+    );
+}

@@ -49,7 +49,7 @@ fn ignored_directories_are_not_read_even_when_the_config_does_not_exclude_them()
     git(root, &["add", "-f", "forced/package.json"]);
     // The config excludes nothing, so only Git keeps the ignored files out.
     let scanner = scanner("amends \"PatchulaConfig.pkl\"\nexclude = new Listing {}\n");
-    let (paths, files) = patchula_engine::read_tree(root, &scanner).unwrap();
+    let (paths, files, _deep) = patchula_engine::read_tree(root, &scanner).unwrap();
     assert_eq!(
         files.keys().map(String::as_str).collect::<Vec<_>>(),
         [
@@ -74,7 +74,7 @@ fn a_directory_outside_git_is_walked_and_the_default_excludes_apply() {
     write(root, "tests/app/package.json", MANIFEST);
     write(root, ".git/package.json", MANIFEST);
     let scanner = scanner("amends \"PatchulaConfig.pkl\"\n");
-    let (paths, files) = patchula_engine::read_tree(root, &scanner).unwrap();
+    let (paths, files, _deep) = patchula_engine::read_tree(root, &scanner).unwrap();
     assert_eq!(
         files.keys().map(String::as_str).collect::<Vec<_>>(),
         ["package.json"]
@@ -90,7 +90,7 @@ fn a_negated_exclude_reads_a_default_excluded_directory_again() {
     write(root, "examples/app/package.json", MANIFEST);
     write(root, "examples/other/package.json", MANIFEST);
     let scanner = scanner("amends \"PatchulaConfig.pkl\"\nexclude { \"!examples/app/**\" }\n");
-    let (_, files) = patchula_engine::read_tree(root, &scanner).unwrap();
+    let (_, files, _) = patchula_engine::read_tree(root, &scanner).unwrap();
     assert_eq!(
         files.keys().map(String::as_str).collect::<Vec<_>>(),
         ["examples/app/package.json"]
@@ -110,7 +110,7 @@ fn a_tracked_file_below_a_symlinked_directory_is_not_read() {
     std::fs::remove_dir_all(root.join("app")).unwrap();
     std::os::unix::fs::symlink(&outside, root.join("app")).unwrap();
     let scanner = scanner("amends \"PatchulaConfig.pkl\"\n");
-    let (paths, files) = patchula_engine::read_tree(&root, &scanner).unwrap();
+    let (paths, files, _deep) = patchula_engine::read_tree(&root, &scanner).unwrap();
     assert!(files.is_empty(), "{files:?}");
     assert!(!paths.contains("app/package.json"));
 }
@@ -160,7 +160,7 @@ fn a_symlinked_settings_file_is_unreadable_not_absent() {
     );
     std::os::unix::fs::symlink("../config/bundle-dir", root.join("app/.bundle")).unwrap();
     let scanner = scanner("amends \"PatchulaConfig.pkl\"\n");
-    let (_, files) = patchula_engine::read_tree(&root, &scanner).unwrap();
+    let (_, files, _) = patchula_engine::read_tree(&root, &scanner).unwrap();
     assert_eq!(
         files.get("uv.toml").map(String::as_str),
         Some(patchula_manager::UNREADABLE_SETTINGS)
