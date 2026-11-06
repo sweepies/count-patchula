@@ -42,8 +42,12 @@ fn marker(body: &str) -> Option<Marker> {
     let valid_hash = |s: &str| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit());
     (m.version == 1 && valid_hash(&m.identity) && valid_hash(&m.update)).then_some(m)
 }
-/// Target identity intentionally excludes current/base/file/message so a closed
-/// update stays closed after a rebase, policy wording change or new occurrence.
+/// One PR's update: its branch and the targets it moves to. The branch makes
+/// the key unique per PR, so groups on different branches that bump the same
+/// package to the same version (one group per service in a monorepo) are
+/// batched, closed and recreated independently. The key excludes
+/// current/base/file/message so a closed update stays closed after a rebase,
+/// policy wording change or new occurrence.
 pub fn update_key(plan: &Plan) -> String {
     if plan.maintenance {
         return hash(format!("maintenance:{}", plan.input_fingerprint).as_bytes());
@@ -54,7 +58,7 @@ pub fn update_key(plan: &Plan) -> String {
         .map(|c| (&c.source, &c.package, &c.value, &c.version, &c.digest))
         .collect();
     hash(
-        serde_json::to_string(&targets)
+        serde_json::to_string(&(&plan.action.branch, targets))
             .expect("serializable targets")
             .as_bytes(),
     )

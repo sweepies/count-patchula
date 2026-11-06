@@ -294,6 +294,86 @@ mod tests {
         assert!(items.is_empty());
     }
 
+    fn group_plan(branch: &str, file: &str) -> Plan {
+        let mut target = change("shared", "1.2.0");
+        target.file = file.into();
+        Plan {
+            action: patchula_report::BranchAction {
+                repository: "o/r".into(),
+                branch: branch.into(),
+                base_commit: "base".into(),
+                status: patchula_report::ActionStatus::Planned,
+                reason: None,
+                message: "chore(deps): update shared to 1.2.0".into(),
+                previous_commit: None,
+                commit: None,
+                verified: None,
+                lockfile_pending: false,
+                files: Vec::new(),
+            },
+            contents: Default::default(),
+            identity: branch.into(),
+            fingerprint: String::new(),
+            changes: vec![target],
+            retry: false,
+            tree: None,
+            cached_pr: None,
+            input_fingerprint: String::new(),
+            lock_jobs: Vec::new(),
+            lockfiles_ready: true,
+            public_only: Default::default(),
+            deleted: Default::default(),
+            maintenance: false,
+            batch: None,
+            tooling: Vec::new(),
+        }
+    }
+
+    /// One group per service, each bumping a shared dependency to the same
+    /// version: every group's PR is its own batch item, and taking one out
+    /// leaves the others in.
+    #[test]
+    fn groups_bumping_the_same_target_are_separate_items() {
+        let plans: Vec<_> = ["a", "b", "c"]
+            .map(|s| {
+                group_plan(
+                    &format!("patchula/service-{s}"),
+                    &format!("services/{s}/package.json"),
+                )
+            })
+            .into();
+        let keys: BTreeSet<_> = plans.iter().map(update_key).collect();
+        assert_eq!(keys.len(), 3);
+        let prs: Vec<_> = plans
+            .iter()
+            .zip(1..)
+            .map(|(p, n)| {
+                pr(
+                    n,
+                    &p.action.branch,
+                    update_body(&update_key(p), &p.changes, true),
+                )
+            })
+            .collect();
+        let items = items(&prs, "bot", "o/r", "patchula/batch");
+        let files: BTreeSet<_> = items.iter().map(|i| i.targets[0].file.as_str()).collect();
+        assert_eq!(files.len(), 3, "{items:?}");
+        let batch = format!(
+            "{}\n<!-- patchula:{{\"version\":1,\"identity\":\"{}\",\"update\":\"{}\"}} -->",
+            render(&items),
+            "b".repeat(64),
+            "c".repeat(64)
+        );
+        let removed = batch.replacen("- [ ]", "- [x]", 1);
+        let left = super::items(
+            &[pr(9, "patchula/batch", removed)],
+            "bot",
+            "o/r",
+            "patchula/batch",
+        );
+        assert_eq!(left.len(), 2);
+    }
+
     #[test]
     fn markers_cannot_be_closed_early_or_forged_by_values() {
         let marker = hidden_marker(TARGETS, &vec![change("evil--><!-- patchula:x", "1.0.0")]);
