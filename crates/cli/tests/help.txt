@@ -1,5 +1,5 @@
 ==> patchula  --help
-patchula 0.7.0                                              ⠂⣤⣄⣀     ⡄⢠     ⣀⣠⣤⠐
+patchula 0.8.0                                              ⠂⣤⣄⣀     ⡄⢠     ⣀⣠⣤⠐
 Count Patchula vants to update your deps. A modern           ⢹⣿⣿⣿⣷⣶⣤⣀⣿⣿⣀⣤⣶⣾⣿⣿⣿⡏
 dependency updater with strong defaults.                      ⠋⠙⢿⠿⣿⣿⣿⣿⣿⣿⣿⣿⠿⡿⠋⠙
                                                                   ⠘⠋⠹⢿⡿⠏⠙⠃
