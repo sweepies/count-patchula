@@ -18,6 +18,10 @@ showed, and the batch uses those, not whatever was released since. A newer
 release opens as a fresh update PR once the batched one has closed; ticking that
 one replaces the dependency's item in the batch.
 
+Each PR is its own item. Groups that bump the same dependency to the same
+version on separate branches, such as one group per service in a monorepo, add
+one item each, and taking one out leaves the others in.
+
 ## How the batch is built
 
 There is one batch per repository and base branch. It applies every item's edit

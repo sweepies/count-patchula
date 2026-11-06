@@ -94,7 +94,10 @@ exactly as they are.
 
 Close an update PR without merging and the Count takes the hint: that target is
 suppressed, and a new PR only appears when a newer version is available. Reopen
-it to undo. The [dashboard](/guide/dashboard/) lists closed targets with a box to
+it to undo. Suppression belongs to the PR's branch: closing one group's PR
+leaves the same update on another group's branch alone. Renaming a group
+starts its branch afresh, and changing `prs.branch` does the same for every
+branch, so updates closed before the change can come back once. The [dashboard](/guide/dashboard/) lists closed targets with a box to
 recreate one.
 
 When an update is no longer needed (merged elsewhere, dependency removed,

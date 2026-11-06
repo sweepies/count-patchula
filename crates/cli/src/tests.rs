@@ -214,9 +214,12 @@ impl Transport for Fake {
 
 fn existing_pr(package: &str, number: u64, closed: bool) -> Value {
     use sha2::{Digest, Sha256};
-    // Same target tuple encoded by update_key; these historical PRs existed
-    // before this process/cache. The identity is deliberately unrelated.
-    let targets = json!([["npm", package, "2.0.0", "2.0.0", null]]);
+    // Same branch and target tuple encoded by update_key; these historical PRs
+    // existed before this process/cache. The identity is deliberately unrelated.
+    let targets = json!([
+        format!("patchula/{package}-2.x"),
+        [["npm", package, "2.0.0", "2.0.0", null]]
+    ]);
     let update = Sha256::digest(serde_json::to_vec(&targets).unwrap())
         .iter()
         .map(|b| format!("{b:02x}"))
