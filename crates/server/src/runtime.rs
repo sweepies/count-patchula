@@ -12,14 +12,14 @@ use chrono::Utc;
 use futures_util::future::BoxFuture;
 use patchula_cache::{
     Cache,
-    queue::{Attribution, Work},
+    queue::{Attribution, Finish, Work},
 };
 use patchula_engine::Engine;
 use patchula_github::{Client, app::App};
 use patchula_http::Transport;
 use patchula_report::{Report, Repository, SCHEMA_VERSION, Status};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     future::Future,
     path::PathBuf,
     str::FromStr,
@@ -255,7 +255,13 @@ fn router(webhook: Webhook, ready: Arc<AtomicBool>) -> Router {
 #[derive(Default, Debug)]
 struct BatchOutcome {
     error_kinds: BTreeMap<&'static str, usize>,
-    requeue: bool,
+    /// Repositories, lowercased, whose run failed and retries after a backoff.
+    failed: BTreeSet<String>,
+    /// Repositories, lowercased, to run again because their default branch
+    /// moved while the run was writing.
+    requeued: BTreeSet<String>,
+    /// The batch failed before its repositories had results; every claim retries.
+    whole: bool,
 }
 impl BatchOutcome {
     fn report(report: &Report) -> Self {
@@ -263,18 +269,22 @@ impl BatchOutcome {
         let mut outcome = Self::default();
         for repo in &report.repositories {
             if repo.status == Status::Error {
-                *outcome.error_kinds.entry("repository-error").or_default() += 1;
+                outcome.fail("repository-error", &repo.repository);
             }
         }
         if let Some(actions) = &report.actions {
             for branch in &actions.branches {
-                outcome.requeue |= patchula_update::needs_requeue(branch);
+                if patchula_update::needs_requeue(branch) {
+                    outcome
+                        .requeued
+                        .insert(branch.repository.to_ascii_lowercase());
+                }
                 let kind = match branch.status {
                     ActionStatus::Error => "branch-error",
                     ActionStatus::Protected => "branch-protected",
                     _ => continue,
                 };
-                *outcome.error_kinds.entry(kind).or_default() += 1;
+                outcome.fail(kind, &branch.repository);
             }
             for pr in &actions.pull_requests {
                 let kind = match pr.status {
@@ -282,16 +292,37 @@ impl BatchOutcome {
                     ActionStatus::Protected => "pull-request-protected",
                     _ => continue,
                 };
-                *outcome.error_kinds.entry(kind).or_default() += 1;
+                outcome.fail(kind, &pr.repository);
             }
         }
         outcome
     }
+    /// Every claim of the batch retries.
+    fn whole(kind: &'static str) -> Self {
+        Self {
+            error_kinds: BTreeMap::from([(kind, 1)]),
+            whole: true,
+            ..Self::default()
+        }
+    }
+    fn fail(&mut self, kind: &'static str, repo: &str) {
+        *self.error_kinds.entry(kind).or_default() += 1;
+        self.failed.insert(repo.to_ascii_lowercase());
+    }
     fn failed(&self) -> bool {
         !self.error_kinds.is_empty()
     }
-    fn retry(&self) -> bool {
-        self.requeue || self.failed()
+    /// How a claimed repository's run ended. Discovery and repositories the
+    /// batch skipped are done.
+    fn finish(&self, work: &Work) -> Finish {
+        let repo = work.repo.to_ascii_lowercase();
+        if self.whole || self.failed.contains(&repo) {
+            Finish::Failed
+        } else if self.requeued.contains(&repo) {
+            Finish::Requeue
+        } else {
+            Finish::Done
+        }
     }
 }
 
@@ -725,34 +756,39 @@ async fn worker(
         let result = runner.run(&work, &settings, &attribution).await;
         let (outcome, error) = match result {
             Ok(outcome) => (outcome, None),
-            Err(error) => (
-                BatchOutcome {
-                    error_kinds: BTreeMap::from([("batch-operation", 1)]),
-                    requeue: false,
-                },
-                Some(error),
-            ),
+            Err(error) => (BatchOutcome::whole("batch-operation"), Some(error)),
         };
+        let finished: Vec<_> = claims
+            .into_iter()
+            .map(|claim| {
+                let finish = outcome.finish(&claim.work);
+                (claim, finish)
+            })
+            .collect();
+        let named = |wanted: Finish| -> Vec<&str> {
+            finished
+                .iter()
+                .filter(|(claim, finish)| *finish == wanted && !claim.work.repo.is_empty())
+                .map(|(claim, _)| claim.work.repo.as_str())
+                .collect()
+        };
+        let (retried, requeued) = (named(Finish::Failed), named(Finish::Requeue));
         if outcome.failed() {
             tracing::error!(target: "patchula_server", error = error.as_ref().map(|e| e.0),
                 error_kinds = ?outcome.error_kinds, error_count = outcome.error_kinds.values().sum::<usize>(),
-                "batch failed; work will be retried");
+                retried = ?retried, "batch failed; failed repositories will be retried with backoff");
         }
-        if outcome.requeue {
+        if !requeued.is_empty() {
             tracing::warn!(target: "patchula_server", reason = "default branch moved; requeued",
-                installation = work[0].installation, "batch requeued");
+                installation = work[0].installation, requeued = ?requeued, "batch requeued");
         }
-        tracing::info!(target: "patchula_server", installation = work[0].installation, entries = work.len(), success = !outcome.failed(), requeued = outcome.retry(), "batch finished");
+        tracing::info!(target: "patchula_server", installation = work[0].installation, entries = work.len(),
+            success = !outcome.failed(), retried = retried.len(), requeued = requeued.len(), "batch finished");
         cache
             .finish_work(
-                claims,
-                !outcome.retry(),
+                finished,
                 Utc::now().timestamp_millis(),
-                if !outcome.retry() {
-                    settings.server.coalescing_ms as i64
-                } else {
-                    60_000
-                },
+                settings.server.coalescing_ms as i64,
             )
             .await
             .map_err(|_| Error("queue completion failed"))?;

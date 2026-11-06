@@ -45,6 +45,36 @@ impl Attribution {
     }
 }
 
+/// How a claimed repository's run ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Finish {
+    /// It ran; its work is done.
+    Done,
+    /// It failed, and runs again after a backoff that grows with each
+    /// consecutive failure.
+    Failed,
+    /// It must run again, without having failed: its default branch moved
+    /// while the run was writing.
+    Requeue,
+}
+impl Finish {
+    /// Every claim ended the same way.
+    pub fn all(self, claims: Vec<Claim>) -> Vec<(Claim, Finish)> {
+        claims.into_iter().map(|claim| (claim, self)).collect()
+    }
+}
+/// The delay before a first retry, and before a requeued run.
+pub const RETRY_MS: i64 = 60_000;
+/// The longest retry backoff.
+pub const MAX_RETRY_MS: i64 = 3_600_000;
+/// The backoff after `failures` consecutive failures: one minute, doubling up
+/// to an hour.
+pub fn backoff_ms(failures: i64) -> i64 {
+    RETRY_MS
+        .saturating_mul(1 << (failures - 1).clamp(0, 6))
+        .min(MAX_RETRY_MS)
+}
+
 impl Cache {
     /// Atomically accept a delivery and persist its work before acknowledging it.
     /// Delivery IDs are retained for seven days, covering normal GitHub redelivery.
@@ -79,6 +109,8 @@ impl Cache {
                 let inserted = tx.execute("INSERT OR IGNORE INTO server_deliveries(delivery,received_at) VALUES (?1,?2)", params![delivery, now])?;
                 if inserted == 0 { return Ok(false); }
             }
+            // A new trigger brings a backed-off retry forward; coalescing
+            // still waits for the window the first event opened.
             for item in &work {
                 let previous: Option<Option<String>> = tx.query_row("SELECT check_prs FROM server_work WHERE installation=?1 AND repo=?2", params![item.installation as i64, item.repo], |r| r.get(0)).optional()?;
                 let checks = match (&item.check_prs, previous) {
@@ -90,7 +122,7 @@ impl Cache {
                     (Some(incoming), None) => Some(serde_json::to_string(incoming)?),
                     _ => None, // A push/checkbox/sweep takes precedence over check hints.
                 };
-                tx.execute("INSERT INTO server_work(installation,repo,available_at,check_prs) VALUES (?1,?2,?3,?4) ON CONFLICT(installation,repo) DO UPDATE SET generation=server_work.generation+1,check_prs=excluded.check_prs",
+                tx.execute("INSERT INTO server_work(installation,repo,available_at,check_prs) VALUES (?1,?2,?3,?4) ON CONFLICT(installation,repo) DO UPDATE SET generation=server_work.generation+1,check_prs=excluded.check_prs,available_at=MIN(server_work.available_at,excluded.available_at)",
                     params![item.installation as i64, item.repo, now + coalesce_ms, checks])?;
                 tx.execute("INSERT INTO server_work_causes SELECT installation,repo,generation,?3 FROM server_work WHERE installation=?1 AND repo=?2", params![item.installation as i64, item.repo, serde_json::to_string(&attribution)?])?;
             }
@@ -131,22 +163,36 @@ impl Cache {
     }
     pub async fn finish_work(
         &self,
-        claims: Vec<Claim>,
-        success: bool,
+        finished: Vec<(Claim, Finish)>,
         now: i64,
-        delay_ms: i64,
+        coalesce_ms: i64,
     ) -> Result<()> {
         self.call(move |store| {
             let tx = store.conn.transaction()?;
-            for claim in &claims {
-                if success {
-                    tx.execute("DELETE FROM server_work_causes WHERE installation=?1 AND repo=?2 AND generation<=?3", params![claim.work.installation as i64, claim.work.repo, claim.generation])?;
-                    tx.execute("DELETE FROM server_work WHERE installation=?1 AND repo=?2 AND generation=?3 AND claimed=?3", params![claim.work.installation as i64, claim.work.repo, claim.generation])?;
-                }
-                else {
-                    tx.execute("INSERT INTO server_work_causes VALUES (?1,?2,?3,?4)", params![claim.work.installation as i64, claim.work.repo, claim.generation, serde_json::to_string(&Attribution::reason("retry"))?])?;
-                }
-                tx.execute("UPDATE server_work SET claimed=NULL,available_at=?4 WHERE installation=?1 AND repo=?2 AND claimed=?3", params![claim.work.installation as i64, claim.work.repo, claim.generation, now + delay_ms])?;
+            for (claim, finish) in &finished {
+                let key = params![claim.work.installation as i64, claim.work.repo, claim.generation];
+                // Work that arrived during the run waits only for coalescing.
+                let state: Option<(i64, i64)> = tx.query_row("SELECT generation,failures FROM server_work WHERE installation=?1 AND repo=?2 AND claimed=?3", key, |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+                let Some((generation, failures)) = state else { continue };
+                let newer = generation != claim.generation;
+                let (failures, delay) = match finish {
+                    Finish::Done => {
+                        tx.execute("DELETE FROM server_work_causes WHERE installation=?1 AND repo=?2 AND generation<=?3", key)?;
+                        tx.execute("DELETE FROM server_work WHERE installation=?1 AND repo=?2 AND generation=?3 AND claimed=?3", key)?;
+                        (0, coalesce_ms)
+                    }
+                    Finish::Failed | Finish::Requeue => {
+                        // One `retry` cause per generation, however often it fails.
+                        let retry = serde_json::to_string(&Attribution::reason("retry"))?;
+                        tx.execute("INSERT INTO server_work_causes SELECT ?1,?2,?3,?4 WHERE NOT EXISTS (SELECT 1 FROM server_work_causes WHERE installation=?1 AND repo=?2 AND generation=?3 AND attribution=?4)",
+                            params![claim.work.installation as i64, claim.work.repo, claim.generation, retry])?;
+                        let failures = failures + i64::from(*finish == Finish::Failed);
+                        let delay = if newer { coalesce_ms } else if *finish == Finish::Failed { backoff_ms(failures) } else { RETRY_MS };
+                        (failures, delay)
+                    }
+                };
+                tx.execute("UPDATE server_work SET claimed=NULL,available_at=?4,failures=?5 WHERE installation=?1 AND repo=?2 AND claimed=?3",
+                    params![claim.work.installation as i64, claim.work.repo, claim.generation, now + delay, failures])?;
             }
             tx.commit()?;
             Ok(())
@@ -202,23 +248,32 @@ mod tests {
             .enqueue(Some("followup".into()), work(), 0, 0)
             .await
             .unwrap();
-        cache.finish_work(claims, true, 0, 0).await.unwrap();
+        cache
+            .finish_work(Finish::Done.all(claims), 0, 0)
+            .await
+            .unwrap();
         let claims = cache.claim_batch(0, 1).await.unwrap();
         assert_eq!(
             claims[0].attribution.deliveries,
             BTreeSet::from(["followup".into()])
         );
-        cache.finish_work(claims, false, 0, 0).await.unwrap();
+        cache
+            .finish_work(Finish::Failed.all(claims), 0, 0)
+            .await
+            .unwrap();
         drop(cache);
         let cache = Cache::open(path, Default::default()).await.unwrap();
         cache.recover_work().await.unwrap();
-        let claims = cache.claim_batch(0, 1).await.unwrap();
+        let claims = cache.claim_batch(RETRY_MS, 1).await.unwrap();
         assert!(claims[0].attribution.reasons.contains("retry"));
         assert_eq!(
             claims[0].attribution.deliveries,
             BTreeSet::from(["followup".into()])
         );
-        cache.finish_work(claims, true, 0, 0).await.unwrap();
+        cache
+            .finish_work(Finish::Done.all(claims), 0, 0)
+            .await
+            .unwrap();
         cache
             .enqueue_attributed(None, work(), 0, 0, Attribution::reason("sweep"))
             .await
@@ -246,14 +301,20 @@ mod tests {
         cache.enqueue(None, vec![candidate(1)], 0, 0).await.unwrap();
         let claims = cache.claim_batch(0, 1).await.unwrap();
         cache.enqueue(None, vec![candidate(2)], 0, 0).await.unwrap();
-        cache.finish_work(claims, true, 0, 0).await.unwrap();
+        cache
+            .finish_work(Finish::Done.all(claims), 0, 0)
+            .await
+            .unwrap();
         drop(cache);
         let cache = Cache::open(path, Default::default()).await.unwrap();
         cache.recover_work().await.unwrap();
         let claims = cache.claim_batch(0, 1).await.unwrap();
         assert_eq!(claims[0].work.check_prs, Some(BTreeSet::from([1, 2])));
         cache.enqueue(None, work(), 0, 0).await.unwrap();
-        cache.finish_work(claims, true, 0, 0).await.unwrap();
+        cache
+            .finish_work(Finish::Done.all(claims), 0, 0)
+            .await
+            .unwrap();
         assert_eq!(
             cache.claim_batch(0, 1).await.unwrap()[0].work.check_prs,
             None
@@ -276,7 +337,10 @@ mod tests {
         assert_eq!(second.len(), 1);
         assert_eq!(second[0].work.installation, 2);
         assert!(cache.claim_batch(0, 10).await.unwrap().is_empty());
-        cache.finish_work(first, true, 0, 0).await.unwrap();
+        cache
+            .finish_work(Finish::Done.all(first), 0, 0)
+            .await
+            .unwrap();
         let third = cache.claim_batch(0, 10).await.unwrap();
         assert_eq!(third[0].work.repo, "one/b");
     }
@@ -302,11 +366,17 @@ mod tests {
         cache.enqueue(None, work(), 111, 10).await.unwrap();
         cache.enqueue(None, work(), 112, 10).await.unwrap();
         assert!(cache.claim_batch(130, 10).await.unwrap().is_empty());
-        cache.finish_work(batch, true, 120, 10).await.unwrap();
+        cache
+            .finish_work(Finish::Done.all(batch), 120, 10)
+            .await
+            .unwrap();
         assert!(cache.claim_batch(129, 10).await.unwrap().is_empty());
         let batch = cache.claim_batch(130, 10).await.unwrap();
         assert_eq!(batch.len(), 1);
-        cache.finish_work(batch, true, 131, 10).await.unwrap();
+        cache
+            .finish_work(Finish::Done.all(batch), 131, 10)
+            .await
+            .unwrap();
         assert_eq!(cache.queue_len().await.unwrap(), 0);
     }
     #[tokio::test]
@@ -330,7 +400,156 @@ mod tests {
         );
         let batch = cache.claim_batch(0, 10).await.unwrap();
         assert_eq!(batch.len(), 1);
-        cache.finish_work(batch, false, 1, 10).await.unwrap();
-        assert_eq!(cache.claim_batch(11, 10).await.unwrap().len(), 1);
+        cache
+            .finish_work(Finish::Failed.all(batch), 1, 10)
+            .await
+            .unwrap();
+        assert!(cache.claim_batch(RETRY_MS, 10).await.unwrap().is_empty());
+        assert_eq!(cache.claim_batch(1 + RETRY_MS, 10).await.unwrap().len(), 1);
+    }
+    async fn causes(cache: &Cache) -> i64 {
+        cache
+            .call(|store| {
+                Ok(store
+                    .conn
+                    .query_row("SELECT count(*) FROM server_work_causes", [], |r| r.get(0))?)
+            })
+            .await
+            .unwrap()
+    }
+    #[test]
+    fn backoff_doubles_from_a_minute_to_an_hour() {
+        let minutes: Vec<_> = (1..=9).map(|n| backoff_ms(n) / 60_000).collect();
+        assert_eq!(minutes, [1, 2, 4, 8, 16, 32, 60, 60, 60]);
+    }
+    #[tokio::test]
+    async fn only_failed_repositories_retry_and_their_backoff_grows_until_success() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let repos = [
+            Work::repository(1, "o/broken"),
+            Work::repository(1, "o/fine"),
+        ];
+        cache.enqueue(None, repos.to_vec(), 0, 0).await.unwrap();
+        let mut now = 0;
+        for failures in 1..=8 {
+            let claims = cache.claim_batch(now, 10).await.unwrap();
+            let finished = claims
+                .into_iter()
+                .map(|claim| {
+                    let finish = if claim.work.repo == "o/broken" {
+                        Finish::Failed
+                    } else {
+                        Finish::Done
+                    };
+                    (claim, finish)
+                })
+                .collect();
+            cache.finish_work(finished, now, 0).await.unwrap();
+            assert_eq!(cache.queue_len().await.unwrap(), 1);
+            let delay = backoff_ms(failures);
+            assert!(
+                cache
+                    .claim_batch(now + delay - 1, 10)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            now += delay;
+        }
+        // However often it failed, its causes are the trigger and one retry.
+        assert_eq!(causes(&cache).await, 2);
+        let claims = cache.claim_batch(now, 10).await.unwrap();
+        assert_eq!(claims.len(), 1);
+        cache
+            .finish_work(Finish::Done.all(claims), now, 0)
+            .await
+            .unwrap();
+        assert_eq!(cache.queue_len().await.unwrap(), 0);
+        assert_eq!(causes(&cache).await, 0);
+        // A later failure starts over at a minute.
+        cache
+            .enqueue(None, vec![repos[0].clone()], now, 0)
+            .await
+            .unwrap();
+        let claims = cache.claim_batch(now, 10).await.unwrap();
+        cache
+            .finish_work(Finish::Failed.all(claims), now, 0)
+            .await
+            .unwrap();
+        assert_eq!(
+            cache.claim_batch(now + RETRY_MS, 10).await.unwrap().len(),
+            1
+        );
+    }
+    #[tokio::test]
+    async fn a_new_trigger_brings_a_backed_off_retry_forward() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        cache.enqueue(None, work(), 0, 0).await.unwrap();
+        let mut now = 0;
+        for failures in 1..=4 {
+            let claims = cache.claim_batch(now, 10).await.unwrap();
+            cache
+                .finish_work(Finish::Failed.all(claims), now, 0)
+                .await
+                .unwrap();
+            now += backoff_ms(failures);
+        }
+        // Eight minutes of backoff remain; a push waits only for coalescing.
+        let pushed = now - backoff_ms(4) + 1_000;
+        cache.enqueue(None, work(), pushed, 10).await.unwrap();
+        assert!(cache.claim_batch(pushed + 9, 10).await.unwrap().is_empty());
+        assert_eq!(cache.claim_batch(pushed + 10, 10).await.unwrap().len(), 1);
+    }
+    #[tokio::test]
+    async fn work_that_arrives_during_a_failed_run_waits_only_for_coalescing() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        cache.enqueue(None, work(), 0, 0).await.unwrap();
+        let claims = cache.claim_batch(0, 10).await.unwrap();
+        cache.enqueue(None, work(), 5, 10).await.unwrap();
+        cache
+            .finish_work(Finish::Failed.all(claims), 20, 10)
+            .await
+            .unwrap();
+        assert_eq!(cache.claim_batch(30, 10).await.unwrap().len(), 1);
+    }
+    #[tokio::test]
+    async fn a_requeue_retries_after_a_minute_without_counting_as_a_failure() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        cache.enqueue(None, work(), 0, 0).await.unwrap();
+        let claims = cache.claim_batch(0, 10).await.unwrap();
+        cache
+            .finish_work(Finish::Failed.all(claims), 0, 0)
+            .await
+            .unwrap();
+        let mut now = RETRY_MS;
+        for _ in 0..3 {
+            let claims = cache.claim_batch(now, 10).await.unwrap();
+            cache
+                .finish_work(Finish::Requeue.all(claims), now, 0)
+                .await
+                .unwrap();
+            now += RETRY_MS;
+        }
+        // Still one failure: the next one backs off two minutes.
+        let claims = cache.claim_batch(now, 10).await.unwrap();
+        cache
+            .finish_work(Finish::Failed.all(claims), now, 0)
+            .await
+            .unwrap();
+        assert!(
+            cache
+                .claim_batch(now + backoff_ms(2) - 1, 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            cache
+                .claim_batch(now + backoff_ms(2), 10)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }
