@@ -238,10 +238,12 @@ impl Client {
         range.sort_by(|(a, _), (b, _)| Ecosystem::Loose.order(b, a));
         let mut incomplete = range.len() > RANGE;
         range.truncate(RANGE);
-        let changes: Vec<Option<String>> = match index {
+        // Per version: its listed changes, `None` without the annotation, or `Err`
+        // when its chart could not be read.
+        let changes: Vec<std::result::Result<Option<String>, ()>> = match index {
             Some((_, notes)) => range
                 .iter()
-                .map(|(_, version)| notes.get(version).and_then(|n| n.changes.clone()))
+                .map(|(_, version)| Ok(notes.get(version).and_then(|n| n.changes.clone())))
                 .collect(),
             None => {
                 use futures_util::{StreamExt, stream};
@@ -255,29 +257,30 @@ impl Client {
                     .await;
                 read.into_iter()
                     .map(|chart| match chart {
-                        Ok(chart) => chart.and_then(|c| c.changes),
-                        Err(_) => {
-                            incomplete = true;
-                            None
-                        }
+                        Ok(chart) => Ok(chart.and_then(|c| c.changes)),
+                        Err(_) => Err(()),
                     })
                     .collect()
             }
         };
-        if changes.iter().all(Option::is_none) {
+        if !changes.iter().any(|c| matches!(c, Ok(Some(_)))) {
             return Ok(None);
         }
         let sections = range
             .iter()
             .zip(changes)
             .map(|((version, _), changes)| {
-                let body = match changes.as_deref().map(render_changes) {
-                    Some(Some(body)) => body,
-                    Some(None) => {
+                let body = match changes.as_ref().map(|c| c.as_deref().map(render_changes)) {
+                    Ok(Some(Some(body))) => body,
+                    Ok(Some(None)) => {
                         incomplete = true;
                         "The chart's list of changes for this version could not be read.\n".into()
                     }
-                    None => "The chart lists no changes for this version.\n".into(),
+                    Ok(None) => "The chart lists no changes for this version.\n".into(),
+                    Err(()) => {
+                        incomplete = true;
+                        "The Count could not read the chart for this version.\n".into()
+                    }
                 };
                 Section {
                     version: version_id(version),

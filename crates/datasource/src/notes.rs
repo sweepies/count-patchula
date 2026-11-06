@@ -78,7 +78,10 @@ fn boundary(text: &str, source: Source) -> Option<Parsed> {
         return Ecosystem::Docker
             .parse(text)
             .ok()
-            .and_then(|p| parsed(&p.0.to_string()));
+            .and_then(|p| parsed(&p.0.to_string()))
+            // An OCI catalog reads a chart's `_` build metadata back as `+`,
+            // which no image tag holds.
+            .or_else(|| (source == Source::Oci).then(|| parsed(text)).flatten());
     }
     parsed(text.trim_start_matches(['^', '~', '=', '>', ' ']))
 }
@@ -130,8 +133,10 @@ fn tag_version<'a>(tag: &'a str, package: &str, repository: &Repository) -> Opti
         if name.is_empty() {
             continue;
         }
-        // `-` after the name is chart-releaser's `<chart>-<version>`.
-        for separator in ["@", "-v", "/v", "-"] {
+        // chart-releaser tags `<chart>-<version>`; elsewhere a bare `-` would
+        // also take tags like `foo-2` for a version of `foo`.
+        let chart = repository.chart_sources.then_some("-");
+        for separator in ["@", "-v", "/v"].into_iter().chain(chart) {
             if let Some(version) = tag
                 .strip_prefix(&format!("{name}{separator}"))
                 .filter(|v| parsed(v).is_some())
@@ -424,13 +429,18 @@ impl Client {
         let mut notes = Notes {
             from: current.into(),
             to: target.into(),
-            source: self.notes_source_repository(id, target).await?,
             ..Notes::default()
         };
         // A chart's own list of changes describes the chart; its `sources`
-        // may name the packaged application instead.
+        // may name the packaged application instead. Read first, so that a
+        // source that cannot be read only costs the Source link.
         match self.chart_sections(id, current, target).await {
             Ok(Some((sections, incomplete))) => {
+                notes.source = self
+                    .notes_source_repository(id, target)
+                    .await
+                    .ok()
+                    .flatten();
                 notes.sections = sections;
                 notes.incomplete = incomplete;
                 notes.from_chart = true;
@@ -440,6 +450,7 @@ impl Client {
             // Unread chart changes leave the source's notes, marked incomplete.
             Err(_) => notes.incomplete = true,
         }
+        notes.source = self.notes_source_repository(id, target).await?;
         let Some(repository) = notes.source.as_ref() else {
             return Ok(notes);
         };
@@ -873,7 +884,9 @@ mod tests {
     #[test]
     fn chart_releaser_tags_name_the_chart_then_its_version() {
         let id = PackageId::public(Source::Helm, "https://charts.example.com|app");
-        let repository = Repository::from_url("https://github.com/example/charts").unwrap();
+        let repository = Repository::from_url("https://github.com/example/charts")
+            .unwrap()
+            .chart_sourced();
         let package = tag_name(&id);
         assert_eq!(package, "app");
         assert_eq!(
@@ -887,5 +900,9 @@ mod tests {
         // Another chart's tags in the same repository are not this chart's.
         assert_eq!(tag_version("app-extra-1.2.3", package, &repository), None);
         assert_eq!(tag_version("other-1.2.3", package, &repository), None);
+        // Only a chart's tags take a bare `-`.
+        let plain = Repository::from_url("https://github.com/example/foo").unwrap();
+        assert_eq!(tag_version("foo-2", "foo", &plain), None);
+        assert_eq!(tag_version("foo-v2", "foo", &plain), Some("2"));
     }
 }

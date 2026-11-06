@@ -464,10 +464,7 @@ impl Client {
         version: &str,
     ) -> Result<Option<notes::ChartNotes>> {
         let (host, path) = identity(package)?;
-        // OCI tags cannot hold `+`; `helm push` writes build metadata as `_`.
-        let image = self
-            .image_config(&host, &path, &version.replace('+', "_"))
-            .await?;
+        let image = self.image_config(&host, &path, version).await?;
         Ok(image.chart.then(|| image.chart_notes()))
     }
 
@@ -479,7 +476,12 @@ impl Client {
         {
             return Err(Error::Invalid);
         }
-        let mut reference = version.to_owned();
+        // OCI tags cannot hold `+`: `helm push` writes build metadata as `_`,
+        // which a catalog of OCI versions reads back as `+`.
+        let mut reference = version.replace('+', "_");
+        // An index may carry the annotation for all its platforms; a
+        // platform's own manifest overrides it.
+        let mut annotated_source = None;
         for _ in 0..4 {
             let response = self
                 .registry(
@@ -491,6 +493,11 @@ impl Client {
                 )
                 .await?;
             let manifest: Value = serde_json::from_slice(&response.body)?;
+            if let Some(source) =
+                manifest["annotations"]["org.opencontainers.image.source"].as_str()
+            {
+                annotated_source = Some(source.to_owned());
+            }
             if let Some(digest) = manifest["config"]["digest"].as_str() {
                 validate_digest(digest)?;
                 let response = self
@@ -504,9 +511,7 @@ impl Client {
                     .await?;
                 return Ok(ImageConfig {
                     config: serde_json::from_slice(&response.body)?,
-                    annotated_source: manifest["annotations"]["org.opencontainers.image.source"]
-                        .as_str()
-                        .map(str::to_owned),
+                    annotated_source,
                     chart: manifest["config"]["mediaType"]
                         == "application/vnd.cncf.helm.config.v1+json",
                 });

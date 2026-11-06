@@ -2301,3 +2301,79 @@ fn github_tree_urls_name_a_directory() {
         assert_eq!(Repository::from_url(url).unwrap().directory, None, "{url}");
     }
 }
+
+#[tokio::test]
+async fn a_chart_version_that_cannot_be_read_says_so() {
+    let mut routes = Arc::try_unwrap(oci_chart_routes(&[
+        ("1.1.0", Some("- One\n")),
+        ("1.3.0", Some("- Three\n")),
+    ]))
+    .ok()
+    .unwrap();
+    routes.bodies.insert(
+        "https://registry.example/v2/charts/app/manifests/1.2.0".into(),
+        json!({"status":404}),
+    );
+    let client = client(Arc::new(routes), memory().await).await;
+    let id = patchula_config::PackageId::public(Source::Oci, "registry.example/charts/app");
+    let notes = client.release_notes(&id, "1.0.0", "1.3.0").await.unwrap();
+    assert!(notes.from_chart && notes.incomplete);
+    assert_eq!(
+        notes.sections[1].body,
+        "The Count could not read the chart for this version.\n"
+    );
+}
+
+#[tokio::test]
+async fn chart_versions_with_build_metadata_read_their_underscore_tags() {
+    let mut routes = Arc::try_unwrap(oci_chart_routes(&[("1.1.0_meta", Some("- Meta\n"))]))
+        .ok()
+        .unwrap();
+    routes.bodies.insert(
+        "https://registry.example/v2/charts/app/tags/list?n=1000".into(),
+        json!({"tags":["1.0.0","1.1.0_meta"]}),
+    );
+    let client = client(Arc::new(routes), memory().await).await;
+    let id = patchula_config::PackageId::public(Source::Oci, "registry.example/charts/app");
+    let notes = client
+        .release_notes(&id, "1.0.0", "1.1.0+meta")
+        .await
+        .unwrap();
+    assert!(notes.from_chart && !notes.incomplete);
+    assert_eq!(notes.sections[0].body, "- Meta\n");
+    assert_eq!(
+        notes.source.unwrap().github.as_deref(),
+        Some("example/charts")
+    );
+}
+
+#[tokio::test]
+async fn a_multi_platform_index_annotates_the_source_for_its_platforms() {
+    let child = format!("sha256:{}", "c".repeat(64));
+    let config = format!("sha256:{}", "d".repeat(64));
+    let routes = routes(&[
+        (
+            "https://registry.example/v2/tools/multi/manifests/2.0.0",
+            json!({
+                "manifests":[{"digest":child,"platform":{"os":"linux","architecture":"amd64"}}],
+                "annotations":{"org.opencontainers.image.source":"https://github.com/example/multi"}
+            }),
+        ),
+        (
+            &format!("https://registry.example/v2/tools/multi/manifests/{child}"),
+            json!({"config":{"digest":config}}),
+        ),
+        (
+            &format!("https://registry.example/v2/tools/multi/blobs/{config}"),
+            json!({"config":{}}),
+        ),
+    ]);
+    let client = client(routes, memory().await).await;
+    let id = patchula_config::PackageId::public(Source::Oci, "registry.example/tools/multi");
+    let source = client
+        .source_repository(&id, "2.0.0")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(source.github.as_deref(), Some("example/multi"));
+}
