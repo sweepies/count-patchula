@@ -637,28 +637,80 @@ impl crate::remote::Runner for Engines {
         })
     }
 }
-/// Deletes the oldest batch reports beyond `kept`. Only finished reports are
-/// considered: another worker may be writing a temporary file, and files that
-/// are not reports belong to someone else. Names start with a fixed-width UTC
-/// time, so their order is their age.
-fn prune_reports(directory: &std::path::Path, kept: usize) {
-    let Ok(entries) = std::fs::read_dir(directory) else {
-        return;
+/// Whether `name` is a batch report exactly as `output_report` names one:
+/// `batch-YYYYMMDDTHHMMSS.NNNNNNNNNZ-<pid>-<counter>.json`. Anything else in
+/// the directory belongs to someone else and is never counted or deleted.
+fn report_name(name: &str) -> bool {
+    let digits = |text: &str, len: Option<usize>| {
+        !text.is_empty()
+            && len.is_none_or(|len| text.len() == len)
+            && text.bytes().all(|b| b.is_ascii_digit())
     };
-    let mut reports: Vec<_> = entries
-        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
-        .filter(|name| name.starts_with("batch-") && name.ends_with(".json"))
-        .collect();
-    if reports.len() <= kept {
-        return;
+    let Some(rest) = name
+        .strip_prefix("batch-")
+        .and_then(|rest| rest.strip_suffix(".json"))
+    else {
+        return false;
+    };
+    let Some((time, rest)) = rest.split_once("Z-") else {
+        return false;
+    };
+    let (Some((date, clock)), Some((pid, counter))) = (time.split_once('T'), rest.split_once('-'))
+    else {
+        return false;
+    };
+    let Some((seconds, fraction)) = clock.split_once('.') else {
+        return false;
+    };
+    digits(date, Some(8))
+        && digits(seconds, Some(6))
+        && digits(fraction, Some(9))
+        && digits(pid, None)
+        && digits(counter, None)
+}
+/// How old a report's temporary file must be before it counts as abandoned by
+/// a writer that crashed, rather than one still being written.
+const ABANDONED_REPORT: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+/// Deletes the oldest batch reports beyond `kept`, and temporary files that
+/// crashed writers left behind. Names start with a fixed-width UTC time, so
+/// their order is their age, as long as the clock does not step backwards.
+fn prune_reports(directory: &std::path::Path, kept: usize) {
+    let entries = match std::fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) => {
+            tracing::warn!(target: "patchula_server", directory = %directory.display(), %error, "cannot list the report directory; old reports are not deleted");
+            return;
+        }
+    };
+    let mut reports = Vec::new();
+    let mut abandoned = Vec::new();
+    for entry in entries.flatten() {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        if report_name(&name) {
+            reports.push(name);
+        } else if name
+            .strip_prefix('.')
+            .and_then(|name| name.strip_suffix(".tmp"))
+            .is_some_and(report_name)
+            && entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age > ABANDONED_REPORT)
+        {
+            abandoned.push(name);
+        }
     }
     reports.sort_unstable();
-    let excess = reports.len() - kept;
+    let excess = reports.len().saturating_sub(kept);
     let mut removed = 0;
-    for name in &reports[..excess] {
+    for name in reports[..excess].iter().chain(&abandoned) {
         match std::fs::remove_file(directory.join(name)) {
             Ok(()) => removed += 1,
-            // Another worker pruned it first.
+            // Another worker deleted it first.
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
                 tracing::warn!(target: "patchula_server", report = %name, %error, "cannot delete an old batch report");

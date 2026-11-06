@@ -580,6 +580,13 @@ mod tests {
                 .reports_kept,
             5
         );
+        assert_eq!(
+            load("server { reportsKept = 100000 }")
+                .unwrap()
+                .server
+                .reports_kept,
+            100_000
+        );
         for kept in [0, 100_001] {
             assert!(load(&format!("server {{ reportsKept = {kept} }}")).is_err());
         }

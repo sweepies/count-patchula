@@ -1377,7 +1377,7 @@ async fn the_report_directory_keeps_only_the_newest_reports() {
     for entry in std::fs::read_dir(dir.path()).unwrap() {
         let path = entry.unwrap().path();
         let name = path.file_name().unwrap().to_str().unwrap().to_owned();
-        if name.starts_with("batch-") && name.ends_with(".json") {
+        if report_name(&name) {
             let decoded: Report = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
             kept.push(decoded.repositories[0].repository.clone());
         } else {
@@ -1395,6 +1395,23 @@ async fn the_report_directory_keeps_only_the_newest_reports() {
             "notes.txt"
         ]
     );
+}
+
+#[test]
+fn only_names_the_report_writer_makes_are_reports() {
+    assert!(report_name("batch-20261106T120000.123456789Z-42-7.json"));
+    for name in [
+        "batch-notes.json",
+        "batch-20261106T120000.123456789Z-42-7.json.tmp",
+        ".batch-20261106T120000.123456789Z-42-7.json",
+        "batch-2026116T120000.123456789Z-42-7.json",
+        "batch-20261106T120000.12345678Z-42-7.json",
+        "batch-20261106T120000.123456789Z-42.json",
+        "batch-20261106T120000.123456789Z--7.json",
+        "batch-20261106T120000.123456789Z-42-x.json",
+    ] {
+        assert!(!report_name(name), "{name}");
+    }
 }
 
 struct PrDetails(Value);
