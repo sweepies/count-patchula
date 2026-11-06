@@ -80,6 +80,9 @@ class Server {
   workers: Int = 4
   /// null emits the versioned report as a structured log event.
   reportDirectory: String? = null
+  /// Batch reports `reportDirectory` keeps, 1 to 100000; the oldest are
+  /// deleted after each new one.
+  reportsKept: Int = 200
   /// Empty lists allow all installations/repositories the App can access.
   allowedInstallations: Listing<Int> = new {}
   allowedRepositories: Listing<String> = new {}

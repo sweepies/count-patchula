@@ -1323,7 +1323,9 @@ async fn report_directory_preserves_versioned_contract() {
         stats: None,
         actions: None,
     };
-    output_report(&report, Some(dir.path())).await.unwrap();
+    let mut server = settings().server;
+    server.report_directory = Some(dir.path().to_owned());
+    output_report(&report, &server).await.unwrap();
     let path = std::fs::read_dir(dir.path())
         .unwrap()
         .next()
@@ -1332,6 +1334,89 @@ async fn report_directory_preserves_versioned_contract() {
         .path();
     let decoded: Report = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     assert_eq!(decoded, report);
+}
+
+#[tokio::test]
+async fn the_report_directory_keeps_only_the_newest_reports() {
+    let _capture = LOG_TEST_LOCK.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    // Another worker's report in progress, and files that are not reports:
+    // even one named like them, which would sort after every real report.
+    let writing = ".batch-20261106T120000.000000000Z-1-0.json.tmp";
+    for name in [writing, "notes.txt", "batch-notes.txt", "batch-notes.json"] {
+        std::fs::write(dir.path().join(name), "keep").unwrap();
+    }
+    // A crashed writer's temporary file, two days old.
+    let abandoned = dir
+        .path()
+        .join(".batch-20261104T120000.000000000Z-1-0.json.tmp");
+    std::fs::write(&abandoned, "gone").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&abandoned)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 86400))
+        .unwrap();
+    let mut server = settings().server;
+    server.report_directory = Some(dir.path().to_owned());
+    server.reports_kept = 3;
+    let report = |n: usize| Report {
+        schema_version: SCHEMA_VERSION,
+        repositories: vec![Repository {
+            repository: format!("owner/repo-{n}"),
+            status: Status::Complete,
+            reason: None,
+            package_files: Vec::new(),
+            warnings: Vec::new(),
+            skipped: Vec::new(),
+            notices: Vec::new(),
+            lookup_failures: Vec::new(),
+            tooling: Vec::new(),
+            default_branch: None,
+            commit: None,
+        }],
+        stats: None,
+        actions: None,
+    };
+    for n in 0..6 {
+        output_report(&report(n), &server).await.unwrap();
+    }
+    let mut kept = Vec::new();
+    let mut others = Vec::new();
+    for entry in std::fs::read_dir(dir.path()).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_str().unwrap().to_owned();
+        if report_name(&name) {
+            let decoded: Report = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            kept.push(decoded.repositories[0].repository.clone());
+        } else {
+            others.push(name);
+        }
+    }
+    kept.sort();
+    others.sort();
+    assert_eq!(kept, ["owner/repo-3", "owner/repo-4", "owner/repo-5"]);
+    assert_eq!(
+        others,
+        [writing, "batch-notes.json", "batch-notes.txt", "notes.txt"]
+    );
+}
+
+#[test]
+fn only_names_the_report_writer_makes_are_reports() {
+    assert!(report_name("batch-20261106T120000.123456789Z-42-7.json"));
+    for name in [
+        "batch-notes.json",
+        "batch-20261106T120000.123456789Z-42-7.json.tmp",
+        ".batch-20261106T120000.123456789Z-42-7.json",
+        "batch-2026116T120000.123456789Z-42-7.json",
+        "batch-20261106T120000.12345678Z-42-7.json",
+        "batch-20261106T120000.123456789Z-42.json",
+        "batch-20261106T120000.123456789Z--7.json",
+        "batch-20261106T120000.123456789Z-42-x.json",
+    ] {
+        assert!(!report_name(name), "{name}");
+    }
 }
 
 struct PrDetails(Value);

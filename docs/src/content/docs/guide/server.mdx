@@ -65,6 +65,13 @@ snapshot it started with. A change to the `http` section takes effect at each
 installation's next batch. Every setting is in the [settings
 reference](/reference/settings/).
 
+Each batch's report is logged as one JSON event, or with `reportDirectory`
+written to a file there. The directory keeps the newest `reportsKept` reports
+(200 by default) and deletes older ones after each new report, so a busy or
+failing server does not fill its volume. A temporary file a crashed write left
+behind is deleted once it is a day old. Only files named as the server names
+reports are touched.
+
 ## Credentials and startup
 
 ```sh

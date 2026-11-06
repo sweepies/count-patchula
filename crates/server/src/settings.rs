@@ -90,6 +90,8 @@ pub struct Server {
     /// Installations whose batches run at once, each one batch at a time.
     pub workers: usize,
     pub report_directory: Option<PathBuf>,
+    /// Batch reports `report_directory` keeps; older ones are deleted.
+    pub reports_kept: usize,
     pub allowed_installations: Vec<u64>,
     pub allowed_repositories: Vec<String>,
     pub advertise: bool,
@@ -136,6 +138,7 @@ impl Default for Settings {
                 coalescing_ms: 1000,
                 workers: 4,
                 report_directory: None,
+                reports_kept: 200,
                 allowed_installations: Vec::new(),
                 allowed_repositories: Vec::new(),
                 advertise: true,
@@ -280,6 +283,9 @@ impl Settings {
             .is_some_and(|p| p.as_os_str().is_empty())
         {
             return Err("reportDirectory must be nonempty");
+        }
+        if !(1..=100_000).contains(&server.reports_kept) {
+            return Err("reportsKept must be 1..100000");
         }
         if server
             .allowed_installations
@@ -558,6 +564,33 @@ pub fn from_webhook(url: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reports_kept_is_read_and_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.pkl");
+        let load = |body: &str| {
+            std::fs::write(&path, format!("amends \"PatchulaSettings.pkl\"\n{body}\n")).unwrap();
+            Settings::load(&path)
+        };
+        assert_eq!(load("").unwrap().server.reports_kept, 200);
+        assert_eq!(
+            load("server { reportsKept = 5 }")
+                .unwrap()
+                .server
+                .reports_kept,
+            5
+        );
+        assert_eq!(
+            load("server { reportsKept = 100000 }")
+                .unwrap()
+                .server
+                .reports_kept,
+            100_000
+        );
+        for kept in [0, 100_001] {
+            assert!(load(&format!("server {{ reportsKept = {kept} }}")).is_err());
+        }
+    }
     #[test]
     fn local_absolute_imports_bundled_schema_and_diagnostics() {
         let dir = tempfile::tempdir().unwrap();
