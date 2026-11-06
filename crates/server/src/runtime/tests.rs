@@ -1340,14 +1340,23 @@ async fn report_directory_preserves_versioned_contract() {
 async fn the_report_directory_keeps_only_the_newest_reports() {
     let _capture = LOG_TEST_LOCK.lock().await;
     let dir = tempfile::tempdir().unwrap();
-    // Another worker's report in progress, and files that are not reports.
-    for name in [
-        ".batch-in-progress.json.tmp",
-        "notes.txt",
-        "batch-notes.txt",
-    ] {
+    // Another worker's report in progress, and files that are not reports:
+    // even one named like them, which would sort after every real report.
+    let writing = ".batch-20261106T120000.000000000Z-1-0.json.tmp";
+    for name in [writing, "notes.txt", "batch-notes.txt", "batch-notes.json"] {
         std::fs::write(dir.path().join(name), "keep").unwrap();
     }
+    // A crashed writer's temporary file, two days old.
+    let abandoned = dir
+        .path()
+        .join(".batch-20261104T120000.000000000Z-1-0.json.tmp");
+    std::fs::write(&abandoned, "gone").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&abandoned)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 86400))
+        .unwrap();
     let mut server = settings().server;
     server.report_directory = Some(dir.path().to_owned());
     server.reports_kept = 3;
@@ -1389,11 +1398,7 @@ async fn the_report_directory_keeps_only_the_newest_reports() {
     assert_eq!(kept, ["owner/repo-3", "owner/repo-4", "owner/repo-5"]);
     assert_eq!(
         others,
-        [
-            ".batch-in-progress.json.tmp",
-            "batch-notes.txt",
-            "notes.txt"
-        ]
+        [writing, "batch-notes.json", "batch-notes.txt", "notes.txt"]
     );
 }
 
