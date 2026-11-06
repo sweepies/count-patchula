@@ -1323,7 +1323,9 @@ async fn report_directory_preserves_versioned_contract() {
         stats: None,
         actions: None,
     };
-    output_report(&report, Some(dir.path())).await.unwrap();
+    let mut server = settings().server;
+    server.report_directory = Some(dir.path().to_owned());
+    output_report(&report, &server).await.unwrap();
     let path = std::fs::read_dir(dir.path())
         .unwrap()
         .next()
@@ -1332,6 +1334,67 @@ async fn report_directory_preserves_versioned_contract() {
         .path();
     let decoded: Report = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     assert_eq!(decoded, report);
+}
+
+#[tokio::test]
+async fn the_report_directory_keeps_only_the_newest_reports() {
+    let _capture = LOG_TEST_LOCK.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    // Another worker's report in progress, and files that are not reports.
+    for name in [
+        ".batch-in-progress.json.tmp",
+        "notes.txt",
+        "batch-notes.txt",
+    ] {
+        std::fs::write(dir.path().join(name), "keep").unwrap();
+    }
+    let mut server = settings().server;
+    server.report_directory = Some(dir.path().to_owned());
+    server.reports_kept = 3;
+    let report = |n: usize| Report {
+        schema_version: SCHEMA_VERSION,
+        repositories: vec![Repository {
+            repository: format!("owner/repo-{n}"),
+            status: Status::Complete,
+            reason: None,
+            package_files: Vec::new(),
+            warnings: Vec::new(),
+            skipped: Vec::new(),
+            notices: Vec::new(),
+            lookup_failures: Vec::new(),
+            tooling: Vec::new(),
+            default_branch: None,
+            commit: None,
+        }],
+        stats: None,
+        actions: None,
+    };
+    for n in 0..6 {
+        output_report(&report(n), &server).await.unwrap();
+    }
+    let mut kept = Vec::new();
+    let mut others = Vec::new();
+    for entry in std::fs::read_dir(dir.path()).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_str().unwrap().to_owned();
+        if name.starts_with("batch-") && name.ends_with(".json") {
+            let decoded: Report = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            kept.push(decoded.repositories[0].repository.clone());
+        } else {
+            others.push(name);
+        }
+    }
+    kept.sort();
+    others.sort();
+    assert_eq!(kept, ["owner/repo-3", "owner/repo-4", "owner/repo-5"]);
+    assert_eq!(
+        others,
+        [
+            ".batch-in-progress.json.tmp",
+            "batch-notes.txt",
+            "notes.txt"
+        ]
+    );
 }
 
 struct PrDetails(Value);

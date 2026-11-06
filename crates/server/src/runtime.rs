@@ -508,7 +508,7 @@ impl Batch for Engines {
                     actions: None,
                 },
             };
-            output_report(&report, settings.server.report_directory.as_deref()).await?;
+            output_report(&report, &settings.server).await?;
             let mut outcome = BatchOutcome::report(&report);
             if result.is_err() {
                 outcome.error_kinds.insert("engine-error", 1);
@@ -629,7 +629,7 @@ impl crate::remote::Runner for Engines {
                     .await;
                 }
                 tracing::info!(target: "patchula_server", installation, user = login, "remote run report");
-                output_report(&report, settings.server.report_directory.as_deref())
+                output_report(&report, &settings.server)
                     .await
                     .map_err(|e| e.0)?;
             }
@@ -637,13 +637,46 @@ impl crate::remote::Runner for Engines {
         })
     }
 }
+/// Deletes the oldest batch reports beyond `kept`. Only finished reports are
+/// considered: another worker may be writing a temporary file, and files that
+/// are not reports belong to someone else. Names start with a fixed-width UTC
+/// time, so their order is their age.
+fn prune_reports(directory: &std::path::Path, kept: usize) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    let mut reports: Vec<_> = entries
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|name| name.starts_with("batch-") && name.ends_with(".json"))
+        .collect();
+    if reports.len() <= kept {
+        return;
+    }
+    reports.sort_unstable();
+    let excess = reports.len() - kept;
+    let mut removed = 0;
+    for name in &reports[..excess] {
+        match std::fs::remove_file(directory.join(name)) {
+            Ok(()) => removed += 1,
+            // Another worker pruned it first.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                tracing::warn!(target: "patchula_server", report = %name, %error, "cannot delete an old batch report");
+            }
+        }
+    }
+    if removed > 0 {
+        tracing::info!(target: "patchula_server", removed, kept, "old batch reports deleted");
+    }
+}
 fn skip_report(reason: &str, discovery_only: bool) {
     tracing::info!(target: "patchula_server", reason, discovery_only, repository_runs = 0, "batch report skipped");
 }
-async fn output_report(report: &Report, directory: Option<&std::path::Path>) -> Result<(), Error> {
-    if let Some(directory) = directory {
+async fn output_report(report: &Report, server: &crate::settings::Server) -> Result<(), Error> {
+    if let Some(directory) = &server.report_directory {
         let report = report.clone();
         let directory = directory.to_owned();
+        let kept = server.reports_kept;
         tokio::task::spawn_blocking(move || {
             std::fs::create_dir_all(&directory)
                 .map_err(|_| Error("cannot create report directory"))?;
@@ -670,6 +703,7 @@ async fn output_report(report: &Report, directory: Option<&std::path::Path>) -> 
             std::fs::rename(temporary, &path)
                 .map_err(|_| Error("cannot publish batch report"))?;
             tracing::info!(target: "patchula_server", path = %path.display(), repository_runs = report.repositories.len(), "batch report written");
+            prune_reports(&directory, kept);
             Ok::<(), Error>(())
         })
         .await
