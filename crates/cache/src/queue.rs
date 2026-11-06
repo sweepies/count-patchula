@@ -217,17 +217,20 @@ impl Cache {
     /// counting as failures.
     pub async fn release_work(&self) -> Result<()> {
         self.call(|store| {
-            store
-                .conn
-                .execute_batch("INSERT INTO server_work_causes SELECT installation,repo,generation,'{\"reasons\":[\"retry\"],\"deliveries\":[]}' FROM server_work WHERE claimed IS NOT NULL; UPDATE server_work SET claimed=NULL;")?;
+            let tx = store.conn.transaction()?;
+            let retry = serde_json::to_string(&Attribution::reason("retry"))?;
+            tx.execute("INSERT INTO server_work_causes SELECT installation,repo,generation,?1 FROM server_work WHERE claimed IS NOT NULL", [retry])?;
+            tx.execute("UPDATE server_work SET claimed=NULL", [])?;
+            tx.commit()?;
             Ok(())
         })
         .await
     }
-    /// Called once under the server's exclusive process lock, on start. A
-    /// shutdown releases its claims, so a claim left over is a run that died
-    /// with the process, such as by an OOM kill: it counts as a failure and
-    /// backs off, so a run that kills the server cannot do so at full rate.
+    /// Called under the server's exclusive process lock, on start and when
+    /// the server stops on a failure. A clean shutdown releases its claims, so
+    /// a claim left over is a run that died with the process (an OOM kill) or
+    /// took it down (a panic): it counts as a failure and backs off, so a run
+    /// that kills the server cannot do so at full rate.
     pub async fn recover_work(&self, now: i64) -> Result<()> {
         self.call(move |store| {
             let tx = store.conn.transaction()?;
@@ -240,9 +243,10 @@ impl Cache {
                 tx.execute("INSERT INTO server_work_causes SELECT ?1,?2,?3,?4 WHERE NOT EXISTS (SELECT 1 FROM server_work_causes WHERE installation=?1 AND repo=?2 AND generation=?3 AND attribution=?4)",
                     params![installation, repo, claimed, retry])?;
                 let failures = failures + 1;
-                let delay = retry_delay_ms(installation as u64, &repo, failures);
-                tx.execute("UPDATE server_work SET claimed=NULL,failures=?3,available_at=?4 WHERE installation=?1 AND repo=?2",
-                    params![installation, repo, failures, now + delay])?;
+                // Work that arrived during the run keeps the time its trigger set.
+                let at = now + retry_delay_ms(installation as u64, &repo, failures);
+                tx.execute("UPDATE server_work SET claimed=NULL,failures=?3,available_at=CASE WHEN generation=claimed THEN ?4 ELSE available_at END WHERE installation=?1 AND repo=?2",
+                    params![installation, repo, failures, at])?;
             }
             tx.commit()?;
             Ok(())
@@ -673,5 +677,23 @@ mod tests {
         let first = now + retry_delay_ms(1, "owner/repo", 1);
         assert!(cache.claim_batch(first - 1, 10).await.unwrap().is_empty());
         assert_eq!(cache.claim_batch(first, 10).await.unwrap().len(), 1);
+    }
+    #[tokio::test]
+    async fn work_that_arrived_before_a_crash_keeps_its_time_but_the_crash_counts() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        cache.enqueue(None, work(), 0, 0).await.unwrap();
+        assert_eq!(cache.claim_batch(0, 10).await.unwrap().len(), 1);
+        cache.enqueue(None, work(), 5, 10).await.unwrap();
+        cache.recover_work(100).await.unwrap();
+        let claims = cache.claim_batch(100, 10).await.unwrap();
+        assert_eq!(claims.len(), 1);
+        cache
+            .finish_work(Finish::Failed.all(claims), 100, 0)
+            .await
+            .unwrap();
+        // The crash was the first failure; this is the second.
+        let second = 100 + retry_delay_ms(1, "owner/repo", 2);
+        assert!(cache.claim_batch(second - 1, 10).await.unwrap().is_empty());
+        assert_eq!(cache.claim_batch(second, 10).await.unwrap().len(), 1);
     }
 }

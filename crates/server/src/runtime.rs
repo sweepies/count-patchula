@@ -872,10 +872,15 @@ async fn run_until(
     if !worker.is_finished() {
         let _ = worker.await;
     }
-    cache
-        .release_work()
-        .await
-        .map_err(|_| Error("cannot requeue interrupted batch"))?;
+    // A clean shutdown releases its runs; one on a failure, such as a
+    // panicking batch, counts them as failed so a run that takes the server
+    // down backs off instead of looping at restart rate.
+    if failure.is_some() {
+        cache.recover_work(Utc::now().timestamp_millis()).await
+    } else {
+        cache.release_work().await
+    }
+    .map_err(|_| Error("cannot requeue interrupted batch"))?;
     failure.map_or(Ok(()), Err)
 }
 
