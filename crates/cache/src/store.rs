@@ -36,7 +36,7 @@ fn initialize(mut conn: Connection) -> Result<Connection> {
     // cache together migrate it once.
     let transaction = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let version: i64 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if version > 8 {
+    if version > 9 {
         return Err(Error::FutureSchema(version));
     }
     if version < 1 {
@@ -62,6 +62,9 @@ fn initialize(mut conn: Connection) -> Result<Connection> {
     }
     if version < 8 {
         transaction.execute_batch(include_str!("migrations/008.sql"))?;
+    }
+    if version < 9 {
+        transaction.execute_batch(include_str!("migrations/009.sql"))?;
     }
     transaction.commit()?;
     Ok(conn)

@@ -340,7 +340,11 @@ async fn repository_and_org_webhooks_resolve_installations_and_ping_does_no_work
     let claims = state.cache.claim_batch(i64::MAX, 10).await.unwrap();
     assert_eq!(claims.len(), 1);
     assert_eq!(claims[0].work, Work::repository(1, "owner/repo"));
-    state.cache.finish_work(claims, true, 0, 0).await.unwrap();
+    state
+        .cache
+        .finish_work(Finish::Done.all(claims), 0, 0)
+        .await
+        .unwrap();
     // Apply installation and repository allowlists after resolution, including cache hits.
     let mut denied = state.settings.current();
     denied.server.allowed_installations = vec![2];
@@ -389,7 +393,11 @@ async fn repository_and_org_webhooks_resolve_installations_and_ping_does_no_work
     assert_eq!(transport.requests.load(Ordering::SeqCst), 2);
     let claims = state.cache.claim_batch(i64::MAX, 10).await.unwrap();
     assert_eq!(claims[0].work, Work::repository(1, "owner/repo"));
-    state.cache.finish_work(claims, true, 0, 0).await.unwrap();
+    state
+        .cache
+        .finish_work(Finish::Done.all(claims), 0, 0)
+        .await
+        .unwrap();
     // A new resolver with an empty cache gets a 404: accept/ignore, no org fallback.
     let unknown = self::state().await.with_app(app.clone());
     transport.status.store(404, Ordering::SeqCst);
@@ -767,7 +775,10 @@ async fn database_busy_has_a_stable_error_kind_and_does_not_consume_the_delivery
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     let claims = cache.claim_batch(i64::MAX, 10).await.unwrap();
     assert_eq!(claims.len(), 1);
-    cache.finish_work(claims, true, 0, 0).await.unwrap();
+    cache
+        .finish_work(Finish::Done.all(claims), 0, 0)
+        .await
+        .unwrap();
     let response = router
         .oneshot(request(body, "push", "retry-busy"))
         .await
@@ -898,7 +909,11 @@ async fn signature_precedes_json_parse_and_duplicate_delivery_never_enqueues_twi
             .status(),
         StatusCode::ACCEPTED
     );
-    state.cache.finish_work(claims, true, 0, 0).await.unwrap();
+    state
+        .cache
+        .finish_work(Finish::Done.all(claims), 0, 0)
+        .await
+        .unwrap();
     assert_eq!(state.cache.queue_len().await.unwrap(), 0);
     let large = request(vec![b'a'; BODY_LIMIT + 1], "push", "large");
     assert_eq!(
@@ -1109,9 +1124,9 @@ async fn stale_base_requeues_without_failure_and_real_errors_have_counts() {
         .await
         .unwrap();
         let events = logs.events();
-        let failure = events
-            .iter()
-            .find(|event| event["message"] == "batch failed; work will be retried");
+        let failure = events.iter().find(|event| {
+            event["message"] == "batch failed; failed repositories will be retried with backoff"
+        });
         assert_eq!(failure.is_some(), errors);
         if let Some(failure) = failure {
             assert_eq!(failure["error_count"], 3);
@@ -1123,7 +1138,7 @@ async fn stale_base_requeues_without_failure_and_real_errors_have_counts() {
         let requeue = events
             .iter()
             .find(|event| event["message"] == "batch requeued");
-        assert_eq!(requeue.is_some(), stale);
+        assert_eq!(requeue.is_some(), stale && !errors);
         if let Some(requeue) = requeue {
             assert_eq!(requeue["reason"], "default branch moved; requeued");
         }
@@ -1132,7 +1147,9 @@ async fn stale_base_requeues_without_failure_and_real_errors_have_counts() {
             .find(|event| event["message"] == "batch finished")
             .unwrap();
         assert_eq!(finished["success"], !errors);
-        assert_eq!(finished["requeued"].as_bool(), Some(true));
+        // A failure outranks a moved default branch: the repository backs off.
+        assert_eq!(finished["retried"], u64::from(errors));
+        assert_eq!(finished["requeued"], u64::from(stale && !errors));
         assert_eq!(state.cache.queue_len().await.unwrap(), 1);
         assert!(
             state
@@ -1147,6 +1164,43 @@ async fn stale_base_requeues_without_failure_and_real_errors_have_counts() {
         assert!(retry[0].attribution.reasons.contains("retry"));
         assert!(retry[0].attribution.reasons.contains("startup discovery"));
     }
+}
+
+#[tokio::test]
+async fn only_the_failing_repository_of_a_batch_is_retried() {
+    let report: Report = serde_json::from_value(json!({"schemaVersion": 5,
+        "repositories":[
+            {"repository":"Owner/Broken", "status":"error", "packageFiles":[]},
+            {"repository":"owner/fine", "status":"complete", "packageFiles":[]}
+        ]
+    }))
+    .unwrap();
+    let state = state().await;
+    state
+        .cache
+        .enqueue(
+            None,
+            vec![
+                Work::repository(1, "owner/broken"),
+                Work::repository(1, "owner/fine"),
+            ],
+            0,
+            0,
+        )
+        .await
+        .unwrap();
+    let (stop, stopped) = watch::channel(false);
+    worker(
+        state.cache.clone(),
+        state.settings,
+        Arc::new(ReportBatch { report, stop }),
+        stopped,
+    )
+    .await
+    .unwrap();
+    let retry = state.cache.claim_batch(i64::MAX, 10).await.unwrap();
+    let repos: Vec<_> = retry.iter().map(|c| c.work.repo.as_str()).collect();
+    assert_eq!(repos, ["owner/broken"]);
 }
 impl Batch for BlockingBatch {
     fn run<'a>(
