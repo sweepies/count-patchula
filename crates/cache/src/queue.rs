@@ -74,6 +74,21 @@ pub fn backoff_ms(failures: i64) -> i64 {
         .saturating_mul(1 << (failures - 1).clamp(0, 6))
         .min(MAX_RETRY_MS)
 }
+/// A repository's retry delay after `failures` consecutive failures: the
+/// backoff plus up to a tenth more, always the same share for the same
+/// repository, so repositories that failed together do not retry in step.
+pub fn retry_delay_ms(installation: u64, repo: &str, failures: i64) -> i64 {
+    let backoff = backoff_ms(failures);
+    // FNV-1a: stable across processes and releases, unlike std's hasher.
+    let hash = installation
+        .to_le_bytes()
+        .iter()
+        .chain(repo.as_bytes())
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        });
+    backoff + (hash % (backoff as u64 / 10 + 1)) as i64
+}
 
 impl Cache {
     /// Atomically accept a delivery and persist its work before acknowledging it.
@@ -187,7 +202,7 @@ impl Cache {
                         tx.execute("INSERT INTO server_work_causes SELECT ?1,?2,?3,?4 WHERE NOT EXISTS (SELECT 1 FROM server_work_causes WHERE installation=?1 AND repo=?2 AND generation=?3 AND attribution=?4)",
                             params![claim.work.installation as i64, claim.work.repo, claim.generation, retry])?;
                         let failures = failures + i64::from(*finish == Finish::Failed);
-                        let delay = if newer { coalesce_ms } else if *finish == Finish::Failed { backoff_ms(failures) } else { RETRY_MS };
+                        let delay = if newer { coalesce_ms } else if *finish == Finish::Failed { retry_delay_ms(claim.work.installation, &claim.work.repo, failures) } else { RETRY_MS };
                         (failures, delay)
                     }
                 };
@@ -198,12 +213,38 @@ impl Cache {
             Ok(())
         }).await
     }
-    /// Called once under the server's exclusive process lock, including on restart.
-    pub async fn recover_work(&self) -> Result<()> {
+    /// Releases the claims of runs a shutdown cut short, to run again without
+    /// counting as failures.
+    pub async fn release_work(&self) -> Result<()> {
         self.call(|store| {
             store
                 .conn
                 .execute_batch("INSERT INTO server_work_causes SELECT installation,repo,generation,'{\"reasons\":[\"retry\"],\"deliveries\":[]}' FROM server_work WHERE claimed IS NOT NULL; UPDATE server_work SET claimed=NULL;")?;
+            Ok(())
+        })
+        .await
+    }
+    /// Called once under the server's exclusive process lock, on start. A
+    /// shutdown releases its claims, so a claim left over is a run that died
+    /// with the process, such as by an OOM kill: it counts as a failure and
+    /// backs off, so a run that kills the server cannot do so at full rate.
+    pub async fn recover_work(&self, now: i64) -> Result<()> {
+        self.call(move |store| {
+            let tx = store.conn.transaction()?;
+            let claimed = {
+                let mut query = tx.prepare("SELECT installation,repo,claimed,failures FROM server_work WHERE claimed IS NOT NULL")?;
+                query.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?)))?.collect::<std::result::Result<Vec<_>, _>>()?
+            };
+            let retry = serde_json::to_string(&Attribution::reason("retry"))?;
+            for (installation, repo, claimed, failures) in claimed {
+                tx.execute("INSERT INTO server_work_causes SELECT ?1,?2,?3,?4 WHERE NOT EXISTS (SELECT 1 FROM server_work_causes WHERE installation=?1 AND repo=?2 AND generation=?3 AND attribution=?4)",
+                    params![installation, repo, claimed, retry])?;
+                let failures = failures + 1;
+                let delay = retry_delay_ms(installation as u64, &repo, failures);
+                tx.execute("UPDATE server_work SET claimed=NULL,failures=?3,available_at=?4 WHERE installation=?1 AND repo=?2",
+                    params![installation, repo, failures, now + delay])?;
+            }
+            tx.commit()?;
             Ok(())
         })
         .await
@@ -263,8 +304,11 @@ mod tests {
             .unwrap();
         drop(cache);
         let cache = Cache::open(path, Default::default()).await.unwrap();
-        cache.recover_work().await.unwrap();
-        let claims = cache.claim_batch(RETRY_MS, 1).await.unwrap();
+        cache.recover_work(0).await.unwrap();
+        let claims = cache
+            .claim_batch(retry_delay_ms(1, "owner/repo", 1), 1)
+            .await
+            .unwrap();
         assert!(claims[0].attribution.reasons.contains("retry"));
         assert_eq!(
             claims[0].attribution.deliveries,
@@ -307,7 +351,7 @@ mod tests {
             .unwrap();
         drop(cache);
         let cache = Cache::open(path, Default::default()).await.unwrap();
-        cache.recover_work().await.unwrap();
+        cache.recover_work(0).await.unwrap();
         let claims = cache.claim_batch(0, 1).await.unwrap();
         assert_eq!(claims[0].work.check_prs, Some(BTreeSet::from([1, 2])));
         cache.enqueue(None, work(), 0, 0).await.unwrap();
@@ -391,21 +435,47 @@ mod tests {
         assert_eq!(cache.claim_batch(0, 10).await.unwrap().len(), 1);
         drop(cache);
         let cache = Cache::open(path, Default::default()).await.unwrap();
-        cache.recover_work().await.unwrap();
+        cache.recover_work(0).await.unwrap();
         assert!(
             !cache
                 .enqueue(Some("delivery".into()), work(), 0, 0)
                 .await
                 .unwrap()
         );
-        let batch = cache.claim_batch(0, 10).await.unwrap();
+        // The run died with the process: a failure, so it backs off.
+        let first = retry_delay_ms(1, "owner/repo", 1);
+        assert!(cache.claim_batch(first - 1, 10).await.unwrap().is_empty());
+        let batch = cache.claim_batch(first, 10).await.unwrap();
         assert_eq!(batch.len(), 1);
         cache
-            .finish_work(Finish::Failed.all(batch), 1, 10)
+            .finish_work(Finish::Failed.all(batch), first, 10)
             .await
             .unwrap();
-        assert!(cache.claim_batch(RETRY_MS, 10).await.unwrap().is_empty());
-        assert_eq!(cache.claim_batch(1 + RETRY_MS, 10).await.unwrap().len(), 1);
+        let second = first + retry_delay_ms(1, "owner/repo", 2);
+        assert!(cache.claim_batch(second - 1, 10).await.unwrap().is_empty());
+        assert_eq!(cache.claim_batch(second, 10).await.unwrap().len(), 1);
+    }
+    #[tokio::test]
+    async fn a_shutdown_releases_its_claims_without_counting_a_failure() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        cache.enqueue(None, work(), 0, 0).await.unwrap();
+        assert_eq!(cache.claim_batch(0, 10).await.unwrap().len(), 1);
+        cache.release_work().await.unwrap();
+        let claims = cache.claim_batch(0, 10).await.unwrap();
+        assert!(claims[0].attribution.reasons.contains("retry"));
+        // No failure was counted: the next one is the first.
+        cache
+            .finish_work(Finish::Failed.all(claims), 0, 0)
+            .await
+            .unwrap();
+        assert_eq!(
+            cache
+                .claim_batch(retry_delay_ms(1, "owner/repo", 1), 10)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
     async fn causes(cache: &Cache) -> i64 {
         cache
@@ -446,7 +516,7 @@ mod tests {
                 .collect();
             cache.finish_work(finished, now, 0).await.unwrap();
             assert_eq!(cache.queue_len().await.unwrap(), 1);
-            let delay = backoff_ms(failures);
+            let delay = retry_delay_ms(1, "o/broken", failures);
             assert!(
                 cache
                     .claim_batch(now + delay - 1, 10)
@@ -477,7 +547,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            cache.claim_batch(now + RETRY_MS, 10).await.unwrap().len(),
+            cache
+                .claim_batch(now + retry_delay_ms(1, "o/broken", 1), 10)
+                .await
+                .unwrap()
+                .len(),
             1
         );
     }
@@ -492,10 +566,10 @@ mod tests {
                 .finish_work(Finish::Failed.all(claims), now, 0)
                 .await
                 .unwrap();
-            now += backoff_ms(failures);
+            now += retry_delay_ms(1, "owner/repo", failures);
         }
         // Eight minutes of backoff remain; a push waits only for coalescing.
-        let pushed = now - backoff_ms(4) + 1_000;
+        let pushed = now - retry_delay_ms(1, "owner/repo", 4) + 1_000;
         cache.enqueue(None, work(), pushed, 10).await.unwrap();
         assert!(cache.claim_batch(pushed + 9, 10).await.unwrap().is_empty());
         assert_eq!(cache.claim_batch(pushed + 10, 10).await.unwrap().len(), 1);
@@ -538,18 +612,66 @@ mod tests {
             .unwrap();
         assert!(
             cache
-                .claim_batch(now + backoff_ms(2) - 1, 10)
+                .claim_batch(now + retry_delay_ms(1, "owner/repo", 2) - 1, 10)
                 .await
                 .unwrap()
                 .is_empty()
         );
         assert_eq!(
             cache
-                .claim_batch(now + backoff_ms(2), 10)
+                .claim_batch(now + retry_delay_ms(1, "owner/repo", 2), 10)
                 .await
                 .unwrap()
                 .len(),
             1
         );
+    }
+    #[test]
+    fn repositories_retry_apart_by_at_most_a_tenth_of_the_backoff() {
+        for failures in 1..=8 {
+            let backoff = backoff_ms(failures);
+            let delays: BTreeSet<_> = (0..20)
+                .map(|n| retry_delay_ms(1, &format!("owner/repo-{n}"), failures))
+                .collect();
+            assert!(delays.len() > 10, "{delays:?}");
+            assert!(
+                delays
+                    .iter()
+                    .all(|d| (backoff..=backoff + backoff / 10).contains(d))
+            );
+            assert_eq!(
+                retry_delay_ms(1, "owner/repo-1", failures),
+                retry_delay_ms(1, "owner/repo-1", failures)
+            );
+        }
+    }
+    #[tokio::test]
+    async fn a_success_resets_the_backoff_of_work_that_arrived_during_it() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        cache.enqueue(None, work(), 0, 0).await.unwrap();
+        let mut now = 0;
+        for failures in 1..=3 {
+            let claims = cache.claim_batch(now, 10).await.unwrap();
+            cache
+                .finish_work(Finish::Failed.all(claims), now, 0)
+                .await
+                .unwrap();
+            now += retry_delay_ms(1, "owner/repo", failures);
+        }
+        let claims = cache.claim_batch(now, 10).await.unwrap();
+        cache.enqueue(None, work(), now, 0).await.unwrap();
+        cache
+            .finish_work(Finish::Done.all(claims), now, 0)
+            .await
+            .unwrap();
+        // The newer work survives the success, which reset its failures.
+        let claims = cache.claim_batch(now, 10).await.unwrap();
+        cache
+            .finish_work(Finish::Failed.all(claims), now, 0)
+            .await
+            .unwrap();
+        let first = now + retry_delay_ms(1, "owner/repo", 1);
+        assert!(cache.claim_batch(first - 1, 10).await.unwrap().is_empty());
+        assert_eq!(cache.claim_batch(first, 10).await.unwrap().len(), 1);
     }
 }

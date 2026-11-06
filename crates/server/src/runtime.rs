@@ -83,7 +83,7 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
         .await
         .map_err(|_| Error("cannot open server cache"))?;
     cache
-        .recover_work()
+        .recover_work(Utc::now().timestamp_millis())
         .await
         .map_err(|_| Error("cannot recover pending work"))?;
     let transport: Arc<dyn Transport> =
@@ -728,6 +728,9 @@ async fn workers(
     failure.map_or(Ok(()), Err)
 }
 
+/// Repository names a batch log line lists at most.
+const LOGGED_REPOSITORIES: usize = 20;
+
 async fn worker(
     cache: Cache,
     settings: Reload,
@@ -773,14 +776,26 @@ async fn worker(
                 .collect()
         };
         let (retried, requeued) = (named(Finish::Failed), named(Finish::Requeue));
+        // Names of a large batch are capped; `batch finished` has the counts.
+        let listed = |names: &[&str]| -> Vec<String> {
+            let mut listed: Vec<_> = names
+                .iter()
+                .take(LOGGED_REPOSITORIES)
+                .map(|n| (*n).to_owned())
+                .collect();
+            if names.len() > LOGGED_REPOSITORIES {
+                listed.push(format!("… {} more", names.len() - LOGGED_REPOSITORIES));
+            }
+            listed
+        };
         if outcome.failed() {
             tracing::error!(target: "patchula_server", error = error.as_ref().map(|e| e.0),
                 error_kinds = ?outcome.error_kinds, error_count = outcome.error_kinds.values().sum::<usize>(),
-                retried = ?retried, "batch failed; failed repositories will be retried with backoff");
+                retried = ?listed(&retried), "batch failed; failed repositories will be retried with backoff");
         }
         if !requeued.is_empty() {
             tracing::warn!(target: "patchula_server", reason = "default branch moved; requeued",
-                installation = work[0].installation, requeued = ?requeued, "batch requeued");
+                installation = work[0].installation, requeued = ?listed(&requeued), "batch requeued");
         }
         tracing::info!(target: "patchula_server", installation = work[0].installation, entries = work.len(),
             success = !outcome.failed(), retried = retried.len(), requeued = requeued.len(), "batch finished");
@@ -858,7 +873,7 @@ async fn run_until(
         let _ = worker.await;
     }
     cache
-        .recover_work()
+        .release_work()
         .await
         .map_err(|_| Error("cannot requeue interrupted batch"))?;
     failure.map_or(Ok(()), Err)

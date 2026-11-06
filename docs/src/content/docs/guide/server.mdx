@@ -124,11 +124,14 @@ though, so lower `workers` on a small host. The first event opens a coalescing w
 (`coalescingMs`), and events that arrive during a batch fold into one follow-up
 batch. Each repository finishes on its own: when one fails, only that one is
 retried, after a backoff that starts at a minute and doubles with each
-consecutive failure up to an hour. A success resets it, and a new event for the
-repository, such as a push that fixes it, runs it after the usual coalescing
-window instead of waiting out the backoff. If the default branch moves while a
-batch is writing, the stale publication is skipped and the repository is
-requeued for a minute later.
+consecutive failure up to an hour, plus a small spread per repository so that
+repositories that failed together do not retry in step. A success resets it.
+A new event for the repository, such as a push that fixes it, runs it after the
+usual coalescing window instead of waiting out the backoff. A run that dies
+with the server, such as by an OOM kill, counts as a failure when the server
+starts again; one cut short by a shutdown does not. If the default branch moves
+while a batch is writing, the stale publication is skipped and the repository
+is requeued for a minute later.
 
 Queue rows survive restarts. SIGTERM stops new work, drains the running batches
 within `--shutdown-timeout-secs` (60 by default), and requeues the rest. A lock
