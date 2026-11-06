@@ -43,6 +43,14 @@ fn terraform(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
     encode(&catalog)
 }
 
+/// One chart from a Helm repository index: its versions, and what release
+/// notes read from each version's metadata.
+#[derive(Default, Serialize, Deserialize)]
+pub(crate) struct HelmChart {
+    pub catalog: Catalog,
+    #[serde(default)]
+    pub notes: BTreeMap<String, notes::ChartNotes>,
+}
 fn helm(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
     #[derive(Deserialize)]
     struct Index {
@@ -55,30 +63,46 @@ fn helm(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
         digest: Option<String>,
         #[serde(default)]
         deprecated: bool,
+        sources: Option<serde_yaml_ng::Value>,
+        annotations: Option<serde_yaml_ng::Value>,
     }
     let index: Index = serde_yaml_ng::from_slice(body).map_err(|_| CacheError::Document)?;
-    let catalogs: BTreeMap<_, _> = index
+    let charts: BTreeMap<_, _> = index
         .entries
         .into_iter()
         .map(|(name, entries)| {
-            let mut catalog = Catalog {
-                versions: entries
-                    .into_iter()
-                    .map(|v| Version {
-                        version: v.version,
-                        published_at: v.created,
-                        digest: v.digest,
-                        deprecated: v.deprecated,
-                        yanked: false,
-                    })
-                    .collect(),
-                ..Default::default()
-            };
-            sort(&mut catalog.versions, Ecosystem::Npm);
-            (name, catalog)
+            let mut chart = HelmChart::default();
+            for v in entries {
+                let sources = v
+                    .sources
+                    .as_ref()
+                    .and_then(serde_yaml_ng::Value::as_sequence);
+                let notes = notes::ChartNotes::new(
+                    sources
+                        .into_iter()
+                        .flatten()
+                        .filter_map(serde_yaml_ng::Value::as_str),
+                    v.annotations
+                        .as_ref()
+                        .and_then(|a| a.get(notes::CHANGES))
+                        .and_then(serde_yaml_ng::Value::as_str),
+                );
+                if !notes.is_empty() {
+                    chart.notes.insert(v.version.clone(), notes);
+                }
+                chart.catalog.versions.push(Version {
+                    version: v.version,
+                    published_at: v.created,
+                    digest: v.digest,
+                    deprecated: v.deprecated,
+                    yanked: false,
+                });
+            }
+            sort(&mut chart.catalog.versions, Ecosystem::Npm);
+            (name, chart)
         })
         .collect();
-    serde_json::to_vec(&catalogs).map_err(|_| CacheError::Document)
+    serde_json::to_vec(&charts).map_err(|_| CacheError::Document)
 }
 
 impl Client {
@@ -115,6 +139,10 @@ impl Client {
         Ok(serde_json::from_slice(&response.body)?)
     }
     pub(super) async fn helm(&self, package: &str) -> Result<Catalog> {
+        Ok(self.helm_chart(package).await?.catalog)
+    }
+    /// One chart from a Helm repository's index; `package` is `repository|chart`.
+    pub(super) async fn helm_chart(&self, package: &str) -> Result<HelmChart> {
         let (repo, chart) = package.rsplit_once('|').ok_or(Error::Invalid)?;
         if chart.is_empty()
             || !chart
@@ -126,10 +154,10 @@ impl Client {
         let url = format!("{}/index.yaml", repo.trim_end_matches('/'));
         let response = self
             .http
-            .get_derived(&url, "application/yaml", "helm-index-v1", helm)
+            .get_derived(&url, "application/yaml", "helm-index-v2", helm)
             .await?;
-        let mut catalogs: BTreeMap<String, Catalog> = serde_json::from_slice(&response.body)?;
-        catalogs.remove(chart).ok_or(Error::Invalid)
+        let mut charts: BTreeMap<String, HelmChart> = serde_json::from_slice(&response.body)?;
+        charts.remove(chart).ok_or(Error::Invalid)
     }
     /// A package's versions from a private simple index at `index`.
     pub(super) async fn pypi_index(&self, index: &str, package: &str) -> Result<Catalog> {

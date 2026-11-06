@@ -51,6 +51,10 @@ pub fn inert(text: &str) -> String {
 pub enum Links<'a> {
     Github(&'a str),
     Forge(&'a super::source::Forge),
+    /// Text from no repository, such as a chart's own list of changes. A bare
+    /// `#123` names nothing GitHub should link, and `owner/repo#123` is a
+    /// GitHub reference.
+    None,
 }
 impl Links<'_> {
     fn issue(&self, owner: Option<&str>, number: &str) -> Option<String> {
@@ -74,6 +78,12 @@ impl Links<'_> {
                     forge.host
                 ))
             }
+            Self::None => Some(match owner {
+                Some(owner) => format!(
+                    "[{owner}#{number}](https://redirect.github.com/{owner}/issues/{number})"
+                ),
+                None => format!("#\u{200D}{number}"),
+            }),
         }
     }
 }

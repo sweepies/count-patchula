@@ -1,6 +1,7 @@
 //! Source metadata and release ranges, fetched only for changed pull requests.
 mod adapters;
 mod changelog;
+mod chart;
 mod forge;
 mod markdown;
 mod releases;
@@ -8,6 +9,7 @@ mod source;
 use super::*;
 pub use adapters::{parse_go_history, parse_release_sgml};
 pub use changelog::{Section, parse_changelog};
+pub use chart::{CHANGES, ChartNotes, render_changes};
 use forge::{compare_link, releases_url};
 use markdown::demote_headings;
 pub use markdown::{Links, fit, inert, sanitise};
@@ -53,6 +55,8 @@ pub struct Notes {
     pub compare: Option<String>,
     pub compare_inferred: bool,
     pub incomplete: bool,
+    /// The sections are the chart's own list of changes, not its upstream's.
+    pub from_chart: bool,
 }
 
 fn parsed(text: &str) -> Option<Parsed> {
@@ -82,6 +86,17 @@ fn in_range(version: &Parsed, old: &Parsed, new: &Parsed) -> bool {
     Ecosystem::Loose.order(version, old).is_gt()
         && !Ecosystem::Loose.order(version, new).is_gt()
         && (version.0.pre.is_empty() || !new.0.pre.is_empty())
+}
+/// The name a package's tags are namespaced by: a Helm chart's name rather
+/// than its repository's URL.
+fn tag_name(id: &PackageId) -> &str {
+    match id.source {
+        Source::Helm => id
+            .name
+            .rsplit_once('|')
+            .map_or(id.name.as_str(), |(_, chart)| chart),
+        _ => id.name.as_str(),
+    }
 }
 fn tag_version<'a>(tag: &'a str, package: &str, repository: &Repository) -> Option<&'a str> {
     if parsed(tag).is_some() {
@@ -115,7 +130,8 @@ fn tag_version<'a>(tag: &'a str, package: &str, repository: &Repository) -> Opti
         if name.is_empty() {
             continue;
         }
-        for separator in ["@", "-v", "/v"] {
+        // `-` after the name is chart-releaser's `<chart>-<version>`.
+        for separator in ["@", "-v", "/v", "-"] {
             if let Some(version) = tag
                 .strip_prefix(&format!("{name}{separator}"))
                 .filter(|v| parsed(v).is_some())
@@ -404,13 +420,26 @@ impl Client {
         current: &str,
         target: &str,
     ) -> Result<Notes> {
-        let (source, package) = (id.source, id.name.as_str());
+        let (source, package) = (id.source, tag_name(id));
         let mut notes = Notes {
             from: current.into(),
             to: target.into(),
             source: self.notes_source_repository(id, target).await?,
             ..Notes::default()
         };
+        // A chart's own list of changes describes the chart; its `sources`
+        // may name the packaged application instead.
+        match self.chart_sections(id, current, target).await {
+            Ok(Some((sections, incomplete))) => {
+                notes.sections = sections;
+                notes.incomplete = incomplete;
+                notes.from_chart = true;
+                return Ok(notes);
+            }
+            Ok(None) => {}
+            // Unread chart changes leave the source's notes, marked incomplete.
+            Err(_) => notes.incomplete = true,
+        }
         let Some(repository) = notes.source.as_ref() else {
             return Ok(notes);
         };
@@ -672,36 +701,61 @@ impl Notes {
             .replace("<!--", "&lt;!--")
             .replace("-->", "--&gt;");
         let package = truncate(&package, 160);
-        let Some(source) = &self.source else {
-            return format!(
-                "### {package}\n\nRelease notes unavailable: source repository could not be resolved.\n"
-            );
+        // A chart's own list of changes needs no source; anything else does.
+        let chart = self.from_chart && !self.sections.is_empty();
+        let fits = |source: &&Repository| {
+            source.url.len() <= 512 && source.url.len() + package.len() + 160 <= limit
         };
-        if source.url.len() > 512 || source.url.len() + package.len() + 160 > limit {
-            return format!(
-                "### {package}\n\nSource found; upstream URL exceeds the release-note budget.\n"
-            );
-        }
-        let mut text = format!("### {package}\n\n[Source]({})", source.url);
-        if let Some(compare) = &self.compare {
-            let label = if self.compare_inferred {
-                "Compare changes (inferred tags)"
-            } else {
-                "Compare changes"
-            };
-            text.push_str(&format!(" · [{label}]({compare})"));
-        }
-        text.push_str("\n\n");
-        if text.len() + 200 > limit {
-            return format!(
+        let source = match &self.source {
+            None if !chart => {
+                return format!(
+                    "### {package}\n\nRelease notes unavailable: source repository could not be resolved.\n"
+                );
+            }
+            Some(source) if !chart && !fits(&source) => {
+                return format!(
+                    "### {package}\n\nSource found; upstream URL exceeds the release-note budget.\n"
+                );
+            }
+            source => source.as_ref().filter(fits),
+        };
+        let cut = || match source {
+            Some(source) => format!(
                 "### {package}\n\nRelease notes truncated; [view upstream]({}).\n",
                 source.url
-            );
+            ),
+            None => format!("### {package}\n\nRelease notes truncated.\n"),
+        };
+        let mut text = format!("### {package}\n\n");
+        if let Some(source) = source {
+            text.push_str(&format!("[Source]({})", source.url));
+            if let Some(compare) = &self.compare {
+                let label = if self.compare_inferred {
+                    "Compare changes (inferred tags)"
+                } else {
+                    "Compare changes"
+                };
+                text.push_str(&format!(" · [{label}]({compare})"));
+            }
+            text.push_str("\n\n");
+            if source.chart_sources && !chart {
+                text.push_str(
+                    "The Count found these notes in the repository the chart lists under `sources`, so they may describe the packaged application rather than the chart itself.\n\n",
+                );
+            }
         }
-        let links = match (source.github.as_deref(), source.forge.as_ref()) {
-            (Some(repo), _) => Links::Github(repo),
-            (None, Some(forge)) => Links::Forge(forge),
-            (None, None) => {
+        if text.len() + 200 > limit {
+            return cut();
+        }
+        let links = match source {
+            _ if chart => Links::None,
+            Some(Repository {
+                github: Some(repo), ..
+            }) => Links::Github(repo),
+            Some(Repository {
+                forge: Some(forge), ..
+            }) => Links::Forge(forge),
+            _ => {
                 text.push_str(
                     "Source found, unsupported host. Release notes support GitHub, GitLab and Gitea/Forgejo.\n",
                 );
@@ -722,7 +776,11 @@ impl Notes {
                 unreadable = true;
                 continue;
             }
-            let heading = format!("#### [{}]({})\n\n", section.version, section.link);
+            let heading = if section.link.is_empty() {
+                format!("#### {}\n\n", section.version)
+            } else {
+                format!("#### [{}]({})\n\n", section.version, section.link)
+            };
             let room = limit.saturating_sub(text.len() + releases.len() + reserve);
             if heading.len() + 40 > room {
                 trimmed = true;
@@ -778,26 +836,56 @@ impl Notes {
             }
         }
         // One notice: either the Count left text out, or upstream's own
-        // history couldn't be read in full.
-        let history = source
-            .forge
-            .as_ref()
-            .map_or_else(|| format!("{}/releases", source.url), releases_url);
+        // history couldn't be read in full. A chart's own changes have no
+        // upstream history to point to.
+        let history = source.filter(|_| !chart).map(|source| {
+            source
+                .forge
+                .as_ref()
+                .map_or_else(|| format!("{}/releases", source.url), releases_url)
+        });
         if trimmed {
-            text.push_str(&format!(
-                "\nThe Count left some release notes out to keep this description short; [read them all]({history}).\n"
-            ));
+            text.push_str(&match &history {
+                Some(history) => format!(
+                    "\nThe Count left some release notes out to keep this description short; [read them all]({history}).\n"
+                ),
+                None => "\nThe Count left some release notes out to keep this description short.\n".into(),
+            });
         } else if self.incomplete || unreadable {
-            text.push_str(&format!(
-                "\nThese release notes may be incomplete; [see upstream's history]({history}).\n"
-            ));
+            text.push_str(&match &history {
+                Some(history) => format!(
+                    "\nThese release notes may be incomplete; [see upstream's history]({history}).\n"
+                ),
+                None => "\nThese release notes may be incomplete.\n".into(),
+            });
         }
         if text.len() > limit {
-            return format!(
-                "### {package}\n\nRelease notes truncated; [view upstream]({}).\n",
-                source.url
-            );
+            return cut();
         }
         text
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chart_releaser_tags_name_the_chart_then_its_version() {
+        let id = PackageId::public(Source::Helm, "https://charts.example.com|app");
+        let repository = Repository::from_url("https://github.com/example/charts").unwrap();
+        let package = tag_name(&id);
+        assert_eq!(package, "app");
+        assert_eq!(
+            tag_version("app-1.2.3", package, &repository),
+            Some("1.2.3")
+        );
+        assert_eq!(
+            tag_version("app-v1.2.3", package, &repository),
+            Some("1.2.3")
+        );
+        // Another chart's tags in the same repository are not this chart's.
+        assert_eq!(tag_version("app-extra-1.2.3", package, &repository), None);
+        assert_eq!(tag_version("other-1.2.3", package, &repository), None);
     }
 }

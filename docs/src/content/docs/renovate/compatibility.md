@@ -159,7 +159,7 @@ Renovate's other schemes, including `regex` versioning, `node`, `debian`,
 | `automerge` | `merge`: native auto-merge, or a checked fallback on a later run, with [tooling warnings](/guide/auto-merge/#tooling-warnings) when CI, required checks or delivery are missing |
 | `dependencyDashboard`, dashboard approval | `dashboard`; a held-back update can be created from it |
 | `lockFileMaintenance` | `lockfiles { refresh }` |
-| `fetchChangeLogs` | `releaseNotes` |
+| `fetchChangeLogs` | `releaseNotes`; Helm charts also show their own `artifacthub.io/changes`, which Renovate does not read |
 | `customManagers` (regex) | `extractors` |
 | `vulnerabilityAlerts`, `osvVulnerabilityAlerts` | OSV.dev [advisories](/guide/security/), on by default |
 | none, for OS packages in images | [image rebuild advisories](/guide/security/#container-image-rebuilds): a new digest is compared with the old through their SBOMs and OSV.dev |
