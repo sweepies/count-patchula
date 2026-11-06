@@ -22,15 +22,33 @@ pub(crate) fn validate_digest(digest: &str) -> Result<()> {
         Err(Error::Invalid)
     }
 }
-fn compact_source_labels(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+/// What release notes read from a config blob: an image's source and version
+/// labels, and a Helm chart's `sources` and Artifact Hub changes.
+fn compact_config(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     let value: Value =
         serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
     let labels = &value["config"]["Labels"];
     serde_json::to_vec(&serde_json::json!({
         "org.opencontainers.image.source": labels["org.opencontainers.image.source"],
-        "org.opencontainers.image.version": labels["org.opencontainers.image.version"]
+        "org.opencontainers.image.version": labels["org.opencontainers.image.version"],
+        "chart": notes::ChartNotes::from_metadata(&value),
     }))
     .map_err(|_| patchula_http::CacheError::Document)
+}
+
+/// The config of one image or chart version, as release notes read it.
+struct ImageConfig {
+    /// The compact config blob from `compact_config`.
+    config: Value,
+    /// The manifest's `org.opencontainers.image.source` annotation.
+    annotated_source: Option<String>,
+    /// Whether the manifest's config is a Helm chart's.
+    chart: bool,
+}
+impl ImageConfig {
+    fn chart_notes(&self) -> notes::ChartNotes {
+        serde_json::from_value(self.config["chart"].clone()).unwrap_or_default()
+    }
 }
 
 fn now() -> i64 {
@@ -114,7 +132,7 @@ impl Client {
     }
 
     /// A registry read whose blob body is derived by "derived" instead of
-    /// the default source-label compaction.
+    /// the default config compaction release notes read.
     pub(crate) async fn registry_with(
         &self,
         host: &str,
@@ -382,13 +400,7 @@ impl Client {
         } else if url.contains("/blobs/") {
             Ok(self
                 .http
-                .registry_get_derived(
-                    url,
-                    accept,
-                    token,
-                    "oci-source-labels-v1",
-                    compact_source_labels,
-                )
+                .registry_get_derived(url, accept, token, "oci-config-notes-v1", compact_config)
                 .await?)
         } else {
             Ok(self.http.registry_get(url, accept, token).await?)
@@ -407,25 +419,56 @@ impl Client {
                     .and_then(|name| notes::mapped("docker-official", name))
             })
             .flatten();
-        match self.image_labels(&host, &path, version).await {
-            Ok(labels) => {
-                let mut source = labels["org.opencontainers.image.source"]
-                    .as_str()
+        let image = match self.image_config(&host, &path, version).await {
+            Ok(image) => image,
+            Err(_) if fallback.is_some() => return Ok(fallback),
+            Err(error) => return Err(error),
+        };
+        if image.chart {
+            // `helm push` copies the chart's first `sources` entry into the
+            // manifest annotation; the config holds the whole list.
+            return Ok(image.chart_notes().repository().or_else(|| {
+                image
+                    .annotated_source
+                    .as_deref()
                     .and_then(notes::Repository::from_url)
-                    .or(fallback);
-                if let Some(source) = &mut source {
-                    source.image_version = labels["org.opencontainers.image.version"]
-                        .as_str()
-                        .map(str::to_owned);
-                }
-                Ok(source)
-            }
-            Err(_) if fallback.is_some() => Ok(fallback),
-            Err(error) => Err(error),
+                    .map(notes::Repository::chart_sourced)
+            }));
         }
+        let labels = &image.config;
+        // Official images annotate their Dockerfile repository, not the
+        // project's; the table of official images comes first.
+        let mut source = labels["org.opencontainers.image.source"]
+            .as_str()
+            .and_then(notes::Repository::from_url)
+            .or(fallback)
+            .or_else(|| {
+                image
+                    .annotated_source
+                    .as_deref()
+                    .and_then(notes::Repository::from_url)
+            });
+        if let Some(source) = &mut source {
+            source.image_version = labels["org.opencontainers.image.version"]
+                .as_str()
+                .map(str::to_owned);
+        }
+        Ok(source)
     }
 
-    async fn image_labels(&self, host: &str, path: &str, version: &str) -> Result<Value> {
+    /// A Helm chart version's notes metadata, or `None` when the artifact at
+    /// that tag is not a Helm chart.
+    pub(super) async fn oci_chart(
+        &self,
+        package: &str,
+        version: &str,
+    ) -> Result<Option<notes::ChartNotes>> {
+        let (host, path) = identity(package)?;
+        let image = self.image_config(&host, &path, version).await?;
+        Ok(image.chart.then(|| image.chart_notes()))
+    }
+
+    async fn image_config(&self, host: &str, path: &str, version: &str) -> Result<ImageConfig> {
         if version.is_empty()
             || !version
                 .bytes()
@@ -433,7 +476,12 @@ impl Client {
         {
             return Err(Error::Invalid);
         }
-        let mut reference = version.to_owned();
+        // OCI tags cannot hold `+`: `helm push` writes build metadata as `_`,
+        // which a catalog of OCI versions reads back as `+`.
+        let mut reference = version.replace('+', "_");
+        // An index may carry the annotation for all its platforms; a
+        // platform's own manifest overrides it.
+        let mut annotated_source = None;
         for _ in 0..4 {
             let response = self
                 .registry(
@@ -445,6 +493,11 @@ impl Client {
                 )
                 .await?;
             let manifest: Value = serde_json::from_slice(&response.body)?;
+            if let Some(source) =
+                manifest["annotations"]["org.opencontainers.image.source"].as_str()
+            {
+                annotated_source = Some(source.to_owned());
+            }
             if let Some(digest) = manifest["config"]["digest"].as_str() {
                 validate_digest(digest)?;
                 let response = self
@@ -456,7 +509,12 @@ impl Client {
                         Method::GET,
                     )
                     .await?;
-                return Ok(serde_json::from_slice(&response.body)?);
+                return Ok(ImageConfig {
+                    config: serde_json::from_slice(&response.body)?,
+                    annotated_source,
+                    chart: manifest["config"]["mediaType"]
+                        == "application/vnd.cncf.helm.config.v1+json",
+                });
             }
             let manifests = manifest["manifests"].as_array().ok_or(Error::Invalid)?;
             let child = manifests

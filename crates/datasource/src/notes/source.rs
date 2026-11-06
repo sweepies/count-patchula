@@ -14,6 +14,10 @@ pub struct Repository {
     pub forge: Option<Forge>,
     pub directory: Option<String>,
     pub image_version: Option<String>,
+    /// Read from a Helm chart's `sources`, which may name the packaged
+    /// application's repository rather than the chart's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub chart_sources: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +78,12 @@ impl Forge {
 }
 
 impl Repository {
+    pub(crate) fn chart_sourced(self) -> Self {
+        Self {
+            chart_sources: true,
+            ..self
+        }
+    }
     pub fn from_url(raw: &str) -> Option<Self> {
         let raw = raw.trim().trim_start_matches("git+");
         let raw = if let Some(path) = raw.strip_prefix("git@github.com:") {
@@ -100,7 +110,8 @@ impl Repository {
             return None;
         }
         if url.host_str() == Some("github.com") {
-            let parts: Vec<_> = url.path_segments()?.take(2).collect();
+            let segments: Vec<_> = url.path_segments()?.collect();
+            let parts = &segments[..segments.len().min(2)];
             if parts.len() != 2
                 || parts.iter().any(|p| {
                     p.is_empty()
@@ -114,9 +125,15 @@ impl Repository {
                 return None;
             }
             let repo = format!("{}/{}", parts[0], parts[1].trim_end_matches(".git"));
+            // `/tree/<ref>/<directory>` names a package inside the repository.
+            let directory = match segments.get(2..) {
+                Some(["tree", _, rest @ ..]) => directory(rest.join("/").trim_end_matches('/')),
+                _ => None,
+            };
             Some(Self {
                 url: format!("https://github.com/{repo}"),
                 github: Some(repo),
+                directory,
                 ..Self::default()
             })
         } else if matches!(url.scheme(), "https" | "http" | "git" | "ssh") {
@@ -151,7 +168,9 @@ fn metadata(value: &Value) -> Option<Repository> {
     let mut source = raw
         .and_then(Repository::from_url)
         .or_else(|| value["homepage"].as_str().and_then(Repository::from_url))?;
-    source.directory = repository["directory"].as_str().and_then(directory);
+    if let Some(directory) = repository["directory"].as_str().and_then(directory) {
+        source.directory = Some(directory);
+    }
     Some(source)
 }
 
@@ -380,6 +399,10 @@ impl Client {
                     .await?
             }
             Source::Docker | Source::Oci => return self.image_source(package, version).await,
+            Source::Helm => {
+                let chart = self.helm_chart(package).await?;
+                return Ok(chart.notes.get(version).and_then(ChartNotes::repository));
+            }
             _ => return Ok(None),
         };
         Ok(serde_json::from_slice(&response.body)?)

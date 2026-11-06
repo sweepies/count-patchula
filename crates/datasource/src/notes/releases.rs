@@ -33,7 +33,11 @@ impl Client {
     pub async fn prepare_release_notes(&self, ranges: &[(PackageId, String, String)]) {
         let mut repos: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for (id, current, target) in ranges {
-            let (source, package) = (id.source, id.name.as_str());
+            let (source, package) = (id.source, tag_name(id));
+            // A chart that lists its own changes needs no upstream releases.
+            if matches!(self.chart_sections(id, current, target).await, Ok(Some(_))) {
+                continue;
+            }
             let Ok(Some(repository)) = self.notes_source_repository(id, target).await else {
                 continue;
             };

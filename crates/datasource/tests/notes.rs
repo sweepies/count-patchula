@@ -8,7 +8,7 @@ use patchula_datasource::{
     Client,
     notes::{
         Links, Notes, Repository, Section, fit, inert, parse_changelog, parse_go_history,
-        parse_release_sgml, sanitise,
+        parse_release_sgml, render_changes, sanitise,
     },
 };
 use patchula_http::{Cached, Exchange, Response, Transport};
@@ -2048,4 +2048,332 @@ fn an_epoch_survives_in_the_range_summary() {
         text.contains("<summary>Release notes: 1!0.1 → 1!0.3 (2 releases)</summary>"),
         "{text}"
     );
+}
+
+const HELM_CONFIG: &str = "application/vnd.cncf.helm.config.v1+json";
+
+/// An OCI chart at `registry.example/charts/app` with versions 1.0.0 to 1.3.0;
+/// `changes` is each version's `artifacthub.io/changes`.
+fn oci_chart_routes(changes: &[(&str, Option<&str>)]) -> Arc<Routes> {
+    let mut entries = vec![(
+        "https://registry.example/v2/charts/app/tags/list?n=1000".to_string(),
+        json!({"tags":["1.0.0","1.1.0","1.2.0","1.3.0"]}),
+    )];
+    for (index, (version, change)) in changes.iter().enumerate() {
+        let digest = format!("sha256:{}", index.to_string().repeat(64));
+        let mut annotations = json!({});
+        if let Some(change) = change {
+            annotations["artifacthub.io/changes"] = json!(change);
+        }
+        entries.push((
+            format!("https://registry.example/v2/charts/app/manifests/{version}"),
+            json!({
+                "config":{"mediaType":HELM_CONFIG,"digest":digest},
+                "annotations":{"org.opencontainers.image.source":"https://github.com/example/app"}
+            }),
+        ));
+        entries.push((
+            format!("https://registry.example/v2/charts/app/blobs/{digest}"),
+            json!({
+                "name":"app","version":version,
+                "sources":["https://example.com/not-a-forge","https://github.com/example/charts/tree/main/charts/app"],
+                "annotations":annotations
+            }),
+        ));
+    }
+    Arc::new(Routes {
+        bodies: entries.into_iter().collect(),
+        ..Default::default()
+    })
+}
+
+#[tokio::test]
+async fn an_oci_chart_lists_its_own_changes_for_each_version_in_the_range() {
+    let routes = oci_chart_routes(&[
+        ("1.1.0", Some("- Plain entry\n")),
+        ("1.2.0", None),
+        (
+            "1.3.0",
+            Some(
+                "- kind: fixed\n  description: Probe\n    timeouts\n- kind: added\n  description: Ingress annotations\n  links:\n    - name: PR [42]\n      url: https://github.com/example/charts/pull/42\n",
+            ),
+        ),
+    ]);
+    let client = client(routes.clone(), memory().await).await.notes_batch();
+    let id = patchula_config::PackageId::public(Source::Oci, "registry.example/charts/app");
+    let notes = client.release_notes(&id, "1.0.0", "1.3.0").await.unwrap();
+    assert!(notes.from_chart && !notes.incomplete);
+    let versions: Vec<_> = notes.sections.iter().map(|s| s.version.as_str()).collect();
+    assert_eq!(versions, ["1.3.0", "1.2.0", "1.1.0"]);
+    assert_eq!(
+        notes.sections[0].body,
+        "### Added\n\n- Ingress annotations ([PR \\[42\\]](https://github.com/example/charts/pull/42))\n\n### Fixed\n\n- Probe timeouts\n"
+    );
+    assert_eq!(
+        notes.sections[1].body,
+        "The chart lists no changes for this version.\n"
+    );
+    let text = notes.render("app", 12_000);
+    // The chart's own notes link no upstream and carry no `sources` disclaimer.
+    assert!(
+        text.contains("#### 1.3.0\n") && !text.contains("lists under `sources`"),
+        "{text}"
+    );
+    assert!(
+        text.contains("[Source](https://github.com/example/charts)"),
+        "{text}"
+    );
+    // Nothing on GitHub was read: no mirror lists, release bodies or changelogs.
+    let requests = routes.requests.lock().unwrap();
+    assert!(
+        requests
+            .iter()
+            .all(|url| url.starts_with("https://registry.example/")),
+        "{requests:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_oci_chart_source_is_its_first_forge_in_sources_with_the_charts_directory() {
+    let routes = oci_chart_routes(&[("1.3.0", None)]);
+    let client = client(routes, memory().await).await;
+    let id = patchula_config::PackageId::public(Source::Oci, "registry.example/charts/app");
+    let source = client
+        .source_repository(&id, "1.3.0")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(source.github.as_deref(), Some("example/charts"));
+    assert_eq!(source.directory.as_deref(), Some("charts/app"));
+    assert!(source.chart_sources);
+}
+
+#[tokio::test]
+async fn an_image_without_labels_takes_its_manifests_source_annotation() {
+    let digest = format!("sha256:{}", "b".repeat(64));
+    let routes = routes(&[
+        (
+            "https://registry.example/v2/tools/cli/manifests/2.0.0",
+            json!({
+                "config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":digest},
+                "annotations":{"org.opencontainers.image.source":"https://github.com/example/cli"}
+            }),
+        ),
+        (
+            &format!("https://registry.example/v2/tools/cli/blobs/{digest}"),
+            json!({"config":{}}),
+        ),
+    ]);
+    let client = client(routes, memory().await).await;
+    let id = patchula_config::PackageId::public(Source::Oci, "registry.example/tools/cli");
+    let source = client
+        .source_repository(&id, "2.0.0")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(source.github.as_deref(), Some("example/cli"));
+    assert!(!source.chart_sources);
+}
+
+#[tokio::test]
+async fn a_helm_repository_chart_reads_its_changes_and_sources_from_the_index() {
+    let index = json!({"apiVersion":"v1","entries":{
+        "app":[
+            {"version":"1.2.0","sources":["https://github.com/example/charts"]},
+            {"version":"1.1.0","sources":["https://github.com/example/charts"],
+             "annotations":{"artifacthub.io/changes":"- Faster rollouts\n"}},
+            {"version":"1.0.0"}
+        ],
+        "other":[{"version":"9.0.0","annotations":{"artifacthub.io/changes":"- Not ours\n"}}]
+    }});
+    let routes = routes(&[("https://charts.example.com/index.yaml", index)]);
+    let client = client(routes.clone(), memory().await).await.notes_batch();
+    let id = patchula_config::PackageId::public(Source::Helm, "https://charts.example.com|app");
+    let source = client
+        .source_repository(&id, "1.2.0")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(source.github.as_deref(), Some("example/charts"));
+    assert!(source.chart_sources);
+    let notes = client.release_notes(&id, "1.0.0", "1.2.0").await.unwrap();
+    assert!(notes.from_chart);
+    let bodies: Vec<_> = notes
+        .sections
+        .iter()
+        .map(|s| (s.version.as_str(), s.body.as_str()))
+        .collect();
+    assert_eq!(
+        bodies,
+        [
+            ("1.2.0", "The chart lists no changes for this version.\n"),
+            ("1.1.0", "- Faster rollouts\n")
+        ]
+    );
+    // The index is downloaded once; later reads only revalidate it.
+    let requests = routes.requests.lock().unwrap().len();
+    assert_eq!(requests - routes.not_modified.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn notes_from_a_charts_sources_say_where_they_came_from() {
+    let mut notes = upstream(vec![("4.156.0", "Fixed a thing\n")]);
+    notes.source = notes.source.map(|mut s| {
+        s.chart_sources = true;
+        s
+    });
+    let text = notes.render("app", 12_000);
+    assert!(
+        text.contains("The Count found these notes in the repository the chart lists under `sources`, so they may describe the packaged application rather than the chart itself."),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_charts_own_changes_render_without_a_source() {
+    let notes = Notes {
+        from: "1.0.0".into(),
+        to: "1.1.0".into(),
+        from_chart: true,
+        incomplete: true,
+        sections: vec![Section {
+            version: "1.1.0".into(),
+            link: String::new(),
+            body: "- Fixed #12 and example/charts#3, thanks @someone\n".into(),
+        }],
+        ..Default::default()
+    };
+    let text = notes.render("app", 12_000);
+    assert!(
+        !text.contains("[Source]") && !text.contains("unavailable"),
+        "{text}"
+    );
+    assert!(text.contains("#\u{200D}12"), "{text}");
+    assert!(
+        text.contains("[example/charts#3](https://redirect.github.com/example/charts/issues/3)"),
+        "{text}"
+    );
+    assert!(text.contains("@\u{200D}someone"), "{text}");
+    assert!(
+        text.contains("These release notes may be incomplete.\n"),
+        "{text}"
+    );
+    // Without changes or a source there is nothing to show.
+    let empty = Notes {
+        from_chart: true,
+        ..Default::default()
+    };
+    assert!(
+        empty
+            .render("app", 12_000)
+            .contains("source repository could not be resolved")
+    );
+}
+
+#[test]
+fn artifact_hub_changes_render_as_grouped_lists() {
+    assert_eq!(render_changes("- One\n- Two\n").unwrap(), "- One\n- Two\n");
+    assert_eq!(
+        render_changes("- kind: security\n  description: CVE fix\n- Untyped\n- kind: bogus\n  description: Unknown kind\n").unwrap(),
+        "- Untyped\n- Unknown kind\n\n### Security\n\n- CVE fix\n"
+    );
+    // Links must be plain web URLs; parentheses cannot end the Markdown link.
+    assert_eq!(
+        render_changes("- kind: changed\n  description: X\n  links:\n    - name: bad\n      url: javascript:alert(1)\n    - url: https://example.com/a_(b)\n").unwrap(),
+        "### Changed\n\n- X ([example.com](https://example.com/a_%28b%29))\n"
+    );
+    assert_eq!(render_changes("not: a list"), None);
+    assert_eq!(render_changes("- kind: added\n  description: '  '\n"), None);
+}
+
+#[test]
+fn github_tree_urls_name_a_directory() {
+    let source =
+        Repository::from_url("https://github.com/example/charts/tree/main/charts/app/").unwrap();
+    assert_eq!(source.url, "https://github.com/example/charts");
+    assert_eq!(source.directory.as_deref(), Some("charts/app"));
+    for url in [
+        "https://github.com/example/charts",
+        "https://github.com/example/charts/blob/main/charts/app/Chart.yaml",
+        "https://github.com/example/charts/tree/main",
+        "https://github.com/example/charts/tree/main/../x",
+    ] {
+        assert_eq!(Repository::from_url(url).unwrap().directory, None, "{url}");
+    }
+}
+
+#[tokio::test]
+async fn a_chart_version_that_cannot_be_read_says_so() {
+    let mut routes = Arc::try_unwrap(oci_chart_routes(&[
+        ("1.1.0", Some("- One\n")),
+        ("1.3.0", Some("- Three\n")),
+    ]))
+    .ok()
+    .unwrap();
+    routes.bodies.insert(
+        "https://registry.example/v2/charts/app/manifests/1.2.0".into(),
+        json!({"status":404}),
+    );
+    let client = client(Arc::new(routes), memory().await).await;
+    let id = patchula_config::PackageId::public(Source::Oci, "registry.example/charts/app");
+    let notes = client.release_notes(&id, "1.0.0", "1.3.0").await.unwrap();
+    assert!(notes.from_chart && notes.incomplete);
+    assert_eq!(
+        notes.sections[1].body,
+        "The Count could not read the chart for this version.\n"
+    );
+}
+
+#[tokio::test]
+async fn chart_versions_with_build_metadata_read_their_underscore_tags() {
+    let mut routes = Arc::try_unwrap(oci_chart_routes(&[("1.1.0_meta", Some("- Meta\n"))]))
+        .ok()
+        .unwrap();
+    routes.bodies.insert(
+        "https://registry.example/v2/charts/app/tags/list?n=1000".into(),
+        json!({"tags":["1.0.0","1.1.0_meta"]}),
+    );
+    let client = client(Arc::new(routes), memory().await).await;
+    let id = patchula_config::PackageId::public(Source::Oci, "registry.example/charts/app");
+    let notes = client
+        .release_notes(&id, "1.0.0", "1.1.0+meta")
+        .await
+        .unwrap();
+    assert!(notes.from_chart && !notes.incomplete);
+    assert_eq!(notes.sections[0].body, "- Meta\n");
+    assert_eq!(
+        notes.source.unwrap().github.as_deref(),
+        Some("example/charts")
+    );
+}
+
+#[tokio::test]
+async fn a_multi_platform_index_annotates_the_source_for_its_platforms() {
+    let child = format!("sha256:{}", "c".repeat(64));
+    let config = format!("sha256:{}", "d".repeat(64));
+    let routes = routes(&[
+        (
+            "https://registry.example/v2/tools/multi/manifests/2.0.0",
+            json!({
+                "manifests":[{"digest":child,"platform":{"os":"linux","architecture":"amd64"}}],
+                "annotations":{"org.opencontainers.image.source":"https://github.com/example/multi"}
+            }),
+        ),
+        (
+            &format!("https://registry.example/v2/tools/multi/manifests/{child}"),
+            json!({"config":{"digest":config}}),
+        ),
+        (
+            &format!("https://registry.example/v2/tools/multi/blobs/{config}"),
+            json!({"config":{}}),
+        ),
+    ]);
+    let client = client(routes, memory().await).await;
+    let id = patchula_config::PackageId::public(Source::Oci, "registry.example/tools/multi");
+    let source = client
+        .source_repository(&id, "2.0.0")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(source.github.as_deref(), Some("example/multi"));
 }

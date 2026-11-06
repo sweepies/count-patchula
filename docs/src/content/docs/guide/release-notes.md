@@ -17,12 +17,17 @@ running package code:
 | crates.io | the crate's `repository` |
 | PyPI | project URLs named Source, Source Code, Repository, Code, GitHub or Changelog |
 | Go | the module path; vanity paths through `?go-get=1`; `golang.org/x` through its GitHub mirrors |
-| Docker and OCI | the image's `org.opencontainers.image.source` label, then a small table for official images |
+| Docker and OCI images | the image's `org.opencontainers.image.source` label, then a small table for official images, then the same key in the manifest's annotations |
+| Helm charts, from an OCI registry or an `index.yaml` | the chart version's `sources`: the first on a supported host, else the first |
 | mise | the release URL mise lists for the version; a table for core tools; the npm, PyPI or crates.io metadata when that is the backend mise picks for the tool |
 
 GitHub, GitLab (gitlab.com and hosts with `gitlab` in the name), Codeberg,
 gitea.com and hosts named `gitea` or `forgejo` are supported. Other hosts are
 reported as "source found, unsupported host" and never probed.
+
+A GitHub URL of the form `/tree/<branch>/<directory>` also names the package's
+directory, as charts kept together in one repository usually do. The branch
+must be a single path segment, such as `main`.
 
 ## Where the text comes from
 
@@ -37,10 +42,45 @@ reported as "source found, unsupported host" and never probed.
 3. For upstreams that publish notes elsewhere, a dedicated adapter: PostgreSQL's
    SGML release notes on the target's branch, and Go's release history data.
 
-Plain and `v`-prefixed tags, monorepo namespaces (`@scope/pkg@1.2.3`), and the
+The mise-versions lists only cover public repositories, so a private GitHub
+repository gives its notes through a changelog, which the Count reads when its
+GitHub access covers that repository.
+
+Plain and `v`-prefixed tags, monorepo namespaces (`@scope/pkg@1.2.3`,
+chart-releaser's `my-chart-1.2.3`), and the
 spellings used by Go, jq, Bun, nginx, Redis and PostgreSQL are understood.
 Comparison links use the exact tags. If a tag had to be inferred from the
 upstream's naming pattern, the link says so.
+
+## Helm charts
+
+A chart can list its own changes for each version in Artifact Hub's
+[`artifacthub.io/changes`](https://artifacthub.io/docs/topics/annotations/helm/)
+annotation in `Chart.yaml`. When any version in the range has it, those lists
+are the notes, and the source repository is not read for text:
+
+```yaml
+annotations:
+  artifacthub.io/changes: |
+    - kind: added
+      description: Support for custom ingress annotations
+    - kind: fixed
+      description: Probe timeouts were ignored
+      links:
+        - name: PR #42
+          url: https://github.com/acme/charts/pull/42
+```
+
+Plain entries (`- Fixed probe timeouts`) are listed as they are; structured
+ones are grouped by kind. A version in the range without the annotation says
+the chart lists no changes for it. Charts in an OCI registry are read one
+version at a time, at most 32 per range; an `index.yaml` holds every version
+already.
+
+Without the annotation, the notes come from the repository the chart's
+`sources` names, as for any other package. That is often the packaged
+application's repository rather than the chart's, so these PRs say where the
+notes came from. A changelog packaged inside the chart is not read.
 
 ## Fetching once
 
