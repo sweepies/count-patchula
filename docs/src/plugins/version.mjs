@@ -34,7 +34,7 @@ export function versionCheck() {
       "astro:build:done": async ({ dir }) => {
         const left = [];
         for (const entry of await readdir(dir, { recursive: true, withFileTypes: true })) {
-          if (!entry.isFile() || !/\.(html|md|txt|xml|json)$/.test(entry.name)) continue;
+          if (!entry.isFile() || !/\.(html|md|txt|xml|json|js|css)$/.test(entry.name)) continue;
           const path = `${entry.parentPath}/${entry.name}`;
           if ((await readFile(path, "utf8")).includes(TOKEN)) left.push(path);
         }

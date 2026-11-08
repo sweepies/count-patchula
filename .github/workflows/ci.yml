@@ -96,7 +96,7 @@ jobs:
           MISE_ENABLE_TOOLS: nu,gh
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: mise run release:bump --check "$HEAD_SHA"
+        run: mise run release:bump --check "$HEAD_SHA" --green-parent
 
   # hk.pkl's check hook, the same steps the git hooks run, plus Clippy. It runs
   # on every change, since it is the only secret scan in CI, but each step

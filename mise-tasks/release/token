@@ -1,6 +1,7 @@
 #!/usr/bin/env nu
-#MISE description="In the release bot's job: log in to OpenBao with the job's GitHub OIDC token and export the sweepies-ops App token for this repository as GH_TOKEN to later steps. --revoke ends the OpenBao session"
-#USAGE flag "--revoke" help="Revoke the OpenBao token a previous run left in RUNNER_TEMP"
+#MISE description="In the release bot's job: log in to OpenBao with the job's GitHub OIDC token and export the sweepies-ops App token for this repository as GH_TOKEN to later steps. --revoke revokes that token and the OpenBao session"
+#MISE tools={gh="2.103.3"}
+#USAGE flag "--revoke" help="Revoke the App token and the OpenBao token a previous run left"
 
 # The job needs `id-token: write`, and BAO_ADDR, an Actions variable that is
 # also the OIDC audience. Errors never name the address: it stays out of the
@@ -10,6 +11,10 @@ const ROLE = "count-patchula-release"
 def main [--revoke] {
   let file = $env.RUNNER_TEMP | path join openbao-token
   if $revoke {
+    # The App token would otherwise stay valid for its hour.
+    if "GH_TOKEN" in $env {
+      ^gh api --method DELETE /installation/token --silent
+    }
     if ($file | path exists) {
       bao "post" $"($env.BAO_ADDR)/v1/auth/token/revoke-self" {} (open --raw $file)
       rm $file

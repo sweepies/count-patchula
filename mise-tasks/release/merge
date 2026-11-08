@@ -28,10 +28,21 @@ def main [--now] {
     print "the release PR is behind main; the bot moves it once CI passes on main"
     return
   }
-  let checks = ^gh pr checks ($pr.number) --repo $repo --json name,bucket | from json
-  let waiting = $checks | where bucket not-in [pass skipping]
-  if ($checks | is-empty) or ($waiting | is-not-empty) {
-    print $"the release PR's checks have not all passed: ($waiting | get name | str join ', ')"
+  # The head must be exactly the bump of the current main to the version
+  # release:next picks for it, so a commit pushed by hand never merges.
+  ^git fetch --quiet origin $BRANCH main
+  ^git checkout --quiet --detach $main
+  let next = ^mise run --quiet release:next | str trim
+  let bump = ^mise run --quiet release:bump --check $pr.headRefOid --expect $next | lines | last
+  if $next == "" or $bump != "bump=true" {
+    error make --unspanned {msg: $"the release PR head ($pr.headRefOid) is not the bot's bump of main to ($next)"}
+  }
+  # gh exits 0 only when every check passed or skipped, and non-zero while any
+  # is pending or failing, or when there are none; the JSON says which.
+  let checks = ^gh pr checks ($pr.number) --repo $repo --json name,bucket | complete
+  if $checks.exit_code != 0 {
+    let waiting = $checks.stdout | str trim | if $in == "" { [] } else { from json | where bucket not-in [pass skipping] | get name }
+    print $"the release PR's checks have not all passed: ($waiting | str join ', ')"
     return
   }
   ^gh pr merge ($pr.number) --repo $repo --squash --subject $"($pr.title) \(#($pr.number)\)" --body "" --match-head-commit $pr.headRefOid

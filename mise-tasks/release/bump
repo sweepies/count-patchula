@@ -2,16 +2,22 @@
 #MISE description="Set the workspace to a release version with cargo-release, which writes Cargo.toml and Cargo.lock. With --check, test that a commit is exactly such a bump of its parent instead"
 #MISE tools={"github:crate-ci/cargo-release"="1.1.7", gh="2.103.3"}
 #USAGE arg "[version]" help="The version to release, such as 0.9.0"
-#USAGE flag "--check <commit>" help="Check that this commit only bumps the version of its single parent and that CI passed on that parent on main; print bump=true or bump=false (also to GITHUB_OUTPUT). Needs GH_TOKEN and GITHUB_REPOSITORY"
+#USAGE flag "--check <commit>" help="Check that this commit only bumps the version of its single parent; print bump=true or bump=false (also to GITHUB_OUTPUT)"
+#USAGE flag "--expect <version>" help="With --check, also require the commit to bump to this version"
+#USAGE flag "--green-parent" help="With --check, also require CI to have passed on the parent as a push to main. Needs GH_TOKEN with actions: read, and GITHUB_REPOSITORY"
 
 # The version lives in Cargo.toml's workspace.package alone: the docs fill it in
 # when they build and the help snapshot holds a placeholder. So a release
 # changes Cargo.toml and Cargo.lock, which lets CI skip a release PR's Rust jobs:
 # when a commit changes nothing but the version, the CI run that passed on its
 # parent holds for it.
-def main [version?: string, --check: string] {
+def main [version?: string, --check: string, --expect: string, --green-parent] {
   if $check != null {
-    let bump = (is-bump $check) and (parent-passed $check)
+    let bump = (
+      (is-bump $check)
+      and ($expect == null or (toml-at $check Cargo.toml).workspace.package.version == $expect)
+      and (not $green_parent or (parent-passed $check))
+    )
     print $"bump=($bump)"
     if "GITHUB_OUTPUT" in $env {
       $"bump=($bump)\n" | save --append $env.GITHUB_OUTPUT

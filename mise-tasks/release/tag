@@ -10,8 +10,8 @@ def main [commit: string] {
   let repo = $env.GITHUB_REPOSITORY
   let version = version-at $commit
   let before = version-at $"($commit)^"
-  if $version == $before {
-    print $"($commit) is not a release: the version is still ($version)"
+  if not (newer $version $before) {
+    print $"($commit) is not a release: ($before) to ($version)"
     return
   }
   let tag = $"v($version)"
@@ -23,6 +23,16 @@ def main [commit: string] {
   let object = ^gh api $"repos/($repo)/git/tags" -f $"tag=($tag)" -f $"message=($tag)" -f $"object=($commit)" -f type=commit --jq .sha | str trim
   ^gh api $"repos/($repo)/git/refs" -f $"ref=refs/tags/($tag)" -f $"sha=($object)" --silent
   print $"tagged ($commit) as ($tag)"
+}
+
+# A revert to an older version on main is never released again.
+def newer [version: string, than: string]: nothing -> bool {
+  (sortable $version) > (sortable $than)
+}
+
+# 0.10.2 as 000000000010000002, so versions compare as strings.
+def sortable [version: string]: nothing -> string {
+  $version | split row "." | each {|part| $part | fill --alignment right --character "0" --width 6 } | str join
 }
 
 def version-at [commit: string]: nothing -> string {
