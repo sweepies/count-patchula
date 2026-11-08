@@ -1,0 +1,40 @@
+#!/usr/bin/env nu
+#MISE description="In the release bot's job: tag a commit on main that changed the workspace version as v<version>; the tag starts the release workflow. Needs GH_TOKEN from release:token"
+#MISE tools={gh="2.103.3"}
+#USAGE arg "<commit>" help="A commit on main that passed CI"
+
+# Only the commit that changed the version is tagged, so a later commit at the
+# same version never becomes the release. A tag pushed with an App token starts
+# workflows, unlike one pushed with the job's own token.
+def main [commit: string] {
+  let repo = $env.GITHUB_REPOSITORY
+  let version = version-at $commit
+  let before = version-at $"($commit)^"
+  if not (newer $version $before) {
+    print $"($commit) is not a release: ($before) to ($version)"
+    return
+  }
+  let tag = $"v($version)"
+  let existing = ^gh api $"repos/($repo)/git/matching-refs/tags/($tag)" | from json | where ref == $"refs/tags/($tag)"
+  if ($existing | is-not-empty) {
+    print $"($tag) already exists"
+    return
+  }
+  let object = ^gh api $"repos/($repo)/git/tags" -f $"tag=($tag)" -f $"message=($tag)" -f $"object=($commit)" -f type=commit --jq .sha | str trim
+  ^gh api $"repos/($repo)/git/refs" -f $"ref=refs/tags/($tag)" -f $"sha=($object)" --silent
+  print $"tagged ($commit) as ($tag)"
+}
+
+# A revert to an older version on main is never released again.
+def newer [version: string, than: string]: nothing -> bool {
+  (sortable $version) > (sortable $than)
+}
+
+# 0.10.2 as 000000000010000002, so versions compare as strings.
+def sortable [version: string]: nothing -> string {
+  $version | split row "." | each {|part| $part | fill --alignment right --character "0" --width 6 } | str join
+}
+
+def version-at [commit: string]: nothing -> string {
+  ^git show $"($commit):Cargo.toml" | from toml | get workspace.package.version
+}

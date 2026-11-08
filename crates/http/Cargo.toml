@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish.workspace = true
 
 [lints]
 workspace = true
@@ -13,7 +14,7 @@ workspace = true
 base64 = "0.23"
 httpdate = "1"
 reqwest.workspace = true
-patchula-cache = { version = "0.8.1", path = "../cache" }
+patchula-cache = { path = "../cache" }
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
 tokio.workspace = true

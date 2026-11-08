@@ -11,8 +11,6 @@ description: Every patchula command, argument and flag, generated from the CLI's
 {%- set cmd = spec.cmd %}
 {%- set full_cmd = cmd.full_cmd | join(sep=" ") %}
 
-{%- if spec.version %}
-- **Version:** {{ spec.version }}{% endif %}
 {%- if spec.author %}
 - **Author:** {{ spec.author }}{% endif %}
 {%- if spec.license %}

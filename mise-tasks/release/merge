@@ -1,0 +1,50 @@
+#!/usr/bin/env nu
+#MISE description="In the release bot's job: merge the release PR when its checks passed and it is on the current main, at most weekly unless --now. Needs GH_TOKEN from release:token"
+#MISE tools={gh="2.103.3"}
+#USAGE flag "--now" help="Merge regardless of when the latest release was"
+
+const BRANCH = "release-next"
+const MIN_AGE = 6day
+
+def main [--now] {
+  let repo = $env.GITHUB_REPOSITORY
+  let open = ^gh pr list --repo $repo --head $BRANCH --base main --state open --json number,title,headRefOid | from json
+  if ($open | is-empty) {
+    print "no release PR is open"
+    return
+  }
+  let pr = $open | first
+  if not $now {
+    let tag = ^git describe --tags --match "v[0-9]*" --abbrev=0 origin/main | str trim
+    let age = (date now) - (^git log -1 --format=%cI $tag | into datetime)
+    if $age < $MIN_AGE {
+      print $"($tag) is only ($age) old; the release waits for next week"
+      return
+    }
+  }
+  let main = ^gh api $"repos/($repo)/commits/main" --jq .sha | str trim
+  let parent = ^gh api $"repos/($repo)/commits/($pr.headRefOid)" --jq ".parents[0].sha" | str trim
+  if $parent != $main {
+    print "the release PR is behind main; the bot moves it once CI passes on main"
+    return
+  }
+  # The head must be exactly the bump of the current main to the version
+  # release:next picks for it, so a commit pushed by hand never merges.
+  ^git fetch --quiet origin $BRANCH main
+  ^git checkout --quiet --detach $main
+  let next = ^mise run --quiet release:next | str trim
+  let bump = ^mise run --quiet release:bump --check $pr.headRefOid --expect $next | lines | last
+  if $next == "" or $bump != "bump=true" {
+    error make --unspanned {msg: $"the release PR head ($pr.headRefOid) is not the bot's bump of main to ($next)"}
+  }
+  # gh exits 0 only when every check passed or skipped, and non-zero while any
+  # is pending or failing, or when there are none; the JSON says which.
+  let checks = ^gh pr checks ($pr.number) --repo $repo --json name,bucket | complete
+  if $checks.exit_code != 0 {
+    let waiting = $checks.stdout | str trim | if $in == "" { [] } else { from json | where bucket not-in [pass skipping] | get name }
+    print $"the release PR's checks have not all passed: ($waiting | str join ', ')"
+    return
+  }
+  ^gh pr merge ($pr.number) --repo $repo --squash --subject $"($pr.title) \(#($pr.number)\)" --body "" --match-head-commit $pr.headRefOid
+  print $"merged #($pr.number)"
+}

@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish.workspace = true
 
 [lints]
 workspace = true
@@ -16,7 +17,7 @@ hcl-edit = "0.10.0"
 yaml-rust2 = "0.13.0"
 jsonc-parser = "0.34.0"
 regex = "1.13.1"
-patchula-config = { version = "0.8.1", path = "../config" }
+patchula-config = { path = "../config" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_yaml_ng = "0.10.0"

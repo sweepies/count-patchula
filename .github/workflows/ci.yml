@@ -31,9 +31,16 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      # release:bump --check reads the CI result of the release commit's parent.
+      actions: read
     outputs:
-      rust: ${{ steps.some.outputs.rust == 'true' || steps.every.outputs.rust == 'true' }}
+      rust: ${{ steps.release.outputs.bump != 'true' && (steps.some.outputs.rust == 'true' || steps.every.outputs.rust == 'true') }}
       docs: ${{ steps.some.outputs.docs }}
+    env:
+      # The release bot's own PR from this repository, the only one the release
+      # check below may run for (see there). One predicate, so the steps that
+      # use it cannot drift apart.
+      RELEASE_PR: ${{ github.event_name == 'pull_request' && github.head_ref == 'release-next' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'sweepies-ops[bot]' }}
     steps:
       # A push is compared with the commit before it, which needs the history.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -73,10 +80,31 @@ jobs:
               - "!.gitignore"
               - "!socket.yml"
               - "!communique.toml"
+              - "!cliff.toml"
               - "!tak.toml"
               # hk lints the workflows on every change.
               - "!action.yml"
               - "!.github/**"
+      # The release bot's PR is one commit on a green main that only bumps the
+      # version. When release:bump recognises that commit and CI passed on its
+      # parent on main, a version bump has nothing left for the Rust jobs to
+      # check, so they skip; anything else in the PR runs them all. The check
+      # runs the PR's own copy of the task, so it only runs for the bot's PR
+      # from this repository (RELEASE_PR): a fork could name its branch
+      # release-next and make the task skip its tests.
+      - if: env.RELEASE_PR == 'true'
+        uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          cache: false
+        env:
+          MISE_ENABLE_TOOLS: nu,gh
+      - id: release
+        if: env.RELEASE_PR == 'true'
+        env:
+          MISE_ENABLE_TOOLS: nu,gh
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: mise run release:bump --check "$HEAD_SHA" --green-parent
 
   # hk.pkl's check hook, the same steps the git hooks run, plus Clippy. It runs
   # on every change, since it is the only secret scan in CI, but each step

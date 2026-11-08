@@ -1,0 +1,79 @@
+#!/usr/bin/env nu
+#MISE description="In the release bot's job: keep the release PR (branch release-next) at the next version for a commit on main that passed CI, or close it when nothing is left to release. Needs GH_TOKEN from release:token"
+#MISE tools={gh="2.103.3"}
+#USAGE arg "<commit>" help="A commit on main that passed CI"
+
+# The PR is always one commit on top of a green main: release:bump's version,
+# committed through the API so GitHub signs it, and moved onto the branch in one
+# forced ref update. CI on the PR recognises that commit (release:bump --check)
+# and skips what a version bump cannot change.
+const BRANCH = "release-next"
+
+def main [commit: string] {
+  let repo = $env.GITHUB_REPOSITORY
+  # CI runs for two pushes can finish out of order: only the newest main moves
+  # the PR.
+  let main = ^gh api $"repos/($repo)/commits/main" --jq .sha | str trim
+  if $main != $commit {
+    print $"main has moved past ($commit); its own CI run moves the PR"
+    return
+  }
+  # A tag release:tag just made must count as the latest release.
+  ^git fetch --quiet --tags origin
+  let open = ^gh pr list --repo $repo --head $BRANCH --base main --state open --json number,title,headRefOid | from json
+  let version = ^mise run --quiet release:next | str trim
+  if $version == "" {
+    if ($open | is-not-empty) {
+      ^gh pr close ($open.0.number) --repo $repo --delete-branch --comment "Nothing is left to release since the latest tag."
+    }
+    print "nothing to release"
+    return
+  }
+  let title = $"chore: release v($version)"
+  if ($open | is-not-empty) and $open.0.title == $title and (parent-of $repo $open.0.headRefOid) == $commit {
+    print $"the release PR is already v($version) on ($commit)"
+    return
+  }
+  ^mise run --quiet release:bump $version
+  let changed = ^git diff --name-only | lines
+  let tree = {
+    base_tree: (^git rev-parse $"($commit)^{tree}" | str trim)
+    tree: ($changed | each {|path| {path: $path mode: "100644" type: blob content: (open --raw $path)} })
+  } | to json | ^gh api $"repos/($repo)/git/trees" --input - --jq .sha | str trim
+  let bump = {message: $title tree: $tree parents: [$commit]} | to json | ^gh api $"repos/($repo)/git/commits" --input - | from json
+  if not $bump.verification.verified {
+    error make --unspanned {msg: $"GitHub did not sign the release commit ($bump.sha): ($bump.verification.reason)"}
+  }
+  ^git checkout --quiet -- .
+  let exists = ^gh api $"repos/($repo)/git/matching-refs/heads/($BRANCH)" | from json | where ref == $"refs/heads/($BRANCH)" | is-not-empty
+  if $exists {
+    ^gh api --method PATCH $"repos/($repo)/git/refs/heads/($BRANCH)" -f $"sha=($bump.sha)" -F force=true --silent
+  } else {
+    ^gh api $"repos/($repo)/git/refs" -f $"ref=refs/heads/($BRANCH)" -f $"sha=($bump.sha)" --silent
+  }
+  let body = body $commit $version
+  if ($open | is-empty) {
+    $body | ^gh pr create --repo $repo --base main --head $BRANCH --title $title --body-file -
+  } else {
+    $body | ^gh pr edit ($open.0.number) --repo $repo --title $title --body-file -
+  }
+  print $"the release PR is v($version) on ($commit)"
+}
+
+def parent-of [repo: string, commit: string]: nothing -> string {
+  ^gh api $"repos/($repo)/commits/($commit)" --jq ".parents[0].sha" | str trim
+}
+
+def body [commit: string, version: string]: nothing -> string {
+  let tag = ^git describe --tags --match "v[0-9]*" --abbrev=0 $commit | str trim
+  let changes = ^git log --format="- %s" $"($tag)..($commit)" | str trim
+  [
+    $"Merging this releases v($version). Once CI passes on main, the release bot tags the merge commit, and the tag builds and publishes the release; communique writes its notes."
+    ""
+    "The release bot merges this on Mondays when the latest release is at least six days old. Run the Release bot workflow by hand to merge it now."
+    ""
+    $"## Since ($tag)"
+    ""
+    $changes
+  ] | str join "\n"
+}

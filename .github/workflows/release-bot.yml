@@ -1,0 +1,84 @@
+name: Release bot
+
+# Releases without hand edits. After CI passes on main, the bot tags a commit
+# that changed the version (the tag starts release.yml), then moves the release
+# PR (branch release-next) to the next version from the conventional commits
+# since the latest tag, or closes it when there is nothing to release. On
+# Mondays it merges that PR if its checks passed and the latest release is at
+# least six days old; running this workflow by hand merges it now.
+#
+# The bot acts as the sweepies-ops App, with a token leased from OpenBao: the
+# job's OIDC token logs in to the jwt/ role count-patchula-release, which only
+# this workflow on main can use. Each step is a mise task in mise-tasks/release.
+on:
+  # zizmor: ignore[dangerous-triggers] the job runs only for a successful CI run
+  # on a push to main in this repository, and checks out that commit.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  schedule:
+    - cron: "0 10 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+# A run in flight finishes; the next one waits for it.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  MISE_LOCKED: "1"
+  # git-cliff and cargo-release are the release tasks' own tools; cargo-release
+  # needs the Rust toolchain, which mise.toml routes through mr-boxington.
+  MISE_ENABLE_TOOLS: nu,gh,rust,mr-boxington,git-cliff,github:crate-ci/cargo-release
+  # One task per step, so workflow commands (masks, GITHUB_ENV) reach the runner
+  # unprefixed.
+  MISE_TASK_OUTPUT: interleave
+
+jobs:
+  bot:
+    name: Release bot
+    if: >-
+      github.event_name != 'workflow_run' || (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          cache: false
+      - name: Lease the App token
+        env:
+          BAO_ADDR: ${{ vars.BAO_ADDR }}
+        run: mise run release:token
+      - name: Tag a merged release
+        if: github.event_name == 'workflow_run'
+        run: mise run release:tag "$COMMIT"
+      - name: Move the release PR
+        if: github.event_name == 'workflow_run'
+        run: mise run release:pr "$COMMIT"
+      - name: Merge the release PR weekly
+        if: github.event_name == 'schedule'
+        run: mise run release:merge
+      - name: Merge the release PR now
+        if: github.event_name == 'workflow_dispatch'
+        run: mise run release:merge --now
+      - name: Revoke the OpenBao session
+        if: always()
+        env:
+          BAO_ADDR: ${{ vars.BAO_ADDR }}
+        run: mise run release:token --revoke

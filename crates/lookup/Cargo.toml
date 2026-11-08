@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish.workspace = true
 
 [lints]
 workspace = true
@@ -13,11 +14,11 @@ workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 nodejs-semver = "7.0.0"
 regex = "1.13.1"
-patchula-config = { version = "0.8.1", path = "../config" }
-patchula-datasource = { version = "0.8.1", path = "../datasource" }
-patchula-manager = { version = "0.8.1", path = "../manager" }
-patchula-report = { version = "0.8.1", path = "../report" }
-patchula-versioning = { version = "0.8.1", path = "../versioning" }
+patchula-config = { path = "../config" }
+patchula-datasource = { path = "../datasource" }
+patchula-manager = { path = "../manager" }
+patchula-report = { path = "../report" }
+patchula-versioning = { path = "../versioning" }
 semver = "1.0.28"
 
 [dev-dependencies]
