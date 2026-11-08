@@ -476,11 +476,11 @@ impl Executor for Overlap {
             if tool {
                 let now = self.active.fetch_add(1, Ordering::SeqCst) + 1;
                 self.most.fetch_max(now, Ordering::SeqCst);
-                // Hold the tool until a second one runs, so overlap never
-                // depends on how fast the runner sets up the next tree.
-                // Serialised plans time out with `most` still 1.
+                // Hold the tool until all three plans run one, so overlap
+                // never depends on how fast the runner sets up the next tree.
+                // Serialised or capped plans time out with `most` below 3.
                 let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-                while self.most.load(Ordering::SeqCst) < 2 && tokio::time::Instant::now() < deadline
+                while self.most.load(Ordering::SeqCst) < 3 && tokio::time::Instant::now() < deadline
                 {
                     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
                 }
@@ -511,6 +511,10 @@ async fn plans_regenerate_lockfiles_side_by_side() {
     let temp = tempfile::tempdir().unwrap();
     let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
         .with_executor(executor.clone());
+    // A first use clears an unproven install under the store's exclusive
+    // lock, which waits for any run in progress; a used tool takes the
+    // shared lock only, so all three plans can run at once.
+    runner.record_use(&[("go".into(), default_version("go"))]);
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut plans: Vec<_> = (0..3)
@@ -530,7 +534,7 @@ async fn plans_regenerate_lockfiles_side_by_side() {
     for plan in &plans {
         assert!(plan.lockfiles_ready, "{:?}", plan.action);
     }
-    assert!(executor.most.load(std::sync::atomic::Ordering::SeqCst) >= 2);
+    assert_eq!(executor.most.load(std::sync::atomic::Ordering::SeqCst), 3);
     assert!(snapshot.files.contains_key("go.sum"));
 }
 
