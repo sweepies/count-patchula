@@ -351,22 +351,6 @@ fn without_backlink(url: &str) -> String {
     }
 }
 
-/// An opening or closing code fence: its character and length.
-fn fence(line: &str) -> Option<(char, usize, &str)> {
-    static LIST_MARKER: LazyLock<regex::Regex> = LazyLock::new(|| {
-        regex::Regex::new(r"^(?:[-+*]|[0-9]{1,9}[.)])[ \t]+").expect("list marker")
-    });
-    // A fence may sit in a block quote or a list item, as in `sanitise`.
-    let mut line = line.trim_start_matches([' ', '\t']);
-    while let Some(quoted) = line.strip_prefix('>') {
-        line = quoted.trim_start_matches([' ', '\t']);
-    }
-    let line = LIST_MARKER.find(line).map_or(line, |m| &line[m.end()..]);
-    let ch = line.chars().next().filter(|c| matches!(c, '`' | '~'))?;
-    let count = line.chars().take_while(|c| *c == ch).count();
-    (count >= 3).then(|| (ch, count, &line[count..]))
-}
-
 /// An ATX heading's level, if the line is one.
 fn heading(line: &str) -> Option<usize> {
     let indent = line.len() - line.trim_start_matches(' ').len();
@@ -415,9 +399,9 @@ impl Fences {
         let line = line.trim_end_matches(['\n', '\r']);
         let Some(open) = self.0 else {
             let (quotes, rest) = unquote(line, usize::MAX);
-            let indent = rest.len() - rest.trim_start_matches(' ').len();
-            let (list, rest) = match LIST_MARKER.find(&rest[indent..]) {
-                Some(marker) => (Some(indent + marker.end()), &rest[indent + marker.end()..]),
+            let (width, bytes) = indent(rest);
+            let (list, rest) = match LIST_MARKER.find(&rest[bytes..]) {
+                Some(marker) => (Some(width + marker.end()), &rest[bytes + marker.end()..]),
                 None => (None, rest),
             };
             let Some((ch, count, _)) = token(rest) else {
@@ -443,11 +427,10 @@ impl Fences {
         }
         let rest = match open.list {
             Some(column) => {
-                let indent = rest.len() - rest.trim_start_matches(' ').len();
-                if indent < column && !rest.trim().is_empty() {
+                if indent(rest).0 < column && !rest.trim().is_empty() {
                     return ended(self);
                 }
-                &rest[indent.min(column)..]
+                rest
             }
             None => rest,
         };
@@ -461,10 +444,38 @@ impl Fences {
             _ => false,
         }
     }
-    /// The line that closes the open fence.
+    /// The line that closes the open fence where it is: inside its quotes,
+    /// and indented to its list item's content.
     fn closer(self) -> Option<String> {
-        self.0.map(|open| open.ch.to_string().repeat(open.count))
+        self.0.map(|open| {
+            format!(
+                "{}{}{}",
+                "> ".repeat(open.quotes),
+                " ".repeat(open.list.unwrap_or(0)),
+                open.ch.to_string().repeat(open.count)
+            )
+        })
     }
+    /// Whether `line` would open a fence where none is open.
+    fn opens(line: &str) -> bool {
+        Self::default().advance(line)
+    }
+}
+
+/// The width of `text`'s leading spaces and tabs, a tab reaching the next
+/// multiple of four as in CommonMark, and how many bytes they take.
+fn indent(text: &str) -> (usize, usize) {
+    let mut width = 0;
+    let mut bytes = 0;
+    for b in text.bytes() {
+        match b {
+            b' ' => width += 1,
+            b'\t' => width += 4 - width % 4,
+            _ => break,
+        }
+        bytes += 1;
+    }
+    (width, bytes)
 }
 
 /// Up to `depth` block-quote markers stripped from `line`: how many there
@@ -606,7 +617,7 @@ pub fn fit(text: &str, limit: usize) -> (String, bool) {
             && (previous_blank
                 || heading(line).is_some()
                 || list_item(line)
-                || fence(line).is_some());
+                || Fences::opens(line));
         if starts_block && !previous_heading {
             cut = *offset;
         }

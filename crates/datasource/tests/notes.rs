@@ -2411,3 +2411,23 @@ async fn a_multi_platform_index_annotates_the_source_for_its_platforms() {
         .unwrap();
     assert_eq!(source.github.as_deref(), Some("example/multi"));
 }
+
+/// The fence `fit` closes for a cut body is closed inside its quote or list
+/// item, so nothing after it turns into code; a tab indents a list item's
+/// content as far as four spaces would.
+#[test]
+fn a_closed_fence_stays_in_its_container_and_tabs_indent() {
+    for open in ["> ```\n> code", "- ```\n  code", "> - ```\n>   code"] {
+        let (kept, _) = fit(&format!("## 2.0.0\n<details>\n{open}\n"), 10_000);
+        let versions: Vec<_> = parse_changelog(&format!("{kept}\n## 1.0.0\nOld\n"))
+            .into_iter()
+            .map(|s| s.version)
+            .collect();
+        assert_eq!(versions, ["2.0.0", "1.0.0"], "{open}: {kept}");
+    }
+    let versions: Vec<_> = parse_changelog("## 2.0.0\n- ```\n\tcode\n\t```\n## 1.0.0\nOld\n")
+        .into_iter()
+        .map(|s| s.version)
+        .collect();
+    assert_eq!(versions, ["2.0.0", "1.0.0"]);
+}
