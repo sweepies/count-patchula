@@ -105,7 +105,14 @@ must initialise tracing for the warnings to show.
 - A registry 429 sets a cooldown for that host and is retried at most three
   times, honouring `Retry-After` or backing off 1, 2 and 4 seconds. Waits over
   60 seconds and exhausted retries fail, and queued callers wait out the
-  cooldown. Docker Hub pull-quota errors are returned at once.
+  cooldown. Docker Hub pull-quota errors on manifest GETs are returned at once
+  and hold back manifest GETs for the quota window (six hours when Docker Hub
+  names none). HEAD and tag-list requests don't use the pull quota, so their 429
+  cools the whole host only for a window the counter names; otherwise it is an
+  ordinary throttle.
+- Overlapping identical registry and derived reads share one request. Each
+  shared answer lives only while a caller waits on it, so memory follows the
+  reads in flight, not every URL read since the server started.
 - Only successful responses are cached, so a rate-limited pagination attempt
   never becomes a complete catalog.
 

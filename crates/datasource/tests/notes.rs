@@ -512,6 +512,23 @@ async fn release_body_batches_validate_timestamps_and_fetch_only_edited_bodies_a
 }
 
 #[test]
+fn a_fence_in_a_list_item_or_quote_hides_its_headings() {
+    for open in ["- ```text", "> ```text", "1. ~~~"] {
+        let close = if open.ends_with('~') { "~~~" } else { "```" };
+        let text = format!("## 2.0.0\nNew\n{open}\n  ## 1.9.0\n{close}\nMore\n## 1.0.0\nOld\n");
+        let sections = parse_changelog(&text);
+        assert_eq!(
+            sections
+                .iter()
+                .map(|s| s.version.as_str())
+                .collect::<Vec<_>>(),
+            ["2.0.0", "1.0.0"],
+            "{open}"
+        );
+    }
+}
+
+#[test]
 fn headings_fences_setext_plain_text_and_utf8_are_sliced_once() {
     let text = "# Changelog\n\n## [v2.1.0](https://example.org/2.1.0) (2026-01-01)\nCrab 🦀\n### Fixes\nKept\n```md\n## 99.0.0\n```\n2.0.0 - 2025-01-01\n==================\nOld fixes\n\n# Footer\nNo version here\n";
     let sections = parse_changelog(text);

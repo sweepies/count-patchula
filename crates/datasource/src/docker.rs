@@ -8,7 +8,18 @@ use std::{
 };
 use tokio::sync::Mutex;
 
-type Token = Arc<Mutex<Option<(String, Instant)>>>;
+/// A registry pull token and the moment it stops being usable.
+pub(super) struct Pull {
+    bearer: String,
+    expiry: Instant,
+}
+type Token = Arc<Mutex<Option<Pull>>>;
+/// The token in `slot`, unless it has expired.
+fn live(slot: &Option<Pull>) -> Option<&str> {
+    slot.as_ref()
+        .filter(|pull| pull.expiry > Instant::now())
+        .map(|pull| pull.bearer.as_str())
+}
 pub(super) type Tokens = Arc<Mutex<BTreeMap<String, Token>>>;
 pub(crate) const MANIFEST: &str = "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json";
 
@@ -158,28 +169,26 @@ impl Client {
         // it; a withheld entry's is fetched without any.
         let account = entry.as_ref().is_some_and(|entry| entry.auth.sends());
         let token = self.tokens.lock().await.entry(scope).or_default().clone();
-        let key = token_key(host, path)?;
+        // Only an anonymous token is kept in the shared cache, under a key with
+        // no credential scope, so only an anonymous scope may read or clear it.
+        let persisted = (!authenticated)
+            .then(|| token_key(host, path))
+            .transpose()?;
         let mut saved = token.lock().await;
-        if saved
-            .as_ref()
-            .is_none_or(|(_, expiry)| *expiry <= Instant::now())
-        {
+        if live(&saved).is_none() {
             *saved = None;
-            if !authenticated
-                && let Some(entry) = self.cache.http_get(&key).await?
+            if let Some(key) = &persisted
+                && let Some(entry) = self.cache.http_get(key).await?
                 && let Some(expiry) = entry.expires_at.filter(|expiry| *expiry > now())
                 && let Ok(bearer) = String::from_utf8(entry.body)
             {
-                *saved = Some((
+                *saved = Some(Pull {
                     bearer,
-                    Instant::now() + Duration::from_secs((expiry - now()).max(0) as u64),
-                ));
+                    expiry: Instant::now() + Duration::from_secs((expiry - now()).max(0) as u64),
+                });
             }
         }
-        let bearer = saved
-            .as_ref()
-            .filter(|(_, expiry)| *expiry > Instant::now())
-            .map(|(v, _)| v.clone());
+        let bearer = live(&saved).map(str::to_owned);
         drop(saved);
         let mut response = self
             .registry_read(
@@ -193,14 +202,15 @@ impl Client {
             .await?;
         if response.status == 401 {
             let mut saved_token = token.lock().await;
-            let refreshed = saved_token
-                .as_ref()
-                .filter(|(v, expiry)| *expiry > Instant::now() && Some(v) != bearer.as_ref())
-                .map(|(v, _)| v.clone());
+            let refreshed = live(&saved_token)
+                .filter(|v| Some(*v) != bearer.as_deref())
+                .map(str::to_owned);
             let next = if let Some(refreshed) = refreshed {
                 refreshed
             } else {
-                self.cache.http_remove(&key).await?;
+                if let Some(key) = &persisted {
+                    self.cache.http_remove(key).await?;
+                }
                 *saved_token = None;
                 let challenge = response
                     .headers
@@ -295,7 +305,7 @@ impl Client {
                     .saturating_sub(10);
                 let expiry = Instant::now()
                     + Duration::from_secs(expires_at.saturating_sub(now()).max(0) as u64);
-                if !authenticated
+                if let Some(key) = &persisted
                     && expires_at > now()
                     && !auth
                         .headers
@@ -308,7 +318,7 @@ impl Client {
                 {
                     self.cache
                         .http_put(
-                            &key,
+                            key,
                             &HttpEntry {
                                 status: 200,
                                 etag: None,
@@ -322,7 +332,10 @@ impl Client {
                         )
                         .await?;
                 }
-                *saved_token = Some((bearer.clone(), expiry));
+                *saved_token = Some(Pull {
+                    bearer: bearer.clone(),
+                    expiry,
+                });
                 bearer
             };
             drop(saved_token);
@@ -331,7 +344,9 @@ impl Client {
                 .await?;
             if response.status == 401 {
                 *token.lock().await = None;
-                self.cache.http_remove(&key).await?;
+                if let Some(key) = &persisted {
+                    self.cache.http_remove(key).await?;
+                }
             }
         }
         if response.status == 429 {

@@ -86,7 +86,9 @@ No cap guarantees against secondary throttling.
 The governor tracks the `x-ratelimit-*` headers per resource (core, search and
 graphql), reserves known remaining capacity for in-flight requests and waits
 until an exhausted window resets, plus one second. A 304 refunds its
-reservation.
+reservation. While a bucket is exhausted its reset only moves later, so a
+response still in flight can't cut short a wait a rate-limit answer set. Once
+the reset passes the bucket is unknown again and queued requests go ahead.
 
 Secondary 403 and 429 responses (`Retry-After`, documented secondary or abuse
 messages, or GraphQL `RATE_LIMITED` errors) set a cooldown shared by all tasks.

@@ -158,7 +158,9 @@ impl Governor {
                     bucket.reset = None;
                 }
                 if bucket.available == Some(0) {
-                    // Missing reset header: wait conservatively, then probe once.
+                    // Missing reset header: wait a minute. When it passes the
+                    // bucket is unknown again and queued requests go ahead; a
+                    // still-exhausted answer closes it again.
                     let reset = *bucket.reset.get_or_insert(now + Duration::from_secs(60));
                     until = Some(until.map_or(reset, |until| until.max(reset)));
                 }
@@ -208,17 +210,25 @@ impl Governor {
                 remaining
             }
         });
-        if let Some(reset) = reported.reset_at {
-            let delay =
-                Duration::from_secs(reset.saturating_sub(epoch_seconds()).saturating_add(1));
-            bucket.reset = Instant::now().checked_add(delay);
-        }
         // Out-of-order in-flight responses must not replenish this window's reservations.
         bucket.available = match (same_window, old_remaining, reported.remaining) {
             (true, Some(old), Some(new)) => Some(old.min(new)),
             (_, _, Some(new)) => Some(new),
             (_, old, None) => old,
         };
+        if let Some(reset) = reported.reset_at {
+            let delay =
+                Duration::from_secs(reset.saturating_sub(epoch_seconds()).saturating_add(1));
+            let next = Instant::now().checked_add(delay);
+            // While the bucket is spent its reset only moves later: an earlier
+            // header from a response in flight must not cut short a wait a
+            // rate-limit answer set.
+            bucket.reset = if bucket.available == Some(0) {
+                bucket.reset.max(next)
+            } else {
+                next
+            };
+        }
         bucket.report = PrimaryLimit {
             limit: reported.limit.or(bucket.report.limit),
             remaining: reported.remaining.or(bucket.report.remaining),
@@ -322,4 +332,51 @@ fn epoch_seconds() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::{
+        StatusCode,
+        header::{HeaderMap, HeaderName, HeaderValue},
+    };
+
+    fn response(status: u16, headers: &[(&'static str, String)]) -> Response {
+        Response {
+            status: StatusCode::from_u16(status).unwrap(),
+            headers: headers
+                .iter()
+                .map(|(name, value)| {
+                    (
+                        HeaderName::from_static(name),
+                        HeaderValue::from_str(value).unwrap(),
+                    )
+                })
+                .collect::<HeaderMap>(),
+            body: Vec::new(),
+        }
+    }
+
+    /// A response still in flight when the limit hit may carry an earlier
+    /// reset; it must not shorten the wait the rate-limit answer set.
+    #[tokio::test]
+    async fn a_spent_bucket_reset_only_moves_later() {
+        let governor = Governor::new(4, Duration::from_secs(3600));
+        let soon = (epoch_seconds() + 10).to_string();
+        // No reset header: the governor backs off a minute.
+        let limited = response(403, &[("x-ratelimit-remaining", "0".into())]);
+        assert!(governor.rate_limited("core", &limited, 0).await.unwrap());
+        let in_flight = response(
+            200,
+            &[
+                ("x-ratelimit-remaining", "0".into()),
+                ("x-ratelimit-reset", soon),
+            ],
+        );
+        governor.observe("core", &in_flight).await;
+        let state = governor.state.lock().await;
+        let reset = state.primary["core"].reset.unwrap();
+        assert!(reset >= Instant::now() + Duration::from_secs(50));
+    }
 }

@@ -49,26 +49,14 @@ pub fn parse_changelog(text: &str) -> Vec<Section> {
     let mut sections = Vec::new();
     let mut active: Option<(String, String, usize, usize)> = None;
     let mut slugs = BTreeMap::<String, usize>::new();
-    let mut fence: Option<(char, usize)> = None;
+    let mut fences = super::markdown::Fences::default();
     let mut lines = text.split_inclusive('\n').peekable();
     let mut offset = 0;
     while let Some(line) = lines.next() {
         let start = offset;
         offset += line.len();
         let trim = line.trim();
-        let fence_char = trim.chars().next().unwrap_or('\0');
-        let fence_len = trim.chars().take_while(|c| *c == fence_char).count();
-        if matches!(fence_char, '`' | '~') && fence_len >= 3 {
-            if let Some((kind, len)) = fence {
-                if kind == fence_char && fence_len >= len && trim.chars().all(|c| c == kind) {
-                    fence = None;
-                }
-            } else {
-                fence = Some((fence_char, fence_len));
-            }
-            continue;
-        }
-        if fence.is_some() {
+        if fences.advance(line) || fences.is_open() {
             continue;
         }
         let hashes = trim.bytes().take_while(|b| *b == b'#').count();
