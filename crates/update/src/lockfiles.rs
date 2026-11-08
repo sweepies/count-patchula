@@ -146,12 +146,34 @@ fn directory(path: &str) -> &str {
 fn under(path: &str, root: &str) -> bool {
     root.is_empty() || path.strip_prefix(root).is_some_and(|p| p.starts_with('/'))
 }
-fn nearest<'a>(file: &str, paths: &'a BTreeSet<String>, names: &[&str]) -> Option<&'a str> {
+/// The deepest directory holding `file` (its own included) that has one of
+/// `names`. Walks up from the file, so the cost follows its depth, not the
+/// size of the tree.
+fn nearest<'a>(file: &'a str, paths: &BTreeSet<String>, names: &[&str]) -> Option<&'a str> {
+    let mut dir = directory(file);
+    loop {
+        if names
+            .iter()
+            .any(|name| paths.contains(&node::join(dir, name)))
+        {
+            return Some(dir);
+        }
+        if dir.is_empty() {
+            return None;
+        }
+        dir = directory(dir);
+    }
+}
+/// The paths under `dir`, which sort together.
+fn subtree<'a>(paths: &'a BTreeSet<String>, dir: &'a str) -> impl Iterator<Item = &'a String> {
+    let prefix = if dir.is_empty() {
+        String::new()
+    } else {
+        format!("{dir}/")
+    };
     paths
-        .iter()
-        .filter(|p| names.contains(&p.rsplit('/').next().unwrap_or(p)) && under(file, directory(p)))
-        .max_by_key(|p| directory(p).len())
-        .map(|p| directory(p))
+        .range(prefix.clone()..)
+        .take_while(move |p| p.starts_with(&prefix))
 }
 pub(crate) fn job(
     dep: &Dependency,
@@ -204,11 +226,7 @@ pub(crate) fn job(
             ) else {
                 return Ok(None);
             };
-            if snapshot
-                .paths
-                .iter()
-                .any(|p| directory(p) == root && p.rsplit('/').next() == Some("bun.lockb"))
-            {
+            if snapshot.paths.contains(&node::join(root, "bun.lockb")) {
                 return Err("unsupported lockfile format".into());
             }
             (Ecosystem::Node, root)
@@ -267,10 +285,8 @@ pub(crate) fn job(
             let dir = directory(&dep.file);
             let locked = dep.kind != patchula_config::DependencyKind::Toolchain
                 && !dep.file.ends_with("dotnet-tools.json")
-                && snapshot.paths.iter().any(|p| {
-                    p.rsplit('/').next() == Some("packages.lock.json")
-                        && (dir.is_empty() || under(p, dir))
-                });
+                && subtree(&snapshot.paths, dir)
+                    .any(|p| p.rsplit('/').next() == Some("packages.lock.json"));
             if !locked {
                 return Ok(None);
             }

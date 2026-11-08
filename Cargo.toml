@@ -26,3 +26,9 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = 0
+
+# Release binaries trade build time for speed: LTO across the workspace and its
+# dependencies, with one codegen unit per crate.
+[profile.release]
+lto = "fat"
+codegen-units = 1

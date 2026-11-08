@@ -476,7 +476,14 @@ impl Executor for Overlap {
             if tool {
                 let now = self.active.fetch_add(1, Ordering::SeqCst) + 1;
                 self.most.fetch_max(now, Ordering::SeqCst);
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                // Hold the tool until all three plans run one, so overlap
+                // never depends on how fast the runner sets up the next tree.
+                // Serialised or capped plans time out with `most` below 3.
+                let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+                while self.most.load(Ordering::SeqCst) < 3 && tokio::time::Instant::now() < deadline
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
             }
             let result = self.inner.run(spec).await;
             if tool {
@@ -504,6 +511,10 @@ async fn plans_regenerate_lockfiles_side_by_side() {
     let temp = tempfile::tempdir().unwrap();
     let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
         .with_executor(executor.clone());
+    // A first use clears an unproven install under the store's exclusive
+    // lock, which waits for any run in progress; a used tool takes the
+    // shared lock only, so all three plans can run at once.
+    runner.record_use(&[("go".into(), default_version("go"))]);
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut plans: Vec<_> = (0..3)
@@ -523,7 +534,7 @@ async fn plans_regenerate_lockfiles_side_by_side() {
     for plan in &plans {
         assert!(plan.lockfiles_ready, "{:?}", plan.action);
     }
-    assert!(executor.most.load(std::sync::atomic::Ordering::SeqCst) >= 2);
+    assert_eq!(executor.most.load(std::sync::atomic::Ordering::SeqCst), 3);
     assert!(snapshot.files.contains_key("go.sum"));
 }
 
@@ -6445,4 +6456,44 @@ fn every_materialized_file_has_a_credential_decision() {
             "{name} has no credential decision"
         );
     }
+}
+
+#[test]
+fn nearest_takes_the_deepest_lock_directory_above_a_file() {
+    let paths: BTreeSet<String> = [
+        "package-lock.json",
+        "apps/web/yarn.lock",
+        "apps/web-legacy/package-lock.json",
+        "apps/webby/pnpm-lock.yaml",
+        "tools/sub/Cargo.lock",
+    ]
+    .map(String::from)
+    .into();
+    let node = ["package-lock.json", "yarn.lock", "pnpm-lock.yaml"];
+    assert_eq!(
+        nearest("apps/web/package.json", &paths, &node),
+        Some("apps/web")
+    );
+    assert_eq!(
+        nearest("apps/web/pkg/a/package.json", &paths, &node),
+        Some("apps/web")
+    );
+    // A sibling whose name extends the directory's does not count.
+    assert_eq!(nearest("apps/we/package.json", &paths, &node), Some(""));
+    assert_eq!(nearest("package.json", &paths, &node), Some(""));
+    // A lock below the file does not govern it.
+    assert_eq!(nearest("tools/Cargo.toml", &paths, &["Cargo.lock"]), None);
+    assert_eq!(nearest("Cargo.toml", &paths, &["Cargo.lock"]), None);
+}
+
+#[test]
+fn subtree_lists_only_paths_under_the_directory() {
+    let paths: BTreeSet<String> = ["a/x", "a/b/y", "a-b/z", "ab/w", "c"]
+        .map(String::from)
+        .into();
+    let under = |dir| subtree(&paths, dir).cloned().collect::<Vec<_>>();
+    assert_eq!(under("a"), ["a/b/y", "a/x"]);
+    assert_eq!(under("a/b"), ["a/b/y"]);
+    assert_eq!(under("d"), Vec::<String>::new());
+    assert_eq!(under("").len(), 5);
 }
