@@ -457,8 +457,8 @@ impl Engine {
                         if merge_actions.iter().any(|a| {
                             matches!(
                                 a.status,
-                                patchula_report::ActionStatus::Error
-                                    | patchula_report::ActionStatus::Protected
+                                patchula_report::PullRequestStatus::Error
+                                    | patchula_report::PullRequestStatus::Protected
                             )
                         }) {
                             fail(repo, "auto-merge failed or was protected; inspect actions");
@@ -498,7 +498,7 @@ impl Engine {
                                             branch: p.action.branch.clone(),
                                             number: pr["number"].as_u64(),
                                             url: pr["html_url"].as_str().map(str::to_owned),
-                                            status: patchula_report::ActionStatus::Unchanged,
+                                            status: patchula_report::PullRequestStatus::Unchanged,
                                             reason: None,
                                         }
                                     })
@@ -519,13 +519,13 @@ impl Engine {
                 pull_requests.extend(
                     plans
                         .iter()
-                        .filter(|p| p.action.status == patchula_report::ActionStatus::Planned)
+                        .filter(|p| p.action.status == patchula_report::BranchStatus::Planned)
                         .map(|p| patchula_report::PullRequestAction {
                             repository: repo.repository.clone(),
                             branch: p.action.branch.clone(),
                             number: None,
                             url: None,
-                            status: patchula_report::ActionStatus::Planned,
+                            status: patchula_report::PullRequestStatus::Planned,
                             reason: Some(
                                 "create or reconcile after authoritative live inventory".into(),
                             ),
@@ -575,10 +575,10 @@ impl Engine {
                         .await;
                 } else {
                     for plan in &mut plans {
-                        if plan.action.status == patchula_report::ActionStatus::Planned
+                        if plan.action.status == patchula_report::BranchStatus::Planned
                             && !plan.lockfiles_ready
                         {
-                            plan.action.status = patchula_report::ActionStatus::Error;
+                            plan.action.status = patchula_report::BranchStatus::Error;
                             plan.action.reason = Some(
                                 "lockfile generation requires a disk cache or an injected runner"
                                     .into(),
@@ -681,8 +681,8 @@ impl Engine {
                 if state.actions.iter().any(|a| {
                     matches!(
                         a.status,
-                        patchula_report::ActionStatus::Error
-                            | patchula_report::ActionStatus::Protected
+                        patchula_report::PullRequestStatus::Error
+                            | patchula_report::PullRequestStatus::Protected
                     )
                 }) {
                     fail(
@@ -695,7 +695,7 @@ impl Engine {
             for plan in &plans {
                 if matches!(
                     plan.action.status,
-                    patchula_report::ActionStatus::Error | patchula_report::ActionStatus::Protected
+                    patchula_report::BranchStatus::Error | patchula_report::BranchStatus::Protected
                 ) {
                     fail(
                         repo,
@@ -1709,7 +1709,7 @@ impl Engine {
                         })
                         .map(|(_, reason)| reason.clone());
                     let silence = |mut check: patchula_report::ImageCheck| {
-                        if patchula_lookup::images::warns(&check.state) {
+                        if check.state.warns() {
                             check.silenced.clone_from(&silenced);
                         }
                         check
@@ -1727,14 +1727,20 @@ impl Engine {
                             continue;
                         };
                         if let Some(failure) = &osv_failure
-                            && matches!(check.state.as_str(), "checked" | "partial-sources")
+                            && matches!(
+                                check.state,
+                                patchula_report::ImageState::Checked
+                                    | patchula_report::ImageState::PartialSources
+                            )
                         {
-                            check.state = "unreadable".into();
+                            check.state = patchula_report::ImageState::Unreadable;
                             check.detail = Some(failure.clone());
                         }
                         let (verified, introduced) =
                             patchula_lookup::images::advisories(&check, &image_found);
-                        if check.state != "unreadable" && !verified.is_empty() {
+                        if check.state != patchula_report::ImageState::Unreadable
+                            && !verified.is_empty()
+                        {
                             if eval.secure(dep, proposal) {
                                 proposal.fixes = check.fixed.iter().map(|f| f.id.clone()).collect();
                                 proposal.fixes.dedup();
@@ -1748,7 +1754,7 @@ impl Engine {
                             }
                             image_advisories.extend(verified);
                         }
-                        if check.state != "unreadable" {
+                        if check.state != patchula_report::ImageState::Unreadable {
                             check.introduced_details = introduced;
                         }
                         proposal.image = Some(silence(check));

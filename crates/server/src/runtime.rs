@@ -265,7 +265,7 @@ struct BatchOutcome {
 }
 impl BatchOutcome {
     fn report(report: &Report) -> Self {
-        use patchula_report::ActionStatus;
+        use patchula_report::BranchStatus;
         let mut outcome = Self::default();
         for repo in &report.repositories {
             if repo.status == Status::Error {
@@ -280,16 +280,16 @@ impl BatchOutcome {
                         .insert(branch.repository.to_ascii_lowercase());
                 }
                 let kind = match branch.status {
-                    ActionStatus::Error => "branch-error",
-                    ActionStatus::Protected => "branch-protected",
+                    BranchStatus::Error => "branch-error",
+                    BranchStatus::Protected => "branch-protected",
                     _ => continue,
                 };
                 outcome.fail(kind, &branch.repository);
             }
             for pr in &actions.pull_requests {
                 let kind = match pr.status {
-                    ActionStatus::Error => "pull-request-error",
-                    ActionStatus::Protected => "pull-request-protected",
+                    patchula_report::PullRequestStatus::Error => "pull-request-error",
+                    patchula_report::PullRequestStatus::Protected => "pull-request-protected",
                     _ => continue,
                 };
                 outcome.fail(kind, &pr.repository);

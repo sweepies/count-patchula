@@ -18,7 +18,7 @@ use patchula_cache::{
 };
 use patchula_github::Client;
 use patchula_report::{
-    ActionStatus, LookupFailure, PackageFile, PullRequestAction, Report, Status,
+    BranchStatus, LookupFailure, PackageFile, PullRequestAction, Report, Status,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -70,7 +70,7 @@ struct Snapshot<'a> {
 #[serde(rename_all = "camelCase")]
 struct Branch<'a> {
     branch: &'a str,
-    status: ActionStatus,
+    status: BranchStatus,
     reason: Option<&'a str>,
     message: &'a str,
     base_commit: &'a str,
@@ -102,7 +102,7 @@ struct PullRequest<'a> {
 }
 #[derive(Serialize)]
 struct Action<'a> {
-    status: ActionStatus,
+    status: patchula_report::PullRequestStatus,
     reason: Option<&'a str>,
 }
 impl<'a> PullRequest<'a> {

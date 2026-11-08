@@ -530,7 +530,7 @@ fn updates_held_by_the_pr_limits_are_listed_with_their_reason_and_a_box() {
                 repository: "demo/app".into(),
                 branch: format!("patchula/{package}"),
                 base_commit: "a".repeat(40),
-                status: patchula_report::ActionStatus::Planned,
+                status: patchula_report::BranchStatus::Planned,
                 reason: None,
                 message: format!("chore(deps): update {package} to 2.0.0"),
                 previous_commit: None,

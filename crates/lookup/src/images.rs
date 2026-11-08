@@ -1,7 +1,7 @@
 //! Whether a new image digest fixes advisories its old digest has, from the OS
 //! packages their SBOMs list. Only OSV's answers decide a fix.
 use patchula_datasource::{Advisory, AdvisoryListing, AdvisoryQuery, ImageSbom, Sbom};
-use patchula_report::{ImageAdvisory, ImageCheck};
+use patchula_report::{ImageAdvisory, ImageCheck, ImageState};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -34,43 +34,19 @@ pub fn most_severe<'a>(ids: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
 /// One digest's SBOM per platform, or why it could not be read.
 pub type Side = BTreeMap<String, Result<ImageSbom, String>>;
 
-/// States from worst to best; a comparison takes the worst of its platforms.
-const STATES: [&str; 8] = [
-    "unreadable",
-    "previous-unavailable",
-    "no-sbom",
-    "sbom-without-os",
-    "os-not-covered",
-    "partial-sources",
-    "checked",
-    "no-os-packages",
-];
-
-/// Whether a state means the Count can't tell, so it is a warning.
-pub fn warns(state: &str) -> bool {
-    matches!(
-        state,
-        "previous-unavailable" | "no-sbom" | "sbom-without-os" | "os-not-covered"
-    )
-}
-
-fn rank(state: &str) -> usize {
-    STATES.iter().position(|s| *s == state).unwrap_or(0)
-}
-
-fn sbom_state(sbom: &Sbom) -> &'static str {
+fn sbom_state(sbom: &Sbom) -> ImageState {
     if sbom.packages == 0 {
         if sbom.cataloger {
-            "no-os-packages"
+            ImageState::NoOsPackages
         } else {
-            "sbom-without-os"
+            ImageState::SbomWithoutOs
         }
     } else if sbom.ecosystem.is_none() {
-        "os-not-covered"
+        ImageState::OsNotCovered
     } else if !sbom.sources_known {
-        "partial-sources"
+        ImageState::PartialSources
     } else {
-        "checked"
+        ImageState::Checked
     }
 }
 
@@ -100,12 +76,12 @@ pub fn image_queries(side: &Side) -> BTreeSet<AdvisoryQuery> {
 
 #[derive(Default)]
 struct Check {
-    state: Option<&'static str>,
+    state: Option<ImageState>,
     detail: Option<String>,
 }
 impl Check {
-    fn worse(&mut self, state: &'static str, detail: Option<String>) {
-        if self.state.is_none_or(|s| rank(state) < rank(s)) {
+    fn worse(&mut self, state: ImageState, detail: Option<String>) {
+        if self.state.is_none_or(|s| state < s) {
             self.state = Some(state);
             self.detail = detail;
         }
@@ -124,15 +100,15 @@ pub fn image_state(side: &Side) -> Option<ImageCheck> {
                 check.worse(sbom_state(sbom), Some(sbom.generator.clone()));
                 os = os.or(sbom.os.clone());
             }
-            Ok(ImageSbom::Missing) => check.worse("no-sbom", None),
+            Ok(ImageSbom::Missing) => check.worse(ImageState::NoSbom, None),
             Ok(ImageSbom::NoPlatform(_)) => continue,
             Ok(ImageSbom::Gone) | Err(_) => return None,
         }
         platforms.push(platform.clone());
     }
-    let state = check.state.filter(|s| warns(s))?;
+    let state = check.state.filter(|s| s.warns())?;
     Some(ImageCheck {
-        state: state.into(),
+        state,
         platforms,
         os,
         detail: check.detail,
@@ -158,27 +134,27 @@ pub fn compare(
         };
         let (before, after) = match (before, after) {
             (Err(e), _) | (_, Err(e)) => {
-                check.worse("unreadable", Some(e.clone()));
+                check.worse(ImageState::Unreadable, Some(e.clone()));
                 result.platforms.push(platform.clone());
                 continue;
             }
             (Ok(ImageSbom::NoPlatform(_)), _) | (_, Ok(ImageSbom::NoPlatform(_))) => continue,
             (_, Ok(ImageSbom::Gone)) => {
                 check.worse(
-                    "unreadable",
+                    ImageState::Unreadable,
                     Some("the new digest is not in its registry".into()),
                 );
                 result.platforms.push(platform.clone());
                 continue;
             }
             (Ok(ImageSbom::Gone), _) | (Ok(ImageSbom::Missing), Ok(ImageSbom::Found(_))) => {
-                check.worse("previous-unavailable", None);
+                check.worse(ImageState::PreviousUnavailable, None);
                 result.platforms.push(platform.clone());
                 continue;
             }
             (Ok(ImageSbom::Found(before)), Ok(ImageSbom::Found(after))) => (before, after),
             _ => {
-                check.worse("no-sbom", None);
+                check.worse(ImageState::NoSbom, None);
                 result.platforms.push(platform.clone());
                 continue;
             }
@@ -225,10 +201,13 @@ pub fn compare(
         }
         introduced.extend(now.into_keys().filter(|id| !was.contains_key(id)));
     }
-    result.state = check.state?.into();
-    result.detail = check
-        .detail
-        .filter(|_| matches!(result.state.as_str(), "unreadable" | "sbom-without-os"));
+    result.state = check.state?;
+    result.detail = check.detail.filter(|_| {
+        matches!(
+            result.state,
+            ImageState::Unreadable | ImageState::SbomWithoutOs
+        )
+    });
     result.sboms = sboms.into_iter().collect();
     result.fixed = fixed
         .into_iter()
@@ -365,7 +344,7 @@ mod tests {
             (query("openssl", "2"), vec![advisory("DSA-4")]),
         ]);
         let check = compare(("sha256:a", &old), ("sha256:b", &new), &listing(&found)).unwrap();
-        assert_eq!(check.state, "checked");
+        assert_eq!(check.state, ImageState::Checked);
         assert_eq!(check.platforms, ["linux/amd64", "linux/arm64"]);
         let fixed: Vec<_> = check
             .fixed
@@ -453,21 +432,18 @@ mod tests {
             .map(|c| c.state)
         };
         let one = |s: &ImageSbom| side(&[("linux/amd64", s.clone())]);
+        assert_eq!(state(one(&ok), one(&ko)), Some(ImageState::SbomWithoutOs));
         assert_eq!(
-            state(one(&ok), one(&ko)).as_deref(),
-            Some("sbom-without-os")
+            state(one(&ImageSbom::Missing), one(&ok)),
+            Some(ImageState::PreviousUnavailable)
         );
         assert_eq!(
-            state(one(&ImageSbom::Missing), one(&ok)).as_deref(),
-            Some("previous-unavailable")
+            state(one(&ImageSbom::Gone), one(&ok)),
+            Some(ImageState::PreviousUnavailable)
         );
         assert_eq!(
-            state(one(&ImageSbom::Gone), one(&ok)).as_deref(),
-            Some("previous-unavailable")
-        );
-        assert_eq!(
-            state(one(&ok), one(&ImageSbom::Missing)).as_deref(),
-            Some("no-sbom")
+            state(one(&ok), one(&ImageSbom::Missing)),
+            Some(ImageState::NoSbom)
         );
         assert_eq!(state(one(&ok), one(&ImageSbom::NoPlatform(None))), None);
         let elsewhere = ImageSbom::NoPlatform(Some("linux/arm64".into()));
@@ -489,7 +465,7 @@ mod tests {
             &AdvisoryListing::new(),
         )
         .unwrap();
-        assert_eq!(check.state, "unreadable");
+        assert_eq!(check.state, ImageState::Unreadable);
         assert_eq!(check.detail.as_deref(), Some("registry rate limit reached"));
         let ImageSbom::Found(mut partial) = ok.clone() else {
             unreachable!()
@@ -497,8 +473,8 @@ mod tests {
         partial.sources_known = false;
         let partial = ImageSbom::Found(partial);
         assert_eq!(
-            state(one(&ok), one(&partial)).as_deref(),
-            Some("partial-sources")
+            state(one(&ok), one(&partial)),
+            Some(ImageState::PartialSources)
         );
         let ImageSbom::Found(mut oracle) = ok.clone() else {
             unreachable!()
@@ -512,8 +488,8 @@ mod tests {
             &AdvisoryListing::new(),
         );
         assert_eq!(
-            check.as_ref().map(|c| c.state.as_str()),
-            Some("os-not-covered")
+            check.as_ref().map(|c| c.state),
+            Some(ImageState::OsNotCovered)
         );
         assert_eq!(check.unwrap().os.as_deref(), Some("ol 9"));
     }
@@ -524,7 +500,7 @@ mod tests {
         assert_eq!(image_state(&one(sbom(&[("openssl", "1")]))), None);
         assert_eq!(
             image_state(&one(ImageSbom::Missing)).map(|c| c.state),
-            Some("no-sbom".to_owned())
+            Some(ImageState::NoSbom)
         );
         assert_eq!(image_state(&one(ImageSbom::Gone)), None);
         assert_eq!(

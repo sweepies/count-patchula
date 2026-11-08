@@ -112,7 +112,7 @@ fn report() -> Report {
         dependency("tokio", json!([])),
     ]}]);
     serde_json::from_value(json!({
-        "schemaVersion": 5,
+        "schemaVersion": 6,
         "repositories": [app, repository("acme/secret"), repository("acme/broken"),
             repository("acme/late"), repository("acme/stranger")],
         "actions": {"schemaVersion": 1, "dryRun": false,
@@ -313,7 +313,7 @@ fn credentialed_lookups_leave_only_the_declared_dependency_in_public() {
                     "publishedAt": "2026-11-01T00:00:00Z", "eligibleAt": "2026-11-02T00:00:00Z"}]}})
     };
     let private = "https://acme.jfrog.io/artifactory/api/helm/charts|app";
-    let report: Report = serde_json::from_value(json!({"schemaVersion": 5, "repositories": [{
+    let report: Report = serde_json::from_value(json!({"schemaVersion": 6, "repositories": [{
         "repository": "acme/app", "status": "complete", "reason": null,
         "defaultBranch": "main", "commit": "c".repeat(40),
         "warnings": [format!("digest of {private}:2.0.0: not found"), "a config warning".to_owned()],
@@ -348,7 +348,7 @@ async fn only_a_private_repository_is_stored_without_what_credentials_found() {
                     "updateType": "minor", "group": null}],
                 "metadata": {"source": "helm", "kinds": [], "locations": [], "credentialed": true}}]}]})
     };
-    let report: Report = serde_json::from_value(json!({"schemaVersion": 5,
+    let report: Report = serde_json::from_value(json!({"schemaVersion": 6,
         "repositories": [repository("acme/app"), repository("acme/secret")]}))
     .unwrap();
     let cache = Cache::open(":memory:", CacheOptions::default())

@@ -1,6 +1,6 @@
 use patchula_config::{Config, PackageId};
 use patchula_manager::{Dependency, Edit, word};
-use patchula_report::{ActionStatus, BranchAction, FileAction, Repository, Update};
+use patchula_report::{BranchAction, BranchStatus, FileAction, Repository, Update};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -128,7 +128,7 @@ impl Plan {
         {
             return;
         }
-        self.action.status = ActionStatus::Skipped;
+        self.action.status = BranchStatus::Skipped;
         self.action.reason = Some(hold.text().to_owned());
         self.hold = Some(hold);
     }
@@ -141,7 +141,7 @@ impl Plan {
     pub fn lift(&mut self) {
         if self.hold.as_ref().is_some_and(Hold::overridable) {
             self.hold = None;
-            self.action.status = ActionStatus::Planned;
+            self.action.status = BranchStatus::Planned;
             self.action.reason = None;
         }
     }
@@ -498,9 +498,9 @@ fn build(
         branch,
         base_commit: repo.commit.clone().ok_or("missing extraction commit")?,
         status: if hold.is_some() {
-            ActionStatus::Skipped
+            BranchStatus::Skipped
         } else {
-            ActionStatus::Planned
+            BranchStatus::Planned
         },
         reason: hold.as_ref().map(|hold| hold.text().to_owned()),
         message,

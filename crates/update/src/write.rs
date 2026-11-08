@@ -3,7 +3,7 @@ use crate::{Plan, Snapshot, blob_sha};
 use futures_util::{FutureExt, StreamExt, stream};
 use patchula_config::Rebase;
 use patchula_github::Client;
-use patchula_report::ActionStatus;
+use patchula_report::BranchStatus;
 use serde_json::{Value, json};
 
 /// GitHub's Git Data GraphQL ref update, atomic across the branch refs it names.
@@ -12,29 +12,38 @@ use serde_json::{Value, json};
 pub const REF_UPDATE: &str =
     "mutation($input:UpdateRefsInput!){updateRefs(input:$input){clientMutationId}}";
 
-pub const DEFAULT_BRANCH_MOVED: &str =
-    "default branch moved since extraction; stale blob refusal, rerun";
-pub const DEFAULT_BRANCH_CHANGED: &str = "default branch changed since extraction; rerun";
-
-/// An expected extraction race: no writes were attempted against the stale base.
-pub fn needs_requeue(action: &patchula_report::BranchAction) -> bool {
-    action.status == ActionStatus::Skipped
-        && matches!(
-            action.reason.as_deref(),
-            Some(DEFAULT_BRANCH_MOVED | DEFAULT_BRANCH_CHANGED)
-        )
+/// Why a write did not happen.
+#[derive(Clone, Debug)]
+enum Refusal {
+    /// An expected extraction race: the default branch changed or moved, and
+    /// no write was attempted against the stale base. A rerun retries it.
+    Stale(&'static str),
+    Failed(String),
+}
+impl From<String> for Refusal {
+    fn from(error: String) -> Self {
+        Self::Failed(error)
+    }
+}
+impl From<&str> for Refusal {
+    fn from(error: &str) -> Self {
+        Self::Failed(error.into())
+    }
 }
 
-fn refuse(plan: &mut Plan, error: String) {
-    plan.action.status = if matches!(
-        error.as_str(),
-        DEFAULT_BRANCH_MOVED | DEFAULT_BRANCH_CHANGED
-    ) {
-        ActionStatus::Skipped
-    } else {
-        ActionStatus::Error
+/// Whether a branch's write should run again: its base went stale before
+/// anything was written.
+pub fn needs_requeue(action: &patchula_report::BranchAction) -> bool {
+    action.status == BranchStatus::Stale
+}
+
+fn refuse(plan: &mut Plan, refusal: Refusal) {
+    let (status, reason) = match refusal {
+        Refusal::Stale(reason) => (BranchStatus::Stale, reason.to_owned()),
+        Refusal::Failed(error) => (BranchStatus::Error, error),
     };
-    plan.action.reason = Some(error);
+    plan.action.status = status;
+    plan.action.reason = Some(reason);
 }
 
 fn field<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
@@ -64,14 +73,14 @@ pub async fn apply(
     rebase: Rebase,
     dry_run: bool,
 ) {
-    if plan.action.status != ActionStatus::Planned {
+    if plan.action.status != BranchStatus::Planned {
         return;
     }
     if dry_run {
         return;
     }
     if !plan.lockfiles_ready {
-        plan.action.status = ActionStatus::Error;
+        plan.action.status = BranchStatus::Error;
         plan.action.reason =
             Some("lockfiles must be generated successfully before publication".into());
         return;
@@ -84,8 +93,10 @@ pub async fn apply(
     )
     .await
     {
-        Ok(base) => apply_inner(client, plan, snapshot, rebase, &base, true).await,
-        Err(error) => Err(error),
+        Ok(base) => apply_inner(client, plan, snapshot, rebase, &base, true)
+            .await
+            .map_err(Refusal::Failed),
+        Err(refusal) => Err(refusal),
     };
     if let Err(error) = result {
         refuse(plan, error);
@@ -106,14 +117,18 @@ async fn prepare(
     repo: &str,
     base_commit: &str,
     default_branch: &str,
-) -> Result<Base, String> {
+) -> Result<Base, Refusal> {
     let metadata = fresh(client, &format!("repos/{repo}")).await?;
     if field(&metadata, "default_branch")? != default_branch {
-        return Err(DEFAULT_BRANCH_CHANGED.into());
+        return Err(Refusal::Stale(
+            "default branch changed since extraction; rerun",
+        ));
     }
     let head = fresh(client, &ref_path(repo, default_branch)).await?;
     if field(&head["object"], "sha")? != base_commit {
-        return Err(DEFAULT_BRANCH_MOVED.into());
+        return Err(Refusal::Stale(
+            "default branch moved since extraction; stale blob refusal, rerun",
+        ));
     }
     let base = fresh(client, &format!("repos/{repo}/git/commits/{base_commit}")).await?;
     let tree_sha = field(&base["tree"], "sha")?.to_owned();
@@ -151,15 +166,15 @@ pub async fn apply_all(
     }
     for plan in plans
         .iter_mut()
-        .filter(|p| p.action.status == ActionStatus::Planned && !p.lockfiles_ready)
+        .filter(|p| p.action.status == BranchStatus::Planned && !p.lockfiles_ready)
     {
-        plan.action.status = ActionStatus::Error;
+        plan.action.status = BranchStatus::Error;
         plan.action.reason =
             Some("lockfiles must be generated successfully before publication".into());
     }
     let Some(first) = plans
         .iter()
-        .find(|p| p.action.status == ActionStatus::Planned)
+        .find(|p| p.action.status == BranchStatus::Planned)
     else {
         return;
     };
@@ -172,7 +187,7 @@ pub async fn apply_all(
     .await;
     let pending: std::collections::BTreeSet<_> = plans
         .iter()
-        .filter(|p| p.action.status == ActionStatus::Planned)
+        .filter(|p| p.action.status == BranchStatus::Planned)
         .map(|p| p.action.branch.clone())
         .collect();
     // Build the borrowed futures before awaiting the stream. This also keeps
@@ -182,12 +197,14 @@ pub async fn apply_all(
         .map(|plan: &mut Plan| {
             let base = &base;
             async move {
-                if plan.action.status != ActionStatus::Planned {
+                if plan.action.status != BranchStatus::Planned {
                     return;
                 }
                 let result = match base {
-                    Ok(base) => apply_inner(client, plan, snapshot, rebase, base, false).await,
-                    Err(error) => Err(error.clone()),
+                    Ok(base) => apply_inner(client, plan, snapshot, rebase, base, false)
+                        .await
+                        .map_err(Refusal::Failed),
+                    Err(refusal) => Err(refusal.clone()),
                 };
                 if let Err(error) = result {
                     refuse(plan, error);
@@ -209,7 +226,7 @@ pub async fn apply_all(
                 pending.contains(&p.action.branch)
                     && matches!(
                         p.action.status,
-                        ActionStatus::Created | ActionStatus::Updated | ActionStatus::Rebased
+                        BranchStatus::Created | BranchStatus::Updated | BranchStatus::Rebased
                     )
             };
             let mut refs = Vec::new();
@@ -236,7 +253,7 @@ pub async fn apply_all(
             };
             if let Some(error) = error {
                 for p in chunk.iter_mut().filter(|p| eligible(p)) {
-                    p.action.status = ActionStatus::Error;
+                    p.action.status = BranchStatus::Error;
                     p.action.reason = Some(error.clone());
                     p.action.commit = None;
                 }
@@ -326,12 +343,12 @@ async fn apply_inner(
         let existing_tip = fresh(client, &format!("repos/{repo}/git/commits/{old}")).await?;
         let tip_message = existing_tip["message"].as_str().unwrap_or("");
         if trailer(tip_message, "Patchula-Base: ").is_none() {
-            plan.action.status = ActionStatus::Protected;
+            plan.action.status = BranchStatus::Protected;
             plan.action.reason = Some("unmarked branch history; left untouched".into());
             return Ok(());
         }
         let Some(recorded) = recorded_base(tip_message) else {
-            plan.action.status = ActionStatus::Protected;
+            plan.action.status = BranchStatus::Protected;
             plan.action.reason = Some("invalid recorded branch base; left untouched".into());
             return Ok(());
         };
@@ -358,7 +375,7 @@ async fn apply_inner(
             .ok_or("missing branch commit count")?;
         let owned = total == commits.len() as u64 && all_ours(commits, actor);
         if !owned {
-            plan.action.status = ActionStatus::Protected;
+            plan.action.status = BranchStatus::Protected;
             plan.action.reason = Some("branch contains human, unverified, unmarked or uninspectable commits; left untouched".into());
             return Ok(());
         }
@@ -422,7 +439,7 @@ async fn apply_inner(
                 }
             }
             if contents_match && (moved_base || leaves(existing_entries) == expected) {
-                plan.action.status = ActionStatus::Unchanged;
+                plan.action.status = BranchStatus::Unchanged;
                 plan.action.commit = Some(old.clone());
                 plan.action.verified = Some(true);
                 plan.tree = Some(existing_tree.into());
@@ -479,11 +496,11 @@ async fn apply_inner(
     }
     plan.action.commit = Some(sha.into());
     plan.action.status = if old.is_none() {
-        ActionStatus::Created
+        BranchStatus::Created
     } else if moved_base {
-        ActionStatus::Rebased
+        BranchStatus::Rebased
     } else {
-        ActionStatus::Updated
+        BranchStatus::Updated
     };
     if plan.action.lockfile_pending {
         plan.action.reason =

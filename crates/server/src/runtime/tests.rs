@@ -1085,7 +1085,7 @@ async fn stale_base_requeues_without_failure_and_real_errors_have_counts() {
         for (branch, status, reason) in [
             (
                 "stale",
-                "skipped",
+                "stale",
                 "default branch moved since extraction; stale blob refusal, rerun",
             ),
             ("error", "error", "synthetic write error"),
@@ -1096,7 +1096,7 @@ async fn stale_base_requeues_without_failure_and_real_errors_have_counts() {
                     "lockfilePending":false, "files":[]}));
             }
         }
-        let report: Report = serde_json::from_value(json!({"schemaVersion": 5,
+        let report: Report = serde_json::from_value(json!({"schemaVersion": 6,
             "repositories":[{"repository":"owner/repo", "status":if errors {"error"} else {"complete"}, "packageFiles":[]}],
             "actions":{"schemaVersion":1, "dryRun":false, "branches":branches,
                 "pullRequests":if errors {vec![json!({"repository":"owner/repo", "branch":"pr-error", "status":"error"})]} else {vec![]}}
@@ -1168,7 +1168,7 @@ async fn stale_base_requeues_without_failure_and_real_errors_have_counts() {
 
 #[tokio::test]
 async fn only_the_failing_repository_of_a_batch_is_retried() {
-    let report: Report = serde_json::from_value(json!({"schemaVersion": 5,
+    let report: Report = serde_json::from_value(json!({"schemaVersion": 6,
         "repositories":[
             {"repository":"Owner/Broken", "status":"error", "packageFiles":[]},
             {"repository":"owner/fine", "status":"complete", "packageFiles":[]}

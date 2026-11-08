@@ -560,7 +560,7 @@ async fn only_an_osv_match_marks_an_image_rebuild_as_a_security_fix() {
     assert!(policy.labels.contains(&"security".to_owned()));
     assert_eq!(policy.wait_hours, 0);
     let check = update.image.as_ref().unwrap();
-    assert_eq!(check.state, "checked");
+    assert_eq!(check.state, patchula_report::ImageState::Checked);
     assert_eq!(check.platforms, ["linux/arm64"]);
     assert_eq!(check.fixed[0].package, "openssl");
     assert_eq!(check.fixed[0].new.as_deref(), Some("2"));
@@ -580,7 +580,7 @@ async fn only_an_osv_match_marks_an_image_rebuild_as_a_security_fix() {
             .contains(&"security".to_owned())
     );
     let check = update.image.as_ref().unwrap();
-    assert_eq!(check.state, "checked");
+    assert_eq!(check.state, patchula_report::ImageState::Checked);
     assert_eq!(check.platforms, ["linux/amd64"]);
     assert!(claims.metadata.as_ref().unwrap().advisories.is_empty());
     replay.assert_finished().unwrap();

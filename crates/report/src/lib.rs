@@ -4,13 +4,13 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("invalid report JSON: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("unsupported report schemaVersion {0}; expected 5")]
+    #[error("unsupported report schemaVersion {0}; expected 6")]
     Version(u32),
     #[error("invalid report: {0}")]
     Invalid(String),
@@ -45,21 +45,46 @@ pub struct PullRequestAction {
     pub branch: String,
     pub number: Option<u64>,
     pub url: Option<String>,
-    pub status: ActionStatus,
+    pub status: PullRequestStatus,
     pub reason: Option<String>,
 }
 
+/// What happened to a branch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum ActionStatus {
+pub enum BranchStatus {
+    /// Would be written; dry runs only, or not yet reached.
     Planned,
-    Deleted,
-    Closed,
-    Merged,
     Created,
     Updated,
     Rebased,
     Unchanged,
+    /// Its pull request was merged.
+    Merged,
+    /// Obsolete and deleted.
+    Deleted,
+    /// Held; the reason says why.
+    Skipped,
+    /// The default branch changed or moved since extraction, so nothing
+    /// was written; a rerun retries it.
+    Stale,
+    /// Left alone because it holds work that is not the Count's.
+    Protected,
+    Error,
+}
+
+/// What happened to a pull request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PullRequestStatus {
+    /// Would be opened or updated; dry runs only.
+    Planned,
+    Created,
+    Updated,
+    Unchanged,
+    Closed,
+    Merged,
+    /// Held; the reason says why.
     Skipped,
     Protected,
     Error,
@@ -71,7 +96,7 @@ pub struct BranchAction {
     pub repository: String,
     pub branch: String,
     pub base_commit: String,
-    pub status: ActionStatus,
+    pub status: BranchStatus,
     pub reason: Option<String>,
     pub message: String,
     pub previous_commit: Option<String>,
@@ -442,13 +467,49 @@ pub struct Update {
     pub image: Option<ImageCheck>,
 }
 
+/// How far an image comparison got, from worst to best: a comparison takes
+/// the worst of its platforms.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ImageState {
+    #[default]
+    Unreadable,
+    PreviousUnavailable,
+    NoSbom,
+    SbomWithoutOs,
+    OsNotCovered,
+    PartialSources,
+    Checked,
+    NoOsPackages,
+}
+impl ImageState {
+    /// The state as the report writes it.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Unreadable => "unreadable",
+            Self::PreviousUnavailable => "previous-unavailable",
+            Self::NoSbom => "no-sbom",
+            Self::SbomWithoutOs => "sbom-without-os",
+            Self::OsNotCovered => "os-not-covered",
+            Self::PartialSources => "partial-sources",
+            Self::Checked => "checked",
+            Self::NoOsPackages => "no-os-packages",
+        }
+    }
+    /// Whether the state means the Count can't tell, so it is a warning.
+    pub fn warns(self) -> bool {
+        matches!(
+            self,
+            Self::PreviousUnavailable | Self::NoSbom | Self::SbomWithoutOs | Self::OsNotCovered
+        )
+    }
+}
+
 /// What the Count found comparing the OS packages in two image digests.
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImageCheck {
-    /// checked, partial-sources, no-os-packages, no-sbom, sbom-without-os,
-    /// previous-unavailable, os-not-covered or unreadable.
-    pub state: String,
+    pub state: ImageState,
     /// Platforms compared, where both digests have them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub platforms: Vec<String>,
@@ -563,17 +624,20 @@ impl Report {
                         "invalid or duplicate pull request action".into(),
                     ));
                 }
-                if actions.dry_run && (pr.number.is_some() || pr.status != ActionStatus::Planned) {
+                if actions.dry_run
+                    && (pr.number.is_some() || pr.status != PullRequestStatus::Planned)
+                {
                     return Err(Error::Invalid(
                         "dry run cannot contain applied pull requests".into(),
                     ));
                 }
                 if matches!(
                     pr.status,
-                    ActionStatus::Created
-                        | ActionStatus::Updated
-                        | ActionStatus::Unchanged
-                        | ActionStatus::Closed
+                    PullRequestStatus::Created
+                        | PullRequestStatus::Updated
+                        | PullRequestStatus::Unchanged
+                        | PullRequestStatus::Closed
+                        | PullRequestStatus::Merged
                 ) && pr.number.is_none()
                 {
                     return Err(Error::Invalid(
@@ -582,7 +646,9 @@ impl Report {
                 }
                 if matches!(
                     pr.status,
-                    ActionStatus::Protected | ActionStatus::Error | ActionStatus::Skipped
+                    PullRequestStatus::Protected
+                        | PullRequestStatus::Error
+                        | PullRequestStatus::Skipped
                 ) && pr.reason.as_ref().is_none_or(String::is_empty)
                 {
                     return Err(Error::Invalid(
@@ -606,7 +672,10 @@ impl Report {
                 }
                 if matches!(
                     action.status,
-                    ActionStatus::Skipped | ActionStatus::Protected | ActionStatus::Error
+                    BranchStatus::Skipped
+                        | BranchStatus::Stale
+                        | BranchStatus::Protected
+                        | BranchStatus::Error
                 ) && action.reason.as_ref().is_none_or(String::is_empty)
                 {
                     return Err(Error::Invalid(
@@ -617,10 +686,11 @@ impl Report {
                     && (action.commit.is_some()
                         || matches!(
                             action.status,
-                            ActionStatus::Created
-                                | ActionStatus::Updated
-                                | ActionStatus::Rebased
-                                | ActionStatus::Deleted
+                            BranchStatus::Created
+                                | BranchStatus::Updated
+                                | BranchStatus::Rebased
+                                | BranchStatus::Merged
+                                | BranchStatus::Deleted
                         ))
                 {
                     return Err(Error::Invalid(
@@ -629,7 +699,7 @@ impl Report {
                 }
                 if matches!(
                     action.status,
-                    ActionStatus::Created | ActionStatus::Updated | ActionStatus::Rebased
+                    BranchStatus::Created | BranchStatus::Updated | BranchStatus::Rebased
                 ) && action.commit.is_none()
                 {
                     return Err(Error::Invalid("applied action needs a commit".into()));
@@ -761,16 +831,31 @@ pub fn normalize_dependencies(dependencies: Vec<Dependency>) -> Vec<Dependency> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Version 6 gave branches and pull requests their own statuses: a status
+    /// only the other one has is not a report.
+    #[test]
+    fn branch_and_pull_request_statuses_are_their_own() {
+        let report = |branch: &str, pr: &str| {
+            format!(
+                r#"{{"schemaVersion":6,"repositories":[{{"repository":"o/r","status":"complete","reason":null,"packageFiles":[]}}],"actions":{{"schemaVersion":1,"dryRun":false,"branches":[{{"repository":"o/r","branch":"b","baseCommit":"c","status":"{branch}","reason":"why","message":"m","previousCommit":null,"commit":null,"verified":null,"lockfilePending":false,"files":[]}}],"pullRequests":[{{"repository":"o/r","branch":"b","number":1,"url":null,"status":"{pr}","reason":"why"}}]}}}}"#
+            )
+        };
+        assert!(Report::from_json(report("stale", "closed").as_bytes()).is_ok());
+        assert!(Report::from_json(report("closed", "closed").as_bytes()).is_err());
+        assert!(Report::from_json(report("stale", "stale").as_bytes()).is_err());
+        assert!(Report::from_json(report("deleted", "rebased").as_bytes()).is_err());
+    }
+
     #[test]
     fn reject_future_schema_before_interpreting_payload() {
         assert!(matches!(
-            Report::from_json(br#"{"schemaVersion":6,"future":true}"#),
-            Err(Error::Version(6))
+            Report::from_json(br#"{"schemaVersion":7,"future":true}"#),
+            Err(Error::Version(7))
         ));
         assert!(
-            Report::from_json(br#"{"schemaVersion":5,"repositories":[],"typo":true}"#).is_err()
+            Report::from_json(br#"{"schemaVersion":6,"repositories":[],"typo":true}"#).is_err()
         );
-        for old in [1, 2, 3, 4] {
+        for old in [1, 2, 3, 4, 5] {
             let report = format!(r#"{{"schemaVersion":{old},"repositories":[]}}"#);
             assert!(matches!(
                 Report::from_json(report.as_bytes()),
@@ -788,7 +873,7 @@ mod tests {
                 r#"{{"schemaVersion":{version},"repositories":[{{"repository":"demo/app","status":"complete","reason":null,"packageFiles":[{{"path":"package.json","dependencies":[{{"manager":"npm","name":"@acme/ui","package":"@acme/ui","registry":"https://npm.acme.dev","current":{{"value":"1.0.0","version":"1.0.0","digest":null}},"updates":[]}}]}}]}}]}}"#
             )
         };
-        let parsed = Report::from_json(report(5).as_bytes()).unwrap();
+        let parsed = Report::from_json(report(SCHEMA_VERSION).as_bytes()).unwrap();
         let dependency = &parsed.repositories[0].package_files[0].dependencies[0];
         assert_eq!(dependency.registry.as_deref(), Some("https://npm.acme.dev"));
         assert!(matches!(
@@ -799,7 +884,7 @@ mod tests {
 
     #[test]
     fn a_notice_reason_parses() {
-        let report = r#"{"schemaVersion":5,"repositories":[{"repository":"demo/app","status":"complete","reason":null,"packageFiles":[],"notices":[{"manager":"composer","path":"composer.json","name":"acme/lib","package":"acme/lib","current":"^1 | ^2","available":"3.0.0","reason":"cannot be rewritten"}]}]}"#;
+        let report = r#"{"schemaVersion":6,"repositories":[{"repository":"demo/app","status":"complete","reason":null,"packageFiles":[],"notices":[{"manager":"composer","path":"composer.json","name":"acme/lib","package":"acme/lib","current":"^1 | ^2","available":"3.0.0","reason":"cannot be rewritten"}]}]}"#;
         let parsed = Report::from_json(report.as_bytes()).unwrap();
         let notice = &parsed.repositories[0].notices[0];
         assert_eq!(notice.reason.as_deref(), Some("cannot be rewritten"));
@@ -809,7 +894,7 @@ mod tests {
     #[test]
     fn action_versions_and_dry_run_states_are_validated() {
         let mut value = serde_json::json!({
-            "schemaVersion": 5,
+            "schemaVersion": 6,
             "repositories": [{"repository":"demo/app","status":"complete","reason":null,"packageFiles":[]}],
             "actions": {"schemaVersion":1,"dryRun":true,"branches":[{
                 "repository":"demo/app","branch":"patchula/example","baseCommit":"base",

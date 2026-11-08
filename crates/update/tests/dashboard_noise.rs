@@ -1,6 +1,6 @@
 //! The dashboard built from the data of the Count's first live run on his own
 //! repository: grouped, readable, and never mentioning anyone.
-use patchula_report::{ActionStatus, BranchAction, Repository};
+use patchula_report::{BranchAction, BranchStatus, Repository};
 use patchula_update::{Change, Plan, Recheck, dashboard};
 use serde_json::{Value, json};
 
@@ -153,9 +153,9 @@ fn plan(
             branch: branch.into(),
             base_commit: "base".into(),
             status: if reason.is_some() {
-                ActionStatus::Error
+                BranchStatus::Error
             } else {
-                ActionStatus::Planned
+                BranchStatus::Planned
             },
             reason: reason.map(str::to_owned),
             message: message.into(),
