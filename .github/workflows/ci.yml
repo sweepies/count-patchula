@@ -83,15 +83,18 @@ jobs:
       # The release bot's PR is one commit on a green main that only bumps the
       # version. When release:bump recognises that commit and CI passed on its
       # parent on main, a version bump has nothing left for the Rust jobs to
-      # check, so they skip; anything else in the PR runs them all.
-      - if: github.event_name == 'pull_request' && github.head_ref == 'release-next'
+      # check, so they skip; anything else in the PR runs them all. The check
+      # runs the PR's own copy of the task, so it only runs for the bot's PR
+      # from this repository: a fork could name its branch release-next and
+      # make the task skip its tests.
+      - if: github.event_name == 'pull_request' && github.head_ref == 'release-next' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'sweepies-ops[bot]'
         uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           cache: false
         env:
           MISE_ENABLE_TOOLS: nu,gh
       - id: release
-        if: github.event_name == 'pull_request' && github.head_ref == 'release-next'
+        if: github.event_name == 'pull_request' && github.head_ref == 'release-next' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'sweepies-ops[bot]'
         env:
           MISE_ENABLE_TOOLS: nu,gh
           GH_TOKEN: ${{ github.token }}
