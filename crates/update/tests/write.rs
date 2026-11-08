@@ -3615,3 +3615,59 @@ async fn obsolete_prs_fetch_repository_metadata_once() {
         .count();
     assert_eq!(metas, 1, "{:?}", s.requests);
 }
+
+/// A branch whose tip records a base GitHub cannot compare is left alone as
+/// someone else's, rather than failing the run.
+#[tokio::test(start_paused = true)]
+async fn an_uncomparable_recorded_base_leaves_the_branch_protected() {
+    let (mut first, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    apply(
+        &github,
+        &mut first,
+        &snapshot,
+        "main",
+        Rebase::Behind,
+        false,
+    )
+    .await;
+    assert_eq!(first.action.status, ActionStatus::Created);
+    {
+        let mut s = server.0.lock().unwrap();
+        let sha = s.refs[&format!("refs/heads/{}", first.action.branch)].clone();
+        let commit = s.commits.get_mut(&sha).unwrap();
+        commit["message"] = json!(
+            commit["message"]
+                .as_str()
+                .unwrap()
+                .replace("Patchula-Base: base", "Patchula-Base: unknown")
+        );
+    }
+    let writes = server.0.lock().unwrap().writes.len();
+    let (mut second, _) = make_plan("22.1.0");
+    apply(
+        &github,
+        &mut second,
+        &snapshot,
+        "main",
+        Rebase::Behind,
+        false,
+    )
+    .await;
+    assert_eq!(
+        second.action.status,
+        ActionStatus::Protected,
+        "{:?}",
+        second.action
+    );
+    assert!(
+        second
+            .action
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("not a commit here")
+    );
+    assert_eq!(server.0.lock().unwrap().writes.len(), writes);
+}

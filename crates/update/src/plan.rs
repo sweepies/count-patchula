@@ -106,22 +106,25 @@ impl Hold {
         match self {
             Self::Window | Self::Concurrent | Self::PerHour => 0,
             Self::WaitingForBatch
-            | Self::Batched
             | Self::ClosedByOwner
             | Self::LockfilesCurrent
             | Self::MaintenanceWindow
             | Self::MaintenanceDone => 1,
             Self::Blocked(_) => 2,
+            // The batch PR carries it and its own PR closes as batched, whatever
+            // else would have held it.
+            Self::Batched => 3,
         }
     }
 }
 impl Plan {
-    /// Hold the plan, unless a stronger or earlier equal hold already does.
+    /// Hold the plan, unless a stronger hold already does; of equals, the
+    /// later wins, as in [`keep`].
     pub fn hold(&mut self, hold: Hold) {
         if self
             .hold
             .as_ref()
-            .is_some_and(|held| held.rank() >= hold.rank())
+            .is_some_and(|held| held.rank() > hold.rank())
         {
             return;
         }

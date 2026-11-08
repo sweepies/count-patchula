@@ -957,23 +957,29 @@ fn fix_status(
             .find(|p| p["state"] == "open" && p["head"]["ref"] == branch)
             .and_then(|p| p["number"].as_u64())
     };
-    // A batched update is fixed by the batch PR that carries it.
-    let batch = || {
+    // A batched update is fixed by the batch PR, if that PR carries it.
+    let batch = |key: &str| {
         plans
             .iter()
-            .find(|plan| plan.batch.is_some())
+            .find(|plan| {
+                plan.batch
+                    .as_ref()
+                    .is_some_and(|items| items.iter().any(|item| item.origin == key))
+            })
             .and_then(|plan| open(&plan.action.branch))
     };
     let number = matching.iter().find_map(|plan| {
         if plan.held(&crate::plan::Hold::Batched) {
-            batch()
+            batch(&crate::pull_requests::update_key(plan))
         } else {
             open(&plan.action.branch)
         }
     });
-    let closed = matching
-        .iter()
-        .any(|plan| plan.held(&crate::plan::Hold::ClosedByOwner));
+    // Closed only when no matching plan is still on its way to a PR.
+    let closed = !matching.is_empty()
+        && matching
+            .iter()
+            .all(|plan| plan.held(&crate::plan::Hold::ClosedByOwner));
     match (
         number,
         update.new_version.as_ref().or(update.new_value.as_ref()),
