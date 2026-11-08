@@ -52,9 +52,11 @@ writes the rest:
   like `~> 6.0`, where only the lockfile would change;
 - a declaration that changed between the lookup and the write.
 
-The new files are staged beside the old ones first, so a file that can't be
-written stops the write before anything changes. Only a failure while moving
-the staged files into place can leave some written, and the error names them.
+Every file is opened for writing before any is changed, so a file that is
+missing or read-only stops the write before anything changes. Files are
+written in place, keeping their owner, permissions and links. Only a failure
+while writing, such as a full disk, can leave some written, and the error names
+them.
 
 Lockfiles are not regenerated. When an update's current version came from a
 lockfile, the summary reminds you to refresh it with your package manager

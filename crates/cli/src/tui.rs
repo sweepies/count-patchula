@@ -14,7 +14,7 @@ use ratatui::{
     },
 };
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
 
@@ -808,10 +808,12 @@ impl Model {
             });
             return;
         }
+        if let Mode::Copier(_) = self.mode {
+            // Confirmed: the terminal loop runs it next, whatever is pressed.
+            return;
+        }
         self.message = None;
-        if self.mode != Mode::Browse {
-            // Help, or a copier run the terminal loop has not taken yet: any
-            // key returns to the tabs.
+        if self.mode == Mode::Help {
             self.mode = Mode::Browse;
             return;
         }
@@ -971,70 +973,75 @@ pub struct Plan {
     /// Positions of the updates that cannot be written in place, with why.
     pub skipped: Vec<(usize, String)>,
 }
-/// A write that stopped, and the files it had already replaced.
+/// A write that stopped: the files it had already written, and the one it
+/// was writing when it failed, which may be left partly written.
 #[derive(Debug)]
 pub struct WriteError {
     pub written: Vec<String>,
+    pub partial: Option<String>,
     pub error: String,
 }
 impl std::fmt::Display for WriteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.written.is_empty() {
-            write!(f, "{}; nothing was written", self.error)
-        } else {
-            write!(
-                f,
-                "{}; only {} {} written",
-                self.error,
-                self.written.join(", "),
-                if self.written.len() == 1 {
-                    "was"
-                } else {
-                    "were"
-                }
-            )
+        write!(f, "{}", self.error)?;
+        if let Some(partial) = &self.partial {
+            write!(f, "; {partial} may be left partly written")?;
+        }
+        match self.written.len() {
+            0 if self.partial.is_none() => write!(f, "; nothing was written"),
+            0 => Ok(()),
+            1 => write!(f, "; only {} was written", self.written[0]),
+            _ => write!(f, "; only {} were written", self.written.join(", ")),
         }
     }
 }
 impl Plan {
-    /// Write every file, or as close to all-or-none as a filesystem allows:
-    /// each new text is first staged beside its file, so a failure there
-    /// writes nothing, and only then renamed into place. A rename that fails
-    /// partway says which files were already replaced.
+    /// Write every file in place. Each is opened for writing before any is
+    /// changed, so a missing file, a permission, or two paths naming the same
+    /// file stops the write with nothing written. Writing in place keeps each
+    /// file's owner, mode, links and attributes, as an editor saving it would.
+    /// Only a failure while writing, such as a full disk, can stop partway,
+    /// and the error names what was written.
     pub fn write(&self, dir: &Path) -> Result<(), WriteError> {
-        let fail = |written: Vec<String>, error: String| WriteError { written, error };
-        let mut staged = Vec::new();
-        let unstage = |staged: &[(&String, PathBuf, PathBuf)]| {
-            for (_, temporary, _) in staged {
-                let _ = std::fs::remove_file(temporary);
-            }
-        };
+        use std::io::Write as _;
+        let mut opened = Vec::new();
+        let mut targets = BTreeSet::new();
         for (file, (_, content)) in &self.files {
-            let staging = (|| {
-                // A symlinked file is written through its link, as a plain
-                // write would.
+            let open = (|| {
+                // A symlinked file is written through its link.
                 let target = std::fs::canonicalize(dir.join(file))?;
-                let name = target.file_name().unwrap_or_default().to_string_lossy();
-                let temporary = target.with_file_name(format!(".{name}.patchula-write"));
-                std::fs::write(&temporary, content)?;
-                std::fs::set_permissions(&temporary, std::fs::metadata(&target)?.permissions())?;
-                Ok::<_, std::io::Error>((temporary, target))
+                if !targets.insert(target.clone()) {
+                    return Err(std::io::Error::other(
+                        "another file in this write is the same file",
+                    ));
+                }
+                std::fs::OpenOptions::new().write(true).open(&target)
             })();
-            match staging {
-                Ok((temporary, target)) => staged.push((file, temporary, target)),
+            match open {
+                Ok(handle) => opened.push((file, handle, content)),
                 Err(error) => {
-                    unstage(&staged);
-                    return Err(fail(Vec::new(), format!("{file}: {error}")));
+                    return Err(WriteError {
+                        written: Vec::new(),
+                        partial: None,
+                        error: format!("{file}: {error}"),
+                    });
                 }
             }
         }
         let mut written = Vec::new();
-        for (index, (file, temporary, target)) in staged.iter().enumerate() {
-            if let Err(error) = std::fs::rename(temporary, target) {
-                unstage(&staged[index..]);
-                return Err(fail(written, format!("{file}: {error}")));
+        for (file, mut handle, content) in opened {
+            let result = handle
+                .set_len(0)
+                .and_then(|()| handle.write_all(content.as_bytes()))
+                .and_then(|()| handle.flush());
+            if let Err(error) = result {
+                return Err(WriteError {
+                    written,
+                    partial: Some(file.clone()),
+                    error: format!("{file}: {error}"),
+                });
             }
-            written.push((*file).clone());
+            written.push(file.clone());
         }
         Ok(())
     }

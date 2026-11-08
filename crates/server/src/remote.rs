@@ -240,6 +240,10 @@ async fn start(
         ));
     }
     api.authorize(installation, &repositories, &login).await?;
+    // Held from before the job is recorded until its task is spawned, with no
+    // await between the two: a request dropped at an await point either
+    // recorded nothing or already has a task to finish the job.
+    let mut tasks = api.0.tasks.lock().await;
     let id = {
         let now = chrono::Utc::now().timestamp();
         let mut jobs = api.0.jobs.lock().await;
@@ -279,16 +283,16 @@ async fn start(
         repositories = repositories.len(), "remote run started");
     let job = api.clone();
     let job_id = id.clone();
-    let mut tasks = api.0.tasks.lock().await;
     while tasks.try_join_next().is_some() {}
     tasks.spawn(async move {
-        let result = std::panic::AssertUnwindSafe(job.0.runner.run(
-            installation,
-            repositories,
-            start.mode,
-            &login,
-            &settings,
-        ))
+        // The runner is called inside the caught future, so a panic while
+        // building its future is caught too.
+        let result = std::panic::AssertUnwindSafe(async {
+            job.0
+                .runner
+                .run(installation, repositories, start.mode, &login, &settings)
+                .await
+        })
         .catch_unwind()
         .await
         .unwrap_or(Err("the run stopped unexpectedly"));
