@@ -120,9 +120,12 @@ jobs:
       # Code scanning shows hk's findings on the diff.
       security-events: write
     env:
-      # Lint never needs these. Without Rust changes, Clippy and rustfmt do
-      # not run either, so their toolchain is left out too.
+      # Lint never needs these. When the Rust jobs skip, Clippy and rustfmt
+      # skip too, and their toolchain is left out. That includes the release
+      # bot's version bump, whose Cargo.toml and Cargo.lock changes would
+      # otherwise start Clippy without the toolchain.
       MISE_DISABLE_TOOLS: go,node,tak,usage,nu,http:deepsource${{ needs.changes.outputs.rust != 'true' && ',rust,mr-boxington,zig' || '' }}
+      HK_SKIP_STEPS: ${{ needs.changes.outputs.rust != 'true' && 'clippy,cargo-fmt' || '' }}
       # A pull request's merge commit has the base branch as its first parent.
       FROM_REF: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
     steps:
