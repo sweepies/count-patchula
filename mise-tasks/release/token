@@ -11,13 +11,17 @@ const ROLE = "count-patchula-release"
 def main [--revoke] {
   let file = $env.RUNNER_TEMP | path join openbao-token
   if $revoke {
-    # The App token would otherwise stay valid for its hour.
-    if "GH_TOKEN" in $env {
-      ^gh api --method DELETE /installation/token --silent
-    }
     if ($file | path exists) {
       bao "post" $"($env.BAO_ADDR)/v1/auth/token/revoke-self" {} (open --raw $file)
       rm $file
+    }
+    # The App token would otherwise stay valid for its hour. Best effort: one
+    # that already expired cannot be revoked and needs nothing more.
+    if "GH_TOKEN" in $env {
+      let revoked = ^gh api --method DELETE /installation/token --silent | complete
+      if $revoked.exit_code != 0 {
+        print $"the App token was not revoked: ($revoked.stderr | str trim)"
+      }
     }
     return
   }
