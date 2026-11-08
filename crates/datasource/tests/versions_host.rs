@@ -226,10 +226,10 @@ async fn cached_catalogs_do_not_freeze_mutable_lightweight_or_annotated_tag_targ
         Cached::new(cache.clone(), moving.clone(), 4).unwrap(),
         cache,
     );
-    let keys = vec![
+    let keys = std::collections::BTreeSet::from([
         ("example/tool".into(), "v1".into()),
         ("example/tool".into(), "v2".into()),
-    ];
+    ]);
     for (i, expected) in ["a".repeat(40), "b".repeat(40)].iter().enumerate() {
         let digests = source.fresh_tag_digests(&keys).await;
         assert!(

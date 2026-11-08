@@ -1300,7 +1300,6 @@ impl Engine {
                     key.1.source == Source::GithubTags && key.1.name == *package && e.reused
                 })
             });
-        let mutable_tags: Vec<_> = mutable_tags.into_iter().collect();
         let tags = async {
             let found = self.sources.fresh_tag_digests(&mutable_tags).await;
             self.progress.advance(mutable_tags.len());

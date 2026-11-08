@@ -4,6 +4,7 @@ use patchula_cache::ExtractionKey;
 use patchula_github::GraphqlPage;
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 
 const RELEASES: &str = "query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){releases(first:100,after:$cursor,orderBy:{field:CREATED_AT,direction:DESC}){nodes{tagName publishedAt isDraft isPrerelease}pageInfo{hasNextPage endCursor}}}}";
 const GIT_OBJECT_FIELDS: &str = "oid __typename ... on Tag{tagger{date} target{__typename ... on Commit{oid} ... on Tag{target{__typename ... on Commit{oid}}}}}";
@@ -360,8 +361,11 @@ impl Client {
     }
     /// Refresh only requested mutable tag targets while version lists are reused.
     /// One missing/inaccessible object falls back to its ordinary ref lookup.
-    /// Chunks and fallbacks run concurrently under the GitHub governor.
-    pub async fn fresh_tag_digests(&self, keys: &[(String, String)]) -> TagDigests {
+    /// Chunks and fallbacks run concurrently under the GitHub governor; a
+    /// set keeps each key in one chunk, so the result never depends on
+    /// which finishes first.
+    pub async fn fresh_tag_digests(&self, keys: &BTreeSet<(String, String)>) -> TagDigests {
+        let keys: Vec<_> = keys.iter().cloned().collect();
         // Owned chunks: a closure over borrowed slices is not general enough
         // for the server's boxed Send futures.
         let chunks = stream::iter(keys.chunks(64).map(<[_]>::to_vec))
@@ -373,10 +377,7 @@ impl Client {
     }
     /// One GraphQL query for up to 64 tags; a tag it does not resolve falls
     /// back to the REST lookup, those side by side.
-    async fn fresh_tag_chunk(
-        &self,
-        chunk: &[(String, String)],
-    ) -> Vec<((String, String), std::result::Result<String, Failure>)> {
+    async fn fresh_tag_chunk(&self, chunk: &[(String, String)]) -> TagDigests {
         let mut declarations = Vec::new();
         let mut fields = Vec::new();
         let mut variables = serde_json::Map::new();
@@ -412,7 +413,7 @@ impl Client {
             fields.join(" ")
         );
         let data = self.github.graphql(&query, Value::Object(variables)).await;
-        let mut resolved = Vec::new();
+        let mut resolved = TagDigests::new();
         let mut missing = Vec::new();
         for (i, key) in chunk.iter().enumerate() {
             let sha = data
@@ -426,7 +427,9 @@ impl Client {
                 .and_then(|commit| commit["oid"].as_str())
                 .filter(|sha| sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit()));
             match sha {
-                Some(sha) => resolved.push((key.clone(), Ok(sha.to_owned()))),
+                Some(sha) => {
+                    resolved.insert(key.clone(), Ok(sha.to_owned()));
+                }
                 None => missing.push(key.clone()),
             }
         }
