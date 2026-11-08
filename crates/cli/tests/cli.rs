@@ -71,6 +71,7 @@ fn help_pages_match_the_snapshot() {
         pages.push_str(&String::from_utf8(output.stdout).unwrap());
         pages.push('\n');
     }
+    let pages = without_version(&pages);
     if std::env::var_os("PATCHULA_UPDATE_SNAPSHOT").is_some() {
         std::fs::write(SNAPSHOT, &pages).unwrap();
     }
@@ -79,6 +80,27 @@ fn help_pages_match_the_snapshot() {
         expected == pages,
         "plain help changed; review it and run `mise run help:snapshot`"
     );
+}
+
+/// The root page opens with "patchula <version>" and the bat in a fixed column.
+/// The snapshot holds `{version}` there instead, padded to the same column, so
+/// a release does not change it.
+fn without_version(pages: &str) -> String {
+    const VERSION: &str = env!("CARGO_PKG_VERSION");
+    const PLACEHOLDER: &str = "{version}";
+    let prefix = format!("patchula {VERSION}");
+    pages
+        .split_inclusive('\n')
+        .map(|line| {
+            let Some(rest) = line.strip_prefix(&prefix) else {
+                return line.to_owned();
+            };
+            let logo = rest.trim_start_matches(' ');
+            let width = VERSION.len() + rest.len() - logo.len();
+            let pad = width.saturating_sub(PLACEHOLDER.len()).max(1);
+            format!("patchula {PLACEHOLDER}{}{logo}", " ".repeat(pad))
+        })
+        .collect()
 }
 
 #[test]

@@ -7,6 +7,7 @@ import starlightDocSearch from "@astrojs/starlight-docsearch";
 import starlightLinksValidator from "starlight-links-validator";
 import starlightLlmsTxt from "starlight-llms-txt";
 import markdownPages from "./src/plugins/markdown-pages.mjs";
+import { versionCheck, versionPlugin } from "./src/plugins/version.mjs";
 
 const site = "https://count-patchula.sweepy.dev";
 const repo = "https://github.com/sweepies/count-patchula";
@@ -171,10 +172,12 @@ export default defineConfig({
     processor: satteri({
       // `### Heading {#id}` keeps the stable anchors other tools link to.
       features: { headingAttributes: true },
+      mdastPlugins: [versionPlugin],
     }),
   },
   integrations: [
     agentLinks(),
+    versionCheck(),
     sitemap(),
     starlight({
       title: "Count Patchula",
