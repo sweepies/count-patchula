@@ -478,7 +478,7 @@ fn project_redirect(
         dir.starts_with(folder) || folder.starts_with(dir)
     };
     let leaf = |path: &str| path.rsplit('/').next().unwrap_or(path).to_owned();
-    let unreadable = crate::unreadable_text;
+    let unreadable = |text: &str| crate::Unread::of(text).is_some();
     let found = |test: &dyn Fn(&str, &str) -> bool, what: &str| {
         files
             .iter()
@@ -619,7 +619,7 @@ pub(crate) fn redirected(
         }
         related.push(*config);
         let text = files.get(*config)?;
-        let Some(redirected) = (!crate::unreadable_text(text.as_str()))
+        let Some(redirected) = (crate::Unread::of(text.as_str()).is_none())
             .then(|| redirected_backends(config, text))
             .flatten()
         else {

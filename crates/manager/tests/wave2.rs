@@ -82,6 +82,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     );
 }
 #[test]
+fn dockerfile_continuations_skip_empty_and_comment_lines() {
+    let files = Files::from([(
+        "Dockerfile".into(),
+        "FROM \\\n\n  # the base\n  nginx:1.26-bookworm\nRUN true\n".into(),
+    )]);
+    let deps = extract(&files);
+    assert_eq!(deps.len(), 1, "{deps:?}");
+    assert_eq!(
+        (deps[0].package.as_str(), deps[0].current.as_str()),
+        ("nginx", "1.26-bookworm")
+    );
+}
+#[test]
 fn dockerfile_args_multistage_platform_and_compose() {
     let files=Files::from([
         ("Dockerfile".into(),"ARG ALPINE_VERSION=3.20\nFROM --platform=$BUILDPLATFORM alpine:${ALPINE_VERSION} AS build\nFROM build AS copied\nFROM \\\n  nginx:1.26-bookworm\nFROM scratch\n".into()),
@@ -673,5 +686,41 @@ fn a_workspace_root_with_a_package_counts_it_without_any_member_manifest() {
             "[workspace]\nmembers = [\"crates/*\"]\n\n[workspace.dependencies]\nshared = \"0.21\"\n"
         ),
         None
+    );
+}
+
+/// `//` inside a template is a string, not a comment, so a declaration after
+/// it on the same line is read; a script whose string never ends is skipped
+/// with a warning rather than read in part.
+#[test]
+fn gradle_comments_are_found_by_the_one_lexer() {
+    let files = Files::from([(
+        "build.gradle".into(),
+        "def url = \"${ \"//\" }host\"; dependencies { implementation 'org.acme:lib:1.2.3' }\n// implementation 'org.acme:old:0.1.0'\n".into(),
+    )]);
+    let deps = extract(&files);
+    assert_eq!(
+        deps.iter().map(|d| d.package.as_str()).collect::<Vec<_>>(),
+        ["org.acme:lib"],
+        "{deps:?}"
+    );
+    let files = Files::from([(
+        "build.gradle".into(),
+        "dependencies { implementation 'org.acme:lib:1.2.3' }\ndef broken = \"never ends\n".into(),
+    )]);
+    let config = patchula_config::load(std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/kubernetes-infra.pkl"
+    )))
+    .unwrap();
+    let result = Scanner::new(&config).unwrap().extract(&files).unwrap();
+    assert!(result.dependencies.is_empty(), "{:?}", result.dependencies);
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.starts_with("build.gradle: skipped")),
+        "{:?}",
+        result.warnings
     );
 }

@@ -598,7 +598,7 @@ impl Feeds {
             .iter()
             .find(|(path, text)| {
                 msbuild_file(path)
-                    && (crate::unreadable_text(text.as_str()) || {
+                    && (crate::Unread::of(text.as_str()).is_some() || {
                         let text = decoded(text).to_ascii_lowercase();
                         RESTORE_OVERRIDES
                             .iter()
@@ -816,7 +816,7 @@ mod tests {
         }
         let files = Files::from([(
             "build/publish.pubxml".to_owned(),
-            crate::UNREADABLE_SETTINGS.to_owned(),
+            crate::Unread::Failed.text().to_owned(),
         )]);
         assert!(Feeds::new(&files).overridden.is_some());
     }

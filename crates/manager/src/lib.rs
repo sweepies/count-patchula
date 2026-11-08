@@ -13,7 +13,7 @@ mod cargo;
 mod composer;
 mod credentials;
 pub use credentials::{
-    committed_credentials, credential_check, credential_reason, credential_scope,
+    CredentialCheck, committed_credentials, credential_check, credential_reason, credential_scope,
 };
 mod custom;
 mod devcontainer;
@@ -1022,23 +1022,50 @@ pub fn linked_settings(path: &str) -> Option<String> {
     }
 }
 
-/// What a settings file the Count could not read becomes: text no TOML or
-/// YAML mapping parser accepts, so it is unreadable rather than absent.
-pub const UNREADABLE_SETTINGS: &str = "= the Count could not read this file\n";
-
-/// What a file the include chain reached but the read rounds ran out on
-/// becomes: unreadable the same way, so its packages' lookups fail.
-pub const UNREADABLE_DEEP: &str = "= the Count did not read this file: include chain too deep\n";
+/// Why a file in [`Files`] holds no text the Count read. Such a file stands in
+/// as text no TOML or YAML mapping parser accepts, so it is unreadable rather
+/// than absent. Every check for one goes through [`Unread::of`], so no reader
+/// can recognise one reason and miss another.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unread {
+    /// The read failed.
+    Failed,
+    /// The include chain reached it after the read rounds ran out.
+    TooDeep,
+}
+impl Unread {
+    const FAILED: &str = "= the Count could not read this file\n";
+    const TOO_DEEP: &str = "= the Count did not read this file: include chain too deep\n";
+    /// The text that stands in for the file.
+    pub fn text(self) -> &'static str {
+        match self {
+            Self::Failed => Self::FAILED,
+            Self::TooDeep => Self::TOO_DEEP,
+        }
+    }
+    /// Why `text` is a stand-in, or `None` for text the Count read.
+    pub fn of(text: &str) -> Option<Self> {
+        match text {
+            Self::FAILED => Some(Self::Failed),
+            Self::TOO_DEEP => Some(Self::TooDeep),
+            _ => None,
+        }
+    }
+    /// Why lookups that depend on the file at `path` fail.
+    pub(crate) fn reason(self, path: &str) -> String {
+        match self {
+            Self::Failed => format!("{path}, which the Count cannot read"),
+            Self::TooDeep => format!(
+                "include chain deeper than {MORE_ROUNDS} rounds starting at {path}; the remaining files were not read"
+            ),
+        }
+    }
+}
 
 /// How many times the files read so far may name more to read: Gradle
 /// builds include builds and apply scripts, and Maven POMs name modules, a
 /// few levels deep at most.
 pub const MORE_ROUNDS: usize = 16;
-
-/// Whether `text` is the stand-in for a file the Count did not read.
-pub(crate) fn unreadable_text(text: &str) -> bool {
-    matches!(text, UNREADABLE_SETTINGS | UNREADABLE_DEEP)
-}
 
 /// The host of an http or https `url`, lowercased and without a default
 /// port, whatever the case of its scheme.

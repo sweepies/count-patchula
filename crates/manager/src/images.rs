@@ -59,7 +59,9 @@ pub(super) fn dockerfile(path: &str, text: &str) -> Result<Vec<Dependency>, Stri
         }
         offset += line.len();
         let code = line.trim();
-        if code.starts_with('#') {
+        // Docker drops comment lines, and empty lines inside a continuation,
+        // before joining an instruction.
+        if code.starts_with('#') || (code.is_empty() && !instruction.is_empty()) {
             continue;
         }
         instruction.push_str(code.trim_end_matches('\\'));

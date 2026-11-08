@@ -6451,7 +6451,8 @@ fn every_materialized_file_has_a_credential_decision() {
     for name in &names {
         assert!(materialized(name), "{name} should be materialized");
         assert!(
-            patchula_manager::credential_check(name).is_some(),
+            patchula_manager::credential_check(name)
+                != patchula_manager::CredentialCheck::Undecided,
             "{name} has no credential decision"
         );
     }

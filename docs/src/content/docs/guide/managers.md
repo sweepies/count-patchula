@@ -335,7 +335,10 @@ such as `versions += [jackson: "2.15.0"]`, and `gradle.properties`.
 Gradle skips anything under `src/` except `src/main/`, since test resources
 hold fixtures; a name defined twice; computed values; the project's own
 `version`; and packages reached through several variables, which are
-deliberate parallel versions such as Kafka's compatibility pins. The wrapper's
+deliberate parallel versions such as Kafka's compatibility pins. A script with a
+comment, string or template that never ends is skipped with a warning, since
+Gradle could not compile it either; its comments are found by the same lexer
+that reads its repositories. The wrapper's
 `distributionUrl` upgrades, and a recorded `distributionSha256Sum` is replaced
 with Gradle's published checksum.
 

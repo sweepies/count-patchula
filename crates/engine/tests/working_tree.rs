@@ -163,7 +163,7 @@ fn a_symlinked_settings_file_is_unreadable_not_absent() {
     let (_, files, _) = patchula_engine::read_tree(&root, &scanner).unwrap();
     assert_eq!(
         files.get("uv.toml").map(String::as_str),
-        Some(patchula_manager::UNREADABLE_SETTINGS)
+        Some(patchula_manager::Unread::Failed.text())
     );
     let extraction = scanner.extract(&files).unwrap();
     let registry = extraction
@@ -179,11 +179,11 @@ fn a_symlinked_settings_file_is_unreadable_not_absent() {
     );
     assert_eq!(
         files.get(".bundle/config").map(String::as_str),
-        Some(patchula_manager::UNREADABLE_SETTINGS)
+        Some(patchula_manager::Unread::Failed.text())
     );
     assert_eq!(
         files.get("app/.bundle/config").map(String::as_str),
-        Some(patchula_manager::UNREADABLE_SETTINGS)
+        Some(patchula_manager::Unread::Failed.text())
     );
     let rake = extraction
         .dependencies

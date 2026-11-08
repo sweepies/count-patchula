@@ -1002,8 +1002,8 @@ pub(crate) fn verdict(path: &str, text: &str, files: &Files) -> Option<bool> {
         _ if leaf.ends_with(".sln") => lines_public(text, &crate::nuget::NUGET_ORG),
         _ => return None,
     };
-    // A file that could not be read can name anything.
-    Some(flag && text != crate::UNREADABLE_SETTINGS)
+    // A file that could not be read, for whatever reason, can name anything.
+    Some(flag && crate::Unread::of(text).is_none())
 }
 
 #[cfg(test)]
@@ -1030,9 +1030,21 @@ mod tests {
             "registry=https://npm.acme.dev/\n",
             "registry=${NPM_REGISTRY}\n",
             // A file the Count could not read.
-            crate::UNREADABLE_SETTINGS,
+            crate::Unread::Failed.text(),
+            crate::Unread::TooDeep.text(),
         ] {
             assert_eq!(verdict(".npmrc", text, &files), Some(false), "{text:?}");
+        }
+        // Line-based files read a stand-in as harmless lines; whatever the
+        // reason, an unread file is never public.
+        for unread in [crate::Unread::Failed, crate::Unread::TooDeep] {
+            for path in ["yarn.lock", "Gemfile.lock", "app.sln", ".npmrc"] {
+                assert_eq!(
+                    verdict(path, unread.text(), &files),
+                    Some(false),
+                    "{path} {unread:?}"
+                );
+            }
         }
         // A lockfile `resolved` URL on a non-public host is not public.
         let lock = "{\"packages\":{\"\":{\"resolved\":\"https://npm.acme.dev/x.tgz\"}}}";

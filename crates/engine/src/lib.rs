@@ -2600,12 +2600,12 @@ impl Engine {
                         blobs.insert(path, blob);
                     }
                     None => {
-                        files.insert(path, patchula_manager::UNREADABLE_SETTINGS.to_owned());
+                        files.insert(path, patchula_manager::Unread::Failed.text().to_owned());
                     }
                 }
             }
             for settings in linked {
-                files.insert(settings, patchula_manager::UNREADABLE_SETTINGS.to_owned());
+                files.insert(settings, patchula_manager::Unread::Failed.text().to_owned());
             }
             // What the files read so far name, such as the sources of a
             // Gradle build the settings include, until they name nothing new.
@@ -2629,7 +2629,7 @@ impl Engine {
                             blobs.insert(path, blob);
                         }
                         None => {
-                            files.insert(path, patchula_manager::UNREADABLE_SETTINGS.to_owned());
+                            files.insert(path, patchula_manager::Unread::Failed.text().to_owned());
                         }
                     }
                 }
@@ -2640,7 +2640,10 @@ impl Engine {
             let deep: Vec<String> =
                 scanner.more(&files, rest.iter().map(|entry| entry.path.as_str()));
             for path in &deep {
-                files.insert(path.clone(), patchula_manager::UNREADABLE_DEEP.to_owned());
+                files.insert(
+                    path.clone(),
+                    patchula_manager::Unread::TooDeep.text().to_owned(),
+                );
             }
             // A repository that commits its own registry credentials is
             // refused: its lockfile tools would fetch what they buy into
@@ -2912,7 +2915,7 @@ pub fn read_tree(
                 // whose settings the Count then cannot read.
                 && std::fs::metadata(dir.join(&relative)).is_ok()
             {
-                files.insert(settings, patchula_manager::UNREADABLE_SETTINGS.to_owned());
+                files.insert(settings, patchula_manager::Unread::Failed.text().to_owned());
             }
             continue;
         }
@@ -2926,7 +2929,7 @@ pub fn read_tree(
                 _ if patchula_manager::registry_settings(&relative) => {
                     files.insert(
                         relative.clone(),
-                        patchula_manager::UNREADABLE_SETTINGS.to_owned(),
+                        patchula_manager::Unread::Failed.text().to_owned(),
                     );
                 }
                 // As on GitHub, any other selected file that is not UTF-8
@@ -2967,7 +2970,7 @@ pub fn read_tree(
             };
             files.insert(
                 relative,
-                content.unwrap_or_else(|| patchula_manager::UNREADABLE_SETTINGS.to_owned()),
+                content.unwrap_or_else(|| patchula_manager::Unread::Failed.text().to_owned()),
             );
         }
     }
@@ -2975,7 +2978,10 @@ pub fn read_tree(
     // same way, so its lookups fail saying why.
     let deep = scanner.more(&files, paths.iter().chain(&links).map(String::as_str));
     for path in &deep {
-        files.insert(path.clone(), patchula_manager::UNREADABLE_DEEP.to_owned());
+        files.insert(
+            path.clone(),
+            patchula_manager::Unread::TooDeep.text().to_owned(),
+        );
     }
     Ok((paths, files, deep))
 }

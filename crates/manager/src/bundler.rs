@@ -781,7 +781,7 @@ mod tests {
             // YAML would read one setting here; Bundler reads two.
             "---\nBUNDLE_PATH: |\n BUNDLE_MIRROR__ALL: https://gems.acme.dev\n",
             "../shared/bundle-config",
-            crate::UNREADABLE_SETTINGS,
+            crate::Unread::Failed.text(),
         ] {
             assert!(read(text).is_some(), "{text}");
         }

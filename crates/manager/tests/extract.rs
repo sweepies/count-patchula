@@ -2934,7 +2934,7 @@ fn gems_come_from_their_gemfile_when_it_is_plain_else_their_lockfile() {
         ("symlink/Gemfile".into(), gemfile("gem \"rake\", \"~> 13.0\"\n")),
         (
             "symlink/.bundle/config".into(),
-            patchula_manager::UNREADABLE_SETTINGS.into(),
+            patchula_manager::Unread::Failed.text().into(),
         ),
         // From git, by option or as the lockfile records.
         (
@@ -3445,7 +3445,7 @@ fn maven_lookups_fail_when_any_build_file_names_another_repository() {
         ],
         vec![
             ("pom.xml", plain.as_str()),
-            ("lib/pom.xml", patchula_manager::UNREADABLE_SETTINGS),
+            ("lib/pom.xml", patchula_manager::Unread::Failed.text()),
         ],
         vec![
             ("pom.xml", relative_parent.as_str()),
@@ -3594,7 +3594,7 @@ fn gradle_lookups_fail_when_build_logic_could_add_another_repository() {
         ],
         vec![
             ("build.gradle.kts", plain.as_str()),
-            ("lib/build.gradle", patchula_manager::UNREADABLE_SETTINGS),
+            ("lib/build.gradle", patchula_manager::Unread::Failed.text()),
         ],
         vec![
             ("build.gradle.kts", plain.as_str()),
@@ -3713,7 +3713,10 @@ fn crates_io_lookups_fail_where_cargo_configuration_replaces_crates_io() {
         ],
         vec![
             ("app/Cargo.toml", manifest),
-            (".cargo/config.toml", patchula_manager::UNREADABLE_SETTINGS),
+            (
+                ".cargo/config.toml",
+                patchula_manager::Unread::Failed.text(),
+            ),
         ],
     ] {
         let found = lookup(&files);
@@ -3755,7 +3758,7 @@ fn crates_patched_or_included_from_elsewhere_fail_their_lookups() {
     ];
     assert!(fails(lookup(&root, "serde")));
     let unreadable = [
-        ("Cargo.toml", patchula_manager::UNREADABLE_SETTINGS),
+        ("Cargo.toml", patchula_manager::Unread::Failed.text()),
         ("app/Cargo.toml", git.as_str()),
     ];
     assert!(fails(lookup(&unreadable, "serde")));
@@ -3878,7 +3881,7 @@ fn go_modules_a_replace_directive_names_are_skipped() {
             ("app/go.mod", plain.clone()),
             (
                 "go.work".to_owned().leak(),
-                patchula_manager::UNREADABLE_SETTINGS.to_owned(),
+                patchula_manager::Unread::Failed.text().to_owned(),
             ),
         ],
     ] {
@@ -4048,7 +4051,7 @@ fn a_deeper_include_chain_fails_saying_the_rounds_ran_out() {
             "build.gradle",
             "plugins { id 'java' }\nrepositories { mavenCentral() }\ndependencies { implementation \"org.springframework:spring-core:6.1.0\" }\n",
         ),
-        ("lib/build.gradle", patchula_manager::UNREADABLE_DEEP),
+        ("lib/build.gradle", patchula_manager::Unread::TooDeep.text()),
     ];
     let reason = lookup(&files).unwrap();
     assert!(

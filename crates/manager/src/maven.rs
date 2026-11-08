@@ -390,19 +390,8 @@ pub(crate) fn private_repositories(files: &Files) -> Option<crate::origins::Repo
         .iter()
         .filter(|(path, _)| repository_file(path) || poms.contains(path.as_str()))
     {
-        if matches!(
-            text.as_str(),
-            crate::UNREADABLE_SETTINGS | crate::UNREADABLE_DEEP
-        ) {
-            let reason = if text.as_str() == crate::UNREADABLE_DEEP {
-                format!(
-                    "include chain deeper than {} rounds starting at {path}; the remaining files were not read",
-                    crate::MORE_ROUNDS
-                )
-            } else {
-                format!("{path}, which the Count cannot read")
-            };
-            out.close(reason);
+        if let Some(unread) = crate::Unread::of(text) {
+            out.close(unread.reason(path));
             return Some(out);
         }
         if path.ends_with("maven.config") {
