@@ -1292,23 +1292,23 @@ impl Engine {
         let phase = PhaseTrace::new("digest");
         self.progress
             .stage(Stage::Digests, digest_keys.len() + image_keys.len());
-        let mutable_tags: Vec<_> = digest_keys
-            .iter()
-            .filter(|(package, _)| {
+        // Mutable tags, other refs and image digests are independent, so they
+        // resolve side by side rather than in three waves.
+        let (mutable_tags, digest_keys): (BTreeSet<_>, BTreeSet<_>) =
+            digest_keys.into_iter().partition(|(package, _)| {
                 catalog_evidence.iter().any(|(key, e)| {
                     key.1.source == Source::GithubTags && key.1.name == *package && e.reused
                 })
-            })
-            .cloned()
-            .collect();
-        digests.extend(self.sources.fresh_tag_digests(&mutable_tags).await);
-        let pending = digest_keys.len();
-        digest_keys.retain(|key| !digests.contains_key(key));
-        self.progress.advance(pending - digest_keys.len());
-        digests.extend(self.digests(digest_keys, true, sent).await);
+            });
+        let tags = async {
+            let found = self.sources.fresh_tag_digests(&mutable_tags).await;
+            self.progress.advance(mutable_tags.len());
+            found
+        };
+        let refs = self.digests(digest_keys, true, sent);
         let retry_keys = &retry_keys;
         let fresh_sources = &fresh_sources;
-        let image_digests: BTreeMap<_, _> = stream::iter(image_keys)
+        let images = stream::iter(image_keys)
             .map(|(package, tag)| async move {
                 let sources = if retry_keys.iter().any(|(_, id)| {
                     matches!(id.source, Source::Docker | Source::Oci) && id.name == package
@@ -1329,8 +1329,10 @@ impl Engine {
                 ((package, tag), result)
             })
             .buffer_unordered(100)
-            .collect()
-            .await;
+            .collect::<BTreeMap<_, _>>();
+        let (tags, refs, image_digests) = futures_util::future::join3(tags, refs, images).await;
+        digests.extend(tags);
+        digests.extend(refs);
         let digest_time = micros(started);
         drop(phase);
         let started = Instant::now();
