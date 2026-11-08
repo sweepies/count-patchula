@@ -748,10 +748,7 @@ fn gradle_lexing_is_bounded_and_reads_keyword_slashies() {
             .iter()
             .any(|w| w.starts_with("build.gradle: skipped"))
     );
-    for line in [
-        "def f = { return /a'b/ }",
-        "println /it's a regex/",
-    ] {
+    for line in ["def f = { return /a'b/ }", "println /it's a regex/"] {
         let found = read(format!(
             "{line}\ndependencies {{ implementation 'org.acme:lib:1.2.3' }}\n"
         ));
