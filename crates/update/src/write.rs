@@ -335,11 +335,21 @@ async fn apply_inner(
             plan.action.reason = Some("invalid recorded branch base; left untouched".into());
             return Ok(());
         };
-        let compare = fresh(
-            client,
-            &format!("repos/{repo}/compare/{}...{old}?per_page=100", recorded),
-        )
-        .await?;
+        let compare = match client
+            .get(&format!(
+                "repos/{repo}/compare/{recorded}...{old}?per_page=100"
+            ))
+            .await
+        {
+            Err(patchula_github::Error::Status(404 | 422)) => {
+                plan.action.status = ActionStatus::Protected;
+                plan.action.reason =
+                    Some("recorded branch base is not a commit here; left untouched".into());
+                return Ok(());
+            }
+            result => serde_json::from_slice::<Value>(&result.map_err(|e| e.to_string())?.body)
+                .map_err(|e| e.to_string())?,
+        };
         let commits = compare["commits"]
             .as_array()
             .ok_or("missing branch commit history")?;

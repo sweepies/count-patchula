@@ -45,12 +45,17 @@ pub async fn owned(client: &Client, repo: &str, head: &str, actor: &str) -> Resu
     let Some(base) = recorded_base(message) else {
         return Ok(false);
     };
-    let history = client
+    let history = match client
         .get_fresh(&format!(
             "repos/{repo}/compare/{base}...{head}?per_page=100"
         ))
         .await
-        .map_err(|e| e.to_string())?;
+    {
+        // A recorded base GitHub cannot compare is no evidence of ownership:
+        // the branch is not the Count's, and the run carries on.
+        Err(patchula_github::Error::Status(404 | 422)) => return Ok(false),
+        result => result.map_err(|e| e.to_string())?,
+    };
     let Some(commits) = history["commits"].as_array() else {
         return Ok(false);
     };

@@ -90,11 +90,15 @@ impl Pinned {
     pub(super) fn is_empty(&self) -> bool {
         self.originals.is_empty()
     }
-    /// Put the manifests back as they were.
+    /// Put the manifests back as they were. Each is forgotten only once it is
+    /// written back, so a failure leaves the rest for `Drop` to retry.
     pub(super) fn restore(&mut self) -> Result<(), String> {
-        std::mem::take(&mut self.originals)
-            .iter()
-            .try_for_each(|(path, content)| write(&self.root, path, content))
+        while let Some((path, content)) = self.originals.first_key_value() {
+            write(&self.root, path, content)?;
+            let path = path.clone();
+            self.originals.remove(&path);
+        }
+        Ok(())
     }
 }
 impl Drop for Pinned {

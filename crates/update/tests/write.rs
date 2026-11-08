@@ -394,6 +394,8 @@ impl Transport for Fake {
                 200,
                 json!({"tree":state.trees[sha],"truncated":state.truncated}),
             )
+        } else if path.starts_with("/repos/demo/app/compare/unknown...") {
+            response(404, json!({"message":"Not Found"}))
         } else if let Some(spec) = path.strip_prefix("/repos/demo/app/compare/") {
             let sha = spec.split("...").nth(1).unwrap();
             let history: Vec<_> = state
@@ -3217,6 +3219,33 @@ async fn cleanup_deletes_nothing_once_the_default_branch_moves() {
         .unwrap();
     assert!(actions.is_empty());
     assert_eq!(ref_update_names(&server).len(), before);
+    // A recorded base GitHub cannot compare marks a branch that is not the
+    // Count's; cleanup leaves it and carries on rather than failing the run.
+    let retag = |from: &str, to: &str| {
+        let mut s = server.0.lock().unwrap();
+        let sha = s.refs[&format!("refs/heads/{}", plans[0].action.branch)].clone();
+        let commit = s.commits.get_mut(&sha).unwrap();
+        commit["message"] = json!(commit["message"].as_str().unwrap().replace(from, to));
+    };
+    retag(
+        "Patchula-Base: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "Patchula-Base: unknown",
+    );
+    server
+        .0
+        .lock()
+        .unwrap()
+        .refs
+        .insert("refs/heads/main".into(), "base".into());
+    let actions = patchula_update::cleanup(&github, "demo/app", "base", "main", &[], false)
+        .await
+        .unwrap();
+    assert!(actions.is_empty());
+    assert_eq!(ref_update_names(&server).len(), before);
+    retag(
+        "Patchula-Base: unknown",
+        "Patchula-Base: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
     // The same branch is deleted once the plans match the default branch again.
     server
         .0

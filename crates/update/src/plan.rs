@@ -337,9 +337,10 @@ fn lock_only(dep: &Dependency, update: &Update) -> bool {
         || (update.new_value.is_none() && update.new_version.is_some())
 }
 
-/// Keep the stronger of `hold` and what `slot` holds, or the first of equals.
+/// Keep the stronger of `hold` and what `slot` holds, or the later of equals,
+/// so a plan with several problems of one kind names the last, as it did.
 fn keep(slot: &mut Option<Hold>, hold: Hold) {
-    if slot.as_ref().is_none_or(|held| held.rank() < hold.rank()) {
+    if slot.as_ref().is_none_or(|held| held.rank() <= hold.rank()) {
         *slot = Some(hold);
     }
 }
