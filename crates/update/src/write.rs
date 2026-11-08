@@ -359,7 +359,7 @@ async fn apply_inner(
             .await
         {
             Err(patchula_github::Error::Status(404 | 422)) => {
-                plan.action.status = ActionStatus::Protected;
+                plan.action.status = BranchStatus::Protected;
                 plan.action.reason =
                     Some("recorded branch base is not a commit here; left untouched".into());
                 return Ok(());
