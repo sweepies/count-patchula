@@ -724,3 +724,60 @@ fn gradle_comments_are_found_by_the_one_lexer() {
         result.warnings
     );
 }
+
+/// Build logic nested past any real script does not lex rather than
+/// exhausting the stack; a slashy regex after a keyword is a string; and an
+/// unclosed brace does not lex.
+#[test]
+fn gradle_lexing_is_bounded_and_reads_keyword_slashies() {
+    let config = patchula_config::load(std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/kubernetes-infra.pkl"
+    )))
+    .unwrap();
+    let scanner = Scanner::new(&config).unwrap();
+    let read = |text: String| {
+        scanner
+            .extract(&Files::from([("build.gradle".into(), text)]))
+            .unwrap()
+    };
+    let deep = read(format!("def s = {}\n", "\"${".repeat(30_000)));
+    assert!(deep.dependencies.is_empty());
+    assert!(
+        deep.warnings
+            .iter()
+            .any(|w| w.starts_with("build.gradle: skipped"))
+    );
+    for line in [
+        "def f = { return /a'b/ }",
+        "println /it's a regex/",
+    ] {
+        let found = read(format!(
+            "{line}\ndependencies {{ implementation 'org.acme:lib:1.2.3' }}\n"
+        ));
+        assert_eq!(found.dependencies.len(), 1, "{line}: {:?}", found.warnings);
+    }
+    let open = read("dependencies { implementation 'org.acme:lib:1.2.3'\n".into());
+    assert!(open.dependencies.is_empty());
+}
+
+/// Docker joins a continued line without a space, strips a byte-order mark,
+/// honours the escape directive and does not read heredoc bodies.
+#[test]
+fn dockerfiles_are_read_the_way_docker_reads_them() {
+    for text in [
+        "FROM ng\\\ninx:1.26\n",
+        "\u{feff}FROM nginx:1.26\n",
+        "# escape=`\nFROM `\n  nginx:1.26\n",
+        "FROM nginx:1.26\nRUN <<EOT\nFROM alpine:3.20\nEOT\nCOPY <<-EOF /x\n\tFROM busybox:1\n\tEOF\n",
+    ] {
+        let deps = extract(&Files::from([("Dockerfile".into(), text.into())]));
+        assert_eq!(
+            deps.iter()
+                .map(|d| (d.package.as_str(), d.current.as_str()))
+                .collect::<Vec<_>>(),
+            [("nginx", "1.26")],
+            "{text:?}"
+        );
+    }
+}

@@ -439,11 +439,13 @@ pub(super) fn extracted_registry(value: &str) -> Option<String> {
 pub(super) struct Npmrc {
     default: Option<Named>,
     scopes: BTreeMap<String, Named>,
+    /// The file was not read, so it may name any registry for any scope.
+    unread: bool,
 }
 
 impl Npmrc {
     fn names_any(&self) -> bool {
-        self.default.is_some() || !self.scopes.is_empty()
+        self.unread || self.default.is_some() || !self.scopes.is_empty()
     }
     /// Every registry it names, public or not.
     fn values(&self) -> impl Iterator<Item = &Named> {
@@ -553,11 +555,19 @@ pub(super) fn npmrcs(files: &crate::Files) -> BTreeMap<&str, Npmrc> {
                 None if path == leaf => "",
                 _ => continue,
             };
-            let read = parse(text);
+            let read = if crate::Unread::of(text).is_some() {
+                Npmrc {
+                    unread: true,
+                    ..Npmrc::default()
+                }
+            } else {
+                parse(text)
+            };
             if !read.names_any() {
                 continue;
             }
             let entry = found.entry(directory).or_default();
+            entry.unread |= read.unread;
             if read.default.is_some() {
                 entry.default = read.default;
             }
@@ -584,6 +594,13 @@ pub(super) fn registry_for(
         directory = directory.rsplit_once('/').map_or("", |(d, _)| d);
     }
     let settings: Vec<&Npmrc> = directories.iter().filter_map(|d| npmrcs.get(d)).collect();
+    // A settings file the Count did not read may set this package's registry,
+    // so its lookup fails rather than guessing past it.
+    if settings.iter().any(|s| s.unread) {
+        return recorded(&Named::Unusable(
+            "(an npm settings file the Count could not read)".into(),
+        ));
+    }
     let scope = package
         .split_once('/')
         .map(|(scope, _)| scope)

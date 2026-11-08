@@ -4107,3 +4107,42 @@ fn a_registry_in_a_settings_file_fails_a_mise_npm_tool() {
         "npmRegistryServer: [unclosed\n"
     )])));
 }
+
+/// A `.npmrc` or `.yarnrc.yml` the Count did not read may set any registry,
+/// so packages under it fail their lookups instead of reading npmjs, even
+/// when a readable file further up names their scope.
+#[test]
+fn an_unread_npm_settings_file_fails_lookups_under_it() {
+    for (leaf, unread) in [
+        (".npmrc", patchula_manager::Unread::Failed),
+        (".yarnrc.yml", patchula_manager::Unread::TooDeep),
+    ] {
+        let files = Files::from([
+            (
+                ".npmrc".into(),
+                "@acme:registry=https://npm.acme.dev\n".into(),
+            ),
+            (format!("app/{leaf}"), unread.text().into()),
+            (
+                "app/package.json".into(),
+                r#"{"dependencies":{"left-pad":"1.0.0","@acme/ui":"1.0.0"}}"#.into(),
+            ),
+        ]);
+        let extraction = Scanner::new(&config()).unwrap().extract(&files).unwrap();
+        for name in ["left-pad", "@acme/ui"] {
+            let registry = extraction
+                .dependencies
+                .iter()
+                .find(|d| d.name == name)
+                .unwrap()
+                .registry
+                .clone();
+            assert!(
+                registry
+                    .as_deref()
+                    .is_some_and(|r| r.contains("could not read")),
+                "{leaf} {name}: {registry:?}"
+            );
+        }
+    }
+}

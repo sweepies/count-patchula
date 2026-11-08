@@ -651,7 +651,14 @@ struct Lexer<'a> {
     kotlin: bool,
     /// Java: strings hold no templates, and there are no slashy strings.
     java: bool,
+    /// How many `${ … }` templates enclose the lexer now. Each costs stack,
+    /// so text nested deeper than [`MAX_NESTING`] does not lex.
+    nesting: usize,
 }
+
+/// The deepest templates may nest: far past real build logic, and well within
+/// the stack.
+const MAX_NESTING: usize = 32;
 
 impl Lexer<'_> {
     /// Blank a comment in both views.
@@ -675,7 +682,20 @@ impl Lexer<'_> {
 
     /// Code from `i`: to the end, or, in a template, past the `}` that
     /// closes it. None when a comment, string or template does not end.
-    fn code(&mut self, mut i: usize, template: bool) -> Option<usize> {
+    fn code(&mut self, i: usize, template: bool) -> Option<usize> {
+        if !template {
+            return self.code_in(i, false);
+        }
+        if self.nesting >= MAX_NESTING {
+            return None;
+        }
+        self.nesting += 1;
+        let end = self.code_in(i, true);
+        self.nesting -= 1;
+        end
+    }
+
+    fn code_in(&mut self, mut i: usize, template: bool) -> Option<usize> {
         let bytes = self.bytes;
         let mut depth = 0usize;
         while i < bytes.len() {
@@ -729,7 +749,9 @@ impl Lexer<'_> {
                 i += 1;
             }
         }
-        (!template).then_some(bytes.len())
+        // The end of the text ends the code only outside templates, with every
+        // brace closed.
+        (!template && depth == 0).then_some(bytes.len())
     }
 
     /// Whether a `/` at `i` opens a Groovy slashy string rather than
@@ -742,9 +764,29 @@ impl Lexer<'_> {
             .rev()
             .find(|b| !b.is_ascii_whitespace())
             .copied();
+        // Or after a keyword that takes an expression, as in `return /re/`.
+        let word: Vec<u8> = self.out[..i]
+            .iter()
+            .rev()
+            .skip_while(|b| b.is_ascii_whitespace())
+            .take_while(|b| b.is_ascii_alphanumeric() || **b == b'_')
+            .copied()
+            .collect();
+        let keyword = [
+            &b"return"[..],
+            b"println",
+            b"print",
+            b"assert",
+            b"case",
+            b"in",
+            b"throw",
+            b"yield",
+        ]
+        .iter()
+        .any(|k| word.iter().rev().eq(k.iter()));
         !matches!(next, b'/' | b'*')
             && !next.is_ascii_whitespace()
-            && before.is_none_or(|b| b"=~(,:[{!&|?;".contains(&b))
+            && (keyword || before.is_none_or(|b| b"=~(,:[{!&|?;".contains(&b)))
     }
 
     /// A Groovy slashy (`/…/`) or dollar-slashy (`$/…/$`) string from
@@ -831,6 +873,7 @@ fn code(path: &str, text: &str) -> Option<(String, Vec<(usize, String)>)> {
         strings: Vec::new(),
         kotlin: path.ends_with(".kt") || path.ends_with(".kts"),
         java: path.ends_with(".java"),
+        nesting: 0,
     };
     lexer.code(0, false)?;
     // Blanking replaced whole bytes, so a multi-byte character inside a
@@ -850,6 +893,7 @@ pub(crate) fn without_comments(path: &str, text: &str) -> Option<String> {
         strings: Vec::new(),
         kotlin: path.ends_with(".kt") || path.ends_with(".kts"),
         java: path.ends_with(".java"),
+        nesting: 0,
     };
     lexer.code(0, false)?;
     String::from_utf8(lexer.kept).ok()
