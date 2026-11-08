@@ -3665,7 +3665,7 @@ async fn an_uncomparable_recorded_base_leaves_the_branch_protected() {
         false,
     )
     .await;
-    assert_eq!(first.action.status, ActionStatus::Created);
+    assert_eq!(first.action.status, BranchStatus::Created);
     {
         let mut s = server.0.lock().unwrap();
         let sha = s.refs[&format!("refs/heads/{}", first.action.branch)].clone();
@@ -3690,7 +3690,7 @@ async fn an_uncomparable_recorded_base_leaves_the_branch_protected() {
     .await;
     assert_eq!(
         second.action.status,
-        ActionStatus::Protected,
+        BranchStatus::Protected,
         "{:?}",
         second.action
     );

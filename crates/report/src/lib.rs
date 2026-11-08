@@ -694,6 +694,7 @@ impl Report {
                                 | BranchStatus::Rebased
                                 | BranchStatus::Merged
                                 | BranchStatus::Deleted
+                                | BranchStatus::Stale
                         ))
                 {
                     return Err(Error::Invalid(
