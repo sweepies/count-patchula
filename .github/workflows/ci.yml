@@ -36,6 +36,11 @@ jobs:
     outputs:
       rust: ${{ steps.release.outputs.bump != 'true' && (steps.some.outputs.rust == 'true' || steps.every.outputs.rust == 'true') }}
       docs: ${{ steps.some.outputs.docs }}
+    env:
+      # The release bot's own PR from this repository, the only one the release
+      # check below may run for (see there). One predicate, so the steps that
+      # use it cannot drift apart.
+      RELEASE_PR: ${{ github.event_name == 'pull_request' && github.head_ref == 'release-next' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'sweepies-ops[bot]' }}
     steps:
       # A push is compared with the commit before it, which needs the history.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -85,16 +90,16 @@ jobs:
       # parent on main, a version bump has nothing left for the Rust jobs to
       # check, so they skip; anything else in the PR runs them all. The check
       # runs the PR's own copy of the task, so it only runs for the bot's PR
-      # from this repository: a fork could name its branch release-next and
-      # make the task skip its tests.
-      - if: github.event_name == 'pull_request' && github.head_ref == 'release-next' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'sweepies-ops[bot]'
+      # from this repository (RELEASE_PR): a fork could name its branch
+      # release-next and make the task skip its tests.
+      - if: env.RELEASE_PR == 'true'
         uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           cache: false
         env:
           MISE_ENABLE_TOOLS: nu,gh
       - id: release
-        if: github.event_name == 'pull_request' && github.head_ref == 'release-next' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'sweepies-ops[bot]'
+        if: env.RELEASE_PR == 'true'
         env:
           MISE_ENABLE_TOOLS: nu,gh
           GH_TOKEN: ${{ github.token }}
