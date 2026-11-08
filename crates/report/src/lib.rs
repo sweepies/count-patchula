@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 pub const SCHEMA_VERSION: u32 = 6;
+/// The `actions` object's own version: 2 gave branches and pull requests
+/// their own statuses, with `stale` for branches.
+pub const ACTIONS_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -608,7 +611,7 @@ impl Report {
             return Err(Error::Version(self.schema_version));
         }
         if let Some(actions) = &self.actions {
-            if actions.schema_version != 1 {
+            if actions.schema_version != ACTIONS_SCHEMA_VERSION {
                 return Err(Error::Invalid("unsupported actions.schemaVersion".into()));
             }
             let mut prs = BTreeSet::new();
@@ -837,7 +840,7 @@ mod tests {
     fn branch_and_pull_request_statuses_are_their_own() {
         let report = |branch: &str, pr: &str| {
             format!(
-                r#"{{"schemaVersion":6,"repositories":[{{"repository":"o/r","status":"complete","reason":null,"packageFiles":[]}}],"actions":{{"schemaVersion":1,"dryRun":false,"branches":[{{"repository":"o/r","branch":"b","baseCommit":"c","status":"{branch}","reason":"why","message":"m","previousCommit":null,"commit":null,"verified":null,"lockfilePending":false,"files":[]}}],"pullRequests":[{{"repository":"o/r","branch":"b","number":1,"url":null,"status":"{pr}","reason":"why"}}]}}}}"#
+                r#"{{"schemaVersion":6,"repositories":[{{"repository":"o/r","status":"complete","reason":null,"packageFiles":[]}}],"actions":{{"schemaVersion":2,"dryRun":false,"branches":[{{"repository":"o/r","branch":"b","baseCommit":"c","status":"{branch}","reason":"why","message":"m","previousCommit":null,"commit":null,"verified":null,"lockfilePending":false,"files":[]}}],"pullRequests":[{{"repository":"o/r","branch":"b","number":1,"url":null,"status":"{pr}","reason":"why"}}]}}}}"#
             )
         };
         assert!(Report::from_json(report("stale", "closed").as_bytes()).is_ok());
@@ -896,7 +899,7 @@ mod tests {
         let mut value = serde_json::json!({
             "schemaVersion": 6,
             "repositories": [{"repository":"demo/app","status":"complete","reason":null,"packageFiles":[]}],
-            "actions": {"schemaVersion":1,"dryRun":true,"branches":[{
+            "actions": {"schemaVersion":2,"dryRun":true,"branches":[{
                 "repository":"demo/app","branch":"patchula/example","baseCommit":"base",
                 "status":"planned","reason":null,"message":"update example","previousCommit":null,
                 "commit":null,"verified":null,"lockfilePending":false,"files":[]
@@ -904,9 +907,9 @@ mod tests {
         });
         let parse = |v: &serde_json::Value| Report::from_json(&serde_json::to_vec(v).unwrap());
         parse(&value).unwrap();
-        value["actions"]["schemaVersion"] = serde_json::json!(2);
+        value["actions"]["schemaVersion"] = serde_json::json!(3);
         assert!(parse(&value).is_err());
-        value["actions"]["schemaVersion"] = serde_json::json!(1);
+        value["actions"]["schemaVersion"] = serde_json::json!(2);
         value["actions"]["branches"][0]["commit"] = serde_json::json!("unexpected-write");
         assert!(parse(&value).is_err());
         value["actions"]["branches"][0]["commit"] = serde_json::Value::Null;

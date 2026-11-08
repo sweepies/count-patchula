@@ -1098,7 +1098,7 @@ async fn stale_base_requeues_without_failure_and_real_errors_have_counts() {
         }
         let report: Report = serde_json::from_value(json!({"schemaVersion": 6,
             "repositories":[{"repository":"owner/repo", "status":if errors {"error"} else {"complete"}, "packageFiles":[]}],
-            "actions":{"schemaVersion":1, "dryRun":false, "branches":branches,
+            "actions":{"schemaVersion":2, "dryRun":false, "branches":branches,
                 "pullRequests":if errors {vec![json!({"repository":"owner/repo", "branch":"pr-error", "status":"error"})]} else {vec![]}}
         })).unwrap();
         let state = state().await;

@@ -733,7 +733,10 @@ async fn token_only_run_uses_repository_config_cold_and_cached_and_reports_actio
             );
             Report::from_json(&serde_json::to_vec(&report).unwrap()).unwrap();
             let actions = report.actions.as_ref().unwrap();
-            assert_eq!(actions.schema_version, 1);
+            assert_eq!(
+                actions.schema_version,
+                patchula_report::ACTIONS_SCHEMA_VERSION
+            );
             assert_eq!(actions.dry_run, dry_run);
             assert_eq!(actions.branches.len(), 1, "{actions:?}");
             let action = &actions.branches[0];

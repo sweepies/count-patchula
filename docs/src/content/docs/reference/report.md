@@ -33,7 +33,8 @@ whole batch. This page describes schema version 6.
 Readers should reject any other `schemaVersion`. Unknown fields are rejected
 too, so a new field means a new version. Version 6 split branch and pull
 request statuses, added the `stale` branch status and limited an image
-`state` to the ones in [security](/guide/security/); version 5 added a dependency's
+`state` to the ones in [security](/guide/security/), with the `actions`
+object at its own version 2; version 5 added a dependency's
 `registry`; version 4 added the `reason` of a notice that is not a template
 update; version 3 added an image rebuild's `image` check.
 
@@ -132,7 +133,7 @@ when this list is not empty.
 
 ```json
 "actions": {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "dryRun": true,
   "branches": [{
     "repository": "owner/repo",

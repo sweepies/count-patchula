@@ -720,7 +720,7 @@ impl Engine {
         }
         branches.sort_by(|a, b| (&a.repository, &a.branch).cmp(&(&b.repository, &b.branch)));
         report.actions = Some(patchula_report::Actions {
-            schema_version: 1,
+            schema_version: patchula_report::ACTIONS_SCHEMA_VERSION,
             dry_run,
             branches,
             pull_requests,

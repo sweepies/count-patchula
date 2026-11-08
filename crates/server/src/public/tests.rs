@@ -115,7 +115,7 @@ fn report() -> Report {
         "schemaVersion": 6,
         "repositories": [app, repository("acme/secret"), repository("acme/broken"),
             repository("acme/late"), repository("acme/stranger")],
-        "actions": {"schemaVersion": 1, "dryRun": false,
+        "actions": {"schemaVersion": 2, "dryRun": false,
             "branches": [{"repository": "acme/app", "branch": "patchula/serde-2.x",
                 "baseCommit": "c".repeat(40), "status": "created", "reason": null,
                 "message": "Update serde to v2", "previousCommit": null, "commit": "d".repeat(40),
