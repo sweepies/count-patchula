@@ -100,12 +100,22 @@ pub(super) fn extract(
     static RUBY: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r#"(?m)^[ \t]*ruby[ \t(]+["']([0-9][0-9.]*)["']"#).expect("ruby pattern")
     });
-    let lock_text = files.get(&format!("{path}.lock"));
+    let lock_name = format!("{path}.lock");
+    let lock_text = files.get(&lock_name);
+    // An unread lockfile may record any remote for any gem, unlike an absent
+    // one: every lookup it could steer fails instead of trusting the Gemfile.
+    let unread = lock_text.is_some_and(|l| crate::Unread::of(l).is_some());
+    let lock_text = lock_text.filter(|_| !unread);
     let lock = lock_text.map(|l| locked(l)).unwrap_or_default();
     let Gemfile {
         mut origins, gems, ..
     } = gemfile(path, text);
     origins.locks.extend(lock_text.map(|l| lock_origins(l)));
+    if unread {
+        origins.uncertain.push(Named::Unusable(format!(
+            "(a {lock_name} the Count could not read)"
+        )));
+    }
     origins.uncertain.extend(bundle_config(
         dir,
         files.get(&format!("{dir}.bundle/config")),

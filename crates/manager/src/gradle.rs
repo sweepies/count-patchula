@@ -781,12 +781,14 @@ impl Lexer<'_> {
             b"in",
             b"throw",
             b"yield",
+            b"else",
+            b"do",
         ]
         .iter()
         .any(|k| word.iter().rev().eq(k.iter()));
         !matches!(next, b'/' | b'*')
             && !next.is_ascii_whitespace()
-            && (keyword || before.is_none_or(|b| b"=~(,:[{!&|?;".contains(&b)))
+            && (keyword || before.is_none_or(|b| b"=~(,:[{}!&|?;+-*/%^<>".contains(&b)))
     }
 
     /// A Groovy slashy (`/…/`) or dollar-slashy (`$/…/$`) string from

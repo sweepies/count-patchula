@@ -194,6 +194,10 @@ fn read(files: &Files) -> Result<Aube, String> {
         .iter()
         .filter(|(p, _)| p.rsplit('/').next() == Some("aube-lock.yaml"))
     {
+        // An unread lock is no lock at all, as with npm's.
+        if crate::Unread::of(text).is_some() {
+            return Err(format!("{path}: the Count could not read this lockfile"));
+        }
         let lock: serde_yaml_ng::Value =
             serde_yaml_ng::from_str(text).map_err(|e| format!("{path}: {e}"))?;
         let dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);

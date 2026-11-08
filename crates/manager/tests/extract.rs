@@ -4146,3 +4146,53 @@ fn an_unread_npm_settings_file_fails_lookups_under_it() {
         }
     }
 }
+
+/// A Gemfile.lock the Count did not read may record any remote, so the gems
+/// it could steer fail their lookups instead of trusting the Gemfile, and an
+/// unread aube-lock.yaml fails like npm's locks.
+#[test]
+fn an_unread_lockfile_is_not_an_absent_one() {
+    let mut config = config();
+    config.managers = vec![Manager::Bundler];
+    for unread in [
+        patchula_manager::Unread::Failed,
+        patchula_manager::Unread::TooDeep,
+    ] {
+        let files = Files::from([
+            (
+                "Gemfile".into(),
+                "source \"https://rubygems.org\"\ngem \"foo\", \"~> 1.0\"\n".into(),
+            ),
+            ("Gemfile.lock".into(), unread.text().into()),
+        ]);
+        let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+        let registry = extraction
+            .dependencies
+            .iter()
+            .find(|d| d.name == "foo")
+            .unwrap()
+            .registry
+            .clone();
+        assert!(
+            registry
+                .as_deref()
+                .is_some_and(|r| r.contains("could not read")),
+            "{unread:?}: {registry:?}"
+        );
+    }
+    let files = Files::from([
+        (
+            "package.json".into(),
+            r#"{"dependencies":{"left-pad":"1.0.0"}}"#.into(),
+        ),
+        (
+            "aube-lock.yaml".into(),
+            patchula_manager::Unread::Failed.text().into(),
+        ),
+    ]);
+    let error = Scanner::new(&self::config())
+        .unwrap()
+        .extract(&files)
+        .unwrap_err();
+    assert!(error.contains("could not read this lockfile"), "{error}");
+}
