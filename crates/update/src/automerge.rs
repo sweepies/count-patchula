@@ -381,7 +381,8 @@ async fn one(
         }
     }
     pr["state"] = json!("closed");
-    pr["merged_at"] = json!("merged by patchula");
+    // The cached PR keeps GitHub's shape: merged_at is when it merged.
+    pr["merged_at"] = json!(Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
     Ok((ActionStatus::Merged, reason))
 }
 

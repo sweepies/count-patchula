@@ -148,7 +148,7 @@ impl Runner {
             // Poetry moves a package as far as its constraint allows and cannot be
             // told a version, so a package whose declaration stays as it is has
             // the constraint pinned for one resolution and restored for the next.
-            let pinned = if leaf == "poetry.lock" {
+            let mut pinned = if leaf == "poetry.lock" {
                 Pinned::apply(root, directory, config, Manager::Pyproject, jobs)?
             } else {
                 Pinned::none(root)

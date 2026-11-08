@@ -10,6 +10,30 @@ pub(crate) fn trailer<'a>(message: &'a str, key: &str) -> Option<&'a str> {
     lines.next().is_none().then_some(value)
 }
 
+/// The base commit a branch tip records, when it can name one in a URL path:
+/// up to 64 ASCII letters and digits, which covers SHA-1 and SHA-256 names.
+/// Writing and cleanup both decide ownership from this one reading. The base
+/// only bounds the history inspected; ownership itself comes from every
+/// commit since it being the Count's own (see [`all_ours`]).
+pub(crate) fn recorded_base(message: &str) -> Option<&str> {
+    trailer(message, "Patchula-Base: ").filter(|base| {
+        !base.is_empty() && base.len() <= 64 && base.bytes().all(|b| b.is_ascii_alphanumeric())
+    })
+}
+
+/// Whether every commit is the Count's own: by `actor`, verified and marked.
+pub(crate) fn all_ours(commits: &[Value], actor: &str) -> bool {
+    !commits.is_empty()
+        && commits.iter().all(|c| {
+            let message = c["commit"]["message"].as_str().unwrap_or("");
+            c["author"]["login"] == actor
+                && (c["committer"]["login"] == actor || c["committer"]["login"] == "web-flow")
+                && c["commit"]["verification"]["verified"].as_bool() == Some(true)
+                && trailer(message, "Patchula: ") == Some("v1")
+                && trailer(message, "Patchula-Branch: ").is_some()
+        })
+}
+
 /// Validate every commit since the recorded base, including author and signature.
 /// A copied marker alone never authorizes deleting or replacing human work.
 pub async fn owned(client: &Client, repo: &str, head: &str, actor: &str) -> Result<bool, String> {
@@ -18,12 +42,9 @@ pub async fn owned(client: &Client, repo: &str, head: &str, actor: &str) -> Resu
         .await
         .map_err(|e| e.to_string())?;
     let message = tip["commit"]["message"].as_str().unwrap_or("");
-    let Some(base) = trailer(message, "Patchula-Base: ") else {
+    let Some(base) = recorded_base(message) else {
         return Ok(false);
     };
-    if !base.bytes().all(|b| b.is_ascii_hexdigit()) || base.len() != 40 {
-        return Ok(false);
-    }
     let history = client
         .get_fresh(&format!(
             "repos/{repo}/compare/{base}...{head}?per_page=100"
@@ -33,17 +54,11 @@ pub async fn owned(client: &Client, repo: &str, head: &str, actor: &str) -> Resu
     let Some(commits) = history["commits"].as_array() else {
         return Ok(false);
     };
-    Ok(!commits.is_empty()
-        && history["total_commits"].as_u64() == Some(commits.len() as u64)
-        && commits.last().is_some_and(|c| c["sha"] == head)
-        && commits.iter().all(|c| {
-            let message = c["commit"]["message"].as_str().unwrap_or("");
-            c["author"]["login"] == actor
-                && (c["committer"]["login"] == actor || c["committer"]["login"] == "web-flow")
-                && c["commit"]["verification"]["verified"].as_bool() == Some(true)
-                && trailer(message, "Patchula: ") == Some("v1")
-                && trailer(message, "Patchula-Branch: ").is_some()
-        }))
+    Ok(
+        history["total_commits"].as_u64() == Some(commits.len() as u64)
+            && commits.last().is_some_and(|c| c["sha"] == head)
+            && all_ours(commits, actor),
+    )
 }
 
 /// Inspect all heads, regardless of naming, and remove obsolete owned branches

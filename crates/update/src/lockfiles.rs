@@ -501,7 +501,7 @@ pub fn maintenance(
             } else {
                 ActionStatus::Skipped
             },
-            reason: (!due).then(|| "outside lockfile maintenance window".into()),
+            reason: (!due).then(|| crate::plan::Hold::MaintenanceWindow.text().to_owned()),
             message: format!("{} lock file maintenance", config.defaults.commit_prefix),
             previous_commit: None,
             commit: None,
@@ -524,6 +524,7 @@ pub fn maintenance(
         maintenance: true,
         batch: None,
         tooling: Vec::new(),
+        hold: (!due).then_some(crate::plan::Hold::MaintenanceWindow),
     }))
 }
 
@@ -553,10 +554,7 @@ pub async fn defer_completed_refresh(
         && (last.iso_week() == now.iso_week()
             || now - last < chrono::Duration::hours(i64::from(config.lockfiles.wait_hours)))
     {
-        plan.action.status = ActionStatus::Skipped;
-        plan.action.reason = Some(
-            "maintenance already completed this week or waiting for lockfiles.waitHours".into(),
-        );
+        plan.hold(crate::plan::Hold::MaintenanceDone);
     }
     Ok(())
 }
@@ -567,8 +565,7 @@ pub async fn record_refresh(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), String> {
     for plan in plans.iter().filter(|p| p.maintenance && p.lockfiles_ready) {
-        if (plan.action.status == ActionStatus::Skipped
-            && plan.action.reason.as_deref() == Some("lockfiles already current"))
+        if plan.held(&crate::plan::Hold::LockfilesCurrent)
             || actions.iter().any(|a| {
                 a.branch == plan.action.branch
                     && matches!(
@@ -1140,8 +1137,7 @@ impl Runner {
                 .as_bytes(),
         );
         if plan.action.files.is_empty() {
-            plan.action.status = ActionStatus::Skipped;
-            plan.action.reason = Some("lockfiles already current".into());
+            plan.hold(crate::plan::Hold::LockfilesCurrent);
         }
         Ok(added)
     }

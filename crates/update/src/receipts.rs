@@ -351,8 +351,7 @@ pub async fn restore_inventory(
             }) {
                 Err("pr-state-changed")
             } else {
-                plan.action.status = ActionStatus::Skipped;
-                plan.action.reason = Some(crate::pull_requests::CLOSED_BY_OWNER.into());
+                plan.hold(crate::plan::Hold::ClosedByOwner);
                 Ok(())
             }
         } else {
@@ -480,8 +479,7 @@ pub async fn save_receipts(
 ) -> Result<(), String> {
     let mut receipts = Receipts::default();
     for plan in plans {
-        if plan.action.status == ActionStatus::Skipped
-            && plan.action.reason.as_deref() == Some(crate::pull_requests::CLOSED_BY_OWNER)
+        if plan.held(&crate::plan::Hold::ClosedByOwner)
             && let Some(pr) = lifecycle.closed_for(plan)
             && pr["node_id"].is_string()
         {

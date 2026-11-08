@@ -11,8 +11,6 @@ pub const BODY_LIMIT: usize = 32_000;
 const MARKER: &str = "<!-- patchula:";
 const RECHECK: &str = "<!-- patchula-recheck -->";
 const OBSOLETE: &str = "<!-- patchula-closed:obsolete -->";
-pub(crate) const CLOSED_BY_OWNER: &str =
-    "closed-by-owner: this update was manually closed; waiting for a newer target";
 pub const ENABLE_AUTO_MERGE: &str = "mutation($input:EnablePullRequestAutoMergeInput!){enablePullRequestAutoMerge(input:$input){pullRequest{id}}}";
 const DISABLE_AUTO_MERGE: &str = "mutation($input:DisablePullRequestAutoMergeInput!){disablePullRequestAutoMerge(input:$input){pullRequest{id}}}";
 
@@ -143,12 +141,10 @@ fn action(
         reason,
     }
 }
-fn limit(plan: &mut Plan, reason: &str) {
-    plan.action.status = ActionStatus::Skipped;
-    plan.action.reason = Some(reason.into());
-}
-/// Ticked checkbox lines outside fenced code, trimmed.
-pub(crate) fn ticked_lines(text: &str) -> Vec<&str> {
+/// Every checkbox line outside fenced code: whether it is ticked, and its
+/// text after the box. The one reader of the Count's checkboxes, so the
+/// dashboard, PR and batch controls agree on what is ticked and what is code.
+pub(crate) fn checkboxes(text: &str) -> Vec<(bool, &str)> {
     let mut fence = None;
     let mut out = Vec::new();
     for line in text.lines().map(str::trim) {
@@ -161,11 +157,26 @@ pub(crate) fn ticked_lines(text: &str) -> Vec<&str> {
             }
             continue;
         }
-        if fence.is_none() && (line.starts_with("- [x] ") || line.starts_with("- [X] ")) {
-            out.push(line);
+        if fence.is_some() {
+            continue;
+        }
+        let Some((state, rest)) = line.strip_prefix("- [").and_then(|s| s.split_once("] ")) else {
+            continue;
+        };
+        match state {
+            "x" | "X" => out.push((true, rest)),
+            " " => out.push((false, rest)),
+            _ => {}
         }
     }
     out
+}
+/// The text of ticked checkboxes outside fenced code.
+pub(crate) fn ticked_lines(text: &str) -> Vec<&str> {
+    checkboxes(text)
+        .into_iter()
+        .filter_map(|(ticked, rest)| ticked.then_some(rest))
+        .collect()
 }
 /// The update key recorded by a patchula PR's ownership marker.
 pub(crate) fn marker_update(text: &str) -> Option<String> {
@@ -195,28 +206,10 @@ fn suppresses(pr: &Value) -> bool {
         && !body(pr).contains(crate::batch::ITEMS)
 }
 pub fn checked(pr: &Value) -> bool {
-    if body(pr).matches(RECHECK).count() != 1 {
-        return false;
-    }
-    let mut fence = None;
-    for line in body(pr).lines().map(str::trim) {
-        if line.starts_with("```") || line.starts_with("~~~") {
-            let kind = &line[..3];
-            if fence == Some(kind) {
-                fence = None;
-            } else if fence.is_none() {
-                fence = Some(kind);
-            }
-            continue;
-        }
-        if fence.is_none()
-            && line.ends_with(RECHECK)
-            && (line.starts_with("- [x] ") || line.starts_with("- [X] "))
-        {
-            return true;
-        }
-    }
-    false
+    body(pr).matches(RECHECK).count() == 1
+        && ticked_lines(body(pr))
+            .iter()
+            .any(|line| line.ends_with(RECHECK))
 }
 fn untick(text: &str) -> String {
     text.split_inclusive('\n')
@@ -479,14 +472,14 @@ impl Lifecycle {
                         && marker(body(p)).is_some_and(|m| m.update == key)
                 })
             {
-                limit(plan, CLOSED_BY_OWNER);
+                plan.hold(crate::plan::Hold::ClosedByOwner);
                 continue;
             }
             if let Some(pr) = existing.first() {
                 // A newer target must not take over a PR that just moved into
                 // the batch; it gets its own PR once that one closes.
                 if marker(body(pr)).is_some_and(|m| state.batched.contains(&m.update)) {
-                    limit(plan, "waiting for its batched PR to close");
+                    plan.hold(crate::plan::Hold::WaitingForBatch);
                     continue;
                 }
                 plan.retry |= checked(pr);
@@ -500,11 +493,11 @@ impl Lifecycle {
                 || plan.batch.is_some()
                 || plan.changes.iter().any(|c| !c.advisories.is_empty());
             if !bypass && config.prs.concurrent.is_some_and(|n| active >= n) {
-                limit(plan, "prs.concurrent limit reached");
+                plan.hold(crate::plan::Hold::Concurrent);
                 continue;
             }
             if !bypass && config.prs.per_hour.is_some_and(|n| hourly >= n) {
-                limit(plan, "prs.perHour limit reached");
+                plan.hold(crate::plan::Hold::PerHour);
                 continue;
             }
             active = active.saturating_add(1);
@@ -647,13 +640,8 @@ impl Lifecycle {
             {
                 continue;
             }
-            client
-                .post(
-                    &format!("repos/{}/issues/{target}/comments", self.repo),
-                    json!({"body":format!("Moved to the batch PR #{number}. Tick this update's box there to bring it back.")}),
-                )
-                .await
-                .map_err(|e| e.to_string())?;
+            // Closed first: a closed PR is never visited again, so a failure
+            // after this cannot repeat the comment.
             let mut text = truncate(body(&fresh), FOREIGN_LIMIT - 100);
             text.push_str("\n\n");
             text.push_str(crate::batch::BATCHED);
@@ -661,12 +649,22 @@ impl Lifecycle {
                 .patch(&path, json!({"state":"closed","body":text}))
                 .await
                 .map_err(|e| e.to_string())?;
+            let mut reason = format!("moved to the batch PR #{number}");
+            if let Err(error) = client
+                .post(
+                    &format!("repos/{}/issues/{target}/comments", self.repo),
+                    json!({"body":format!("Moved to the batch PR #{number}. Tick this update's box there to bring it back.")}),
+                )
+                .await
+            {
+                reason.push_str(&format!("; the note saying so was not posted: {error}"));
+            }
             self.actions.push(action(
                 &self.repo,
                 branch(&closed),
                 Some(&closed),
                 ActionStatus::Closed,
-                Some(format!("moved to the batch PR #{number}")),
+                Some(reason),
             ));
             if let Some(old) = self.prs.iter_mut().find(|p| p["number"] == target) {
                 *old = closed;

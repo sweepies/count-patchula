@@ -119,7 +119,10 @@ condition that holds it, and no other:
 - the release-age wait: until the release is old enough.
 
 The [dashboard](/guide/dashboard/) shows each held update with its reason and a
-box to create it now; without the dashboard the updates wait silently. A first
+box to create it now; without the dashboard the updates wait silently. The box
+lifts only these waits: an update that is also blocked, such as one whose
+target digest is unavailable, shows that reason instead and has no box. A
+release-age box, once ticked, lasts while that version is held back. A first
 run on a repository with many outdated dependencies opens ten ordinary PRs and
 lists the rest, and later runs open more as slots free up.
 

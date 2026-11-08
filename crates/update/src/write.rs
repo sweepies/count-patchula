@@ -1,3 +1,4 @@
+use crate::cleanup::{all_ours, recorded_base, trailer};
 use crate::{Plan, Snapshot, blob_sha};
 use futures_util::{FutureExt, StreamExt, stream};
 use patchula_config::Rebase;
@@ -40,11 +41,6 @@ fn field<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
     value[key]
         .as_str()
         .ok_or_else(|| format!("GitHub response has no {key}"))
-}
-fn trailer<'a>(message: &'a str, key: &str) -> Option<&'a str> {
-    let mut lines = message.lines().filter_map(|l| l.strip_prefix(key));
-    let value = lines.next()?;
-    lines.next().is_none().then_some(value)
 }
 pub(crate) fn ref_path(repo: &str, branch: &str) -> String {
     let mut url = reqwest::Url::parse(&format!(
@@ -328,22 +324,17 @@ async fn apply_inner(
             .await?;
         let actor = actor.as_str();
         let existing_tip = fresh(client, &format!("repos/{repo}/git/commits/{old}")).await?;
-        let Some(recorded) = existing_tip["message"]
-            .as_str()
-            .and_then(|m| trailer(m, "Patchula-Base: "))
-        else {
+        let tip_message = existing_tip["message"].as_str().unwrap_or("");
+        if trailer(tip_message, "Patchula-Base: ").is_none() {
             plan.action.status = ActionStatus::Protected;
             plan.action.reason = Some("unmarked branch history; left untouched".into());
             return Ok(());
-        };
-        if recorded.is_empty()
-            || recorded.len() > 64
-            || !recorded.bytes().all(|b| b.is_ascii_alphanumeric())
-        {
+        }
+        let Some(recorded) = recorded_base(tip_message) else {
             plan.action.status = ActionStatus::Protected;
             plan.action.reason = Some("invalid recorded branch base; left untouched".into());
             return Ok(());
-        }
+        };
         let compare = fresh(
             client,
             &format!("repos/{repo}/compare/{}...{old}?per_page=100", recorded),
@@ -355,16 +346,7 @@ async fn apply_inner(
         let total = compare["total_commits"]
             .as_u64()
             .ok_or("missing branch commit count")?;
-        let owned = total > 0
-            && total == commits.len() as u64
-            && commits.iter().all(|c| {
-                let message = c["commit"]["message"].as_str().unwrap_or("");
-                c["author"]["login"] == actor
-                    && (c["committer"]["login"] == actor || c["committer"]["login"] == "web-flow")
-                    && c["commit"]["verification"]["verified"].as_bool() == Some(true)
-                    && trailer(message, "Patchula: ") == Some("v1")
-                    && trailer(message, "Patchula-Branch: ").is_some()
-            });
+        let owned = total == commits.len() as u64 && all_ours(commits, actor);
         if !owned {
             plan.action.status = ActionStatus::Protected;
             plan.action.reason = Some("branch contains human, unverified, unmarked or uninspectable commits; left untouched".into());

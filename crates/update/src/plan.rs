@@ -45,6 +45,103 @@ pub struct Plan {
     pub batch: Option<Vec<crate::batch::Item>>,
     /// Tooling warnings shown on this PR.
     pub tooling: Vec<crate::tooling::Callout>,
+    /// Why the plan is not written this run, if it is held; set only
+    /// through [`Plan::hold`], which keeps the report's status and reason
+    /// in step.
+    pub hold: Option<Hold>,
+}
+
+/// Why a plan is not written this run. A plan has at most one: when several
+/// apply, one no tick can lift wins over one a tick can, so ticking "Create
+/// it now anyway" never writes a plan that is also blocked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Hold {
+    /// Outside its update windows.
+    Window,
+    /// `prs.concurrent` PRs are open.
+    Concurrent,
+    /// `prs.perHour` PRs opened in the last hour.
+    PerHour,
+    /// Its PR moved into the batch and has not closed yet.
+    WaitingForBatch,
+    /// The batch PR carries it.
+    Batched,
+    /// Its owner closed its PR; a newer target opens a new one.
+    ClosedByOwner,
+    /// A lockfile refresh that found nothing to change.
+    LockfilesCurrent,
+    /// Lockfile maintenance outside its schedule.
+    MaintenanceWindow,
+    /// Lockfile maintenance already ran this week, or waits for
+    /// `lockfiles.waitHours`.
+    MaintenanceDone,
+    /// It cannot be written as it stands.
+    Blocked(String),
+}
+impl Hold {
+    /// The report's reason.
+    pub fn text(&self) -> &str {
+        match self {
+            Self::Window => "outside the configured update windows",
+            Self::Concurrent => "prs.concurrent limit reached",
+            Self::PerHour => "prs.perHour limit reached",
+            Self::WaitingForBatch => "waiting for its batched PR to close",
+            Self::Batched => "batched: carried by the batch PR",
+            Self::ClosedByOwner => {
+                "closed-by-owner: this update was manually closed; waiting for a newer target"
+            }
+            Self::LockfilesCurrent => "lockfiles already current",
+            Self::MaintenanceWindow => "outside lockfile maintenance window",
+            Self::MaintenanceDone => {
+                "maintenance already completed this week or waiting for lockfiles.waitHours"
+            }
+            Self::Blocked(reason) => reason,
+        }
+    }
+    /// Whether a dashboard tick to create the update anyway lifts it.
+    pub fn overridable(&self) -> bool {
+        matches!(self, Self::Window | Self::Concurrent | Self::PerHour)
+    }
+    fn rank(&self) -> u8 {
+        match self {
+            Self::Window | Self::Concurrent | Self::PerHour => 0,
+            Self::WaitingForBatch
+            | Self::Batched
+            | Self::ClosedByOwner
+            | Self::LockfilesCurrent
+            | Self::MaintenanceWindow
+            | Self::MaintenanceDone => 1,
+            Self::Blocked(_) => 2,
+        }
+    }
+}
+impl Plan {
+    /// Hold the plan, unless a stronger or earlier equal hold already does.
+    pub fn hold(&mut self, hold: Hold) {
+        if self
+            .hold
+            .as_ref()
+            .is_some_and(|held| held.rank() >= hold.rank())
+        {
+            return;
+        }
+        self.action.status = ActionStatus::Skipped;
+        self.action.reason = Some(hold.text().to_owned());
+        self.hold = Some(hold);
+    }
+    /// Whether `hold` is what holds the plan.
+    pub fn held(&self, hold: &Hold) -> bool {
+        self.hold.as_ref() == Some(hold)
+    }
+    /// Release a hold a dashboard tick may lift; a plan held for any other
+    /// reason stays held.
+    pub fn lift(&mut self) {
+        if self.hold.as_ref().is_some_and(Hold::overridable) {
+            self.hold = None;
+            self.action.status = ActionStatus::Planned;
+            self.action.reason = None;
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Change {
@@ -240,6 +337,13 @@ fn lock_only(dep: &Dependency, update: &Update) -> bool {
         || (update.new_value.is_none() && update.new_version.is_some())
 }
 
+/// Keep the stronger of `hold` and what `slot` holds, or the first of equals.
+fn keep(slot: &mut Option<Hold>, hold: Hold) {
+    if slot.as_ref().is_none_or(|held| held.rank() < hold.rank()) {
+        *slot = Some(hold);
+    }
+}
+
 /// One branch plan from its items: edits, lock jobs, message and changes.
 #[allow(clippy::too_many_arguments)]
 fn build(
@@ -255,7 +359,7 @@ fn build(
     items: &[Item<'_>],
 ) -> Result<Plan, String> {
     let mut changes = BTreeMap::<String, Vec<Edit>>::new();
-    let mut reason = None;
+    let mut hold = None;
     let mut pending = None;
     let mut lock_jobs = BTreeSet::new();
     let mut prefixes = BTreeSet::new();
@@ -267,17 +371,20 @@ fn build(
         let dep = item.dep;
         let update = item.update;
         if evaluator.needs_digest(dep, update) && update.new_digest.is_none() {
-            reason = Some(format!(
-                "{}: required target digest is unavailable; retry lookup",
-                dep.name
-            ));
+            keep(
+                &mut hold,
+                Hold::Blocked(format!(
+                    "{}: required target digest is unavailable; retry lookup",
+                    dep.name
+                )),
+            );
         }
         if let Some(policy) = &update.policy {
             if !secure || !update.fixes.is_empty() {
                 prefixes.insert(policy.commit_prefix.clone());
             }
             if !in_window(&policy.windows, since, now) {
-                reason = Some("outside the configured update windows".into());
+                keep(&mut hold, Hold::Window);
             }
         }
         match crate::lockfiles::job(dep, update, snapshot) {
@@ -307,16 +414,22 @@ fn build(
             return Err(format!("missing extracted file {}", dep.file));
         };
         if !matches!(blob.mode.as_str(), "100644" | "100755") {
-            reason = Some(format!("unsupported manifest mode {}", blob.mode));
+            keep(
+                &mut hold,
+                Hold::Blocked(format!("unsupported manifest mode {}", blob.mode)),
+            );
             continue;
         }
         match patchula_manager::edits(dep, &blob.content, value, update.new_digest.as_deref()) {
             Ok(edits) => changes.entry(dep.file.clone()).or_default().extend(edits),
-            Err(error) => reason = Some(format!("{}: {error}", dep.file)),
+            Err(error) => keep(&mut hold, Hold::Blocked(format!("{}: {error}", dep.file))),
         }
     }
     if prefixes.len() > 1 {
-        reason = Some("group has conflicting commitPrefix policies".into());
+        keep(
+            &mut hold,
+            Hold::Blocked("group has conflicting commitPrefix policies".into()),
+        );
     }
     let prefix = prefixes.first().unwrap_or(&config.defaults.commit_prefix);
     let mut message = if items.iter().all(|item| item.update.update_type == "pin") {
@@ -344,23 +457,32 @@ fn build(
                 contents.insert(path, content);
             }
             Ok(_) => {}
-            Err(error) => reason = Some(format!("{path}: {error}")),
+            Err(error) => keep(&mut hold, Hold::Blocked(format!("{path}: {error}"))),
         }
     }
     let lockfile_only = items.iter().all(|item| lock_only(item.dep, item.update));
     if lockfile_only && lock_jobs.iter().any(|job| job.target.is_none()) {
-        reason = Some("no lockfile tool can move this package to an exact version".into());
+        keep(
+            &mut hold,
+            Hold::Blocked("no lockfile tool can move this package to an exact version".into()),
+        );
     }
-    if contents.is_empty() && reason.is_none() && !(lockfile_only && !lock_jobs.is_empty()) {
-        reason = Some(
-            "no editable manifest change: the declaration already allows the target, or is inherited from its workspace root"
-                .into(),
+    if contents.is_empty() && hold.is_none() && !(lockfile_only && !lock_jobs.is_empty()) {
+        keep(
+            &mut hold,
+            Hold::Blocked(
+                "no editable manifest change: the declaration already allows the target, or is inherited from its workspace root"
+                    .into(),
+            ),
         );
     }
     if let Some(error) = pending.as_ref().filter(|_| !allow_pending) {
-        reason = Some(format!(
-            "lockfile pending: {error}; --allow-lockfile-pending permits manifest-only testing"
-        ));
+        keep(
+            &mut hold,
+            Hold::Blocked(format!(
+                "lockfile pending: {error}; --allow-lockfile-pending permits manifest-only testing"
+            )),
+        );
     }
     let fingerprint = hash(
         serde_json::to_string(&(&contents, &message, pending.is_some(), &lock_jobs))
@@ -371,12 +493,12 @@ fn build(
         repository: repo.repository.clone(),
         branch,
         base_commit: repo.commit.clone().ok_or("missing extraction commit")?,
-        status: if reason.is_some() {
+        status: if hold.is_some() {
             ActionStatus::Skipped
         } else {
             ActionStatus::Planned
         },
-        reason,
+        reason: hold.as_ref().map(|hold| hold.text().to_owned()),
         message,
         previous_commit: None,
         commit: None,
@@ -442,6 +564,7 @@ fn build(
         maintenance: false,
         batch: None,
         tooling: Vec::new(),
+        hold,
     })
 }
 

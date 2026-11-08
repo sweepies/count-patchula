@@ -82,7 +82,7 @@ impl Runner {
         // Bundler moves a gem as far as its requirement allows and cannot be
         // told a version, so a package whose declaration stays as it is has
         // the requirement pinned for one resolution and restored for the next.
-        let pinned = Pinned::apply(root, directory, config, Manager::Bundler, jobs)?;
+        let mut pinned = Pinned::apply(root, directory, config, Manager::Bundler, jobs)?;
         self.held_tool(driver, invocation(args)).await?;
         if !pinned.is_empty() {
             pinned.restore()?;

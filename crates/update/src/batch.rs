@@ -18,8 +18,6 @@ pub(crate) const TARGETS: &str = "<!-- patchula-targets:";
 pub(crate) const ITEMS: &str = "<!-- patchula-batch:";
 /// Ticked on a batch item: return it to an individual PR.
 pub(crate) const REMOVE: &str = "<!-- patchula-batch-remove:";
-/// The reason recorded on a plan whose update the batch carries.
-pub const BATCHED_REASON: &str = "batched: carried by the batch PR";
 /// A PR closed because its update moved into the batch.
 pub(crate) const BATCHED: &str = "<!-- patchula-closed:batched -->";
 
@@ -178,8 +176,7 @@ pub fn apply(
         .iter_mut()
         .filter(|p| origins.contains(&update_key(p)))
     {
-        p.action.status = patchula_report::ActionStatus::Skipped;
-        p.action.reason = Some(BATCHED_REASON.into());
+        p.hold(crate::plan::Hold::Batched);
     }
     plan.batch = Some(items);
     plans.push(plan);
@@ -326,7 +323,32 @@ mod tests {
             maintenance: false,
             batch: None,
             tooling: Vec::new(),
+            hold: None,
         }
+    }
+
+    /// A tick lifts only a hold a tick may lift: a plan outside its window
+    /// that is also blocked stays held, whichever came first.
+    #[test]
+    fn a_tick_never_lifts_a_blocked_plan() {
+        use crate::plan::Hold;
+        for order in [
+            [Hold::Window, Hold::Blocked("digest unavailable".into())],
+            [Hold::Blocked("digest unavailable".into()), Hold::Window],
+        ] {
+            let mut plan = group_plan("patchula/x", "package.json");
+            for hold in order {
+                plan.hold(hold);
+            }
+            plan.lift();
+            assert_eq!(plan.action.status, patchula_report::ActionStatus::Skipped);
+            assert_eq!(plan.action.reason.as_deref(), Some("digest unavailable"));
+        }
+        let mut plan = group_plan("patchula/x", "package.json");
+        plan.hold(Hold::Window);
+        plan.lift();
+        assert_eq!(plan.action.status, patchula_report::ActionStatus::Planned);
+        assert_eq!(plan.action.reason, None);
     }
 
     /// One group per service, each bumping a shared dependency to the same
