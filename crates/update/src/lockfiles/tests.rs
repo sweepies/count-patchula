@@ -476,7 +476,14 @@ impl Executor for Overlap {
             if tool {
                 let now = self.active.fetch_add(1, Ordering::SeqCst) + 1;
                 self.most.fetch_max(now, Ordering::SeqCst);
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                // Hold the tool until a second one runs, so overlap never
+                // depends on how fast the runner sets up the next tree.
+                // Serialised plans time out with `most` still 1.
+                let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+                while self.most.load(Ordering::SeqCst) < 2 && tokio::time::Instant::now() < deadline
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
             }
             let result = self.inner.run(spec).await;
             if tool {
