@@ -1091,3 +1091,45 @@ async fn apply_reports_notices_that_are_not_templates() {
         "{result}"
     );
 }
+
+/// A file that cannot be staged stops the write before any file changes, and
+/// leaves no staged copy behind.
+#[test]
+fn a_write_that_cannot_stage_every_file_writes_none() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.txt"), "old").unwrap();
+    let plan = crate::tui::Plan {
+        files: BTreeMap::from([
+            ("a.txt".to_owned(), ("old".to_owned(), "new".to_owned())),
+            (
+                "gone/b.txt".to_owned(),
+                ("old".to_owned(), "new".to_owned()),
+            ),
+        ]),
+        applied: Vec::new(),
+        skipped: Vec::new(),
+    };
+    let error = plan.write(dir.path()).unwrap_err();
+    assert!(error.written.is_empty(), "{error}");
+    assert!(
+        error.to_string().ends_with("nothing was written"),
+        "{error}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        "old"
+    );
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+
+    let plan = crate::tui::Plan {
+        files: BTreeMap::from([("a.txt".to_owned(), ("old".to_owned(), "new".to_owned()))]),
+        applied: Vec::new(),
+        skipped: Vec::new(),
+    };
+    plan.write(dir.path()).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        "new"
+    );
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}

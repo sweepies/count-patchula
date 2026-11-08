@@ -225,6 +225,9 @@ fn router(webhook: Webhook, ready: Arc<AtomicBool>) -> Router {
                     cache.clone(),
                     ready.clone(),
                 );
+                // Ready is every condition at once. Webhooks and remote runs
+                // check only `accepting`: while unready they are still queued,
+                // since a rejected delivery would be lost.
                 async move {
                     if accepting.load(Ordering::Acquire)
                         && settings.valid()
@@ -1001,6 +1004,9 @@ async fn maintenance(
         }
         let sweep_due = next_sweep.is_some_and(|next| next <= Utc::now());
         if sweep_due || tokio::time::Instant::now() >= probe_at {
+            // A sweep is done once it is queued; a token probe failing after
+            // that marks the server unready but does not queue it again.
+            let mut swept = false;
             let result = async {
                 app.bot_login()
                     .await
@@ -1037,6 +1043,7 @@ async fn maintenance(
                         )
                         .await
                         .map_err(|_| Error("cannot persist cron sweep"))?;
+                    swept = true;
                 }
                 for id in &ids {
                     app.installation(*id)
@@ -1054,7 +1061,7 @@ async fn maintenance(
             }
             probe_at = tokio::time::Instant::now() + Duration::from_secs(30);
             if sweep_due {
-                next_sweep = if success {
+                next_sweep = if swept {
                     sweep_after(&current, Utc::now())
                 } else {
                     Some(Utc::now() + chrono::Duration::seconds(60))

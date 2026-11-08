@@ -52,6 +52,10 @@ writes the rest:
   like `~> 6.0`, where only the lockfile would change;
 - a declaration that changed between the lookup and the write.
 
+The new files are staged beside the old ones first, so a file that can't be
+written stops the write before anything changes. Only a failure while moving
+the staged files into place can leave some written, and the error names them.
+
 Lockfiles are not regenerated. When an update's current version came from a
 lockfile, the summary reminds you to refresh it with your package manager
 (`aube install`, `cargo update -w`, `uv lock` and so on).
