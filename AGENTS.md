@@ -47,3 +47,13 @@ A change is done when every CI check on GitHub is green after pushing. GitHub
 runs the tasks in `mise run ci` as parallel jobs, so run only the checks for
 what changed locally, such as one crate's tests. Commits use conventional commit
 messages (`feat(manager): …`, `fix(lookup): …`).
+
+## Releases
+
+The release bot (`.github/workflows/release-bot.yml`, tasks in
+`mise-tasks/release/`) releases from those commit messages: after CI passes on
+main it keeps a `release-next` PR at the next version (git-cliff, `cliff.toml`),
+merges it on Mondays, and tags the merge, which starts `release.yml`. Run the
+workflow by hand to release now. Never bump the version yourself: it lives only
+in `Cargo.toml`'s `workspace.package`, the docs write the current release as
+`@@version@@`, and the help snapshot holds `{version}`.

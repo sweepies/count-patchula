@@ -1,0 +1,12 @@
+#!/usr/bin/env nu
+#MISE description="Print the next release version for HEAD from the conventional commits since the latest release tag (git-cliff, configured in cliff.toml), or nothing when none of them is a feature, fix or breaking change"
+#MISE tools={git-cliff="2.14.2"}
+
+def main [] {
+  let latest = ^git describe --tags --match "v[0-9]*" --abbrev=0 HEAD | str trim
+  let next = ^git-cliff --bumped-version | str trim
+  # git-cliff answers with the latest tag when nothing since it bumps.
+  if $next != $latest {
+    print ($next | str replace --regex '^v' '')
+  }
+}

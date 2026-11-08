@@ -1,0 +1,48 @@
+#!/usr/bin/env nu
+#MISE description="In the release bot's job: log in to OpenBao with the job's GitHub OIDC token and export the sweepies-ops App token for this repository as GH_TOKEN to later steps. --revoke ends the OpenBao session"
+#USAGE flag "--revoke" help="Revoke the OpenBao token a previous run left in RUNNER_TEMP"
+
+# The job needs `id-token: write`, and BAO_ADDR, an Actions variable that is
+# also the OIDC audience. Errors never name the address: it stays out of the
+# public logs.
+const ROLE = "count-patchula-release"
+
+def main [--revoke] {
+  let file = $env.RUNNER_TEMP | path join openbao-token
+  if $revoke {
+    if ($file | path exists) {
+      bao "post" $"($env.BAO_ADDR)/v1/auth/token/revoke-self" {} (open --raw $file)
+      rm $file
+    }
+    return
+  }
+  let address = $env.BAO_ADDR
+  let audience = $address | url encode --all
+  let oidc = http get --headers [Authorization $"Bearer ($env.ACTIONS_ID_TOKEN_REQUEST_TOKEN)"] $"($env.ACTIONS_ID_TOKEN_REQUEST_URL)&audience=($audience)" | get value
+  let session = bao "post" $"($address)/v1/auth/jwt/login" {role: $ROLE jwt: $oidc} null | get auth.client_token
+  print $"::add-mask::($session)"
+  $session | save --force $file
+  let token = bao "get" $"($address)/v1/github/token/($ROLE)" {} $session | get data.token
+  print $"::add-mask::($token)"
+  $"GH_TOKEN=($token)\n" | save --append $env.GITHUB_ENV
+  print "exported the release bot's App token as GH_TOKEN"
+}
+
+# One OpenBao request. A failure reports the status and path only.
+def bao [method: string, url: string, body: record, session: any]: nothing -> record {
+  let headers = if $session == null { [] } else { [X-Vault-Token $session] }
+  let path = $url | url parse | get path
+  let response = try {
+    if $method == "get" {
+      http get --full --allow-errors --headers $headers $url
+    } else {
+      http post --full --allow-errors --headers $headers --content-type application/json $url $body
+    }
+  } catch {
+    error make --unspanned {msg: $"could not reach OpenBao for ($path)"}
+  }
+  if $response.status >= 300 {
+    error make --unspanned {msg: $"OpenBao answered ($response.status) for ($path)"}
+  }
+  if ($response.body | describe) == "string" { {} } else { $response.body }
+}

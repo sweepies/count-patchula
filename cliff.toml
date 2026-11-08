@@ -1,0 +1,17 @@
+# git-cliff works out the next release version (mise run release:next); the
+# release notes come from communique, so nothing here renders a changelog.
+[git]
+conventional_commits = true
+filter_unconventional = true
+# Only features, fixes, performance changes and breaking changes make a release.
+commit_parsers = [
+  { message = "^(feat|fix|perf)", group = "release" },
+  { message = ".*", skip = true },
+]
+protect_breaking_commits = true
+tag_pattern = "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+
+[bump]
+# Before 1.0, a breaking change bumps the minor version, as does a feature.
+features_always_bump_minor = true
+breaking_always_bump_major = false
