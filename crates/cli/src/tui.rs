@@ -996,29 +996,33 @@ impl std::fmt::Display for WriteError {
     }
 }
 impl Plan {
-    /// Write every file in place. Each is opened for writing before any is
-    /// changed, so a missing file, a permission, or two paths naming the same
-    /// file stops the write with nothing written. Writing in place keeps each
-    /// file's owner, mode, links and attributes, as an editor saving it would.
-    /// Only a failure while writing, such as a full disk, can stop partway,
-    /// and the error names what was written.
+    /// Write every file in place. Each is first checked by opening it for
+    /// writing, so a missing file, a permission, or two names for the same
+    /// file (a symlink or a hard link) stops the write with nothing written.
+    /// Files are then written one at a time, each open only while it is
+    /// written, so a plan may touch more files than the process may hold
+    /// open. Writing in place keeps each file's owner, mode, links and
+    /// attributes, as an editor saving it would. Only a failure while writing,
+    /// such as a full disk, can stop partway, and the error names what was
+    /// written.
     pub fn write(&self, dir: &Path) -> Result<(), WriteError> {
         use std::io::Write as _;
-        let mut opened = Vec::new();
-        let mut targets = BTreeSet::new();
+        let mut checked = Vec::new();
+        let mut identities = BTreeSet::new();
         for (file, (_, content)) in &self.files {
-            let open = (|| {
+            let check = (|| {
                 // A symlinked file is written through its link.
                 let target = std::fs::canonicalize(dir.join(file))?;
-                if !targets.insert(target.clone()) {
+                let handle = std::fs::OpenOptions::new().write(true).open(&target)?;
+                if !identities.insert(identity(&target, &handle.metadata()?)) {
                     return Err(std::io::Error::other(
                         "another file in this write is the same file",
                     ));
                 }
-                std::fs::OpenOptions::new().write(true).open(&target)
+                Ok(target)
             })();
-            match open {
-                Ok(handle) => opened.push((file, handle, content)),
+            match check {
+                Ok(target) => checked.push((file, target, content)),
                 Err(error) => {
                     return Err(WriteError {
                         written: Vec::new(),
@@ -1029,15 +1033,22 @@ impl Plan {
             }
         }
         let mut written = Vec::new();
-        for (file, mut handle, content) in opened {
-            let result = handle
-                .set_len(0)
-                .and_then(|()| handle.write_all(content.as_bytes()))
-                .and_then(|()| handle.flush());
+        for (file, target, content) in checked {
+            let mut opened = None;
+            let result = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&target)
+                .and_then(|handle| {
+                    let handle = opened.insert(handle);
+                    handle.set_len(0)?;
+                    handle.write_all(content.as_bytes())?;
+                    handle.flush()
+                });
             if let Err(error) = result {
                 return Err(WriteError {
                     written,
-                    partial: Some(file.clone()),
+                    // Opened means it may have been cut short.
+                    partial: opened.is_some().then(|| file.clone()),
                     error: format!("{file}: {error}"),
                 });
             }
@@ -1045,6 +1056,18 @@ impl Plan {
         }
         Ok(())
     }
+}
+
+/// What makes two paths the same file: the device and inode where there are
+/// such, else the resolved path.
+#[cfg(unix)]
+fn identity(_: &Path, metadata: &std::fs::Metadata) -> (u64, u64, PathBuf) {
+    use std::os::unix::fs::MetadataExt;
+    (metadata.dev(), metadata.ino(), PathBuf::new())
+}
+#[cfg(not(unix))]
+fn identity(target: &Path, _: &std::fs::Metadata) -> (u64, u64, PathBuf) {
+    (0, 0, target.to_owned())
 }
 
 /// Plan the edits for these updates in the working tree, the way the Count

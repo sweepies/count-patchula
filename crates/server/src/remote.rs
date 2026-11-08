@@ -244,6 +244,15 @@ async fn start(
     // await between the two: a request dropped at an await point either
     // recorded nothing or already has a task to finish the job.
     let mut tasks = api.0.tasks.lock().await;
+    // Checked again under the lock: shutdown stops accepting before `drain`
+    // takes the tasks, so a run spawned here is one drain waits for.
+    if !api.0.accepting.load(Ordering::Acquire) {
+        return Err(reject(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "shutting-down",
+            "the server is shutting down",
+        ));
+    }
     let id = {
         let now = chrono::Utc::now().timestamp();
         let mut jobs = api.0.jobs.lock().await;

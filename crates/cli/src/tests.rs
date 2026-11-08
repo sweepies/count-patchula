@@ -1189,3 +1189,39 @@ fn writes_are_in_place_and_refuse_before_changing_anything() {
         .collect();
     assert_eq!(names.len(), 6, "{names:?}");
 }
+
+/// Two hard links are one file, so writing both is refused; and a plan may
+/// touch more files than the process may hold open at once.
+#[cfg(unix)]
+#[test]
+fn hard_links_are_one_file_and_wide_plans_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("a.txt"), "old").unwrap();
+    std::fs::hard_link(root.join("a.txt"), root.join("b.txt")).unwrap();
+    let plan = |files: Vec<String>| crate::tui::Plan {
+        files: files
+            .into_iter()
+            .map(|f| (f, ("old".to_owned(), "new".to_owned())))
+            .collect(),
+        applied: Vec::new(),
+        skipped: Vec::new(),
+    };
+    let error = plan(vec!["a.txt".into(), "b.txt".into()])
+        .write(root)
+        .unwrap_err();
+    assert!(error.to_string().contains("same file"), "{error}");
+    assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "old");
+
+    let names: Vec<String> = (0..5000).map(|n| format!("wide/f{n}.txt")).collect();
+    std::fs::create_dir(root.join("wide")).unwrap();
+    for name in &names {
+        std::fs::write(root.join(name), "old").unwrap();
+    }
+    plan(names.clone()).write(root).unwrap();
+    assert!(
+        names
+            .iter()
+            .all(|name| std::fs::read_to_string(root.join(name)).unwrap() == "new")
+    );
+}
