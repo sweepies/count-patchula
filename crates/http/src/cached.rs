@@ -1055,7 +1055,11 @@ fn pull_limit(response: &Response) -> bool {
         .headers
         .get("ratelimit-remaining")
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.split(';').next().is_some_and(|v| v.trim() == "0"))
+        .is_some_and(|v| {
+            v.split(';')
+                .next()
+                .is_some_and(|v| v.trim().parse::<u64>() == Ok(0))
+        })
         || response
             .body
             .windows(b"pull rate limit".len())

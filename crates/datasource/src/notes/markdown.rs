@@ -388,31 +388,107 @@ fn list_item(line: &str) -> bool {
 /// Which lines are code: the one place a document's fences are tracked, so
 /// every reader of release notes agrees on them. Fences may use either
 /// character and any run of at least three, and may sit in a block quote or
-/// a list item. A shorter run inside a fence is content, not its close.
+/// a list item. As in CommonMark, a fence in a quote or list item ends with
+/// that container, and only a fence line in the same container closes it; a
+/// shorter run inside a fence is content, not its close.
 #[derive(Clone, Copy, Default)]
-pub(super) struct Fences(Option<(char, usize)>);
+pub(super) struct Fences(Option<Open>);
+#[derive(Clone, Copy)]
+struct Open {
+    ch: char,
+    count: usize,
+    /// Block quotes enclosing the fence.
+    quotes: usize,
+    /// The column a list item's content starts at, for a fence opened in
+    /// one.
+    list: Option<usize>,
+}
 impl Fences {
     pub(super) fn is_open(self) -> bool {
         self.0.is_some()
     }
     /// Moves past `line`: true when it opens or closes a fence.
     pub(super) fn advance(&mut self, line: &str) -> bool {
-        let Some((ch, count, rest)) = fence(line.trim_end_matches(['\n', '\r'])) else {
-            return false;
+        static LIST_MARKER: LazyLock<regex::Regex> = LazyLock::new(|| {
+            regex::Regex::new(r"^(?:[-+*]|[0-9]{1,9}[.)])[ \t]+").expect("list marker")
+        });
+        let line = line.trim_end_matches(['\n', '\r']);
+        let Some(open) = self.0 else {
+            let (quotes, rest) = unquote(line, usize::MAX);
+            let indent = rest.len() - rest.trim_start_matches(' ').len();
+            let (list, rest) = match LIST_MARKER.find(&rest[indent..]) {
+                Some(marker) => (Some(indent + marker.end()), &rest[indent + marker.end()..]),
+                None => (None, rest),
+            };
+            let Some((ch, count, _)) = token(rest) else {
+                return false;
+            };
+            self.0 = Some(Open {
+                ch,
+                count,
+                quotes,
+                list,
+            });
+            return true;
         };
-        match self.0 {
-            None => self.0 = Some((ch, count)),
-            Some((kind, size)) if kind == ch && count >= size && rest.trim().is_empty() => {
-                self.0 = None;
-            }
-            Some(_) => return false,
+        let (quotes, rest) = unquote(line, open.quotes);
+        let ended = |fences: &mut Self| {
+            // The container ended, and the fence with it; the line is read
+            // afresh, so it may open a fence of its own.
+            fences.0 = None;
+            fences.advance(line)
+        };
+        if quotes < open.quotes {
+            return ended(self);
         }
-        true
+        let rest = match open.list {
+            Some(column) => {
+                let indent = rest.len() - rest.trim_start_matches(' ').len();
+                if indent < column && !rest.trim().is_empty() {
+                    return ended(self);
+                }
+                &rest[indent.min(column)..]
+            }
+            None => rest,
+        };
+        match token(rest) {
+            Some((ch, count, tail))
+                if ch == open.ch && count >= open.count && tail.trim().is_empty() =>
+            {
+                self.0 = None;
+                true
+            }
+            _ => false,
+        }
     }
     /// The line that closes the open fence.
     fn closer(self) -> Option<String> {
-        self.0.map(|(ch, count)| ch.to_string().repeat(count))
+        self.0.map(|open| open.ch.to_string().repeat(open.count))
     }
+}
+
+/// Up to `depth` block-quote markers stripped from `line`: how many there
+/// were, and the rest.
+fn unquote(line: &str, depth: usize) -> (usize, &str) {
+    let mut rest = line;
+    let mut quotes = 0;
+    while quotes < depth {
+        let Some(inner) = rest.trim_start_matches([' ', '\t']).strip_prefix('>') else {
+            break;
+        };
+        rest = inner.strip_prefix(' ').unwrap_or(inner);
+        quotes += 1;
+    }
+    (quotes, rest)
+}
+
+/// A fence delimiter at the start of `text`: its character, its length and
+/// what follows it.
+fn token(text: &str) -> Option<(char, usize, &str)> {
+    let text = text.trim_start_matches([' ', '\t']);
+    let ch = text.chars().next().filter(|c| matches!(c, '`' | '~'))?;
+    let count = text.chars().take_while(|c| *c == ch).count();
+    (count >= 3).then(|| (ch, count, &text[count..]))
 }
 
 /// Lines with the fence state in force at their start.

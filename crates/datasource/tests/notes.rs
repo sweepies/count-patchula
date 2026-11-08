@@ -513,9 +513,12 @@ async fn release_body_batches_validate_timestamps_and_fetch_only_edited_bodies_a
 
 #[test]
 fn a_fence_in_a_list_item_or_quote_hides_its_headings() {
-    for open in ["- ```text", "> ```text", "1. ~~~"] {
-        let close = if open.ends_with('~') { "~~~" } else { "```" };
-        let text = format!("## 2.0.0\nNew\n{open}\n  ## 1.9.0\n{close}\nMore\n## 1.0.0\nOld\n");
+    for (open, inside, close) in [
+        ("- ```text", "  ## 1.9.0", "  ```"),
+        ("> ```text", "> ## 1.9.0", "> ```"),
+        ("1. ~~~", "   ## 1.9.0", "   ~~~"),
+    ] {
+        let text = format!("## 2.0.0\nNew\n{open}\n{inside}\n{close}\nMore\n## 1.0.0\nOld\n");
         let sections = parse_changelog(&text);
         assert_eq!(
             sections
@@ -525,6 +528,20 @@ fn a_fence_in_a_list_item_or_quote_hides_its_headings() {
             ["2.0.0", "1.0.0"],
             "{open}"
         );
+    }
+}
+
+/// A fence in a quote or list item that is never closed ends with its
+/// container, so the versions after it are still read.
+#[test]
+fn an_unclosed_fence_ends_with_its_quote_or_list_item() {
+    for open in ["> ```text\n> code", "- ```text\n  code"] {
+        let text = format!("## 2.0.0\nNew\n{open}\n## 1.0.0\nOld\n## 0.9.0\nOlder\n");
+        let versions: Vec<_> = parse_changelog(&text)
+            .into_iter()
+            .map(|s| s.version)
+            .collect();
+        assert_eq!(versions, ["2.0.0", "1.0.0", "0.9.0"], "{open}");
     }
 }
 
