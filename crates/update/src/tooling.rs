@@ -451,7 +451,7 @@ pub fn apply(
             continue;
         }
         let files: Vec<&str> = plan
-            .action
+            .action()
             .files
             .iter()
             .map(|f| f.path.as_str())
@@ -490,7 +490,7 @@ pub fn apply(
                 branches: Vec::new(),
                 silenced: silenced.clone(),
             });
-            entry.branches.push(plan.action.branch.clone());
+            entry.branches.push(plan.action().branch.clone());
             if silenced.is_none() {
                 plan.tooling.push(Callout {
                     rule,
@@ -700,65 +700,50 @@ mod tests {
         );
     }
     fn plan(branch: &str, advisory: bool) -> Plan {
-        Plan {
-            action: patchula_report::BranchAction {
-                repository: "demo/app".into(),
-                branch: branch.into(),
-                base_commit: "base".into(),
-                status: patchula_report::BranchStatus::Planned,
-                reason: None,
-                message: "chore(deps): update".into(),
-                previous_commit: None,
-                commit: None,
-                verified: None,
-                lockfile_pending: false,
-                files: Vec::new(),
-            },
-            contents: Default::default(),
-            identity: branch.into(),
-            fingerprint: String::new(),
-            changes: vec![crate::Change {
-                registry: None,
-                source: patchula_words::Source::Npm,
-                package: "lodash".into(),
-                file: "app/package.json".into(),
-                current: "4.17.20".into(),
-                current_version: Some("4.17.20".into()),
-                value: Some("4.17.21".into()),
-                version: Some("4.17.21".into()),
-                digest: None,
-                kind: patchula_words::Update::Patch,
-                merge: true,
-                labels: Vec::new(),
-                release_notes: false,
-                body_notes: Vec::new(),
-                advisories: advisory
-                    .then(|| patchula_report::Advisory {
-                        id: "GHSA-jf85-cpcp-j695".into(),
-                        aliases: Vec::new(),
-                        severity: None,
-                        summary: None,
-                        url: "https://osv.dev/vulnerability/GHSA-jf85-cpcp-j695".into(),
-                        fixed_in: None,
-                    })
-                    .into_iter()
-                    .collect(),
-                image: None,
-            }],
-            retry: false,
-            tree: None,
-            cached_pr: None,
-            input_fingerprint: String::new(),
-            lock_jobs: Vec::new(),
-            lockfiles_ready: true,
-            public_only: Default::default(),
-            deleted: Default::default(),
-            maintenance: false,
-            batch: None,
-            tooling: Vec::new(),
-            hold: None,
-            failure: None,
-        }
+        let mut plan = Plan::new(patchula_report::BranchAction {
+            repository: "demo/app".into(),
+            branch: branch.into(),
+            base_commit: "base".into(),
+            status: patchula_report::BranchStatus::Planned,
+            reason: None,
+            message: "chore(deps): update".into(),
+            previous_commit: None,
+            commit: None,
+            verified: None,
+            lockfile_pending: false,
+            files: Vec::new(),
+        });
+        plan.identity = branch.into();
+        plan.changes = vec![crate::Change {
+            registry: None,
+            source: patchula_words::Source::Npm,
+            package: "lodash".into(),
+            file: "app/package.json".into(),
+            current: "4.17.20".into(),
+            current_version: Some("4.17.20".into()),
+            value: Some("4.17.21".into()),
+            version: Some("4.17.21".into()),
+            digest: None,
+            kind: patchula_words::Update::Patch,
+            merge: true,
+            labels: Vec::new(),
+            release_notes: false,
+            body_notes: Vec::new(),
+            advisories: advisory
+                .then(|| patchula_report::Advisory {
+                    id: "GHSA-jf85-cpcp-j695".into(),
+                    aliases: Vec::new(),
+                    severity: None,
+                    summary: None,
+                    url: "https://osv.dev/vulnerability/GHSA-jf85-cpcp-j695".into(),
+                    fixed_in: None,
+                })
+                .into_iter()
+                .collect(),
+            image: None,
+        }];
+        plan.lockfiles_ready = true;
+        plan
     }
 
     fn config() -> Config {

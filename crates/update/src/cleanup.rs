@@ -78,7 +78,7 @@ pub async fn cleanup(
         .rest_pages(&format!("repos/{repo}/branches?per_page=100"), |_| false)
         .await
         .map_err(|e| e.to_string())?;
-    let desired: BTreeSet<_> = plans.iter().map(|p| p.action.branch.as_str()).collect();
+    let desired: BTreeSet<_> = plans.iter().map(|p| p.action().branch.as_str()).collect();
     let candidates: Vec<_> = refs
         .iter()
         .filter(|r| {

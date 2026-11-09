@@ -58,7 +58,7 @@ async fn save_history(
 ) -> Result<(), String> {
     let merged: Vec<_> = plans
         .iter()
-        .filter(|p| p.action.status == BranchStatus::Merged)
+        .filter(|p| p.action().status == BranchStatus::Merged)
         .filter_map(|p| p.cached_pr.clone())
         .collect();
     if merged.is_empty() {
@@ -399,7 +399,7 @@ pub async fn reconcile(
 ) -> Vec<PullRequestAction> {
     let mut actions = Vec::new();
     for plan in plans.iter_mut() {
-        if !requested(plan, config) || plan.action.status != BranchStatus::Unchanged {
+        if !requested(plan, config) || plan.action().status != BranchStatus::Unchanged {
             continue;
         }
         let Some(pr) = &mut plan.cached_pr else {
@@ -421,11 +421,11 @@ pub async fn reconcile(
             Some(crate::pull_requests::MergeNote::Reason(reason.clone())),
         );
         if status == PullRequestStatus::Merged {
-            plan.action.status = BranchStatus::Merged;
+            plan.merged();
         }
         actions.push(PullRequestAction {
             repository: repo.repository.clone(),
-            branch: plan.action.branch.clone(),
+            branch: plan.action().branch.clone(),
             number: proof["number"].as_u64(),
             url: proof["html_url"].as_str().map(str::to_owned),
             status,

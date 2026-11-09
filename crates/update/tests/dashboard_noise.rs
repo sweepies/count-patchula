@@ -158,59 +158,43 @@ fn plan(
     version: &str,
     reason: Option<&str>,
 ) -> Plan {
-    Plan {
-        action: BranchAction {
-            repository: "sweepies/count-patchula".into(),
-            branch: branch.into(),
-            base_commit: "base".into(),
-            status: if reason.is_some() {
-                BranchStatus::Error
-            } else {
-                BranchStatus::Planned
-            },
-            reason: reason.map(str::to_owned),
-            message: message.into(),
-            previous_commit: None,
-            commit: None,
-            verified: None,
-            lockfile_pending: false,
-            files: Vec::new(),
+    let mut plan = Plan::new(BranchAction {
+        repository: "sweepies/count-patchula".into(),
+        branch: branch.into(),
+        base_commit: "base".into(),
+        status: if reason.is_some() {
+            BranchStatus::Error
+        } else {
+            BranchStatus::Planned
         },
-        contents: Default::default(),
-        identity: branch.into(),
-        fingerprint: String::new(),
-        changes: vec![Change {
-            registry: None,
-            source: patchula_words::Source::Crates,
-            package: package.into(),
-            file: file.into(),
-            current: "1".into(),
-            current_version: Some("1".into()),
-            value: Some(version.into()),
-            version: Some(version.into()),
-            digest: None,
-            kind: patchula_words::Update::Patch,
-            merge: false,
-            labels: Vec::new(),
-            release_notes: true,
-            body_notes: Vec::new(),
-            advisories: Vec::new(),
-            image: None,
-        }],
-        retry: false,
-        tree: None,
-        cached_pr: None,
-        input_fingerprint: String::new(),
-        lock_jobs: Vec::new(),
-        lockfiles_ready: false,
-        public_only: Default::default(),
-        deleted: Default::default(),
-        maintenance: false,
-        batch: None,
-        tooling: Vec::new(),
-        hold: None,
-        failure: None,
-    }
+        reason: reason.map(str::to_owned),
+        message: message.into(),
+        previous_commit: None,
+        commit: None,
+        verified: None,
+        lockfile_pending: false,
+        files: Vec::new(),
+    });
+    plan.identity = branch.into();
+    plan.changes = vec![Change {
+        registry: None,
+        source: patchula_words::Source::Crates,
+        package: package.into(),
+        file: file.into(),
+        current: "1".into(),
+        current_version: Some("1".into()),
+        value: Some(version.into()),
+        version: Some(version.into()),
+        digest: None,
+        kind: patchula_words::Update::Patch,
+        merge: false,
+        labels: Vec::new(),
+        release_notes: true,
+        body_notes: Vec::new(),
+        advisories: Vec::new(),
+        image: None,
+    }];
+    plan
 }
 
 fn render() -> String {
@@ -218,18 +202,19 @@ fn render() -> String {
 }
 fn render_with(repo: &Repository) -> String {
     let process = lockfile_process();
-    let reason = format!("lockfile generation failed: cargo: {process}");
     let mut base64 = plan(
         "patchula/base64-0.x",
         "chore(deps): update base64 to 0.23.1",
         "base64",
         "Cargo.lock",
         "0.23.1",
-        Some(&reason),
+        None,
     );
-    base64.failure = Some(patchula_update::text::tool_failure(
-        "lockfile generation failed: cargo",
-        &process,
+    base64.lockfiles_failed(patchula_update::lockfiles::Error::Tool(
+        patchula_update::lockfiles::ToolFailure {
+            context: "cargo".into(),
+            failure: process,
+        },
     ));
     let plans = [
         plan(

@@ -251,7 +251,7 @@ impl Engine {
                         .collect();
                     controls
                         .branches
-                        .insert(plan.action.branch.clone(), dependencies.clone());
+                        .insert(plan.action().branch.clone(), dependencies.clone());
                     controls
                         .targets
                         .insert(patchula_update::update_key(&plan), dependencies);

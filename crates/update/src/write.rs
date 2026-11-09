@@ -38,12 +38,10 @@ pub fn needs_requeue(action: &patchula_report::BranchAction) -> bool {
 }
 
 fn refuse(plan: &mut Plan, refusal: Refusal) {
-    let (status, reason) = match refusal {
-        Refusal::Stale(reason) => (BranchStatus::Stale, reason.to_owned()),
-        Refusal::Failed(error) => (BranchStatus::Error, error),
-    };
-    plan.action.status = status;
-    plan.action.reason = Some(reason);
+    match refusal {
+        Refusal::Stale(reason) => plan.stale(reason),
+        Refusal::Failed(error) => plan.error(error),
+    }
 }
 
 fn field<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
@@ -62,45 +60,6 @@ pub(crate) fn ref_path(repo: &str, branch: &str) -> String {
 pub(crate) async fn fresh(client: &Client, path: &str) -> Result<Value, String> {
     let response = client.get(path).await.map_err(|e| e.to_string())?;
     serde_json::from_slice(&response.body).map_err(|e| e.to_string())
-}
-
-/// Preconditions run before creating Git objects; atomic leases protect races.
-pub async fn apply(
-    client: &Client,
-    plan: &mut Plan,
-    snapshot: &Snapshot,
-    default_branch: &str,
-    rebase: Rebase,
-    dry_run: bool,
-) {
-    if plan.action.status != BranchStatus::Planned {
-        return;
-    }
-    if dry_run {
-        return;
-    }
-    if !plan.lockfiles_ready {
-        plan.action.status = BranchStatus::Error;
-        plan.action.reason =
-            Some("lockfiles must be generated successfully before publication".into());
-        return;
-    }
-    let result = match prepare(
-        client,
-        &plan.action.repository,
-        &plan.action.base_commit,
-        default_branch,
-    )
-    .await
-    {
-        Ok(base) => apply_inner(client, plan, snapshot, rebase, &base, true)
-            .await
-            .map_err(Refusal::Failed),
-        Err(refusal) => Err(refusal),
-    };
-    if let Err(error) = result {
-        refuse(plan, error);
-    }
 }
 
 struct Base {
@@ -166,29 +125,27 @@ pub async fn apply_all(
     }
     for plan in plans
         .iter_mut()
-        .filter(|p| p.action.status == BranchStatus::Planned && !p.lockfiles_ready)
+        .filter(|p| p.action().status == BranchStatus::Planned && !p.lockfiles_ready)
     {
-        plan.action.status = BranchStatus::Error;
-        plan.action.reason =
-            Some("lockfiles must be generated successfully before publication".into());
+        plan.error("lockfiles must be generated successfully before publication");
     }
     let Some(first) = plans
         .iter()
-        .find(|p| p.action.status == BranchStatus::Planned)
+        .find(|p| p.action().status == BranchStatus::Planned)
     else {
         return;
     };
     let base = prepare(
         client,
-        &first.action.repository,
-        &first.action.base_commit,
+        &first.action().repository,
+        &first.action().base_commit,
         default_branch,
     )
     .await;
     let pending: std::collections::BTreeSet<_> = plans
         .iter()
-        .filter(|p| p.action.status == BranchStatus::Planned)
-        .map(|p| p.action.branch.clone())
+        .filter(|p| p.action().status == BranchStatus::Planned)
+        .map(|p| p.action().branch.clone())
         .collect();
     // Build the borrowed futures before awaiting the stream. This also keeps
     // the engine future Send when a long-lived server spawns its batch worker.
@@ -197,11 +154,11 @@ pub async fn apply_all(
         .map(|plan: &mut Plan| {
             let base = &base;
             async move {
-                if plan.action.status != BranchStatus::Planned {
+                if plan.action().status != BranchStatus::Planned {
                     return;
                 }
                 let result = match base {
-                    Ok(base) => apply_inner(client, plan, snapshot, rebase, base, false)
+                    Ok(base) => apply_inner(client, plan, snapshot, rebase, base)
                         .await
                         .map_err(Refusal::Failed),
                     Err(refusal) => Err(refusal.clone()),
@@ -223,15 +180,15 @@ pub async fn apply_all(
         // update of it.
         for chunk in plans.chunks_mut(50) {
             let eligible = |p: &Plan| {
-                pending.contains(&p.action.branch)
+                pending.contains(&p.action().branch)
                     && matches!(
-                        p.action.status,
+                        p.action().status,
                         BranchStatus::Created | BranchStatus::Updated | BranchStatus::Rebased
                     )
             };
             let mut refs = Vec::new();
             for p in chunk.iter().filter(|p| eligible(p)) {
-                refs.push(json!({"name":format!("refs/heads/{}",p.action.branch),"beforeOid":p.action.previous_commit.as_deref().unwrap_or("0000000000000000000000000000000000000000"),"afterOid":p.action.commit,"force":true}));
+                refs.push(json!({"name":format!("refs/heads/{}",p.action().branch),"beforeOid":p.action().previous_commit.as_deref().unwrap_or("0000000000000000000000000000000000000000"),"afterOid":p.action().commit,"force":true}));
             }
             if refs.is_empty() {
                 continue;
@@ -253,9 +210,7 @@ pub async fn apply_all(
             };
             if let Some(error) = error {
                 for p in chunk.iter_mut().filter(|p| eligible(p)) {
-                    p.action.status = BranchStatus::Error;
-                    p.action.reason = Some(error.clone());
-                    p.action.commit = None;
+                    p.error(error.clone());
                 }
             }
         }
@@ -267,29 +222,27 @@ async fn apply_inner(
     snapshot: &Snapshot,
     rebase: Rebase,
     base: &Base,
-    publish_ref: bool,
 ) -> Result<(), String> {
     let default_branch = &base.default_branch;
-    let repo = plan.action.repository.clone();
-    if repo != base.repository || plan.action.base_commit != base.commit {
+    let repo = plan.action().repository.clone();
+    if repo != base.repository || plan.action().base_commit != base.commit {
         return Err("mixed repositories or base commits in write batch".into());
     }
-    if plan.action.branch == *default_branch {
+    if plan.action().branch == *default_branch {
         return Err("update branch equals default branch".into());
     }
-    if plan.contents.len() != plan.action.files.len()
+    if plan.contents.len() != plan.action().files.len()
         || plan
-            .action
+            .action()
             .files
             .iter()
             .any(|f| !plan.contents.contains_key(&f.path))
     {
         return Err("plan contents and file preconditions differ".into());
     }
-    let node_id = &base.node_id;
     let tree_sha = &base.tree_sha;
     let entries = &base.entries;
-    for file in &plan.action.files {
+    for file in &plan.action().files {
         let blob = snapshot
             .files
             .get(&file.path)
@@ -318,7 +271,7 @@ async fn apply_inner(
             ));
         }
     }
-    let old = match client.get(&ref_path(&repo, &plan.action.branch)).await {
+    let old = match client.get(&ref_path(&repo, &plan.action().branch)).await {
         Ok(response) => {
             let value: Value = serde_json::from_slice(&response.body).map_err(|e| e.to_string())?;
             Some(field(&value["object"], "sha")?.to_owned())
@@ -326,7 +279,7 @@ async fn apply_inner(
         Err(patchula_github::Error::Status(404)) => None,
         Err(e) => return Err(e.to_string()),
     };
-    plan.action.previous_commit.clone_from(&old);
+    plan.record_head(old.clone());
     let mut moved_base = false;
     if let Some(old) = &old {
         let actor = base
@@ -343,13 +296,11 @@ async fn apply_inner(
         let existing_tip = fresh(client, &format!("repos/{repo}/git/commits/{old}")).await?;
         let tip_message = existing_tip["message"].as_str().unwrap_or("");
         if trailers::base(tip_message).is_none() {
-            plan.action.status = BranchStatus::Protected;
-            plan.action.reason = Some("unmarked branch history; left untouched".into());
+            plan.protect("unmarked branch history; left untouched");
             return Ok(());
         }
         let Some(recorded) = recorded_base(tip_message) else {
-            plan.action.status = BranchStatus::Protected;
-            plan.action.reason = Some("invalid recorded branch base; left untouched".into());
+            plan.protect("invalid recorded branch base; left untouched");
             return Ok(());
         };
         let compare = match client
@@ -359,9 +310,7 @@ async fn apply_inner(
             .await
         {
             Err(patchula_github::Error::Status(404 | 422)) => {
-                plan.action.status = BranchStatus::Protected;
-                plan.action.reason =
-                    Some("recorded branch base is not a commit here; left untouched".into());
+                plan.protect("recorded branch base is not a commit here; left untouched");
                 return Ok(());
             }
             result => serde_json::from_slice::<Value>(&result.map_err(|e| e.to_string())?.body)
@@ -375,8 +324,9 @@ async fn apply_inner(
             .ok_or("missing branch commit count")?;
         let owned = total == commits.len() as u64 && all_ours(commits, actor);
         if !owned {
-            plan.action.status = BranchStatus::Protected;
-            plan.action.reason = Some("branch contains human, unverified, unmarked or uninspectable commits; left untouched".into());
+            plan.protect(
+                "branch contains human, unverified, unmarked or uninspectable commits; left untouched",
+            );
             return Ok(());
         }
         let latest = commits.last().ok_or("empty branch history")?;
@@ -387,7 +337,7 @@ async fn apply_inner(
             .as_str()
             .ok_or("missing commit message")?;
         let parent = trailers::base(message).ok_or("missing patchula base marker")?;
-        moved_base = parent != plan.action.base_commit;
+        moved_base = parent != plan.action().base_commit;
         if !moved_base
             || rebase == Rebase::Conflicts
                 && trailers::plan(message) == Some(plan.fingerprint.as_str())
@@ -439,10 +389,7 @@ async fn apply_inner(
                 }
             }
             if contents_match && (moved_base || leaves(existing_entries) == expected) {
-                plan.action.status = BranchStatus::Unchanged;
-                plan.action.commit = Some(old.clone());
-                plan.action.verified = Some(true);
-                plan.tree = Some(existing_tree.into());
+                plan.unchanged(old.clone(), existing_tree.into());
                 return Ok(());
             }
         }
@@ -460,53 +407,42 @@ async fn apply_inner(
         .map_err(|e| e.to_string())?;
     let tree = field(&tree, "sha")?;
     plan.tree = Some(tree.into());
-    let pending = if plan.action.lockfile_pending {
+    let pending = if plan.action().lockfile_pending {
         "\n\nLockfile pending: manifest-only test branch; regenerate before merging."
     } else {
         ""
     };
     let message = format!(
         "{}{}\n\n{}",
-        plan.action.message,
+        plan.action().message,
         pending,
-        trailers::block(&plan.identity, &plan.action.base_commit, &plan.fingerprint)
+        trailers::block(
+            &plan.identity,
+            &plan.action().base_commit,
+            &plan.fingerprint
+        )
     );
     // App bot signing requires GitHub-supplied authorship and signature.
     let commit = client
         .post(
             &format!("repos/{repo}/git/commits"),
-            json!({"message":message,"tree":tree,"parents":[plan.action.base_commit]}),
+            json!({"message":message,"tree":tree,"parents":[plan.action().base_commit]}),
         )
         .await
         .map_err(|e| e.to_string())?;
-    plan.action.verified = commit["verification"]["verified"].as_bool();
-    if plan.action.verified != Some(true) {
+    let verified = commit["verification"]["verified"].as_bool();
+    plan.set_verified(verified);
+    if verified != Some(true) {
         return Err("GitHub returned an unverified Git Data commit; branch left untouched. Check App bot signing; createCommitOnBranch may be required".into());
     }
     let sha = field(&commit, "sha")?;
-    if publish_ref {
-        let zero = "0000000000000000000000000000000000000000";
-        let published = client.graphql(REF_UPDATE, json!({"input":{"repositoryId":node_id,"refUpdates":[
-        {"name":format!("refs/heads/{}",plan.action.branch),"beforeOid":old.as_deref().unwrap_or(zero),"afterOid":sha,"force":true}
-    ]}})).await.map_err(|e| format!("atomic ref lease failed; branch may have changed, rerun: {e}"))?;
-        if !published["updateRefs"].is_object() {
-            return Err(
-            "GitHub did not acknowledge the ref update; inspect the current branch before retrying"
-                .into(),
-        );
-        }
-    }
-    plan.action.commit = Some(sha.into());
-    plan.action.status = if old.is_none() {
+    let status = if old.is_none() {
         BranchStatus::Created
     } else if moved_base {
         BranchStatus::Rebased
     } else {
         BranchStatus::Updated
     };
-    if plan.action.lockfile_pending {
-        plan.action.reason =
-            Some("lockfile pending: manifest-only test branch; regenerate before merging".into());
-    }
+    plan.committed(sha.into(), status);
     Ok(())
 }

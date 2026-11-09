@@ -44,7 +44,7 @@ pub fn update_key(plan: &Plan) -> String {
         .map(|c| (&c.source, &c.package, &c.value, &c.version, &c.digest))
         .collect();
     hash(
-        serde_json::to_string(&(&plan.action.branch, targets))
+        serde_json::to_string(&(&plan.action().branch, targets))
             .expect("serializable targets")
             .as_bytes(),
     )
@@ -53,7 +53,7 @@ pub fn update_key(plan: &Plan) -> String {
 /// never while a lockfile is pending; maintenance plans follow the default
 /// policy, and every other plan merges only when all its changes opt in.
 pub(crate) fn merge_requested(plan: &Plan, policy: &patchula_config::Policy) -> bool {
-    !plan.action.lockfile_pending
+    !plan.action().lockfile_pending
         && if plan.maintenance {
             policy.merge
         } else {
@@ -262,25 +262,6 @@ impl Lifecycle {
     }
     /// Authoritative inventory includes closed history and all pages. No cached
     /// decisions can suppress a newly closed PR or permit an over-budget create.
-    pub async fn prepare(
-        client: &Client,
-        repository: &patchula_report::Repository,
-        plans: &mut [Plan],
-        config: &Config,
-        now: DateTime<Utc>,
-        recheck: Recheck,
-    ) -> Result<Self, String> {
-        Self::prepare_with_controls(
-            client,
-            repository,
-            plans,
-            config,
-            now,
-            recheck,
-            &Default::default(),
-        )
-        .await
-    }
     pub async fn prepare_with_controls(
         client: &Client,
         repository: &patchula_report::Repository,
@@ -328,7 +309,7 @@ impl Lifecycle {
             batched: controls.batched.clone(),
             server: None,
         };
-        let desired: BTreeSet<_> = plans.iter().map(|p| p.action.branch.as_str()).collect();
+        let desired: BTreeSet<_> = plans.iter().map(|p| p.action().branch.as_str()).collect();
         // The repository metadata does not change between pulls, so it is
         // fetched once for all obsolete PRs, on the first that needs it.
         let mut meta = None;
@@ -433,17 +414,16 @@ impl Lifecycle {
             .count() as u32;
         for plan in plans
             .iter_mut()
-            .filter(|p| p.action.status == BranchStatus::Planned)
+            .filter(|p| p.action().status == BranchStatus::Planned)
         {
-            let name = &plan.action.branch;
+            let name = &plan.action().branch;
             let existing: Vec<_> = state
                 .prs
                 .iter()
                 .filter(|p| p["state"] == "open" && branch(p) == name && same_repo(p, repo))
                 .collect();
             if existing.len() > 1 || existing.first().is_some_and(|p| !owned_pr(p, actor, repo)) {
-                plan.action.status = BranchStatus::Protected;
-                plan.action.reason = Some("unowned or ambiguous open PR for branch".into());
+                plan.protect("unowned or ambiguous open PR for branch");
                 continue;
             }
             let key = update_key(plan);
@@ -510,7 +490,7 @@ impl Lifecycle {
         for plan in plans.iter().filter(|p| {
             p.cached_pr.is_none()
                 && matches!(
-                    p.action.status,
+                    p.action().status,
                     BranchStatus::Created
                         | BranchStatus::Updated
                         | BranchStatus::Rebased
@@ -518,7 +498,9 @@ impl Lifecycle {
                 )
         }) {
             let existing = self.prs.iter().find(|p| {
-                p["state"] == "open" && branch(p) == plan.action.branch && same_repo(p, &self.repo)
+                p["state"] == "open"
+                    && branch(p) == plan.action().branch
+                    && same_repo(p, &self.repo)
             });
             let (_, marker) = self.body_intent(plan);
             if self.reusable_body(plan, existing, &marker) {
@@ -556,7 +538,7 @@ impl Lifecycle {
             if let Some(pr) = &plan.cached_pr {
                 self.actions.push(action(
                     &self.repo,
-                    &plan.action.branch,
+                    &plan.action().branch,
                     Some(pr),
                     PullRequestStatus::Unchanged,
                     None,
@@ -564,7 +546,7 @@ impl Lifecycle {
                 continue;
             }
             if !matches!(
-                plan.action.status,
+                plan.action().status,
                 BranchStatus::Created
                     | BranchStatus::Updated
                     | BranchStatus::Rebased
@@ -575,7 +557,7 @@ impl Lifecycle {
             if let Err(error) = self.publish_one(client, sources, plan).await {
                 self.actions.push(action(
                     &self.repo,
-                    &plan.action.branch,
+                    &plan.action().branch,
                     None,
                     PullRequestStatus::Error,
                     Some(error),
@@ -591,7 +573,7 @@ impl Lifecycle {
             return Ok(());
         };
         if !matches!(
-            plan.action.status,
+            plan.action().status,
             BranchStatus::Created
                 | BranchStatus::Updated
                 | BranchStatus::Rebased
@@ -603,7 +585,9 @@ impl Lifecycle {
             .prs
             .iter()
             .find(|p| {
-                p["state"] == "open" && branch(p) == plan.action.branch && same_repo(p, &self.repo)
+                p["state"] == "open"
+                    && branch(p) == plan.action().branch
+                    && same_repo(p, &self.repo)
             })
             .and_then(|p| p["number"].as_u64())
         else {
@@ -614,7 +598,7 @@ impl Lifecycle {
             .iter()
             .filter(|p| {
                 p["state"] == "open"
-                    && branch(p) != plan.action.branch
+                    && branch(p) != plan.action().branch
                     && owned_pr(p, &self.actor, &self.repo)
                     && markers::ownership_marker(body(p))
                         .is_some_and(|m| self.batched.contains(&m.update))
@@ -701,11 +685,13 @@ impl Lifecycle {
             .prs
             .iter()
             .find(|p| {
-                p["state"] == "open" && branch(p) == plan.action.branch && same_repo(p, &self.repo)
+                p["state"] == "open"
+                    && branch(p) == plan.action().branch
+                    && same_repo(p, &self.repo)
             })
             .cloned();
         let text = self.render(sources, plan, existing.as_ref()).await;
-        let title = truncate(&plan.action.message.replace(['\n', '\r'], " "), 250);
+        let title = truncate(&plan.action().message.replace(['\n', '\r'], " "), 250);
         let path = format!("repos/{}/pulls", self.repo);
         let (mut pr, status) = if let Some(pr) = existing {
             // A user can close a PR while branches are being written. Never
@@ -718,7 +704,7 @@ impl Lifecycle {
                     .await
                     .map_err(|e| e.to_string())?;
                 if !owned_pr(&fresh, &self.actor, &self.repo)
-                    || branch(&fresh) != plan.action.branch
+                    || branch(&fresh) != plan.action().branch
                     || markers::ownership_marker(body(&fresh))
                         != markers::ownership_marker(body(&pr))
                 {
@@ -730,7 +716,7 @@ impl Lifecycle {
                 if fresh["state"] != "open" {
                     self.actions.push(action(
                         &self.repo,
-                        &plan.action.branch,
+                        &plan.action().branch,
                         Some(&fresh),
                         PullRequestStatus::Skipped,
                         Some("closed-by-owner: PR closed during this run; left closed".into()),
@@ -740,12 +726,12 @@ impl Lifecycle {
                     }
                     return Ok(());
                 }
-                if fresh["head"]["sha"] == plan.action.commit.as_deref().unwrap_or("") {
+                if fresh["head"]["sha"] == plan.action().commit.as_deref().unwrap_or("") {
                     break fresh;
                 }
                 // Only the exact head verified before our publication is an
                 // expected stale value. Never retry an unfamiliar commit.
-                if fresh["head"]["sha"] != plan.action.previous_commit.as_deref().unwrap_or("") {
+                if fresh["head"]["sha"] != plan.action().previous_commit.as_deref().unwrap_or("") {
                     return Err(
                         "PR head moved after branch publication to an unexpected commit; rerun"
                             .into(),
@@ -775,7 +761,7 @@ impl Lifecycle {
                 (updated, PullRequestStatus::Updated)
             }
         } else {
-            let created = client.post(&path,json!({"title":title,"body":text,"head":plan.action.branch,"base":self.base,"maintainer_can_modify":false})).await.map_err(|e|e.to_string())?;
+            let created = client.post(&path,json!({"title":title,"body":text,"head":plan.action().branch,"base":self.base,"maintainer_can_modify":false})).await.map_err(|e|e.to_string())?;
             (created, PullRequestStatus::Created)
         };
         let number = pr["number"].as_u64().ok_or("missing created PR number")?;
@@ -837,7 +823,7 @@ impl Lifecycle {
                     client,
                     &json!(id),
                     method,
-                    &json!(plan.action.commit),
+                    &json!(plan.action().commit),
                 )
                 .await?
                     == crate::automerge::Native::Enabled;
@@ -861,7 +847,7 @@ impl Lifecycle {
         }
         self.actions.push(action(
             &self.repo,
-            &plan.action.branch,
+            &plan.action().branch,
             Some(&pr),
             status,
             None,
@@ -885,7 +871,7 @@ impl Lifecycle {
                 "\nScheduled {} using the repository's mise tool versions.\n",
                 safe(&self.maintenance_group)
             ));
-            for file in &plan.action.files {
+            for file in &plan.action().files {
                 append(&mut text, &format!("\n- {}", cell(&file.path)), 18_000);
             }
         }
@@ -915,7 +901,7 @@ impl Lifecycle {
             }
             text.push_str(&row);
         }
-        if plan.action.lockfile_pending {
+        if plan.action().lockfile_pending {
             text.push_str("\nLockfile pending: regenerate and validate it before merging.\n");
         }
         if let Some(items) = &plan.batch {
@@ -946,7 +932,7 @@ impl Lifecycle {
             &text,
             ranges,
             recheck_hashed(self.recheck),
-            self.branch_permits.get(&plan.action.branch),
+            self.branch_permits.get(&plan.action().branch),
         );
         // Only an advertised server joins the hash, so bodies written without
         // one keep their hash.
@@ -1031,7 +1017,7 @@ impl Lifecycle {
         let controls = Self::controls(plan);
         let permit = self
             .branch_permits
-            .get(&plan.action.branch)
+            .get(&plan.action().branch)
             .map(crate::dashboard::permit_marker);
         markers::START.len()
             + 1
@@ -1059,7 +1045,7 @@ impl Lifecycle {
         let controls = Self::controls(plan);
         let permit = self
             .branch_permits
-            .get(&plan.action.branch)
+            .get(&plan.action().branch)
             .map(crate::dashboard::permit_marker);
         // The intent and the release notes share the room the budget leaves
         // after his controls, exactly as releases have always counted it.

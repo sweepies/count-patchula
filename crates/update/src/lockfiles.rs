@@ -596,42 +596,29 @@ pub fn maintenance(
             .unwrap()
             .as_bytes(),
     );
-    Ok(Some(Plan {
-        action: BranchAction {
-            repository: repository.repository.clone(),
-            branch: crate::branch_name(&config.prs.branch, "lock-file-maintenance", "maintenance")?,
-            base_commit: repository.commit.clone().ok_or("missing base")?,
-            status: if due {
-                BranchStatus::Planned
-            } else {
-                BranchStatus::Skipped
-            },
-            reason: (!due).then(|| crate::plan::Hold::MaintenanceWindow.text().to_owned()),
-            message: format!("{} lock file maintenance", config.defaults.commit_prefix),
-            previous_commit: None,
-            commit: None,
-            verified: None,
-            lockfile_pending: false,
-            files: Vec::new(),
-        },
-        contents: BTreeMap::new(),
-        identity: hash(b"lock-file-maintenance"),
-        fingerprint: fingerprint.clone(),
-        input_fingerprint: fingerprint,
-        changes: Vec::new(),
-        retry: false,
-        tree: None,
-        cached_pr: None,
-        lock_jobs: jobs.into_iter().collect(),
-        lockfiles_ready: false,
-        public_only: snapshot.public_only.clone(),
-        deleted: BTreeSet::new(),
-        maintenance: true,
-        batch: None,
-        tooling: Vec::new(),
-        hold: (!due).then_some(crate::plan::Hold::MaintenanceWindow),
-        failure: None,
-    }))
+    let mut plan = Plan::new(BranchAction {
+        repository: repository.repository.clone(),
+        branch: crate::branch_name(&config.prs.branch, "lock-file-maintenance")?,
+        base_commit: repository.commit.clone().ok_or("missing base")?,
+        status: BranchStatus::Planned,
+        reason: None,
+        message: format!("{} lock file maintenance", config.defaults.commit_prefix),
+        previous_commit: None,
+        commit: None,
+        verified: None,
+        lockfile_pending: false,
+        files: Vec::new(),
+    });
+    plan.identity = hash(b"lock-file-maintenance");
+    plan.fingerprint = fingerprint.clone();
+    plan.input_fingerprint = fingerprint;
+    plan.lock_jobs = jobs.into_iter().collect();
+    plan.public_only = snapshot.public_only.clone();
+    plan.maintenance = true;
+    if !due {
+        plan.hold(crate::plan::Hold::MaintenanceWindow);
+    }
+    Ok(Some(plan))
 }
 
 /// When a repository's lockfile maintenance last completed.
@@ -658,11 +645,11 @@ pub async fn defer_completed_refresh(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), String> {
     use chrono::Datelike;
-    if !plan.maintenance || plan.action.status != BranchStatus::Planned {
+    if !plan.maintenance || plan.action().status != BranchStatus::Planned {
         return Ok(());
     }
     if let Some(last) = cache
-        .state::<MaintenanceSuccess>(&refresh_scope(&plan.action.repository))
+        .state::<MaintenanceSuccess>(&refresh_scope(&plan.action().repository))
         .await
         .map_err(|e| e.to_string())?
         && let Some(last) = chrono::DateTime::<chrono::Utc>::from_timestamp(last.0, 0)
@@ -682,7 +669,7 @@ pub async fn record_refresh(
     for plan in plans.iter().filter(|p| p.maintenance && p.lockfiles_ready) {
         if plan.held(&crate::plan::Hold::LockfilesCurrent)
             || actions.iter().any(|a| {
-                a.branch == plan.action.branch
+                a.branch == plan.action().branch
                     && matches!(
                         a.status,
                         patchula_report::PullRequestStatus::Created
@@ -693,7 +680,7 @@ pub async fn record_refresh(
         {
             cache
                 .set_state(
-                    &refresh_scope(&plan.action.repository),
+                    &refresh_scope(&plan.action().repository),
                     &MaintenanceSuccess(now.timestamp()),
                 )
                 .await
@@ -867,25 +854,13 @@ impl Runner {
     }
     /// One plan's lockfiles, and the base blobs of the files they change.
     async fn prepare_plan(&self, plan: &mut Plan, config: &Config) -> BTreeMap<String, Blob> {
-        if plan.action.status != BranchStatus::Planned || plan.lockfiles_ready {
+        if plan.action().status != BranchStatus::Planned || plan.lockfiles_ready {
             return BTreeMap::new();
         }
         match self.generate(plan, config).await {
             Ok(added) => added,
             Err(error) => {
-                plan.action.status = BranchStatus::Error;
-                match error {
-                    Error::Tool(tool) => {
-                        plan.action.reason = Some(format!("lockfile generation failed: {tool}"));
-                        plan.failure = Some(crate::text::tool_failure(
-                            &format!("lockfile generation failed: {}", tool.context),
-                            &tool.failure,
-                        ));
-                    }
-                    Error::Text(text) => {
-                        plan.action.reason = Some(format!("lockfile generation failed: {text}"));
-                    }
-                }
+                plan.lockfiles_failed(error);
                 BTreeMap::new()
             }
         }
@@ -1040,16 +1015,8 @@ impl Runner {
                 }),
             );
         }
-        plan.contents = contents;
-        plan.deleted = deleted;
-        plan.action.files = files.into_values().collect();
-        plan.lockfiles_ready = true;
-        plan.fingerprint = hash(
-            serde_json::to_string(&(&plan.contents, &plan.deleted, &plan.action.message))
-                .unwrap()
-                .as_bytes(),
-        );
-        if plan.action.files.is_empty() {
+        plan.lockfiles_generated(contents, deleted, files.into_values().collect());
+        if plan.action().files.is_empty() {
             plan.hold(crate::plan::Hold::LockfilesCurrent);
         }
         Ok(added)

@@ -58,7 +58,7 @@ impl Runner {
     ) -> Result<(BTreeMap<String, Blob>, BTreeMap<String, String>), Error> {
         let clones = self.cache.join("clones");
         std::fs::create_dir_all(&clones).map_err(|e| e.to_string())?;
-        let name = hash(plan.action.repository.as_bytes());
+        let name = hash(plan.action().repository.as_bytes());
         let clone = clones.join(&name);
         let lock = std::fs::File::options()
             .write(true)
@@ -83,7 +83,7 @@ impl Runner {
             )
             .await?;
         }
-        let repo = &plan.action.repository;
+        let repo = &plan.action().repository;
         let (owner, name) = repo.split_once('/').ok_or("invalid repository")?;
         if [owner, name].iter().any(|s| {
             s.is_empty()
@@ -108,7 +108,7 @@ impl Runner {
             )
             .await?;
         }
-        let base = &plan.action.base_commit;
+        let base = &plan.action().base_commit;
         if base.len() != 40 || !base.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err("invalid checkout base OID".into());
         }
@@ -212,7 +212,7 @@ impl Runner {
             );
         }
         // Manifest edits were extracted through the API; the clone must agree.
-        for file in &plan.action.files {
+        for file in &plan.action().files {
             if baseline.get(&file.path).map(|b| b.sha.as_str()) != Some(&file.blob_sha) {
                 return Err(
                     format!("checkout disagrees with extracted manifest {}", file.path).into(),
