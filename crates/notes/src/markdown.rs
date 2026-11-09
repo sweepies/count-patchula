@@ -50,7 +50,7 @@ pub fn inert(text: &str) -> String {
 #[derive(Clone, Copy)]
 pub enum Links<'a> {
     Github(&'a str),
-    Forge(&'a super::source::Forge),
+    Forge(&'a crate::Forge),
     /// Text from no repository, such as a chart's own list of changes. A bare
     /// `#123` names nothing GitHub should link, and `owner/repo#123` is a
     /// GitHub reference.
@@ -70,8 +70,8 @@ impl Links<'_> {
             Self::Forge(forge) => {
                 let path = owner.unwrap_or(&forge.path);
                 let route = match forge.kind {
-                    super::source::ForgeKind::Gitlab => "-/issues",
-                    super::source::ForgeKind::Gitea => "issues",
+                    crate::ForgeKind::Gitlab => "-/issues",
+                    crate::ForgeKind::Gitea => "issues",
                 };
                 Some(format!(
                     "[{path}#{number}](https://{}/{path}/{route}/{number})",

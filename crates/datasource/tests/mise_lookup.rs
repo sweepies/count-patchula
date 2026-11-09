@@ -269,97 +269,12 @@ async fn a_tool_that_installs_from_a_git_ref_has_no_releases_to_update_to() {
 }
 
 #[tokio::test]
-async fn asdf_and_vfox_tools_are_refused_before_mise_starts() {
-    let replay = replay();
-    let source = client(Some(&replay), memory().await, "a-token");
-    for tool in ["asdf:mise-plugins/asdf-tiny", "vfox:version-fox/vfox-cmake"] {
-        let error = source
-            .lookup(&patchula_config::PackageId::public(Source::Mise, tool))
-            .await
-            .unwrap_err();
-        assert!(
-            error.to_string().contains("runs plugin code"),
-            "{tool}: {error}"
-        );
-        assert!(
-            source
-                .source_repository(
-                    &patchula_config::PackageId::public(Source::Mise, tool),
-                    "1.0.0"
-                )
-                .await
-                .is_err()
-        );
-    }
-    assert!(replay.calls().is_empty());
-}
-
-#[tokio::test]
 async fn a_client_without_the_tool_store_cannot_look_up_mise_tools() {
     let error = client(None, memory().await, "a-token")
         .lookup(&patchula_config::PackageId::public(Source::Mise, "jq"))
         .await
         .unwrap_err();
     assert!(matches!(error, Error::NoMise));
-}
-
-#[tokio::test]
-async fn release_notes_find_their_repository_from_the_release_url() {
-    let replay = replay();
-    let source = client(Some(&replay), memory().await, "a-token");
-    let jq = source
-        .source_repository(
-            &patchula_config::PackageId::public(Source::Mise, "jq"),
-            "1.8.2",
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(jq.github.as_deref(), Some("jqlang/jq"));
-    let hk = source
-        .source_repository(
-            &patchula_config::PackageId::public(Source::Mise, "packslip:jdx/hk"),
-            "2.8.0",
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(hk.github.as_deref(), Some("jdx/hk"));
-    // Core tools keep their fixed upstream and need no listing.
-    let before = replay.lookups().len();
-    for (tool, repo) in [("node", "nodejs/node"), ("core:node", "nodejs/node")] {
-        let found = source
-            .source_repository(
-                &patchula_config::PackageId::public(Source::Mise, tool),
-                "26.12.1",
-            )
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(found.github.as_deref(), Some(repo));
-    }
-    assert_eq!(replay.lookups().len(), before);
-}
-
-#[tokio::test]
-async fn release_notes_follow_an_npm_backend_when_the_listing_has_no_release_url() {
-    let replay = replay();
-    let found = client(Some(&replay), memory().await, "a-token")
-        .source_repository(
-            &patchula_config::PackageId::public(Source::Mise, "prettier"),
-            "3.9.10",
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(found.github.as_deref(), Some("prettier/prettier"));
-    assert_eq!(
-        replay.lookups(),
-        [
-            vec!["ls-remote", "--json", "--prerelease", "--", "prettier"],
-            vec!["tool", "--json", "--", "prettier"],
-        ]
-    );
 }
 
 /// Listings the tests write themselves, for what no recording has: a run

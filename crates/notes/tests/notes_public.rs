@@ -74,8 +74,7 @@ async fn public_note_sources_and_release_range() {
     } else {
         "offline-public-token".into()
     };
-    let path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/datasource/public-notes.json");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/notes/public-notes.json");
     let transport = patchula_testkit::from_env(
         &path,
         Options {
@@ -98,7 +97,9 @@ async fn public_note_sources_and_release_range() {
     )
     .unwrap();
     let http = patchula_datasource::cached(cache.clone(), transport, 4).unwrap();
-    let client = Client::new(github.clone(), http.clone(), cache).with_versions_host(false);
+    let client = patchula_notes::Client::new(
+        Client::new(github.clone(), http.clone(), cache).with_versions_host(false),
+    );
     for (source, package, version, repo) in [
         (Source::Npm, "@babel/code-frame", "7.27.1", "babel/babel"),
         (Source::Crates, "heck", "0.5.0", "withoutboats/heck"),
@@ -172,7 +173,7 @@ async fn public_sandbox_note_ranges() {
     } else {
         "offline-public-token".into()
     };
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/datasource");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/notes");
     // One cassette per upstream keeps refreshes and offline failures focused.
     for (source, package, current, targets, fixture) in [
         (
@@ -251,7 +252,9 @@ async fn public_sandbox_note_ranges() {
         )
         .unwrap();
         let http = patchula_datasource::cached(cache.clone(), transport, 4).unwrap();
-        let client = Client::new(github.clone(), http.clone(), cache).with_versions_host(false);
+        let client = patchula_notes::Client::new(
+            Client::new(github.clone(), http.clone(), cache).with_versions_host(false),
+        );
         for target in targets {
             let started = std::time::Instant::now();
             let notes = client

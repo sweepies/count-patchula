@@ -1,24 +1,11 @@
 //! The public mise-versions mirror of GitHub release and tag lists, for plain GitHub lookups.
+use super::upstream::{MirrorEntry, MirrorList, mirror_url};
 use super::*;
 use futures_util::{StreamExt, stream};
 
-const HOST: &str = "https://mise-versions.jdx.dev/data";
-#[derive(Deserialize)]
-struct Lists {
-    #[serde(default)]
-    releases: Vec<Entry>,
-    #[serde(default)]
-    tags: Vec<Entry>,
-    truncated: bool,
-}
-#[derive(Deserialize)]
-struct Entry {
-    tag: String,
-    date: Option<String>,
-    sha: Option<String>,
-    #[serde(default)]
-    prerelease: bool,
-}
+/// Mirror documents fetched at once.
+const MIRROR_FAN_OUT: usize = 16;
+
 fn fallback(error: &patchula_http::CacheError) -> bool {
     matches!(
         error,
@@ -26,25 +13,28 @@ fn fallback(error: &patchula_http::CacheError) -> bool {
             | patchula_http::CacheError::Transport(_)
     )
 }
+/// A mirror tag as the typed release the catalog stores, with its commit.
+fn tag(entry: &MirrorEntry) -> Release {
+    Release {
+        version: entry.tag.clone(),
+        published_at: entry.date.clone(),
+        digest: entry.sha.clone(),
+    }
+}
 impl Client {
     pub fn with_versions_host(mut self, enabled: bool) -> Self {
         self.use_versions_host = enabled;
         self
     }
-    async fn mirror_list(&self, package: &str, kind: &str) -> Result<Option<Lists>> {
+    async fn mirror_list(&self, package: &str, kind: &str) -> Result<Option<MirrorList>> {
         if !self.use_versions_host
             || !self.github.versions_host_eligible()
             || !patchula_mise::listed_github_repository(package)
         {
             return Ok(None);
         }
-        let response = self
-            .http
-            .get(
-                &format!("{HOST}/github/{}/{kind}.json", package.to_ascii_lowercase()),
-                "application/json",
-            )
-            .await;
+        let url = mirror_url(package, kind);
+        let response = self.http.get(&url, "application/json").await;
         match response {
             Ok(response) => Ok(Some(serde_json::from_slice(&response.body)?)),
             Err(error) if fallback(&error) => Ok(None),
@@ -78,27 +68,28 @@ impl Client {
                     "mise-versions tag catalog is truncated; full range unavailable".into(),
                 ));
             }
+            // Tags carry no reliable dates of their own; the releases
+            // document dates them.
             tags.tags
-                .into_iter()
-                .map(|tag| Version {
-                    published_at: dates.get(&tag.tag).cloned().flatten(),
-                    version: tag.tag,
-                    digest: tag.sha,
-                    deprecated: false,
-                    yanked: false,
+                .iter()
+                .map(|tag| {
+                    Version::from(Release {
+                        published_at: dates.get(&tag.tag).cloned().flatten(),
+                        ..self::tag(tag)
+                    })
                 })
                 .collect()
         } else {
             releases
                 .releases
-                .into_iter()
-                .filter(|r| !r.prerelease)
-                .map(|release| Version {
-                    version: release.tag,
-                    published_at: release.date,
-                    digest: None,
-                    deprecated: false,
-                    yanked: false,
+                .iter()
+                .filter(|entry| super::github::release_counts(false, entry.prerelease))
+                .map(|entry| {
+                    Version::from(Release {
+                        version: entry.tag.clone(),
+                        published_at: entry.date.clone(),
+                        digest: None,
+                    })
                 })
                 .collect()
         };
@@ -134,7 +125,7 @@ impl Client {
                 };
                 (package, result)
             })
-            .buffer_unordered(16)
+            .buffer_unordered(MIRROR_FAN_OUT)
             .collect()
             .await)
     }

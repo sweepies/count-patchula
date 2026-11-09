@@ -3,14 +3,12 @@
 mod support;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use patchula_cache::Cache;
-use patchula_datasource::{
-    Client,
-    notes::{
-        Links, Notes, Repository, Section, fit, inert, parse_changelog, parse_go_history,
-        parse_release_sgml, render_changes, sanitise,
-    },
-};
+use patchula_datasource::Client;
 use patchula_http::{Exchange, Response, Transport};
+use patchula_notes::{
+    Links, Notes, Repository, Section, fit, inert, parse_changelog, parse_go_history,
+    parse_release_sgml, render_changes, sanitise,
+};
 use patchula_words::Source;
 use serde_json::{Value, json};
 use std::{
@@ -112,6 +110,9 @@ async fn client(routes: Arc<Routes>, cache: Cache) -> Client {
     )
     .with_versions_host(false)
 }
+async fn notes(routes: Arc<Routes>, cache: Cache) -> patchula_notes::Client {
+    patchula_notes::Client::new(client(routes, cache).await)
+}
 async fn memory() -> Cache {
     Cache::open(":memory:", Default::default()).await.unwrap()
 }
@@ -178,7 +179,7 @@ async fn every_ecosystem_resolves_its_own_metadata_conditionally_without_credent
         bodies: entries.drain(..).collect(),
         ..Default::default()
     });
-    let client = client(routes.clone(), memory().await).await;
+    let client = notes(routes.clone(), memory().await).await;
     let cases = [
         (Source::Npm, "@scope/pkg", "https://github.com/example/mono"),
         (Source::Npm, "string", "https://github.com/example/string"),
@@ -284,7 +285,7 @@ async fn range_merges_releases_and_package_changelog_and_reuses_blob_across_clie
     let routes = range_routes();
     let cache = memory().await;
     for _ in 0..2 {
-        let client = client(routes.clone(), cache.clone()).await;
+        let client = notes(routes.clone(), cache.clone()).await;
         for _ in 0..2 {
             let notes = client
                 .release_notes(
@@ -354,7 +355,7 @@ async fn publication_batch_deduplicates_overlapping_upstream_reads_and_next_batc
         ),
     ]);
     let source = client(routes.clone(), memory().await).await;
-    let batch = source.notes_batch();
+    let batch = patchula_notes::Client::new(source.clone());
     batch
         .prepare_release_notes(&[
             (
@@ -402,8 +403,7 @@ async fn publication_batch_deduplicates_overlapping_upstream_reads_and_next_batc
             assert_eq!(reads.iter().filter(|r| *r == url).count(), 1, "{url}");
         }
     }
-    source
-        .notes_batch()
+    patchula_notes::Client::new(source.clone())
         .release_notes(
             &patchula_config::PackageId::public(Source::Mise, "node"),
             "22.9.0",
@@ -456,8 +456,8 @@ async fn release_body_batches_validate_timestamps_and_fetch_only_edited_bodies_a
             ..Default::default()
         });
         let cache = Cache::open(&path, Default::default()).await.unwrap();
-        let source = client(routes.clone(), cache).await;
-        let batch = source.notes_batch();
+        let source = notes(routes.clone(), cache).await;
+        let batch = source.clone();
         batch.prepare_release_notes(&ranges).await;
         for (id, current, target) in &ranges {
             let notes = batch.release_notes(id, current, target).await.unwrap();
@@ -787,7 +787,7 @@ async fn mirror_errors_empty_and_truncation_never_fall_back_to_github_catalogs()
                 json!({"tree":[],"truncated":false}),
             ),
         ]);
-        let notes = client(routes.clone(), memory().await)
+        let notes = notes(routes.clone(), memory().await)
             .await
             .release_notes(
                 &patchula_config::PackageId::public(Source::GithubTags, "example/empty"),
@@ -828,7 +828,7 @@ async fn publication_batch_deduplicates_failed_note_reads_without_poisoning_the_
         ),
     ]);
     let source = client(routes.clone(), memory().await).await;
-    let batch = source.notes_batch();
+    let batch = patchula_notes::Client::new(source.clone());
     for package in ["node", "core:node"] {
         let notes = batch
             .release_notes(
@@ -842,8 +842,7 @@ async fn publication_batch_deduplicates_failed_note_reads_without_poisoning_the_
         assert!(notes.sections.is_empty());
     }
     assert_eq!(routes.requests.lock().unwrap().len(), 3);
-    source
-        .notes_batch()
+    patchula_notes::Client::new(source.clone())
         .release_notes(
             &patchula_config::PackageId::public(Source::Mise, "node"),
             "22.9.0",
@@ -882,7 +881,7 @@ async fn node_per_major_changelog_and_prerelease_ranges() {
             json!({"content":STANDARD.encode("## 2026-10-01, Version 22.23.3 'Jod' (LTS)\nNew\n## 22.20.0\nMiddle\n## 22.9.0\nOld\n")}),
         ),
     ]);
-    let notes = client(routes.clone(), memory().await)
+    let notes = notes(routes.clone(), memory().await)
         .await
         .release_notes(
             &patchula_config::PackageId::public(Source::Mise, "node"),
@@ -941,7 +940,7 @@ async fn prerelease_targets_include_prereleases_but_stable_targets_exclude_them(
             json!({"tree":[]}),
         ),
     ]);
-    let client = client(routes.clone(), memory().await).await;
+    let client = notes(routes.clone(), memory().await).await;
     let notes = client
         .release_notes(
             &patchula_config::PackageId::public(Source::GithubReleases, "example/pre"),
@@ -986,7 +985,7 @@ async fn prerelease_targets_include_prereleases_but_stable_targets_exclude_them(
 async fn a_changed_changelog_blob_is_reparsed_once_with_new_sections() {
     let first = range_routes();
     let cache = memory().await;
-    client(first.clone(), cache.clone())
+    notes(first.clone(), cache.clone())
         .await
         .release_notes(
             &patchula_config::PackageId::public(Source::Npm, "@scope/pkg"),
@@ -1005,7 +1004,7 @@ async fn a_changed_changelog_blob_is_reparsed_once_with_new_sections() {
         bodies,
         ..Default::default()
     });
-    let client = client(routes.clone(), cache).await;
+    let client = notes(routes.clone(), cache).await;
     for _ in 0..2 {
         let notes = client
             .release_notes(
@@ -1342,7 +1341,7 @@ fn adapter_routes() -> Arc<Routes> {
 #[tokio::test]
 async fn upstream_adapters_fill_ranges_without_github_releases() {
     let routes = adapter_routes();
-    let client = client(routes.clone(), memory().await).await;
+    let client = notes(routes.clone(), memory().await).await;
     let postgres = client
         .release_notes(
             &patchula_config::PackageId::public(Source::GithubTags, "postgres/postgres"),
@@ -1406,7 +1405,7 @@ async fn unchanged_adapter_blobs_are_neither_downloaded_nor_parsed_again() {
     let routes = adapter_routes();
     let cache = memory().await;
     for _ in 0..2 {
-        let client = client(routes.clone(), cache.clone()).await;
+        let client = notes(routes.clone(), cache.clone()).await;
         let notes = client
             .release_notes(
                 &patchula_config::PackageId::public(Source::GithubTags, "golang/go"),
@@ -1450,7 +1449,7 @@ async fn a_range_spanning_postgres_majors_keeps_the_earlier_major_incomplete() {
         bodies,
         ..Default::default()
     });
-    let notes = client(routes.clone(), memory().await)
+    let notes = notes(routes.clone(), memory().await)
         .await
         .release_notes(
             &patchula_config::PackageId::public(Source::GithubTags, "postgres/postgres"),
@@ -1499,7 +1498,7 @@ async fn a_failing_adapter_marks_the_notes_incomplete_without_failing() {
         bodies,
         ..Default::default()
     });
-    let notes = client(routes.clone(), memory().await)
+    let notes = notes(routes.clone(), memory().await)
         .await
         .release_notes(
             &patchula_config::PackageId::public(Source::GithubTags, "golang/go"),
@@ -1514,7 +1513,7 @@ async fn a_failing_adapter_marks_the_notes_incomplete_without_failing() {
 
 #[test]
 fn gitlab_and_gitea_sources_are_recognised_from_their_urls() {
-    use patchula_datasource::notes::ForgeKind;
+    use patchula_notes::ForgeKind;
     for (raw, kind, path, web) in [
         (
             "git+https://gitlab.com/grp/sub/proj.git",
@@ -1530,6 +1529,12 @@ fn gitlab_and_gitea_sources_are_recognised_from_their_urls() {
         ),
         (
             "git@gitlab.com:grp/proj.git",
+            Some(ForgeKind::Gitlab),
+            "grp/proj",
+            "https://gitlab.com/grp/proj",
+        ),
+        (
+            "https://gitlab.com/grp/proj/",
             Some(ForgeKind::Gitlab),
             "grp/proj",
             "https://gitlab.com/grp/proj",
@@ -1565,6 +1570,25 @@ fn gitlab_and_gitea_sources_are_recognised_from_their_urls() {
     }
 }
 
+#[test]
+fn a_git_suffix_is_not_part_of_the_repository_name() {
+    for url in [
+        "https://github.com/owner/.git",
+        "https://github.com/owner/..git",
+        "https://github.com/owner",
+        "https://github.com/owner/",
+    ] {
+        assert_eq!(Repository::from_url(url), None, "{url}");
+    }
+    assert_eq!(
+        Repository::from_url("https://github.com/owner/repo.git")
+            .unwrap()
+            .github
+            .as_deref(),
+        Some("owner/repo")
+    );
+}
+
 #[tokio::test]
 async fn gitlab_releases_link_to_gitlab_and_keep_references_on_that_forge() {
     let routes = routes(&[
@@ -1584,7 +1608,7 @@ async fn gitlab_releases_link_to_gitlab_and_keep_references_on_that_forge() {
             ]),
         ),
     ]);
-    let client = client(routes.clone(), memory().await).await;
+    let client = notes(routes.clone(), memory().await).await;
     let notes = client
         .release_notes(
             &patchula_config::PackageId::public(Source::Npm, "gl-pkg"),
@@ -1643,7 +1667,7 @@ async fn gitea_without_release_text_falls_back_to_its_root_changelog() {
             json!({"html":"# Changelog\n\n## 1.2.0\n\n- Fixed #3\n\n## 1.1.0\n\n- Added x\n\n## 1.0.0\n\n- First\n"}),
         ),
     ]);
-    let client = client(routes, memory().await).await;
+    let client = notes(routes, memory().await).await;
     let notes = client
         .release_notes(
             &patchula_config::PackageId::public(Source::Npm, "cb-pkg"),
@@ -1728,7 +1752,7 @@ async fn forge_tags_page_newest_first_until_a_short_page() {
 
 #[test]
 fn compare_urls_follow_the_tag_source() {
-    use patchula_datasource::notes::compare_url;
+    use patchula_notes::compare_url;
     use patchula_words::Source;
     assert_eq!(
         compare_url(Source::GithubTags, "acme/template", "v1.4.0", "v1.6.0").as_deref(),
@@ -2135,7 +2159,7 @@ async fn an_oci_chart_lists_its_own_changes_for_each_version_in_the_range() {
             ),
         ),
     ]);
-    let client = client(routes.clone(), memory().await).await.notes_batch();
+    let client = notes(routes.clone(), memory().await).await;
     let id = patchula_config::PackageId::public(Source::Oci, "registry.example/charts/app");
     let notes = client.release_notes(&id, "1.0.0", "1.3.0").await.unwrap();
     assert!(notes.from_chart && !notes.incomplete);
@@ -2172,7 +2196,7 @@ async fn an_oci_chart_lists_its_own_changes_for_each_version_in_the_range() {
 #[tokio::test]
 async fn an_oci_chart_source_is_its_first_forge_in_sources_with_the_charts_directory() {
     let routes = oci_chart_routes(&[("1.3.0", None)]);
-    let client = client(routes, memory().await).await;
+    let client = notes(routes, memory().await).await;
     let id = patchula_config::PackageId::public(Source::Oci, "registry.example/charts/app");
     let source = client
         .source_repository(&id, "1.3.0")
@@ -2182,6 +2206,30 @@ async fn an_oci_chart_source_is_its_first_forge_in_sources_with_the_charts_direc
     assert_eq!(source.github.as_deref(), Some("example/charts"));
     assert_eq!(source.directory.as_deref(), Some("charts/app"));
     assert!(source.chart_sources);
+}
+
+#[tokio::test]
+async fn a_package_from_its_own_registry_has_no_public_release_notes() {
+    // No request is expected: the fake transport panics on any.
+    let client = notes(routes(&[]), memory().await).await;
+    let private = patchula_config::PackageId::new(
+        Source::Npm,
+        Some("https://npm.acme.dev".into()),
+        "@acme/ui",
+    );
+    assert!(!private.is_public());
+    assert!(
+        client
+            .source_repository(&private, "1.0.0")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let notes = client
+        .release_notes(&private, "1.0.0", "2.0.0")
+        .await
+        .unwrap();
+    assert!(notes.source.is_none());
 }
 
 #[tokio::test]
@@ -2200,7 +2248,7 @@ async fn an_image_without_labels_takes_its_manifests_source_annotation() {
             json!({"config":{}}),
         ),
     ]);
-    let client = client(routes, memory().await).await;
+    let client = notes(routes, memory().await).await;
     let id = patchula_config::PackageId::public(Source::Oci, "registry.example/tools/cli");
     let source = client
         .source_repository(&id, "2.0.0")
@@ -2223,7 +2271,7 @@ async fn a_helm_repository_chart_reads_its_changes_and_sources_from_the_index() 
         "other":[{"version":"9.0.0","annotations":{"artifacthub.io/changes":"- Not ours\n"}}]
     }});
     let routes = routes(&[("https://charts.example.com/index.yaml", index)]);
-    let client = client(routes.clone(), memory().await).await.notes_batch();
+    let client = notes(routes.clone(), memory().await).await;
     let id = patchula_config::PackageId::public(Source::Helm, "https://charts.example.com|app");
     let source = client
         .source_repository(&id, "1.2.0")
@@ -2350,7 +2398,7 @@ async fn a_chart_version_that_cannot_be_read_says_so() {
         "https://registry.example/v2/charts/app/manifests/1.2.0".into(),
         json!({"status":404}),
     );
-    let client = client(Arc::new(routes), memory().await).await;
+    let client = notes(Arc::new(routes), memory().await).await;
     let id = patchula_config::PackageId::public(Source::Oci, "registry.example/charts/app");
     let notes = client.release_notes(&id, "1.0.0", "1.3.0").await.unwrap();
     assert!(notes.from_chart && notes.incomplete);
@@ -2369,7 +2417,7 @@ async fn chart_versions_with_build_metadata_read_their_underscore_tags() {
         "https://registry.example/v2/charts/app/tags/list?n=1000".into(),
         json!({"tags":["1.0.0","1.1.0_meta"]}),
     );
-    let client = client(Arc::new(routes), memory().await).await;
+    let client = notes(Arc::new(routes), memory().await).await;
     let id = patchula_config::PackageId::public(Source::Oci, "registry.example/charts/app");
     let notes = client
         .release_notes(&id, "1.0.0", "1.1.0+meta")
@@ -2404,7 +2452,7 @@ async fn a_multi_platform_index_annotates_the_source_for_its_platforms() {
             json!({"config":{}}),
         ),
     ]);
-    let client = client(routes, memory().await).await;
+    let client = notes(routes, memory().await).await;
     let id = patchula_config::PackageId::public(Source::Oci, "registry.example/tools/multi");
     let source = client
         .source_repository(&id, "2.0.0")

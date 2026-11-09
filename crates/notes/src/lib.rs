@@ -1,4 +1,6 @@
-//! Source metadata and release ranges, fetched only for changed pull requests.
+//! Release notes for changed dependencies: upstream changelogs and releases,
+//! parsed and rendered for pull request bodies.
+#![forbid(unsafe_code)]
 mod adapters;
 mod changelog;
 mod chart;
@@ -6,22 +8,44 @@ mod forge;
 mod markdown;
 mod releases;
 mod source;
-use super::*;
 pub use adapters::{parse_go_history, parse_release_sgml};
 pub use changelog::{Section, parse_changelog};
-pub use chart::{CHANGES, ChartNotes, render_changes};
+pub use chart::render_changes;
 use forge::{compare_link, releases_url};
 use markdown::demote_headings;
 pub use markdown::{Links, fit, inert, sanitise};
-use patchula_versioning::Parsed;
-pub(crate) use releases::BodyCache;
-pub(crate) use source::mapped;
-pub use source::{Forge, ForgeKind, Repository};
-use std::{collections::BTreeSet, sync::Arc};
+use patchula_cache::State;
+use patchula_config::PackageId;
+use patchula_datasource::upstream::{ChartNotes, MirrorList, directory, mapped, mirror_url};
+pub use patchula_datasource::upstream::{Forge, ForgeKind, Repository};
+use patchula_datasource::{Error, Result, truncate};
+use patchula_versioning::{Ecosystem, Parsed, Versioning};
+use patchula_words::Source;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 type SharedSections = Arc<tokio::sync::Mutex<Option<Arc<Vec<Section>>>>>;
-pub(crate) type ChangelogCache = Arc<tokio::sync::Mutex<BTreeMap<String, SharedSections>>>;
+/// Parsed upstream blobs memoised per batch. Changelog files and adapter
+/// sections share the map; the key type keeps their formats distinct.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum MemoKey {
+    Changelog {
+        repo: String,
+        path: String,
+        sha: String,
+    },
+    Adapter {
+        repo: String,
+        path: String,
+        sha: String,
+    },
+}
+type ChangelogCache = Arc<tokio::sync::Mutex<BTreeMap<MemoKey, SharedSections>>>;
 type SharedRead = Arc<tokio::sync::Mutex<Option<std::result::Result<Vec<u8>, String>>>>;
-pub(crate) type ReadCache = Arc<tokio::sync::Mutex<BTreeMap<String, SharedRead>>>;
+type ReadCache = Arc<tokio::sync::Mutex<BTreeMap<String, SharedRead>>>;
 
 /// The parsed sections of one immutable changelog blob.
 #[derive(Serialize, Deserialize)]
@@ -39,21 +63,6 @@ impl State for ParsedChangelog {
     type Scope = ChangelogScope;
 }
 
-#[derive(Default, Serialize, Deserialize)]
-struct MirrorList {
-    #[serde(default)]
-    releases: Vec<MirrorVersion>,
-    #[serde(default)]
-    tags: Vec<MirrorVersion>,
-    #[serde(default)]
-    truncated: bool,
-}
-#[derive(Serialize, Deserialize)]
-struct MirrorVersion {
-    tag: String,
-    #[serde(default)]
-    prerelease: bool,
-}
 fn compact_mirror(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     let list: MirrorList =
         serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
@@ -107,6 +116,15 @@ fn in_range(version: &Parsed, old: &Parsed, new: &Parsed) -> bool {
         && !Ecosystem::Loose.order(version, new).is_gt()
         && (version.0.pre.is_empty() || !new.0.pre.is_empty())
 }
+/// Upstream prereleases stay out of a stable target's notes; a prerelease
+/// target sees them.
+fn hidden_prerelease(upstream_prerelease: bool, target: &Parsed) -> bool {
+    upstream_prerelease && target.0.pre.is_empty()
+}
+/// A PR body renders at most this many upstream-text bytes per dependency.
+const NOTES_BYTES: usize = 12_000;
+/// ... and at most this many version sections.
+const NOTES_SECTIONS: usize = 32;
 /// The name a package's tags are namespaced by: a Helm chart's name rather
 /// than its repository's URL.
 fn tag_name(id: &PackageId) -> &str {
@@ -238,24 +256,38 @@ fn note_bounds(
         .then_some((old, new))
 }
 
+/// Release notes read through a datasource client. Constructing one starts
+/// a batch: every memoised read lives and dies with it, so callers cannot
+/// forget to scope a publication batch. New batches still revalidate mutable
+/// upstream resources, including on explicit re-checks.
+#[derive(Clone)]
+pub struct Client {
+    sources: patchula_datasource::Client,
+    changelogs: ChangelogCache,
+    note_reads: ReadCache,
+    release_bodies: releases::BodyCache,
+}
 impl Client {
-    /// Scope note-read memoisation to one publication batch. New batches still
-    /// revalidate mutable upstream resources, including on explicit re-checks.
-    pub fn notes_batch(&self) -> Self {
-        let mut client = self.clone();
-        client.note_reads = Some(Default::default());
-        client.release_bodies = Default::default();
-        client
+    pub fn new(sources: patchula_datasource::Client) -> Self {
+        Self {
+            sources,
+            changelogs: Default::default(),
+            note_reads: Default::default(),
+            release_bodies: Default::default(),
+        }
     }
     async fn note_read(
         &self,
         key: &str,
         fetch: impl std::future::Future<Output = Result<Vec<u8>>>,
     ) -> Result<Vec<u8>> {
-        let Some(reads) = &self.note_reads else {
-            return fetch.await;
-        };
-        let read = reads.lock().await.entry(key.into()).or_default().clone();
+        let read = self
+            .note_reads
+            .lock()
+            .await
+            .entry(key.into())
+            .or_default()
+            .clone();
         let mut saved = read.lock().await;
         if let Some(result) = &*saved {
             return result.clone().map_err(Error::Notes);
@@ -281,6 +313,7 @@ impl Client {
     }
     async fn notes_directory(&self, repo: &str, directory: &str) -> Result<changelog::Tree> {
         let mut url = self
+            .sources
             .github
             .api_url()
             .join(&format!("repos/{repo}/contents"))
@@ -293,6 +326,7 @@ impl Client {
         let bytes = self
             .note_read(url.as_str(), async {
                 Ok(self
+                    .sources
                     .github
                     .get_derived(url.as_str(), &changelog::NOTES_CHANGELOG_DIRECTORY)
                     .await?
@@ -389,39 +423,43 @@ impl Client {
             .changelogs
             .lock()
             .await
-            .entry(format!("{repo}:{}:{}", file.path, file.sha))
+            .entry(MemoKey::Changelog {
+                repo: repo.into(),
+                path: file.path.clone(),
+                sha: file.sha.clone(),
+            })
             .or_default()
             .clone();
         let mut saved = shared.lock().await;
         if let Some(sections) = &*saved {
             return Ok(sections.clone());
         }
-        let sections = if let Some(entry) = self.cache.state::<ParsedChangelog>(&scope).await? {
-            entry.0
-        } else {
-            let response = self
-                .github
-                .get_derived(
-                    &format!("repos/{repo}/git/blobs/{}", file.sha),
-                    &changelog::PARSED_CHANGELOG,
-                )
-                .await?;
-            let entry = ParsedChangelog(serde_json::from_slice(&response.body)?);
-            self.cache.set_state(&scope, &entry).await?;
-            entry.0
-        };
+        let sections =
+            if let Some(entry) = self.sources.cache.state::<ParsedChangelog>(&scope).await? {
+                entry.0
+            } else {
+                let response = self
+                    .sources
+                    .github
+                    .get_derived(
+                        &format!("repos/{repo}/git/blobs/{}", file.sha),
+                        &changelog::PARSED_CHANGELOG,
+                    )
+                    .await?;
+                let entry = ParsedChangelog(serde_json::from_slice(&response.body)?);
+                self.sources.cache.set_state(&scope, &entry).await?;
+                entry.0
+            };
         let sections = Arc::new(sections);
         *saved = Some(sections.clone());
         Ok(sections)
     }
     async fn notes_list(&self, repo: &str, kind: &str) -> Result<MirrorList> {
-        let url = format!(
-            "https://mise-versions.jdx.dev/data/github/{}/{kind}.json",
-            repo.to_ascii_lowercase()
-        );
+        let url = mirror_url(repo, kind);
         let bytes = self
             .note_read(&url, async {
                 Ok(self
+                    .sources
                     .http
                     .get_derived(&url, "application/json", &NOTES_MISE_VERSIONS)
                     .await?
@@ -503,7 +541,7 @@ impl Client {
                     if Ecosystem::Loose.order(&version, &new).is_eq() {
                         new_tag = Some(release.tag.clone());
                     }
-                    if release.prerelease && new.0.pre.is_empty() {
+                    if hidden_prerelease(release.prerelease, &new) {
                         continue;
                     }
                     if !in_range(&version, &old, &new) {
@@ -514,7 +552,7 @@ impl Client {
                 candidates.sort_by(|(a, _), (b, _)| Ecosystem::Loose.order(b, a));
                 let tags: Vec<_> = candidates
                     .iter()
-                    .take(32)
+                    .take(NOTES_SECTIONS)
                     .map(|(_, r)| r.tag.clone())
                     .collect();
                 let bodies = self.release_bodies(repo, &tags).await?;
@@ -522,13 +560,13 @@ impl Client {
                 for (index, (version, release)) in candidates.into_iter().enumerate() {
                     // A PR displays at most 12 KB per dependency. Avoid reading
                     // hundreds of older bodies that the renderer cannot include.
-                    if bytes >= 12_000 || index >= 32 {
+                    if bytes >= NOTES_BYTES || index >= NOTES_SECTIONS {
                         notes.incomplete = true;
                         break;
                     }
                     match &bodies[&release.tag] {
                         Ok(Some(body)) => {
-                            if body.draft || body.prerelease && new.0.pre.is_empty() {
+                            if body.draft || hidden_prerelease(body.prerelease, &new) {
                                 continue;
                             }
                             if let Some(body) = body.body.clone().filter(|b| !b.trim().is_empty()) {
@@ -570,7 +608,7 @@ impl Client {
         }
         // Changelogs fill versions with missing/empty releases. Discover once;
         // parse each immutable blob once, irrespective of version/heading count.
-        let tree = if notes.sections.iter().map(|s| s.body.len()).sum::<usize>() >= 12_000 {
+        let tree = if notes.sections.iter().map(|s| s.body.len()).sum::<usize>() >= NOTES_BYTES {
             None
         } else {
             Some(
@@ -685,14 +723,6 @@ impl Client {
         }
         Ok(notes)
     }
-}
-
-pub fn truncate(text: &str, limit: usize) -> &str {
-    let mut end = text.len().min(limit);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    &text[..end]
 }
 
 /// Upstream's top heading level inside a version's notes: the package is

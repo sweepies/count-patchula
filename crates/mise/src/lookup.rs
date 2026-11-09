@@ -10,8 +10,6 @@ use std::{
 
 /// The mise package the Count pins, installed into its own tool store.
 pub const PACKAGE: &str = "aqua:jdx/mise";
-/// Backends mise skips even when a registry shorthand lists them first.
-const DISABLED_BACKENDS: &str = "asdf,vfox";
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(180);
 /// A slow host can take most of this to serve the mise archive once.
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(1800);
@@ -85,7 +83,10 @@ impl Lookup {
         env.insert("MISE_AUTO_INSTALL".into(), "0".into());
         // Registry shorthands that list an asdf or vfox plugin fall through to
         // the next backend, or fail when there is none.
-        env.insert("MISE_DISABLE_BACKENDS".into(), DISABLED_BACKENDS.into());
+        env.insert(
+            "MISE_DISABLE_BACKENDS".into(),
+            policy::PLUGIN_BACKENDS.join(",").into(),
+        );
         env.insert(
             "MISE_USE_VERSIONS_HOST".into(),
             if versions_host { "1" } else { "0" }.into(),

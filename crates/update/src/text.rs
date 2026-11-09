@@ -3,7 +3,7 @@
 //! `#123` into a backlink, so everything here ends up inert, in a code span, or
 //! in a code block.
 use chrono::{DateTime, Utc};
-pub use patchula_datasource::notes::inert;
+pub use patchula_notes::inert;
 
 /// Failure text kept on a dashboard: a one-line summary, and the decisive
 /// lines of the tool's output for a collapsed block.

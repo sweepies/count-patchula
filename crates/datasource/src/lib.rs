@@ -12,10 +12,11 @@ mod maven;
 mod mise;
 mod nix;
 pub use nix::Flakes;
-pub mod notes;
 mod nuget;
 mod packagist;
 mod registries;
+pub mod upstream;
+pub use registries::HelmChart;
 mod rubygems;
 mod rules;
 use patchula_cache::{Cache, Release, State};
@@ -56,17 +57,21 @@ pub enum Error {
     Notes(String),
     #[error("registry rate limit reached; retry after {0} seconds")]
     RateLimit(u64),
+    #[error(
+        "mise lists no release versions of `{tool}`, only `{sample}`: it installs from a Git ref"
+    )]
+    NoReleases { tool: String, sample: String },
 }
 pub type Result<T> = std::result::Result<T, Error>;
 impl Error {
+    /// Every variant is classified explicitly: a new one must pick a kind.
     pub fn kind(&self) -> LookupErrorKind {
-        use patchula_http::CacheError;
+        use patchula_http::{CacheError, Error as HttpError};
         match self {
             Error::Http(CacheError::Status(status))
             | Error::Github(GithubError::Status(status)) => status_kind(*status),
-            Error::Http(CacheError::Transport(_)) | Error::Github(GithubError::Transport) => {
-                LookupErrorKind::Network
-            }
+            Error::Http(CacheError::Transport(HttpError::Network))
+            | Error::Github(GithubError::Transport) => LookupErrorKind::Network,
             Error::Http(CacheError::Document)
             | Error::Github(GithubError::Json)
             | Error::Json(_)
@@ -74,8 +79,32 @@ impl Error {
             Error::Github(GithubError::RateLimit) | Error::RateLimit(_) => {
                 LookupErrorKind::RateLimit
             }
-            Error::Mise(patchula_mise::Error::Empty(_)) => LookupErrorKind::NotFound,
-            _ => LookupErrorKind::Other,
+            Error::Mise(patchula_mise::Error::Empty(_)) | Error::NoReleases { .. } => {
+                LookupErrorKind::NotFound
+            }
+            Error::Http(
+                CacheError::Worker
+                | CacheError::Configuration
+                | CacheError::MissingBody
+                | CacheError::Cache(_)
+                | CacheError::Transport(HttpError::Configuration),
+            )
+            | Error::Github(
+                GithubError::Configuration
+                | GithubError::Url
+                | GithubError::Cache
+                | GithubError::Graphql(_)
+                | GithubError::Pagination
+                | GithubError::MissingBody,
+            )
+            | Error::Cache(_)
+            | Error::Mise(patchula_mise::Error::Refused(_) | patchula_mise::Error::Failed(_))
+            | Error::NoMise
+            | Error::NoNix
+            | Error::Nix(_)
+            | Error::Invalid
+            | Error::Registry(_)
+            | Error::Notes(_) => LookupErrorKind::Other,
         }
     }
 }
@@ -187,13 +216,10 @@ fn npm_url(registry: Option<&str>, package: &str) -> String {
 
 #[derive(Clone)]
 pub struct Client {
-    pub(crate) github: patchula_github::Client,
-    pub(crate) http: Cached,
-    pub(crate) cache: Cache,
+    pub github: patchula_github::Client,
+    pub http: Cached,
+    pub cache: Cache,
     tokens: docker::Tokens,
-    changelogs: notes::ChangelogCache,
-    note_reads: Option<notes::ReadCache>,
-    release_bodies: notes::BodyCache,
     use_versions_host: bool,
     mise: Option<std::sync::Arc<patchula_mise::Lookup>>,
     nix: Option<std::sync::Arc<dyn Flakes>>,
@@ -211,9 +237,6 @@ impl Client {
             http,
             cache,
             tokens: Default::default(),
-            changelogs: Default::default(),
-            note_reads: None,
-            release_bodies: Default::default(),
             use_versions_host: true,
             mise: None,
             nix: None,
@@ -516,6 +539,37 @@ fn sort(versions: &mut Vec<Version>, scheme: Ecosystem) {
         _ => std::cmp::Ordering::Equal,
     });
     versions.extend(parsed.into_iter().map(|(_, v)| v));
+}
+/// The longest prefix of `text` within `limit` bytes that ends on a char
+/// boundary.
+pub fn truncate(text: &str, limit: usize) -> &str {
+    let mut end = text.len().min(limit);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+/// Lowercase hex SHA-256 of `bytes`.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+/// The child manifest an image index offers for `os`/`architecture`/
+/// `variant`, when it has an exact platform match.
+fn platform_manifest<'a>(
+    manifests: &'a [Value],
+    os: &str,
+    architecture: &str,
+    variant: Option<&str>,
+) -> Option<&'a Value> {
+    manifests.iter().find(|m| {
+        m["platform"]["os"] == os
+            && m["platform"]["architecture"] == architecture
+            && variant.is_none_or(|v| m["platform"]["variant"] == v)
+    })
 }
 pub fn escape_go(package: &str) -> Result<String> {
     let mut out = String::with_capacity(package.len());

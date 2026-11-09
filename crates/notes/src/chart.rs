@@ -3,62 +3,8 @@
 //! annotation (<https://artifacthub.io/docs/topics/annotations/helm/>).
 use super::*;
 
-/// The `Chart.yaml` annotation listing a version's changes.
-pub const CHANGES: &str = "artifacthub.io/changes";
-/// Sources kept per chart version; charts list one or two.
-const SOURCES: usize = 8;
-/// Bytes of one version's changes kept; a PR shows at most 12,000 per package.
-const CHANGES_BYTES: usize = 32_000;
-
-/// What release notes read from one chart version's `Chart.yaml`.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ChartNotes {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sources: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub changes: Option<String>,
-}
-impl ChartNotes {
-    pub(crate) fn new<'a>(sources: impl Iterator<Item = &'a str>, changes: Option<&str>) -> Self {
-        Self {
-            sources: sources.take(SOURCES).map(str::to_owned).collect(),
-            changes: changes
-                .filter(|c| !c.trim().is_empty())
-                .map(|c| truncate(c, CHANGES_BYTES).to_owned()),
-        }
-    }
-    /// From `Chart.yaml` as JSON, which is what an OCI chart's config holds.
-    pub(crate) fn from_metadata(value: &Value) -> Self {
-        Self::new(
-            value["sources"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str),
-            value["annotations"][CHANGES].as_str(),
-        )
-    }
-    pub(crate) fn is_empty(&self) -> bool {
-        self.sources.is_empty() && self.changes.is_none()
-    }
-    /// The first `sources` entry on a supported forge, else the first readable
-    /// one. Charts often list the packaged application's repository first.
-    pub(crate) fn repository(&self) -> Option<Repository> {
-        let found: Vec<_> = self
-            .sources
-            .iter()
-            .filter_map(|s| Repository::from_url(s))
-            .collect();
-        let supported = found
-            .iter()
-            .position(|r| r.github.is_some() || r.forge.is_some())
-            .unwrap_or(0);
-        found
-            .into_iter()
-            .nth(supported)
-            .map(Repository::chart_sourced)
-    }
-}
+/// Chart metadata reads at once.
+const CHART_FAN_OUT: usize = 4;
 
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -216,18 +162,18 @@ impl Client {
         }
         let mut index = match id.source {
             Source::Helm => {
-                let chart = self.helm_chart(&id.name).await?;
+                let chart = self.sources.helm_chart(&id.name).await?;
                 Some((chart.catalog.versions, chart.notes))
             }
             // Only a chart's config carries chart metadata; an image costs one read.
-            _ => match self.oci_chart(&id.name, target).await? {
+            _ => match self.sources.oci_chart(&id.name, target).await? {
                 Some(_) => None,
                 None => return Ok(None),
             },
         };
         let versions = match &mut index {
             Some((versions, _)) => std::mem::take(versions),
-            None => self.lookup(id).await?.versions,
+            None => self.sources.lookup(id).await?.versions,
         };
         let mut range: Vec<_> = versions
             .into_iter()
@@ -251,8 +197,8 @@ impl Client {
                 // borrows, so the server can spawn it.
                 let versions: Vec<String> = range.iter().map(|(_, v)| v.clone()).collect();
                 let read = stream::iter(versions)
-                    .map(|version| async move { self.oci_chart(&id.name, &version).await })
-                    .buffered(4)
+                    .map(|version| async move { self.sources.oci_chart(&id.name, &version).await })
+                    .buffered(CHART_FAN_OUT)
                     .collect::<Vec<_>>()
                     .await;
                 read.into_iter()

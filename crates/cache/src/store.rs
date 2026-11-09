@@ -2,7 +2,7 @@ use crate::{Error, HttpEntry, Options, Release, ReleaseList, Result};
 
 /// Each migration sets `user_version` to its own number; a cache at version
 /// N runs the ones after it.
-pub(crate) const MIGRATIONS: [&str; 10] = [
+pub(crate) const MIGRATIONS: [&str; 11] = [
     include_str!("migrations/001.sql"),
     include_str!("migrations/002.sql"),
     include_str!("migrations/003.sql"),
@@ -13,6 +13,7 @@ pub(crate) const MIGRATIONS: [&str; 10] = [
     include_str!("migrations/008.sql"),
     include_str!("migrations/009.sql"),
     include_str!("migrations/010.sql"),
+    include_str!("migrations/011.sql"),
 ];
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::{

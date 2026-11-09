@@ -2,7 +2,6 @@ use super::*;
 use futures_util::{StreamExt, stream};
 use patchula_github::GraphqlPage;
 use serde_json::json;
-use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
 /// The newest releases a catalog refresh starts from.
@@ -12,6 +11,11 @@ enum Head<'a> {
     /// Only the newest release, to compare with the saved fingerprint; the
     /// walk fetches its own first page.
     Newest(Value),
+}
+/// Whether a GitHub release enters a release catalog: drafts and releases
+/// GitHub marks as prereleases never do, whichever source listed them.
+pub(crate) fn release_counts(draft: bool, prerelease: bool) -> bool {
+    !draft && !prerelease
 }
 const RELEASES: &str = "query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){releases(first:100,after:$cursor,orderBy:{field:CREATED_AT,direction:DESC}){nodes{tagName publishedAt isDraft isPrerelease}pageInfo{hasNextPage endCursor}}}}";
 const GIT_OBJECT_FIELDS: &str = "oid __typename ... on Tag{tagger{date} target{__typename ... on Commit{oid} ... on Tag{target{__typename ... on Commit{oid}}}}}";
@@ -211,7 +215,10 @@ impl Client {
                 };
                 let mut releases = Vec::with_capacity(page.nodes.len());
                 for node in &page.nodes {
-                    if node["isDraft"].as_bool() == Some(true) {
+                    if !release_counts(
+                        node["isDraft"].as_bool() == Some(true),
+                        node["isPrerelease"].as_bool() == Some(true),
+                    ) {
                         continue;
                     }
                     releases.push(Release {
@@ -254,7 +261,7 @@ impl Client {
                 .collect(),
             dist_tags: BTreeMap::new(),
         };
-        if package == "actions/node-versions" {
+        if package.eq_ignore_ascii_case("actions/node-versions") {
             // Stable setup-node targets remain usable during a Node-index
             // outage. An explicit LTS policy fails closed without this evidence.
             if let Ok(lts) = self.node_lts().await {
@@ -304,10 +311,7 @@ impl Client {
             .iter()
             .map(|reference| (&reference["ref"], &reference["object"]["sha"]))
             .collect();
-        let fingerprint: String = Sha256::digest(serde_json::to_vec(&identity)?)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+        let fingerprint = sha256_hex(&serde_json::to_vec(&identity)?);
         let catalog_scope = TagCatalogScope {
             package: package.into(),
             fingerprint,

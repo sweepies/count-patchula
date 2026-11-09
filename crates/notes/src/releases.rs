@@ -66,16 +66,17 @@ impl Client {
                 .filter_map(|release| {
                     let version =
                         tag_version(&release.tag, package, &repository).and_then(parsed)?;
-                    (in_range(&version, &old, &new)
-                        && (!release.prerelease || !new.0.pre.is_empty()))
-                    .then_some((version, release.tag))
+                    (in_range(&version, &old, &new) && !hidden_prerelease(release.prerelease, &new))
+                        .then_some((version, release.tag))
                 })
                 .collect();
             candidates.sort_by(|(a, _), (b, _)| Ecosystem::Loose.order(b, a));
-            repos
-                .entry(repo.to_ascii_lowercase())
-                .or_default()
-                .extend(candidates.into_iter().take(32).map(|(_, tag)| tag));
+            repos.entry(repo.to_ascii_lowercase()).or_default().extend(
+                candidates
+                    .into_iter()
+                    .take(NOTES_SECTIONS)
+                    .map(|(_, tag)| tag),
+            );
         }
         use futures_util::{StreamExt, stream};
         stream::iter(repos.into_iter().map(|(repo, tags)| async move {
@@ -83,7 +84,7 @@ impl Client {
                 .release_bodies(&repo, &tags.into_iter().collect::<Vec<_>>())
                 .await;
         }))
-        .buffer_unordered(4)
+        .buffer_unordered(self.sources.github.concurrency())
         .collect::<Vec<_>>()
         .await;
     }
@@ -94,16 +95,13 @@ impl Client {
         tags: &[String],
     ) -> Result<BTreeMap<String, BodyResult>> {
         let repo = repo.to_ascii_lowercase();
-        let shared: RepoBodies = if self.note_reads.is_some() {
-            self.release_bodies
-                .lock()
-                .await
-                .entry(repo.clone())
-                .or_default()
-                .clone()
-        } else {
-            Default::default()
-        };
+        let shared: RepoBodies = self
+            .release_bodies
+            .lock()
+            .await
+            .entry(repo.clone())
+            .or_default()
+            .clone();
         let mut bodies = shared.lock().await;
         let missing: Vec<_> = tags
             .iter()
@@ -136,6 +134,7 @@ impl Client {
         let mut cached = BTreeMap::new();
         for tag in tags {
             if let Some(saved) = self
+                .sources
                 .cache
                 .state::<SavedRelease>(&release_scope(repo, tag))
                 .await?
@@ -170,7 +169,7 @@ impl Client {
             let query = format!(
                 "query ReleaseNotes({declarations}){{repository(owner:$owner,name:$name){{{fields}}}}}"
             );
-            let data = self.github.graphql(&query, variables).await?;
+            let data = self.sources.github.graphql(&query, variables).await?;
             let repository = data["repository"]
                 .as_object()
                 .ok_or_else(|| Error::Notes("missing upstream repository".into()))?;
@@ -207,7 +206,8 @@ impl Client {
                     updated_at: updated_at.into(),
                     release: release.clone(),
                 };
-                self.cache
+                self.sources
+                    .cache
                     .set_state(&release_scope(repo, &tag), &saved)
                     .await?;
                 result.insert(tag, Ok(Some(release)));

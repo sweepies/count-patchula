@@ -568,7 +568,7 @@ impl Engine {
         let before = self.github.stats().await;
         let mut branches = Vec::new();
         let mut pull_requests = Vec::new();
-        let note_sources = self.sources.notes_batch();
+        let note_sources = patchula_notes::Client::new(self.sources.clone());
         for mut work in work {
             let Some(config) = work.config else {
                 continue;
@@ -2024,7 +2024,7 @@ impl Engine {
                         package: dep.package.clone(),
                         current: dep.current.clone(),
                         compare_url: dep.resolved.as_deref().and_then(|resolved| {
-                            patchula_datasource::notes::compare_url(
+                            patchula_notes::compare_url(
                                 dep.source,
                                 &dep.package,
                                 resolved,
@@ -2056,7 +2056,7 @@ impl Engine {
                             name: dep.name.clone(),
                             package: dep.package.clone(),
                             current: dep.current.clone(),
-                            compare_url: patchula_datasource::notes::compare_url(
+                            compare_url: patchula_notes::compare_url(
                                 dep.source,
                                 &dep.package,
                                 &dep.current,

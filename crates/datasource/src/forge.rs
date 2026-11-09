@@ -1,7 +1,7 @@
 //! Tags on GitLab and Gitea/Forgejo repositories, for `forge-tags`
 //! dependencies identified as `host/path`.
 use super::*;
-use notes::{ForgeKind, Repository};
+use crate::upstream::{Forge, ForgeKind, Repository};
 
 /// Newest-first pages; enough history for update proposals without walking
 /// every tag of a long-lived project.
@@ -44,14 +44,14 @@ const FORGE_GITLAB_TAGS: patchula_http::Derived<patchula_http::CacheError> =
 const FORGE_GITEA_TAGS: patchula_http::Derived<patchula_http::CacheError> =
     patchula_http::Derived::new("forge-gitea-tags", gitea);
 
-fn forge(package: &str) -> Result<notes::Forge> {
+fn forge(package: &str) -> Result<Forge> {
     Repository::from_url(&format!("https://{package}"))
         .and_then(|r| r.forge)
         .ok_or(Error::Invalid)
 }
 
 /// The URL of one page of tags.
-fn page_url(forge: &notes::Forge, page: u32) -> String {
+fn page_url(forge: &Forge, page: u32) -> String {
     match forge.kind {
         ForgeKind::Gitlab => format!(
             "https://{}/api/v4/projects/{}/repository/tags?per_page=100&page={page}",

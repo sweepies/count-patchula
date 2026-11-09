@@ -2257,6 +2257,7 @@ dependencies = [
  "patchula-http",
  "patchula-lookup",
  "patchula-manager",
+ "patchula-notes",
  "patchula-process",
  "patchula-report",
  "patchula-testkit",
@@ -2366,6 +2367,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "patchula-notes"
+version = "0.8.1"
+dependencies = [
+ "base64 0.23.1",
+ "futures-util",
+ "patchula-cache",
+ "patchula-config",
+ "patchula-datasource",
+ "patchula-github",
+ "patchula-http",
+ "patchula-mise",
+ "patchula-testkit",
+ "patchula-versioning",
+ "patchula-words",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "patchula-process"
 version = "0.8.1"
 dependencies = [
@@ -2456,6 +2481,7 @@ dependencies = [
  "patchula-lookup",
  "patchula-manager",
  "patchula-mise",
+ "patchula-notes",
  "patchula-process",
  "patchula-report",
  "patchula-testkit",

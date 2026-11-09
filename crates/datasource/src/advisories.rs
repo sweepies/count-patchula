@@ -10,6 +10,9 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+/// Advisory records fetched at once.
+const ADVISORY_FAN_OUT: usize = 16;
+
 const OSV: &str = "https://api.osv.dev/v1";
 /// OSV accepts at most this many queries in one batch.
 const BATCH: usize = 1000;
@@ -275,7 +278,7 @@ impl Client {
                 let advisory = self.advisory(&id, &modified).await?;
                 Ok::<_, Error>((id, advisory))
             })
-            .buffer_unordered(16)
+            .buffer_unordered(ADVISORY_FAN_OUT)
             .collect::<Vec<_>>()
             .await
             .into_iter()

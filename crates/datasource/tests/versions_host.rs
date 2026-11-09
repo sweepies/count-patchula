@@ -12,6 +12,8 @@ struct Host {
     empty: bool,
     lost: bool,
     requests: Mutex<Vec<(String, bool)>>,
+    /// Both sources also list v3.0.0, which GitHub marks a prerelease.
+    prerelease: bool,
 }
 impl Transport for Host {
     fn send(&self, request: reqwest::Request) -> Exchange<'_> {
@@ -29,12 +31,25 @@ impl Transport for Host {
             }
             let body = if github {
                 assert_eq!(path, "/graphql");
-                json!({"data":{"r0":{"releases":{"nodes":[{"tagName":"v2.0.0","publishedAt":"2026-01-01T00:00:00Z","isDraft":false,"isPrerelease":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}).to_string()
+                let mut nodes = vec![
+                    json!({"tagName":"v2.0.0","publishedAt":"2026-01-01T00:00:00Z","isDraft":false,"isPrerelease":false}),
+                ];
+                if self.prerelease {
+                    nodes.push(json!({"tagName":"v3.0.0","publishedAt":"2026-02-01T00:00:00Z","isDraft":false,"isPrerelease":true}));
+                }
+                json!({"data":{"r0":{"releases":{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}).to_string()
             } else if path.ends_with("tags.json") {
                 json!({"tags":[{"tag":"v2.0.0","sha":"a".repeat(40),"date":"2099-01-01T00:00:00Z"}],"truncated":false}).to_string()
             } else {
                 assert_eq!(path, "/data/github/filosottile/age/releases.json");
-                json!({"releases":if self.empty {json!([])} else {json!([{"tag":"v2.0.0","date":"2026-01-01T00:00:00Z","prerelease":false}])},"truncated":false}).to_string()
+                let mut releases =
+                    vec![json!({"tag":"v2.0.0","date":"2026-01-01T00:00:00Z","prerelease":false})];
+                if self.prerelease {
+                    releases.push(
+                        json!({"tag":"v3.0.0","date":"2026-02-01T00:00:00Z","prerelease":true}),
+                    );
+                }
+                json!({"releases":if self.empty {json!([])} else {json!(releases)},"truncated":false}).to_string()
             };
             Ok(Response {
                 status: reqwest::StatusCode::from_u16(if !github && self.status != 0 {
@@ -247,5 +262,32 @@ async fn cached_catalogs_do_not_freeze_mutable_lightweight_or_annotated_tag_targ
             i + 1,
             "one query for both mutable tags per run"
         );
+    }
+}
+
+#[tokio::test]
+async fn releases_github_marks_as_prereleases_stay_out_whichever_source_answers() {
+    for lost in [false, true] {
+        let host = Arc::new(Host {
+            prerelease: true,
+            lost,
+            ..Host::default()
+        });
+        let catalog = client(host.clone(), memory().await)
+            .await
+            .lookup(&patchula_config::PackageId::public(
+                Source::GithubReleases,
+                "FiloSottile/age",
+            ))
+            .await
+            .unwrap();
+        let versions: Vec<_> = catalog
+            .versions
+            .iter()
+            .map(|v| v.version.as_str())
+            .collect();
+        assert_eq!(versions, ["v2.0.0"], "mirror unreachable: {lost}");
+        // Releases carry no commit; only tags do.
+        assert!(catalog.versions.iter().all(|v| v.digest.is_none()));
     }
 }

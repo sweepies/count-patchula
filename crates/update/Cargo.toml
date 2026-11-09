@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 patchula-datasource = { path = "../datasource" }
+patchula-notes = { path = "../notes" }
 patchula-cache = { path = "../cache" }
 patchula-config = { path = "../config" }
 patchula-manager = { path = "../manager" }

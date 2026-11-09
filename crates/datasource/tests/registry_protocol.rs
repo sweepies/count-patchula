@@ -135,6 +135,12 @@ async fn rate_limit_and_foreign_pagination_are_explicit() {
             ),
             "invalid package",
         ),
+        // A malformed Link header is an invalid payload, not a GitHub
+        // pagination failure.
+        (
+            response(200, r#"{"tags":["1.0"]}"#, &[("link", "not a link header")]),
+            "invalid package",
+        ),
     ] {
         let steps = Arc::new(Steps(Mutex::new(VecDeque::from([(
             "https://ghcr.io/v2/spec/image/tags/list?n=1000".into(),
@@ -1496,31 +1502,6 @@ async fn escaped_npm_names_are_refused_and_mirrored_reads_count_as_credentialed(
     .await;
     assert!(catalog.is_ok() && credentialed);
     assert!(steps.0.lock().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn a_package_from_its_own_registry_has_no_public_release_notes() {
-    let dir = tempfile::tempdir().unwrap();
-    // No request is expected: the fake transport panics on any.
-    let client = auth_client(Arc::new(AuthSteps(Mutex::new(VecDeque::new()))), dir.path()).await;
-    let private = patchula_config::PackageId::new(
-        Source::Npm,
-        Some("https://npm.acme.dev".into()),
-        "@acme/ui",
-    );
-    assert!(!private.is_public());
-    assert!(
-        client
-            .source_repository(&private, "1.0.0")
-            .await
-            .unwrap()
-            .is_none()
-    );
-    let notes = client
-        .release_notes(&private, "1.0.0", "2.0.0")
-        .await
-        .unwrap();
-    assert!(notes.source.is_none());
 }
 
 #[tokio::test]
