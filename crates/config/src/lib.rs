@@ -125,6 +125,14 @@ pub fn due(windows: &[Window], since: Option<DateTime<Utc>>, now: DateTime<Utc>)
 }
 
 impl Config {
+    /// Whether any update this config plans can merge on its own: a merge
+    /// policy, a security merge, a rule's merge, or the batch PR's.
+    pub fn may_merge(&self) -> bool {
+        self.defaults.merge
+            || self.security.apply.merge == Some(true)
+            || self.rules.iter().any(|rule| rule.apply.merge == Some(true))
+            || self.prs.batch_merge
+    }
     /// The windows lockfile maintenance runs in: `defaults.windows`, or Monday
     /// 00:00 to 04:00 UTC when the repository sets none.
     pub fn maintenance_windows(&self) -> Vec<Window> {
