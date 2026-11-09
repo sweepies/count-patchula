@@ -13,8 +13,10 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     install: Install::Nix,
 };
 
-/// The static nix the Count runs: Hydra's `buildStatic` binary of the pinned
-/// release, for each Linux architecture, pinned by build and checksum.
+/// The static nix the Count runs: Hydra's `buildStatic` binary of this
+/// release, for each Linux architecture, pinned by build and checksum. The
+/// version and its builds change together.
+const VERSION: &str = "2.35.5";
 const BUILDS: &[(&str, &str, &str)] = &[
     (
         "x86_64",
@@ -46,16 +48,13 @@ pub(super) fn tools() -> Result<Vec<(String, String)>, String> {
             "flake.lock is regenerated only on Linux, where a static nix build exists".into(),
         );
     }
-    let version = tool_defaults()?["nix"]["version"]
-        .as_str()
-        .ok_or("embedded defaults pin no nix")?;
     let (_, url, sha256) = BUILDS
         .iter()
         .find(|(arch, ..)| *arch == std::env::consts::ARCH)
         .ok_or_else(|| format!("no static nix build for {}", std::env::consts::ARCH))?;
     Ok(vec![(
         format!("http:nix[url={url},checksum=sha256:{sha256},bin=nix]"),
-        version.into(),
+        VERSION.into(),
     )])
 }
 

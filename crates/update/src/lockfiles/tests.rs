@@ -2645,7 +2645,7 @@ fn tool_versions_pin_the_versions_a_run_resolves() {
         ),
         (
             "mise.toml".to_string(),
-            "[tools]\nnode = '21.0.0'\n".to_string(),
+            "[tools]\nnode = '21.0.0'\npython = '3.12.0'\n".to_string(),
         ),
         (
             ".mise.toml".to_string(),
@@ -2662,8 +2662,8 @@ fn tool_versions_pin_the_versions_a_run_resolves() {
     assert_eq!(sub_versions["go"], "1.24.0");
     assert_eq!(sub_versions["python"], "3.13.0");
     assert_eq!(sub_versions["rust"], default_version("rust"));
-    // At the root the nearer `mise.toml` beats `.tool-versions`, and the
-    // deeper file does not reach it.
+    // At the root `mise.toml` beats `.tool-versions`, `.mise.toml` beats
+    // `mise.toml` (python), and the deeper file does not reach it.
     let root_versions = versions(&baseline, "").unwrap();
     assert_eq!(root_versions["node"], "21.0.0");
     assert_eq!(root_versions["python"], "3.13.0");
