@@ -5,7 +5,7 @@
 //! has no role, so it is never materialized for a tool run, never public,
 //! and credential-checked whenever it could hold one.
 
-use crate::credentials::CredentialCheck;
+use crate::credentials::{CredentialCheck, CredentialScan};
 use patchula_words::Manager;
 
 /// The lockfile names one manager's ecosystem recognizes: `supported` are
@@ -28,8 +28,10 @@ pub struct EcoRoles {
     pub registry: bool,
     /// Can say where packages come from.
     pub settings: bool,
-    /// May hold a committed credential.
-    pub credentials: bool,
+    /// The credential check this name's text gets, `Some` exactly when the
+    /// file may hold a committed credential: `credentials::keyed` runs it,
+    /// so a credential-bearing file cannot lack a check.
+    pub(crate) credential_scan: Option<CredentialScan>,
     /// This ecosystem's credential-check decision for the name.
     pub check: CredentialCheck,
     /// A lockfile tool may modify it.
@@ -68,6 +70,14 @@ fn suffixed(extensions: &[&str], path: &str) -> bool {
     extensions.iter().any(|e| path.ends_with(e))
 }
 
+/// The credential scan `path` gets among `choices`' `(names, scan)` pairs.
+fn scanned(path: &str, choices: &[(&[&str], CredentialScan)]) -> Option<CredentialScan> {
+    choices
+        .iter()
+        .find(|(names, _)| named(names, path))
+        .map(|(_, scan)| *scan)
+}
+
 const NPM_LOCKS: &[&str] = &[
     "package-lock.json",
     "npm-shrinkwrap.json",
@@ -78,77 +88,86 @@ const NPM_LOCKS: &[&str] = &[
 const NODE_SETTINGS: &[&str] = &[".npmrc", ".yarnrc.yml"];
 const NODE_MANIFEST: &[&str] = &["package.json"];
 const PYTHON_LOCKS: &[&str] = &["uv.lock", "poetry.lock"];
+const PNPM_WORKSPACE: &[&str] = &["pnpm-workspace.yaml"];
+const BUN_LOCK: &[&str] = &["bun.lock"];
+/// The credential-bearing files and the check each gets. `.npmrc` and
+/// `.yarnrc.yml` are npm's settings, which bun reads too;
+/// `pnpm-workspace.yaml` is npm's alone.
+const NPM_CREDENTIAL_SCANS: &[(&[&str], CredentialScan)] = &[
+    (&[".npmrc"], CredentialScan::Npmrc),
+    (&[".yarnrc.yml"], CredentialScan::Yarnrc),
+    (PNPM_WORKSPACE, CredentialScan::PnpmWorkspace),
+];
+const BUN_CREDENTIAL_SCANS: &[(&[&str], CredentialScan)] = &[
+    (&[".npmrc"], CredentialScan::Npmrc),
+    (&[".yarnrc.yml"], CredentialScan::Yarnrc),
+];
+/// Python's credential-bearing files and the check each gets.
+const PYTHON_CREDENTIAL_SCANS: &[(&[&str], CredentialScan)] = &[
+    (&["poetry.toml"], CredentialScan::Poetry),
+    (&["pyproject.toml", "uv.toml"], CredentialScan::Python),
+    (&["pip.conf", "pip.ini"], CredentialScan::Pip),
+];
+/// MSBuild project and solution suffixes NuGet reads.
+const NUGET_SUFFIXES: &[&str] = &[".csproj", ".fsproj", ".vbproj", ".sln", ".slnx"];
+/// `NUGET_SUFFIXES` plus the property and target files that can carry
+/// restore sources.
+const NUGET_STEERING_SUFFIXES: &[&str] = &[
+    ".csproj", ".fsproj", ".vbproj", ".sln", ".slnx", ".props", ".targets",
+];
+/// The NuGet files the Count rewrites: its lockfile and the MSBuild files
+/// that hold central package management and restore settings.
+const NUGET_WRITABLE: &[&str] = &[
+    "packages.lock.json",
+    "Directory.Packages.props",
+    "Directory.Build.props",
+    "dotnet-tools.json",
+    "global.json",
+];
+/// composer.json and composer.lock: the files Composer's tool rewrites.
+const COMPOSER_FILES: &[&str] = &["composer.json", "composer.lock"];
 
-/// The roles `path` has for `manager`'s ecosystem.
 pub fn eco_roles(manager: Manager, path: &str) -> EcoRoles {
     let mut roles = EcoRoles::default();
     match manager {
         Manager::Npm => {
             roles.registry = named(NODE_SETTINGS, path);
             roles.settings = roles.registry;
-            roles.credentials = named(&[".npmrc", ".yarnrc.yml", "pnpm-workspace.yaml"], path);
-            roles.check = if named(
-                &[
-                    "package.json",
-                    "package-lock.json",
-                    "npm-shrinkwrap.json",
-                    "aube-lock.yaml",
-                    "pnpm-lock.yaml",
-                    "yarn.lock",
-                    "bun.lock",
-                    ".npmrc",
-                    ".yarnrc.yml",
-                    "pnpm-workspace.yaml",
-                ],
-                path,
-            ) {
+            roles.credential_scan = scanned(path, NPM_CREDENTIAL_SCANS);
+            roles.check = if named(NODE_MANIFEST, path)
+                || named(NPM_LOCKS, path)
+                || named(BUN_LOCK, path)
+                || named(NODE_SETTINGS, path)
+                || named(PNPM_WORKSPACE, path)
+            {
                 CredentialCheck::Scan
             } else {
                 CredentialCheck::Undecided
             };
             roles.writable = named(NPM_LOCKS, path) || named(NODE_MANIFEST, path);
-            roles.read = named(&[".npmrc", ".yarnrc.yml", "pnpm-workspace.yaml"], path);
-            roles.steers = named(
-                &[
-                    "package.json",
-                    ".npmrc",
-                    ".yarnrc.yml",
-                    "pnpm-workspace.yaml",
-                    "package-lock.json",
-                    "npm-shrinkwrap.json",
-                    "aube-lock.yaml",
-                    "pnpm-lock.yaml",
-                    "yarn.lock",
-                ],
-                path,
-            );
+            roles.read = named(NODE_SETTINGS, path) || named(PNPM_WORKSPACE, path);
+            roles.steers = named(NODE_MANIFEST, path)
+                || named(NODE_SETTINGS, path)
+                || named(PNPM_WORKSPACE, path)
+                || named(NPM_LOCKS, path);
         }
         Manager::Bun => {
             roles.registry = named(NODE_SETTINGS, path);
             roles.settings = roles.registry;
-            roles.credentials = named(NODE_SETTINGS, path);
-            roles.check = if named(&["bun.lock"], path) || named(NODE_SETTINGS, path) {
+            roles.credential_scan = scanned(path, BUN_CREDENTIAL_SCANS);
+            roles.check = if named(BUN_LOCK, path) || named(NODE_SETTINGS, path) {
                 CredentialCheck::Scan
             } else {
                 CredentialCheck::Undecided
             };
-            roles.writable = named(&["bun.lock"], path);
+            roles.writable = named(BUN_LOCK, path);
             roles.read = named(NODE_SETTINGS, path);
             roles.steers = named(&["package.json", ".npmrc", ".yarnrc.yml", "bun.lock"], path);
         }
         Manager::Pyproject => {
             roles.registry = crate::python_settings(path) || named(PYTHON_LOCKS, path);
             roles.settings = crate::python_settings(path) || named(&["pip.conf", "pip.ini"], path);
-            roles.credentials = named(
-                &[
-                    "poetry.toml",
-                    "pyproject.toml",
-                    "uv.toml",
-                    "pip.conf",
-                    "pip.ini",
-                ],
-                path,
-            );
+            roles.credential_scan = scanned(path, PYTHON_CREDENTIAL_SCANS);
             roles.check = if named(
                 &[
                     "pyproject.toml",
@@ -175,7 +194,8 @@ pub fn eco_roles(manager: Manager, path: &str) -> EcoRoles {
             roles.registry =
                 crate::bundle_config(path) || named(lock_names(Manager::Bundler).supported, path);
             roles.settings = crate::bundle_config(path);
-            roles.credentials = named(&["Gemfile"], path);
+            roles.credential_scan =
+                named(manifest_names(Manager::Bundler), path).then_some(CredentialScan::Gemfile);
             roles.check = if named(&["Gemfile", "Gemfile.lock"], path) || path.ends_with(".gemspec")
             {
                 CredentialCheck::Scan
@@ -188,19 +208,21 @@ pub fn eco_roles(manager: Manager, path: &str) -> EcoRoles {
         }
         Manager::Composer => {
             roles.registry = named(lock_names(Manager::Composer).supported, path);
-            roles.credentials = named(&["composer.json"], path);
-            roles.check = if named(&["composer.json", "composer.lock"], path) {
+            roles.credential_scan =
+                named(manifest_names(Manager::Composer), path).then_some(CredentialScan::Composer);
+            roles.check = if named(COMPOSER_FILES, path) {
                 CredentialCheck::Scan
             } else {
                 CredentialCheck::Undecided
             };
-            roles.writable = named(&["composer.json", "composer.lock"], path);
-            roles.steers = named(&["composer.json", "composer.lock"], path);
+            roles.writable = named(COMPOSER_FILES, path);
+            roles.steers = named(COMPOSER_FILES, path);
         }
         Manager::Cargo => {
             roles.registry = crate::cargo::config_file(path);
             roles.settings = crate::cargo::config_file(path) || named(&["Cargo.toml"], path);
-            roles.credentials = crate::cargo::config_file(path);
+            roles.credential_scan =
+                crate::cargo::config_file(path).then_some(CredentialScan::Cargo);
             roles.check = if named(&["Cargo.toml", "Cargo.lock"], path)
                 || crate::cargo::config_file(path)
                 || path.ends_with(".rs")
@@ -239,57 +261,26 @@ pub fn eco_roles(manager: Manager, path: &str) -> EcoRoles {
         Manager::Nuget => {
             roles.registry = crate::nuget::config_file(path) || crate::nuget::msbuild_file(path);
             roles.settings = roles.registry;
-            roles.credentials = crate::nuget::config_file(path);
+            roles.credential_scan =
+                crate::nuget::config_file(path).then_some(CredentialScan::Nuget);
             roles.check = if crate::nuget::config_file(path)
-                || named(
-                    &[
-                        "Directory.Packages.props",
-                        "Directory.Build.props",
-                        "Directory.Build.targets",
-                        "dotnet-tools.json",
-                        "global.json",
-                    ],
-                    path,
-                )
-                || suffixed(&[".csproj", ".fsproj", ".vbproj", ".sln", ".slnx"], path)
+                || named(manifest_names(Manager::Nuget), path)
+                || suffixed(NUGET_SUFFIXES, path)
             {
                 CredentialCheck::Scan
-            } else if named(&["packages.lock.json"], path) {
+            } else if named(lock_names(Manager::Nuget).supported, path) {
                 CredentialCheck::Skip
             } else {
                 CredentialCheck::Undecided
             };
-            roles.writable = named(
-                &[
-                    "packages.lock.json",
-                    "Directory.Packages.props",
-                    "Directory.Build.props",
-                    "dotnet-tools.json",
-                    "global.json",
-                ],
-                path,
-            );
+            roles.writable = named(NUGET_WRITABLE, path);
             roles.read = crate::nuget::config_file(path)
                 || named(&["Directory.Build.targets"], path)
-                || suffixed(&[".csproj", ".fsproj", ".vbproj", ".sln", ".slnx"], path);
+                || suffixed(NUGET_SUFFIXES, path);
             roles.steers = crate::nuget::config_file(path)
-                || named(
-                    &[
-                        "packages.lock.json",
-                        "Directory.Packages.props",
-                        "Directory.Build.props",
-                        "Directory.Build.targets",
-                        "global.json",
-                        "dotnet-tools.json",
-                    ],
-                    path,
-                )
-                || suffixed(
-                    &[
-                        ".csproj", ".fsproj", ".vbproj", ".sln", ".slnx", ".props", ".targets",
-                    ],
-                    path,
-                );
+                || named(lock_names(Manager::Nuget).supported, path)
+                || named(manifest_names(Manager::Nuget), path)
+                || suffixed(NUGET_STEERING_SUFFIXES, path);
         }
         Manager::Maven => {
             roles.registry = crate::maven::repository_file(path);
@@ -349,13 +340,12 @@ pub fn eco_roles(manager: Manager, path: &str) -> EcoRoles {
     roles
 }
 
-/// The roles `path` has across every manager's ecosystem.
 pub fn roles(path: &str) -> Roles {
     let mut roles = Roles::default();
     for manager in Manager::ALL {
         let eco = eco_roles(*manager, path);
         roles.settings |= eco.settings;
-        roles.credentials |= eco.credentials;
+        roles.credentials |= eco.credential_scan.is_some();
         roles.writable |= eco.writable;
         roles.read |= eco.read;
         let rank = |check: CredentialCheck| match check {
@@ -380,12 +370,10 @@ pub fn registry_settings(path: &str) -> bool {
     roles(path).settings
 }
 
-/// Whether `path`'s text is checked for committed credentials.
 pub fn credential_check(path: &str) -> CredentialCheck {
     roles(path).check
 }
 
-/// Whether `path` can hold a committed credential the checks know.
 pub fn credential_scope(path: &str) -> bool {
     roles(path).credentials
 }
@@ -400,7 +388,6 @@ pub fn nuget_config(path: &str) -> bool {
     crate::nuget::config_file(path)
 }
 
-/// The lockfile leaf names `manager`'s ecosystem recognizes.
 pub fn lock_names(manager: Manager) -> LockNames {
     match manager {
         Manager::Npm => LockNames {
