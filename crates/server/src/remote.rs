@@ -10,7 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use futures_util::future::BoxFuture;
+use futures_util::{FutureExt, future::BoxFuture};
 use patchula_cache::Cache;
 use patchula_github::{Client, app::App};
 use patchula_http::Transport;
@@ -82,12 +82,22 @@ struct User {
 struct Job {
     login: String,
     state: JobState,
-    finished: Option<i64>,
 }
+/// A job runs until its task ends, then holds its outcome and when it ended.
+/// The task records an outcome on every exit, a panic included, so no job
+/// stays running after its task is gone.
 enum JobState {
     Running,
-    Complete(Box<Report>),
-    Failed(&'static str),
+    Complete { report: Box<Report>, at: i64 },
+    Failed { error: &'static str, at: i64 },
+}
+impl JobState {
+    fn finished(&self) -> Option<i64> {
+        match self {
+            Self::Running => None,
+            Self::Complete { at, .. } | Self::Failed { at, .. } => Some(*at),
+        }
+    }
 }
 
 pub(crate) struct Parts {
@@ -230,10 +240,27 @@ async fn start(
         ));
     }
     api.authorize(installation, &repositories, &login).await?;
+    // Held from before the job is recorded until its task is spawned, with no
+    // await between the two: a request dropped at an await point either
+    // recorded nothing or already has a task to finish the job.
+    let mut tasks = api.0.tasks.lock().await;
+    // Checked again under the lock: shutdown stops accepting before `drain`
+    // takes the tasks, so a run spawned here is one drain waits for.
+    if !api.0.accepting.load(Ordering::Acquire) {
+        return Err(reject(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "shutting-down",
+            "the server is shutting down",
+        ));
+    }
     let id = {
         let now = chrono::Utc::now().timestamp();
         let mut jobs = api.0.jobs.lock().await;
-        jobs.retain(|_, job| job.finished.is_none_or(|at| at + JOB_TTL_SECONDS > now));
+        jobs.retain(|_, job| {
+            job.state
+                .finished()
+                .is_none_or(|at| at + JOB_TTL_SECONDS > now)
+        });
         if jobs
             .values()
             .any(|job| job.login == login && matches!(job.state, JobState::Running))
@@ -257,7 +284,6 @@ async fn start(
             Job {
                 login: login.clone(),
                 state: JobState::Running,
-                finished: None,
             },
         );
         id
@@ -266,22 +292,30 @@ async fn start(
         repositories = repositories.len(), "remote run started");
     let job = api.clone();
     let job_id = id.clone();
-    let mut tasks = api.0.tasks.lock().await;
     while tasks.try_join_next().is_some() {}
     tasks.spawn(async move {
-        let result = job
-            .0
-            .runner
-            .run(installation, repositories, start.mode, &login, &settings)
-            .await;
+        // The runner is called inside the caught future, so a panic while
+        // building its future is caught too.
+        let result = std::panic::AssertUnwindSafe(async {
+            job.0
+                .runner
+                .run(installation, repositories, start.mode, &login, &settings)
+                .await
+        })
+        .catch_unwind()
+        .await
+        .unwrap_or(Err("the run stopped unexpectedly"));
         let success = result.is_ok();
+        let at = chrono::Utc::now().timestamp();
         let mut jobs = job.0.jobs.lock().await;
         if let Some(entry) = jobs.get_mut(&job_id) {
             entry.state = match result {
-                Ok(report) => JobState::Complete(Box::new(report)),
-                Err(error) => JobState::Failed(error),
+                Ok(report) => JobState::Complete {
+                    report: Box::new(report),
+                    at,
+                },
+                Err(error) => JobState::Failed { error, at },
             };
-            entry.finished = Some(chrono::Utc::now().timestamp());
         }
         tracing::info!(target: "patchula_server", installation, user = %login, success, "remote run finished");
     });
@@ -308,8 +342,8 @@ async fn status(
         })?;
     Ok(Json(match &job.state {
         JobState::Running => json!({"status": "running"}),
-        JobState::Complete(report) => json!({"status": "complete", "report": report}),
-        JobState::Failed(error) => json!({"status": "failed", "error": error}),
+        JobState::Complete { report, .. } => json!({"status": "complete", "report": report}),
+        JobState::Failed { error, .. } => json!({"status": "failed", "error": error}),
     }))
 }
 

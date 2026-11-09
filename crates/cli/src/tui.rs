@@ -14,7 +14,7 @@ use ratatui::{
     },
 };
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
 
@@ -40,8 +40,16 @@ pub struct Update {
     pub transitive: bool,
     /// The current version came from a lockfile, which an edit here leaves stale.
     pub locked: bool,
-    pub selected: bool,
-    pub applied: bool,
+    pub pick: Pick,
+}
+/// Where an update stands in this session: an applied update can no longer
+/// be selected.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Pick {
+    #[default]
+    Open,
+    Selected,
+    Applied,
 }
 impl Update {
     pub fn target(&self) -> String {
@@ -118,8 +126,7 @@ pub fn updates(report: &Report) -> Vec<Update> {
                         locked: metadata
                             .and_then(|m| m.resolution.as_ref())
                             .is_some_and(|r| r.kind == "lockfile"),
-                        selected: false,
-                        applied: false,
+                        pick: Pick::Open,
                     });
                 }
             }
@@ -471,6 +478,21 @@ fn shifted(mut event: KeyEvent) -> KeyEvent {
     event
 }
 
+/// What the keyboard drives: the tabs, or one step over them. One value, so
+/// two prompts can never be open at once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    Browse,
+    Searching,
+    Help,
+    /// Waiting for y before writing the selection.
+    ConfirmApply,
+    /// Waiting for y before running copier for this template.
+    ConfirmCopier(usize),
+    /// Confirmed: the terminal loop hands this template to copier.
+    Copier(usize),
+}
+
 pub struct Model {
     pub tab: Tab,
     pub updates: Vec<Update>,
@@ -484,17 +506,11 @@ pub struct Model {
     pub repositories: usize,
     pub filter: Filter,
     pub search: String,
-    pub searching: bool,
+    pub mode: Mode,
     pub cursor: usize,
     pub scroll: usize,
     /// Each tab's cursor and scroll while another tab is shown.
     places: [(usize, usize); TABS.len()],
-    pub confirming: bool,
-    /// The template awaiting a y/n before copier runs.
-    pub confirming_template: Option<usize>,
-    /// The confirmed template; the terminal loop hands it to copier.
-    pub copier: Option<usize>,
-    pub help: bool,
     pub message: Option<String>,
     pub origin: Origin,
     /// The working tree has uncommitted changes, so copier would refuse.
@@ -608,14 +624,10 @@ impl Model {
             repositories: report.repositories.len(),
             filter: Filter::All,
             search: String::new(),
-            searching: false,
             cursor: 0,
             scroll: 0,
             places: [(0, 0); TABS.len()],
-            confirming: false,
-            confirming_template: None,
-            copier: None,
-            help: false,
+            mode: Mode::Browse,
             message: None,
             uncommitted: match &origin {
                 Origin::Local(local) => uncommitted(&local.dir),
@@ -662,14 +674,18 @@ impl Model {
     }
     /// The question waiting for `y`, if any.
     pub fn prompt(&self) -> Option<String> {
-        if self.confirming {
-            let n = self.selected();
-            return Some(format!(
-                "Write {n} selected update{} into the working tree? y writes, any other key cancels.",
-                plural(n)
-            ));
-        }
-        let template = self.templates.get(self.confirming_template?)?;
+        let index = match self.mode {
+            Mode::ConfirmApply => {
+                let n = self.selected();
+                return Some(format!(
+                    "Write {n} selected update{} into the working tree? y writes, any other key cancels.",
+                    plural(n)
+                ));
+            }
+            Mode::ConfirmCopier(index) => index,
+            _ => return None,
+        };
+        let template = self.templates.get(index)?;
         Some(format!(
             "Run copier update --vcs-ref {} for {}? The template's code runs on this machine as you{}. y runs it, any other key cancels.",
             template.notice.available,
@@ -739,7 +755,10 @@ impl Model {
         }
     }
     fn selected(&self) -> usize {
-        self.updates.iter().filter(|u| u.selected).count()
+        self.updates
+            .iter()
+            .filter(|u| u.pick == Pick::Selected)
+            .count()
     }
 
     pub fn key(&mut self, key: KeyEvent) {
@@ -750,9 +769,9 @@ impl Model {
             self.quit = true;
             return;
         }
-        if self.searching {
+        if self.mode == Mode::Searching {
             match key.code {
-                KeyCode::Enter | KeyCode::Esc => self.searching = false,
+                KeyCode::Enter | KeyCode::Esc => self.mode = Mode::Browse,
                 KeyCode::Backspace => {
                     self.search.pop();
                 }
@@ -763,17 +782,18 @@ impl Model {
             return;
         }
         let yes = matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y'));
-        if let Some(index) = self.confirming_template.take() {
+        if let Mode::ConfirmCopier(index) = self.mode {
+            self.mode = Mode::Browse;
             self.message = Some(if yes {
-                self.copier = Some(index);
+                self.mode = Mode::Copier(index);
                 "Copier is running in your terminal.".into()
             } else {
                 "Copier was not run.".into()
             });
             return;
         }
-        if self.confirming {
-            self.confirming = false;
+        if self.mode == Mode::ConfirmApply {
+            self.mode = Mode::Browse;
             self.message = Some(if yes {
                 match self.apply() {
                     Ok((edits, files)) => format!(
@@ -781,16 +801,20 @@ impl Model {
                         plural(edits),
                         plural(files)
                     ),
-                    Err(error) => format!("Nothing was written: {error}"),
+                    Err(error) => format!("The Count stopped: {error}"),
                 }
             } else {
                 "Apply cancelled; nothing was written.".into()
             });
             return;
         }
+        if let Mode::Copier(_) = self.mode {
+            // Confirmed: the terminal loop runs it next, whatever is pressed.
+            return;
+        }
         self.message = None;
-        if self.help {
-            self.help = false;
+        if self.mode == Mode::Help {
+            self.mode = Mode::Browse;
             return;
         }
         let Some(binding) = binding(key, self.tab) else {
@@ -800,7 +824,7 @@ impl Model {
         let tab = self.tab;
         match binding.action {
             Action::Quit => self.quit = true,
-            Action::Help => self.help = true,
+            Action::Help => self.mode = Mode::Help,
             Action::NextTab => self.switch(1),
             Action::PreviousTab => self.switch(TABS.len() - 1),
             Action::JumpTab => {
@@ -815,7 +839,7 @@ impl Model {
             Action::Top => self.cursor = 0,
             Action::Bottom => self.cursor = rows.saturating_sub(1),
             Action::Search => {
-                self.searching = true;
+                self.mode = Mode::Searching;
                 self.search.clear();
             }
             Action::Filter => {
@@ -825,25 +849,26 @@ impl Model {
             Action::Select => {
                 if let Some(&index) = self.visible().get(self.cursor) {
                     let update = &mut self.updates[index];
-                    if !update.applied {
-                        update.selected = !update.selected;
-                    }
+                    update.pick = match update.pick {
+                        Pick::Open => Pick::Selected,
+                        Pick::Selected => Pick::Open,
+                        Pick::Applied => Pick::Applied,
+                    };
                 }
             }
             Action::SelectAll => {
                 let visible = self.visible();
-                let select = visible
-                    .iter()
-                    .any(|&i| !self.updates[i].selected && !self.updates[i].applied);
+                let select = visible.iter().any(|&i| self.updates[i].pick == Pick::Open);
                 for i in visible {
-                    if !self.updates[i].applied {
-                        self.updates[i].selected = select;
+                    let pick = &mut self.updates[i].pick;
+                    if *pick != Pick::Applied {
+                        *pick = if select { Pick::Selected } else { Pick::Open };
                     }
                 }
             }
             Action::Apply => match self.apply_blocked() {
                 Some(reason) => self.message = Some(format!("The Count cannot apply: {reason}.")),
-                None => self.confirming = true,
+                None => self.mode = Mode::ConfirmApply,
             },
             Action::Copier => {
                 if self.templates.get(self.cursor).is_none() {
@@ -854,7 +879,7 @@ impl Model {
                     Some(reason) => {
                         self.message = Some(format!("The Count cannot run copier: {reason}."))
                     }
-                    None => self.confirming_template = Some(self.cursor),
+                    None => self.mode = Mode::ConfirmCopier(self.cursor),
                 }
             }
         }
@@ -883,13 +908,14 @@ impl Model {
         (self.cursor, self.scroll) = self.places[index];
     }
 
-    /// Write the selected updates into the local directory's files, all or none.
+    /// Write the selected updates into the local directory's files, all or
+    /// none as far as the filesystem allows. An error says what was written.
     fn apply(&mut self) -> Result<(usize, usize), String> {
         let Origin::Local(local) = &self.origin else {
-            return Err("not a local directory".into());
+            return Err("not a local directory; nothing was written".into());
         };
         let selected: Vec<usize> = (0..self.updates.len())
-            .filter(|&i| self.updates[i].selected)
+            .filter(|&i| self.updates[i].pick == Pick::Selected)
             .collect();
         let plan = plan(
             local,
@@ -897,22 +923,30 @@ impl Model {
                 .iter()
                 .map(|&i| &self.updates[i])
                 .collect::<Vec<_>>(),
-        )?;
+        )
+        .map_err(|error| format!("{error}; nothing was written"))?;
         if let Some((_, reason)) = plan.skipped.first() {
-            return Err(reason.clone());
+            return Err(format!("{reason}; nothing was written"));
         }
-        plan.write(&local.dir)?;
+        if let Err(error) = plan.write(&local.dir) {
+            // Whatever landed is in the tree now, so the tree's view follows it.
+            self.uncommitted = uncommitted(&local.dir);
+            return Err(error.to_string());
+        }
         self.uncommitted = uncommitted(&local.dir);
         for &index in &selected {
-            self.updates[index].selected = false;
-            self.updates[index].applied = true;
+            self.updates[index].pick = Pick::Applied;
         }
         Ok((selected.len(), plan.files.len()))
     }
     /// Run copier for the confirmed template, with the terminal handed over
     /// to it, and say what it changed.
     pub fn run_copier(&mut self, program: &str) {
-        let (Some(index), Origin::Local(local)) = (self.copier.take(), &self.origin) else {
+        let Mode::Copier(index) = self.mode else {
+            return;
+        };
+        self.mode = Mode::Browse;
+        let Origin::Local(local) = &self.origin else {
             return;
         };
         let notice = self.templates[index].notice.clone();
@@ -939,13 +973,121 @@ pub struct Plan {
     /// Positions of the updates that cannot be written in place, with why.
     pub skipped: Vec<(usize, String)>,
 }
+/// A write that stopped: the files it had already written, and the one it
+/// was writing when it failed, which may be left partly written.
+#[derive(Debug)]
+pub struct WriteError {
+    pub written: Vec<String>,
+    pub partial: Option<String>,
+    pub error: String,
+}
+impl std::fmt::Display for WriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.error)?;
+        if let Some(partial) = &self.partial {
+            write!(f, "; {partial} may be left partly written")?;
+        }
+        match self.written.len() {
+            0 if self.partial.is_none() => write!(f, "; nothing was written"),
+            0 => Ok(()),
+            1 => write!(f, "; only {} was written", self.written[0]),
+            _ => write!(f, "; only {} were written", self.written.join(", ")),
+        }
+    }
+}
 impl Plan {
-    pub fn write(&self, dir: &Path) -> Result<(), String> {
+    /// Write every file in place. Each is first checked by opening it for
+    /// writing, so a missing file, a permission, or two names for the same
+    /// file (a symlink or a hard link) stops the write with nothing written.
+    /// Files are then written one at a time, each open only while it is
+    /// written, so a plan may touch more files than the process may hold
+    /// open. Writing in place keeps each file's owner, mode, links and
+    /// attributes, as an editor saving it would. Only a failure while writing,
+    /// such as a full disk, can stop partway, and the error names what was
+    /// written.
+    pub fn write(&self, dir: &Path) -> Result<(), WriteError> {
+        use std::io::Write as _;
+        let mut checked = Vec::new();
+        let mut identities = BTreeSet::new();
         for (file, (_, content)) in &self.files {
-            std::fs::write(dir.join(file), content).map_err(|e| format!("{file}: {e}"))?;
+            let check = (|| {
+                // A symlinked file is written through its link.
+                let target = std::fs::canonicalize(dir.join(file))?;
+                // Only a regular file: opening a pipe or device to write may block
+                // or reach something that is not the manifest.
+                if !std::fs::metadata(&target)?.is_file() {
+                    return Err(std::io::Error::other("not a regular file"));
+                }
+                let handle = std::fs::OpenOptions::new().write(true).open(&target)?;
+                let id = identity(&target, &handle.metadata()?);
+                if !identities.insert(id.clone()) {
+                    return Err(std::io::Error::other(
+                        "another file in this write is the same file",
+                    ));
+                }
+                Ok((target, id))
+            })();
+            match check {
+                Ok((target, id)) => checked.push((file, target, id, content)),
+                Err(error) => {
+                    return Err(WriteError {
+                        written: Vec::new(),
+                        partial: None,
+                        error: format!("{file}: {error}"),
+                    });
+                }
+            }
+        }
+        let mut written = Vec::new();
+        for (file, target, id, content) in checked {
+            let mut opened = None;
+            let result = std::fs::metadata(&target)
+                .and_then(|metadata| {
+                    if metadata.is_file() {
+                        Ok(())
+                    } else {
+                        Err(std::io::Error::other("not a regular file"))
+                    }
+                })
+                .and_then(|()| std::fs::OpenOptions::new().write(true).open(&target))
+                .and_then(|handle| {
+                    // The file checked, not one put in its place since.
+                    if identity(&target, &handle.metadata()?) != id {
+                        return Err(std::io::Error::other(
+                            "the file changed since the Count checked it",
+                        ));
+                    }
+                    let handle = opened.insert(handle);
+                    handle.set_len(0)?;
+                    handle.write_all(content.as_bytes())?;
+                    handle.flush()
+                });
+            if let Err(error) = result {
+                return Err(WriteError {
+                    written,
+                    // Opened means it may have been cut short.
+                    partial: opened.is_some().then(|| file.clone()),
+                    error: format!("{file}: {error}"),
+                });
+            }
+            written.push(file.clone());
         }
         Ok(())
     }
+}
+
+/// What makes two paths the same file: the device and inode where there are
+/// such, else the resolved path. A filesystem that makes up inode numbers
+/// (some FUSE and network ones) can make distinct files look the same, which
+/// refuses the write rather than risking it.
+#[cfg(unix)]
+fn identity(_: &Path, metadata: &std::fs::Metadata) -> (u64, u64, PathBuf) {
+    use std::os::unix::fs::MetadataExt;
+    (metadata.dev(), metadata.ino(), PathBuf::new())
+}
+#[cfg(not(unix))]
+fn identity(target: &Path, _: &std::fs::Metadata) -> (u64, u64, PathBuf) {
+    (0, 0, target.to_owned())
 }
 
 /// Plan the edits for these updates in the working tree, the way the Count
@@ -1105,7 +1247,7 @@ pub fn draw(frame: &mut Frame, model: &mut Model) {
                 .map(|l| Line::styled(format!(" {l}"), Style::new().fg(palette::WARNING.tui()))),
         );
     }
-    let (status, style) = if model.searching {
+    let (status, style) = if model.mode == Mode::Searching {
         (
             format!("search: {}_  Enter or Esc to finish", model.search),
             Style::new(),
@@ -1200,7 +1342,7 @@ pub fn draw(frame: &mut Frame, model: &mut Model) {
         ),
     }
     frame.render_widget(Paragraph::new(footer_lines), footer);
-    if model.help {
+    if model.mode == Mode::Help {
         draw_help(frame);
     }
 }
@@ -1274,15 +1416,15 @@ fn draw_updates(frame: &mut Frame, model: &mut Model, area: Rect) {
         .zip(cells)
         .map(|(&i, [name, current, target, kind, age, file])| {
             let u = &model.updates[i];
-            let mark = if u.applied {
+            let mark = if u.pick == Pick::Applied {
                 "done"
-            } else if u.selected {
+            } else if u.pick == Pick::Selected {
                 "[x]"
             } else {
                 "[ ]"
             };
             TableRow::new(vec![
-                Cell::from(mark).style(Style::new().fg(if u.applied {
+                Cell::from(mark).style(Style::new().fg(if u.pick == Pick::Applied {
                     palette::SUCCESS.tui()
                 } else {
                     palette::WARNING.tui()
@@ -1914,7 +2056,7 @@ pub fn interact(mut model: Model) -> std::io::Result<()> {
             if let Event::Key(key) = event::read()? {
                 model.key(key);
             }
-            if model.copier.is_some() {
+            if matches!(model.mode, Mode::Copier(_)) {
                 // Copier asks its own questions, so it gets the plain terminal.
                 ratatui::restore();
                 model.run_copier("copier");
@@ -2015,7 +2157,7 @@ mod tests {
         assert!(text.contains("hono") && !text.contains("zod "), "{text}");
         press(&mut model, KeyCode::Char('w'));
         assert!(model.message.as_deref().unwrap().contains("working tree"));
-        assert!(!model.confirming);
+        assert_ne!(model.mode, Mode::ConfirmApply);
         press(&mut model, KeyCode::Char('3'));
         assert_eq!(model.tab, Tab::Dependencies);
         press(&mut model, KeyCode::Char('?'));
@@ -2057,7 +2199,7 @@ mod tests {
         assert!(model.message.as_deref().unwrap().contains("select updates"));
         press(&mut model, KeyCode::Char(' '));
         press(&mut model, KeyCode::Char('w'));
-        assert!(model.confirming);
+        assert_eq!(model.mode, Mode::ConfirmApply);
         press(&mut model, KeyCode::Char('y'));
         assert!(
             model
@@ -2070,7 +2212,7 @@ mod tests {
         );
         let written = std::fs::read_to_string(dir.path().join("package.json")).unwrap();
         assert_eq!(written, manifest.replace("3.22.0", "4.1.0"));
-        assert!(model.updates[0].applied && !model.updates[0].selected);
+        assert_eq!(model.updates[0].pick, Pick::Applied);
     }
 
     /// A release the Count could not write into a declaration is a warning that
@@ -2133,10 +2275,10 @@ mod tests {
         );
         press(&mut remote, KeyCode::Char(' '));
         press(&mut remote, KeyCode::Char('a'));
-        assert!(remote.updates.iter().all(|u| !u.selected));
+        assert!(remote.updates.iter().all(|u| u.pick != Pick::Selected));
         press(&mut remote, KeyCode::Char('u'));
         assert!(remote.message.as_deref().unwrap().contains("working tree"));
-        assert_eq!((remote.confirming_template, remote.copier), (None, None));
+        assert_eq!(remote.mode, Mode::Browse);
 
         let dir = tempfile::tempdir().unwrap();
         let tree = dir.path().join("tree");
@@ -2178,12 +2320,12 @@ mod tests {
                 .contains("--vcs-ref v1.6.0 for gh:acme/template? The template's code runs on this machine as you; its changes: https://github.com/acme/template/compare/v1.4.0...v1.6.0. y runs it")
         );
         press(&mut model, KeyCode::Char('n'));
-        assert_eq!(model.copier, None);
+        assert_eq!(model.mode, Mode::Browse);
         press(&mut model, KeyCode::Char('u'));
         press(&mut model, KeyCode::Char('y'));
-        assert_eq!(model.copier, Some(0));
+        assert_eq!(model.mode, Mode::Copier(0));
         model.run_copier(&fake.to_string_lossy());
-        assert_eq!(model.copier, None);
+        assert_eq!(model.mode, Mode::Browse);
         assert!(model.templates[0].applied);
         assert!(
             model.message.as_deref().unwrap().contains(
@@ -2329,7 +2471,7 @@ mod tests {
         );
         let (_dir, mut model) = local_model(MANIFEST);
         for (width, height) in [(80, 24), (120, 40)] {
-            model.help = true;
+            model.mode = Mode::Help;
             let help = sized(&mut model, width, height);
             for binding in KEYS {
                 assert!(help.contains(&binding.keys()), "{help}");

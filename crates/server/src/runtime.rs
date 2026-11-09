@@ -9,7 +9,7 @@ use axum::{
     routing::{get, post},
 };
 use chrono::Utc;
-use futures_util::future::BoxFuture;
+use futures_util::{FutureExt, future::BoxFuture};
 use patchula_cache::{
     Cache,
     queue::{Attribution, Finish, Work},
@@ -225,6 +225,9 @@ fn router(webhook: Webhook, ready: Arc<AtomicBool>) -> Router {
                     cache.clone(),
                     ready.clone(),
                 );
+                // Ready is every condition at once. Webhooks and remote runs
+                // check only `accepting`: while unready they are still queued,
+                // since a rejected delivery would be lost.
                 async move {
                     if accepting.load(Ordering::Acquire)
                         && settings.valid()
@@ -458,19 +461,24 @@ impl Batch for Engines {
             let started = Utc::now();
             let (result, withheld) = {
                 let mut slot = self.engine(id, settings).await?;
-                let (_, engine) = slot.as_mut().ok_or(Error("missing batch engine"))?;
-                let result = engine
-                    .run(
-                        patchula_engine::Options {
-                            repositories: repositories.clone(),
-                            ..patchula_engine::Options::default()
-                        },
-                        false,
-                        false,
-                    )
-                    .await;
-                let withheld = result.as_ref().ok().map(crate::public::withheld);
-                (result, withheld)
+                let outcome = std::panic::AssertUnwindSafe(async {
+                    let (_, engine) = slot.as_mut().ok_or(Error("missing batch engine"))?;
+                    let result = engine
+                        .run(
+                            patchula_engine::Options {
+                                repositories: repositories.clone(),
+                                ..patchula_engine::Options::default()
+                            },
+                            false,
+                            false,
+                        )
+                        .await;
+                    let withheld = result.as_ref().ok().map(crate::public::withheld);
+                    Ok::<_, Error>((result, withheld))
+                })
+                .catch_unwind()
+                .await;
+                discard_on_panic(&mut slot, outcome)?
             };
             if let (Ok(report), Some(withheld)) = (&result, withheld) {
                 crate::public::record(
@@ -593,17 +601,22 @@ impl crate::remote::Runner for Engines {
                 // The installation's own lock, so a remote run never races its
                 // queued batches.
                 let mut slot = self.engine(installation, settings).await.map_err(|e| e.0)?;
-                let (_, engine) = slot.as_mut().ok_or("missing batch engine")?;
-                let options = patchula_engine::Options {
-                    repositories,
-                    ..patchula_engine::Options::default()
-                };
-                let report = match mode {
-                    Mode::Lookup => engine.lookup(options).await,
-                    Mode::DryRun => engine.run(options, true, false).await,
-                    Mode::Run => engine.run(options, false, false).await,
-                }
-                .map_err(|_| "the run failed on the server")?;
+                let outcome = std::panic::AssertUnwindSafe(async {
+                    let (_, engine) = slot.as_mut().ok_or("missing batch engine")?;
+                    let options = patchula_engine::Options {
+                        repositories,
+                        ..patchula_engine::Options::default()
+                    };
+                    match mode {
+                        Mode::Lookup => engine.lookup(options).await,
+                        Mode::DryRun => engine.run(options, true, false).await,
+                        Mode::Run => engine.run(options, false, false).await,
+                    }
+                    .map_err(|_| "the run failed on the server")
+                })
+                .catch_unwind()
+                .await;
+                let report = discard_on_panic(&mut slot, outcome)?;
                 let withheld = crate::public::withheld(&report);
                 (report, withheld)
             };
@@ -1001,6 +1014,9 @@ async fn maintenance(
         }
         let sweep_due = next_sweep.is_some_and(|next| next <= Utc::now());
         if sweep_due || tokio::time::Instant::now() >= probe_at {
+            // A sweep is done once it is queued; a token probe failing after
+            // that marks the server unready but does not queue it again.
+            let mut swept = false;
             let result = async {
                 app.bot_login()
                     .await
@@ -1037,6 +1053,7 @@ async fn maintenance(
                         )
                         .await
                         .map_err(|_| Error("cannot persist cron sweep"))?;
+                    swept = true;
                 }
                 for id in &ids {
                     app.installation(*id)
@@ -1054,7 +1071,7 @@ async fn maintenance(
             }
             probe_at = tokio::time::Instant::now() + Duration::from_secs(30);
             if sweep_due {
-                next_sweep = if success {
+                next_sweep = if swept {
                     sweep_after(&current, Utc::now())
                 } else {
                     Some(Utc::now() + chrono::Duration::seconds(60))
@@ -1106,3 +1123,16 @@ async fn signal() {
 
 #[cfg(test)]
 mod tests;
+
+/// The outcome of work on a slot's engine. An engine that panicked mid-run
+/// may hold half-done state, so its slot is emptied, the next run builds a
+/// fresh one, and the panic carries on to whoever recovers it.
+fn discard_on_panic<T>(
+    slot: &mut tokio::sync::OwnedMutexGuard<Option<(EngineKey, Engine)>>,
+    outcome: std::thread::Result<T>,
+) -> T {
+    outcome.unwrap_or_else(|panic| {
+        **slot = None;
+        std::panic::resume_unwind(panic)
+    })
+}

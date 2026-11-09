@@ -73,6 +73,9 @@ type Call = (u64, Vec<String>, Mode, String);
 struct Recorder {
     calls: StdMutex<Vec<Call>>,
     gate: Option<Arc<tokio::sync::Notify>>,
+    panics: bool,
+    /// Panic in `run` itself, before its future exists.
+    panics_early: bool,
 }
 impl Runner for Recorder {
     fn run<'a>(
@@ -83,6 +86,7 @@ impl Runner for Recorder {
         login: &'a str,
         _settings: &'a Settings,
     ) -> BoxFuture<'a, Result<Report, &'static str>> {
+        assert!(!self.panics_early, "the runner panicked before running");
         Box::pin(async move {
             self.calls.lock().unwrap().push((
                 installation,
@@ -93,6 +97,7 @@ impl Runner for Recorder {
             if let Some(gate) = &self.gate {
                 gate.notified().await;
             }
+            assert!(!self.panics, "the runner panicked");
             Ok(Report {
                 schema_version: patchula_report::SCHEMA_VERSION,
                 repositories: repositories
@@ -326,6 +331,32 @@ async fn one_run_at_a_time_per_user() {
     }
     let (status, _) = call(&router, start("ghu_writer", body)).await;
     assert_eq!(status, StatusCode::ACCEPTED);
+}
+
+#[tokio::test]
+async fn a_run_that_panics_fails_and_frees_its_user() {
+    for early in [false, true] {
+        let runner = Arc::new(Recorder {
+            panics: !early,
+            panics_early: early,
+            ..Recorder::default()
+        });
+        let router = api(runner, Some("client"), "").await;
+        let body = json!({"mode": "lookup", "repositories": ["acme/app"]});
+        let (status, first) = call(&router, start("ghu_writer", body.clone())).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let id = first["id"].as_str().unwrap();
+        let polled = loop {
+            let (_, polled) = call(&router, poll("ghu_writer", id)).await;
+            if polled["status"] != "running" {
+                break polled;
+            }
+            tokio::task::yield_now().await;
+        };
+        assert_eq!(polled["status"], "failed", "{polled}");
+        let (status, _) = call(&router, start("ghu_writer", body)).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+    }
 }
 
 #[tokio::test]

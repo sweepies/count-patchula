@@ -1091,3 +1091,143 @@ async fn apply_reports_notices_that_are_not_templates() {
         "{result}"
     );
 }
+
+/// A file that cannot be opened stops the write before any file changes, and
+/// a write leaves no file behind.
+#[test]
+fn a_write_that_cannot_open_every_file_writes_none() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.txt"), "old").unwrap();
+    let plan = crate::tui::Plan {
+        files: BTreeMap::from([
+            ("a.txt".to_owned(), ("old".to_owned(), "new".to_owned())),
+            (
+                "gone/b.txt".to_owned(),
+                ("old".to_owned(), "new".to_owned()),
+            ),
+        ]),
+        applied: Vec::new(),
+        skipped: Vec::new(),
+    };
+    let error = plan.write(dir.path()).unwrap_err();
+    assert!(error.written.is_empty(), "{error}");
+    assert!(
+        error.to_string().ends_with("nothing was written"),
+        "{error}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        "old"
+    );
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+
+    let plan = crate::tui::Plan {
+        files: BTreeMap::from([("a.txt".to_owned(), ("old".to_owned(), "new".to_owned()))]),
+        applied: Vec::new(),
+        skipped: Vec::new(),
+    };
+    plan.write(dir.path()).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        "new"
+    );
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+/// Files are written in place: a hard link sees the new text, a read-only
+/// file is refused before anything changes, a file in a read-only directory
+/// is still written, and two paths to one file are refused.
+#[cfg(unix)]
+#[test]
+fn writes_are_in_place_and_refuse_before_changing_anything() {
+    use std::os::unix::fs::PermissionsExt;
+    let plan = |files: &[&str]| crate::tui::Plan {
+        files: files
+            .iter()
+            .map(|f| ((*f).to_owned(), ("old".to_owned(), "new".to_owned())))
+            .collect(),
+        applied: Vec::new(),
+        skipped: Vec::new(),
+    };
+    let read = |path: &std::path::Path| std::fs::read_to_string(path).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("a.txt"), "old").unwrap();
+    std::fs::hard_link(root.join("a.txt"), root.join("link.txt")).unwrap();
+    plan(&["a.txt"]).write(root).unwrap();
+    assert_eq!(read(&root.join("link.txt")), "new");
+
+    std::fs::write(root.join("b.txt"), "old").unwrap();
+    std::fs::write(root.join("locked.txt"), "old").unwrap();
+    std::fs::set_permissions(
+        root.join("locked.txt"),
+        std::fs::Permissions::from_mode(0o444),
+    )
+    .unwrap();
+    let error = plan(&["b.txt", "locked.txt"]).write(root).unwrap_err();
+    assert!(
+        error.written.is_empty() && error.partial.is_none(),
+        "{error}"
+    );
+    assert_eq!(read(&root.join("b.txt")), "old");
+
+    std::os::unix::fs::symlink("b.txt", root.join("alias.txt")).unwrap();
+    let error = plan(&["alias.txt", "b.txt"]).write(root).unwrap_err();
+    assert!(error.to_string().contains("same file"), "{error}");
+    assert_eq!(read(&root.join("b.txt")), "old");
+
+    let sealed = root.join("sealed");
+    std::fs::create_dir(&sealed).unwrap();
+    std::fs::write(sealed.join("c.txt"), "old").unwrap();
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o555)).unwrap();
+    plan(&["sealed/c.txt"]).write(root).unwrap();
+    assert_eq!(read(&sealed.join("c.txt")), "new");
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let names: Vec<_> = std::fs::read_dir(root)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(names.len(), 6, "{names:?}");
+}
+
+/// Two hard links are one file, so writing both is refused; and a plan may
+/// touch more files than the process may hold open at once.
+#[cfg(unix)]
+#[test]
+fn hard_links_are_one_file_and_wide_plans_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("a.txt"), "old").unwrap();
+    std::fs::hard_link(root.join("a.txt"), root.join("b.txt")).unwrap();
+    let plan = |files: Vec<String>| crate::tui::Plan {
+        files: files
+            .into_iter()
+            .map(|f| (f, ("old".to_owned(), "new".to_owned())))
+            .collect(),
+        applied: Vec::new(),
+        skipped: Vec::new(),
+    };
+    let error = plan(vec!["a.txt".into(), "b.txt".into()])
+        .write(root)
+        .unwrap_err();
+    assert!(error.to_string().contains("same file"), "{error}");
+    std::fs::create_dir(root.join("dir.txt")).unwrap();
+    let error = plan(vec!["a.txt".into(), "dir.txt".into()])
+        .write(root)
+        .unwrap_err();
+    assert!(error.to_string().contains("not a regular file"), "{error}");
+    assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "old");
+    assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "old");
+
+    let names: Vec<String> = (0..5000).map(|n| format!("wide/f{n}.txt")).collect();
+    std::fs::create_dir(root.join("wide")).unwrap();
+    for name in &names {
+        std::fs::write(root.join(name), "old").unwrap();
+    }
+    plan(names.clone()).write(root).unwrap();
+    assert!(
+        names
+            .iter()
+            .all(|name| std::fs::read_to_string(root.join(name)).unwrap() == "new")
+    );
+}

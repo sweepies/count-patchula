@@ -52,6 +52,12 @@ writes the rest:
   like `~> 6.0`, where only the lockfile would change;
 - a declaration that changed between the lookup and the write.
 
+Every file is opened for writing before any is changed, so a file that is
+missing or read-only stops the write before anything changes. Files are
+written in place, keeping their owner, permissions and links. Only a failure
+while writing, such as a full disk, can leave some written, and the error names
+them.
+
 Lockfiles are not regenerated. When an update's current version came from a
 lockfile, the summary reminds you to refresh it with your package manager
 (`aube install`, `cargo update -w`, `uv lock` and so on).
