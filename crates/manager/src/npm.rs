@@ -599,14 +599,10 @@ pub(super) fn assign_registries(
                 .map(|entry| (entry.file.as_str(), entry.package.as_str())),
         )
     {
-        origins
-            .local
-            .entry(file.to_owned())
-            .or_default()
-            .insert(
-                package.to_owned(),
-                Origin::Index(named_for(file, package, npmrcs)),
-            );
+        origins.local.entry(file.to_owned()).or_default().insert(
+            package.to_owned(),
+            Origin::Index(named_for(file, package, npmrcs)),
+        );
     }
     let dropped = origins.assign(deps, &NPM);
     debug_assert!(dropped.is_empty());

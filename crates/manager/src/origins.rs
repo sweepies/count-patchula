@@ -158,11 +158,7 @@ impl Origins {
                 .configured
                 .iter()
                 .all(|named| matches!(named, Named::Public))
-            && self
-                .local
-                .values()
-                .flat_map(|m| m.values())
-                .all(&public)
+            && self.local.values().flat_map(|m| m.values()).all(&public)
             && self.declared.values().all(&public)
             && self.locks.iter().all(|lock| lock.values().all(&public))
     }
@@ -195,12 +191,7 @@ impl Origins {
 
     /// The registry `file`'s `package` records, for lockfile entries that
     /// are not dependencies: the decision `assign` makes, without dropping.
-    pub(crate) fn recorded(
-        &self,
-        file: &str,
-        package: &str,
-        public: &Public,
-    ) -> Option<Registry> {
+    pub(crate) fn recorded(&self, file: &str, package: &str, public: &Public) -> Option<Registry> {
         match self.origin(file, package) {
             Origin::Index(named) => named.registry(),
             Origin::Ambiguous(named) => {
