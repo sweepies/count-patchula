@@ -37,18 +37,7 @@ fn denied() -> pklr::Error {
     pklr::Error::Eval("repository configuration may access only supplied local modules".into())
 }
 pub(super) fn normalize(path: &Path, local: bool) -> pklr::Result<PathBuf> {
-    let mut out = PathBuf::new();
-    for part in path.components() {
-        match part {
-            std::path::Component::ParentDir => {
-                if !out.pop() {
-                    return Err(denied());
-                }
-            }
-            std::path::Component::CurDir => {}
-            part => out.push(part.as_os_str()),
-        }
-    }
+    let out = crate::normalize_path(path).ok_or_else(denied)?;
     if !local && !out.starts_with("/repo") {
         return Err(denied());
     }

@@ -880,13 +880,7 @@ pub(crate) fn redacted(value: &str) -> String {
 pub(crate) fn registry_url(value: &str) -> Option<String> {
     let value = value.trim().trim_matches(['"', '\'']).trim_end_matches('/');
     // A URL's scheme is case-insensitive.
-    let rest = value
-        .get(..8)
-        .filter(|scheme| scheme.eq_ignore_ascii_case("https://"))
-        .map(|_| &value[8..])?;
-    let host = rest.split('/').next().unwrap_or_default();
-    let valid = !host.is_empty() && !value.contains(['@', '?', '#', ' ', '$']);
-    valid.then(|| format!("https://{rest}"))
+    patchula_config::acceptable_registry_url(value).then(|| format!("https://{}", &value[8..]))
 }
 
 /// A pip requirements file by its name: `requirements.txt`,
