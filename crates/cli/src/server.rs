@@ -18,11 +18,19 @@ fn env(name: &str) -> Result<Option<String>> {
 /// strip trailing CR/LF, reject empty, and errors never carry the value. The
 /// bytes are kept as they are: a webhook secret or key need not be UTF-8.
 fn secret(path: Option<&PathBuf>, file_env: &str, value_env: &str) -> Result<Vec<u8>> {
+    secret_with(path, file_env, value_env, |name| std::env::var_os(name))
+}
+/// `secret` with the environment lookup passed in, so tests need not touch
+/// the process environment.
+fn secret_with(
+    path: Option<&PathBuf>,
+    file_env: &str,
+    value_env: &str,
+    env: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Result<Vec<u8>> {
     // Presence is checked on the raw variable: a secret need not be UTF-8.
-    let path = path
-        .cloned()
-        .or_else(|| std::env::var_os(file_env).map(PathBuf::from));
-    let value = std::env::var_os(value_env).is_some();
+    let path = path.cloned().or_else(|| env(file_env).map(PathBuf::from));
+    let value = env(value_env).is_some();
     if path.is_some() && value {
         return Err(invalid(
             "choose either a secret file or a secret environment value",
@@ -111,12 +119,7 @@ mod tests {
         let key = dir.path().join("key");
         std::fs::write(&key, [0xff, 0xfe, b'\n']).unwrap();
         assert_eq!(
-            secret(
-                Some(&key),
-                "PATCHULA_TEST_SERVER_KEY_FILE",
-                "PATCHULA_TEST_SERVER_KEY",
-            )
-            .unwrap(),
+            secret_with(Some(&key), "KEY_FILE", "KEY", |_| None).unwrap(),
             [0xff, 0xfe]
         );
     }
