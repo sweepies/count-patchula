@@ -28,8 +28,8 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
             env: std::env::vars_os().collect(),
             secrets: Vec::new(),
             timeout: crate::GIT_TIMEOUT,
-            output_limit: 1 << 16,
-            complete_output: false,
+            output_limit: 1 << 24,
+            complete_output: true,
         },
     ))
     .map_err(|failure| match failure {

@@ -20,22 +20,21 @@ fn help_version_and_bundled_schema() {
         assert!(output.status.success(), "{output:?}");
         assert!(!output.stdout.is_empty());
     }
-    for (args, properties) in [
+    // The commands print the bundled schemas whole.
+    for (args, schema) in [
+        (["config", "schema"], patchula_config::SCHEMA),
         (
-            vec!["config", "schema"],
-            ["managers:", "rules:", "files:", "prs:"],
-        ),
-        (
-            vec!["config", "settings-schema"],
-            ["concurrency:", "http:", "registries:", "server:"],
+            ["config", "settings-schema"],
+            patchula_config::settings::SCHEMA,
         ),
     ] {
         let output = cli(&args);
         assert!(output.status.success(), "{args:?}: {output:?}");
-        let schema = String::from_utf8(output.stdout).unwrap();
-        for property in properties {
-            assert!(schema.contains(property), "{args:?} lacks {property}");
-        }
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            schema,
+            "{args:?}"
+        );
     }
 }
 

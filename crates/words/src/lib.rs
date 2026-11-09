@@ -349,8 +349,27 @@ impl Update {
         words
     };
 
+    /// `RANKED` holds every kind exactly once, checked when this compiles.
+    const _RANKED_IS_COMPLETE: () = {
+        assert!(Self::RANKED.len() == Self::ALL.len());
+        let mut i = 0;
+        while i < Self::ALL.len() {
+            let mut found = 0;
+            let mut j = 0;
+            while j < Self::RANKED.len() {
+                if Self::RANKED[j] as u8 == Self::ALL[i] as u8 {
+                    found += 1;
+                }
+                j += 1;
+            }
+            assert!(found == 1, "Update::RANKED must hold every kind once");
+            i += 1;
+        }
+    };
+
     /// The kind's position in [`Self::RANKED`].
     pub const fn rank(self) -> u8 {
+        let () = Self::_RANKED_IS_COMPLETE;
         let mut i = 0;
         while i < Self::RANKED.len() {
             if Self::RANKED[i] as u8 == self as u8 {

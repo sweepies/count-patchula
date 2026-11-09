@@ -369,6 +369,16 @@ fn withheld_classifies_every_metadata_field() {
         "repository": "acme/app", "status": "complete", "reason": null,
         "packageFiles": [{"path": "package.json", "dependencies": [dependency]}]}]}))
     .unwrap();
+    let mut report = report;
+    report.repositories[0].package_files[0].dependencies[0]
+        .metadata
+        .as_mut()
+        .unwrap()
+        .image = Some(patchula_report::ImageCheck {
+        os: Some("debian 12".into()),
+        packages: 3,
+        ..Default::default()
+    });
     let shown = withheld(&report);
     let dep = &shown.repositories[0].package_files[0].dependencies[0];
     // What the declaration itself says stays.
