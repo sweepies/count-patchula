@@ -2227,6 +2227,7 @@ dependencies = [
  "patchula-github",
  "patchula-http",
  "patchula-mise",
+ "patchula-process",
  "patchula-testkit",
  "patchula-versioning",
  "patchula-words",
@@ -2368,6 +2369,7 @@ name = "patchula-process"
 version = "0.8.1"
 dependencies = [
  "rustix",
+ "serde",
  "tokio",
 ]
 

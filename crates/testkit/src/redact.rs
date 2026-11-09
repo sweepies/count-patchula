@@ -15,12 +15,11 @@ pub struct Redactor {
 impl Default for Redactor {
     fn default() -> Self {
         // The token shapes the HTTP layer owns, each a prefix at a word
-        // boundary: `sk-` inside `task-1` is not a key. `v1.` keeps its own
-        // pattern: only a long run after it is a token, so versions such as
-        // v1.2.3 survive.
+        // boundary: `sk-` inside `task-1` is not a key. Recordings add a long-run
+        // `v1.` pattern of their own: only a long run after it is a token, so
+        // versions such as v1.2.3 survive.
         let shapes = patchula_http::TOKEN_SHAPES
             .iter()
-            .filter(|shape| **shape != "v1.")
             .map(|shape| regex::escape(shape))
             .collect::<Vec<_>>()
             .join("|");

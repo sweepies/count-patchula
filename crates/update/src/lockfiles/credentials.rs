@@ -346,7 +346,7 @@ pub(super) fn secrets<'a>(entries: impl IntoIterator<Item = &'a Credential>) -> 
                 secrets.push(encoded.clone());
                 secrets.push(format!("Basic {encoded}"));
             }
-            _ => {}
+            Auth::Withheld | Auth::Anonymous => {}
         }
     }
     secrets
@@ -470,6 +470,26 @@ mod tests {
             username: username.into(),
             password: password.into(),
         }
+    }
+    #[test]
+    fn every_form_a_tool_could_echo_is_a_secret() {
+        let entries = [
+            entry("https://a.example/", bearer("tok")),
+            entry("https://b.example/", basic("user", "pass")),
+            entry("https://c.example/", Auth::Anonymous),
+        ];
+        let secrets = secrets(&entries);
+        assert_eq!(
+            secrets,
+            [
+                "tok",
+                "Bearer tok",
+                "pass",
+                "user:pass",
+                "dXNlcjpwYXNz",
+                "Basic dXNlcjpwYXNz",
+            ]
+        );
     }
     fn runner(entries: Vec<Credential>) -> Runner {
         Runner::new(std::env::temp_dir(), "").with_registries(&entries)

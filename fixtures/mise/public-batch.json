@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "provenance": "Recorded from the pinned mise with `mise run fixtures:record-engine`: what `mise ls-remote --json` printed for the mise tools of jdx/usage and jdx/mr-boxington",
   "mise_version": "2026.10.11",
   "runs": [

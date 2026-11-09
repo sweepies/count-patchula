@@ -23,6 +23,7 @@ const TOKEN_VARS: [&str; 3] = ["PATCHULA_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"];
 /// to github.com, whatever host `gh` defaults to.
 const GH_HOST: &str = "github.com";
 const GH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const TOKEN_HELP: &str = "lookup/run requires PATCHULA_TOKEN, GITHUB_TOKEN or GH_TOKEN, or a GitHub CLI signed in with `gh auth login`";
 const LOG_VAR: &str = "PATCHULA_LOG";
 /// A lookup or apply finished, but some dependencies' lookups failed.
@@ -974,7 +975,8 @@ async fn pushed() -> Result<(), (u8, miette::Report)> {
 async fn git(args: &[&str]) -> Option<String> {
     let mut env = std::collections::BTreeMap::new();
     env.insert("LC_ALL".into(), "C".into());
-    for var in ["PATH", "HOME"] {
+    // GIT_DIR and GIT_WORK_TREE choose the checkout git reads, as the user set them.
+    for var in ["PATH", "HOME", "GIT_DIR", "GIT_WORK_TREE"] {
         if let Some(value) = std::env::var_os(var) {
             env.insert(var.into(), value);
         }
@@ -986,7 +988,7 @@ async fn git(args: &[&str]) -> Option<String> {
             cwd: std::env::current_dir().ok()?,
             env,
             secrets: Vec::new(),
-            timeout: GH_TIMEOUT,
+            timeout: GIT_TIMEOUT,
             output_limit: 1 << 16,
             complete_output: false,
         })

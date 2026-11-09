@@ -33,7 +33,8 @@ pub trait Executor: Send + Sync {
 
 /// How a command failed. Output is already redacted for every declared
 /// secret and bounded to [`FAILURE_STREAM_LIMIT`] bytes a stream.
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Failure {
     /// The program could not be started.
     Spawn {
@@ -93,6 +94,35 @@ fn redact(text: &str, secrets: &[String]) -> String {
     redacted
 }
 
+/// One failure stream: redacted over everything captured, then cut to
+/// [`FAILURE_STREAM_LIMIT`]. When the capture itself stopped early, a tail that
+/// begins a secret is dropped too, so no fragment of one survives the cut.
+fn failure_stream(captured: &[u8], cut_short: bool, secrets: &[String]) -> String {
+    let mut text = redact(&String::from_utf8_lossy(captured), secrets);
+    let mut end = text.len().min(FAILURE_STREAM_LIMIT);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let cut = end < text.len() || cut_short;
+    text.truncate(end);
+    if cut {
+        let fragment = secrets
+            .iter()
+            .flat_map(|secret| {
+                (1..secret.len())
+                    .filter(|k| secret.is_char_boundary(*k))
+                    .map(move |k| &secret[..k])
+            })
+            .filter(|prefix| text.ends_with(prefix))
+            .map(str::len)
+            .max();
+        if let Some(fragment) = fragment {
+            text.truncate(text.len() - fragment);
+        }
+    }
+    text
+}
+
 pub struct SystemExecutor;
 async fn drain(
     mut reader: impl AsyncRead + Unpin,
@@ -148,11 +178,13 @@ impl Executor for SystemExecutor {
                 .stderr
                 .take()
                 .ok_or_else(|| Failure::Io("missing stderr".into()))?;
+            let longest = spec.secrets.iter().map(String::len).max().unwrap_or(0);
             let result = tokio::time::timeout(spec.timeout, async {
                 let (status, out, err) = tokio::join!(
                     child.wait(),
                     drain(stdout, spec.output_limit),
-                    drain(stderr, FAILURE_STREAM_LIMIT)
+                    // Room for a secret that starts inside the kept window.
+                    drain(stderr, FAILURE_STREAM_LIMIT + longest)
                 );
                 Ok::<_, Failure>((status.map_err(|e| Failure::Io(e.to_string()))?, out?, err?))
             })
@@ -174,17 +206,12 @@ impl Executor for SystemExecutor {
                     })
                 }
                 Ok(result) => {
-                    let (status, (out, truncated), (err, _)) = result?;
+                    let (status, (out, truncated), (err, err_truncated)) = result?;
                     if !status.success() {
                         Err(Failure::Exited {
                             status: status.to_string(),
-                            stdout: redact(
-                                &String::from_utf8_lossy(
-                                    &out[..out.len().min(FAILURE_STREAM_LIMIT)],
-                                ),
-                                &spec.secrets,
-                            ),
-                            stderr: redact(&String::from_utf8_lossy(&err), &spec.secrets),
+                            stdout: failure_stream(&out, truncated, &spec.secrets),
+                            stderr: failure_stream(&err, err_truncated, &spec.secrets),
                         })
                     } else if truncated && spec.complete_output {
                         Err(Failure::OutputTooLarge)
@@ -194,5 +221,28 @@ impl Executor for SystemExecutor {
                 }
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_secret_across_the_cut_leaves_no_fragment() {
+        let secret = "s3cr3t-token-value".to_string();
+        let mut out = "x".repeat(FAILURE_STREAM_LIMIT - 5).into_bytes();
+        out.extend_from_slice(secret.as_bytes());
+        let text = failure_stream(&out, false, std::slice::from_ref(&secret));
+        assert!(!text.contains("s3cr"), "{}", &text[text.len() - 20..]);
+        assert!(text.len() <= FAILURE_STREAM_LIMIT);
+    }
+
+    #[test]
+    fn a_capture_cut_inside_a_secret_drops_the_fragment() {
+        let secret = "s3cr3t-token-value".to_string();
+        let out = format!("error: {}", &secret[..6]);
+        let text = failure_stream(out.as_bytes(), true, std::slice::from_ref(&secret));
+        assert_eq!(text, "error: ");
     }
 }

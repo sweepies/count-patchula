@@ -27,10 +27,12 @@ pub struct Run {
 pub enum Outcome {
     /// Standard output, which is JSON.
     Output(serde_json::Value),
-    /// The executor's failure as its display text: the exit status and what
-    /// mise printed.
-    Error(String),
+    /// How the executor failed, as structured as it reported it.
+    Failure(Failure),
 }
+
+/// The fixture format: 2 records a failure as its structure.
+const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MiseFixture {
@@ -70,7 +72,7 @@ pub fn read(path: &Path, redactor: &Redactor) -> Result<MiseFixture, Error> {
 pub(crate) fn parse(bytes: &[u8]) -> Result<MiseFixture, Error> {
     let fixture: MiseFixture =
         serde_json::from_slice(bytes).map_err(|_| failure("invalid mise fixture JSON"))?;
-    if fixture.schema_version != 1 {
+    if fixture.schema_version != SCHEMA_VERSION {
         return Err(failure("unsupported mise fixture schema version"));
     }
     Ok(fixture)
@@ -103,42 +105,6 @@ impl MiseReplay {
             .filter_map(|call| call.lookup().map(<[String]>::to_vec))
             .collect()
     }
-}
-/// A recorded failure's display text back into the `Failure` it was, for
-/// the variants a recording can hold.
-fn recorded(text: &str) -> Failure {
-    if let Some(rest) = text.strip_prefix("tool exceeded ")
-        && let Some(secs) = rest.strip_suffix("s time limit")
-        && let Ok(secs) = secs.parse::<u64>()
-    {
-        return Failure::TimedOut {
-            limit: std::time::Duration::from_secs(secs),
-        };
-    }
-    if text == "command output exceeded size limit" {
-        return Failure::OutputTooLarge;
-    }
-    for prefix in ["exit status: ", "exit code: ", "signal: "] {
-        if let Some(rest) = text.strip_prefix(prefix)
-            && let Some(at) = rest.find(": ")
-        {
-            return Failure::Exited {
-                status: format!("{prefix}{}", &rest[..at]),
-                // "{stdout} {stderr}" cannot be split back; keep it as stdout.
-                stdout: rest[at + 2..].to_owned(),
-                stderr: String::new(),
-            };
-        }
-    }
-    if let Some(rest) = text.strip_prefix("cannot start ")
-        && let Some((program, message)) = rest.rsplit_once(": ")
-    {
-        return Failure::Spawn {
-            program: program.into(),
-            message: message.to_owned(),
-        };
-    }
-    Failure::Io(text.to_owned())
 }
 
 fn snapshot(spec: &CommandSpec) -> Call {
@@ -178,9 +144,9 @@ impl Executor for MiseReplay {
                     ..
                 }) => Ok(serde_json::to_vec(value).expect("JSON value serializes")),
                 Some(Run {
-                    result: Outcome::Error(message),
+                    result: Outcome::Failure(failure),
                     ..
-                }) => Err(recorded(message)),
+                }) => Err(failure.clone()),
                 None => Err(Failure::Io(format!(
                     "mise fixture has no run for `mise {}`; replay never runs mise",
                     args.join(" ")
@@ -203,7 +169,7 @@ impl MiseRecorder {
             path: path.to_owned(),
             mise,
             fixture: Mutex::new(MiseFixture {
-                schema_version: 1,
+                schema_version: SCHEMA_VERSION,
                 provenance: provenance.into(),
                 mise_version: mise_version.into(),
                 runs: Vec::new(),
@@ -227,7 +193,7 @@ impl Executor for MiseRecorder {
                     serde_json::from_slice(bytes)
                         .map_err(|e| Failure::Io(format!("not JSON: {e}")))?,
                 ),
-                Err(failure) => Outcome::Error(failure.to_string()),
+                Err(failure) => Outcome::Failure(failure.clone()),
             };
             let mut fixture = self.fixture.lock().expect("fixture lock");
             fixture.runs.retain(|run| run.args != args);
