@@ -87,7 +87,8 @@ fn nuget_configs(dir: &Path, out: &mut Vec<std::io::Result<String>>) {
             {
                 nuget_configs(&path, out);
             }
-        } else if path
+        } else if entry
+            .file_name()
             .to_str()
             .is_some_and(patchula_manager::roles::nuget_config)
         {

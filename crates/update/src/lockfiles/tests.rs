@@ -6799,10 +6799,7 @@ fn file_classification_is_pinned() {
         assert_eq!(writable(path), writ, "{path}: writable");
         assert_eq!(cargo_config(path), cargo, "{path}: cargo_config");
         assert_eq!(
-            path.rsplit('/')
-                .next()
-                .unwrap()
-                .eq_ignore_ascii_case("nuget.config"),
+            patchula_manager::roles::nuget_config(path),
             nuget,
             "{path}: nuget.config"
         );
