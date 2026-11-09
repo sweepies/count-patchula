@@ -1,8 +1,8 @@
 use super::*;
-use crate::settings::Settings;
 use axum::body::Body;
 use axum::http::HeaderMap;
 use patchula_cache::{Options as CacheOptions, queue::Work};
+use patchula_config::settings::Settings;
 use patchula_http::Transport;
 use std::sync::Arc;
 use tower::ServiceExt;

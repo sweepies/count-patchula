@@ -727,10 +727,13 @@ async fn apply_writes_the_working_tree_and_exits_by_what_is_left() {
     assert_eq!(result["exitCode"], 0);
     assert_eq!(read("package.json"), manifest.replace("2.1.2", "2.1.3"));
 
-    // The largest update for each declaration is applied, and then nothing waits.
+    // The largest update for each declaration is applied; the patch update
+    // that loses its declaration is reported as skipped, as the TUI reports
+    // it, so something is still waiting.
     let (code, _, err) = apply(&[]).await;
-    assert_eq!(code, 0, "{err}");
+    assert_eq!(code, 3, "{err}");
     assert!(err.contains("applied 2 updates to 2 files"), "{err}");
+    assert!(err.contains("already takes minor 3.24.3"), "{err}");
     assert_eq!(read("Dockerfile"), updated);
     assert_eq!(
         read("package.json"),
@@ -912,6 +915,27 @@ async fn apply_is_always_local_and_validates_its_filters() {
     );
 }
 
+#[test]
+fn remote_flags_cover_every_local_only_policy() {
+    use crate::cli::{Command, REMOTE_POLICY, RemotePolicy};
+    let words = ["lookup", "--remote", "demo/app"];
+    let app = App::parse_from(&words.iter().map(OsStr::new).collect::<Vec<_>>()).unwrap();
+    let Some(Command::Lookup(options)) = &app.command else {
+        panic!("lookup")
+    };
+    let names: Vec<_> = super::remote_flags(&app, options, None)
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    for (flag, policy) in REMOTE_POLICY {
+        assert_eq!(
+            names.contains(flag),
+            *policy == RemotePolicy::Local,
+            "--{flag}: remote_flags and REMOTE_POLICY disagree"
+        );
+    }
+}
+
 #[tokio::test]
 async fn apply_without_a_config_asks_or_takes_default_config() {
     let tree = apply_tree();
@@ -991,29 +1015,6 @@ async fn apply_without_a_config_asks_or_takes_default_config() {
         std::fs::read_to_string(tree.path().join("Dockerfile")).unwrap(),
         "FROM alpine:3.19.0\n"
     );
-}
-
-#[test]
-#[cfg(not(target_os = "macos"))]
-fn user_cache_dir_follows_xdg_then_home() {
-    use std::{collections::HashMap, ffi::OsString, path::PathBuf};
-    let lookup = |vars: &[(&str, &str)]| {
-        let vars: HashMap<String, OsString> = vars
-            .iter()
-            .map(|(k, v)| (k.to_string(), OsString::from(v)))
-            .collect();
-        super::user_cache_dir(|name| vars.get(name).cloned())
-    };
-    assert_eq!(
-        lookup(&[("XDG_CACHE_HOME", "/xdg"), ("HOME", "/home/count")]),
-        Some(PathBuf::from("/xdg"))
-    );
-    assert_eq!(
-        lookup(&[("XDG_CACHE_HOME", "relative"), ("HOME", "/home/count")]),
-        Some(PathBuf::from("/home/count/.cache"))
-    );
-    assert_eq!(lookup(&[("HOME", "")]), None);
-    assert_eq!(lookup(&[]), None);
 }
 
 #[test]
@@ -1138,7 +1139,7 @@ async fn apply_reports_notices_that_are_not_templates() {
 fn a_write_that_cannot_open_every_file_writes_none() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("a.txt"), "old").unwrap();
-    let plan = crate::tui::Plan {
+    let plan = crate::plan::Plan {
         files: BTreeMap::from([
             ("a.txt".to_owned(), ("old".to_owned(), "new".to_owned())),
             (
@@ -1161,7 +1162,7 @@ fn a_write_that_cannot_open_every_file_writes_none() {
     );
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
 
-    let plan = crate::tui::Plan {
+    let plan = crate::plan::Plan {
         files: BTreeMap::from([("a.txt".to_owned(), ("old".to_owned(), "new".to_owned()))]),
         applied: Vec::new(),
         skipped: Vec::new(),
@@ -1181,7 +1182,7 @@ fn a_write_that_cannot_open_every_file_writes_none() {
 #[test]
 fn writes_are_in_place_and_refuse_before_changing_anything() {
     use std::os::unix::fs::PermissionsExt;
-    let plan = |files: &[&str]| crate::tui::Plan {
+    let plan = |files: &[&str]| crate::plan::Plan {
         files: files
             .iter()
             .map(|f| ((*f).to_owned(), ("old".to_owned(), "new".to_owned())))
@@ -1239,7 +1240,7 @@ fn hard_links_are_one_file_and_wide_plans_write() {
     let root = dir.path();
     std::fs::write(root.join("a.txt"), "old").unwrap();
     std::fs::hard_link(root.join("a.txt"), root.join("b.txt")).unwrap();
-    let plan = |files: Vec<String>| crate::tui::Plan {
+    let plan = |files: Vec<String>| crate::plan::Plan {
         files: files
             .into_iter()
             .map(|f| (f, ("old".to_owned(), "new".to_owned())))

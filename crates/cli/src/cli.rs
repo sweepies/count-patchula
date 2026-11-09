@@ -355,6 +355,47 @@ pub struct Scan {
     pub default_config: bool,
 }
 
+/// Whether a `lookup`, `run` or `tui` flag applies when the batch runs on a
+/// `--remote` server.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemotePolicy {
+    /// Travels in the request, or belongs to the server itself.
+    Applies,
+    /// Only works on this machine; `--remote` refuses it.
+    Local,
+}
+
+/// Every flag `lookup`, `run` and `tui` take — globals included — with its
+/// `--remote` policy, declared next to the flags themselves. A test walks the
+/// command spec and fails on a flag missing here, so a new flag cannot be
+/// silently ignored or silently refused remotely.
+pub const REMOTE_POLICY: &[(&str, RemotePolicy)] = &[
+    ("all-repos", RemotePolicy::Local),
+    ("allow-lockfile-pending", RemotePolicy::Local),
+    ("cache", RemotePolicy::Local),
+    ("color", RemotePolicy::Applies),
+    ("concurrency", RemotePolicy::Local),
+    ("config", RemotePolicy::Local),
+    ("config-dir", RemotePolicy::Local),
+    ("default-config", RemotePolicy::Local),
+    ("dry-run", RemotePolicy::Applies),
+    ("here", RemotePolicy::Applies),
+    ("json", RemotePolicy::Applies),
+    ("once", RemotePolicy::Applies),
+    ("recheck", RemotePolicy::Local),
+    ("remote", RemotePolicy::Applies),
+    ("settings", RemotePolicy::Local),
+    ("verbose", RemotePolicy::Applies),
+];
+
+/// The `--remote` policy of `flag`, a long name without the `--`.
+pub fn remote_policy(flag: &str) -> Option<RemotePolicy> {
+    REMOTE_POLICY
+        .iter()
+        .find(|(name, _)| *name == flag)
+        .map(|(_, policy)| *policy)
+}
+
 #[derive(Args)]
 pub struct Apply {
     #[usage(flatten)]
@@ -570,6 +611,47 @@ mod tests {
         assert_eq!(apply.manager, ["github-actions"]);
         assert_eq!(apply.dependency, ["glob:actions/*"]);
         assert!(apply.check && !apply.dry_run);
+    }
+
+    /// Every long flag name a command's spec declares, recursively.
+    fn longs<'a>(command: &'a usage_rs::Command<'a>, out: &mut Vec<&'a str>) {
+        out.extend(
+            command
+                .flags
+                .iter()
+                .flat_map(|flag| flag.longs.iter().copied()),
+        );
+        for sub in command.subcommands {
+            longs(sub, out);
+        }
+    }
+
+    #[test]
+    fn every_remote_flag_has_a_policy() {
+        let mut declared = Vec::new();
+        longs(App::command(), &mut declared);
+        for (name, _) in REMOTE_POLICY {
+            assert!(
+                declared.contains(name),
+                "--{name} has a --remote policy but no such flag"
+            );
+        }
+        let root = App::command();
+        for wanted in ["lookup", "run", "tui"] {
+            let command = root
+                .subcommands
+                .iter()
+                .find(|sub| sub.name == wanted)
+                .unwrap_or_else(|| panic!("{wanted}"));
+            let mut names = Vec::new();
+            longs(command, &mut names);
+            for name in names {
+                assert!(
+                    remote_policy(name).is_some(),
+                    "--{name} on {wanted} has no --remote policy"
+                );
+            }
+        }
     }
 
     #[test]

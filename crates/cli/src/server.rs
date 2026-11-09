@@ -13,39 +13,43 @@ fn env(name: &str) -> Result<Option<String>> {
         Err(_) => Err(invalid("server environment value is not valid UTF-8")),
     }
 }
+/// A secret from a file (`--flag` or the file's env var) or an env var holding
+/// the value itself — never both. Reading shares the settings `Secret` rule:
+/// strip trailing CR/LF, reject empty, and errors never carry the value. The
+/// bytes are kept as they are: a webhook secret or key need not be UTF-8.
 fn secret(path: Option<&PathBuf>, file_env: &str, value_env: &str) -> Result<Vec<u8>> {
-    let path = path.cloned().or(env(file_env)?.map(PathBuf::from));
-    let value = env(value_env)?;
-    if path.is_some() && value.is_some() {
+    secret_with(path, file_env, value_env, |name| std::env::var_os(name))
+}
+/// `secret` with the environment lookup passed in, so tests need not touch
+/// the process environment.
+fn secret_with(
+    path: Option<&PathBuf>,
+    file_env: &str,
+    value_env: &str,
+    env: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Result<Vec<u8>> {
+    // Presence is checked on the raw variable: a secret need not be UTF-8.
+    let path = path.cloned().or_else(|| env(file_env).map(PathBuf::from));
+    let value = env(value_env).is_some();
+    if path.is_some() && value {
         return Err(invalid(
             "choose either a secret file or a secret environment value",
         ));
     }
-    let bytes = if let Some(path) = path {
-        std::fs::read(path).map_err(|_| invalid("cannot read server secret file"))?
-    } else {
-        value
-            .ok_or_else(|| {
-                invalid("server requires App private key and webhook secret via env or files")
-            })?
-            .into_bytes()
+    if path.is_none() && !value {
+        return Err(invalid(
+            "server requires App private key and webhook secret via env or files",
+        ));
+    }
+    let secret = patchula_config::settings::Secret {
+        env: path.is_none().then(|| value_env.to_owned()),
+        file: path,
     };
-    // Strip terminal line endings from secret files, preserving other secret bytes.
-    let mut bytes = bytes;
-    while bytes.last().is_some_and(|b| matches!(b, b'\r' | b'\n')) {
-        bytes.pop();
-    }
-    if bytes.is_empty() {
-        return Err(invalid("server secret must be nonempty"));
-    }
-    Ok(bytes)
+    secret.read_bytes().map_err(|message| invalid(&message))
 }
 pub async fn run(app: &App, serve: &Serve) -> Result<u8> {
-    let settings = serve
-        .settings
-        .clone()
-        .or(env("PATCHULA_SETTINGS")?.map(PathBuf::from))
-        .ok_or_else(|| invalid("serve requires --settings or PATCHULA_SETTINGS"))?;
+    let settings = patchula_config::settings::Settings::for_server(serve.settings.as_deref())
+        .map_err(|e| (2, e))?;
     let listen = serve.listen.map(Ok).unwrap_or_else(|| {
         env("PATCHULA_LISTEN")?
             .unwrap_or_else(|| "127.0.0.1:8080".into())
@@ -104,4 +108,19 @@ pub async fn run(app: &App, serve: &Serve) -> Result<u8> {
     .await
     .map(|()| 0)
     .map_err(|e| (1, e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn a_secret_file_keeps_non_utf8_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("key");
+        std::fs::write(&key, [0xff, 0xfe, b'\n']).unwrap();
+        assert_eq!(
+            secret_with(Some(&key), "KEY_FILE", "KEY", |_| None).unwrap(),
+            [0xff, 0xfe]
+        );
+    }
 }

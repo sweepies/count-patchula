@@ -30,7 +30,7 @@ fn help_version_and_bundled_schema() {
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        patchula_server::settings::SCHEMA
+        patchula_config::settings::SCHEMA
     );
 }
 

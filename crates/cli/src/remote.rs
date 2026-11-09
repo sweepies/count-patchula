@@ -6,13 +6,13 @@
 //! repository whether to run there.
 use crate::Services;
 use patchula_http::Transport;
+use patchula_server::remote::protocol::{self, Accepted, AuthInfo, JobStatus, RejectBody, Start};
 use reqwest::{Method, Url, header};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
 pub const SERVER_VAR: &str = "PATCHULA_SERVER";
-const CONFIG_VAR: &str = "XDG_CONFIG_HOME";
 const DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 const ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -59,13 +59,9 @@ pub fn parse(value: &str) -> Result<String> {
     Ok(url.as_str().trim_end_matches('/').to_owned())
 }
 
-#[derive(Clone, Copy, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Mode {
-    Lookup,
-    DryRun,
-    Run,
-}
+/// What a run request asks for; the wire shape is the server's
+/// `remote::protocol::Mode`.
+pub use patchula_server::remote::protocol::Mode;
 
 /// Runs `repositories` on the server and returns its report.
 pub async fn report(
@@ -75,7 +71,8 @@ pub async fn report(
     mode: Mode,
 ) -> Result<patchula_report::Report> {
     let transport = services.remote_transport().map_err(fail)?;
-    let body = json!({"mode": mode, "repositories": repositories});
+    let body = serde_json::to_value(Start { mode, repositories })
+        .map_err(|_| fail("cannot encode the run request"))?;
     let mut token = token(services, &*transport, server).await?;
     let mut response = send(
         &*transport,
@@ -102,13 +99,22 @@ pub async fn report(
     if status != 202 {
         return Err(rejected(server, status, &value));
     }
-    let id = value["id"]
-        .as_str()
-        .ok_or_else(|| fail("the server did not return a run ID"))?
-        .to_owned();
+    let id = serde_json::from_value::<Accepted>(value)
+        .map_err(|_| fail("the server did not return a run ID"))?
+        .id;
     eprintln!("patchula: the Count is on it at {server}");
+    // A finished report lives JOB_TTL_SECONDS; the run itself is bounded by
+    // RUN_LIMIT_SECONDS. Past the deadline the job is gone or hung.
+    let deadline =
+        tokio::time::Instant::now() + Duration::from_secs(protocol::DEADLINE_SECONDS as u64);
     loop {
         tokio::time::sleep(POLL_INTERVAL).await;
+        if tokio::time::Instant::now() >= deadline {
+            return Err(fail(format!(
+                "{server}: the run did not finish within {} hours; it may still be running there",
+                protocol::RUN_LIMIT_SECONDS / 3600
+            )));
+        }
         let (status, value) = send(
             &*transport,
             Method::GET,
@@ -120,32 +126,41 @@ pub async fn report(
         if status != 200 {
             return Err(rejected(server, status, &value));
         }
-        match value["status"].as_str() {
-            Some("running") => continue,
-            Some("complete") => {
-                // Through the version check and validation, like any report.
-                let report = serde_json::to_vec(&value["report"])
-                    .map_err(|_| fail("the server returned a report this CLI cannot read"))?;
-                return patchula_report::Report::from_json(&report).map_err(|error| match error {
-                    patchula_report::Error::Version(version) => fail(format!(
-                        "{server} sends report schema {version}; this CLI reads {}. Use the same release on both",
-                        patchula_report::SCHEMA_VERSION
-                    )),
-                    error => fail(format!("{server}: the server returned a report this CLI cannot read: {error}")),
-                });
+        match JobStatus::decode(&value).map_err(|error| match error {
+            protocol::StatusError::Report(patchula_report::Error::Version(version)) => fail(
+                format!(
+                    "{server} sends report schema {version}; this CLI reads {}. Use the same release on both",
+                    patchula_report::SCHEMA_VERSION
+                ),
+            ),
+            protocol::StatusError::Unknown => {
+                fail("the server returned an unknown run status")
             }
-            Some("failed") => {
-                return Err(fail(format!(
-                    "{server}: {}",
-                    value["error"].as_str().unwrap_or("the run failed")
-                )));
+            _ => fail(format!(
+                "{server}: the server returned a report this CLI cannot read: {error}"
+            )),
+        })? {
+            JobStatus::Running => continue,
+            JobStatus::Complete { report } => return Ok(report),
+            JobStatus::Failed { error } => {
+                return Err(fail(format!("{server}: {error}")));
             }
-            _ => return Err(fail("the server returned an unknown run status")),
         }
     }
 }
 
 fn rejected(server: &str, status: u16, value: &Value) -> (u8, miette::Report) {
+    // A finished job's report lives JOB_TTL_SECONDS; a restart loses every
+    // job. Say which, rather than the server's generic wording.
+    if status == 404
+        && serde_json::from_value::<RejectBody>(value.clone())
+            .is_ok_and(|body| body.error_kind == "unknown-run")
+    {
+        return fail(format!(
+            "{server}: the run is gone — a finished report lives {} minutes, and a restart loses every run",
+            protocol::JOB_TTL_SECONDS / 60
+        ));
+    }
     match value["error"].as_str() {
         Some(error) => fail(format!("{server}: {error}")),
         None => fail(format!(
@@ -297,8 +312,9 @@ async fn names_bot(services: &Services, server: &str) -> Option<String> {
     .await
     .ok()?;
     (status == 200)
-        .then(|| value["bot"].as_str().map(str::to_owned))
+        .then(|| serde_json::from_value::<AuthInfo>(value).ok())
         .flatten()
+        .map(|info| info.bot)
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -316,12 +332,7 @@ fn path(services: &Services, name: &str) -> Result<PathBuf> {
         return Ok(dir.join(name));
     }
     let _ = services;
-    std::env::var_os(CONFIG_VAR)
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os(crate::HOME_VAR).map(|home| PathBuf::from(home).join(".config"))
-        })
-        .map(|dir| dir.join("patchula").join(name))
+    crate::user::file(name)
         .ok_or_else(|| fail("cannot find a config directory; set XDG_CONFIG_HOME or HOME"))
 }
 fn load<T: DeserializeOwned>(services: &Services, name: &str) -> Result<BTreeMap<String, T>> {
@@ -440,10 +451,9 @@ async fn client_id(transport: &dyn Transport, server: &str) -> Result<String> {
     if status != 200 {
         return Err(rejected(server, status, &value));
     }
-    value["clientId"]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| fail(format!("{server} did not name its GitHub App")))
+    serde_json::from_value::<AuthInfo>(value)
+        .map(|info| info.client_id)
+        .map_err(|_| fail(format!("{server} did not name its GitHub App")))
 }
 
 /// GitHub's device flow for the server's App.

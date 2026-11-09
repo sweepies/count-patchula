@@ -184,8 +184,9 @@ Each repository in the request must:
 A server runs one request per user at a time, and a real run uses its
 installation's engine, so it never races that installation's webhook batch. The repository's own `patchula.pkl`
 applies; `--config`, `--config-dir`, `--default-config`, `--all-repos`,
-`--allow-lockfile-pending` and `--recheck` only work locally, and `--cache`,
-`--concurrency` and your local settings file are ignored. A run in progress at shutdown finishes within the
+`--allow-lockfile-pending`, `--recheck`, `--cache`, `--concurrency` and
+`--settings` only work locally — `--remote` refuses them — and the server's
+own settings file decides the rest. A run in progress at shutdown finishes within the
 shutdown deadline.
 
 ### Found from a checkout

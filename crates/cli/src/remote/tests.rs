@@ -1,6 +1,7 @@
 use super::*;
 use crate::{App, run};
 use patchula_http::{Exchange, Response};
+use serde_json::json;
 use std::sync::{Arc, Mutex};
 
 const SERVER: &str = "https://patchula.acme.dev";

@@ -6,10 +6,14 @@ mod cli;
 mod copier;
 mod output;
 mod palette;
+mod plan;
 mod progress;
 mod remote;
 mod server;
+mod tree;
 mod tui;
+mod updates;
+mod user;
 
 use cli::{App, AuthCommand, Command, ConfigCommand, ToolsCommand};
 use patchula_process::Executor as _;
@@ -29,11 +33,7 @@ const LOG_VAR: &str = "PATCHULA_LOG";
 /// A lookup or apply finished, but some dependencies' lookups failed.
 const LOOKUP_FAILED: u8 = 4;
 const RECHECK_VAR: &str = "PATCHULA_RECHECK";
-const SETTINGS_VAR: &str = "PATCHULA_SETTINGS";
-const MISE_DATA_VAR: &str = "MISE_DATA_DIR";
-const XDG_DATA_VAR: &str = "XDG_DATA_HOME";
 const HOME_VAR: &str = "HOME";
-const XDG_CACHE_VAR: &str = "XDG_CACHE_HOME";
 
 // Only the token and transport are replaced in offline CLI tests. Dispatch,
 // configuration, disk-cache opening and engine construction stay on this path.
@@ -275,12 +275,19 @@ async fn auth_command(
 fn config_command(app: &App, config: &cli::Config) -> Result<u8, (u8, miette::Report)> {
     match &config.command {
         ConfigCommand::SettingsSchema => {
-            write!(io::stdout().lock(), "{}", patchula_server::settings::SCHEMA)
+            write!(io::stdout().lock(), "{}", patchula_config::settings::SCHEMA)
                 .map(|_| 0)
                 .map_err(|e| (1, miette::miette!("{e}")))
         }
         ConfigCommand::CheckSettings(check) => {
-            patchula_server::settings::Settings::load(&check.path).map_err(|e| (2, e))?;
+            let settings =
+                patchula_config::settings::Settings::load(&check.path).map_err(|e| (2, e))?;
+            patchula_engine::settings::check(&settings).map_err(|(field, message)| {
+                (
+                    2,
+                    patchula_config::settings_problem(Some(&check.path), field, message),
+                )
+            })?;
             writeln!(
                 io::stdout().lock(),
                 "{}",
@@ -335,7 +342,7 @@ async fn tui_command(
     let (report, read) = report(app, &tui.lookup, None, services).await?;
     let origin = match read {
         Read::Checkout(checkout) => tui::Origin::Local(Box::new(
-            tui::local(&checkout.0, checkout.1).map_err(|e| (2, miette::miette!("{e}")))?,
+            plan::local(&checkout.0, checkout.1).map_err(|e| (2, miette::miette!("{e}")))?,
         )),
         Read::Server => tui::Origin::Server,
         Read::GitHub => tui::Origin::GitHub,
@@ -370,7 +377,7 @@ async fn tools_command(app: &App, tools: &cli::Tools) -> Result<u8, (u8, miette:
         .map_err(|e| (1, miette::miette!("{e}")))?;
     }
     let mut runner = patchula_update::lockfiles::Runner::new(dir.join("worktrees"), "");
-    if let Some(mise_data) = user_mise_data() {
+    if let Some(mise_data) = user::mise_data() {
         runner = runner.with_seed(mise_data);
     }
     let (action, specs) = match days {
@@ -553,32 +560,21 @@ async fn remote_report(
 
 /// Operator settings: `--settings`, then `PATCHULA_SETTINGS`, then
 /// `patchula/settings.pkl` in the user config directory when it exists, else
-/// the schema's defaults.
-fn settings(scan: &cli::Scan) -> Result<patchula_server::settings::Settings, (u8, miette::Report)> {
-    use patchula_server::settings::Settings;
-    let explicit = scan
-        .settings
-        .clone()
-        .or_else(|| std::env::var_os(SETTINGS_VAR).map(std::path::PathBuf::from));
-    let path = match explicit {
-        Some(path) => path,
-        None => match user_settings() {
-            Some(path) if path.is_file() => path,
-            _ => return Ok(Settings::default()),
-        },
-    };
-    Settings::load(&path).map_err(|e| (2, e))
-}
-
-/// `patchula/settings.pkl` under an absolute `XDG_CONFIG_HOME`, else `~/.config`.
-fn user_settings() -> Option<std::path::PathBuf> {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .map(std::path::PathBuf::from)
-        .filter(|dir| dir.is_absolute())
-        .or_else(|| {
-            std::env::var_os(HOME_VAR).map(|home| std::path::PathBuf::from(home).join(".config"))
-        })
-        .map(|dir| dir.join("patchula").join("settings.pkl"))
+/// the schema's defaults. The full check runs here, before tokens, secrets
+/// or the cache are touched, and a failure points into the file.
+fn settings(scan: &cli::Scan) -> Result<patchula_config::settings::Settings, (u8, miette::Report)> {
+    let (path, settings) = patchula_config::settings::Settings::for_cli(
+        scan.settings.as_deref(),
+        user::settings_file(),
+    )
+    .map_err(|e| (2, e))?;
+    patchula_engine::settings::check(&settings).map_err(|(field, message)| {
+        (
+            2,
+            patchula_config::settings_problem(path.as_deref(), field, message),
+        )
+    })?;
+    Ok(settings)
 }
 
 /// The checkbox wording: `--recheck`, then for runs `PATCHULA_RECHECK` and the
@@ -586,7 +582,7 @@ fn user_settings() -> Option<std::path::PathBuf> {
 fn recheck(
     app: &App,
     run: bool,
-    settings: &patchula_server::settings::Settings,
+    settings: &patchula_config::settings::Settings,
 ) -> Result<patchula_words::Recheck, (u8, miette::Report)> {
     Ok(match app.recheck {
         Some(recheck) => recheck,
@@ -616,7 +612,7 @@ fn cache_dir(flag: Option<&std::path::Path>) -> Result<std::path::PathBuf, miett
     let dir = match flag {
         Some(dir) => std::path::absolute(dir)
             .map_err(|e| miette::miette!("cannot resolve --cache {}: {e}", dir.display()))?,
-        None => user_cache_dir(|name| std::env::var_os(name))
+        None => user::cache_dir()
             .ok_or_else(|| {
                 miette::miette!(
                     "cannot find a cache directory; set HOME or XDG_CACHE_HOME, or pass --cache DIR"
@@ -633,35 +629,6 @@ fn cache_dir(flag: Option<&std::path::Path>) -> Result<std::path::PathBuf, miett
     Ok(dir)
 }
 
-/// The platform's user cache directory: `~/Library/Caches` on macOS, else
-/// `XDG_CACHE_HOME` when it is absolute, or `~/.cache`.
-fn user_cache_dir(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
-    use std::path::PathBuf;
-    let home = var(HOME_VAR)
-        .filter(|home| !home.is_empty())
-        .map(PathBuf::from);
-    if cfg!(target_os = "macos") {
-        return home.map(|home| home.join("Library/Caches"));
-    }
-    var(XDG_CACHE_VAR)
-        .map(PathBuf::from)
-        .filter(|dir| dir.is_absolute())
-        .or_else(|| home.map(|home| home.join(".cache")))
-}
-
-/// The invoking user's mise data directory, when it has installs. Local runs
-/// borrow matching tool versions from it instead of downloading them.
-fn user_mise_data() -> Option<std::path::PathBuf> {
-    use std::path::PathBuf;
-    std::env::var_os(MISE_DATA_VAR)
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os(XDG_DATA_VAR).map(|dir| PathBuf::from(dir).join("mise")))
-        .or_else(|| {
-            std::env::var_os(HOME_VAR).map(|home| PathBuf::from(home).join(".local/share/mise"))
-        })
-        .filter(|dir| dir.join("installs").is_dir())
-}
-
 /// The repositories a batch names: the ones given, or every one the token can
 /// reach with `--all-repos` (an empty list, which the engine discovers).
 fn repositories(options: &cli::Lookup) -> Result<Vec<String>, miette::Report> {
@@ -674,6 +641,31 @@ fn repositories(options: &cli::Lookup) -> Result<Vec<String>, miette::Report> {
         return Ok(Vec::new());
     }
     Ok(options.repositories.clone())
+}
+
+/// Every flag `lookup`, `run` and `tui` take that can be local-only, with
+/// whether this invocation set it. `cli::REMOTE_POLICY` decides which are;
+/// a test proves the two lists agree.
+fn remote_flags(
+    app: &App,
+    options: &cli::Lookup,
+    run: Option<&cli::Run>,
+) -> Vec<(&'static str, bool)> {
+    vec![
+        ("all-repos", options.all_repos),
+        (
+            "allow-lockfile-pending",
+            run.is_some_and(|r| r.allow_lockfile_pending),
+        ),
+        ("cache", options.scan.cache.is_some()),
+        ("concurrency", options.scan.concurrency.is_some()),
+        ("config", options.scan.config.is_some()),
+        ("config-dir", options.config_dir.is_some()),
+        ("default-config", options.scan.default_config),
+        // The server's operator setting decides the checkbox wording.
+        ("recheck", app.recheck.is_some()),
+        ("settings", options.scan.settings.is_some()),
+    ]
 }
 
 /// Where a lookup, run or tui batch reads from.
@@ -703,27 +695,14 @@ async fn source(
     let usage = |message: String| (2, miette::miette!("{message}"));
     let named = !options.repositories.is_empty() || options.all_repos;
     let writes = run.is_some_and(|run| !run.dry_run);
-    let local_only = [
-        (options.scan.config.is_some(), "--config"),
-        (options.scan.settings.is_some(), "--settings"),
-        (options.config_dir.is_some(), "--config-dir"),
-        (options.scan.default_config, "--default-config"),
-        (options.all_repos, "--all-repos"),
-        (
-            run.is_some_and(|r| r.allow_lockfile_pending),
-            "--allow-lockfile-pending",
-        ),
-        // The server's operator setting decides the checkbox wording.
-        (app.recheck.is_some(), "--recheck"),
-    ];
-    let local_flag = local_only
-        .iter()
-        .find(|(set, _)| *set)
-        .map(|(_, flag)| *flag);
+    let local_flag = remote_flags(app, options, run)
+        .into_iter()
+        .find(|(flag, set)| *set && cli::remote_policy(flag) == Some(cli::RemotePolicy::Local))
+        .map(|(flag, _)| flag);
     if options.remote {
         if let Some(flag) = local_flag {
             return Err(usage(format!(
-                "{flag} only works on this machine, not with --remote"
+                "--{flag} only works on this machine, not with --remote"
             )));
         }
         if named {
@@ -945,10 +924,10 @@ async fn pushed() -> Result<(), (u8, miette::Report)> {
             ),
         )
     };
-    let status = git(&["status", "--porcelain"])
+    let status = git(&crate::tree::STATUS_ARGS)
         .await
         .ok_or_else(|| refuse("cannot read this checkout's Git status".into()))?;
-    if !status.is_empty() {
+    if !crate::tree::changed(&status).is_empty() {
         return Err(refuse(
             "a run with no repository opens pull requests from what is on GitHub, and this working tree has uncommitted changes".into(),
         ));
@@ -1125,15 +1104,13 @@ async fn report(
     let settings = settings(scan)?;
     let concurrency = scan.concurrency.unwrap_or(settings.concurrency);
     let recheck = recheck(app, run.is_some(), &settings)?;
-    let mut http_options = settings.http_options();
-    let (credentials, failed) = settings.credentials(None);
+    let (credentials, failed) = patchula_engine::settings::credentials(&settings, None);
     if let Some((prefix, reason)) = failed.first() {
         return Err((
             2,
             miette::miette!("cannot use the registry credentials for {prefix}: {reason}"),
         ));
     }
-    http_options.credentials = credentials;
     let spinner = progress::Spinner::start(app.color);
     let token = services
         .token()
@@ -1151,15 +1128,27 @@ async fn report(
     let transport = services
         .transport()
         .map_err(|e| (1, miette::miette!("{e}")))?;
-    let mut engine = Engine::with_http_options(&token, cache, concurrency, transport, http_options)
-        .map_err(|e| (1, miette::miette!("{e}")))?
-        .with_recheck(recheck)
-        .with_advisories();
-    engine.set_lockfile_cache_limit(settings.lockfiles.cache_gib);
+    let mut engine = Engine::from_settings(
+        &settings,
+        credentials,
+        patchula_engine::Auth::Token(token),
+        concurrency,
+        recheck,
+        cache,
+        transport,
+    )
+    .map_err(|e| {
+        let code = if matches!(e, patchula_engine::Error::Configuration(_)) {
+            2
+        } else {
+            1
+        };
+        (code, miette::miette!("{e}"))
+    })?;
     if let Some(spinner) = &spinner {
         engine = engine.with_progress(spinner.clone());
     }
-    if let Some(mise_data) = user_mise_data() {
+    if let Some(mise_data) = user::mise_data() {
         engine = engine.with_tool_seed(mise_data);
     }
     let options = Options {

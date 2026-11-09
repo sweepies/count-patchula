@@ -3,7 +3,7 @@
 //! repository or one the settings no longer allow. The server records a
 //! repository after each run that writes, and discovery keeps the list and
 //! each repository's visibility current.
-use crate::settings::Reload;
+use crate::reload::Reload;
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -422,7 +422,7 @@ fn unavailable() -> Reject {
 }
 
 impl Public {
-    fn enabled(&self) -> Result<crate::settings::Settings, Reject> {
+    fn enabled(&self) -> Result<patchula_config::settings::Settings, Reject> {
         let settings = self.settings.current();
         if !settings.server.public_api {
             return Err(Reject(
@@ -434,7 +434,7 @@ impl Public {
         Ok(settings)
     }
 }
-fn shown(row: &Row, settings: &crate::settings::Settings) -> bool {
+fn shown(row: &Row, settings: &patchula_config::settings::Settings) -> bool {
     !row.private && settings.allows(row.installation, &row.repo)
 }
 /// The fields every view of a repository starts with.

@@ -1,11 +1,10 @@
 //! `patchula apply`: look up the working tree here and write its updates into
 //! the files, through the same engine as the TUI's apply.
 use crate::output::{Paint, Style, count, kind_paint};
-use crate::{Services, cli, tui};
+use crate::{Services, cli, plan, updates};
 use patchula_words::Manager;
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeSet,
     io::{self, IsTerminal, Write},
     path::Path,
 };
@@ -90,7 +89,7 @@ pub async fn command(
         ));
     };
     let (dir, config) = *checkout;
-    let local = tui::local(&dir, config).map_err(|e| (2, miette::miette!("{e}")))?;
+    let local = plan::local(&dir, config).map_err(|e| (2, miette::miette!("{e}")))?;
     let mut warnings = Vec::new();
     let mut failures = Vec::new();
     for repo in &report.repositories {
@@ -107,8 +106,8 @@ pub async fn command(
         warnings.extend(repo.reason.iter().chain(&repo.warnings).cloned());
         failures.extend(&repo.lookup_failures);
     }
-    let all = tui::updates(&report);
-    let mut chosen: Vec<&tui::Update> = all
+    let all = updates::updates(&report);
+    let mut chosen: Vec<&updates::Update> = all
         .iter()
         .filter(|u| {
             (managers.is_empty() || managers.contains(&u.manager))
@@ -144,11 +143,10 @@ pub async fn command(
     } else {
         (String::new(), true)
     };
+    // Conflicts are the planner's to report, the same skips the TUI shows.
     chosen.sort_by_key(|u| u.kind.rank());
-    let mut declarations = BTreeSet::new();
-    chosen.retain(|u| declarations.insert((u.file.clone(), u.name.clone(), u.starts.clone())));
     chosen.sort_by(|a, b| (&a.file, &a.name).cmp(&(&b.file, &b.name)));
-    let plan = tui::plan(&local, &chosen).map_err(|e| (1, miette::miette!("{e}")))?;
+    let plan = plan::plan(&local, &chosen).map_err(|e| (1, miette::miette!("{e}")))?;
     let writes = !options.dry_run && !options.check;
     if writes {
         plan.write(&dir).map_err(|e| (1, miette::miette!("{e}")))?;
@@ -165,8 +163,8 @@ pub async fn command(
     } else {
         0
     };
-    let applied: Vec<&tui::Update> = plan.applied.iter().map(|&i| chosen[i]).collect();
-    let skipped: Vec<(&tui::Update, &str)> = plan
+    let applied: Vec<&updates::Update> = plan.applied.iter().map(|&i| chosen[i]).collect();
+    let skipped: Vec<(&updates::Update, &str)> = plan
         .skipped
         .iter()
         .map(|(i, reason)| (chosen[*i], reason.as_str()))
@@ -178,7 +176,7 @@ pub async fn command(
         .collect();
     let fail = |e: io::Error| (1, miette::miette!("{e}"));
     if app.json {
-        let update = |u: &tui::Update| {
+        let update = |u: &updates::Update| {
             json!({
                 "manager": u.manager, "file": u.file, "name": u.name, "package": u.package,
                 "current": u.current, "type": u.kind,
@@ -320,14 +318,14 @@ fn templates(
 fn summary(
     style: &Style,
     options: &cli::Apply,
-    applied: &[&tui::Update],
-    skipped: &[(&tui::Update, &str)],
+    applied: &[&updates::Update],
+    skipped: &[(&updates::Update, &str)],
     files: usize,
     warned: bool,
     failed: usize,
 ) -> String {
     let updates = |n: usize| count(n, "update", "updates");
-    let row = |u: &tui::Update| {
+    let row = |u: &updates::Update| {
         vec![
             (u.kind.to_string(), kind_paint(u.kind)),
             (u.name.clone(), Paint::Bold),
