@@ -300,7 +300,7 @@ mod tests {
                 .unwrap()
                 .to_rfc3339();
             Box::pin(async move {
-                Ok(Response { status: reqwest::StatusCode::CREATED, headers: Default::default(), body: serde_json::to_vec(&serde_json::json!({"token":format!("offline-installation-token-{mint}"), "expires_at":expires})).unwrap() })
+                Ok(Response { status: reqwest::StatusCode::CREATED, headers: Default::default(), body: serde_json::to_vec(&serde_json::json!({"token":format!("offline-installation-token-{mint}"), "expires_at":expires})).unwrap(), stale: None })
             })
         }
     }

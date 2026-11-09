@@ -46,6 +46,8 @@ fn compact_config(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::C
     }))
     .map_err(|_| patchula_http::CacheError::Document)
 }
+const OCI_CONFIG_NOTES: patchula_http::Derived<patchula_http::CacheError> =
+    patchula_http::Derived::new("oci-config-notes", compact_config);
 
 /// The config of one image or chart version, as release notes read it.
 struct ImageConfig {
@@ -74,7 +76,9 @@ fn token_key(host: &str, path: &str) -> Result<HttpKey> {
         &format!("https://{host}/v2/{path}/"),
         BTreeMap::new(),
     )?
-    .representation("anonymous-registry-pull-token-v1"))
+    .representation(&patchula_http::representation(
+        "anonymous-registry-pull-token",
+    )))
 }
 fn compact_tags(body: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     #[derive(Deserialize, Serialize)]
@@ -85,6 +89,8 @@ fn compact_tags(body: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::Cach
         serde_json::from_slice(body).map_err(|_| patchula_http::CacheError::Document)?;
     serde_json::to_vec(&page).map_err(|_| patchula_http::CacheError::Document)
 }
+const OCI_TAGS: patchula_http::Derived<patchula_http::CacheError> =
+    patchula_http::Derived::new("oci-tags", compact_tags);
 
 pub(crate) fn identity(package: &str) -> Result<(String, String)> {
     let package = package.strip_prefix("oci://").unwrap_or(package);
@@ -127,8 +133,6 @@ pub(crate) fn identity(package: &str) -> Result<(String, String)> {
     Ok((host, path))
 }
 
-pub(crate) type Derive = fn(&[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError>;
-
 impl Client {
     async fn registry(
         &self,
@@ -151,7 +155,7 @@ impl Client {
         url: &str,
         accept: &str,
         method: Method,
-        derived: Option<(&'static str, Derive)>,
+        derived: Option<patchula_http::Derived<patchula_http::CacheError>>,
     ) -> Result<patchula_http::Response> {
         // An operator entry covering the registry makes every token an account's:
         // kept in memory only, never in the shared cache, and per entry.
@@ -369,15 +373,8 @@ impl Client {
         };
         let mut stale = self.stale_registry.lock().await;
         let entries = stale.entry(format!("{host}/{path}")).or_default();
-        if response.headers.contains_key("x-patchula-stale") {
-            if let Some(time) = response
-                .headers
-                .get("x-patchula-fetched-at")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse().ok())
-            {
-                entries.insert(reference, time);
-            }
+        if let Some(provenance) = response.stale {
+            entries.insert(reference, provenance.fetched_at);
         } else {
             entries.remove(&reference);
         }
@@ -391,16 +388,16 @@ impl Client {
         token: Option<&str>,
         account: bool,
         method: Method,
-        derived: Option<(&'static str, Derive)>,
+        derived: Option<patchula_http::Derived<patchula_http::CacheError>>,
     ) -> Result<patchula_http::Response> {
         let token = token.map(|token| patchula_http::Bearer { token, account });
         if method == Method::HEAD {
             return Ok(self.http.registry_head(url, accept, token).await?);
         }
-        if let Some((format, derive)) = derived {
+        if let Some(derived) = derived {
             return Ok(self
                 .http
-                .registry_get_derived(url, accept, token, format, derive)
+                .registry_get_derived(url, accept, token, &derived)
                 .await?);
         }
         if Url::parse(url)
@@ -410,12 +407,12 @@ impl Client {
         {
             Ok(self
                 .http
-                .registry_get_derived(url, accept, token, "oci-tags-v1", compact_tags)
+                .registry_get_derived(url, accept, token, &OCI_TAGS)
                 .await?)
         } else if url.contains("/blobs/") {
             Ok(self
                 .http
-                .registry_get_derived(url, accept, token, "oci-config-notes-v1", compact_config)
+                .registry_get_derived(url, accept, token, &OCI_CONFIG_NOTES)
                 .await?)
         } else {
             Ok(self.http.registry_get(url, accept, token).await?)
@@ -566,14 +563,10 @@ impl Client {
             let response = self
                 .registry(&host, &path, url.as_str(), "application/json", Method::GET)
                 .await?;
-            if response.headers.contains_key("x-patchula-stale")
-                && let Some(time) = response
-                    .headers
-                    .get("x-patchula-fetched-at")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.parse::<i64>().ok())
-            {
-                stale_at = Some(stale_at.map_or(time, |old| old.min(time)));
+            if let Some(provenance) = response.stale {
+                stale_at = Some(
+                    stale_at.map_or(provenance.fetched_at, |old| old.min(provenance.fetched_at)),
+                );
             }
             #[derive(Deserialize)]
             struct Page {

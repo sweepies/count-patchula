@@ -1,7 +1,7 @@
 //! Replays and records `mise` runs. A subprocess has no HTTP cassette, so these
 //! fixtures hold what mise printed for each lookup command.
+use crate::Error;
 use crate::{Redactor, failure};
-use patchula_http::Error;
 use patchula_process::{CommandSpec, Executor, Failure};
 use serde::{Deserialize, Serialize};
 use std::{

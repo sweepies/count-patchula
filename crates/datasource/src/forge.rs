@@ -39,6 +39,10 @@ fn tags(
     let versions: Vec<_> = values.iter().filter_map(map).collect();
     serde_json::to_vec(&versions).map_err(|_| patchula_http::CacheError::Document)
 }
+const FORGE_GITLAB_TAGS: patchula_http::Derived<patchula_http::CacheError> =
+    patchula_http::Derived::new("forge-gitlab-tags", gitlab);
+const FORGE_GITEA_TAGS: patchula_http::Derived<patchula_http::CacheError> =
+    patchula_http::Derived::new("forge-gitea-tags", gitea);
 
 fn forge(package: &str) -> Result<notes::Forge> {
     Repository::from_url(&format!("https://{package}"))
@@ -67,13 +71,13 @@ impl Client {
         let mut versions = Vec::new();
         for page in 1..=PAGES {
             let url = page_url(&forge, page);
-            let (size, format, derive): (usize, _, fn(&[u8]) -> _) = match forge.kind {
-                ForgeKind::Gitlab => (100, "forge-gitlab-tags-v1", gitlab),
-                ForgeKind::Gitea => (50, "forge-gitea-tags-v1", gitea),
+            let (size, derived) = match forge.kind {
+                ForgeKind::Gitlab => (100, FORGE_GITLAB_TAGS),
+                ForgeKind::Gitea => (50, FORGE_GITEA_TAGS),
             };
             let response = self
                 .http
-                .get_derived(&url, "application/json", format, derive)
+                .get_derived(&url, "application/json", &derived)
                 .await?;
             let page: Vec<Version> = serde_json::from_slice(&response.body)?;
             let full = page.len() == size;

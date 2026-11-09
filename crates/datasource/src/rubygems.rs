@@ -26,6 +26,8 @@ fn versions(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheEr
     serde_json::to_vec(&seen.into_values().collect::<Vec<_>>())
         .map_err(|_| patchula_http::CacheError::Document)
 }
+const RUBYGEMS_VERSIONS: patchula_http::Derived<patchula_http::CacheError> =
+    patchula_http::Derived::new("rubygems-versions", versions);
 
 impl Client {
     pub(crate) async fn rubygems(&self, package: &str) -> Result<Catalog> {
@@ -40,8 +42,7 @@ impl Client {
             .get_derived(
                 &format!("https://rubygems.org/api/v1/versions/{package}.json"),
                 "application/json",
-                "rubygems-versions-v1",
-                versions,
+                &RUBYGEMS_VERSIONS,
             )
             .await?;
         let mut versions: Vec<Version> = serde_json::from_slice(&response.body)?;

@@ -58,7 +58,7 @@ can't change what is read. Registry tokens, retries and rate limits go
 through the same client as every other registry read.
 
 SPDX 2.x is read on its own, in an in-toto statement or in a DSSE envelope
-around one. The blob is reduced once, when fetched, by the `sbom-os-v1` derived
+around one. The blob is reduced once, when fetched, by the `sbom-os` derived
 representation of the [HTTP cache](/internals/cache/): its digest, in-toto
 subjects, generator (SPDX `creationInfo.creators`), the count of OS packages,
 the package types and namespace, the distro, and the set of source packages to

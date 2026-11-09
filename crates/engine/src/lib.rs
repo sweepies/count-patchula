@@ -346,6 +346,8 @@ impl Engine {
         if !(1..=MAX_CONCURRENCY).contains(&concurrency) {
             return Err(Error::Invalid("concurrency must be 1..100".into()));
         }
+        let mut http_options = http_options;
+        http_options.rules = patchula_datasource::registry_rules(&http_options);
         let http = Cached::with_options(cache.clone(), transport, http_options)
             .map_err(|e| Error::Invalid(e.to_string()))?;
         let sources = Sources::new(github.clone(), http.clone(), cache.clone());

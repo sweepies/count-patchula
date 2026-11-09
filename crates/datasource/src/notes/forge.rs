@@ -104,6 +104,8 @@ fn gitlab_releases(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::
         })
     })
 }
+const NOTES_GITLAB_RELEASES: patchula_http::Derived<patchula_http::CacheError> =
+    patchula_http::Derived::new("notes-gitlab-releases", gitlab_releases);
 fn gitea_releases(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     compact(bytes, |r| {
         (r["draft"].as_bool() != Some(true)).then_some(())?;
@@ -114,6 +116,8 @@ fn gitea_releases(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::C
         })
     })
 }
+const NOTES_GITEA_RELEASES: patchula_http::Derived<patchula_http::CacheError> =
+    patchula_http::Derived::new("notes-gitea-releases", gitea_releases);
 fn names(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     compact(bytes, |t| {
         Some(Name {
@@ -121,6 +125,8 @@ fn names(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError
         })
     })
 }
+const NOTES_FORGE_TAGS: patchula_http::Derived<patchula_http::CacheError> =
+    patchula_http::Derived::new("notes-forge-tags", names);
 /// Root files only: `blob` on GitLab, `file` on Gitea.
 fn files(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     compact(bytes, |f| {
@@ -130,26 +136,25 @@ fn files(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError
         })
     })
 }
+const NOTES_FORGE_FILES: patchula_http::Derived<patchula_http::CacheError> =
+    patchula_http::Derived::new("notes-forge-files", files);
 fn sections(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     let text = std::str::from_utf8(bytes).map_err(|_| patchula_http::CacheError::Document)?;
     serde_json::to_vec(&parse_changelog(text)).map_err(|_| patchula_http::CacheError::Document)
 }
+const NOTES_FORGE_CHANGELOG: patchula_http::Derived<patchula_http::CacheError> =
+    patchula_http::Derived::new("notes-forge-changelog", sections);
 
 impl Client {
     async fn forge_read<T: serde::de::DeserializeOwned>(
         &self,
         url: &str,
         accept: &str,
-        format: &'static str,
-        derive: fn(&[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError>,
+        derived: patchula_http::Derived<patchula_http::CacheError>,
     ) -> Result<T> {
         let bytes = self
             .note_read(url, async {
-                Ok(self
-                    .http
-                    .get_derived(url, accept, format, derive)
-                    .await?
-                    .body)
+                Ok(self.http.get_derived(url, accept, &derived).await?.body)
             })
             .await?;
         Ok(serde_json::from_slice(&bytes)?)
@@ -166,23 +171,15 @@ impl Client {
         package: &str,
     ) -> Result<Notes> {
         let repository = notes.source.clone().expect("forge source");
-        let (releases, format, derive): (_, _, fn(&[u8]) -> _) = match forge.kind {
-            ForgeKind::Gitlab => (
-                api(forge, "releases?per_page=100"),
-                "notes-gitlab-releases-v1",
-                gitlab_releases,
-            ),
-            ForgeKind::Gitea => (
-                api(forge, "releases?limit=50"),
-                "notes-gitea-releases-v1",
-                gitea_releases,
-            ),
+        let (releases, derived) = match forge.kind {
+            ForgeKind::Gitlab => (api(forge, "releases?per_page=100"), NOTES_GITLAB_RELEASES),
+            ForgeKind::Gitea => (api(forge, "releases?limit=50"), NOTES_GITEA_RELEASES),
         };
         let mut tags = (None, None);
         let mut template = None;
         let mut versions = BTreeSet::new();
         match self
-            .forge_read::<Vec<Release>>(&releases, "application/json", format, derive)
+            .forge_read::<Vec<Release>>(&releases, "application/json", derived)
             .await
         {
             Ok(list) => {
@@ -222,12 +219,7 @@ impl Client {
                 ForgeKind::Gitea => "tags?limit=50",
             };
             if let Ok(listed) = self
-                .forge_read::<Vec<Name>>(
-                    &api(forge, route),
-                    "application/json",
-                    "notes-forge-tags-v1",
-                    names,
-                )
+                .forge_read::<Vec<Name>>(&api(forge, route), "application/json", NOTES_FORGE_TAGS)
                 .await
             {
                 for tag in listed {
@@ -246,12 +238,7 @@ impl Client {
                 ForgeKind::Gitea => "contents",
             };
             match self
-                .forge_read::<Vec<Name>>(
-                    &api(forge, route),
-                    "application/json",
-                    "notes-forge-files-v1",
-                    files,
-                )
+                .forge_read::<Vec<Name>>(&api(forge, route), "application/json", NOTES_FORGE_FILES)
                 .await
             {
                 Ok(root) => {
@@ -264,12 +251,7 @@ impl Client {
                             ForgeKind::Gitea => api(forge, &format!("raw/{}", file.name)),
                         };
                         match self
-                            .forge_read::<Vec<Section>>(
-                                &raw,
-                                "text/plain",
-                                "notes-forge-changelog-v1",
-                                sections,
-                            )
+                            .forge_read::<Vec<Section>>(&raw, "text/plain", NOTES_FORGE_CHANGELOG)
                             .await
                         {
                             Ok(parsed_sections) => {

@@ -62,8 +62,10 @@ Large registry bodies use a versioned local `representation` in the key. npm,
 Cargo sparse indexes, PyPI and GitHub REST release heads store a derived
 document with only the fields the Count reads, never the raw response.
 Derivation runs on `spawn_blocking` with a four-job limit. A 304 updates only
-metadata and reuses the compact body. A format change needs a new
-representation version, so raw and derived namespaces never share validators.
+metadata and reuses the compact body. A derived representation is named once
+and suffixed with the HTTP crate's build version, so a change to the
+compaction code re-derives on the next release; raw and derived namespaces
+never share validators.
 
 The default 256 MiB budget counts compressed HTTP body bytes. An access clock
 approximates LRU and evicts whole HTTP rows, validators included, until the

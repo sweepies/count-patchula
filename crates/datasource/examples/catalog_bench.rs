@@ -4,7 +4,7 @@
 use futures_util::{StreamExt, stream};
 use patchula_cache::Cache;
 use patchula_datasource::Client;
-use patchula_http::{Cached, Exchange, Response, Transport};
+use patchula_http::{Exchange, Response, Transport};
 use patchula_words::Source;
 use sha2::{Digest, Sha256};
 use std::{
@@ -38,6 +38,7 @@ impl Transport for Replay {
                         "max-age=3600".parse().unwrap(),
                     ),
                 ]),
+                stale: None,
                 body: self.bodies[request.url().path().trim_start_matches('/')].clone(),
             })
         })
@@ -71,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Default::default(),
             transport.clone(),
         )?,
-        Cached::new(cache.clone(), transport.clone(), 8)?,
+        patchula_datasource::cached(cache.clone(), transport.clone(), 8)?,
         cache,
     );
     let mut expected = None;

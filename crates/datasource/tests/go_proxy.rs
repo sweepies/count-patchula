@@ -1,7 +1,7 @@
 //! Independent Go proxy contract fixtures; no network client is constructed.
 use patchula_cache::Cache;
 use patchula_datasource::Client;
-use patchula_http::{Cached, Exchange, Response, Transport};
+use patchula_http::{Exchange, Response, Transport};
 use patchula_words::Source;
 use std::sync::{Arc, Mutex};
 
@@ -36,6 +36,7 @@ impl Transport for Proxy {
                 status: reqwest::StatusCode::from_u16(status).unwrap(),
                 headers: Default::default(),
                 body: body.into_bytes(),
+                stale: None,
             })
         })
     }
@@ -56,7 +57,7 @@ async fn undescribed_versions_are_dropped_and_cold_lookups_date_only_recent_rele
     .unwrap();
     let client = Client::new(
         github,
-        Cached::new(cache.clone(), proxy.clone(), 4).unwrap(),
+        patchula_datasource::cached(cache.clone(), proxy.clone(), 4).unwrap(),
         cache,
     )
     .with_versions_host(false);

@@ -2,9 +2,6 @@
 use super::*;
 use base64::{Engine, engine::general_purpose::STANDARD};
 
-/// The cached representation of one parsed upstream document.
-type Derive = fn(&[u8]) -> std::result::Result<Vec<u8>, serde_json::Error>;
-
 /// The parsed sections of one immutable upstream document.
 #[derive(Serialize, Deserialize)]
 struct AdapterSections(Vec<Section>);
@@ -70,6 +67,8 @@ pub(super) fn compact_listing(bytes: &[u8]) -> std::result::Result<Vec<u8>, serd
         .collect();
     serde_json::to_vec(&listing)
 }
+const NOTES_ADAPTER_LISTING: patchula_http::Derived<serde_json::Error> =
+    patchula_http::Derived::new("notes-adapter-listing", compact_listing);
 
 /// Decode a GitHub blob into its text content.
 fn blob_text(bytes: &[u8]) -> std::result::Result<String, serde_json::Error> {
@@ -93,11 +92,15 @@ fn blob_text(bytes: &[u8]) -> std::result::Result<String, serde_json::Error> {
 pub(super) fn compact_sgml(bytes: &[u8]) -> std::result::Result<Vec<u8>, serde_json::Error> {
     serde_json::to_vec(&parse_release_sgml(&blob_text(bytes)?))
 }
+const PARSED_POSTGRES_SGML: patchula_http::Derived<serde_json::Error> =
+    patchula_http::Derived::new("parsed-postgres-sgml", compact_sgml);
 
 /// Parse the Go release history.
 pub(super) fn compact_history(bytes: &[u8]) -> std::result::Result<Vec<u8>, serde_json::Error> {
     serde_json::to_vec(&parse_go_history(&blob_text(bytes)?))
 }
+const PARSED_GO_HISTORY: patchula_http::Derived<serde_json::Error> =
+    patchula_http::Derived::new("parsed-go-history", compact_history);
 
 impl Client {
     /// Adapter notes for the requested range, and whether the adapter covered
@@ -148,8 +151,7 @@ impl Client {
                 "postgres/postgres",
                 &file.path,
                 &file.sha,
-                "parsed-postgres-sgml-v1",
-                compact_sgml,
+                PARSED_POSTGRES_SGML,
             )
             .await?;
         // Only the target major's file is read, so a range spanning majors
@@ -167,13 +169,7 @@ impl Client {
             .find(|entry| entry.name == "release.go")
             .ok_or_else(|| Error::Notes("missing Go release history".into()))?;
         let sections = self
-            .adapter_sections(
-                "golang/website",
-                &file.path,
-                &file.sha,
-                "parsed-go-history-v1",
-                compact_history,
-            )
+            .adapter_sections("golang/website", &file.path, &file.sha, PARSED_GO_HISTORY)
             .await?;
         Ok((sections, true))
     }
@@ -190,7 +186,7 @@ impl Client {
             .note_read(&path, async {
                 Ok(self
                     .github
-                    .get_derived(&path, "notes-adapter-listing-v1", compact_listing)
+                    .get_derived(&path, &NOTES_ADAPTER_LISTING)
                     .await?
                     .body)
             })
@@ -204,14 +200,13 @@ impl Client {
         repo: &str,
         path: &str,
         sha: &str,
-        representation: &'static str,
-        derive: Derive,
+        derived: patchula_http::Derived<serde_json::Error>,
     ) -> Result<Vec<Section>> {
         let scope = AdapterScope {
             repository: repo.into(),
             path: path.into(),
             blob_sha: sha.into(),
-            representation: representation.into(),
+            representation: derived.representation(),
         };
         let shared = self
             .changelogs
@@ -229,11 +224,7 @@ impl Client {
         } else {
             let response = self
                 .github
-                .get_derived(
-                    &format!("repos/{repo}/git/blobs/{sha}"),
-                    representation,
-                    derive,
-                )
+                .get_derived(&format!("repos/{repo}/git/blobs/{sha}"), &derived)
                 .await?;
             let entry = AdapterSections(serde_json::from_slice(&response.body)?);
             self.cache.set_state(&scope, &entry).await?;

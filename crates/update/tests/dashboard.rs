@@ -280,6 +280,7 @@ impl patchula_http::Transport for InventoryPages {
                 status: reqwest::StatusCode::OK,
                 headers: Default::default(),
                 body: serde_json::to_vec(&value).unwrap(),
+                stale: None,
             })
         })
     }

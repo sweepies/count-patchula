@@ -13,7 +13,7 @@ pub use patchula_http::{Network, Response, Transport};
 
 use governor::Governor;
 use patchula_cache::Cache;
-use patchula_http::conditional;
+use patchula_http::{Derived, conditional};
 use reqwest::{
     Method, Request, StatusCode, Url,
     header::{self, HeaderValue},
@@ -38,8 +38,6 @@ pub enum Error {
     Url,
     #[error("GitHub HTTP transport failed")]
     Transport,
-    #[error("GitHub offline fixture failed: {0}")]
-    Fixture(String),
     #[error("GitHub cache operation failed")]
     Cache,
     #[error("GitHub returned HTTP {0}")]
@@ -59,7 +57,6 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
-type Derive = fn(&[u8]) -> std::result::Result<Vec<u8>, serde_json::Error>;
 
 #[derive(Clone, Debug)]
 pub struct Options {
@@ -242,13 +239,23 @@ impl Client {
     }
 
     /// Public metadata reads share the transport pool but never GitHub auth.
-    pub fn public_http(&self) -> patchula_http::Cached {
-        patchula_http::Cached::new(
+    /// A registry client on this client's cache and transport, following
+    /// `rules`. Its options are the defaults at this client's concurrency,
+    /// which was validated when the client was built.
+    pub fn public_http(
+        &self,
+        rules: std::sync::Arc<dyn patchula_http::RegistryRules>,
+    ) -> patchula_http::Cached {
+        patchula_http::Cached::with_options(
             self.0.cache.clone(),
             self.0.transport.clone(),
-            self.concurrency(),
+            patchula_http::Options {
+                default_host_concurrency: self.concurrency(),
+                rules,
+                ..patchula_http::Options::default()
+            },
         )
-        .expect("validated concurrency")
+        .expect("default options at a validated concurrency")
     }
     pub fn cache(&self) -> Cache {
         self.0.cache.clone()
@@ -340,9 +347,6 @@ impl Client {
                 .await;
             let response = match result {
                 Ok(response) => response,
-                Err(patchula_http::Error::Fixture(message)) => {
-                    return Err(Error::Fixture(message));
-                }
                 Err(_) => return Err(Error::Transport),
             };
             self.0.governor.observe(resource, &response).await;
@@ -423,10 +427,9 @@ impl Client {
     pub async fn get_derived(
         &self,
         path: &str,
-        format: &'static str,
-        derive: Derive,
+        derived: &Derived<serde_json::Error>,
     ) -> Result<Response> {
-        self.get_representation(path, Some((format, derive)), Read::Revalidate)
+        self.get_representation(path, Some(derived), Read::Revalidate)
             .await?
             .ok_or(Error::MissingBody)
     }
@@ -434,7 +437,7 @@ impl Client {
     async fn get_representation(
         &self,
         path: &str,
-        derived: Option<(&'static str, Derive)>,
+        derived: Option<&Derived<serde_json::Error>>,
         read: Read,
     ) -> Result<Option<Response>> {
         let mut url = self.url(path)?;
@@ -450,7 +453,7 @@ impl Client {
                 "GET",
                 url.as_str(),
                 SENT,
-                derived.map(|(format, _)| format),
+                derived.map(|derived| derived.representation()).as_deref(),
                 Some(&self.0.credential_scope),
             )
             .map_err(|_| Error::Cache)?;
@@ -494,10 +497,10 @@ impl Client {
             if !response.status.is_success() {
                 return Err(Error::Status(response.status.as_u16()));
             }
-            if !not_modified && let Some((_, derive)) = derived {
+            if !not_modified && let Some(derived) = derived {
                 response.body = conditional::derive(
                     std::mem::take(&mut response.body),
-                    derive,
+                    derived.derive,
                     &self.0.decoding,
                 )
                 .await

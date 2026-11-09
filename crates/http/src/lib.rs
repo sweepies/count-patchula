@@ -4,12 +4,22 @@
 use reqwest::{Request, StatusCode, header::HeaderMap};
 use std::{future::Future, pin::Pin};
 
+/// Provenance for an answer served from the cache while the registry was
+/// rate limited: when the entry was fetched upstream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Stale {
+    pub fetched_at: i64,
+}
+
 /// Buffered response. Debug deliberately excludes headers and body.
 #[derive(Clone)]
 pub struct Response {
     pub status: StatusCode,
     pub headers: HeaderMap,
     pub body: Vec<u8>,
+    /// Set when the cache served the entry because the registry was rate
+    /// limited; `None` for answers that came from the network or a fresh hit.
+    pub stale: Option<Stale>,
 }
 
 impl std::fmt::Debug for Response {
@@ -27,8 +37,6 @@ pub enum Error {
     Network,
     #[error("HTTP client could not be configured")]
     Configuration,
-    #[error("fixture: {0}")]
-    Fixture(String),
 }
 
 pub type Exchange<'a> = Pin<Box<dyn Future<Output = Result<Response, Error>> + Send + 'a>>;
@@ -108,6 +116,7 @@ impl Transport for Network {
                 status,
                 headers,
                 body,
+                stale: None,
             })
         })
     }
@@ -120,7 +129,10 @@ pub const MAX_CONCURRENCY: usize = 100;
 mod cached;
 pub mod conditional;
 mod credentials;
-pub use cached::{Bearer, Cached, Error as CacheError, Options, Stats};
+pub use cached::{
+    Bearer, Cached, Derived, Error as CacheError, NoRules, Options, RegistryRules, Stats,
+    representation,
+};
 pub use credentials::{Auth, Credential, entry_for, prefix as url_prefix};
 mod trace;
 pub use trace::{PhaseTrace, RequestTrace, TOKEN_SHAPES};

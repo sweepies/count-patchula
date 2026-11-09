@@ -59,6 +59,8 @@ fn compact_mirror(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::C
         serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
     serde_json::to_vec(&list).map_err(|_| patchula_http::CacheError::Document)
 }
+const NOTES_MISE_VERSIONS: patchula_http::Derived<patchula_http::CacheError> =
+    patchula_http::Derived::new("notes-mise-versions", compact_mirror);
 
 #[derive(Clone, Debug, Default)]
 pub struct Notes {
@@ -292,11 +294,7 @@ impl Client {
             .note_read(url.as_str(), async {
                 Ok(self
                     .github
-                    .get_derived(
-                        url.as_str(),
-                        "notes-changelog-directory-v1",
-                        changelog::compact_tree,
-                    )
+                    .get_derived(url.as_str(), &changelog::NOTES_CHANGELOG_DIRECTORY)
                     .await?
                     .body)
             })
@@ -405,8 +403,7 @@ impl Client {
                 .github
                 .get_derived(
                     &format!("repos/{repo}/git/blobs/{}", file.sha),
-                    "parsed-changelog-v1",
-                    changelog::compact_blob,
+                    &changelog::PARSED_CHANGELOG,
                 )
                 .await?;
             let entry = ParsedChangelog(serde_json::from_slice(&response.body)?);
@@ -426,12 +423,7 @@ impl Client {
             .note_read(&url, async {
                 Ok(self
                     .http
-                    .get_derived(
-                        &url,
-                        "application/json",
-                        "notes-mise-versions-v1",
-                        compact_mirror,
-                    )
+                    .get_derived(&url, "application/json", &NOTES_MISE_VERSIONS)
                     .await?
                     .body)
             })

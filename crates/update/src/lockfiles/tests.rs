@@ -2997,6 +2997,7 @@ impl Transport for Checksums {
                 status: reqwest::StatusCode::from_u16(status).unwrap(),
                 headers,
                 body,
+                stale: None,
             })
         })
     }

@@ -1,7 +1,7 @@
 //! Compact catalogs retain conditional HTTP semantics across process handles.
 use patchula_cache::{Cache, HttpKey};
 use patchula_datasource::Client;
-use patchula_http::{Cached, Exchange, Response, Transport};
+use patchula_http::{Exchange, Response, Transport};
 use patchula_words::Source;
 use reqwest::{StatusCode, header::HeaderMap};
 use serde_json::{Value, json};
@@ -45,6 +45,7 @@ fn response(status: u16, etag: &str, control: &str, body: Value) -> Response {
         } else {
             serde_json::to_vec(&body).unwrap()
         },
+        stale: None,
     }
 }
 fn client(cache: Cache, transport: Arc<Queue>) -> Client {
@@ -56,7 +57,7 @@ fn client(cache: Cache, transport: Arc<Queue>) -> Client {
             transport.clone(),
         )
         .unwrap(),
-        Cached::new(cache.clone(), transport, 4).unwrap(),
+        patchula_datasource::cached(cache.clone(), transport, 4).unwrap(),
         cache,
     )
     .with_versions_host(false)
@@ -119,7 +120,7 @@ async fn fresh_reopen_304_changed_200_and_invalid_200_preserve_catalog_semantics
         BTreeMap::from([("accept".into(), "application/json".into())]),
     )
     .unwrap()
-    .representation("npm-catalog-v1");
+    .representation(&patchula_http::representation("npm-catalog"));
     let mut entry = cache.http_get(&key).await.unwrap().unwrap();
     assert!(
         entry.body.len() < 500,

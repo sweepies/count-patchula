@@ -54,6 +54,8 @@ fn versions(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheEr
         .collect();
     serde_json::to_vec(&versions).map_err(|_| patchula_http::CacheError::Document)
 }
+const MAVEN_METADATA: patchula_http::Derived<patchula_http::CacheError> =
+    patchula_http::Derived::new("maven-metadata", versions);
 
 /// The directory holding an artifact's `maven-metadata.xml`.
 fn base(package: &str) -> Result<String> {
@@ -73,8 +75,7 @@ impl Client {
             .get_derived(
                 &format!("{base}/maven-metadata.xml"),
                 "application/xml",
-                "maven-metadata-v1",
-                versions,
+                &MAVEN_METADATA,
             )
             .await?;
         let listed: Vec<String> = serde_json::from_slice(&response.body)?;

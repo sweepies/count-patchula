@@ -62,6 +62,7 @@ impl Transport for GitHub {
                 status: reqwest::StatusCode::from_u16(status).unwrap(),
                 headers,
                 body: serde_json::to_vec(&body).unwrap(),
+                stale: None,
             })
         })
     }

@@ -32,6 +32,7 @@ impl Transport for SecretResponse {
                     "Bearer response-secret".parse().unwrap(),
                 )]),
                 body: b"ghp_responseSecret".to_vec(),
+                stale: None,
             })
         })
     }

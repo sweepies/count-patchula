@@ -1,7 +1,7 @@
 //! Typed deserialization skips unused registry fields without building a JSON
 //! tree for README, dependencies, attestations or artifact metadata.
 use super::{Catalog, Version, sort};
-use patchula_http::CacheError;
+use patchula_http::{CacheError, Derived};
 use patchula_versioning::Ecosystem;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -66,6 +66,7 @@ pub(super) fn npm(body: &[u8]) -> Result<Vec<u8>, CacheError> {
     sort(&mut catalog.versions, Ecosystem::Npm);
     encode(catalog, document.time.remove("modified"))
 }
+pub(super) const NPM_CATALOG: Derived<CacheError> = Derived::new("npm-catalog", npm);
 
 #[derive(Deserialize)]
 struct CrateVersion {
@@ -89,6 +90,7 @@ pub(super) fn crates(body: &[u8]) -> Result<Vec<u8>, CacheError> {
     catalog.versions.reverse(); // Sparse index is append-only publication order.
     encode(catalog, None)
 }
+pub(super) const CRATES_CATALOG: Derived<CacheError> = Derived::new("crates-catalog", crates);
 
 #[derive(Deserialize)]
 struct Pypi {
@@ -122,6 +124,7 @@ pub(super) fn pypi(body: &[u8]) -> Result<Vec<u8>, CacheError> {
     sort(&mut catalog.versions, Ecosystem::Pep440);
     encode(catalog, None)
 }
+pub(super) const PYPI_CATALOG: Derived<CacheError> = Derived::new("pypi-catalog", pypi);
 
 #[cfg(test)]
 mod tests {

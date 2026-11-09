@@ -157,6 +157,8 @@ pub(super) fn compact_tree(bytes: &[u8]) -> std::result::Result<Vec<u8>, serde_j
         .retain(|file| matches!(file.kind.as_str(), "dir" | "tree") || is_changelog(&file.path));
     serde_json::to_vec(&tree)
 }
+pub(super) const NOTES_CHANGELOG_DIRECTORY: patchula_http::Derived<serde_json::Error> =
+    patchula_http::Derived::new("notes-changelog-directory", compact_tree);
 pub(super) fn is_changelog(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path).to_ascii_uppercase();
     let stem = name.split('.').next().unwrap_or(&name);
@@ -232,3 +234,5 @@ pub(super) fn compact_blob(bytes: &[u8]) -> std::result::Result<Vec<u8>, serde_j
     let text = std::str::from_utf8(&decoded).map_err(serde::de::Error::custom)?;
     serde_json::to_vec(&parse_changelog(text))
 }
+pub(super) const PARSED_CHANGELOG: patchula_http::Derived<serde_json::Error> =
+    patchula_http::Derived::new("parsed-changelog", compact_blob);

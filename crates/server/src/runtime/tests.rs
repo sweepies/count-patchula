@@ -277,6 +277,7 @@ impl Transport for InstallationLookup {
                 status,
                 headers: Default::default(),
                 body: serde_json::to_vec(&json!({"id":1})).unwrap(),
+                stale: None,
             })
         })
     }
@@ -637,6 +638,7 @@ impl Transport for StartupTransport {
                     status: reqwest::StatusCode::OK,
                     headers: Default::default(),
                     body: serde_json::to_vec(&json!({"id":1})).unwrap(),
+                    stale: None,
                 });
             }
             DiscoveryAndMissingRepository.send(request).await
@@ -825,6 +827,7 @@ impl Transport for DiscoveryAndMissingRepository {
                 status,
                 headers: Default::default(),
                 body: serde_json::to_vec(&value).unwrap(),
+                stale: None,
             })
         })
     }
@@ -1441,6 +1444,7 @@ impl Transport for PrDetails {
                 status: reqwest::StatusCode::OK,
                 headers: Default::default(),
                 body,
+                stale: None,
             })
         })
     }

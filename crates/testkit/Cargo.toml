@@ -19,6 +19,8 @@ serde_json.workspace = true
 regex = "1"
 percent-encoding = "2"
 sha2 = "0.11.1"
+sha1 = "0.11"
+base64 = "0.23"
 tempfile = "3"
 
 [dev-dependencies]

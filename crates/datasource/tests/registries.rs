@@ -1,7 +1,7 @@
 //! Public registry v2, Terraform, PyPI and Helm endpoints recorded by this implementation; replay is offline.
 use patchula_cache::Cache;
 use patchula_datasource::Client;
-use patchula_http::{Cached, Network};
+use patchula_http::Network;
 use patchula_words::Source;
 use std::{path::Path, sync::Arc};
 
@@ -23,7 +23,7 @@ async fn public_registry_catalogs_and_index_digest() {
         transport.clone(),
     )
     .unwrap();
-    let http = Cached::new(cache.clone(), transport, 4).unwrap();
+    let http = patchula_datasource::cached(cache.clone(), transport, 4).unwrap();
     let client = Client::new(github, http.clone(), cache).with_versions_host(false);
     let packages = [
         (Source::Docker, "library/hello-world"),

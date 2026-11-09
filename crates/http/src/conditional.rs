@@ -192,6 +192,7 @@ pub fn response(entry: &HttpEntry) -> Result<Response, Error> {
         status: StatusCode::from_u16(entry.status).map_err(|_| Error::Metadata)?,
         headers,
         body: entry.body.clone(),
+        stale: None,
     })
 }
 
@@ -265,6 +266,7 @@ mod tests {
                 })
                 .collect::<header::HeaderMap>(),
             body: b"body".to_vec(),
+            stale: None,
         }
     }
 

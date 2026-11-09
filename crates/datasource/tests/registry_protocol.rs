@@ -40,6 +40,7 @@ fn response(status: u16, body: &str, headers: &[(&str, &str)]) -> Response {
                 )
             })
             .collect(),
+        stale: None,
     }
 }
 async fn client(transport: Arc<Steps>, dir: &std::path::Path) -> Client {
@@ -60,7 +61,7 @@ async fn client(transport: Arc<Steps>, dir: &std::path::Path) -> Client {
             transport,
             patchula_http::Options {
                 registry_retries: 0,
-                ..Default::default()
+                ..patchula_datasource::http_options()
             },
         )
         .unwrap(),
@@ -203,7 +204,7 @@ async fn rate_limited_catalogs_and_digests_reuse_cache_without_refreshing_it() {
         std::collections::BTreeMap::from([("accept".into(), "application/json".into())]),
     )
     .unwrap()
-    .representation("oci-tags-v1");
+    .representation(&patchula_http::representation("oci-tags"));
     let fetched = cache.http_get(&key).await.unwrap().unwrap().fetched_at;
     assert_eq!(
         sources
@@ -456,7 +457,7 @@ async fn validator_free_tags_are_compact_and_survive_a_new_client() {
         std::collections::BTreeMap::from([("accept".into(), "application/json".into())]),
     )
     .unwrap()
-    .representation("oci-tags-v1");
+    .representation(&patchula_http::representation("oci-tags"));
     let entry = cache.http_get(&key).await.unwrap().unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&entry.body).unwrap(),
@@ -565,7 +566,7 @@ async fn auth_client_with(
             patchula_http::Options {
                 default_host_concurrency: 4,
                 credentials,
-                ..Default::default()
+                ..patchula_datasource::http_options()
             },
         )
         .unwrap(),
@@ -742,7 +743,9 @@ async fn dockerhub_login_is_realm_scoped_and_authenticated_tokens_are_not_persis
         Default::default(),
     )
     .unwrap()
-    .representation("anonymous-registry-pull-token-v1");
+    .representation(&patchula_http::representation(
+        "anonymous-registry-pull-token",
+    ));
     assert!(cache.http_get(&key).await.unwrap().is_none());
     assert!(steps.0.lock().unwrap().is_empty());
 }
@@ -917,7 +920,7 @@ async fn manifest_heads_have_separate_validators_and_fall_back_only_when_needed(
                 steps.clone(),
             )
             .unwrap(),
-            Cached::new(cache.clone(), steps.clone(), 4).unwrap(),
+            patchula_datasource::cached(cache.clone(), steps.clone(), 4).unwrap(),
             cache,
         )
         .with_versions_host(false);

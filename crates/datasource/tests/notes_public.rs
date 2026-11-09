@@ -3,7 +3,7 @@
 mod support;
 use patchula_cache::Cache;
 use patchula_datasource::Client;
-use patchula_http::{Cached, Exchange, Network, Response, Transport};
+use patchula_http::{Exchange, Network, Response, Transport};
 use patchula_testkit::{Options, Redactor};
 use patchula_words::Source;
 use std::{path::Path, sync::Arc};
@@ -35,6 +35,7 @@ impl Transport for ReleaseReplay {
                 status: reqwest::StatusCode::OK,
                 headers: Default::default(),
                 body: serde_json::to_vec(&body).unwrap(),
+                stale: None,
             })
         })
     }
@@ -96,7 +97,7 @@ async fn public_note_sources_and_release_range() {
         transport.clone(),
     )
     .unwrap();
-    let http = Cached::new(cache.clone(), transport, 4).unwrap();
+    let http = patchula_datasource::cached(cache.clone(), transport, 4).unwrap();
     let client = Client::new(github.clone(), http.clone(), cache).with_versions_host(false);
     for (source, package, version, repo) in [
         (Source::Npm, "@babel/code-frame", "7.27.1", "babel/babel"),
@@ -249,7 +250,7 @@ async fn public_sandbox_note_ranges() {
             transport.clone(),
         )
         .unwrap();
-        let http = Cached::new(cache.clone(), transport, 4).unwrap();
+        let http = patchula_datasource::cached(cache.clone(), transport, 4).unwrap();
         let client = Client::new(github.clone(), http.clone(), cache).with_versions_host(false);
         for target in targets {
             let started = std::time::Instant::now();

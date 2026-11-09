@@ -16,9 +16,7 @@ impl Transport for Registry {
             assert!(!request.headers().contains_key("authorization"));
             self.requests.fetch_add(1, Ordering::SeqCst);
             if self.failed.load(Ordering::SeqCst) {
-                return Err(patchula_http::Error::Fixture(
-                    "offline connection failure".into(),
-                ));
+                return Err(patchula_http::Error::Network);
             }
             let phase = self.phase.load(Ordering::SeqCst);
             let etag = format!("\"phase-{phase}\"");
@@ -44,6 +42,7 @@ impl Transport for Registry {
                 .into_iter()
                 .collect(),
                 body: serde_json::to_vec(&body).unwrap(),
+                stale: None,
             })
         })
     }

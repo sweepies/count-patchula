@@ -1,5 +1,5 @@
+use crate::Error;
 use crate::{Body, failure};
-use patchula_http::Error;
 use regex::Regex;
 use reqwest::Url;
 use serde_json::Value;
