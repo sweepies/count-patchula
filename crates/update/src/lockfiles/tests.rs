@@ -3,6 +3,13 @@ use patchula_http::{Exchange, Transport};
 use patchula_process::{CommandSpec, Failure};
 use std::{future::Future, pin::Pin, sync::Mutex};
 
+/// One plan through the batch entry point, as the engine calls it.
+async fn prepare_one(runner: &Runner, plan: &mut Plan, snapshot: &mut Snapshot, config: &Config) {
+    runner
+        .prepare_all(std::slice::from_mut(plan), snapshot, config, 1, &|| {})
+        .await;
+}
+
 mod real_python_indexes;
 
 /// What `defaults.toml` pins for a tool, which a repository without its own pin
@@ -266,7 +273,7 @@ async fn real_apm_relocks_offline() {
     let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert!(
         matches!(
             p.action.status,
@@ -307,7 +314,7 @@ async fn apm_locks_use_the_lock_only_command() {
             p.contents
                 .insert("apm.yml".into(), manifest.replace("v1.0.0", "v1.1.0"));
         }
-        runner.prepare(&mut p, &mut snapshot, &config).await;
+        prepare_one(&runner, &mut p, &mut snapshot, &config).await;
         let calls = executor.calls.lock().unwrap();
         let expected: &[&str] = if refresh {
             &["apm", "lock", "--update"]
@@ -452,7 +459,7 @@ async fn a_credentialed_tool_failure_shows_no_output() {
     let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     let reason = p.action.reason.unwrap();
     assert!(reason.contains("held registry credentials"), "{reason}");
@@ -567,7 +574,7 @@ async fn committed_registry_credentials_stop_the_run_before_any_tool() {
         let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
             .unwrap()
             .unwrap();
-        runner.prepare(&mut p, &mut snapshot, &config).await;
+        prepare_one(&runner, &mut p, &mut snapshot, &config).await;
         let ran_bun = executor
             .calls
             .lock()
@@ -602,7 +609,7 @@ async fn tool_failure_is_reported_without_api_writes_or_partial_scratch_files() 
     let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     assert!(
         p.action
@@ -666,18 +673,22 @@ async fn all_tools_are_targeted_scrubbed_and_versions_are_read_without_loading_r
         .iter_mut()
         .find(|j| j.ecosystem == Ecosystem::Cargo)
         .unwrap();
-    cargo.package = Some("serde".into());
-    cargo.current = Some("1.0.200".into());
-    cargo.target = Some("1.0.229".into());
+    cargo.scope = Scope::Package {
+        package: "serde".into(),
+        current: Some("1.0.200".into()),
+        target: Some("1.0.229".into()),
+    };
     let go = p
         .lock_jobs
         .iter_mut()
         .find(|j| j.ecosystem == Ecosystem::Go)
         .unwrap();
-    go.package = Some("example.com/mod".into());
-    go.current = Some("v1.0.0".into());
-    go.target = Some("v1.1.0".into());
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    go.scope = Scope::Package {
+        package: "example.com/mod".into(),
+        current: Some("v1.0.0".into()),
+        target: Some("v1.1.0".into()),
+    };
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     assert!(p.lockfiles_ready);
     assert_eq!(p.action.files.len(), 5);
@@ -756,7 +767,7 @@ async fn node_lockfiles_use_aube_yarn_and_bun_by_lockfile_format() {
         .unwrap()
         .unwrap();
     p.maintenance = false;
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     let calls = executor.calls.lock().unwrap();
     let commands = recorded(&calls);
@@ -811,7 +822,7 @@ async fn the_npm_engine_setting_restores_native_npm_for_npm_locks() {
         .unwrap()
         .unwrap();
     p.maintenance = false;
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     let calls = executor.calls.lock().unwrap();
     let commands = recorded(&calls);
@@ -916,7 +927,7 @@ async fn an_unchanged_lockfile_after_a_manifest_edit_fails_the_branch() {
         "package.json".into(),
         "{\"dependencies\":{\"fixture\":\"2.0.0\"}}\n".into(),
     );
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     assert!(
         p.action
@@ -957,7 +968,7 @@ async fn a_manifest_edit_outside_the_dependencies_leaves_the_lock_alone() {
         "package.json".into(),
         "{\"description\":\"second\",\"dependencies\":{\"fixture\":\"1.0.0\"}}\n".into(),
     );
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     assert!(p.lockfiles_ready);
 }
@@ -986,7 +997,7 @@ async fn aube_lock_yaml_is_regenerated_in_place_beside_other_lockfiles() {
         p.maintenance = false;
         assert_eq!(p.lock_jobs.len(), 1, "{locks:?}");
         assert_eq!(p.lock_jobs[0].ecosystem, Ecosystem::Node);
-        runner.prepare(&mut p, &mut snapshot, &config).await;
+        prepare_one(&runner, &mut p, &mut snapshot, &config).await;
         assert_eq!(
             p.action.status,
             BranchStatus::Planned,
@@ -1025,7 +1036,7 @@ async fn aube_lock_yaml_creation_fails_the_branch() {
         .unwrap()
         .unwrap();
     p.maintenance = false;
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     assert!(
         p.action
@@ -1058,7 +1069,7 @@ async fn maintenance_refreshes_node_lockfiles_within_the_manifest_ranges() {
         .unwrap()
         .unwrap();
     assert!(p.maintenance);
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     let calls = executor.calls.lock().unwrap();
     let commands = recorded(&calls);
@@ -1135,7 +1146,7 @@ async fn real_tools_produce_deterministic_lockfiles_from_local_offline_fixtures(
             let config=config();
             let mut p=maintenance(&repo(),&config,&snapshot,None,monday()).unwrap().unwrap();
             assert!(p.lock_jobs.iter().all(|j|j.ecosystem==ecosystem));
-            runner.prepare(&mut p,&mut snapshot,&config).await;
+            prepare_one(&runner, &mut p,&mut snapshot,&config).await;
             assert!(matches!(p.action.status,BranchStatus::Planned|BranchStatus::Skipped),"{ecosystem:?}: {:?}",p.action);
             assert!(p.lockfiles_ready);
             assert!(p.contents.contains_key(lock) || ecosystem==Ecosystem::Go);
@@ -1201,7 +1212,7 @@ async fn real_aube_rewrites_pnpm_npm_and_yarn_classic_locks_in_place() {
             .unwrap()
             .unwrap();
         p.maintenance = false;
-        runner.prepare(&mut p, &mut snapshot, &config).await;
+        prepare_one(&runner, &mut p, &mut snapshot, &config).await;
         // An already-current lock is skipped; that still proves the engine choice.
         assert!(
             matches!(
@@ -1256,7 +1267,7 @@ async fn real_aube_regenerates_a_stale_aube_lock_that_aube_ci_accepts() {
         "package.json".into(),
         manifest.replace("file:./local", "file:./local/"),
     );
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     assert!(p.contents["aube-lock.yaml"].contains("local-fixture"));
     // The result is aube's lockfile, and nothing else appeared beside it.
@@ -1470,7 +1481,7 @@ async fn real_git_cache_is_reused_and_fetches_new_bases_incrementally_offline() 
         let mut p = maintenance(&repo, &config, &snapshot, None, monday())
             .unwrap()
             .unwrap();
-        runner.prepare(&mut p, &mut snapshot, &config).await;
+        prepare_one(&runner, &mut p, &mut snapshot, &config).await;
         assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
         assert!(p.contents["Cargo.lock"].contains(version));
     }
@@ -1541,9 +1552,11 @@ async fn real_cargo_and_go_targeted_updates_retain_the_selected_manifest_and_loc
             .unwrap()
             .unwrap();
         p.maintenance = false;
-        p.lock_jobs[0].package = Some(package.into());
-        p.lock_jobs[0].current = Some(current.into());
-        p.lock_jobs[0].target = Some(target.into());
+        p.lock_jobs[0].scope = Scope::Package {
+            package: package.into(),
+            current: Some(current.into()),
+            target: Some(target.into()),
+        };
         p.contents.insert(manifest.into(), new);
         p.action.files.push(FileAction {
             path: manifest.into(),
@@ -1568,7 +1581,7 @@ async fn real_cargo_and_go_targeted_updates_retain_the_selected_manifest_and_loc
             advisories: Vec::new(),
             image: None,
         });
-        runner.prepare(&mut p, &mut snapshot, &config).await;
+        prepare_one(&runner, &mut p, &mut snapshot, &config).await;
         assert_eq!(
             p.action.status,
             BranchStatus::Planned,
@@ -1754,9 +1767,11 @@ async fn cargo_jobs_address_the_lock_as_it_stands() {
         let job = Job {
             ecosystem: Ecosystem::Cargo,
             directory: String::new(),
-            package: Some("hcl-edit".into()),
-            current: Some(current.into()),
-            target: Some(target.into()),
+            scope: Scope::Package {
+                package: "hcl-edit".into(),
+                current: Some(current.into()),
+                target: Some(target.into()),
+            },
             lock_only: false,
         };
         runner
@@ -1852,7 +1867,7 @@ async fn cargo_gets_credentialed_registries_from_the_environment() {
     let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_ne!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     let envs = executor.envs.lock().unwrap();
     assert!(!envs.is_empty());
@@ -1896,9 +1911,11 @@ async fn cargo_lock_adds_a_semver_incompatible_entry_then_pins_the_target() {
         .unwrap()
         .unwrap();
     p.maintenance = false;
-    p.lock_jobs[0].package = Some("base64".into());
-    p.lock_jobs[0].current = Some("0.22.1".into());
-    p.lock_jobs[0].target = Some("0.23.0".into());
+    p.lock_jobs[0].scope = Scope::Package {
+        package: "base64".into(),
+        current: Some("0.22.1".into()),
+        target: Some("0.23.0".into()),
+    };
     p.contents
         .insert("Cargo.toml".into(), old.replace("'0.22'", "'0.23'"));
     p.action.files.push(FileAction {
@@ -1924,7 +1941,7 @@ async fn cargo_lock_adds_a_semver_incompatible_entry_then_pins_the_target() {
         advisories: Vec::new(),
         image: None,
     });
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     let lock = &p.contents["Cargo.lock"];
     assert!(lock.contains("version = \"0.22.1\""), "{lock}");
@@ -2100,7 +2117,7 @@ async fn mise_lock_is_targeted_scrubbed_and_committed_with_each_supported_manife
                 blob_sha: blob_sha(old),
                 diff: String::new(),
             });
-            runner.prepare(&mut p, &mut snapshot, &config).await;
+            prepare_one(&runner, &mut p, &mut snapshot, &config).await;
             if fault.is_empty() {
                 assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
                 assert!(p.lockfiles_ready);
@@ -2179,7 +2196,7 @@ async fn mise_lock_updates_a_tool_that_records_no_platforms() {
             blob_sha: blob_sha(old),
             diff: String::new(),
         });
-        runner.prepare(&mut p, &mut snapshot, &config).await;
+        prepare_one(&runner, &mut p, &mut snapshot, &config).await;
         assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
         assert!(p.contents["mise.lock"].contains("version = \"24.0.0\""));
         let calls = executor.calls.lock().unwrap();
@@ -2276,7 +2293,7 @@ async fn mise_lock_ignores_configuration_below_the_lockfile() {
         blob_sha: blob_sha(old),
         diff: String::new(),
     });
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     assert_eq!(
         *spy.configs.lock().unwrap(),
@@ -2335,7 +2352,7 @@ async fn mise_lock_in_a_subdirectory_reads_the_configuration_beside_it() {
         blob_sha: blob_sha(old),
         diff: String::new(),
     });
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     assert!(p.contents["services/api/mise.lock"].contains("version = \"24.0.0\""));
 }
@@ -2432,7 +2449,7 @@ async fn mise_lock_records_every_request_a_multi_version_declaration_makes() {
                 blob_sha: blob_sha(&old),
                 diff: String::new(),
             });
-            runner.prepare(&mut p, &mut snapshot, &config).await;
+            prepare_one(&runner, &mut p, &mut snapshot, &config).await;
             if omit {
                 assert_eq!(
                     p.action.status,
@@ -2616,6 +2633,78 @@ fn lockfile_engine_pins_match_the_repository_mise_tasks() {
     }
 }
 
+/// `.tool-versions` pins a tool version as `mise.toml` does, under mise's
+/// precedence: `.mise.toml` over `mise.toml` over `.tool-versions` in one
+/// directory, and a deeper file over a shallower one.
+#[test]
+fn tool_versions_pin_the_versions_a_run_resolves() {
+    let files = BTreeMap::from([
+        (
+            ".tool-versions".to_string(),
+            "node 20.0.0\ngo 1.24.0\n".to_string(),
+        ),
+        (
+            "mise.toml".to_string(),
+            "[tools]\nnode = '21.0.0'\npython = '3.12.0'\n".to_string(),
+        ),
+        (
+            ".mise.toml".to_string(),
+            "[tools]\npython = '3.13.0'\n".to_string(),
+        ),
+        (
+            "sub/.tool-versions".to_string(),
+            "node 22.0.0\n".to_string(),
+        ),
+    ]);
+    let baseline = snapshot(&files).files;
+    let sub_versions = versions(&baseline, "sub").unwrap();
+    assert_eq!(sub_versions["node"], "22.0.0");
+    assert_eq!(sub_versions["go"], "1.24.0");
+    assert_eq!(sub_versions["python"], "3.13.0");
+    assert_eq!(sub_versions["rust"], default_version("rust"));
+    // At the root `mise.toml` beats `.tool-versions`, `.mise.toml` beats
+    // `mise.toml` (python), and the deeper file does not reach it.
+    let root_versions = versions(&baseline, "").unwrap();
+    assert_eq!(root_versions["node"], "21.0.0");
+    assert_eq!(root_versions["python"], "3.13.0");
+}
+
+/// A job's scope is an enum in memory but its wire shape is the flat field
+/// layout it always was: job identities feed branch and plan hashes, so the
+/// bytes cannot drift.
+#[test]
+fn lock_jobs_keep_their_serialized_field_layout() {
+    let targeted = Job {
+        ecosystem: Ecosystem::Cargo,
+        directory: "crates/api".into(),
+        scope: Scope::Package {
+            package: "serde".into(),
+            current: Some("1.0.0".into()),
+            target: Some("1.0.1".into()),
+        },
+        lock_only: true,
+    };
+    assert_eq!(
+        serde_json::to_string(&targeted).unwrap(),
+        r#"{"ecosystem":"Cargo","directory":"crates/api","package":"serde","current":"1.0.0","target":"1.0.1","lock_only":true}"#
+    );
+    let whole = Job {
+        ecosystem: Ecosystem::Node,
+        directory: String::new(),
+        scope: Scope::Directory,
+        lock_only: false,
+    };
+    assert_eq!(
+        serde_json::to_string(&whole).unwrap(),
+        r#"{"ecosystem":"Node","directory":"","package":null,"current":null,"target":null,"lock_only":false}"#
+    );
+    let back: Job = serde_json::from_str(
+        r#"{"ecosystem":"Cargo","directory":"crates/api","package":"serde","current":"1.0.0","target":"1.0.1","lock_only":true}"#,
+    )
+    .unwrap();
+    assert_eq!(back, targeted);
+}
+
 /// Yarn never runs a committed release, plugins or credential interpolations.
 #[test]
 fn yarnrc_keeps_settings_but_drops_repository_code_and_credentials() {
@@ -2688,7 +2777,7 @@ async fn an_unchanged_lockfile_after_a_catalog_edit_fails_the_branch() {
         "pnpm-workspace.yaml".into(),
         "catalog:\n  fixture: 2.0.0\n".into(),
     );
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     assert!(
         p.action
@@ -2725,7 +2814,7 @@ async fn real_yarn_berry_uses_a_sanitised_yarnrc_and_restores_it() {
         .unwrap()
         .unwrap();
     p.maintenance = false;
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     assert!(
         p.contents["yarn.lock"].contains("local-fixture"),
@@ -2784,16 +2873,18 @@ async fn python_locks_use_uv_and_poetry_with_the_project_interpreter() {
         p.lock_jobs = vec![Job {
             ecosystem: Ecosystem::Python,
             directory: String::new(),
-            package: Some("ruff".into()),
-            current: Some("0.6.0".into()),
-            target: Some("0.6.9".into()),
+            scope: Scope::Package {
+                package: "ruff".into(),
+                current: Some("0.6.0".into()),
+                target: Some("0.6.9".into()),
+            },
             lock_only: false,
         }];
         p.contents.insert(
             "pyproject.toml".into(),
             "[project]\ndependencies = [\"ruff==0.6.9\"]\n".into(),
         );
-        runner.prepare(&mut p, &mut snapshot, &config).await;
+        prepare_one(&runner, &mut p, &mut snapshot, &config).await;
         let calls = executor.calls.lock().unwrap();
         let commands = recorded(&calls);
         let (specs, args) = commands
@@ -2834,12 +2925,14 @@ async fn an_unchanged_python_lock_after_a_targeted_upgrade_fails() {
     p.lock_jobs = vec![Job {
         ecosystem: Ecosystem::Python,
         directory: String::new(),
-        package: Some("ruff".into()),
-        current: Some("0.6.0".into()),
-        target: Some("0.6.9".into()),
+        scope: Scope::Package {
+            package: "ruff".into(),
+            current: Some("0.6.0".into()),
+            target: Some("0.6.9".into()),
+        },
         lock_only: false,
     }];
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     assert!(
         p.action
@@ -2889,7 +2982,7 @@ async fn real_uv_and_poetry_regenerate_python_locks() {
         let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
             .unwrap()
             .unwrap();
-        runner.prepare(&mut p, &mut snapshot, &config).await;
+        prepare_one(&runner, &mut p, &mut snapshot, &config).await;
         assert_eq!(
             p.action.status,
             BranchStatus::Planned,
@@ -2924,7 +3017,7 @@ fn go_runs_at_the_version_the_edited_module_requires() {
     ] {
         std::fs::write(temp.path().join("go.mod"), module).unwrap();
         assert_eq!(
-            go_version(temp.path(), "1.27.2").unwrap(),
+            go::go_version(temp.path(), "1.27.2").unwrap(),
             expected,
             "{module}"
         );
@@ -3017,10 +3110,20 @@ async fn gradle_wrapper_checksums_follow_the_distribution() {
         .with_http(transport.clone());
     let root = temp.path().join("tree");
     write(&root, "gradle/wrapper/gradle-wrapper.properties", &new).unwrap();
-    runner
-        .gradle_wrapper(&root, "gradle/wrapper")
-        .await
-        .unwrap();
+    let baseline = BTreeMap::new();
+    let versions = BTreeMap::new();
+    let config = config();
+    let context = || node::NodeContext {
+        driver: temp.path(),
+        root: &root,
+        baseline: &baseline,
+        directory: "gradle/wrapper",
+        config: &config,
+        versions: &versions,
+        maintenance: false,
+        public: false,
+    };
+    runner.gradle_wrapper(context()).await.unwrap();
     let written =
         std::fs::read_to_string(root.join("gradle/wrapper/gradle-wrapper.properties")).unwrap();
     assert_eq!(
@@ -3042,7 +3145,7 @@ async fn gradle_wrapper_checksums_follow_the_distribution() {
     .unwrap();
     assert!(
         runner
-            .gradle_wrapper(&root, "gradle/wrapper")
+            .gradle_wrapper(context())
             .await
             .unwrap_err()
             .contains("refusing")
@@ -3054,10 +3157,7 @@ async fn gradle_wrapper_checksums_follow_the_distribution() {
         "distributionUrl=https\\://services.gradle.org/distributions/gradle-9.0-bin.zip\n",
     )
     .unwrap();
-    runner
-        .gradle_wrapper(&root, "gradle/wrapper")
-        .await
-        .unwrap();
+    runner.gradle_wrapper(context()).await.unwrap();
     assert!(transport.requests.lock().unwrap().is_empty());
 }
 
@@ -3259,12 +3359,10 @@ async fn real_dotnet_restore_regenerates_packages_lock_json() {
     p.lock_jobs = vec![Job {
         ecosystem: Ecosystem::Dotnet,
         directory: "app".into(),
-        package: None,
-        current: None,
-        target: None,
+        scope: Scope::Directory,
         lock_only: false,
     }];
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     assert!(
         p.contents["app/packages.lock.json"].contains("net9.0"),
@@ -3296,7 +3394,7 @@ async fn real_bundler_relocks_offline() {
     let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert!(
         matches!(
             p.action.status,
@@ -3348,7 +3446,7 @@ async fn composer_locks_use_static_or_compiled_php() {
         let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
             .unwrap()
             .unwrap();
-        runner.prepare(&mut p, &mut snapshot, &config).await;
+        prepare_one(&runner, &mut p, &mut snapshot, &config).await;
         let calls = executor.calls.lock().unwrap();
         assert!(
             recorded(&calls).iter().any(|(specs, args)| specs
@@ -3399,7 +3497,7 @@ async fn static_php_requires_an_exact_version() {
     let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     assert!(
         p.action
@@ -3432,7 +3530,7 @@ async fn real_composer_relocks_offline() {
     let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     assert!(
         p.contents["composer.lock"].contains("content-hash"),
@@ -3555,9 +3653,11 @@ fn a_vulnerable_transitive_crate_moves_through_its_lockfile_alone() {
         [Job {
             ecosystem: Ecosystem::Cargo,
             directory: String::new(),
-            package: Some("time".into()),
-            current: Some("0.3.20".into()),
-            target: Some("0.3.23".into()),
+            scope: Scope::Package {
+                package: "time".into(),
+                current: Some("0.3.20".into()),
+                target: Some("0.3.23".into()),
+            },
             lock_only: true,
         }]
     );
@@ -3751,9 +3851,11 @@ async fn cargo_jobs_move_only_the_crates_io_entry_of_their_package() {
         let job = Job {
             ecosystem: Ecosystem::Cargo,
             directory: String::new(),
-            package: Some("hcl-edit".into()),
-            current: Some(registry.into()),
-            target: Some("0.9.9".into()),
+            scope: Scope::Package {
+                package: "hcl-edit".into(),
+                current: Some(registry.into()),
+                target: Some("0.9.9".into()),
+            },
             lock_only: false,
         };
         runner
@@ -3766,7 +3868,7 @@ async fn cargo_jobs_move_only_the_crates_io_entry_of_their_package() {
             "git {git}"
         );
         let lock = std::fs::read_to_string(cwd.join("Cargo.lock")).unwrap();
-        let versions: Vec<_> = crates_io_entries(&lock, "hcl-edit");
+        let versions: Vec<_> = cargo::crates_io_entries(&lock, "hcl-edit");
         assert_eq!(
             versions,
             [("0.9.9".to_owned(), CRATES_IO.to_owned())],
@@ -3884,7 +3986,7 @@ async fn real_cargo_moves_a_locked_package_without_a_manifest_change() {
     )
     .unwrap();
     let p = &mut plans[0];
-    runner.prepare(p, &mut snapshot, &config).await;
+    prepare_one(&runner, p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     assert!(!p.contents.contains_key("Cargo.toml"));
     assert!(
@@ -4007,7 +4109,7 @@ async fn flake_update(
     )
     .unwrap();
     let mut p = plans.remove(0);
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     (p, temp)
 }
 
@@ -4111,7 +4213,7 @@ async fn flake_maintenance_skips_refused_inputs() {
                 .collect::<Vec<_>>(),
             [(Ecosystem::Nix, "dev")]
         );
-        runner.prepare(&mut p, &mut snapshot, &config).await;
+        prepare_one(&runner, &mut p, &mut snapshot, &config).await;
         assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
         let calls = executor.calls.lock().unwrap();
         let (_, command) = invocation(&calls[1].0).unwrap();
@@ -4224,7 +4326,7 @@ async fn real_nix_relocks_a_flake_offline() {
     let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     let lock: serde_json::Value = serde_json::from_str(&p.contents["flake.lock"]).unwrap();
     assert_eq!(lock["nodes"]["root"]["inputs"]["sub"], "sub");
@@ -4332,7 +4434,7 @@ async fn real_nix_refuses_a_declared_http_input_before_fetching() {
     let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     assert!(
         p.action
@@ -4664,9 +4766,11 @@ fn an_in_range_release_moves_a_direct_crate_through_its_lockfile_alone() {
         [Job {
             ecosystem: Ecosystem::Cargo,
             directory: String::new(),
-            package: Some("tokio".into()),
-            current: Some("1.39.0".into()),
-            target: Some("1.40.0".into()),
+            scope: Scope::Package {
+                package: "tokio".into(),
+                current: Some("1.39.0".into()),
+                target: Some("1.40.0".into()),
+            },
             lock_only: true,
         }]
     );
@@ -4810,9 +4914,11 @@ fn an_in_range_release_is_a_lock_only_plan_for_bundler_composer_and_pyproject() 
             [Job {
                 ecosystem,
                 directory: String::new(),
-                package: Some(dependencies[0].package.clone()),
-                current: Some(locked.into()),
-                target: Some(target.into()),
+                scope: Scope::Package {
+                    package: dependencies[0].package.clone(),
+                    current: Some(locked.into()),
+                    target: Some(target.into()),
+                },
                 lock_only: true,
             }],
             "{manager}"
@@ -4915,9 +5021,11 @@ async fn lock_only_jobs_reach_their_exact_target_in_every_lockfile_tool() {
             p.lock_jobs = vec![Job {
                 ecosystem,
                 directory: String::new(),
-                package: Some(dep.package.clone()),
-                current: Some(locked.into()),
-                target: Some(target.into()),
+                scope: Scope::Package {
+                    package: dep.package.clone(),
+                    current: Some(locked.into()),
+                    target: Some(target.into()),
+                },
                 lock_only: true,
             }];
             p.changes = vec![crate::plan::Change {
@@ -4938,7 +5046,7 @@ async fn lock_only_jobs_reach_their_exact_target_in_every_lockfile_tool() {
                 advisories: Vec::new(),
                 image: None,
             }];
-            runner.prepare(&mut p, &mut snapshot, &config).await;
+            prepare_one(&runner, &mut p, &mut snapshot, &config).await;
             if !fresh {
                 assert_eq!(p.action.status, BranchStatus::Error, "{manager}");
                 assert!(
@@ -5319,7 +5427,7 @@ async fn mise_lock_follows_the_tools_tasks_install() {
             diff: String::new(),
         });
     }
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     assert!(p.contents["mise.lock"].contains("version = \"24.0.0\""));
     let configs = spy.configs.lock().unwrap();
@@ -5387,7 +5495,7 @@ async fn lock_task_file_tool(
         blob_sha: blob_sha(task),
         diff: String::new(),
     });
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     let action = p.action.clone();
     (p, action)
 }
@@ -5480,7 +5588,7 @@ async fn mise_lock_refuses_a_task_that_declares_a_tool_with_other_options() {
         blob_sha: blob_sha(old),
         diff: String::new(),
     });
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     assert!(
         p.action
@@ -5539,7 +5647,7 @@ async fn lock_node_declared_twice(old: &str, lock: String) -> (Plan, Vec<String>
         blob_sha: blob_sha(old),
         diff: String::new(),
     });
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     let configs = spy.configs.lock().unwrap().clone();
     (p, configs)
 }
@@ -6094,7 +6202,7 @@ fn a_run_is_public_only_when_every_file_it_reads_is() {
     ]);
     // Every file of the ecosystem's kinds is public, anywhere.
     assert!(public_only(
-        Ecosystem::Node,
+        descriptor(Ecosystem::Node),
         &baseline(&files),
         &verdicts(&files)
     ));
@@ -6109,7 +6217,11 @@ fn a_run_is_public_only_when_every_file_it_reads_is() {
         let mut changed = files.clone();
         changed.insert(path.into(), text.into());
         assert!(
-            !public_only(Ecosystem::Node, &baseline(&changed), &verdicts(&changed)),
+            !public_only(
+                descriptor(Ecosystem::Node),
+                &baseline(&changed),
+                &verdicts(&changed)
+            ),
             "{path}"
         );
     }
@@ -6117,7 +6229,7 @@ fn a_run_is_public_only_when_every_file_it_reads_is() {
     let mut unseen = files.clone();
     unseen.remove("app/package-lock.json");
     assert!(!public_only(
-        Ecosystem::Node,
+        descriptor(Ecosystem::Node),
         &baseline(&files),
         &verdicts(&unseen)
     ));
@@ -6127,14 +6239,18 @@ fn a_run_is_public_only_when_every_file_it_reads_is() {
         "[project]\ndependencies = [\"requests\"]\n".into(),
     )]);
     assert!(public_only(
-        Ecosystem::Node,
+        descriptor(Ecosystem::Node),
         &baseline(&python),
         &verdicts(&python)
     ));
     // Go fetches anonymously only without operator credentials: always
     // public.
     let go = BTreeMap::from([("app/go.mod".into(), "module acme.dev/x\n\ngo 1.21\n".into())]);
-    assert!(public_only(Ecosystem::Go, &baseline(&go), &verdicts(&go)));
+    assert!(public_only(
+        descriptor(Ecosystem::Go),
+        &baseline(&go),
+        &verdicts(&go)
+    ));
     // A `.gemspec` has no verdict — it is arbitrary Ruby — so a Ruby
     // run that can read one fails closed.
     let ruby = BTreeMap::from([
@@ -6152,12 +6268,12 @@ fn a_run_is_public_only_when_every_file_it_reads_is() {
     let mut read = ruby.clone();
     read.remove("lib/tool.gemspec");
     assert!(public_only(
-        Ecosystem::Ruby,
+        descriptor(Ecosystem::Ruby),
         &baseline(&read),
         &verdicts(&read)
     ));
     assert!(!public_only(
-        Ecosystem::Ruby,
+        descriptor(Ecosystem::Ruby),
         &baseline(&ruby),
         &verdicts(&ruby)
     ));
@@ -6183,7 +6299,7 @@ fn a_run_is_public_only_when_every_file_it_reads_is() {
         ),
     ]);
     assert!(public_only(
-        Ecosystem::Dotnet,
+        descriptor(Ecosystem::Dotnet),
         &baseline(&dotnet),
         &verdicts(&dotnet)
     ));
@@ -6193,7 +6309,7 @@ fn a_run_is_public_only_when_every_file_it_reads_is() {
         "<Project><Target Name=\"x\" /></Project>".into(),
     );
     assert!(!public_only(
-        Ecosystem::Dotnet,
+        descriptor(Ecosystem::Dotnet),
         &baseline(&targeted),
         &verdicts(&targeted)
     ));
@@ -6236,7 +6352,7 @@ async fn go_fetches_only_through_the_proxy_in_the_public_partition() {
     let mut p = maintenance(&repo(), &config, &first, None, monday())
         .unwrap()
         .unwrap();
-    runner.prepare(&mut p, &mut first, &config).await;
+    prepare_one(&runner, &mut p, &mut first, &config).await;
     assert!(
         matches!(
             p.action.status,
@@ -6268,7 +6384,7 @@ async fn go_fetches_only_through_the_proxy_in_the_public_partition() {
     let mut p = maintenance(&repo(), &config, &failed, None, monday())
         .unwrap()
         .unwrap();
-    runner.prepare(&mut p, &mut failed, &config).await;
+    prepare_one(&runner, &mut p, &mut failed, &config).await;
     assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     let root = temp.path().join("cache/tool-caches");
     let envs = go_envs(&executor);
@@ -6369,7 +6485,7 @@ async fn a_repository_that_commits_credentials_runs_no_tool() {
     let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
-    runner.prepare(&mut p, &mut snapshot, &config).await;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     let reason = p.action.reason.unwrap();
     assert!(
@@ -6468,20 +6584,18 @@ fn nearest_takes_the_deepest_lock_directory_above_a_file() {
     .map(String::from)
     .into();
     let node = ["package-lock.json", "yarn.lock", "pnpm-lock.yaml"];
+    let nearest = |file: &str, names: &[&str]| nearest_dir(&paths, directory(file), names);
+    assert_eq!(nearest("apps/web/package.json", &node), Some("apps/web"));
     assert_eq!(
-        nearest("apps/web/package.json", &paths, &node),
-        Some("apps/web")
-    );
-    assert_eq!(
-        nearest("apps/web/pkg/a/package.json", &paths, &node),
+        nearest("apps/web/pkg/a/package.json", &node),
         Some("apps/web")
     );
     // A sibling whose name extends the directory's does not count.
-    assert_eq!(nearest("apps/we/package.json", &paths, &node), Some(""));
-    assert_eq!(nearest("package.json", &paths, &node), Some(""));
+    assert_eq!(nearest("apps/we/package.json", &node), Some(""));
+    assert_eq!(nearest("package.json", &node), Some(""));
     // A lock below the file does not govern it.
-    assert_eq!(nearest("tools/Cargo.toml", &paths, &["Cargo.lock"]), None);
-    assert_eq!(nearest("Cargo.toml", &paths, &["Cargo.lock"]), None);
+    assert_eq!(nearest("tools/Cargo.toml", &["Cargo.lock"]), None);
+    assert_eq!(nearest("Cargo.toml", &["Cargo.lock"]), None);
 }
 
 #[test]
@@ -6790,7 +6904,7 @@ fn file_classification_is_pinned() {
     for &(path, mask, mat, writ, cargo, nuget) in PINNED_TABLE {
         for (index, ecosystem) in ECOSYSTEMS.iter().enumerate() {
             assert_eq!(
-                steers(*ecosystem, path),
+                steers(descriptor(*ecosystem), path),
                 mask.as_bytes()[index] == b'1',
                 "{path}: steers {ecosystem:?}"
             );

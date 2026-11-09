@@ -55,14 +55,50 @@ pub(super) fn tool(bin: &str) -> Option<Tool> {
     })
 }
 
-/// The `private-<hash>` partition credentialed runs share, keyed by the
-/// entries' scopes alone, never their secrets. The name is not a secret
-/// either — installation scopes are guessable — so a partition is
-/// protected by what it holds, not by being unfindable. Runs without
-/// credentials choose between `public` and `installation-<hash>` by what
-/// they can fetch, in `Runner::use_caches`.
-pub(super) fn partition(scopes: &[String]) -> String {
-    format!("private-{}", hash(scopes.join("\n").as_bytes()))
+/// A tool-cache partition: the directory a run's package data lives in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Partition {
+    /// `public`: shared by every installation and the CLI.
+    Public,
+    /// `private-<hash>`: runs holding credentials, keyed by the hash of
+    /// their scopes.
+    Private(String),
+    /// `installation-<id>`: one installation's own partition.
+    Installation(String),
+}
+
+impl Partition {
+    /// The partition credentialed runs holding `scopes` share, keyed by the
+    /// scopes alone, never their secrets. The name is not a secret either —
+    /// installation scopes are guessable — so a partition is protected by
+    /// what it holds, not by being unfindable. Runs without credentials
+    /// choose between `public` and their installation's partition by what
+    /// they can fetch, in `Runner::use_caches`.
+    pub(super) fn private(scopes: &[String]) -> Self {
+        Self::Private(hash(scopes.join("\n").as_bytes()))
+    }
+    /// The partition a directory name denotes, or `None` for one no run
+    /// creates.
+    fn parse(name: &str) -> Option<Self> {
+        if name == PUBLIC {
+            return Some(Self::Public);
+        }
+        if let Some(scope) = name.strip_prefix("private-") {
+            return Some(Self::Private(scope.into()));
+        }
+        name.strip_prefix("installation-")
+            .map(|id| Self::Installation(id.into()))
+    }
+}
+
+impl std::fmt::Display for Partition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Public => f.write_str(PUBLIC),
+            Self::Private(scope) => write!(f, "private-{scope}"),
+            Self::Installation(id) => write!(f, "installation-{id}"),
+        }
+    }
 }
 
 /// The locks a run holds on its partition, dropped when it finishes.
@@ -130,18 +166,14 @@ fn touch(partition: &Path) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// The environment placing `bin`'s cache inside `partition`.
+/// The environment placing `bin`'s cache inside `partition`; every value is
+/// a directory the run creates.
 fn env(bin: &str, partition: &Path) -> Vec<(String, String)> {
     let path = |path: &str| partition.join(path).to_string_lossy().into_owned();
     match bin {
         // Cargo keeps credentials out of CARGO_HOME; tokens are env vars.
         "cargo" => vec![("CARGO_HOME".into(), path("cargo"))],
-        "go" => vec![
-            ("GOMODCACHE".into(), path("gomod")),
-            // The module cache is read-only by default, which eviction could
-            // not remove; `-modcacherw` keeps it writable.
-            ("GOFLAGS".into(), "-modcacherw".into()),
-        ],
+        "go" => vec![("GOMODCACHE".into(), path("gomod"))],
         "npm" => vec![("NPM_CONFIG_CACHE".into(), path("npm"))],
         "aube" => vec![
             ("AUBE_CACHE_DIR".into(), path("aube/cache")),
@@ -161,28 +193,48 @@ fn env(bin: &str, partition: &Path) -> Vec<(String, String)> {
     }
 }
 
-/// Hold `name`'s partition for one `bin` run, and return its environment.
-/// Blocking, so callers run it off the async runtime.
+/// The `GOFLAGS` a cached Go run gets: the call's own flags ahead of
+/// `-modcacherw`, which keeps the module cache writable so eviction can
+/// remove it.
+fn goflags(call: &[(String, String)]) -> (String, String) {
+    let own = call
+        .iter()
+        .find(|(key, _)| key == "GOFLAGS")
+        .map(|(_, value)| value.as_str())
+        .filter(|flags| !flags.is_empty());
+    let flags = match own {
+        Some(flags) => format!("{flags} -modcacherw"),
+        None => "-modcacherw".into(),
+    };
+    ("GOFLAGS".into(), flags)
+}
+
+/// Hold `partition`'s directory for one `bin` run, and return its
+/// environment merged with the call's own `GOFLAGS`. Blocking, so callers
+/// run it off the async runtime.
 pub(super) fn acquire(
     root: &Path,
-    name: &str,
+    partition: &Partition,
     tool: &Tool,
     bin: &str,
+    call: &[(String, String)],
 ) -> Result<(Vec<(String, String)>, Hold), String> {
     std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
+    let name = partition.to_string();
     let shared = lock(&root.join(format!("{name}.lock")), false)?;
-    let partition = root.join(name);
-    std::fs::create_dir_all(&partition).map_err(|e| e.to_string())?;
-    touch(&partition)?;
-    let env = env(bin, &partition);
-    for (key, value) in &env {
-        if key != "GOFLAGS" {
-            std::fs::create_dir_all(value).map_err(|e| e.to_string())?;
-        }
+    let dir = root.join(&name);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    touch(&dir)?;
+    let mut env = env(bin, &dir);
+    for (_, value) in &env {
+        std::fs::create_dir_all(value).map_err(|e| e.to_string())?;
+    }
+    if bin == "go" {
+        env.push(goflags(call));
     }
     let serial = tool
         .serial
-        .then(|| lock(&partition.join(format!("{bin}.lock")), true))
+        .then(|| lock(&dir.join(format!("{bin}.lock")), true))
         .transpose()?;
     Ok((
         env,
@@ -272,9 +324,10 @@ fn writable(dir: &Path) {
     }
 }
 
-/// Remove `name`'s partition when nothing holds it: the lock is only tried
-/// exclusively, so a run's shared hold keeps it.
-fn evict(root: &Path, name: &str) -> bool {
+/// Remove `partition`'s directory when nothing holds it: the lock is only
+/// tried exclusively, so a run's shared hold keeps it.
+fn evict(root: &Path, partition: &Partition) -> bool {
+    let name = partition.to_string();
     let Ok(file) = std::fs::File::options()
         .create(true)
         .truncate(false)
@@ -286,9 +339,9 @@ fn evict(root: &Path, name: &str) -> bool {
     if file.try_lock().is_err() {
         return false;
     }
-    let partition = root.join(name);
-    writable(&partition);
-    match std::fs::remove_dir_all(&partition) {
+    let dir = root.join(&name);
+    writable(&dir);
+    match std::fs::remove_dir_all(&dir) {
         Ok(()) => {
             // The lock file goes with its partition while the exclusive
             // hold lasts, so a new partition of the name cannot race a
@@ -358,19 +411,19 @@ pub(super) fn prune(root: &Path, cap: u64, now: SystemTime) -> Result<(), String
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name != PUBLIC && !name.starts_with("private-") && !name.starts_with("installation-") {
+        let Some(partition) = Partition::parse(&name) else {
             continue;
-        }
-        partitions.push((name, entry.path(), used_at(&entry.path())));
+        };
+        partitions.push((partition, entry.path(), used_at(&entry.path())));
     }
     let mut kept = Vec::new();
-    for (name, path, used) in partitions {
+    for (partition, path, used) in partitions {
         let stale = now
             .duration_since(used)
             .map(|age| age > AGE)
             .unwrap_or(false);
-        if !stale || !evict(root, &name) {
-            kept.push((name, used, size(&path)));
+        if !stale || !evict(root, &partition) {
+            kept.push((partition, used, size(&path)));
         }
     }
     let mut total: u64 = kept.iter().map(|(_, _, size)| *size).sum();
@@ -380,17 +433,17 @@ pub(super) fn prune(root: &Path, cap: u64, now: SystemTime) -> Result<(), String
     // The least recently used private partition goes first, `public` last.
     kept.sort_by_key(|(_, used, _)| *used);
     let mut rest = Vec::new();
-    for (name, used, size) in kept.into_iter() {
-        if total > cap && name != PUBLIC && evict(root, &name) {
+    for (partition, used, size) in kept.into_iter() {
+        if total > cap && partition != Partition::Public && evict(root, &partition) {
             total -= size;
         } else {
-            rest.push((name, used, size));
+            rest.push((partition, used, size));
         }
     }
     if total > cap {
-        for (name, _, _) in rest {
-            if name == PUBLIC {
-                evict(root, PUBLIC);
+        for (partition, _, _) in rest {
+            if partition == Partition::Public {
+                evict(root, &partition);
             }
         }
     }
@@ -428,7 +481,7 @@ mod tests {
         let root = temp.path();
         std::fs::create_dir_all(root.join("private-x")).unwrap();
         std::fs::File::create(root.join("private-x.lock")).unwrap();
-        assert!(evict(root, "private-x"));
+        assert!(evict(root, &Partition::Private("x".into())));
         assert!(!root.join("private-x").exists());
         assert!(!root.join("private-x.lock").exists());
     }
@@ -470,7 +523,7 @@ mod tests {
         std::fs::create_dir_all(root.join("private-x")).unwrap();
         let file = std::fs::File::create(root.join("private-x.lock")).unwrap();
         file.lock_shared().unwrap();
-        assert!(!evict(root, "private-x"));
+        assert!(!evict(root, &Partition::Private("x".into())));
         assert!(root.join("private-x").exists());
         assert!(root.join("private-x.lock").exists());
     }

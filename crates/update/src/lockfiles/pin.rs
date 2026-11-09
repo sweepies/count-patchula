@@ -27,12 +27,7 @@ impl Pinned {
         let targets: BTreeMap<_, _> = jobs
             .iter()
             .filter(|j| j.lock_only)
-            .filter_map(|j| {
-                Some((
-                    j.package.as_deref()?,
-                    (j.current.as_deref(), j.target.as_deref()?),
-                ))
-            })
+            .filter_map(|j| Some((j.package()?, (j.current(), j.target()?))))
             .collect();
         let mut pinned = Self::none(root);
         if targets.is_empty() {

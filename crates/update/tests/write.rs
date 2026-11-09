@@ -1268,7 +1268,7 @@ fn a_zero_x_crates_in_range_release_yields_to_its_next_minor() {
     assert_eq!(p.changes.len(), 1);
     assert_eq!(p.changes[0].version.as_deref(), Some("0.10.0"));
     assert_eq!(p.lock_jobs.len(), 1, "{:?}", p.lock_jobs);
-    assert_eq!(p.lock_jobs[0].target.as_deref(), Some("0.10.0"));
+    assert_eq!(p.lock_jobs[0].target(), Some("0.10.0"));
     assert!(
         p.action.message.ends_with("update hcl-edit to 0.10.0"),
         "{}",
@@ -1707,9 +1707,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
             p.lock_jobs.push(patchula_update::lockfiles::Job {
                 ecosystem: patchula_update::lockfiles::Ecosystem::Cargo,
                 directory: String::new(),
-                package: None,
-                current: None,
-                target: None,
+                scope: patchula_update::lockfiles::Scope::Directory,
                 lock_only: false,
             });
             p.lockfiles_ready = true;

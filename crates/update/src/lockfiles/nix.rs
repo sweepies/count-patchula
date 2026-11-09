@@ -6,8 +6,16 @@ use super::*;
 use serde_json::Value;
 use std::{future::Future, pin::Pin};
 
-/// The static nix the Count runs: Hydra's `buildStatic` binary of a release, for
-/// each Linux architecture, pinned by build and checksum.
+pub(super) static DESCRIPTOR: Tool = Tool {
+    steers: &[],
+    tools: &[],
+    versions: false,
+    install: Install::Nix,
+};
+
+/// The static nix the Count runs: Hydra's `buildStatic` binary of this
+/// release, for each Linux architecture, pinned by build and checksum. The
+/// version and its builds change together.
 const VERSION: &str = "2.35.5";
 const BUILDS: &[(&str, &str, &str)] = &[
     (
@@ -163,28 +171,23 @@ impl Runner {
         )
         .await
     }
-    async fn nix_token(&self) -> Result<String, String> {
-        match &self.credentials {
-            Some(credentials) => credentials
-                .token()
-                .await
-                .map_err(|_| "GitHub authentication failed".to_owned()),
-            None => Ok(self.token.clone()),
-        }
-    }
     /// `nix flake update <inputs>` for updates, or bare for maintenance, in the
     /// flake's directory. The lock is diffed afterwards: each requested input
     /// must be locked at its approved target, and no node may point where the
     /// Count refuses to fetch.
     pub(super) async fn flake_lock(
         &self,
-        driver: &Path,
-        root: &Path,
-        baseline: &BTreeMap<String, Blob>,
-        directory: &str,
+        context: node::NodeContext<'_>,
         jobs: &[&Job],
-        maintenance: bool,
     ) -> Result<(), Error> {
+        let node::NodeContext {
+            driver,
+            root,
+            baseline,
+            directory,
+            maintenance,
+            ..
+        } = context;
         let lock = node::join(directory, "flake.lock");
         let before: Value = serde_json::from_str(
             &baseline
@@ -194,7 +197,7 @@ impl Runner {
         )
         .map_err(|e| format!("{lock}: {e}"))?;
         let before_inputs = inputs(&before);
-        let refused: BTreeSet<&String> = before_inputs
+        let refused: BTreeSet<&str> = before_inputs
             .iter()
             .filter(|(_, node)| {
                 ["original", "locked"].iter().any(|key| {
@@ -203,19 +206,20 @@ impl Runner {
                     })
                 })
             })
-            .map(|(name, _)| name)
+            .map(|(name, _)| name.as_str())
             .collect();
-        let requested: BTreeSet<&String> = if maintenance {
+        let requested: BTreeSet<&str> = if maintenance {
             before_inputs
                 .keys()
-                .filter(|name| !refused.contains(name))
+                .map(String::as_str)
+                .filter(|name| !refused.contains(*name))
                 .collect()
         } else {
-            jobs.iter().filter_map(|j| j.package.as_ref()).collect()
+            jobs.iter().filter_map(|j| j.package()).collect()
         };
         if let Some(name) = requested
             .iter()
-            .find(|name| !before_inputs.contains_key(**name) || refused.contains(*name))
+            .find(|name| !before_inputs.contains_key(**name) || refused.contains(**name))
         {
             return Err(format!("flake input {name} cannot be updated").into());
         }
@@ -249,7 +253,7 @@ impl Runner {
         for (name, input) in declared.as_object().into_iter().flatten() {
             // An input the lock already refuses is left alone above, as long
             // as flake.nix still points it at the same place.
-            let unchanged = refused.contains(name)
+            let unchanged = refused.contains(name.as_str())
                 && before_inputs
                     .get(name)
                     .and_then(|node| node["original"].as_object())
@@ -278,9 +282,9 @@ impl Runner {
                 return Ok(());
             }
             args.push("--".into());
-            args.extend(requested.iter().map(|name| (*name).clone()));
+            args.extend(requested.iter().map(|name| name.to_string()));
         }
-        let token = self.nix_token().await?;
+        let token = self.github_token().await?;
         self.nix(driver, Some(flake.clone()), args, Some(&token))
             .await?;
         let after: Value = serde_json::from_str(
@@ -314,12 +318,12 @@ impl Runner {
         // An update must lock the revision that passed lookup and its
         // release-age wait; a branch that moved since is not published.
         for job in jobs {
-            let (Some(name), Some(target)) = (&job.package, &job.target) else {
+            let (Some(name), Some(target)) = (job.package(), job.target()) else {
                 continue;
             };
             let locked = after_inputs.get(name).map(|n| &n["locked"]);
             let got = locked.and_then(|l| l["rev"].as_str().or_else(|| l["narHash"].as_str()));
-            if got != Some(target.as_str()) {
+            if got != Some(target) {
                 return Err(format!(
                     "nix locked flake input {name} at {}, not the approved {target}: it moved after the lookup",
                     got.unwrap_or("nothing")

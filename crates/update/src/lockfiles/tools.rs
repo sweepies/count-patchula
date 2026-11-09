@@ -213,40 +213,13 @@ fn write_usage(dir: &Path, usage: &BTreeMap<String, i64>) -> Result<(), String> 
     std::fs::rename(temp, dir.join(USAGE)).map_err(|e| e.to_string())
 }
 
-/// Every pinned default except Rust, which runs through rustup.
+/// Every pinned default the runner installs and keeps: each descriptor's
+/// install specs, in `Ecosystem` order.
 pub(super) fn defaults() -> Result<Vec<(String, String)>, String> {
     let doc = tool_defaults()?;
-    let mut tools = Vec::new();
-    if let Some(table) = doc.get("tools").and_then(toml_edit::Item::as_table_like) {
-        for (tool, version) in table.iter() {
-            if !matches!(tool, "rust" | "php" | "composer")
-                && let Some(version) = version.as_str()
-            {
-                let tool = if tool == "mise" {
-                    patchula_mise::PACKAGE
-                } else {
-                    tool
-                };
-                tools.push((tool.to_string(), version.to_string()));
-            }
-        }
-    }
-    // Static nix exists for Linux only; elsewhere flake locks fail clearly.
-    if let Ok(nix) = super::nix::tools() {
-        tools.extend(nix);
-    }
-    // The static build is the default; compiled PHP is built on first use.
-    if let (Some(php), Some(composer)) = (
-        doc["tools"]["php"].as_str(),
-        doc["tools"]["composer"].as_str(),
-    ) {
-        tools.extend(super::php::tools(
-            patchula_config::PhpBuild::Static,
-            php,
-            composer,
-        ));
-    }
-    Ok(tools)
+    Ok(descriptors()
+        .flat_map(|tool| tool.install_specs(doc))
+        .collect())
 }
 
 /// Recreate `from` at `to` with hard links, keeping symlinks as symlinks. The

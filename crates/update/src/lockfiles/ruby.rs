@@ -1,6 +1,13 @@
 //! `Gemfile.lock` through `bundle lock --update`, with Ruby from mise.
 use super::{pin::Pinned, *};
 
+pub(super) static DESCRIPTOR: Tool = Tool {
+    steers: &[Manager::Bundler],
+    tools: &["ruby"],
+    versions: true,
+    install: Install::Plain,
+};
+
 /// `.ruby-version`, then the Gemfile's `ruby` directive, then the default.
 fn ruby_version(cwd: &Path, pinned: &str) -> String {
     let numeric = |v: &str| {
@@ -50,7 +57,10 @@ impl Runner {
         } = context;
         let cwd = root.join(directory);
         let lock = node::join(directory, "Gemfile.lock");
-        let gems: BTreeSet<_> = jobs.iter().filter_map(|j| j.package.clone()).collect();
+        let gems: BTreeSet<_> = jobs
+            .iter()
+            .filter_map(|j| j.package().map(str::to_owned))
+            .collect();
         let mut args = vec!["lock".to_string(), "--update".into()];
         if !maintenance {
             args.extend(gems.iter().cloned());

@@ -3,6 +3,13 @@
 //! distribution. Only Gradle's own distribution hosts are contacted.
 use super::*;
 
+pub(super) static DESCRIPTOR: Tool = Tool {
+    steers: &[],
+    tools: &[],
+    versions: true,
+    install: Install::Plain,
+};
+
 const HOSTS: [&str; 2] = ["services.gradle.org", "downloads.gradle.org"];
 
 fn official(url: &str) -> bool {
@@ -48,8 +55,14 @@ impl Runner {
         }
         Err("too many Gradle checksum redirects".into())
     }
-    pub(super) async fn gradle_wrapper(&self, root: &Path, directory: &str) -> Result<(), String> {
-        let path = root.join(directory).join("gradle-wrapper.properties");
+    pub(super) async fn gradle_wrapper(
+        &self,
+        context: node::NodeContext<'_>,
+    ) -> Result<(), String> {
+        let path = context
+            .root
+            .join(context.directory)
+            .join("gradle-wrapper.properties");
         let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
         if !text
             .lines()

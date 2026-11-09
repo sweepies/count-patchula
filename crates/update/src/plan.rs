@@ -505,7 +505,7 @@ fn build(
         }
     }
     let lockfile_only = items.iter().all(|item| lock_only(item.dep, item.update));
-    if lockfile_only && lock_jobs.iter().any(|job| job.target.is_none()) {
+    if lockfile_only && lock_jobs.iter().any(|job| job.target().is_none()) {
         keep(
             &mut hold,
             Hold::Blocked("no lockfile tool can move this package to an exact version".into()),

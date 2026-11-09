@@ -3,6 +3,13 @@
 //! nothing to agent targets and runs no package content; only the lock is kept.
 use super::*;
 
+pub(super) static DESCRIPTOR: Tool = Tool {
+    steers: &[],
+    tools: &["apm"],
+    versions: true,
+    install: Install::Plain,
+};
+
 impl Runner {
     pub(super) async fn apm_lock(&self, context: node::NodeContext<'_>) -> Result<(), Error> {
         let node::NodeContext {
