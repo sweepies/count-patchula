@@ -2,6 +2,13 @@
 //! Berry `yarn.lock`, Bun for `bun.lock`.
 use super::*;
 
+pub(super) static DESCRIPTOR: Tool = Tool {
+    steers: &[Manager::Npm, Manager::Bun],
+    tools: &["node", "bun", "aube", "yarn"],
+    versions: true,
+    install: Install::Plain,
+};
+
 /// Lockfile names the Node ecosystem regenerates in place, from the
 /// managers' file roles.
 fn locks() -> Vec<&'static str> {

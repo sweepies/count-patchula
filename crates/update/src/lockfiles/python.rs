@@ -1,6 +1,13 @@
 //! Python lockfiles: `uv lock` for `uv.lock` and `poetry lock` for `poetry.lock`.
 use super::{pin::Pinned, *};
 
+pub(super) static DESCRIPTOR: Tool = Tool {
+    steers: &[Manager::Pyproject],
+    tools: &["python", "uv", "poetry"],
+    versions: true,
+    install: Install::Plain,
+};
+
 /// Lockfile names the Python ecosystem recognizes, from the manager's
 /// file roles: `supported` are regenerated in place, `unsupported` are
 /// names of other tools' lockfiles nothing here regenerates.
@@ -15,14 +22,16 @@ fn python(
     directory: &str,
     versions: &BTreeMap<String, String>,
 ) -> Result<String, String> {
-    let pinned = baseline
-        .iter()
-        .filter(|(path, _)| {
-            path.rsplit('/').next() == Some(".python-version")
-                && (directory == self::directory(path) || under(directory, self::directory(path)))
+    let pinned = upward(baseline.keys(), directory, &[".python-version"])
+        .last()
+        .copied()
+        .and_then(|path| {
+            baseline[path]
+                .content
+                .split_whitespace()
+                .next()
+                .map(str::to_owned)
         })
-        .max_by_key(|(path, _)| path.len())
-        .and_then(|(_, blob)| blob.content.split_whitespace().next().map(str::to_owned))
         .filter(|v| {
             v.split('.')
                 .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
@@ -68,7 +77,10 @@ impl Runner {
             if !cwd.join(leaf).is_file() {
                 continue;
             }
-            let packages: BTreeSet<_> = jobs.iter().filter_map(|j| j.package.clone()).collect();
+            let packages: BTreeSet<_> = jobs
+                .iter()
+                .filter_map(|j| j.package().map(str::to_owned))
+                .collect();
             let invocation = if leaf == "uv.lock" {
                 let mut args = vec![
                     "lock".to_string(),
@@ -80,36 +92,33 @@ impl Runner {
                 }
                 // A declaration left as it is gets the exact version, so the
                 // lock cannot move past it.
-                for job in jobs.iter().filter(|j| j.package.is_some()) {
-                    let package = job.package.as_deref().unwrap_or_default();
+                for job in jobs.iter().filter(|j| j.package().is_some()) {
+                    let package = job.package().unwrap_or_default();
                     args.extend([
                         "--upgrade-package".into(),
-                        match (job.lock_only, &job.target) {
+                        match (job.lock_only, job.target()) {
                             (true, Some(target)) => format!("{package}=={target}"),
                             _ => package.into(),
                         },
                     ]);
                 }
-                (
-                    Invocation {
-                        tools: vec![
-                            ("uv".into(), node::version(versions, "uv")?),
-                            ("python".into(), python.clone()),
-                        ],
-                        bin: "uv".into(),
-                        cwd: None,
-                        // Resolve with the mise interpreter; never download another.
-                        env: vec![
-                            ("UV_PYTHON_DOWNLOADS".into(), "never".into()),
-                            ("UV_NO_PROGRESS".into(), "1".into()),
-                        ],
-                        credentials: credentials::scopes(netrc_entries.iter().copied()),
-                        secrets: credentials::secrets(netrc_entries.iter().copied()),
-                        public,
-                        args,
-                    },
-                    !hosts.is_empty(),
-                )
+                Invocation {
+                    tools: vec![
+                        ("uv".into(), node::version(versions, "uv")?),
+                        ("python".into(), python.clone()),
+                    ],
+                    bin: "uv".into(),
+                    cwd: None,
+                    // Resolve with the mise interpreter; never download another.
+                    env: vec![
+                        ("UV_PYTHON_DOWNLOADS".into(), "never".into()),
+                        ("UV_NO_PROGRESS".into(), "1".into()),
+                    ],
+                    credentials: credentials::scopes(netrc_entries.iter().copied()),
+                    secrets: credentials::secrets(netrc_entries.iter().copied()),
+                    public,
+                    args,
+                }
             } else {
                 // `poetry lock` keeps existing pins and re-resolves changed
                 // constraints; `--regenerate` refreshes everything within them.
@@ -123,32 +132,29 @@ impl Runner {
                 if maintenance {
                     args.push("--regenerate".into());
                 }
-                (
-                    Invocation {
-                        tools: vec![
-                            ("poetry".into(), node::version(versions, "poetry")?),
-                            ("python".into(), python.clone()),
-                        ],
-                        bin: "poetry".into(),
-                        cwd: None,
-                        env: [
-                            ("POETRY_VIRTUALENVS_CREATE".into(), "false".into()),
-                            ("POETRY_NO_INTERACTION".into(), "1".into()),
-                        ]
-                        .into_iter()
-                        .chain(poetry.iter().cloned())
-                        .collect(),
-                        credentials: credentials::scopes(
-                            poetry_entries.iter().chain(netrc_entries.iter()).copied(),
-                        ),
-                        secrets: credentials::secrets(
-                            poetry_entries.iter().chain(netrc_entries.iter()).copied(),
-                        ),
-                        public,
-                        args,
-                    },
-                    !poetry.is_empty() || !hosts.is_empty(),
-                )
+                Invocation {
+                    tools: vec![
+                        ("poetry".into(), node::version(versions, "poetry")?),
+                        ("python".into(), python.clone()),
+                    ],
+                    bin: "poetry".into(),
+                    cwd: None,
+                    env: [
+                        ("POETRY_VIRTUALENVS_CREATE".into(), "false".into()),
+                        ("POETRY_NO_INTERACTION".into(), "1".into()),
+                    ]
+                    .into_iter()
+                    .chain(poetry.iter().cloned())
+                    .collect(),
+                    credentials: credentials::scopes(
+                        poetry_entries.iter().chain(netrc_entries.iter()).copied(),
+                    ),
+                    secrets: credentials::secrets(
+                        poetry_entries.iter().chain(netrc_entries.iter()).copied(),
+                    ),
+                    public,
+                    args,
+                }
             };
             // Poetry moves a package as far as its constraint allows and cannot be
             // told a version, so a package whose declaration stays as it is has
@@ -158,7 +164,6 @@ impl Runner {
             } else {
                 Pinned::none(root)
             };
-            let (invocation, _) = invocation;
             self.held_tool(driver, invocation.clone()).await?;
             if !pinned.is_empty() {
                 pinned.restore()?;

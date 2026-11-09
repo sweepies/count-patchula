@@ -2,21 +2,36 @@
 //! against the SDK `global.json` asks for or the pinned default.
 use super::*;
 
-fn sdk(cwd: &Path, pinned: &str) -> String {
-    // The nearest global.json at or above the restore directory.
-    let mut dir = Some(cwd);
-    while let Some(d) = dir {
-        if let Ok(text) = std::fs::read_to_string(d.join("global.json"))
-            && let Ok(value) = serde_json::from_str::<serde_json::Value>(&text)
-            && let Some(version) = value["sdk"]["version"].as_str()
-            && version.split('.').count() == 3
+pub(super) static DESCRIPTOR: Tool = Tool {
+    steers: &[Manager::Nuget],
+    tools: &["dotnet"],
+    versions: true,
+    install: Install::Plain,
+};
+
+/// The SDK the nearest `global.json` at or above the restore directory asks
+/// for, else the pinned default.
+fn sdk(baseline: &BTreeMap<String, Blob>, root: &Path, directory: &str, pinned: &str) -> String {
+    for path in upward(baseline.keys(), directory, &["global.json"])
+        .into_iter()
+        .rev()
+    {
+        let Ok(text) = std::fs::read_to_string(root.join(path)) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let Some(version) = value["sdk"]["version"].as_str() else {
+            continue;
+        };
+        if version.split('.').count() == 3
             && version
                 .split('.')
                 .all(|p| p.bytes().all(|b| b.is_ascii_digit()))
         {
             return version.into();
         }
-        dir = d.parent();
     }
     pinned.into()
 }
@@ -132,13 +147,18 @@ pub(super) fn restore_env(invariant: Option<String>) -> Vec<(String, String)> {
 impl Runner {
     pub(super) async fn dotnet_restore(
         &self,
-        driver: &Path,
-        root: &Path,
-        directory: &str,
-        versions: &BTreeMap<String, String>,
+        context: node::NodeContext<'_>,
         edited: bool,
-        public: bool,
     ) -> Result<(), Error> {
+        let node::NodeContext {
+            driver,
+            root,
+            baseline,
+            directory,
+            versions,
+            public,
+            ..
+        } = context;
         let cwd = root.join(directory);
         let mut before = Vec::new();
         locks(&cwd, &mut before);
@@ -174,13 +194,11 @@ impl Runner {
         let (credentials, entries) = credentials;
         let mut env = restore_env(std::env::var(INVARIANT).ok());
         env.extend(credentials);
+        let pinned = node::version(versions, "dotnet")?;
         self.held_tool(
             driver,
             Invocation {
-                tools: vec![(
-                    "dotnet".into(),
-                    sdk(&cwd, &node::version(versions, "dotnet")?),
-                )],
+                tools: vec![("dotnet".into(), sdk(baseline, root, directory, &pinned))],
                 bin: "dotnet".into(),
                 cwd: Some(cwd.clone()),
                 env,

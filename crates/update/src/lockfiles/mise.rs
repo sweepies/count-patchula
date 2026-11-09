@@ -2,6 +2,13 @@
 use super::*;
 use serde_json::{Value, json};
 
+pub(super) static DESCRIPTOR: Tool = Tool {
+    steers: &[],
+    tools: &[],
+    versions: false,
+    install: Install::Mise,
+};
+
 fn value(value: &toml_edit::Value) -> Value {
     if let Some(v) = value.as_str() {
         json!(v)
@@ -225,14 +232,18 @@ fn task_declarations(
 impl Runner {
     pub(super) async fn mise_lock(
         &self,
-        driver: &Path,
-        root: &Path,
-        baseline: &BTreeMap<String, Blob>,
+        context: node::NodeContext<'_>,
         jobs: &[&Job],
-        maintenance: bool,
-        config: &Config,
     ) -> Result<(), Error> {
-        let directory = &jobs.first().ok_or("missing mise lock job")?.directory;
+        let node::NodeContext {
+            driver,
+            root,
+            baseline,
+            directory,
+            config,
+            maintenance,
+            ..
+        } = context;
         let lock_path = if directory.is_empty() {
             "mise.lock".into()
         } else {
@@ -249,7 +260,9 @@ impl Runner {
         let selected: BTreeSet<_> = if maintenance {
             old_tools.keys().cloned().collect()
         } else {
-            jobs.iter().filter_map(|job| job.package.clone()).collect()
+            jobs.iter()
+                .filter_map(|job| job.package().map(str::to_owned))
+                .collect()
         };
         let work = driver.join(format!("mise-lock-{}", hash(directory.as_bytes())));
         std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
@@ -262,7 +275,7 @@ impl Runner {
                 matches!(
                     path.rsplit('/').next(),
                     Some("mise.toml" | ".mise.toml" | ".tool-versions")
-                ) && (super::directory(path) == directory.as_str()
+                ) && (super::directory(path) == directory
                     || under(directory, super::directory(path)))
             })
             .collect();
@@ -372,9 +385,7 @@ impl Runner {
         if existing_platforms.is_empty() {
             existing_platforms = old_tools.values().flat_map(platforms).collect();
         }
-        let defaults =
-            toml_edit::Document::parse(include_str!("defaults.toml")).map_err(|e| e.to_string())?;
-        let version = defaults["tools"]["mise"]
+        let version = tool_defaults()?["tools"]["mise"]
             .as_str()
             .ok_or("missing pinned mise")?;
         let mut command = self.command(driver);
@@ -453,9 +464,9 @@ impl Runner {
             }
             for job in jobs
                 .iter()
-                .filter(|job| job.package.as_deref() == Some(name))
+                .filter(|job| job.package() == Some(name.as_str()))
             {
-                if let Some(target) = &job.target
+                if let Some(target) = job.target()
                     && !entries.iter().any(|entry| {
                         entry["version"].as_str().is_some_and(|v| {
                             v.trim_start_matches('v') == target.trim_start_matches('v')

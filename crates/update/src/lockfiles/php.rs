@@ -4,6 +4,13 @@
 use super::*;
 use patchula_config::PhpBuild;
 
+pub(super) static DESCRIPTOR: Tool = Tool {
+    steers: &[Manager::Composer],
+    tools: &["php", "composer"],
+    versions: true,
+    install: Install::Php,
+};
+
 /// The mise tool specs for PHP and Composer. Both use the http backend for
 /// the static build, so no compiler or system libraries are needed.
 pub(super) fn tools(build: PhpBuild, php: &str, composer: &str) -> Vec<(String, String)> {
@@ -59,7 +66,10 @@ impl Runner {
         }
         let cwd = root.join(directory);
         let lock = node::join(directory, "composer.lock");
-        let packages: BTreeSet<_> = jobs.iter().filter_map(|j| j.package.clone()).collect();
+        let packages: BTreeSet<_> = jobs
+            .iter()
+            .filter_map(|j| j.package().map(str::to_owned))
+            .collect();
         let mut args = vec!["update".to_string()];
         if !maintenance {
             args.extend(packages.iter().cloned());
@@ -68,7 +78,7 @@ impl Runner {
             // A declaration left as it is gets its version as a temporary
             // constraint for this run, which composer.json never records.
             for job in jobs.iter().filter(|j| j.lock_only) {
-                if let (Some(package), Some(target)) = (&job.package, &job.target) {
+                if let (Some(package), Some(target)) = (job.package(), job.target()) {
                     args.extend(["--with".into(), format!("{package}:{target}")]);
                 }
             }

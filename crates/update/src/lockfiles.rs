@@ -1,9 +1,11 @@
 //! Real ecosystem tools run before any Git Data mutation, in disposable trees.
 mod apm;
 mod caches;
+mod cargo;
 mod checkout;
 mod credentials;
 mod dotnet;
+mod go;
 mod mise;
 mod nix;
 mod node;
@@ -12,7 +14,10 @@ mod pin;
 mod process;
 mod python;
 mod ruby;
+mod terraform;
+mod tool;
 mod tools;
+use tool::{Install, Tool, descriptor, descriptors};
 pub use tools::{bootstrap_mise, tools_dir};
 mod wrapper;
 use crate::{Blob, Plan, Snapshot, blob_sha, plan::unified};
@@ -46,56 +51,132 @@ pub enum Ecosystem {
     Nix,
     Apm,
 }
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+/// What a lock job asks its ecosystem's tool to do.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Scope {
+    /// Regenerate the directory's lockfile(s) whole.
+    Directory,
+    /// Move `package` to `target`; `current` is what the declaration or
+    /// lock records, where the tool needs it.
+    Package {
+        package: String,
+        current: Option<String>,
+        target: Option<String>,
+    },
+}
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Job {
     pub ecosystem: Ecosystem,
     pub directory: String,
-    pub package: Option<String>,
-    pub current: Option<String>,
-    pub target: Option<String>,
+    /// What the run is asked to move.
+    pub scope: Scope,
     /// The manifest is not edited, so the tool must be told the exact version.
     pub lock_only: bool,
 }
-/// The managers whose files an update ecosystem's tools read, for the
-/// file-role facts in `patchula_manager::roles`.
-fn steers_managers(ecosystem: Ecosystem) -> &'static [Manager] {
-    match ecosystem {
-        Ecosystem::Node => &[Manager::Npm, Manager::Bun],
-        Ecosystem::Python => &[Manager::Pyproject],
-        Ecosystem::Ruby => &[Manager::Bundler],
-        Ecosystem::Php => &[Manager::Composer],
-        Ecosystem::Cargo => &[Manager::Cargo],
-        Ecosystem::Dotnet => &[Manager::Nuget],
-        _ => &[],
+impl Job {
+    /// The package a targeted job moves.
+    pub fn package(&self) -> Option<&str> {
+        match &self.scope {
+            Scope::Package { package, .. } => Some(package),
+            Scope::Directory => None,
+        }
+    }
+    /// What the declaration or lock records the package at.
+    pub fn current(&self) -> Option<&str> {
+        match &self.scope {
+            Scope::Package { current, .. } => current.as_deref(),
+            Scope::Directory => None,
+        }
+    }
+    /// What the job moves the package to.
+    pub fn target(&self) -> Option<&str> {
+        match &self.scope {
+            Scope::Package { target, .. } => target.as_deref(),
+            Scope::Directory => None,
+        }
+    }
+}
+// The wire shape is the old field layout: `package`, `current` and `target`
+// stay top-level so serialized job identities do not change.
+impl Serialize for Job {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let (package, current, target) = match &self.scope {
+            Scope::Directory => (None, None, None),
+            Scope::Package {
+                package,
+                current,
+                target,
+            } => (
+                Some(package.as_str()),
+                current.as_deref(),
+                target.as_deref(),
+            ),
+        };
+        let mut state = serializer.serialize_struct("Job", 6)?;
+        state.serialize_field("ecosystem", &self.ecosystem)?;
+        state.serialize_field("directory", &self.directory)?;
+        state.serialize_field("package", &package)?;
+        state.serialize_field("current", &current)?;
+        state.serialize_field("target", &target)?;
+        state.serialize_field("lock_only", &self.lock_only)?;
+        state.end()
+    }
+}
+impl<'de> Deserialize<'de> for Job {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Fields {
+            ecosystem: Ecosystem,
+            directory: String,
+            package: Option<String>,
+            current: Option<String>,
+            target: Option<String>,
+            lock_only: bool,
+        }
+        let fields = Fields::deserialize(deserializer)?;
+        let scope = match fields.package {
+            Some(package) => Scope::Package {
+                package,
+                current: fields.current,
+                target: fields.target,
+            },
+            None => Scope::Directory,
+        };
+        Ok(Self {
+            ecosystem: fields.ecosystem,
+            directory: fields.directory,
+            scope,
+            lock_only: fields.lock_only,
+        })
     }
 }
 
-/// Whether `path`, materialized for a run of `ecosystem`, could steer
-/// what its tools fetch: a manifest, lockfile or settings file of the
-/// ecosystem, anywhere in the snapshot. A sibling project reached
-/// through a `ProjectReference`, a `.sln`, a `file:../x`, a uv or
-/// Poetry path dependency or a Composer path repository can steer the
-/// run as much as one inside its directory, so the directory does not
-/// bound it.
-fn steers(ecosystem: Ecosystem, path: &str) -> bool {
-    steers_managers(ecosystem)
+/// Whether `path`, materialized for a run of `descriptor`'s ecosystem, could
+/// steer what its tools fetch: a manifest, lockfile or settings file of the
+/// ecosystem, anywhere in the snapshot. A sibling project reached through a
+/// `ProjectReference`, a `.sln`, a `file:../x`, a uv or Poetry path
+/// dependency or a Composer path repository can steer the run as much as one
+/// inside its directory, so the directory does not bound it.
+fn steers(descriptor: &Tool, path: &str) -> bool {
+    descriptor
+        .steers
         .iter()
         .any(|manager| patchula_manager::roles::eco_roles(*manager, path).steers)
 }
 
-/// Whether a run for `ecosystem` can fetch only from the ecosystem's
-/// well-known public registries: every materialized file of its kinds,
-/// anywhere in the snapshot, decided public-only. A file with no
+/// Whether a run for `descriptor`'s ecosystem can fetch only from the
+/// ecosystem's well-known public registries: every materialized file of its
+/// kinds, anywhere in the snapshot, decided public-only. A file with no
 /// verdict is not public. Fail closed.
 fn public_only(
-    ecosystem: Ecosystem,
+    descriptor: &Tool,
     baseline: &BTreeMap<String, Blob>,
     verdicts: &BTreeMap<String, bool>,
 ) -> bool {
-    matches!(ecosystem, Ecosystem::Go)
-        || baseline
-            .keys()
-            .all(|path| !steers(ecosystem, path) || verdicts.get(path) == Some(&true))
+    baseline
+        .keys()
+        .all(|path| !steers(descriptor, path) || verdicts.get(path) == Some(&true))
 }
 
 fn directory(path: &str) -> &str {
@@ -104,23 +185,48 @@ fn directory(path: &str) -> &str {
 fn under(path: &str, root: &str) -> bool {
     root.is_empty() || path.strip_prefix(root).is_some_and(|p| p.starts_with('/'))
 }
-/// The deepest directory holding `file` (its own included) that has one of
-/// `names`. Walks up from the file, so the cost follows its depth, not the
-/// size of the tree.
-fn nearest<'a>(file: &'a str, paths: &BTreeSet<String>, names: &[&str]) -> Option<&'a str> {
-    let mut dir = directory(file);
-    loop {
-        if names
-            .iter()
-            .any(|name| paths.contains(&node::join(dir, name)))
-        {
-            return Some(dir);
-        }
-        if dir.is_empty() {
-            return None;
-        }
-        dir = directory(dir);
-    }
+/// The repo files `names` names in `directory` or a directory above it,
+/// ordered root-first — by directory depth, then by `names` order (an
+/// earlier name loses to a later one in the same directory), then by path —
+/// so applying them in order leaves the nearest, highest-precedence file
+/// winning. A candidate counts when its directory is `directory` itself or
+/// an ancestor of it, the same reach `under` gives.
+fn upward<'a>(
+    paths: impl IntoIterator<Item = &'a String>,
+    directory: &str,
+    names: &[&str],
+) -> Vec<&'a str> {
+    let mut found: Vec<&str> = paths
+        .into_iter()
+        .map(String::as_str)
+        .filter(|path| {
+            let leaf = path.rsplit('/').next().unwrap_or(path);
+            names.contains(&leaf)
+                && (directory == self::directory(path) || under(directory, self::directory(path)))
+        })
+        .collect();
+    found.sort_by_key(|path| {
+        (
+            self::directory(path).len(),
+            names
+                .iter()
+                .position(|name| *name == path.rsplit('/').next().unwrap_or(path))
+                .unwrap_or(usize::MAX),
+            path.len(),
+        )
+    });
+    found
+}
+/// The directory holding the nearest file `names` names at or above
+/// `directory`, from `paths`.
+fn nearest_dir<'a>(
+    paths: impl IntoIterator<Item = &'a String>,
+    directory: &str,
+    names: &[&str],
+) -> Option<&'a str> {
+    upward(paths, directory, names)
+        .last()
+        .map(|path| self::directory(path))
 }
 /// The Node ecosystem's supported lockfile names, from the managers' roles.
 fn node_locks() -> Vec<&'static str> {
@@ -165,9 +271,11 @@ pub(crate) fn job(
             return Ok(Some(Job {
                 ecosystem: Ecosystem::Mise,
                 directory: root.into(),
-                package: Some(dep.name.clone()),
-                current: Some(dep.current.clone()),
-                target: update.new_version.clone().or(update.new_value.clone()),
+                scope: Scope::Package {
+                    package: dep.name.clone(),
+                    current: Some(dep.current.clone()),
+                    target: update.new_version.clone().or(update.new_value.clone()),
+                },
                 lock_only: false,
             }));
         }
@@ -189,7 +297,8 @@ pub(crate) fn job(
                 })
                 .copied()
                 .collect();
-            let Some(root) = nearest(&dep.file, &snapshot.paths, &locks) else {
+            let Some(root) = nearest_dir(snapshot.paths.iter(), directory(&dep.file), &locks)
+            else {
                 return Ok(None);
             };
             if [Manager::Npm, Manager::Bun].iter().any(|manager| {
@@ -233,9 +342,9 @@ pub(crate) fn job(
             return Ok(None);
         }
         Manager::Bundler => {
-            let Some(root) = nearest(
-                &dep.file,
-                &snapshot.paths,
+            let Some(root) = nearest_dir(
+                snapshot.paths.iter(),
+                directory(&dep.file),
                 lock_names(Manager::Bundler).supported,
             ) else {
                 return Ok(None);
@@ -243,9 +352,9 @@ pub(crate) fn job(
             (Ecosystem::Ruby, root)
         }
         Manager::Composer => {
-            let Some(root) = nearest(
-                &dep.file,
-                &snapshot.paths,
+            let Some(root) = nearest_dir(
+                snapshot.paths.iter(),
+                directory(&dep.file),
                 lock_names(Manager::Composer).supported,
             ) else {
                 return Ok(None);
@@ -257,9 +366,11 @@ pub(crate) fn job(
             return Ok(Some(Job {
                 ecosystem: Ecosystem::Nix,
                 directory: directory(&dep.file).into(),
-                package: Some(dep.name.clone()),
-                current: dep.digest.clone(),
-                target: update.new_digest.clone(),
+                scope: Scope::Package {
+                    package: dep.name.clone(),
+                    current: dep.digest.clone(),
+                    target: update.new_digest.clone(),
+                },
                 lock_only: false,
             }));
         }
@@ -280,9 +391,7 @@ pub(crate) fn job(
             return Ok(Some(Job {
                 ecosystem: Ecosystem::Dotnet,
                 directory: dir.into(),
-                package: None,
-                current: None,
-                target: None,
+                scope: Scope::Directory,
                 lock_only: false,
             }));
         }
@@ -294,18 +403,16 @@ pub(crate) fn job(
             return Ok(Some(Job {
                 ecosystem: Ecosystem::GradleWrapper,
                 directory: directory(&dep.file).into(),
-                package: None,
-                current: None,
-                target: None,
+                scope: Scope::Directory,
                 lock_only: false,
             }));
         }
         // Gradle dependency locking writes per-configuration lockfiles that
         // need the build itself to regenerate; hold such updates.
         Manager::Gradle => {
-            if nearest(
-                &dep.file,
-                &snapshot.paths,
+            if nearest_dir(
+                snapshot.paths.iter(),
+                directory(&dep.file),
                 lock_names(Manager::Gradle).unsupported,
             )
             .is_some()
@@ -324,9 +431,9 @@ pub(crate) fn job(
             return Ok(None);
         }
         Manager::Cargo => {
-            let lock = nearest(
-                &dep.file,
-                &snapshot.paths,
+            let lock = nearest_dir(
+                snapshot.paths.iter(),
+                directory(&dep.file),
                 lock_names(Manager::Cargo).supported,
             );
             // A release the declaration already allows changes the lock and
@@ -349,9 +456,14 @@ pub(crate) fn job(
             // with it. The closest lockfile governs the project, so one above a
             // supported lock does not hold it.
             let names = lock_names(Manager::Pyproject);
-            let supported = nearest(&dep.file, &snapshot.paths, names.supported);
-            if let Some(lock) = nearest(&dep.file, &snapshot.paths, names.unsupported)
-                .filter(|lock| supported.is_none_or(|root| lock.len() >= root.len()))
+            let supported =
+                nearest_dir(snapshot.paths.iter(), directory(&dep.file), names.supported);
+            if let Some(lock) = nearest_dir(
+                snapshot.paths.iter(),
+                directory(&dep.file),
+                names.unsupported,
+            )
+            .filter(|lock| supported.is_none_or(|root| lock.len() >= root.len()))
             {
                 return Err(format!(
                     "unsupported lockfile format: {}",
@@ -382,15 +494,21 @@ pub(crate) fn job(
     Ok(Some(Job {
         ecosystem,
         directory: root.into(),
-        package: targeted.then(|| dep.package.clone()),
-        current: targeted.then(|| dep.resolved.clone().unwrap_or_else(|| dep.current.clone())),
-        target: targeted.then(|| {
-            update
-                .new_version
-                .clone()
-                .or(update.new_value.clone())
-                .unwrap_or_else(|| dep.current.clone())
-        }),
+        scope: if targeted {
+            Scope::Package {
+                package: dep.package.clone(),
+                current: Some(dep.resolved.clone().unwrap_or_else(|| dep.current.clone())),
+                target: Some(
+                    update
+                        .new_version
+                        .clone()
+                        .or(update.new_value.clone())
+                        .unwrap_or_else(|| dep.current.clone()),
+                ),
+            }
+        } else {
+            Scope::Directory
+        },
         lock_only: targeted && update.new_value.is_none(),
     }))
 }
@@ -470,9 +588,7 @@ pub fn maintenance(
         jobs.insert(Job {
             ecosystem,
             directory: directory(path).into(),
-            package: None,
-            current: None,
-            target: None,
+            scope: Scope::Directory,
             lock_only: false,
         });
     }
@@ -619,10 +735,9 @@ pub struct Runner {
     nix_install: Arc<tokio::sync::Mutex<()>>,
     /// The persistent tool caches' size cap in GiB; 0 turns them off.
     cache_gib: u64,
-    /// The `installation-<hash>` partition name for runs that hold no
-    /// operator credentials but are not provably public-only:
-    /// `installation-<sha256 of the GitHub credentials scope>` on the
-    /// server, `installation-local` for the CLI.
+    /// The `installation-<id>` partition's id for runs that hold no
+    /// operator credentials but are not provably public-only: the hash of
+    /// the GitHub credentials scope on the server, `local` for the CLI.
     installation: String,
 }
 
@@ -659,7 +774,7 @@ impl Runner {
             seed: None,
             nix_install: Default::default(),
             cache_gib: DEFAULT_CACHE_GIB,
-            installation: "installation-local".into(),
+            installation: "local".into(),
         }
     }
     /// Borrow tool versions from this mise data directory, usually the user's
@@ -694,9 +809,20 @@ impl Runner {
     pub fn with_credentials(mut self, credentials: Arc<dyn patchula_github::Credentials>) -> Self {
         // The installation's own partition, for runs that are not provably
         // public-only but hold no operator credentials.
-        self.installation = format!("installation-{}", hash(credentials.scope().as_bytes()));
+        self.installation = hash(credentials.scope().as_bytes());
         self.credentials = Some(credentials);
         self
+    }
+    /// The GitHub token this run fetches with: the installation's
+    /// credentials when it has them, else the runner's own.
+    async fn github_token(&self) -> Result<String, String> {
+        match &self.credentials {
+            Some(credentials) => credentials
+                .token()
+                .await
+                .map_err(|_| "GitHub authentication failed".to_owned()),
+            None => Ok(self.token.clone()),
+        }
     }
     /// Set the persistent tool caches' size cap in GiB; 0 turns them off.
     pub fn set_cache_limit(&mut self, cache_gib: u64) {
@@ -712,12 +838,6 @@ impl Runner {
             .cloned()
             .collect();
         self
-    }
-    pub async fn prepare(&self, plan: &mut Plan, snapshot: &mut Snapshot, config: &Config) {
-        let added = self.prepare_plan(plan, config).await;
-        for (path, blob) in added {
-            snapshot.files.entry(path).or_insert(blob);
-        }
     }
     /// Every plan's lockfiles, `concurrency` plans at a time, calling `done`
     /// as each finishes. Each plan works in its own scratch tree; the base
@@ -825,10 +945,11 @@ impl Runner {
             .map(|j| (j.ecosystem, j.directory.clone()))
             .collect();
         for (ecosystem, directory) in groups {
-            let versions = if matches!(ecosystem, Ecosystem::Mise | Ecosystem::Nix) {
-                BTreeMap::new()
-            } else {
+            let tool = descriptor(ecosystem);
+            let versions = if tool.versions {
                 versions(&baseline, &directory)?
+            } else {
+                BTreeMap::new()
             };
             let jobs: Vec<_> = plan
                 .lock_jobs
@@ -838,266 +959,42 @@ impl Runner {
             // Whether every file the run can read decided public-only, so
             // its tools may share the `public` cache partition. Fail
             // closed: any file without a verdict makes it not public.
-            let public = public_only(ecosystem, &baseline, &plan.public_only);
-            let cwd = root.join(&directory);
+            let public = public_only(tool, &baseline, &plan.public_only);
+            let context = node::NodeContext {
+                driver: &driver,
+                root: &root,
+                baseline: &baseline,
+                directory: &directory,
+                config,
+                versions: &versions,
+                maintenance: plan.maintenance,
+                public,
+            };
             match ecosystem {
-                Ecosystem::Ruby => {
-                    self.bundle_lock(
-                        node::NodeContext {
-                            driver: &driver,
-                            root: &root,
-                            baseline: &baseline,
-                            directory: &directory,
-                            config,
-                            versions: &versions,
-                            maintenance: plan.maintenance,
-                            public,
-                        },
-                        &jobs,
-                    )
-                    .await?;
-                }
-                Ecosystem::Php => {
-                    self.composer_lock(
-                        node::NodeContext {
-                            driver: &driver,
-                            root: &root,
-                            baseline: &baseline,
-                            directory: &directory,
-                            config,
-                            versions: &versions,
-                            maintenance: plan.maintenance,
-                            public,
-                        },
-                        &jobs,
-                    )
-                    .await?;
-                }
-                Ecosystem::Apm => {
-                    self.apm_lock(node::NodeContext {
-                        driver: &driver,
-                        root: &root,
-                        baseline: &baseline,
-                        directory: &directory,
-                        config,
-                        versions: &versions,
-                        maintenance: plan.maintenance,
-                        public,
-                    })
-                    .await?;
-                }
-                Ecosystem::Dotnet => {
-                    let edited = plan
-                        .contents
-                        .keys()
-                        .any(|p| directory.is_empty() || p.starts_with(&format!("{directory}/")));
-                    self.dotnet_restore(
-                        &driver,
-                        &root,
-                        &directory,
-                        &versions,
-                        edited && !plan.maintenance,
-                        public,
-                    )
-                    .await?;
-                }
-                Ecosystem::GradleWrapper => {
-                    self.gradle_wrapper(&root, &directory).await?;
-                }
-                Ecosystem::Python => {
-                    self.python_locks(
-                        node::NodeContext {
-                            driver: &driver,
-                            root: &root,
-                            baseline: &baseline,
-                            directory: &directory,
-                            config,
-                            versions: &versions,
-                            maintenance: plan.maintenance,
-                            public,
-                        },
-                        &jobs,
-                    )
-                    .await?;
-                }
-                Ecosystem::Nix => {
-                    self.flake_lock(
-                        &driver,
-                        &root,
-                        &baseline,
-                        &directory,
-                        &jobs,
-                        plan.maintenance,
-                    )
-                    .await?;
-                }
-                Ecosystem::Mise => {
-                    self.mise_lock(&driver, &root, &baseline, &jobs, plan.maintenance, config)
-                        .await?;
-                }
-                Ecosystem::Node => {
-                    self.node(node::NodeContext {
-                        driver: &driver,
-                        root: &root,
-                        baseline: &baseline,
-                        directory: &directory,
-                        config,
-                        versions: &versions,
-                        maintenance: plan.maintenance,
-                        public,
-                    })
-                    .await?;
-                }
+                Ecosystem::Node => self.node(context).await?,
                 Ecosystem::Cargo => {
                     // Cargo runs outside the repository and reads none of its
                     // configuration. It gets each credentialed registry the
                     // `.cargo/config.toml` files at or above the project
                     // define, by name, from the environment.
-                    let registries: Vec<_> = cargo_configs
-                        .iter()
-                        .filter(|(path, _)| {
-                            let owner = directory_of_cargo_config(path);
-                            owner == directory || under(&directory, owner)
-                        })
-                        .map(|(_, text)| credentials::cargo_registries(text))
-                        .collect();
-                    let (env, entries) = self.cargo_env(&registries);
-                    let credentials = credentials::scopes(entries.iter().copied());
-                    let secrets = credentials::secrets(entries.iter().copied());
-                    for job in jobs {
-                        self.cargo_update(
-                            &driver,
-                            &cwd,
-                            &versions["rust"],
-                            job,
-                            plan.maintenance,
-                            (&env, &credentials, &secrets, public),
-                        )
-                        .await?;
-                    }
+                    self.cargo_locks(context, &jobs, &cargo_configs).await?;
                 }
-                Ecosystem::Go => {
-                    let go = go_version(&cwd, &versions["go"])?;
-                    // Credentials for Go and Git in `~/.netrc`, gone when Go
-                    // finishes, and their hosts private to Go.
-                    let (netrc, hosts, entries) = self.netrc();
-                    let credentials = credentials::scopes(entries.iter().copied());
-                    let secrets = credentials::secrets(entries.iter().copied());
-                    let held = !hosts.is_empty();
-                    let mut _netrc = node::Private::default();
-                    let mut env = Vec::new();
-                    if held {
-                        let home = driver.join("home");
-                        std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
-                        _netrc.write(&home.join(".netrc"), &netrc)?;
-                        env.push(("GOPRIVATE".to_string(), hosts.join(",")));
-                    }
-                    let mut calls = Vec::new();
-                    for job in jobs {
-                        if let Some(package) = &job.package {
-                            calls.push(vec![
-                                "-C".into(),
-                                cwd.to_string_lossy().into_owned(),
-                                "get".into(),
-                                format!(
-                                    "{package}@{}",
-                                    job.target.as_deref().ok_or("missing Go target")?
-                                ),
-                            ]);
-                        }
-                    }
-                    calls.push(vec![
-                        "-C".into(),
-                        cwd.to_string_lossy().into_owned(),
-                        "mod".into(),
-                        if config.lockfiles.tidy_go {
-                            "tidy".into()
-                        } else {
-                            "download".into()
-                        },
-                    ]);
-                    // What a Go run may fetch is bounded by GOPROXY, not
-                    // by file verdicts. In the `public` partition it is
-                    // `https://proxy.golang.org` alone — never `direct`,
-                    // which could fetch anonymously from a host only this
-                    // server's network reaches, such as a cluster-internal
-                    // Git host, and leave what it got in a cache every
-                    // installation shares; GOSUMDB keeps its default. A
-                    // run that fails there — an internal module the proxy
-                    // cannot serve — is rerun in the installation
-                    // partition with Go's environment as it was (GOPROXY
-                    // unset), so repositories with internal modules keep
-                    // working. A credentialed run goes straight to its
-                    // credential partition with that environment.
-                    let mut attempts = vec![(false, Vec::new())];
-                    if credentials.is_empty() {
-                        attempts.insert(
-                            0,
-                            (
-                                true,
-                                vec![("GOPROXY".into(), "https://proxy.golang.org".into())],
-                            ),
-                        );
-                    }
-                    for (public, extra) in attempts {
-                        let mut failed = None;
-                        for args in &calls {
-                            let mut run_env = env.clone();
-                            run_env.extend(extra.iter().cloned());
-                            let result = self
-                                .held_tool(
-                                    &driver,
-                                    Invocation {
-                                        tools: vec![("go".into(), go.clone())],
-                                        bin: "go".into(),
-                                        cwd: None,
-                                        env: run_env,
-                                        credentials: credentials.clone(),
-                                        secrets: secrets.clone(),
-                                        public,
-                                        args: args.clone(),
-                                    },
-                                )
-                                .await;
-                            if let Err(error) = result {
-                                failed = Some(error);
-                                break;
-                            }
-                        }
-                        match failed {
-                            None => break,
-                            // The last attempt's error stands; only the
-                            // `public` attempt retries.
-                            Some(error) if !public => return Err(error),
-                            Some(_) => {}
-                        }
-                    }
+                Ecosystem::Go => self.go_locks(context, &jobs).await?,
+                Ecosystem::Terraform => self.terraform_lock(context).await?,
+                Ecosystem::Mise => self.mise_lock(context, &jobs).await?,
+                Ecosystem::Python => self.python_locks(context, &jobs).await?,
+                Ecosystem::GradleWrapper => self.gradle_wrapper(context).await?,
+                Ecosystem::Dotnet => {
+                    let edited = plan.contents.keys().any(|p| {
+                        context.directory.is_empty()
+                            || p.starts_with(&format!("{}/", context.directory))
+                    }) && !context.maintenance;
+                    self.dotnet_restore(context, edited).await?;
                 }
-                Ecosystem::Terraform => {
-                    if cwd.join(".terraform.lock.hcl").exists() {
-                        std::fs::remove_file(cwd.join(".terraform.lock.hcl"))
-                            .map_err(|e| e.to_string())?;
-                    }
-                    let (env, entries) = self.terraform_env();
-                    self.held_tool(
-                        &driver,
-                        Invocation {
-                            tools: vec![("terraform".into(), versions["terraform"].clone())],
-                            bin: "terraform".into(),
-                            cwd: None,
-                            env,
-                            credentials: credentials::scopes(entries.iter().copied()),
-                            secrets: credentials::secrets(entries.iter().copied()),
-                            public: false,
-                            args: vec![
-                                format!("-chdir={}", cwd.display()),
-                                "providers".into(),
-                                "lock".into(),
-                            ],
-                        },
-                    )
-                    .await?;
-                }
+                Ecosystem::Ruby => self.bundle_lock(context, &jobs).await?,
+                Ecosystem::Php => self.composer_lock(context, &jobs).await?,
+                Ecosystem::Nix => self.flake_lock(context, &jobs).await?,
+                Ecosystem::Apm => self.apm_lock(context).await?,
             }
         }
         // Only manifests and lockfiles can enter the API commit. Reject links,
@@ -1163,86 +1060,6 @@ impl Runner {
         }
         Ok(added)
     }
-    /// Moves Cargo.lock for one job, against the lock as it stands: a job whose
-    /// target is already locked has nothing to do. A package moves with
-    /// `--precise` to the exact target. A target across a semver-incompatible boundary is a second
-    /// lock entry beside the old one, which other crates may still require, so
-    /// `--precise` on the old entry cannot reach it; `--workspace` locks what
-    /// the edited manifests need and leaves every other package where it is.
-    async fn cargo_update(
-        &self,
-        driver: &Path,
-        cwd: &Path,
-        rust: &str,
-        job: &Job,
-        maintenance: bool,
-        access: CargoAccess<'_>,
-    ) -> Result<(), Error> {
-        let (env, credentials, secrets, public) = access;
-        let update = |args: Vec<String>| {
-            let mut all = vec![
-                "update".into(),
-                "--manifest-path".into(),
-                cwd.join("Cargo.toml").to_string_lossy().into_owned(),
-            ];
-            all.extend(args);
-            self.held_tool(
-                driver,
-                Invocation {
-                    tools: vec![("rust".into(), rust.into())],
-                    bin: "cargo".into(),
-                    cwd: None,
-                    env: env.to_vec(),
-                    credentials: credentials.to_vec(),
-                    secrets: secrets.to_vec(),
-                    public,
-                    args: all,
-                },
-            )
-        };
-        let Some(package) = &job.package else {
-            let args = if maintenance {
-                vec![]
-            } else {
-                vec!["--workspace".into()]
-            };
-            update(args).await?;
-            return Ok(());
-        };
-        let current = job.current.as_deref().unwrap_or("");
-        let target = job.target.as_deref().ok_or("missing Cargo target")?;
-        let crossing = crosses_compatibility(current, target);
-        if crossing {
-            update(vec!["--workspace".into()]).await?;
-        }
-        // Address what the lock holds now: an earlier job or the workspace
-        // update may have moved the entry this job was planned against.
-        let lock = std::fs::read_to_string(cwd.join("Cargo.lock")).map_err(|e| e.to_string())?;
-        let locked = crates_io_entries(&lock, package);
-        if locked
-            .iter()
-            .any(|(version, _)| same_release(version, target))
-        {
-            return Ok(());
-        }
-        // Cargo keeps one entry per compatibility range, so this is the one
-        // crates.io entry that can still move to the target. A git or other
-        // registry copy of the name is another package, and the source in the
-        // spec keeps an equal name and version from being ambiguous.
-        let mut movable: Vec<String> = locked
-            .iter()
-            .filter(|(version, _)| !crosses_compatibility(version, target))
-            .map(|(version, source)| format!("{source}#{package}@{version}"))
-            .collect();
-        if movable.is_empty() && !crossing {
-            // Nothing matches; let cargo name the package it cannot find.
-            movable.push(format!("{package}@{current}"));
-        }
-        for spec in movable {
-            update(vec!["-p".into(), spec, "--precise".into(), target.into()]).await?;
-        }
-        Ok(())
-    }
     /// Evict aged and oversized tool-cache partitions, at most once an hour
     /// per cache root per process, without holding the generation up. Lock
     /// files outlive the partitions they guard.
@@ -1279,33 +1096,21 @@ impl Runner {
         // read decided public-only; anything else gets the installation's
         // own partition, so a run that might fetch private content never
         // leaves it where other installations could pick it up.
-        let name = if !scopes.is_empty() {
-            caches::partition(&scopes)
+        let partition = if !scopes.is_empty() {
+            caches::Partition::private(&scopes)
         } else if call.public {
-            caches::PUBLIC.into()
+            caches::Partition::Public
         } else {
-            self.installation.clone()
+            caches::Partition::Installation(self.installation.clone())
         };
         let root = self.cache.join(caches::ROOT);
         let bin = call.bin.clone();
-        // `-modcacherw` keeps the module cache writable for eviction; merge
-        // it with any GOFLAGS the call already set.
-        let goflags = call
-            .env
-            .iter()
-            .find(|(key, _)| key == "GOFLAGS")
-            .map(|(_, value)| value.clone());
-        let (mut env, hold) =
-            tokio::task::spawn_blocking(move || caches::acquire(&root, &name, &tool, &bin))
-                .await
-                .map_err(|e| e.to_string())??;
-        if let Some(flags) = goflags.filter(|flags| !flags.is_empty()) {
-            for (key, value) in &mut env {
-                if key == "GOFLAGS" {
-                    *value = format!("{flags} {value}");
-                }
-            }
-        }
+        let call_env = call.env.clone();
+        let (env, hold) = tokio::task::spawn_blocking(move || {
+            caches::acquire(&root, &partition, &tool, &bin, &call_env)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
         Ok((env, Some(hold)))
     }
     async fn tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, Error> {
@@ -1445,11 +1250,6 @@ impl From<&str> for Error {
     }
 }
 
-/// What a Cargo run is given: its registry environment, the credential
-/// scopes it holds, every secret value a failure must not repeat, and
-/// whether it may share the `public` cache partition.
-type CargoAccess<'a> = (&'a [(String, String)], &'a [String], &'a [String], bool);
-
 /// One ecosystem tool invocation: the mise tools it needs, the binary to run
 /// and the arguments to pass.
 #[derive(Clone)]
@@ -1547,12 +1347,14 @@ fn validate_targets(
         // pnpm and Yarn locks are not read back (aube-lock.yaml is), so the unchanged-lockfile rule
         // checks them instead. Every lock this runner reads must prove the target.
         let unread = matches!(dep.manager, Manager::Npm | Manager::Bun)
-            && nearest(&change.file, &paths, &node_locks()).is_some_and(|dir| {
-                ![Manager::Npm, Manager::Bun]
-                    .iter()
-                    .flat_map(|manager| lock_names(*manager).readable.iter().copied())
-                    .any(|leaf| paths.contains(&node::join(dir, leaf)))
-            });
+            && nearest_dir(paths.iter(), directory(&change.file), &node_locks()).is_some_and(
+                |dir| {
+                    ![Manager::Npm, Manager::Bun]
+                        .iter()
+                        .flat_map(|manager| lock_names(*manager).readable.iter().copied())
+                        .any(|leaf| paths.contains(&node::join(dir, leaf)))
+                },
+            );
         if !unread
             && (matches!(
                 dep.manager,
@@ -1584,24 +1386,11 @@ fn versions(
     directory: &str,
 ) -> Result<BTreeMap<String, String>, String> {
     let defaults = tool_defaults()?;
-    let mut versions = BTreeMap::new();
-    for tool in [
-        "node",
-        "bun",
-        "rust",
-        "go",
-        "terraform",
-        "aube",
-        "yarn",
-        "python",
-        "uv",
-        "poetry",
-        "dotnet",
-        "ruby",
-        "php",
-        "composer",
-        "apm",
-    ] {
+    let mut versions: BTreeMap<String, String> = BTreeMap::new();
+    for tool in descriptors()
+        .flat_map(|descriptor| descriptor.tools.iter().copied())
+        .collect::<BTreeSet<_>>()
+    {
         versions.insert(
             tool.into(),
             defaults["tools"][tool]
@@ -1610,15 +1399,29 @@ fn versions(
                 .into(),
         );
     }
-    let mut configs: Vec<_> = baseline
-        .iter()
-        .filter(|(path, _)| {
-            matches!(path.rsplit('/').next(), Some("mise.toml" | ".mise.toml"))
-                && (directory == self::directory(path) || under(directory, self::directory(path)))
-        })
-        .collect();
-    configs.sort_by_key(|(path, _)| path.len());
-    for (_, blob) in configs {
+    // mise reads `.tool-versions` below `mise.toml` and `.mise.toml` in the
+    // same directory, and a deeper file over a shallower one; `upward`
+    // orders the same way, so applying in order leaves the winner last.
+    for path in upward(
+        baseline.keys(),
+        directory,
+        &[".tool-versions", "mise.toml", ".mise.toml"],
+    ) {
+        let blob = &baseline[path];
+        if path.ends_with(".tool-versions") {
+            for line in blob.content.lines() {
+                let mut words = line.split('#').next().unwrap_or("").split_whitespace();
+                let (Some(name), Some(version)) = (words.next(), words.next()) else {
+                    continue;
+                };
+                let Some(slot) = versions.get_mut(name) else {
+                    continue;
+                };
+                check_tool_version(name, version)?;
+                *slot = version.into();
+            }
+            continue;
+        }
         let doc = toml_edit::Document::parse(blob.content.as_str()).map_err(|e| e.to_string())?;
         if let Some(tools) = doc.get("tools") {
             for (tool, version) in &mut versions {
@@ -1627,13 +1430,7 @@ fn versions(
                         .as_str()
                         .or_else(|| spec.get("version").and_then(toml_edit::Item::as_str))
                         .ok_or_else(|| format!("{tool}: expected a version string or table"))?;
-                    if value.is_empty()
-                        || !value
-                            .bytes()
-                            .all(|b| b.is_ascii_alphanumeric() || b"._-+".contains(&b))
-                    {
-                        return Err(format!("{tool}: unsupported tool version"));
-                    }
+                    check_tool_version(tool, value)?;
                     *version = value.into();
                 }
             }
@@ -1641,22 +1438,23 @@ fn versions(
     }
     Ok(versions)
 }
+/// A repository's pin for a tool the runner knows, accepted only as a plain
+/// version spec.
+fn check_tool_version(tool: &str, value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || !value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-+".contains(&b))
+    {
+        return Err(format!("{tool}: unsupported tool version"));
+    }
+    Ok(())
+}
 /// Whether a locked version is the requested one. SemVer build metadata does
 /// not order versions, so a request without it matches any build: the advisory
 /// for `zstd-sys` fixes `2.1.2`, which the lock records as `2.1.2+zstd.1.5.7`.
 pub(crate) fn same_release(locked: &str, requested: &str) -> bool {
     locked == requested || (!requested.contains('+') && locked.split('+').next() == Some(requested))
-}
-/// Whether Cargo treats `target` as incompatible with `current`: a different
-/// major version, or a different minor (or patch) one below 1.0. Cargo then
-/// keeps both in the lock.
-fn crosses_compatibility(current: &str, target: &str) -> bool {
-    use patchula_versioning::{Ecosystem as Scheme, Versioning};
-    use patchula_words::Update;
-    match (Scheme::Cargo.parse(current), Scheme::Cargo.parse(target)) {
-        (Ok(current), Ok(target)) => Scheme::Cargo.classify(&current, &target) == Update::Major,
-        _ => false,
-    }
 }
 /// The source a Cargo.lock entry records when it comes from crates.io.
 fn crates_io(entry: &toml_edit::Table) -> Option<&str> {
@@ -1668,56 +1466,18 @@ fn crates_io(entry: &toml_edit::Table) -> Option<&str> {
                 || source.starts_with("sparse+https://index.crates.io/")
         })
 }
-/// The version and source of each crates.io entry for `package` in a
-/// Cargo.lock. A git or other registry package of the same name is another
-/// package.
-fn crates_io_entries(lock: &str, package: &str) -> Vec<(String, String)> {
-    let Ok(lock) = toml_edit::Document::parse(lock) else {
-        return Vec::new();
-    };
-    lock.get("package")
-        .and_then(toml_edit::Item::as_array_of_tables)
-        .into_iter()
-        .flatten()
-        .filter(|entry| entry.get("name").and_then(toml_edit::Item::as_str) == Some(package))
-        .filter_map(|entry| {
-            Some((
-                entry.get("version")?.as_str()?.to_owned(),
-                crates_io(entry)?.to_owned(),
-            ))
+/// The pinned tool versions used when a repository does not pin its own,
+/// parsed once: the file is embedded, so it cannot change between calls.
+fn tool_defaults() -> Result<&'static toml_edit::Document<&'static str>, String> {
+    static DEFAULTS: std::sync::OnceLock<Result<toml_edit::Document<&'static str>, String>> =
+        std::sync::OnceLock::new();
+    DEFAULTS
+        .get_or_init(|| {
+            toml_edit::Document::parse(include_str!("lockfiles/defaults.toml"))
+                .map_err(|e| e.to_string())
         })
-        .collect()
-}
-/// The Go to run: the newest of the pin and the edited `go.mod`'s `go` and
-/// `toolchain` directives. With GOTOOLCHAIN=local, an older Go refuses a
-/// module that requires a newer one, which an update itself may introduce.
-fn go_version(cwd: &Path, pinned: &str) -> Result<String, String> {
-    use patchula_versioning::{Ecosystem as Scheme, Versioning};
-    let text = std::fs::read_to_string(cwd.join("go.mod")).map_err(|e| e.to_string())?;
-    let mut best = pinned.to_string();
-    for line in text.lines() {
-        let mut words = line.split_whitespace();
-        let version = match (words.next(), words.next()) {
-            (Some("go"), Some(v)) => v,
-            (Some("toolchain"), Some(v)) => v.strip_prefix("go").unwrap_or(v),
-            _ => continue,
-        };
-        // Only plain release versions select a toolchain.
-        if !version.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
-            continue;
-        }
-        if let (Ok(candidate), Ok(current)) =
-            (Scheme::Loose.parse(version), Scheme::Loose.parse(&best))
-            && Scheme::Loose.order(&candidate, &current).is_gt()
-        {
-            best = version.to_string();
-        }
-    }
-    Ok(best)
-}
-/// The pinned tool versions used when a repository does not pin its own.
-fn tool_defaults() -> Result<toml_edit::Document<&'static str>, String> {
-    toml_edit::Document::parse(include_str!("lockfiles/defaults.toml")).map_err(|e| e.to_string())
+        .as_ref()
+        .map_err(Clone::clone)
 }
 /// A Cargo configuration file, read only for its `registries`.
 fn cargo_config(path: &str) -> bool {
