@@ -1534,6 +1534,12 @@ fn gitlab_and_gitea_sources_are_recognised_from_their_urls() {
             "https://gitlab.com/grp/proj",
         ),
         (
+            "https://gitlab.com/grp/proj/",
+            Some(ForgeKind::Gitlab),
+            "grp/proj",
+            "https://gitlab.com/grp/proj",
+        ),
+        (
             "https://gitlab.example.com/a/b",
             Some(ForgeKind::Gitlab),
             "a/b",
@@ -1562,6 +1568,25 @@ fn gitlab_and_gitea_sources_are_recognised_from_their_urls() {
         assert_eq!(repository.url, web, "{raw}");
         assert!(repository.github.is_none());
     }
+}
+
+#[test]
+fn a_git_suffix_is_not_part_of_the_repository_name() {
+    for url in [
+        "https://github.com/owner/.git",
+        "https://github.com/owner/..git",
+        "https://github.com/owner",
+        "https://github.com/owner/",
+    ] {
+        assert_eq!(Repository::from_url(url), None, "{url}");
+    }
+    assert_eq!(
+        Repository::from_url("https://github.com/owner/repo.git")
+            .unwrap()
+            .github
+            .as_deref(),
+        Some("owner/repo")
+    );
 }
 
 #[tokio::test]

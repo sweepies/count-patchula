@@ -38,8 +38,10 @@ pub struct Forge {
     pub path: String,
 }
 impl Forge {
-    /// Recognise a forge from its host. Unknown self-hosted instances stay
-    /// unsupported rather than being probed.
+    /// Recognise a forge from its host: gitlab.com or any host with a
+    /// `gitlab` label; codeberg.org, gitea.com, or any host with a `gitea` or
+    /// `forgejo` label. That label match is how self-hosted instances are
+    /// found; other hosts stay unsupported rather than being probed.
     fn detect(host: &str, segments: &[&str]) -> Option<Self> {
         let kind = if host == "gitlab.com" || host.split('.').any(|l| l == "gitlab") {
             ForgeKind::Gitlab
@@ -53,8 +55,9 @@ impl Forge {
         // GitLab paths may nest groups; `-` starts a project sub-route.
         let mut parts: Vec<_> = segments
             .iter()
-            .take_while(|s| **s != "-")
             .copied()
+            .filter(|s| !s.is_empty())
+            .take_while(|s| *s != "-")
             .collect();
         if kind == ForgeKind::Gitea {
             parts.truncate(2);
@@ -115,19 +118,25 @@ impl Repository {
         if url.host_str() == Some("github.com") {
             let segments: Vec<_> = url.path_segments()?.collect();
             let parts = &segments[..segments.len().min(2)];
-            if parts.len() != 2
-                || parts.iter().any(|p| {
-                    p.is_empty()
-                        || p.len() > 100
-                        || !p
-                            .bytes()
-                            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
-                        || matches!(*p, "." | "..")
-                })
-            {
+            // `.git` ends a clone URL, not a name; `owner/.git` has no
+            // repository, so it comes off before the name is validated.
+            let normalized = [
+                parts.first().copied().unwrap_or(""),
+                parts
+                    .get(1)
+                    .map_or("", |name| name.trim_end_matches(".git")),
+            ];
+            if normalized.iter().any(|p| {
+                p.is_empty()
+                    || p.len() > 100
+                    || !p
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+                    || matches!(*p, "." | "..")
+            }) {
                 return None;
             }
-            let repo = format!("{}/{}", parts[0], parts[1].trim_end_matches(".git"));
+            let repo = format!("{}/{}", normalized[0], normalized[1]);
             // `/tree/<ref>/<directory>` names a package inside the repository.
             let directory = match segments.get(2..) {
                 Some(["tree", _, rest @ ..]) => directory(rest.join("/").trim_end_matches('/')),
