@@ -15,14 +15,11 @@ mod ruby;
 mod tools;
 pub use tools::{bootstrap_mise, tools_dir};
 mod wrapper;
-use crate::{
-    Blob, Plan, Snapshot, blob_sha,
-    plan::{hash, unified},
-};
+use crate::{Blob, Plan, Snapshot, blob_sha, plan::unified};
 use futures_util::StreamExt;
 use patchula_cache::State;
 use patchula_config::{Config, NpmEngine};
-use patchula_manager::Dependency;
+use patchula_manager::{Dependency, hash};
 use patchula_process::{Executor, Failure, SystemExecutor};
 use patchula_report::{BranchAction, BranchStatus, FileAction, Repository, Update};
 use patchula_words::{Manager, Source};
@@ -1540,6 +1537,8 @@ fn validate_targets(
             (None, Some(_)) => &change.current,
             (None, None) => continue,
         };
+        // The registry is left out: it records where the lock says the package
+        // came from, which the tool's own rewrite may state differently.
         let Some(dep) = extraction.dependencies.iter().find(|d| {
             d.file == change.file && d.package == change.package && d.current == *declared
         }) else {

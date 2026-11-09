@@ -234,6 +234,25 @@ fn file_mode() -> String {
 type LookupKey = (bool, PackageId);
 /// An image digest to resolve: the image and its reference.
 type DigestKey = (String, String);
+/// A package whose digest, image or SBOM read carried credentials, so the
+/// report can mark what was found private.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Sent {
+    /// A git ref's commit, read through `Sources::digest`.
+    Git(String),
+    /// A container image's tag digest, manifest config or SBOM.
+    Image(String),
+}
+impl Sent {
+    /// The key `dep`'s credentialed reads are recorded and checked under.
+    fn of(dep: &Dependency) -> Self {
+        if matches!(dep.source, Source::Docker | Source::Oci) {
+            Self::Image(dep.package.clone())
+        } else {
+            Self::Git(dep.package.clone())
+        }
+    }
+}
 type Catalogs = BTreeMap<LookupKey, std::result::Result<patchula_datasource::Catalog, Failure>>;
 pub const REPOSITORY_HEAD_QUERY: &str = "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){isPrivate defaultBranchRef{name target{... on Commit{oid tree{oid}}}}}}";
 #[derive(Default, Serialize, Deserialize)]
@@ -892,7 +911,7 @@ impl Engine {
         let sources = self.sources.clone();
         // Packages any of whose digest, image or SBOM reads carried
         // credentials, as their catalogs' lookups record too.
-        let sent = std::sync::Mutex::new(BTreeSet::<String>::new());
+        let sent = std::sync::Mutex::new(BTreeSet::<Sent>::new());
         let sent = &sent;
         let total = Instant::now();
         let _total_span = PhaseTrace::new("total");
@@ -1464,7 +1483,7 @@ impl Engine {
                 if credentialed {
                     sent.lock()
                         .expect("sent packages")
-                        .insert(format!("image:{package}"));
+                        .insert(Sent::Image(package.clone()));
                 }
                 let result = result.map_err(Failure::from);
                 self.progress.advance(1);
@@ -1541,7 +1560,7 @@ impl Engine {
                     if credentialed {
                         sent.lock()
                             .expect("sent packages")
-                            .insert(format!("image:{package}"));
+                            .insert(Sent::Image(package.clone()));
                     }
                     let result = result.map_err(|e| e.to_string());
                     ((package, digest, platform), result)
@@ -1966,23 +1985,25 @@ impl Engine {
                     proposals.clear();
                     held_back.clear();
                 }
-                let stale = if matches!(dep.source, Source::Docker | Source::Oci) {
-                    let mut stale = self.sources.registry_stale(&dep.package).await;
-                    stale.retain(|key, _| {
-                        key == "catalog"
-                            || key.strip_prefix("digest:").is_some_and(|tag| {
-                                tag == dep.current.replace('+', "_")
-                                    || proposals.iter().any(|p| {
-                                        p.new_version
-                                            .as_ref()
-                                            .is_some_and(|v| v.replace('+', "_") == tag)
-                                    })
-                            })
-                    });
-                    stale
-                } else {
-                    BTreeMap::new()
-                };
+                let stale: BTreeMap<String, i64> =
+                    if matches!(dep.source, Source::Docker | Source::Oci) {
+                        let mut stale = self.sources.registry_stale(&dep.package).await;
+                        stale.retain(|key, _| {
+                            *key == patchula_datasource::StaleKey::Catalog
+                                || key.is_manifest_of(&dep.current)
+                                || proposals.iter().any(|p| {
+                                    p.new_version
+                                        .as_ref()
+                                        .is_some_and(|v| key.is_manifest_of(v))
+                                })
+                        });
+                        stale
+                            .into_iter()
+                            .map(|(key, at)| (key.to_string(), at))
+                            .collect()
+                    } else {
+                        BTreeMap::new()
+                    };
                 if !stale.is_empty() {
                     repo.report.warnings.push(format!(
                         "{}: stale cached registry lookup after rate limiting ({})",
@@ -2100,15 +2121,7 @@ impl Engine {
                         image: current_image,
                         credentialed: credentialed
                             .contains(&self.catalog_key(dep, repo.config.as_ref()))
-                            || sent.lock().expect("sent packages").contains(&format!(
-                                "{}:{}",
-                                if matches!(dep.source, Source::Docker | Source::Oci) {
-                                    "image"
-                                } else {
-                                    "git"
-                                },
-                                dep.package
-                            )),
+                            || sent.lock().expect("sent packages").contains(&Sent::of(dep)),
                     }),
                 };
                 files.entry(dep.file.clone()).or_default().push(value);
@@ -2166,7 +2179,7 @@ impl Engine {
         &self,
         keys: BTreeSet<(String, String)>,
         counted: bool,
-        sent: &std::sync::Mutex<BTreeSet<String>>,
+        sent: &std::sync::Mutex<BTreeSet<Sent>>,
     ) -> BTreeMap<(String, String), std::result::Result<String, Failure>> {
         stream::iter(keys)
             .map(|(package, reference)| async move {
@@ -2176,7 +2189,7 @@ impl Engine {
                 if credentialed {
                     sent.lock()
                         .expect("sent packages")
-                        .insert(format!("git:{package}"));
+                        .insert(Sent::Git(package.clone()));
                 }
                 let result = result.map_err(Failure::from);
                 if counted {

@@ -141,6 +141,35 @@ impl From<Release> for Version {
 /// npm's public registry, which a dependency without its own registry reads.
 pub const NPM_REGISTRY: &str = "https://registry.npmjs.org";
 
+/// A cached registry read a rate limit made stale: the package's whole tag
+/// catalog, or one tag's manifest.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StaleKey {
+    /// The package's tag catalog.
+    Catalog,
+    /// One tag's manifest, by the reference it was requested with.
+    Digest(String),
+}
+impl StaleKey {
+    /// The key a tag's manifest read is recorded under. OCI tags cannot hold
+    /// `+`, which a catalog of OCI versions writes as `_`.
+    pub fn digest(tag: &str) -> Self {
+        Self::Digest(tag.replace('+', "_"))
+    }
+    /// Whether this key is the manifest `reference` was read through.
+    pub fn is_manifest_of(&self, reference: &str) -> bool {
+        matches!(self, Self::Digest(tag) if *tag == reference.replace('+', "_"))
+    }
+}
+impl std::fmt::Display for StaleKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Catalog => f.write_str("catalog"),
+            Self::Digest(tag) => write!(f, "digest:{tag}"),
+        }
+    }
+}
+
 /// The URL of `package`'s packument in `registry`, or in npm's public one.
 fn npm_url(registry: Option<&str>, package: &str) -> String {
     format!(
@@ -162,7 +191,7 @@ pub struct Client {
     use_versions_host: bool,
     mise: Option<std::sync::Arc<patchula_mise::Lookup>>,
     nix: Option<std::sync::Arc<dyn Flakes>>,
-    stale_registry: std::sync::Arc<tokio::sync::Mutex<BTreeMap<String, BTreeMap<String, i64>>>>,
+    stale_registry: std::sync::Arc<tokio::sync::Mutex<BTreeMap<String, BTreeMap<StaleKey, i64>>>>,
 }
 impl Client {
     pub fn revalidating(&self) -> Self {
@@ -187,7 +216,7 @@ impl Client {
     }
 
     /// Cached registry reads used because of rate limiting, keyed by catalog or digest tag.
-    pub async fn registry_stale(&self, package: &str) -> BTreeMap<String, i64> {
+    pub async fn registry_stale(&self, package: &str) -> BTreeMap<StaleKey, i64> {
         let Ok((host, path)) = docker::identity(package) else {
             return BTreeMap::new();
         };

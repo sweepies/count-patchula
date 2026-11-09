@@ -5,7 +5,8 @@ use patchula_github::Client;
 use patchula_http::{Exchange, Response, Transport};
 use patchula_manager::{Files, Scanner};
 use patchula_report::{
-    BranchStatus, Current, Dependency as ReportDependency, PackageFile, Repository, Status, Update,
+    BranchStatus, Current, Dependency as ReportDependency, DependencyMetadata, PackageFile,
+    Repository, Status, Update,
 };
 use patchula_update::{Blob, Plan, Snapshot, apply, blob_sha, branch_name, plan};
 use patchula_words::{Manager, Source, Update as UpdateKind};
@@ -14,6 +15,23 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
 };
+
+/// The metadata a real report always carries for an extracted dependency.
+fn metadata(dep: &patchula_manager::Dependency) -> DependencyMetadata {
+    DependencyMetadata {
+        tag_digests: Default::default(),
+        source: dep.source,
+        kinds: vec![],
+        locations: vec![],
+        held_back: vec![],
+        stale: Default::default(),
+        lookup: None,
+        resolution: None,
+        advisories: vec![],
+        image: None,
+        credentialed: false,
+    }
+}
 
 /// The write receipts patchula_update stores, read through the same
 /// namespace and scope.
@@ -507,7 +525,7 @@ fn setup(
                     version: d.resolved.clone(),
                     digest: None,
                 },
-                metadata: None,
+                metadata: Some(metadata(d)),
                 updates: vec![Update {
                     new_value: Some(target.into()),
                     new_version: Some(target.into()),
@@ -2975,7 +2993,7 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
                 version: dep.resolved.clone(),
                 digest: dep.digest.clone(),
             },
-            metadata: None,
+            metadata: Some(metadata(dep)),
             updates,
         };
         if let Some(file) = repo.package_files.iter_mut().find(|f| f.path == dep.file) {
@@ -3543,7 +3561,7 @@ fn reference_data_pins_get_their_own_branch() {
                 version: dep.resolved.clone(),
                 digest: dep.digest.clone(),
             },
-            metadata: None,
+            metadata: Some(metadata(dep)),
             updates: targets
                 .iter()
                 .map(|(kind, target)| Update {

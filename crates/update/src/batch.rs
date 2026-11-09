@@ -58,7 +58,7 @@ fn overlaps(item: &Item, targets: &[Change]) -> bool {
     item.targets.iter().any(|a| {
         targets
             .iter()
-            .any(|b| a.source == b.source && a.package == b.package && a.file == b.file)
+            .any(|b| a.touches(&b.file, b.source, &b.package, b.registry.as_deref()))
     })
 }
 
@@ -156,17 +156,15 @@ pub fn apply(
             plan.action.branch
         ));
     }
-    let pending: BTreeSet<_> = plan
-        .changes
-        .iter()
-        .map(|c| (&c.source, &c.package, &c.file))
-        .collect();
+    let pending: Vec<_> = plan.changes.iter().collect();
     let items: Vec<_> = items
         .into_iter()
         .filter(|i| {
-            i.targets
-                .iter()
-                .any(|t| pending.contains(&(&t.source, &t.package, &t.file)))
+            i.targets.iter().any(|t| {
+                pending
+                    .iter()
+                    .any(|c| c.touches(&t.file, t.source, &t.package, t.registry.as_deref()))
+            })
         })
         .collect();
     let origins: BTreeSet<_> = items.iter().map(|i| i.origin.clone()).collect();

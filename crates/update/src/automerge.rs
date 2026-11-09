@@ -158,18 +158,14 @@ fn policy_allows(repo: &Repository, plan: &Plan, now: DateTime<Utc>) -> bool {
         let mut updates = repo
             .package_files
             .iter()
-            .filter(|f| f.path == c.file)
-            .flat_map(|f| &f.dependencies)
-            .filter(|d| {
-                d.package == c.package && d.metadata.as_ref().is_some_and(|m| m.source == c.source)
+            .flat_map(|f| f.dependencies.iter().map(move |d| (f.path.as_str(), d)))
+            .filter(|&(path, d)| {
+                d.metadata
+                    .as_ref()
+                    .is_some_and(|m| c.touches(path, m.source, &d.package, d.registry.as_deref()))
             })
-            .flat_map(|d| &d.updates)
-            .filter(|u| {
-                u.new_value == c.value
-                    && u.new_version == c.version
-                    && u.new_digest == c.digest
-                    && u.update_type == c.kind
-            })
+            .flat_map(|(_, d)| &d.updates)
+            .filter(|u| c.same_target(u))
             .peekable();
         updates.peek().is_some()
             && updates.all(|u| {
