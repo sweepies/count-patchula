@@ -153,8 +153,9 @@ impl Engine {
         }
     }
     /// Whether each dependency is under a manual retry this run: the
-    /// dashboard controls' retry box, a recheck, or a create/recreate whose
-    /// saved controls name it. Parallel to `repo.dependencies`.
+    /// dashboard controls' retry box, a recheck, a ticked branch box, or a
+    /// create/recreate whose saved controls name it. Parallel to
+    /// `repo.dependencies`.
     pub(super) async fn retried(&self, repo: &Work) -> Result<Vec<bool>> {
         let controls = &repo.controls;
         let mut dependencies = BTreeSet::new();

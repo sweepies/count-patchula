@@ -466,10 +466,11 @@ impl Engine {
         sent: &Mutex<BTreeSet<Sent>>,
     ) -> Result<()> {
         // Hints may refer to dependencies removed by the new commit/config.
+        // A ref under a manual retry is read again even when a hint has it.
         let current_refs: BTreeMap<DigestKey, bool> = plan
             .current_refs
             .iter()
-            .filter(|(key, _)| !lookups.digests.contains_key(*key))
+            .filter(|(key, revalidate)| **revalidate || !lookups.digests.contains_key(*key))
             .map(|(key, revalidate)| (key.clone(), *revalidate))
             .collect();
         self.progress
@@ -834,8 +835,9 @@ impl Engine {
                     .insert((package.clone(), reference.clone()), Ok(digest.clone()));
             }
         }
+        // A ref under a manual retry is read again whatever a hint holds.
         keys.digests
-            .retain(|key, _| !lookups.digests.contains_key(key));
+            .retain(|key, revalidate| *revalidate || !lookups.digests.contains_key(key));
         // Forge refs resolve only through their tag catalog. A ref missing
         // from it is not sent to GitHub.
         keys.digests.retain(|(package, reference), _| {
