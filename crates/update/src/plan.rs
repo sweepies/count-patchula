@@ -50,6 +50,9 @@ pub struct Plan {
     /// through [`Plan::hold`], which keeps the report's status and reason
     /// in step.
     pub hold: Option<Hold>,
+    /// A lockfile tool's failure kept structured for the dashboard, set by
+    /// lockfile generation beside `action.reason`.
+    pub failure: Option<crate::text::Failure>,
 }
 
 /// Why a plan is not written this run. A plan has at most one: when several
@@ -571,6 +574,7 @@ fn build(
         batch: None,
         tooling: Vec::new(),
         hold,
+        failure: None,
     })
 }
 

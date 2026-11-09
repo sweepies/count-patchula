@@ -163,7 +163,7 @@ pub(super) struct NodeContext<'a> {
 
 impl Runner {
     /// Regenerate every Node lockfile committed in one directory.
-    pub(super) async fn node(&self, context: NodeContext<'_>) -> Result<(), String> {
+    pub(super) async fn node(&self, context: NodeContext<'_>) -> Result<(), Error> {
         // Operator registry credentials the entries allow tools to use, in
         // the run's own user configuration, gone when the tools finish.
         let _credentials = registry_credentials(context.driver, &self.registries)?;
@@ -186,7 +186,7 @@ impl Runner {
         }
         result
     }
-    async fn node_locks(&self, context: NodeContext<'_>) -> Result<(), String> {
+    async fn node_locks(&self, context: NodeContext<'_>) -> Result<(), Error> {
         let NodeContext {
             driver,
             root,
@@ -225,7 +225,7 @@ impl Runner {
                 Engine::Yarn => self.yarn(driver, &cwd, versions, public).await?,
             }
             if !cwd.join(leaf).is_file() {
-                return Err(format!("tool did not produce {leaf}"));
+                return Err(format!("tool did not produce {leaf}").into());
             }
             // aube writes its own lockfile when it is not told which one to keep.
             if engine == Engine::Aube
@@ -243,7 +243,8 @@ impl Runner {
                     } else {
                         directory
                     }
-                ));
+                )
+                .into());
             }
         }
         Ok(())
@@ -282,8 +283,9 @@ impl Runner {
         before == after
     }
     /// Run an npm-family tool, which holds every tools entry's credentials.
-    async fn node_tool(&self, driver: &Path, mut call: Invocation) -> Result<Vec<u8>, String> {
+    async fn node_tool(&self, driver: &Path, mut call: Invocation) -> Result<Vec<u8>, Error> {
         call.credentials = credentials::scopes(self.registries.iter());
+        call.secrets = credentials::secrets(self.registries.iter());
         self.held_tool(driver, call).await
     }
     async fn bun(
@@ -293,12 +295,13 @@ impl Runner {
         versions: &BTreeMap<String, String>,
         maintenance: bool,
         public: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let version = version(versions, "bun")?;
         if bun_too_old(&version) {
             return Err(format!(
                 "bun.lock requires Bun >=1.2; repository pins {version}; update its mise.toml first"
-            ));
+            )
+            .into());
         }
         if maintenance {
             std::fs::remove_file(cwd.join("bun.lock")).map_err(|e| e.to_string())?;
@@ -311,6 +314,7 @@ impl Runner {
                 cwd: None,
                 env: Vec::new(),
                 credentials: Vec::new(),
+                secrets: Vec::new(),
                 public,
                 args: vec![
                     "install".into(),
@@ -331,7 +335,7 @@ impl Runner {
         versions: &BTreeMap<String, String>,
         maintenance: bool,
         public: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let args = vec![
             if maintenance { "update" } else { "install" }.to_string(),
             "--prefix".into(),
@@ -349,6 +353,7 @@ impl Runner {
                 cwd: None,
                 env: Vec::new(),
                 credentials: Vec::new(),
+                secrets: Vec::new(),
                 public,
                 args,
             },
@@ -364,7 +369,7 @@ impl Runner {
         versions: &BTreeMap<String, String>,
         maintenance: bool,
         public: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         // aube picks the lockfile it writes from the files it finds. Name the
         // committed lockfile explicitly so a second lockfile cannot redirect it.
         // It may hold registry credentials, which no later tool reads.
@@ -400,6 +405,7 @@ impl Runner {
                     config.to_string_lossy().into_owned(),
                 )],
                 credentials: Vec::new(),
+                secrets: Vec::new(),
                 public,
                 args,
             },
@@ -413,7 +419,7 @@ impl Runner {
         cwd: &Path,
         versions: &BTreeMap<String, String>,
         public: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let manifest = std::fs::read_to_string(cwd.join("package.json")).ok();
         let lock = std::fs::read_to_string(cwd.join("yarn.lock")).unwrap_or_default();
         if family(&lock) != Some(Family::Berry) {
@@ -453,6 +459,7 @@ impl Runner {
                         ("YARN_ENABLE_PROGRESS_BARS".into(), "0".into()),
                     ],
                     credentials: Vec::new(),
+                    secrets: Vec::new(),
                     public,
                     args,
                 },

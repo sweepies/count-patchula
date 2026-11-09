@@ -14,14 +14,21 @@ pub struct Redactor {
 
 impl Default for Redactor {
     fn default() -> Self {
+        // The token shapes the HTTP layer owns, each a prefix at a word
+        // boundary: `sk-` inside `task-1` is not a key. `v1.` keeps its own
+        // pattern: only a long run after it is a token, so versions such as
+        // v1.2.3 survive.
+        let shapes = patchula_http::TOKEN_SHAPES
+            .iter()
+            .filter(|shape| **shape != "v1.")
+            .map(|shape| regex::escape(shape))
+            .collect::<Vec<_>>()
+            .join("|");
         Self {
             patterns: vec![
-                // Preserve v1.2.3 versions; legacy tokens have long suffixes.
-                // Stateless ghs_ tokens include JWT dots and hyphens.
-                Regex::new(
-                    r"(?:gh[psour]_[A-Za-z0-9_.-]+|github_pat_[A-Za-z0-9_.-]+|v1\.[A-Za-z0-9_]{20,})",
-                )
-                .expect("static token regex"),
+                Regex::new(&format!(r"\b(?:{shapes})[A-Za-z0-9_.\-]+"))
+                    .expect("static token regex"),
+                Regex::new(r"v1\.[A-Za-z0-9_]{20,}").expect("static token regex"),
                 Regex::new(r"(?i)(?:bearer|basic)\s+[A-Za-z0-9+/_-]+(?:\.[A-Za-z0-9+/_=-]+)*")
                     .expect("static authorization regex"),
             ],

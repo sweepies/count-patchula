@@ -327,6 +327,31 @@ pub(super) fn scopes<'a>(entries: impl IntoIterator<Item = &'a Credential>) -> V
     scopes
 }
 
+/// Every value a run holding `entries` was given, in each form a tool could
+/// echo back: the secret itself and the encodings the tools write.
+pub(super) fn secrets<'a>(entries: impl IntoIterator<Item = &'a Credential>) -> Vec<String> {
+    use base64::Engine;
+    let mut secrets = Vec::new();
+    for entry in entries {
+        match &entry.auth {
+            Auth::Bearer { token } => {
+                secrets.push(token.clone());
+                secrets.push(format!("Bearer {token}"));
+            }
+            Auth::Basic { username, password } => {
+                secrets.push(password.clone());
+                let userinfo = format!("{username}:{password}");
+                secrets.push(userinfo.clone());
+                let encoded = base64::engine::general_purpose::STANDARD.encode(&userinfo);
+                secrets.push(encoded.clone());
+                secrets.push(format!("Basic {encoded}"));
+            }
+            _ => {}
+        }
+    }
+    secrets
+}
+
 /// Whether `field` is only characters a URL's user part holds unescaped:
 /// unreserved characters and sub-delimiters but `+`, which a form decoder
 /// reads as a space, and `:` in a password.

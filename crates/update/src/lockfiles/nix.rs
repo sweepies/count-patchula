@@ -114,7 +114,7 @@ impl Runner {
         cwd: Option<PathBuf>,
         args: Vec<String>,
         token: Option<&str>,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Vec<u8>, Error> {
         let conf = driver.join("nix-conf");
         std::fs::create_dir_all(&conf).map_err(|e| e.to_string())?;
         std::fs::write(conf.join("nix.conf"), "").map_err(|e| e.to_string())?;
@@ -152,6 +152,11 @@ impl Runner {
                     ("NIX_CONFIG".into(), config),
                 ],
                 credentials: Vec::new(),
+                secrets: token
+                    .filter(|token| !token.is_empty())
+                    .map(str::to_owned)
+                    .into_iter()
+                    .collect(),
                 public: false,
                 args: call,
             },
@@ -179,7 +184,7 @@ impl Runner {
         directory: &str,
         jobs: &[&Job],
         maintenance: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let lock = node::join(directory, "flake.lock");
         let before: Value = serde_json::from_str(
             &baseline
@@ -212,7 +217,7 @@ impl Runner {
             .iter()
             .find(|name| !before_inputs.contains_key(**name) || refused.contains(*name))
         {
-            return Err(format!("flake input {name} cannot be updated"));
+            return Err(format!("flake input {name} cannot be updated").into());
         }
         // nix fetches what flake.nix declares, not what the lock holds, so the
         // declared inputs are checked before it runs. Restricted evaluation
@@ -256,7 +261,8 @@ impl Runner {
                 return Err(format!(
                     "{}: input {name}: {reason}",
                     node::join(directory, "flake.nix")
-                ));
+                )
+                .into());
             }
         }
         let mut args = vec![
@@ -301,7 +307,7 @@ impl Runner {
                 };
                 let dir = direct.contains(name.as_str()).then_some(directory);
                 if let Some(reason) = patchula_manager::flake_input_refusal(attrs, dir) {
-                    return Err(format!("{lock}: node {name}: {reason}"));
+                    return Err(format!("{lock}: node {name}: {reason}").into());
                 }
             }
         }
@@ -317,7 +323,8 @@ impl Runner {
                 return Err(format!(
                     "nix locked flake input {name} at {}, not the approved {target}: it moved after the lookup",
                     got.unwrap_or("nothing")
-                ));
+                )
+                .into());
             }
         }
         Ok(())
@@ -335,7 +342,8 @@ impl Runner {
         {
             let driver = tempfile::tempdir().map_err(|e| e.to_string())?;
             self.nix(driver.path(), None, vec!["store".into(), "gc".into()], None)
-                .await?;
+                .await
+                .map_err(|error| error.to_string())?;
         }
         match std::fs::remove_dir_all(dir.join("cache")) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
@@ -373,6 +381,7 @@ impl patchula_datasource::Flakes for Runner {
                 token,
             )
             .await
+            .map_err(|error| error.to_string())
         })
     }
 }

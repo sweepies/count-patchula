@@ -7,7 +7,7 @@ pub use patchula_datasource::notes::inert;
 
 /// Failure text kept on a dashboard: a one-line summary, and the decisive
 /// lines of the tool's output for a collapsed block.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Failure {
     pub summary: String,
     pub detail: Option<String>,
@@ -133,6 +133,27 @@ fn excerpt(output: &str) -> Option<String> {
     Some(cut(&inert(text), DETAIL_CHARS))
 }
 
+/// A lockfile tool's process failure rendered for the dashboard: an exit
+/// keeps its status in the summary and the decisive output lines below;
+/// every other failure follows [`failure`]'s rules on its display text.
+pub fn tool_failure(context: &str, process: &patchula_process::Failure) -> Failure {
+    if let patchula_process::Failure::Exited {
+        status,
+        stdout,
+        stderr,
+    } = process
+    {
+        let summary = format!("{context}: {status}");
+        if !summary.contains(['\n', '\r']) && summary.chars().count() <= SUMMARY_CHARS {
+            return Failure {
+                summary: inert(&summary),
+                detail: excerpt(&strip_ansi(&format!("{stdout} {stderr}"))),
+            };
+        }
+    }
+    failure(&format!("{context}: {process}"))
+}
+
 /// Splits a failure reason, such as a lockfile tool's whole output, into a
 /// summary and the lines that matter. The report keeps the full reason; this
 /// is what GitHub gets.
@@ -144,21 +165,6 @@ pub fn failure(reason: &str) -> Failure {
             summary: inert(clean),
             detail: None,
         };
-    }
-    // "<what failed>: exit status: N: <stdout> <stderr>"
-    if let Some(at) = clean.find("status: ") {
-        let digits = clean[at + 8..]
-            .bytes()
-            .take_while(u8::is_ascii_digit)
-            .count();
-        let end = at + 8 + digits;
-        let head = &clean[..end];
-        if digits > 0 && !head.contains(['\n', '\r']) && head.chars().count() <= SUMMARY_CHARS {
-            return Failure {
-                summary: inert(&head.replace("exit exit ", "exit ")),
-                detail: excerpt(clean[end..].trim_start_matches(':')),
-            };
-        }
     }
     let first = clean.split(['\n', '\r']).next().unwrap_or("").trim();
     Failure {
@@ -217,8 +223,7 @@ pub fn when_unix(seconds: i64) -> String {
 mod tests {
     use super::*;
 
-    const CARGO: &str = "lockfile generation failed: cargo: exit exit status: 101:  mise by @jdx – installing 1 tool\n\
-mise rust@1.99.0 info: downloading installer\n\
+    const CARGO_OUTPUT: &str = " mise by @jdx – installing 1 tool\nmise rust@1.99.0 info: downloading installer\n\
 mise rust@1.99.0 error: $HOME differs from euid-obtained home directory: you may be using sudo\n\
 mise rust@1.99.0 Rust is installed now. Great!\n\
 mise ███████████░░░░░ 0/1 · 3.0s   rust@1.99.0  Downloading rustup-init  3.0s  30/30 kB · 10 kB/s\r\
@@ -232,9 +237,20 @@ location searched: crates.io index\n\
 required by package `jsonwebtoken v10.4.0`\n\
     ... which satisfies dependency `jsonwebtoken = \"^10\"` of package `patchula-github v0.6.0`\n";
 
+    fn exited(status: &str, output: &str) -> patchula_process::Failure {
+        patchula_process::Failure::Exited {
+            status: status.into(),
+            stdout: output.into(),
+            stderr: String::new(),
+        }
+    }
+
     #[test]
     fn a_lockfile_failure_keeps_the_error_and_its_chain_only() {
-        let failure = failure(CARGO);
+        let failure = tool_failure(
+            "lockfile generation failed: cargo",
+            &exited("exit status: 101", CARGO_OUTPUT),
+        );
         assert_eq!(
             failure.summary,
             "lockfile generation failed: cargo: exit status: 101"
@@ -266,11 +282,8 @@ required by package `jsonwebtoken v10.4.0`\n\
 
     #[test]
     fn the_detail_is_capped_and_cannot_close_its_fence() {
-        let long = format!(
-            "tool: exit status: 1: error: first\n```\n{}",
-            "x".repeat(5000)
-        );
-        let failure = failure(&long);
+        let long = format!("error: first\n```\n{}", "x".repeat(5000));
+        let failure = tool_failure("tool", &exited("exit status: 1", &long));
         let detail = failure.detail.unwrap();
         assert!(
             detail.chars().count() <= DETAIL_CHARS + 1,
@@ -282,8 +295,13 @@ required by package `jsonwebtoken v10.4.0`\n\
 
     #[test]
     fn mentions_in_tool_output_are_neutralised_in_summary_and_detail() {
-        let failure =
-            failure("tool: exit status: 2: error: ask @jdx or @org/team about #12\nsecond line");
+        let failure = tool_failure(
+            "tool",
+            &exited(
+                "exit status: 2",
+                "error: ask @jdx or @org/team about #12\nsecond line",
+            ),
+        );
         let all = format!("{} {}", failure.summary, failure.detail.unwrap());
         assert!(
             !all.contains("@jdx") && !all.contains("@org") && !all.contains("#12"),
@@ -293,12 +311,14 @@ required by package `jsonwebtoken v10.4.0`\n\
 
     #[test]
     fn a_rust_panic_after_many_lines_is_the_excerpts_start() {
-        let mut output = String::from("tool: exit status: 101: ");
+        let mut output = String::new();
         for n in 0..14 {
             output.push_str(&format!("warning: unused variable {n}\n"));
         }
         output.push_str("thread 'main' panicked at src/main.rs:3:5:\nboom\nstack backtrace:\n");
-        let detail = failure(&output).detail.unwrap();
+        let detail = tool_failure("tool", &exited("exit status: 101", &output))
+            .detail
+            .unwrap();
         assert!(detail.starts_with("thread 'main' panicked at"), "{detail}");
         assert!(detail.contains("boom"));
     }
@@ -306,7 +326,7 @@ required by package `jsonwebtoken v10.4.0`\n\
     #[test]
     fn the_cap_counts_the_neutralised_text() {
         let mentions = "error: @a1 @a2 @a3 https://github.com/o/r/issues/1 ".repeat(40);
-        let detail = failure(&format!("x: exit status: 2: {mentions}"))
+        let detail = tool_failure("x", &exited("exit status: 2", &mentions))
             .detail
             .unwrap();
         assert!(

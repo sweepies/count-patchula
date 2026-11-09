@@ -2,7 +2,7 @@
 //! fixtures hold what mise printed for each lookup command.
 use crate::{Redactor, failure};
 use patchula_http::Error;
-use patchula_process::{CommandSpec, Executor};
+use patchula_process::{CommandSpec, Executor, Failure};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -27,7 +27,8 @@ pub struct Run {
 pub enum Outcome {
     /// Standard output, which is JSON.
     Output(serde_json::Value),
-    /// The executor's error: the exit status and what mise printed.
+    /// The executor's failure as its display text: the exit status and what
+    /// mise printed.
     Error(String),
 }
 
@@ -103,6 +104,43 @@ impl MiseReplay {
             .collect()
     }
 }
+/// A recorded failure's display text back into the `Failure` it was, for
+/// the variants a recording can hold.
+fn recorded(text: &str) -> Failure {
+    if let Some(rest) = text.strip_prefix("tool exceeded ")
+        && let Some(secs) = rest.strip_suffix("s time limit")
+        && let Ok(secs) = secs.parse::<u64>()
+    {
+        return Failure::TimedOut {
+            limit: std::time::Duration::from_secs(secs),
+        };
+    }
+    if text == "command output exceeded size limit" {
+        return Failure::OutputTooLarge;
+    }
+    for prefix in ["exit status: ", "exit code: ", "signal: "] {
+        if let Some(rest) = text.strip_prefix(prefix)
+            && let Some(at) = rest.find(": ")
+        {
+            return Failure::Exited {
+                status: format!("{prefix}{}", &rest[..at]),
+                // "{stdout} {stderr}" cannot be split back; keep it as stdout.
+                stdout: rest[at + 2..].to_owned(),
+                stderr: String::new(),
+            };
+        }
+    }
+    if let Some(rest) = text.strip_prefix("cannot start ")
+        && let Some((program, message)) = rest.rsplit_once(": ")
+    {
+        return Failure::Spawn {
+            program: program.into(),
+            message: message.to_owned(),
+        };
+    }
+    Failure::Io(text.to_owned())
+}
+
 fn snapshot(spec: &CommandSpec) -> Call {
     Call {
         program: spec.program.clone(),
@@ -120,7 +158,7 @@ impl Executor for MiseReplay {
     fn run(
         &self,
         spec: CommandSpec,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, Failure>> + Send + '_>> {
         Box::pin(async move {
             let call = snapshot(&spec);
             self.calls.lock().expect("calls lock").push(call.clone());
@@ -128,7 +166,10 @@ impl Executor for MiseReplay {
                 return if call.args.iter().any(|a| a == "install") {
                     Ok(Vec::new())
                 } else {
-                    Err(format!("unexpected mise command {:?}", call.args))
+                    Err(Failure::Io(format!(
+                        "unexpected mise command {:?}",
+                        call.args
+                    )))
                 };
             };
             match self.runs.iter().find(|run| run.args == args) {
@@ -139,11 +180,11 @@ impl Executor for MiseReplay {
                 Some(Run {
                     result: Outcome::Error(message),
                     ..
-                }) => Err(message.clone()),
-                None => Err(format!(
+                }) => Err(recorded(message)),
+                None => Err(Failure::Io(format!(
                     "mise fixture has no run for `mise {}`; replay never runs mise",
                     args.join(" ")
-                )),
+                ))),
             }
         })
     }
@@ -174,7 +215,7 @@ impl Executor for MiseRecorder {
     fn run(
         &self,
         spec: CommandSpec,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, Failure>> + Send + '_>> {
         Box::pin(async move {
             let args = snapshot(&spec).lookup().map(<[String]>::to_vec);
             let result = self.mise.run(spec).await;
@@ -183,9 +224,10 @@ impl Executor for MiseRecorder {
             };
             let outcome = match &result {
                 Ok(bytes) => Outcome::Output(
-                    serde_json::from_slice(bytes).map_err(|e| format!("not JSON: {e}"))?,
+                    serde_json::from_slice(bytes)
+                        .map_err(|e| Failure::Io(format!("not JSON: {e}")))?,
                 ),
-                Err(message) => Outcome::Error(message.clone()),
+                Err(failure) => Outcome::Error(failure.to_string()),
             };
             let mut fixture = self.fixture.lock().expect("fixture lock");
             fixture.runs.retain(|run| run.args != args);
@@ -193,10 +235,11 @@ impl Executor for MiseRecorder {
                 args,
                 result: outcome,
             });
-            let bytes = serde_json::to_vec_pretty(&*fixture).map_err(|e| e.to_string())?;
+            let bytes =
+                serde_json::to_vec_pretty(&*fixture).map_err(|e| Failure::Io(e.to_string()))?;
             Redactor::default()
                 .check(&bytes)
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| Failure::Io(e.to_string()))?;
             // A temporary file in the same directory, renamed over the fixture, so a
             // stopped recording never leaves half a file.
             let parent = self
@@ -204,12 +247,14 @@ impl Executor for MiseRecorder {
                 .parent()
                 .filter(|parent| !parent.as_os_str().is_empty())
                 .unwrap_or_else(|| Path::new("."));
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-            let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(parent).map_err(|e| Failure::Io(e.to_string()))?;
+            let mut file =
+                tempfile::NamedTempFile::new_in(parent).map_err(|e| Failure::Io(e.to_string()))?;
             file.write_all(&bytes)
                 .and_then(|()| file.write_all(b"\n"))
-                .map_err(|e| e.to_string())?;
-            file.persist(&self.path).map_err(|e| e.to_string())?;
+                .map_err(|e| Failure::Io(e.to_string()))?;
+            file.persist(&self.path)
+                .map_err(|e| Failure::Io(e.to_string()))?;
             result
         })
     }

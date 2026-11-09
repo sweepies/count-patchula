@@ -12,6 +12,7 @@ mod server;
 mod tui;
 
 use cli::{App, AuthCommand, Command, ConfigCommand, ToolsCommand};
+use patchula_process::Executor as _;
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 
@@ -188,6 +189,7 @@ async fn resolve_token(
                 .into(),
             cwd: std::env::temp_dir(),
             env: std::env::vars_os().collect(),
+            secrets: Vec::new(),
             timeout: GH_TIMEOUT,
             output_limit: 4096,
             complete_output: true,
@@ -735,7 +737,7 @@ async fn source(
                 repositories: options.repositories.clone(),
             });
         }
-        let repository = current_repository().map_err(|e| (2, e))?;
+        let repository = current_repository().await.map_err(|e| (2, e))?;
         let server = match remote::configured(services)? {
             Some(server) => server,
             None => remote::find(services, &repository).await?.ok_or_else(|| {
@@ -746,7 +748,7 @@ async fn source(
             })?,
         };
         if writes {
-            pushed()?;
+            pushed().await?;
         }
         return Ok(Source::Remote {
             server,
@@ -772,11 +774,11 @@ async fn source(
     }
     if !options.here
         && local_flag.is_none()
-        && let Ok(repository) = current_repository()
+        && let Ok(repository) = current_repository().await
         && let Some(server) = remote::choose(services, &repository).await?
     {
         if writes {
-            pushed()?;
+            pushed().await?;
         }
         return Ok(Source::Remote {
             server,
@@ -784,8 +786,8 @@ async fn source(
         });
     }
     if writes {
-        let repository = current_repository().map_err(|e| (2, e))?;
-        pushed()?;
+        let repository = current_repository().await.map_err(|e| (2, e))?;
+        pushed().await?;
         return Ok(Source::GitHub(vec![repository]));
     }
     if options.config_dir.is_some() {
@@ -932,7 +934,7 @@ fn missing_config(
 
 /// A real run with no repository opens pull requests from what GitHub has, so
 /// the working tree must be clean and at the remote's default branch.
-fn pushed() -> Result<(), (u8, miette::Report)> {
+async fn pushed() -> Result<(), (u8, miette::Report)> {
     let refuse = |message: String| {
         (
             2,
@@ -943,21 +945,23 @@ fn pushed() -> Result<(), (u8, miette::Report)> {
         )
     };
     let status = git(&["status", "--porcelain"])
+        .await
         .ok_or_else(|| refuse("cannot read this checkout's Git status".into()))?;
     if !status.is_empty() {
         return Err(refuse(
             "a run with no repository opens pull requests from what is on GitHub, and this working tree has uncommitted changes".into(),
         ));
     }
-    let remote = git_remote().map_err(|e| (2, e))?;
+    let remote = git_remote().await.map_err(|e| (2, e))?;
     let default = git(&["symbolic-ref", "--short", &format!("refs/remotes/{remote}/HEAD")])
+        .await
         .ok_or_else(|| {
             refuse(format!(
                 "cannot tell the default branch of {remote}; `git remote set-head {remote} --auto` records it"
             ))
         })?;
-    let head = git(&["rev-parse", "HEAD"]);
-    if head.is_none() || head != git(&["rev-parse", &default]) {
+    let head = git(&["rev-parse", "HEAD"]).await;
+    if head.is_none() || head != git(&["rev-parse", &default]).await {
         return Err(refuse(format!(
             "a run with no repository opens pull requests from {default}, and HEAD is not at {default}"
         )));
@@ -966,14 +970,29 @@ fn pushed() -> Result<(), (u8, miette::Report)> {
 }
 
 /// Runs git in the current directory: its trimmed stdout, or None on failure.
-fn git(args: &[&str]) -> Option<String> {
-    std::process::Command::new("git")
-        .args(args)
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+/// The environment is the minimum git needs, and a hung git is stopped.
+async fn git(args: &[&str]) -> Option<String> {
+    let mut env = std::collections::BTreeMap::new();
+    env.insert("LC_ALL".into(), "C".into());
+    for var in ["PATH", "HOME"] {
+        if let Some(value) = std::env::var_os(var) {
+            env.insert(var.into(), value);
+        }
+    }
+    let output = patchula_process::SystemExecutor
+        .run(patchula_process::CommandSpec {
+            program: "git".into(),
+            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+            cwd: std::env::current_dir().ok()?,
+            env,
+            secrets: Vec::new(),
+            timeout: GH_TIMEOUT,
+            output_limit: 1 << 16,
+            complete_output: false,
+        })
+        .await
+        .ok()?;
+    Some(String::from_utf8_lossy(&output).trim().to_owned())
 }
 
 const CHECKOUT_HELP: &str =
@@ -981,8 +1000,8 @@ const CHECKOUT_HELP: &str =
 
 /// The current checkout's remote: `origin`, or the only remote when there is
 /// no `origin`.
-fn git_remote() -> Result<String, miette::Report> {
-    let Some(remotes) = git(&["remote"]) else {
+async fn git_remote() -> Result<String, miette::Report> {
+    let Some(remotes) = git(&["remote"]).await else {
         return Err(miette::miette!(
             help = CHECKOUT_HELP,
             "no repository named, and the current directory is not a Git checkout"
@@ -1004,9 +1023,10 @@ fn git_remote() -> Result<String, miette::Report> {
 }
 
 /// The `owner/name` of the current checkout's GitHub remote.
-fn current_repository() -> Result<String, miette::Report> {
-    let remote = git_remote()?;
+async fn current_repository() -> Result<String, miette::Report> {
+    let remote = git_remote().await?;
     git(&["remote", "get-url", &remote])
+        .await
         .as_deref()
         .and_then(github_repository)
         .ok_or_else(|| {

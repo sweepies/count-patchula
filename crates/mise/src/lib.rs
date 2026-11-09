@@ -17,7 +17,7 @@ pub enum Error {
     #[error("{0}")]
     Refused(String),
     #[error("mise failed: {0}")]
-    Failed(String),
+    Failed(patchula_process::Failure),
     #[error("mise gave an unreadable listing for {0}")]
     Unreadable(String),
     #[error("mise lists no versions of `{0}`")]

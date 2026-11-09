@@ -10327,7 +10327,7 @@
         "--",
         "aapt2"
       ],
-      "error": "exit exit status: 1:  mise ERROR aapt2 is in the mise tool registry but none of its backends (vfox:jdx/vfox-aapt2) are supported in the current configuration\nmise ERROR Version: 2026.10.11 linux-x64 (2026-10-15)\nmise ERROR Run with --verbose or MISE_VERBOSE=1 for more information\n"
+      "error": "exit status: 1:  mise ERROR aapt2 is in the mise tool registry but none of its backends (vfox:jdx/vfox-aapt2) are supported in the current configuration\nmise ERROR Version: 2026.10.11 linux-x64 (2026-10-15)\nmise ERROR Run with --verbose or MISE_VERBOSE=1 for more information\n"
     },
     {
       "args": [
@@ -10337,7 +10337,7 @@
         "--",
         "packslip:packslip.dev"
       ],
-      "error": "exit exit status: 1:  mise ERROR packslip:packslip.dev is not on a forge mise knows, so nothing pins its signer; set `pubkey`, or `identity` and `issuer`, in its tool options\nmise ERROR Version: 2026.10.11 linux-x64 (2026-10-15)\nmise ERROR Run with --verbose or MISE_VERBOSE=1 for more information\n"
+      "error": "exit status: 1:  mise ERROR packslip:packslip.dev is not on a forge mise knows, so nothing pins its signer; set `pubkey`, or `identity` and `issuer`, in its tool options\nmise ERROR Version: 2026.10.11 linux-x64 (2026-10-15)\nmise ERROR Run with --verbose or MISE_VERBOSE=1 for more information\n"
     },
     {
       "args": [
@@ -10347,7 +10347,7 @@
         "--",
         "somethingunknownxyz"
       ],
-      "error": "exit exit status: 1:  mise ERROR somethingunknownxyz not found in mise tool registry\nmise ERROR Version: 2026.10.11 linux-x64 (2026-10-15)\nmise ERROR Run with --verbose or MISE_VERBOSE=1 for more information\n"
+      "error": "exit status: 1:  mise ERROR somethingunknownxyz not found in mise tool registry\nmise ERROR Version: 2026.10.11 linux-x64 (2026-10-15)\nmise ERROR Run with --verbose or MISE_VERBOSE=1 for more information\n"
     },
     {
       "args": [
@@ -10357,7 +10357,7 @@
         "--",
         "nosuch:foo"
       ],
-      "error": "exit exit status: 1:  mise ERROR nosuch is not a valid plugin name\nmise ERROR Version: 2026.10.11 linux-x64 (2026-10-15)\nmise ERROR Run with --verbose or MISE_VERBOSE=1 for more information\n"
+      "error": "exit status: 1:  mise ERROR nosuch is not a valid plugin name\nmise ERROR Version: 2026.10.11 linux-x64 (2026-10-15)\nmise ERROR Run with --verbose or MISE_VERBOSE=1 for more information\n"
     },
     {
       "args": [

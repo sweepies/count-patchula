@@ -4,6 +4,28 @@ use reqwest::{Request, Url};
 use std::time::{Duration, Instant};
 use tracing::Instrument;
 
+/// Prefixes that mark credential material: the token shapes tracing and
+/// test recordings both redact on. `v1.` keeps its own pattern in recordings:
+/// only a long run after it is a token, so versions such as v1.2.3 survive.
+pub const TOKEN_SHAPES: &[&str] = &[
+    "ghp_",
+    "gho_",
+    "ghs_",
+    "ghu_",
+    "ghr_",
+    "github_pat_",
+    "npm_",
+    "sk-",
+    "xoxb-",
+    "xoxp-",
+    "v1.",
+];
+
+/// Words that mark credential material in a path without being a token
+/// shape: the schemes authorization headers use and credential query
+/// parameters. Tracing only; recordings get them from their own rules.
+const PATH_MARKERS: &[&str] = &["bearer", "authorization", "token="];
+
 pub struct RequestTrace {
     span: tracing::Span,
     started: Instant,
@@ -20,23 +42,10 @@ impl RequestTrace {
                 let lower = percent_encoding::percent_decode_str(part)
                     .decode_utf8_lossy()
                     .to_ascii_lowercase();
-                if [
-                    "ghp_",
-                    "gho_",
-                    "ghs_",
-                    "ghu_",
-                    "ghr_",
-                    "github_pat_",
-                    "npm_",
-                    "bearer",
-                    "authorization",
-                    "token=",
-                    "sk-",
-                    "xoxb-",
-                    "xoxp-",
-                ]
-                .iter()
-                .any(|prefix| lower.contains(prefix))
+                if TOKEN_SHAPES
+                    .iter()
+                    .chain(PATH_MARKERS)
+                    .any(|prefix| lower.contains(prefix))
                 {
                     "[redacted]"
                 } else {

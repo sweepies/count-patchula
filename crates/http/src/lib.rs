@@ -118,7 +118,7 @@ mod credentials;
 pub use cached::{Bearer, Cached, Error as CacheError, Options, Stats};
 pub use credentials::{Auth, Credential, entry_for, prefix as url_prefix};
 mod trace;
-pub use trace::{PhaseTrace, RequestTrace};
+pub use trace::{PhaseTrace, RequestTrace, TOKEN_SHAPES};
 mod tracked;
 pub use tracked::tracked;
 

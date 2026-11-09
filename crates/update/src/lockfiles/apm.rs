@@ -4,7 +4,7 @@
 use super::*;
 
 impl Runner {
-    pub(super) async fn apm_lock(&self, context: node::NodeContext<'_>) -> Result<(), String> {
+    pub(super) async fn apm_lock(&self, context: node::NodeContext<'_>) -> Result<(), Error> {
         let node::NodeContext {
             driver,
             root,
@@ -28,6 +28,7 @@ impl Runner {
                 // APM clones each package from its own local bare cache.
                 env: vec![("GIT_ALLOW_PROTOCOL".into(), "https:file".into())],
                 credentials: Vec::new(),
+                secrets: Vec::new(),
                 public: false,
                 args,
             },
@@ -43,7 +44,8 @@ impl Runner {
                 } else {
                     directory
                 }
-            ));
+            )
+            .into());
         }
         Ok(())
     }

@@ -757,6 +757,7 @@ mod tests {
             batch: None,
             tooling: Vec::new(),
             hold: None,
+            failure: None,
         }
     }
 

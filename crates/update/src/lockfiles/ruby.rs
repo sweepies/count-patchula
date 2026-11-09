@@ -37,7 +37,7 @@ impl Runner {
         &self,
         context: node::NodeContext<'_>,
         jobs: &[&Job],
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let node::NodeContext {
             driver,
             root,
@@ -60,6 +60,7 @@ impl Runner {
         let ruby = ruby_version(&cwd, &node::version(versions, "ruby")?);
         let (credentials, entries) = self.bundler_env();
         let scopes = credentials::scopes(entries.iter().copied());
+        let secrets = credentials::secrets(entries.iter().copied());
         let invocation = |args| Invocation {
             tools: vec![("ruby".into(), ruby.clone())],
             bin: "bundle".into(),
@@ -76,6 +77,7 @@ impl Runner {
             .chain(credentials.iter().cloned())
             .collect(),
             credentials: scopes.clone(),
+            secrets: secrets.clone(),
             public,
             args,
         };
@@ -102,7 +104,8 @@ impl Runner {
                 } else {
                     directory
                 }
-            ));
+            )
+            .into());
         }
         Ok(())
     }

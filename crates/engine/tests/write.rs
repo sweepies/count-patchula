@@ -1871,9 +1871,18 @@ impl patchula_process::Executor for FailTools {
     fn run(
         &self,
         _: patchula_process::CommandSpec,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + Send + '_>>
-    {
-        Box::pin(async { Err("fixture tool unavailable".into()) })
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Vec<u8>, patchula_process::Failure>>
+                + Send
+                + '_,
+        >,
+    > {
+        Box::pin(async {
+            Err(patchula_process::Failure::Io(
+                "fixture tool unavailable".into(),
+            ))
+        })
     }
 }
 #[tokio::test(start_paused = true)]

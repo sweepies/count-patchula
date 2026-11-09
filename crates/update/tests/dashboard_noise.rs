@@ -84,6 +84,16 @@ fn lockfile_output() -> String {
     include_str!("fixtures/lockfile-failure.txt").to_owned()
 }
 
+/// The captured output as the runner's structured failure: the fixture is
+/// what the tool printed, and the structure keeps the status apart from it.
+fn lockfile_process() -> patchula_process::Failure {
+    patchula_process::Failure::Exited {
+        status: "exit status: 101".into(),
+        stdout: lockfile_output(),
+        stderr: String::new(),
+    }
+}
+
 fn repository() -> Repository {
     let zstd_safe: Vec<_> = ZSTD_SAFE
         .iter()
@@ -199,6 +209,7 @@ fn plan(
         batch: None,
         tooling: Vec::new(),
         hold: None,
+        failure: None,
     }
 }
 
@@ -206,7 +217,20 @@ fn render() -> String {
     render_with(&repository())
 }
 fn render_with(repo: &Repository) -> String {
-    let output = lockfile_output();
+    let process = lockfile_process();
+    let reason = format!("lockfile generation failed: cargo: {process}");
+    let mut base64 = plan(
+        "patchula/base64-0.x",
+        "chore(deps): update base64 to 0.23.1",
+        "base64",
+        "Cargo.lock",
+        "0.23.1",
+        Some(&reason),
+    );
+    base64.failure = Some(patchula_update::text::tool_failure(
+        "lockfile generation failed: cargo",
+        &process,
+    ));
     let plans = [
         plan(
             "patchula/zstd-safe-8.x",
@@ -232,14 +256,7 @@ fn render_with(repo: &Repository) -> String {
             "0.42.7",
             None,
         ),
-        plan(
-            "patchula/base64-0.x",
-            "chore(deps): update base64 to 0.23.1",
-            "base64",
-            "Cargo.lock",
-            "0.23.1",
-            Some(&format!("lockfile generation failed: {output}")),
-        ),
+        base64,
         plan(
             "patchula/node-26.x",
             "chore(deps): update node to 26.13.0",

@@ -15,6 +15,7 @@ impl Runner {
             args: vec!["--no-config".into()],
             cwd: driver.into(),
             env,
+            secrets: Vec::new(),
             timeout: Duration::from_secs(180),
             output_limit: 4096,
             complete_output: false,

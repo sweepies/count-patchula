@@ -122,14 +122,20 @@ pub(super) async fn install_mise(
         .chain(GITHUB_TOKENS.map(|key| (key, std::env::var_os(key))))
         .filter_map(|(key, value)| Some((key.into(), value?)))
         .collect(),
+        secrets: GITHUB_TOKENS
+            .iter()
+            .filter_map(|key| std::env::var(key).ok())
+            .collect(),
         timeout: INSTALL_TIMEOUT,
         output_limit: 4096,
         complete_output: false,
     };
-    executor
-        .run(spec)
-        .await
-        .map_err(|e| format!("packslip could not install mise {version}: {}", plain(&e)))?;
+    executor.run(spec).await.map_err(|e| {
+        format!(
+            "packslip could not install mise {version}: {}",
+            plain(&e.to_string())
+        )
+    })?;
     let mise = store_mise(tools)
         .ok_or_else(|| format!("packslip installed mise {version} without bin/mise"))?;
     // Only the pinned version is ever started, so earlier ones are removed.
