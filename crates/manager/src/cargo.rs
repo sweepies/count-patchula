@@ -15,11 +15,11 @@ pub(crate) struct Parsed<'a> {
 }
 
 /// Parse the selected manifests and every configuration file once.
-pub(crate) fn parsed<'a>(manifests: &'a Files, files: &'a Files) -> Parsed<'a> {
+pub(crate) fn parsed<'a>(files: &'a Files, keep: impl Fn(&str) -> bool) -> Parsed<'a> {
     Parsed {
-        manifests: manifests
+        manifests: files
             .iter()
-            .filter(|(p, _)| p.ends_with("Cargo.toml") || p.ends_with("Cargo.lock"))
+            .filter(|(p, _)| keep(p) && (p.ends_with("Cargo.toml") || p.ends_with("Cargo.lock")))
             // One the Count could not read fails its crates' lookups
             // instead; see `replaced`.
             .filter_map(|(p, t)| Some((p, t.read().ok()?)))
@@ -566,6 +566,111 @@ pub(crate) const CRATES: crate::origins::Public = crate::origins::Public {
             .is_some_and(|host| matches!(host.as_str(), "index.crates.io" | "crates.io"))
     },
 };
+
+/// The parsed manifests, lock docs and configs extraction shares.
+struct State<'a> {
+    parsed: Parsed<'a>,
+    docs: BTreeMap<&'a str, Document<&'a str>>,
+}
+
+pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
+
+pub(crate) struct Descriptor;
+
+impl crate::Ecosystem for Descriptor {
+    fn selected(&self, _config: &Config, path: &str) -> bool {
+        let leaf = path.rsplit('/').next().unwrap_or(path);
+        matches!(
+            leaf,
+            "Cargo.toml" | "Cargo.lock" | "rust-toolchain" | "rust-toolchain.toml"
+        )
+    }
+    fn registry_file(&self, path: &str) -> bool {
+        config_file(path)
+    }
+    fn backend_settings(&self, path: &str) -> bool {
+        config_file(path)
+    }
+    fn more<'a>(&self, files: &'a Files) -> Option<crate::PathPredicate<'a>> {
+        // The manifests above a crate's, which can patch it as its
+        // workspace, whatever `exclude` leaves out.
+        let ancestors: std::collections::BTreeSet<String> = files
+            .keys()
+            .filter(|p| p.ends_with("Cargo.toml") || p.ends_with("Cargo.lock"))
+            .flat_map(|p| {
+                let mut out = Vec::new();
+                let mut dir = &p[..p.rfind('/').map_or(0, |i| i + 1)];
+                // The manifest beside a lockfile, then those above.
+                out.push(format!("{dir}Cargo.toml"));
+                while !dir.is_empty() {
+                    let parent = dir.trim_end_matches('/');
+                    dir = &parent[..parent.rfind('/').map_or(0, |i| i + 1)];
+                    out.push(format!("{dir}Cargo.toml"));
+                }
+                out
+            })
+            .collect();
+        Some(Box::new(move |path| ancestors.contains(path)))
+    }
+    fn prepare<'a>(
+        &self,
+        scanner: &'a Scanner,
+        files: &'a Files,
+        _shared: &'a Shared<'a>,
+    ) -> Result<Prepared<'a>, String> {
+        // Only the manifests and lockfiles Cargo's selection takes: one read
+        // only for its patches, above a selected crate, does not shape
+        // extraction.
+        let parsed = parsed(files, |path| scanner.selected(Manager::Cargo, path));
+        // The manifests extraction reads; one the Count cannot parse fails
+        // the whole extraction, as before.
+        let docs: BTreeMap<&str, Document<&str>> = parsed
+            .manifests
+            .iter()
+            .map(|(p, r)| r.clone().map(|d| (*p, d)))
+            .collect::<Result<_, _>>()?;
+        let state = std::rc::Rc::new(State { parsed, docs });
+        let extract_state = state.clone();
+        Ok(Prepared {
+            extract: Some(Box::new(move |path, text, out| {
+                let result = if path.ends_with("rust-toolchain")
+                    || path.ends_with("rust-toolchain.toml")
+                {
+                    toolchains::rust(path, text)
+                } else {
+                    extract(path, text, &extract_state.docs, &mut out.skipped).map(|mut deps| {
+                        if let Some(reason) = replaced(files, &extract_state.parsed, path) {
+                            for dep in deps.iter_mut().filter(|d| d.source == Source::Crates) {
+                                dep.registry = origins::Named::Unusable(reason.clone()).recorded();
+                            }
+                        }
+                        deps
+                    })
+                };
+                file_result(out, path, result);
+                Ok(())
+            })),
+            finish: Some(Box::new(move |out| {
+                out.locked
+                    .extend(locked::cargo(files, &state.docs, &out.dependencies));
+                let mut memo = BTreeMap::new();
+                for locked in out
+                    .locked
+                    .iter_mut()
+                    .filter(|l| l.manager == Manager::Cargo)
+                {
+                    let reason = memo
+                        .entry(locked.file.clone())
+                        .or_insert_with(|| replaced(files, &state.parsed, &locked.file));
+                    if let Some(reason) = reason {
+                        locked.registry = Some(reason.clone());
+                    }
+                }
+                Ok(())
+            })),
+        })
+    }
+}
 
 #[cfg(test)]
 mod tests {

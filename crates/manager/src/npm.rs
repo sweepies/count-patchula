@@ -5,22 +5,7 @@ use jsonc_parser::{
 };
 
 pub(crate) fn ast(text: &str, jsonc: bool) -> Result<Value<'_>, String> {
-    let options = jsonc_parser::ParseOptions {
-        allow_comments: jsonc,
-        allow_trailing_commas: jsonc,
-        allow_loose_object_property_names: false,
-        allow_missing_commas: false,
-        allow_single_quoted_strings: false,
-        allow_hexadecimal_numbers: false,
-        allow_unary_plus_numbers: false,
-        allow_bare_decimal_point_numbers: false,
-        allow_non_finite_numbers: false,
-        allow_extended_string_escapes: false,
-    };
-    jsonc_parser::parse_to_ast(text, &Default::default(), &options)
-        .map_err(|e| e.to_string())?
-        .value
-        .ok_or_else(|| "empty JSON".into())
+    crate::jsonc_ast(text, jsonc)
 }
 pub(super) fn locks(files: &Files) -> Result<BTreeMap<&str, Value<'_>>, String> {
     files
@@ -36,7 +21,7 @@ pub(super) fn locks(files: &Files) -> Result<BTreeMap<&str, Value<'_>>, String> 
         .collect()
 }
 fn escape(name: &str) -> String {
-    name.replace('~', "~0").replace('/', "~1")
+    pointer_token(name)
 }
 fn alias<'a>(name: &'a str, value: &'a str) -> (&'a str, &'a str) {
     value
@@ -651,3 +636,93 @@ pub(crate) const NPM: crate::origins::Public = crate::origins::Public {
     label: "npm",
     is_public: public,
 };
+
+/// The node ecosystem: npm and bun share its files; bun extracts only when
+/// npm is disabled.
+pub(crate) struct Descriptor {
+    pub(crate) manager: Manager,
+}
+
+impl crate::Ecosystem for Descriptor {
+    fn selected(&self, _config: &Config, path: &str) -> bool {
+        let leaf = path.rsplit('/').next().unwrap_or(path);
+        matches!(
+            leaf,
+            "package.json"
+                | "package-lock.json"
+                | "aube-lock.yaml"
+                | "bun.lock"
+                | "pnpm-workspace.yaml"
+                | ".yarnrc.yml"
+                | ".nvmrc"
+                | ".node-version"
+                | ".npmrc"
+        )
+    }
+    fn registry_file(&self, path: &str) -> bool {
+        matches!(
+            path.rsplit('/').next().unwrap_or(path),
+            ".npmrc" | ".yarnrc.yml"
+        )
+    }
+    fn backend_settings(&self, path: &str) -> bool {
+        self.registry_file(path)
+    }
+    fn prepare<'a>(
+        &self,
+        scanner: &'a Scanner,
+        files: &'a Files,
+        shared: &'a Shared<'a>,
+    ) -> Result<Prepared<'a>, String> {
+        // package.json shared by npm/bun is scanned once, preferring bun only
+        // when npm is disabled. Lockfiles provide resolution, never transitive
+        // deps.
+        let node = if scanner.config.managers.contains(&Manager::Npm) {
+            Manager::Npm
+        } else {
+            Manager::Bun
+        };
+        if self.manager != node {
+            return Ok(Prepared::default());
+        }
+        let lock_files = std::rc::Rc::new(locks(files)?);
+        let npmrcs = &shared.npmrcs;
+        let manager = self.manager;
+        let npm = manager == Manager::Npm;
+        let extract_locks = lock_files.clone();
+        let finish_locks = lock_files;
+        Ok(Prepared {
+            extract: Some(Box::new(move |path, text, out| {
+                let result = if path.ends_with("package.json") {
+                    extract(path, text, manager, extract_locks.as_ref()).map(|mut deps| {
+                        assign_registries(&mut deps, npmrcs);
+                        deps
+                    })
+                } else if path.ends_with("pnpm-workspace.yaml") || path.ends_with(".yarnrc.yml") {
+                    catalogs(path, text, manager).map(|mut deps| {
+                        assign_registries(&mut deps, npmrcs);
+                        deps
+                    })
+                } else if path.ends_with(".nvmrc") || path.ends_with(".node-version") {
+                    Ok(node_version(path, text, manager))
+                } else {
+                    // `.npmrc` is read for the registries of the manifests
+                    // beside and below it; lockfiles resolve, never extract.
+                    Ok(Vec::new())
+                };
+                file_result(out, path, result);
+                Ok(())
+            })),
+            finish: Some(Box::new(move |out| {
+                out.locked
+                    .extend(locked::aube(files, &mut out.dependencies, manager, npm)?);
+                if npm {
+                    out.locked
+                        .extend(locked::npm(files, finish_locks.as_ref(), &out.dependencies));
+                }
+                assign_locked_registries(&mut out.locked, npmrcs);
+                Ok(())
+            })),
+        })
+    }
+}

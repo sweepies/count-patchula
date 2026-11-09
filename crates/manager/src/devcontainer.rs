@@ -4,15 +4,13 @@ use crate::*;
 use jsonc_parser::common::Ranged;
 
 pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
-    let options = jsonc_parser::ParseOptions {
-        allow_comments: true,
-        allow_trailing_commas: true,
-        ..Default::default()
-    };
-    let root = jsonc_parser::parse_to_ast(text, &Default::default(), &options)
-        .map_err(|e| e.to_string())?
-        .value
-        .ok_or("empty devcontainer.json")?;
+    let root = crate::jsonc_ast_lenient(text).map_err(|e| {
+        if e == "empty JSON" {
+            "empty devcontainer.json".to_owned()
+        } else {
+            e
+        }
+    })?;
     let object = root
         .as_object()
         .ok_or("devcontainer.json must be an object")?;
@@ -55,10 +53,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
                     text,
                     start,
                     start + tag.len(),
-                    format!(
-                        "/features/{}/tag",
-                        key.replace('~', "~0").replace('/', "~1")
-                    ),
+                    format!("/features/{}/tag", pointer_token(key)),
                 ),
                 name: reference.into(),
                 package: reference.into(),
@@ -77,4 +72,31 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
         }
     }
     Ok(out)
+}
+
+pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
+
+pub(crate) struct Descriptor;
+
+impl crate::Ecosystem for Descriptor {
+    fn selected(&self, _config: &Config, path: &str) -> bool {
+        matches!(
+            path.rsplit('/').next().unwrap_or(path),
+            "devcontainer.json" | ".devcontainer.json"
+        )
+    }
+    fn prepare<'a>(
+        &self,
+        _scanner: &'a Scanner,
+        _files: &'a Files,
+        _shared: &'a Shared<'a>,
+    ) -> Result<Prepared<'a>, String> {
+        Ok(Prepared {
+            extract: Some(Box::new(|path, text, out| {
+                file_result(out, path, extract(path, text));
+                Ok(())
+            })),
+            finish: None,
+        })
+    }
 }

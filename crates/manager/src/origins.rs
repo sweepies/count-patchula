@@ -151,20 +151,15 @@ impl Origins {
     }
 
     /// Give each dependency of `public`'s source in `deps` its registry,
-    /// keyed by `package`, and drop those that do not come from a registry,
+    /// keyed by package, and drop those that do not come from a registry,
     /// returning them.
-    pub(crate) fn assign(
-        &self,
-        deps: &mut Vec<Dependency>,
-        public: &Public,
-        package: impl Fn(&Dependency) -> String,
-    ) -> Vec<Dependency> {
+    pub(crate) fn assign(&self, deps: &mut Vec<Dependency>, public: &Public) -> Vec<Dependency> {
         let mut dropped = Vec::new();
         deps.retain_mut(|dep| {
             if dep.source != public.source {
                 return true;
             }
-            match self.origin(&package(dep)) {
+            match self.origin(&dep.package) {
                 Origin::Index(named) => dep.registry = named.recorded(),
                 Origin::Ambiguous(named) => {
                     let labels: Vec<_> = named.iter().map(|n| n.label(public)).collect();
@@ -179,6 +174,21 @@ impl Origins {
         });
         dropped
     }
+}
+
+/// The skipped entries the packages `Origins::assign` dropped become: each
+/// names its file and value and says `reason`.
+pub(crate) fn skipped(manager: Manager, dropped: Vec<Dependency>, reason: &str) -> Vec<Skipped> {
+    dropped
+        .into_iter()
+        .map(|dep| Skipped {
+            manager,
+            file: dep.file,
+            line: Some(dep.location.line),
+            value: dep.name,
+            reason: reason.into(),
+        })
+        .collect()
 }
 
 /// What a build's own repository declarations mean for its Maven lookups:

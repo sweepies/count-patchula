@@ -241,11 +241,34 @@ fn add(
     }
     // YAML parsing selects only semantic uses/container nodes. The line locator
     // retains the original scalar (and its pin comment) for later editing.
-    let pattern = Regex::new(&format!(
-        r#"(?m)^\s*(?:-\s*)?{}:\s*(?<value>[^\n]+)"#,
-        regex::escape(key)
-    ))
-    .map_err(|e| e.to_string())?;
+    static LOCATORS: std::sync::LazyLock<std::collections::BTreeMap<&'static str, Regex>> =
+        std::sync::LazyLock::new(|| {
+            ["uses", "container", "image"]
+                .into_iter()
+                .map(|key| {
+                    (
+                        key,
+                        Regex::new(&format!(
+                            r#"(?m)^\s*(?:-\s*)?{}:\s*(?<value>[^\n]+)"#,
+                            regex::escape(key)
+                        ))
+                        .expect("action locator pattern"),
+                    )
+                })
+                .collect()
+        });
+    let owned;
+    let pattern = match LOCATORS.get(key) {
+        Some(pattern) => pattern,
+        None => {
+            owned = Regex::new(&format!(
+                r#"(?m)^\s*(?:-\s*)?{}:\s*(?<value>[^\n]+)"#,
+                regex::escape(key)
+            ))
+            .map_err(|e| e.to_string())?;
+            &owned
+        }
+    };
     let located = pattern
         .captures_iter(text)
         .find_map(|c| {
@@ -285,8 +308,7 @@ fn add(
         let Some((name, package, source)) = repository(name, bare) else {
             return Ok(());
         };
-        let digest = (reference.len() == 40 && reference.bytes().all(|b| b.is_ascii_hexdigit()))
-            .then(|| reference.to_owned());
+        let digest = commit_hash(reference).then(|| reference.to_owned());
         let comment = located
             .2
             .split_once(" #")
@@ -609,4 +631,37 @@ pub fn runner_replacement(dep: &Dependency, text: &str, value: &str) -> Result<S
         .get(dep.location.start..dep.location.end)
         .ok_or("invalid runner location")?;
     Ok(label.replacen(&dep.current, value, 1))
+}
+
+pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
+
+pub(crate) struct Descriptor;
+
+impl crate::Ecosystem for Descriptor {
+    fn selected(&self, _config: &Config, path: &str) -> bool {
+        let leaf = path.rsplit('/').next().unwrap_or(path);
+        ([
+            ".github/workflows/",
+            ".gitea/workflows/",
+            ".forgejo/workflows/",
+        ]
+        .iter()
+        .any(|dir| path.starts_with(dir))
+            && matches!(leaf.rsplit('.').next(), Some("yml" | "yaml")))
+            || matches!(leaf, "action.yml" | "action.yaml")
+    }
+    fn prepare<'a>(
+        &self,
+        _scanner: &'a Scanner,
+        _files: &'a Files,
+        _shared: &'a Shared<'a>,
+    ) -> Result<Prepared<'a>, String> {
+        Ok(Prepared {
+            extract: Some(Box::new(|path, text, out| {
+                file_result(out, path, extract(path, text));
+                Ok(())
+            })),
+            finish: None,
+        })
+    }
 }

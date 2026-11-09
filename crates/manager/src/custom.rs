@@ -88,3 +88,34 @@ pub(super) fn extract(
     }
     Ok(out)
 }
+
+pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
+
+pub(crate) struct Descriptor;
+
+impl crate::Ecosystem for Descriptor {
+    fn selected(&self, config: &Config, path: &str) -> bool {
+        config
+            .extractors
+            .iter()
+            .any(|e| Patterns::compile(&e.paths).is_ok_and(|p| p.matches(path)))
+    }
+    fn prepare<'a>(
+        &self,
+        scanner: &'a Scanner,
+        _files: &'a Files,
+        shared: &'a Shared<'a>,
+    ) -> Result<Prepared<'a>, String> {
+        let extractors: &[Extractor] = &scanner.config.extractors;
+        let npmrcs = &shared.npmrcs;
+        Ok(Prepared {
+            extract: Some(Box::new(move |path, text, out| {
+                // A bad extractor fails the whole extraction, as before.
+                let dependencies = extract(path, text, extractors, npmrcs)?;
+                out.dependencies.extend(dependencies);
+                Ok(())
+            })),
+            finish: None,
+        })
+    }
+}

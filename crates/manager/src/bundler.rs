@@ -31,12 +31,6 @@ fn ruby(path: &str, text: &str, start: usize, version: &str, pointer: &str) -> D
         registry: None,
     }
 }
-fn numeric(version: &str) -> bool {
-    !version.is_empty()
-        && version
-            .split('.')
-            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
-}
 
 /// `name (version)` entries under each `specs:` section, without platforms.
 fn locked(lock: &str) -> BTreeMap<String, String> {
@@ -161,15 +155,11 @@ pub(super) fn extract(
             registry: None,
         });
     }
-    for dep in origins.assign(&mut out, &RUBYGEMS, |dep| dep.package.clone()) {
-        skipped.push(Skipped {
-            manager: Manager::Bundler,
-            file: dep.file,
-            line: Some(dep.location.line),
-            value: dep.name,
-            reason: NOT_FROM_A_SOURCE.into(),
-        });
-    }
+    skipped.extend(origins::skipped(
+        Manager::Bundler,
+        origins.assign(&mut out, &RUBYGEMS),
+        NOT_FROM_A_SOURCE,
+    ));
     if let Some(version) = RUBY
         .captures(text)
         .and_then(|c| c.get(1))
@@ -765,6 +755,38 @@ pub(crate) fn source_urls(text: &str) -> Vec<String> {
         }
     }
     urls
+}
+
+pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
+
+pub(crate) struct Descriptor;
+
+impl crate::Ecosystem for Descriptor {
+    fn selected(&self, _config: &Config, path: &str) -> bool {
+        matches!(
+            path.rsplit('/').next().unwrap_or(path),
+            "Gemfile" | "Gemfile.lock" | ".ruby-version"
+        )
+    }
+    fn registry_file(&self, path: &str) -> bool {
+        let leaf = path.rsplit('/').next().unwrap_or(path);
+        crate::bundle_config(path) || leaf == "Gemfile.lock"
+    }
+    fn prepare<'a>(
+        &self,
+        _scanner: &'a Scanner,
+        files: &'a Files,
+        _shared: &'a Shared<'a>,
+    ) -> Result<Prepared<'a>, String> {
+        Ok(Prepared {
+            extract: Some(Box::new(move |path, text, out| {
+                let result = extract(path, text, files, &mut out.skipped);
+                file_result(out, path, result);
+                Ok(())
+            })),
+            finish: None,
+        })
+    }
 }
 
 #[cfg(test)]

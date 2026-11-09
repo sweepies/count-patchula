@@ -513,7 +513,7 @@ fn project_redirect(
         ),
         "cargo" => crate::cargo::replaced(
             files,
-            &crate::cargo::parsed(files, files),
+            &crate::cargo::parsed(files, |_| true),
             &format!("{dir}x"),
         )
         .or_else(|| {
@@ -652,4 +652,72 @@ pub(crate) fn redirected(
             .iter()
             .find_map(|kind| project_redirect(kind, dir, &dep.package, files, feeds))
     })
+}
+
+pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
+
+pub(crate) struct Descriptor;
+
+impl crate::Ecosystem for Descriptor {
+    fn selected(&self, _config: &Config, path: &str) -> bool {
+        matches!(
+            path.rsplit('/').next().unwrap_or(path),
+            "mise.toml" | ".mise.toml" | ".tool-versions"
+        )
+    }
+    /// A package backend mise runs in the project reads its settings.
+    fn registry_file(&self, path: &str) -> bool {
+        config_file(path)
+            || [
+                Manager::Npm,
+                Manager::Pyproject,
+                Manager::Cargo,
+                Manager::Nuget,
+            ]
+            .iter()
+            .any(|m| crate::ecosystem(*m).backend_settings(path))
+    }
+    fn prepare<'a>(
+        &self,
+        scanner: &'a Scanner,
+        files: &'a Files,
+        shared: &'a Shared<'a>,
+    ) -> Result<Prepared<'a>, String> {
+        let task_files = task_files(
+            files
+                .iter()
+                .filter(|(path, _)| scanner.selected(Manager::Mise, path)),
+            files,
+        );
+        let feeds = shared.feeds.as_ref().expect("NuGet feeds prepared");
+        Ok(Prepared {
+            extract: Some(Box::new(move |path, text, out| {
+                let result = extract(
+                    path,
+                    text,
+                    task_files.get(path).map(String::as_str),
+                    &mut out.skipped,
+                );
+                file_result(out, path, result);
+                Ok(())
+            })),
+            finish: Some(Box::new(move |out| {
+                let configs: Vec<&str> = files
+                    .keys()
+                    .filter(|path| config_file(path))
+                    .map(String::as_str)
+                    .collect();
+                for dep in out
+                    .dependencies
+                    .iter_mut()
+                    .filter(|d| d.manager == Manager::Mise && d.source == Source::Mise)
+                {
+                    if let Some(reason) = redirected(dep, &configs, files, feeds) {
+                        dep.registry = origins::Named::Unusable(reason).recorded();
+                    }
+                }
+                Ok(())
+            })),
+        })
+    }
 }

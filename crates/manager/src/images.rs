@@ -172,3 +172,31 @@ pub(super) fn dockerfile(path: &str, text: &str) -> Result<Vec<Dependency>, Stri
     }
     Ok(out)
 }
+
+pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
+
+pub(crate) struct Descriptor;
+
+impl crate::Ecosystem for Descriptor {
+    fn selected(&self, _config: &Config, path: &str) -> bool {
+        let leaf = path.rsplit('/').next().unwrap_or(path);
+        leaf == "Dockerfile"
+            || leaf.starts_with("Dockerfile.")
+            || leaf.ends_with(".Dockerfile")
+            || leaf.ends_with(".dockerfile")
+    }
+    fn prepare<'a>(
+        &self,
+        _scanner: &'a Scanner,
+        _files: &'a Files,
+        _shared: &'a Shared<'a>,
+    ) -> Result<Prepared<'a>, String> {
+        Ok(Prepared {
+            extract: Some(Box::new(|path, text, out| {
+                file_result(out, path, dockerfile(path, text));
+                Ok(())
+            })),
+            finish: None,
+        })
+    }
+}

@@ -137,7 +137,7 @@ fn dependency(
     };
     let comment = trailing_comment(text, location).map(|range| &text[range]);
     let hex = reference.bytes().all(|b| b.is_ascii_hexdigit());
-    let (digest, version) = if reference.len() == 40 && hex {
+    let (digest, version) = if commit_hash(reference) {
         let tag = comment.and_then(|c| c[1..].split_whitespace().next());
         let Some(version) = tag.filter(|v| actions::version_comment(v)) else {
             return Err("commit pin has no tag comment to track");
@@ -195,4 +195,32 @@ fn in_flow_list(text: &str, location: &Location) -> bool {
         before = rest.trim_end();
     }
     before.ends_with(['[', ','])
+}
+
+pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
+
+pub(crate) struct Descriptor;
+
+impl crate::Ecosystem for Descriptor {
+    fn selected(&self, _config: &Config, path: &str) -> bool {
+        matches!(
+            path.rsplit('/').next().unwrap_or(path),
+            "apm.yml" | "apm.yaml"
+        )
+    }
+    fn prepare<'a>(
+        &self,
+        _scanner: &'a Scanner,
+        _files: &'a Files,
+        _shared: &'a Shared<'a>,
+    ) -> Result<Prepared<'a>, String> {
+        Ok(Prepared {
+            extract: Some(Box::new(|path, text, out| {
+                let result = extract(path, text, &mut out.skipped);
+                file_result(out, path, result);
+                Ok(())
+            })),
+            finish: None,
+        })
+    }
 }

@@ -118,6 +118,51 @@ pub struct Dependency {
 pub(crate) fn pointer_token(key: &str) -> String {
     key.replace('~', "~0").replace('/', "~1")
 }
+/// A full commit hash: 40 hexadecimal digits.
+pub(crate) fn commit_hash(text: &str) -> bool {
+    text.len() == 40 && text.bytes().all(|b| b.is_ascii_hexdigit())
+}
+/// A dotted version that is all numbers: safe to compare by length.
+pub(crate) fn numeric(version: &str) -> bool {
+    !version.is_empty()
+        && version
+            .split('.')
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+}
+/// One JSONC document's syntax tree under `options`.
+fn jsonc_parse<'a>(
+    text: &'a str,
+    options: &jsonc_parser::ParseOptions,
+) -> Result<jsonc_parser::ast::Value<'a>, String> {
+    jsonc_parser::parse_to_ast(text, &Default::default(), options)
+        .map_err(|e| e.to_string())?
+        .value
+        .ok_or_else(|| "empty JSON".into())
+}
+/// npm's manifests: comments and trailing commas only for JSONC files,
+/// everything else strict JSON.
+pub(crate) fn jsonc_ast(text: &str, jsonc: bool) -> Result<jsonc_parser::ast::Value<'_>, String> {
+    jsonc_parse(
+        text,
+        &jsonc_parser::ParseOptions {
+            allow_comments: jsonc,
+            allow_trailing_commas: jsonc,
+            allow_loose_object_property_names: false,
+            allow_missing_commas: false,
+            allow_single_quoted_strings: false,
+            allow_hexadecimal_numbers: false,
+            allow_unary_plus_numbers: false,
+            allow_bare_decimal_point_numbers: false,
+            allow_non_finite_numbers: false,
+            allow_extended_string_escapes: false,
+        },
+    )
+}
+/// NuGet's and devcontainers' settings: every JSONC relaxation on, which
+/// is what `ParseOptions::default()` has always meant here.
+pub(crate) fn jsonc_ast_lenient(text: &str) -> Result<jsonc_parser::ast::Value<'_>, String> {
+    jsonc_parse(text, &Default::default())
+}
 
 impl Dependency {
     /// The package as the Count looks it up, registry included.
@@ -336,42 +381,193 @@ impl From<&str> for Text {
         Self::Read(text.to_owned())
     }
 }
-pub fn supported(manager: Manager) -> bool {
+/// A predicate for the paths among the tree a later round must read.
+pub(crate) type PathPredicate<'a> = Box<dyn Fn(&str) -> bool + 'a>;
+/// Extract one selected readable file into the extraction.
+pub(crate) type FileExtractor<'a> =
+    Box<dyn FnMut(&str, &str, &mut Extraction) -> Result<(), String> + 'a>;
+/// A finishing step over the whole extraction.
+pub(crate) type Finisher<'a> = Box<dyn FnMut(&mut Extraction) -> Result<(), String> + 'a>;
+
+/// What the Scanner needs to know about one ecosystem: which files it
+/// reads, the state it parses once per extraction, and how it extracts and
+/// finishes. One type per ecosystem implements it; managers that share an
+/// implementation share a type with a manager parameter.
+pub(crate) trait Ecosystem {
+    /// The default file rule, used unless `files` config overrides it.
+    fn selected(&self, config: &Config, path: &str) -> bool;
+    /// Settings files read whatever `files`/`exclude` select.
+    fn registry_file(&self, _path: &str) -> bool {
+        false
+    }
+    /// The settings a package backend of this ecosystem reads, which mise's
+    /// own rule reuses rather than naming files itself.
+    fn backend_settings(&self, _path: &str) -> bool {
+        false
+    }
+    /// A predicate for the paths among the tree a later round must read,
+    /// from the files read so far.
+    fn more<'a>(&self, _files: &'a Files) -> Option<PathPredicate<'a>> {
+        None
+    }
+    /// Shared parsed state and the per-file extractor and finishing step,
+    /// built once per extraction.
+    fn prepare<'a>(
+        &self,
+        scanner: &'a Scanner,
+        files: &'a Files,
+        shared: &'a Shared<'a>,
+    ) -> Result<Prepared<'a>, String> {
+        let _ = (scanner, files, shared);
+        Ok(Prepared::default())
+    }
+}
+
+/// What one ecosystem's `prepare` returns: the per-file extractor and the
+/// finishing step, each capturing whatever parsed state it needs.
+#[derive(Default)]
+pub(crate) struct Prepared<'a> {
+    /// Extract one selected readable file into `out`.
+    pub extract: Option<FileExtractor<'a>>,
+    /// A finishing step over the whole extraction.
+    pub finish: Option<Finisher<'a>>,
+}
+
+/// State several ecosystems share: the YAML family parses each selected
+/// file once for all five managers, npm's registry settings serve the node
+/// extractor, custom extractors and locked packages, and NuGet's feeds serve
+/// NuGet and mise's dotnet redirects.
+pub(crate) struct Shared<'a> {
+    pub yaml: Option<yaml::Docs<'a>>,
+    pub npmrcs: BTreeMap<&'a str, npm::Npmrc>,
+    pub feeds: Option<nuget::Feeds>,
+}
+
+/// One file's extraction: its dependencies on success, or a warning that
+/// skips it.
+pub(crate) fn file_result(
+    out: &mut Extraction,
+    path: &str,
+    result: Result<Vec<Dependency>, String>,
+) {
+    match result {
+        Ok(dependencies) => out.dependencies.extend(dependencies),
+        Err(e) => out.warnings.push(format!("{path}: skipped: {e}")),
+    }
+}
+
+/// The order ecosystems extract a file in: the manifest chain first, then
+/// the additive YAML, CI and regex passes, reproducing the old dispatch.
+const EXTRACT_ORDER: &[Manager] = &[
+    Manager::Npm,
+    Manager::Bun,
+    Manager::GithubActions,
+    Manager::Mise,
+    Manager::Cargo,
+    Manager::Dockerfile,
+    Manager::Go,
+    Manager::Terraform,
+    Manager::Composer,
+    Manager::Nix,
+    Manager::Bundler,
+    Manager::Nuget,
+    Manager::Gradle,
+    Manager::Maven,
+    Manager::Devcontainer,
+    Manager::Apm,
+    Manager::Woodpecker,
+    Manager::Copier,
+    Manager::Helm,
+    Manager::PreCommit,
+    Manager::Pyproject,
+    Manager::Compose,
+    Manager::Kubernetes,
+    Manager::Kustomize,
+    Manager::Flux,
+    Manager::HelmValues,
+    Manager::Gitlabci,
+    Manager::GitlabciInclude,
+    Manager::Regex,
+];
+
+/// The order finishing steps run: Maven's repositories, then Gradle's
+/// variables and repositories, mise's redirects, Cargo's and the node
+/// ecosystem's locked packages.
+const FINISH_ORDER: &[Manager] = &[
+    Manager::Maven,
+    Manager::Gradle,
+    Manager::Mise,
+    Manager::Cargo,
+    Manager::Npm,
+    Manager::Bun,
+];
+
+static NODE_NPM: npm::Descriptor = npm::Descriptor {
+    manager: Manager::Npm,
+};
+static NODE_BUN: npm::Descriptor = npm::Descriptor {
+    manager: Manager::Bun,
+};
+static YAML_COMPOSE: yaml::Descriptor = yaml::Descriptor {
+    manager: Manager::Compose,
+};
+static YAML_KUBERNETES: yaml::Descriptor = yaml::Descriptor {
+    manager: Manager::Kubernetes,
+};
+static YAML_KUSTOMIZE: yaml::Descriptor = yaml::Descriptor {
+    manager: Manager::Kustomize,
+};
+static YAML_FLUX: yaml::Descriptor = yaml::Descriptor {
+    manager: Manager::Flux,
+};
+static YAML_HELM_VALUES: yaml::Descriptor = yaml::Descriptor {
+    manager: Manager::HelmValues,
+};
+static GITLABCI: gitlabci::Descriptor = gitlabci::Descriptor {
+    manager: Manager::Gitlabci,
+};
+static GITLABCI_INCLUDE: gitlabci::Descriptor = gitlabci::Descriptor {
+    manager: Manager::GitlabciInclude,
+};
+
+/// The descriptor for `manager`; exhaustive, so a new `Manager` variant
+/// fails to compile until it has one.
+pub(crate) fn ecosystem(manager: Manager) -> &'static dyn Ecosystem {
     match manager {
-        Manager::Npm
-        | Manager::Bun
-        | Manager::GithubActions
-        | Manager::Mise
-        | Manager::Cargo
-        | Manager::Dockerfile
-        | Manager::Compose
-        | Manager::Go
-        | Manager::Terraform
-        | Manager::Kubernetes
-        | Manager::Kustomize
-        | Manager::Flux
-        | Manager::HelmValues
-        | Manager::Pyproject
-        | Manager::PreCommit
-        | Manager::Helm
-        | Manager::Devcontainer
-        | Manager::Woodpecker
-        | Manager::Copier
-        | Manager::Maven
-        | Manager::Gradle
-        | Manager::Nuget
-        | Manager::Bundler
-        | Manager::Composer
-        | Manager::Gitlabci
-        | Manager::GitlabciInclude
-        | Manager::Nix
-        | Manager::Apm
-        | Manager::Regex => true,
+        Manager::Npm => &NODE_NPM,
+        Manager::Bun => &NODE_BUN,
+        Manager::GithubActions => &actions::DESCRIPTOR,
+        Manager::Mise => &mise::DESCRIPTOR,
+        Manager::Cargo => &cargo::DESCRIPTOR,
+        Manager::Dockerfile => &images::DESCRIPTOR,
+        Manager::Compose => &YAML_COMPOSE,
+        Manager::Go => &go::DESCRIPTOR,
+        Manager::Terraform => &terraform::DESCRIPTOR,
+        Manager::Kubernetes => &YAML_KUBERNETES,
+        Manager::Kustomize => &YAML_KUSTOMIZE,
+        Manager::Flux => &YAML_FLUX,
+        Manager::HelmValues => &YAML_HELM_VALUES,
+        Manager::Pyproject => &pyproject::DESCRIPTOR,
+        Manager::PreCommit => &precommit::DESCRIPTOR,
+        Manager::Helm => &helm::DESCRIPTOR,
+        Manager::Devcontainer => &devcontainer::DESCRIPTOR,
+        Manager::Woodpecker => &woodpecker::DESCRIPTOR,
+        Manager::Copier => &copier::DESCRIPTOR,
+        Manager::Maven => &maven::DESCRIPTOR,
+        Manager::Gradle => &gradle::DESCRIPTOR,
+        Manager::Nuget => &nuget::DESCRIPTOR,
+        Manager::Bundler => &bundler::DESCRIPTOR,
+        Manager::Composer => &composer::DESCRIPTOR,
+        Manager::Gitlabci => &GITLABCI,
+        Manager::GitlabciInclude => &GITLABCI_INCLUDE,
+        Manager::Nix => &nix::DESCRIPTOR,
+        Manager::Apm => &apm::DESCRIPTOR,
+        Manager::Regex => &custom::DESCRIPTOR,
     }
 }
 
 pub struct Scanner {
-    config: Config,
+    pub(crate) config: Config,
     exclude: Patterns,
     selections: Vec<(Manager, Patterns)>,
 }
@@ -403,63 +599,17 @@ impl Scanner {
     }
     /// The files among `paths` that what `files` says makes the Count read
     /// as well: the sources of the builds Gradle settings include, which can
-    /// add repositories.
+    /// add repositories, and the other ecosystems' later-round files.
     pub fn more<'a>(&self, files: &Files, paths: impl IntoIterator<Item = &'a str>) -> Vec<String> {
-        let (included, applied) = if self.config.managers.contains(&Manager::Gradle) {
-            gradle::wanted(files)
-        } else {
-            (Vec::new(), Vec::new())
-        };
-        let workspace_modules: Vec<String> = if self.config.managers.contains(&Manager::Go) {
-            go::workspace_modules(files)
-        } else {
-            Vec::new()
-        };
-        let referenced: std::collections::BTreeSet<String> =
-            if self.config.managers.contains(&Manager::Maven) {
-                maven::referenced(files)
-                    .into_iter()
-                    .flat_map(|(_, targets, _)| targets)
-                    .collect()
-            } else {
-                std::collections::BTreeSet::new()
-            };
-        // The manifests above a crate's, which can patch it as its
-        // workspace, whatever `exclude` leaves out.
-        let ancestors: std::collections::BTreeSet<String> =
-            if self.config.managers.contains(&Manager::Cargo) {
-                files
-                    .keys()
-                    .filter(|p| p.ends_with("Cargo.toml") || p.ends_with("Cargo.lock"))
-                    .flat_map(|p| {
-                        let mut out = Vec::new();
-                        let mut dir = &p[..p.rfind('/').map_or(0, |i| i + 1)];
-                        // The manifest beside a lockfile, then those above.
-                        out.push(format!("{dir}Cargo.toml"));
-                        while !dir.is_empty() {
-                            let parent = dir.trim_end_matches('/');
-                            dir = &parent[..parent.rfind('/').map_or(0, |i| i + 1)];
-                            out.push(format!("{dir}Cargo.toml"));
-                        }
-                        out
-                    })
-                    .collect()
-            } else {
-                std::collections::BTreeSet::new()
-            };
+        let wanted: Vec<PathPredicate<'_>> = self
+            .config
+            .managers
+            .iter()
+            .filter_map(|m| ecosystem(*m).more(files))
+            .collect();
         paths
             .into_iter()
-            .filter(|path| {
-                !files.contains_key(*path)
-                    && (ancestors.contains(*path)
-                        || workspace_modules.iter().any(|module| module == path)
-                        || gradle::logic_source(path)
-                            && included
-                                .iter()
-                                .any(|folder| path.starts_with(folder.as_str()))
-                        || referenced.contains(*path)
-                        || applied.iter().any(|script| script == path))
-            })
+            .filter(|path| !files.contains_key(*path) && wanted.iter().any(|w| w(path)))
             .map(str::to_owned)
             .collect()
     }
@@ -477,71 +627,16 @@ impl Scanner {
     }
     /// Registry settings are read whatever `files` and `exclude` select:
     /// without them, a scoped package would be looked up on the public
-    /// registry, where its name may be someone else's.
+    /// registry, where its name may be someone else's. The node rule also
+    /// applies to an npm extractor with npm disabled, which reads `.npmrc`
+    /// for its registries.
     fn registry_file(&self, path: &str) -> bool {
-        let leaf = path.rsplit('/').next().unwrap_or(path);
-        (self.npm_enabled() && matches!(leaf, ".npmrc" | ".yarnrc.yml"))
-            || (self.config.managers.contains(&Manager::Pyproject)
-                && (python_settings(path) || matches!(leaf, "uv.lock" | "poetry.lock")))
-            || (self.config.managers.contains(&Manager::Bundler)
-                && (bundle_config(path) || leaf == "Gemfile.lock"))
-            || (self.config.managers.contains(&Manager::Composer) && leaf == "composer.lock")
-            || (self.config.managers.contains(&Manager::Cargo) && cargo::config_file(path))
-            || (self.config.managers.contains(&Manager::Go) && go::work_file(path))
-            // A package backend mise runs in the project reads its settings.
-            || (self.config.managers.contains(&Manager::Mise)
-                && (mise::config_file(path)
-                    || matches!(
-                    leaf,
-                    ".npmrc" | ".yarnrc.yml" | "uv.toml" | "pip.conf" | "pip.ini" | "pyproject.toml"
-                ) || cargo::config_file(path)
-                    || nuget::config_file(path)))
-            || (self.config.managers.contains(&Manager::Nuget)
-                && (nuget::config_file(path) || nuget::msbuild_file(path)))
-            || (self.config.managers.contains(&Manager::Maven) && maven::repository_file(path))
-            || (self.config.managers.contains(&Manager::Gradle) && gradle::build_logic(path))
-    }
-    /// Fail every Maven lookup of a build system whose build could take
-    /// artifacts from a repository besides the public ones; see
-    /// `maven::private_repositories` and `gradle::private_repositories`.
-    fn maven_repositories(
-        &self,
-        files: &Files,
-        deps: &mut [Dependency],
-        warnings: &mut Vec<String>,
-    ) {
-        for (manager, found) in [
-            (
-                Manager::Maven,
-                self.config
-                    .managers
-                    .contains(&Manager::Maven)
-                    .then(|| maven::private_repositories(files))
-                    .flatten(),
-            ),
-            (
-                Manager::Gradle,
-                self.config
-                    .managers
-                    .contains(&Manager::Gradle)
-                    .then(|| gradle::private_repositories(files))
-                    .flatten(),
-            ),
-        ] {
-            let Some(repositories) = found else {
-                continue;
-            };
-            warnings.extend(repositories.warnings.iter().cloned());
-            let Some(reason) = repositories.closed else {
-                continue;
-            };
-            for dep in deps
-                .iter_mut()
-                .filter(|dep| dep.manager == manager && dep.source == Source::Maven)
-            {
-                dep.registry = origins::Named::Unusable(reason.clone()).recorded();
-            }
-        }
+        (self.npm_enabled() && ecosystem(Manager::Npm).registry_file(path))
+            || self
+                .config
+                .managers
+                .iter()
+                .any(|m| ecosystem(*m).registry_file(path))
     }
     /// The pip requirements files among `paths`, which the Count does not
     /// maintain, as skipped entries saying why, when Python projects are
@@ -566,198 +661,54 @@ impl Scanner {
             })
             .collect()
     }
-    fn selected(&self, manager: Manager, path: &str) -> bool {
+    pub(crate) fn selected(&self, manager: Manager, path: &str) -> bool {
         if !self.config.managers.contains(&manager) || self.excluded(path) {
             return false;
         }
         if let Some((_, p)) = self.selections.iter().find(|(m, _)| *m == manager) {
             return p.matches(path);
         }
-        let leaf = path.rsplit('/').next().unwrap_or(path);
-        match manager {
-            Manager::Npm | Manager::Bun => {
-                matches!(
-                    leaf,
-                    "package.json"
-                        | "package-lock.json"
-                        | "aube-lock.yaml"
-                        | "bun.lock"
-                        | "pnpm-workspace.yaml"
-                        | ".yarnrc.yml"
-                        | ".nvmrc"
-                        | ".node-version"
-                        | ".npmrc"
-                )
-            }
-            Manager::GithubActions => {
-                ([
-                    ".github/workflows/",
-                    ".gitea/workflows/",
-                    ".forgejo/workflows/",
-                ]
-                .iter()
-                .any(|dir| path.starts_with(dir))
-                    && matches!(leaf.rsplit('.').next(), Some("yml" | "yaml")))
-                    || matches!(leaf, "action.yml" | "action.yaml")
-            }
-            Manager::Mise => matches!(leaf, "mise.toml" | ".mise.toml" | ".tool-versions"),
-            Manager::Regex => self
-                .config
-                .extractors
-                .iter()
-                .any(|e| Patterns::compile(&e.paths).is_ok_and(|p| p.matches(path))),
-            Manager::Cargo => matches!(
-                leaf,
-                "Cargo.toml" | "Cargo.lock" | "rust-toolchain" | "rust-toolchain.toml"
-            ),
-            Manager::Dockerfile => {
-                leaf == "Dockerfile"
-                    || leaf.starts_with("Dockerfile.")
-                    || leaf.ends_with(".Dockerfile")
-                    || leaf.ends_with(".dockerfile")
-            }
-            Manager::Compose => {
-                (leaf.starts_with("docker-compose") || leaf.starts_with("compose"))
-                    && (leaf.ends_with(".yml") || leaf.ends_with(".yaml"))
-            }
-            Manager::Go => leaf == "go.mod",
-            Manager::Terraform => {
-                leaf.ends_with(".tf")
-                    || matches!(leaf, ".terraform.lock.hcl" | ".terraform-version")
-            }
-            Manager::Kubernetes | Manager::Flux => {
-                leaf.ends_with(".yaml") || leaf.ends_with(".yml")
-            }
-            Manager::Kustomize => matches!(
-                leaf,
-                "kustomization.yaml" | "kustomization.yml" | "Kustomization"
-            ),
-            Manager::HelmValues => {
-                (leaf.starts_with("values")
-                    || leaf.ends_with("values.yaml")
-                    || leaf.ends_with("values.yml"))
-                    && (leaf.ends_with(".yaml") || leaf.ends_with(".yml"))
-            }
-            Manager::Helm => leaf == "Chart.yaml",
-            Manager::Maven => leaf == "pom.xml",
-            Manager::Gradle => gradle::selected(path),
-            Manager::Nuget => nuget::selected(path),
-            Manager::Bundler => matches!(leaf, "Gemfile" | "Gemfile.lock" | ".ruby-version"),
-            Manager::Composer => matches!(leaf, "composer.json" | "composer.lock"),
-            Manager::Gitlabci | Manager::GitlabciInclude => {
-                leaf.ends_with(".gitlab-ci.yml") || leaf.ends_with(".gitlab-ci.yaml")
-            }
-            Manager::Nix => matches!(leaf, "flake.nix" | "flake.lock"),
-            Manager::Devcontainer => {
-                matches!(leaf, "devcontainer.json" | ".devcontainer.json")
-            }
-            Manager::PreCommit => {
-                matches!(leaf, ".pre-commit-config.yaml" | ".pre-commit-config.yml")
-            }
-            Manager::Apm => matches!(leaf, "apm.yml" | "apm.yaml"),
-            Manager::Woodpecker => {
-                let stem = path
-                    .strip_suffix(".yml")
-                    .or_else(|| path.strip_suffix(".yaml"))
-                    .unwrap_or_default();
-                stem == ".woodpecker"
-                    || stem
-                        .strip_prefix(".woodpecker/")
-                        .is_some_and(|name| !name.is_empty() && !name.contains('/'))
-            }
-            Manager::Copier => copier::selected(leaf),
-            Manager::Pyproject => matches!(
-                leaf,
-                "pyproject.toml" | "uv.lock" | "poetry.lock" | ".python-version"
-            ),
-        }
+        ecosystem(manager).selected(&self.config, path)
     }
     pub fn extract(&self, files: &Files) -> Result<Extraction, String> {
         let mut result = Extraction::default();
-        let locks = npm::locks(files)?;
-        let npmrcs = npm::npmrcs(files);
-        if self.npm_enabled() {
+        let npmrcs = if self.npm_enabled() {
             result.warnings.extend(npm::env_registry_warnings(files));
-        }
-        // Only the manifests and lockfiles Cargo's selection takes: one read
-        // only for its patches, above a selected crate, does not shape
-        // extraction.
-        let cargo_files: Files = files
-            .iter()
-            .filter(|(path, _)| self.selected(Manager::Cargo, path))
-            .map(|(path, text)| (path.clone(), text.clone()))
-            .collect();
-        let cargo = if self.config.managers.contains(&Manager::Cargo) {
-            cargo::parsed(&cargo_files, files)
-        } else {
-            cargo::Parsed::default()
-        };
-        // The manifests extraction reads; one the Count cannot parse fails
-        // the whole extraction, as before.
-        let cargo_docs: BTreeMap<&str, toml_edit::Document<&str>> = cargo
-            .manifests
-            .iter()
-            .map(|(p, r)| r.clone().map(|d| (*p, d)))
-            .collect::<Result<_, _>>()?;
-        let feeds = nuget::Feeds::new(files);
-        let go_modules = if self.config.managers.contains(&Manager::Go) {
-            go::modules(files)
-        } else {
-            go::Modules::default()
-        };
-        let terraform = if self.config.managers.contains(&Manager::Terraform) {
-            terraform::documents(files)?
+            npm::npmrcs(files)
         } else {
             BTreeMap::new()
         };
-        let yaml_managers = [
+        // A file that does not parse (a template such as ERB-rendered YAML)
+        // is skipped with a warning. Warnings suppress branch cleanup, so the
+        // skipped file's open updates are never closed as obsolete.
+        let yaml = if [
             Manager::Compose,
             Manager::Kubernetes,
             Manager::Kustomize,
             Manager::Flux,
             Manager::HelmValues,
-        ];
-        // A file that does not parse (a template such as ERB-rendered YAML)
-        // is skipped with a warning. Warnings suppress branch cleanup, so the
-        // skipped file's open updates are never closed as obsolete.
-        let mut documents = BTreeMap::new();
-        let mut locations = BTreeMap::new();
-        for (path, text) in files
-            .iter()
-            .filter(|(path, _)| yaml_managers.iter().any(|m| self.selected(*m, path)))
+        ]
+        .iter()
+        .any(|m| self.config.managers.contains(m))
         {
-            let parsed = text
-                .read()
-                .map_err(|unread| unread.why().to_owned())
-                .and_then(|text| {
-                    yaml::docs(text).and_then(|d| Ok((d, yaml_locations::parse(text)?)))
-                });
-            match parsed {
-                Ok((docs, spans)) => {
-                    documents.insert(path.as_str(), docs);
-                    locations.insert(path.as_str(), spans);
-                }
-                Err(e) => result.warnings.push(format!("{path}: skipped: {e}")),
+            Some(yaml::prepare(self, files, &mut result.warnings))
+        } else {
+            None
+        };
+        let feeds = (self.config.managers.contains(&Manager::Nuget)
+            || self.config.managers.contains(&Manager::Mise))
+        .then(|| nuget::Feeds::new(files));
+        let shared = Shared {
+            yaml,
+            npmrcs,
+            feeds,
+        };
+        let mut prepared = Vec::new();
+        for &manager in EXTRACT_ORDER {
+            if self.config.managers.contains(&manager) {
+                prepared.push((manager, ecosystem(manager).prepare(self, files, &shared)?));
             }
         }
-        let repos = yaml::repositories(&documents);
-        let task_files = if self.config.managers.contains(&Manager::Mise) {
-            mise::task_files(
-                files
-                    .iter()
-                    .filter(|(path, _)| self.selected(Manager::Mise, path)),
-                files,
-            )
-        } else {
-            BTreeMap::new()
-        };
-        // package.json shared by npm/bun is scanned once, preferring bun only
-        // when npm is disabled. Lockfiles provide resolution, never transitive deps.
-        let node = if self.config.managers.contains(&Manager::Npm) {
-            Manager::Npm
-        } else {
-            Manager::Bun
-        };
         for (path, text) in files {
             // An unread file says nothing a manager can extract; whatever it
             // could steer is failed by the readers that consult it.
@@ -772,176 +723,22 @@ impl Scanner {
                     continue;
                 }
             };
-            let extraction = if self.selected(node, path) && path.ends_with("package.json") {
-                npm::extract(path, text, node, &locks).map(|mut deps| {
-                    npm::assign_registries(&mut deps, &npmrcs);
-                    deps
-                })
-            } else if self.selected(node, path)
-                && (path.ends_with("pnpm-workspace.yaml") || path.ends_with(".yarnrc.yml"))
-            {
-                npm::catalogs(path, text, node).map(|mut deps| {
-                    npm::assign_registries(&mut deps, &npmrcs);
-                    deps
-                })
-            } else if self.selected(node, path) && path.ends_with(".npmrc") {
-                // Read for the registries of the manifests beside and below it.
-                Ok(Vec::new())
-            } else if self.selected(node, path)
-                && (path.ends_with(".nvmrc") || path.ends_with(".node-version"))
-            {
-                Ok(npm::node_version(path, text, node))
-            } else if self.selected(Manager::GithubActions, path) {
-                actions::extract(path, text)
-            } else if self.selected(Manager::Mise, path) {
-                mise::extract(
-                    path,
-                    text,
-                    task_files.get(path).map(String::as_str),
-                    &mut result.skipped,
-                )
-            } else if self.selected(Manager::Cargo, path)
-                && (path.ends_with("rust-toolchain") || path.ends_with("rust-toolchain.toml"))
-            {
-                toolchains::rust(path, text)
-            } else if self.selected(Manager::Cargo, path) {
-                cargo::extract(path, text, &cargo_docs, &mut result.skipped).map(|mut deps| {
-                    if let Some(reason) = cargo::replaced(files, &cargo, path) {
-                        for dep in deps.iter_mut().filter(|d| d.source == Source::Crates) {
-                            dep.registry = origins::Named::Unusable(reason.clone()).recorded();
-                        }
-                    }
-                    deps
-                })
-            } else if self.selected(Manager::Dockerfile, path) {
-                images::dockerfile(path, text)
-            } else if self.selected(Manager::Go, path) {
-                go::extract(path, text, &go_modules, &mut result.skipped)
-            } else if self.selected(Manager::Terraform, path)
-                && path.ends_with(".terraform-version")
-            {
-                Ok(toolchains::terraform(path, text))
-            } else if self.selected(Manager::Terraform, path) {
-                terraform::extract(path, text, &terraform)
-            } else if self.selected(Manager::Composer, path) {
-                composer::extract(path, text, files, &mut result.skipped)
-            } else if self.selected(Manager::Nix, path) {
-                nix::extract(path, text, files, &mut result.skipped)
-            } else if self.selected(Manager::Bundler, path) {
-                bundler::extract(path, text, files, &mut result.skipped)
-            } else if self.selected(Manager::Nuget, path) {
-                nuget::extract(path, text).map(|mut deps| {
-                    feeds.assign(&mut deps);
-                    deps
-                })
-            } else if self.selected(Manager::Gradle, path) {
-                gradle::extract(path, text)
-            } else if self.selected(Manager::Maven, path) {
-                maven::extract(path, text)
-            } else if self.selected(Manager::Devcontainer, path) {
-                devcontainer::extract(path, text)
-            } else if self.selected(Manager::Apm, path) {
-                apm::extract(path, text, &mut result.skipped)
-            } else if self.selected(Manager::Woodpecker, path) {
-                woodpecker::extract(path, text, &mut result.skipped)
-            } else if self.selected(Manager::Copier, path) {
-                copier::extract(path, text, &mut result.skipped)
-            } else if self.selected(Manager::Helm, path) {
-                helm::extract(path, text)
-            } else if self.selected(Manager::PreCommit, path) {
-                precommit::extract(path, text)
-            } else if self.selected(Manager::Pyproject, path) {
-                pyproject::extract(path, text, files, &mut result.skipped)
-            } else {
-                Ok(Vec::new())
-            };
-            match extraction {
-                Ok(dependencies) => result.dependencies.extend(dependencies),
-                Err(e) => result.warnings.push(format!("{path}: skipped: {e}")),
-            }
-            for manager in [
-                Manager::Compose,
-                Manager::Kubernetes,
-                Manager::Kustomize,
-                Manager::Flux,
-                Manager::HelmValues,
-            ] {
-                if self.selected(manager, path)
-                    && let (Some(docs), Some(spans)) =
-                        (documents.get(path.as_str()), locations.get(path.as_str()))
-                {
-                    match yaml::extract(manager, path, text, docs, spans, &repos) {
-                        Ok(dependencies) => result.dependencies.extend(dependencies),
-                        Err(e) => result.warnings.push(format!("{path}: skipped: {e}")),
-                    }
-                }
-            }
-            for manager in [Manager::Gitlabci, Manager::GitlabciInclude] {
-                if self.selected(manager, path) {
-                    let host = &self.config.gitlab.host;
-                    match gitlabci::extract(manager, path, text, host, &mut result.skipped) {
-                        Ok(dependencies) => result.dependencies.extend(dependencies),
-                        Err(e) => result.warnings.push(format!("{path}: skipped: {e}")),
-                    }
-                }
-            }
-            if self.selected(Manager::Regex, path) {
-                result.dependencies.extend(custom::extract(
-                    path,
-                    text,
-                    &self.config.extractors,
-                    &npmrcs,
-                )?);
-            }
-        }
-        if self.config.managers.contains(&Manager::Gradle) {
-            result
-                .dependencies
-                .extend(gradle_vars::extract(files, |path| {
-                    self.selected(Manager::Gradle, path)
-                }));
-        }
-        self.maven_repositories(files, &mut result.dependencies, &mut result.warnings);
-        if self.config.managers.contains(&Manager::Mise) {
-            let configs: Vec<&str> = files
-                .keys()
-                .filter(|path| mise::config_file(path))
-                .map(String::as_str)
-                .collect();
-            for dep in result
-                .dependencies
-                .iter_mut()
-                .filter(|d| d.manager == Manager::Mise && d.source == Source::Mise)
-            {
-                if let Some(reason) = mise::redirected(dep, &configs, files, &feeds) {
-                    dep.registry = origins::Named::Unusable(reason).recorded();
+            for (manager, eco) in &mut prepared {
+                let Some(extract) = eco.extract.as_mut() else {
+                    continue;
+                };
+                if self.selected(*manager, path) {
+                    extract(path, text, &mut result)?;
                 }
             }
         }
-        result.locked = locked::cargo(files, &cargo_docs, &result.dependencies);
-        let mut replaced = BTreeMap::new();
-        for locked in result
-            .locked
-            .iter_mut()
-            .filter(|l| l.manager == Manager::Cargo)
-        {
-            let reason = replaced
-                .entry(locked.file.clone())
-                .or_insert_with(|| cargo::replaced(files, &cargo, &locked.file));
-            if let Some(reason) = reason {
-                locked.registry = Some(reason.clone());
+        for manager in FINISH_ORDER {
+            if let Some((_, eco)) = prepared.iter_mut().find(|(m, _)| *m == *manager)
+                && let Some(finish) = eco.finish.as_mut()
+            {
+                finish(&mut result)?;
             }
         }
-        let npm = node == Manager::Npm && self.config.managers.contains(&Manager::Npm);
-        result
-            .locked
-            .extend(locked::aube(files, &mut result.dependencies, node, npm)?);
-        if npm {
-            result
-                .locked
-                .extend(locked::npm(files, &locks, &result.dependencies));
-        }
-        npm::assign_locked_registries(&mut result.locked, &npmrcs);
         for (path, text) in files {
             if let Some(flag) = public::verdict(path, text, files) {
                 result.public_only.insert(path.clone(), flag);
@@ -1116,7 +913,7 @@ pub fn registry_settings(path: &str) -> bool {
 }
 
 /// A file that can name a Python package index.
-fn python_settings(path: &str) -> bool {
+pub(crate) fn python_settings(path: &str) -> bool {
     let leaf = path.rsplit('/').next().unwrap_or(path);
     matches!(
         leaf,
@@ -1125,7 +922,7 @@ fn python_settings(path: &str) -> bool {
 }
 
 /// Bundler's settings for a project.
-fn bundle_config(path: &str) -> bool {
+pub(crate) fn bundle_config(path: &str) -> bool {
     path == ".bundle/config" || path.ends_with("/.bundle/config")
 }
 

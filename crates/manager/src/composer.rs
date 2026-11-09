@@ -114,7 +114,7 @@ pub(super) fn extract(
                     text,
                     start + 1,
                     end - 1,
-                    format!("/{field}/{}", name.replace('/', "~1")),
+                    format!("/{field}/{}", pointer_token(name)),
                 ),
                 name: name.into(),
                 package: name.to_ascii_lowercase(),
@@ -130,15 +130,11 @@ pub(super) fn extract(
             });
         }
     }
-    for dep in origins.assign(&mut out, &PACKAGIST, |dep| dep.package.clone()) {
-        skipped.push(Skipped {
-            manager: Manager::Composer,
-            file: dep.file,
-            line: Some(dep.location.line),
-            value: dep.name,
-            reason: NOT_FROM_PACKAGIST.into(),
-        });
-    }
+    skipped.extend(origins::skipped(
+        Manager::Composer,
+        origins.assign(&mut out, &PACKAGIST),
+        NOT_FROM_PACKAGIST,
+    ));
     Ok(out)
 }
 
@@ -309,4 +305,35 @@ fn lock(lock: &str) -> Option<Lock> {
 /// name.
 pub(crate) fn lock_has_plugins(text: &str) -> Option<bool> {
     lock(text).map(|lock| lock.plugins)
+}
+
+pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
+
+pub(crate) struct Descriptor;
+
+impl crate::Ecosystem for Descriptor {
+    fn selected(&self, _config: &Config, path: &str) -> bool {
+        matches!(
+            path.rsplit('/').next().unwrap_or(path),
+            "composer.json" | "composer.lock"
+        )
+    }
+    fn registry_file(&self, path: &str) -> bool {
+        path.rsplit('/').next() == Some("composer.lock")
+    }
+    fn prepare<'a>(
+        &self,
+        _scanner: &'a Scanner,
+        files: &'a Files,
+        _shared: &'a Shared<'a>,
+    ) -> Result<Prepared<'a>, String> {
+        Ok(Prepared {
+            extract: Some(Box::new(move |path, text, out| {
+                let result = extract(path, text, files, &mut out.skipped);
+                file_result(out, path, result);
+                Ok(())
+            })),
+            finish: None,
+        })
+    }
 }

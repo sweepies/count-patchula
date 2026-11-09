@@ -65,7 +65,7 @@ impl Receiver<'_> {
             Slot::Value(key) => Some(format!(
                 "{}/{}",
                 frame.pointer.as_ref()?,
-                key?.replace('~', "~0").replace('/', "~1")
+                crate::pointer_token(&key?)
             )),
         }
     }
