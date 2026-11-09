@@ -190,3 +190,51 @@ fn a_url_with_nothing_to_redact_keeps_its_bytes_however_it_serializes() {
         "https://example.com/a?x=a+b&token=%5BREDACTED%5D"
     );
 }
+
+#[tokio::test]
+async fn a_synthesized_blob_batch_uses_each_recorded_read_once() {
+    use patchula_testkit::{Body, Cassette, Interaction, RecordedRequest, RecordedResponse};
+    let sha = "ce013625030ba8dba906f756967f9e9ca394464a"; // "hello\n"
+    let cassette = Cassette {
+        schema_version: 1,
+        provenance: "simulated: one REST blob read".into(),
+        interactions: vec![Interaction {
+            request: RecordedRequest {
+                method: "GET".into(),
+                url: format!("https://api.github.com/repos/o/r/git/blobs/{sha}"),
+                headers: Default::default(),
+                body: Body::Text(String::new()),
+            },
+            response: RecordedResponse {
+                status: 200,
+                headers: Default::default(),
+                body: Body::Json(serde_json::json!({"encoding": "base64", "content": "aGVsbG8K"})),
+            },
+        }],
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("blobs.json");
+    std::fs::write(&path, serde_json::to_vec(&cassette).unwrap()).unwrap();
+    let replay = Replay::open(&path, Options::default()).unwrap();
+    let batch = || {
+        let mut request = Request::new(
+            Method::POST,
+            "https://api.github.com/graphql".parse().unwrap(),
+        );
+        *request.body_mut() = Some(
+            serde_json::to_vec(&serde_json::json!({
+                "query": "query($owner:String!,$name:String!,$o0:GitObjectID!){repository(owner:$owner,name:$name){b0: object(oid: $o0){... on Blob{text isBinary isTruncated}}}}",
+                "variables": {"owner": "o", "name": "r", "o0": sha},
+            }))
+            .unwrap()
+            .into(),
+        );
+        request
+    };
+    let first = replay.send(batch()).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&first.body).unwrap();
+    assert_eq!(json["data"]["repository"]["b0"]["text"], "hello\n");
+    replay.assert_finished().unwrap();
+    // The read is spent: a second batch is not answered from it again.
+    assert!(replay.send(batch()).await.is_err());
+}

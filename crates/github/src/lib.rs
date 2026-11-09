@@ -239,16 +239,23 @@ impl Client {
     }
 
     /// Public metadata reads share the transport pool but never GitHub auth.
-    pub fn public_http(&self, options: patchula_http::Options) -> patchula_http::Cached {
+    /// A registry client on this client's cache and transport, following
+    /// `rules`. Its options are the defaults at this client's concurrency,
+    /// which was validated when the client was built.
+    pub fn public_http(
+        &self,
+        rules: std::sync::Arc<dyn patchula_http::RegistryRules>,
+    ) -> patchula_http::Cached {
         patchula_http::Cached::with_options(
             self.0.cache.clone(),
             self.0.transport.clone(),
             patchula_http::Options {
                 default_host_concurrency: self.concurrency(),
-                ..options
+                rules,
+                ..patchula_http::Options::default()
             },
         )
-        .expect("validated options")
+        .expect("default options at a validated concurrency")
     }
     pub fn cache(&self) -> Cache {
         self.0.cache.clone()

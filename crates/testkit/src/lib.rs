@@ -178,6 +178,10 @@ impl Replay {
         if cassette.schema_version != 1 {
             return Err(failure("unsupported cassette schema version"));
         }
+        // A malformed recorded response fails here, not mid-replay.
+        for interaction in &cassette.interactions {
+            respond(&interaction.response)?;
+        }
         Ok(Self {
             used: Mutex::new(vec![false; cassette.interactions.len()]),
             cassette,
@@ -202,26 +206,26 @@ impl Replay {
 }
 
 /// Rebuild the transport response a recorded one stands for.
-fn respond(response: &RecordedResponse) -> Response {
+fn respond(response: &RecordedResponse) -> Result<Response, Error> {
     let mut headers = HeaderMap::new();
     for (name, values) in &response.headers {
         let name = HeaderName::from_bytes(name.as_bytes())
-            .unwrap_or_else(|_| panic!("invalid cassette header name"));
+            .map_err(|_| failure("invalid cassette header name"))?;
         for value in values {
             headers.append(
                 name.clone(),
                 HeaderValue::from_str(value)
-                    .unwrap_or_else(|_| panic!("invalid cassette header value")),
+                    .map_err(|_| failure("invalid cassette header value"))?,
             );
         }
     }
-    Response {
+    Ok(Response {
         status: StatusCode::from_u16(response.status)
-            .unwrap_or_else(|_| panic!("invalid cassette status")),
+            .map_err(|_| failure("invalid cassette status"))?,
         headers,
         body: response.body.bytes(),
         stale: None,
-    }
+    })
 }
 
 /// The Git blob SHA of `bytes`, for checking a cassette's REST blob reads.
@@ -271,6 +275,7 @@ impl Replay {
         &self,
         request: &Request,
         key: &RecordedRequest,
+        used: &[bool],
     ) -> Option<(Vec<usize>, RecordedResponse)> {
         if key.method != "POST" {
             return None;
@@ -310,11 +315,16 @@ impl Replay {
         let mut consumed = Vec::new();
         for (alias, sha) in aliases {
             let path = format!("/repos/{owner}/{name}/git/blobs/{sha}");
-            let index = self.cassette.interactions.iter().position(|interaction| {
-                interaction.request.method == "GET"
-                    && reqwest::Url::parse(&interaction.request.url)
-                        .is_ok_and(|url| url.path() == path)
-            })?;
+            // Each recorded read answers once, as it would on its own.
+            let index = self.cassette.interactions.iter().enumerate().position(
+                |(index, interaction)| {
+                    !used[index]
+                        && !consumed.contains(&index)
+                        && interaction.request.method == "GET"
+                        && reqwest::Url::parse(&interaction.request.url)
+                            .is_ok_and(|url| url.path() == path)
+                },
+            )?;
             let bytes = blob_bytes(&self.cassette.interactions[index].response.body)?;
             let blob = match std::str::from_utf8(&bytes) {
                 Ok(text) if git_blob_sha(&bytes) == sha => {
@@ -359,11 +369,11 @@ impl Transport for Replay {
             {
                 Some(index) => index,
                 None => {
-                    if let Some((consumed, response)) = self.blob_batch(&request, &key) {
+                    if let Some((consumed, response)) = self.blob_batch(&request, &key, &used) {
                         for index in consumed {
                             used[index] = true;
                         }
-                        return Ok(respond(&response));
+                        return Ok(respond(&response).expect("a synthesized batch is well formed"));
                     }
                     // An unmatched request is an ordinary transport failure:
                     // callers decide whether a missing interaction matters.
@@ -371,7 +381,8 @@ impl Transport for Replay {
                 }
             };
             used[index] = true;
-            Ok(respond(&self.cassette.interactions[index].response))
+            Ok(respond(&self.cassette.interactions[index].response)
+                .expect("responses are checked when the cassette opens"))
         })
     }
 }

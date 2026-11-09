@@ -519,7 +519,7 @@ impl Lifecycle {
     pub async fn publish(&mut self, client: &Client, plans: &mut [Plan]) {
         let sources = patchula_datasource::Client::new(
             client.clone(),
-            client.public_http(patchula_datasource::http_options()),
+            client.public_http(patchula_datasource::http_options().rules),
             client.cache(),
         )
         .notes_batch();
