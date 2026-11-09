@@ -60,14 +60,14 @@ pub enum Error {
 }
 pub type Result<T> = std::result::Result<T, Error>;
 impl Error {
+    /// Every variant is classified explicitly: a new one must pick a kind.
     pub fn kind(&self) -> LookupErrorKind {
-        use patchula_http::CacheError;
+        use patchula_http::{CacheError, Error as HttpError};
         match self {
             Error::Http(CacheError::Status(status))
             | Error::Github(GithubError::Status(status)) => status_kind(*status),
-            Error::Http(CacheError::Transport(_)) | Error::Github(GithubError::Transport) => {
-                LookupErrorKind::Network
-            }
+            Error::Http(CacheError::Transport(HttpError::Network))
+            | Error::Github(GithubError::Transport) => LookupErrorKind::Network,
             Error::Http(CacheError::Document)
             | Error::Github(GithubError::Json)
             | Error::Json(_)
@@ -75,8 +75,32 @@ impl Error {
             Error::Github(GithubError::RateLimit) | Error::RateLimit(_) => {
                 LookupErrorKind::RateLimit
             }
-            Error::Mise(patchula_mise::Error::Empty(_)) => LookupErrorKind::NotFound,
-            _ => LookupErrorKind::Other,
+            Error::Mise(
+                patchula_mise::Error::Empty(_) | patchula_mise::Error::NoReleases { .. },
+            ) => LookupErrorKind::NotFound,
+            Error::Http(
+                CacheError::Worker
+                | CacheError::Configuration
+                | CacheError::MissingBody
+                | CacheError::Cache(_)
+                | CacheError::Transport(HttpError::Configuration),
+            )
+            | Error::Github(
+                GithubError::Configuration
+                | GithubError::Url
+                | GithubError::Cache
+                | GithubError::Graphql(_)
+                | GithubError::Pagination
+                | GithubError::MissingBody,
+            )
+            | Error::Cache(_)
+            | Error::Mise(patchula_mise::Error::Refused(_) | patchula_mise::Error::Failed(_))
+            | Error::NoMise
+            | Error::NoNix
+            | Error::Nix(_)
+            | Error::Invalid
+            | Error::Registry(_)
+            | Error::Notes(_) => LookupErrorKind::Other,
         }
     }
 }
