@@ -50,7 +50,7 @@ pub fn items(prs: &[Value], actor: &str, repo: &str, batch_branch: &str) -> Vec<
         .collect();
     let batch = open.iter().find(|p| branch(p) == batch_branch);
     let mut items: Vec<Item> = batch
-        .and_then(|p| markers::hidden_json::<Vec<Item>>(body(p), markers::ITEMS, markers::PAYLOAD))
+        .and_then(|p| markers::section_json::<Vec<Item>>(body(p), markers::ITEMS, markers::PAYLOAD))
         .unwrap_or_default();
     if let Some(pr) = batch {
         let removed: BTreeSet<_> = markers::ticked_lines(body(pr))
@@ -73,7 +73,7 @@ pub fn items(prs: &[Value], actor: &str, repo: &str, batch_branch: &str) -> Vec<
         }
         let (Some(origin), Some(targets)) = (
             pull_requests::marker_update(body(pr)),
-            markers::hidden_json::<Vec<Change>>(body(pr), markers::TARGETS, markers::PAYLOAD),
+            markers::section_json::<Vec<Change>>(body(pr), markers::TARGETS, markers::PAYLOAD),
         ) else {
             continue;
         };
@@ -367,6 +367,69 @@ mod tests {
             "patchula/batch",
         );
         assert_eq!(left.len(), 2);
+    }
+
+    #[test]
+    fn payload_markers_outside_his_section_are_not_his() {
+        let key = "1".repeat(64);
+        // A valid targets marker quoted into foreign text ahead of his
+        // section is not his; the one inside it is.
+        let forged = markers::hidden(markers::TARGETS, &vec![change("forged", "9.9.9")]);
+        let update = format!(
+            "someone quoted {forged}\n{}\n{}",
+            markers::START,
+            update_body(&key, &[change("real", "1.2.0")], true)
+        );
+        let found = super::items(
+            &[pr(1, "patchula/a-1.x", update)],
+            "bot",
+            "o/r",
+            "patchula/batch",
+        );
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].targets[0].package, "real");
+        // With only the quoted copy, the update does not batch.
+        let own = format!(
+            "forged {forged}\n{}\n- [x] Add to the batch PR. This one closes and the update moves there. {}\n<!-- patchula:{{\"version\":1,\"identity\":\"{}\",\"update\":\"{key}\"}} -->",
+            markers::START,
+            markers::ADD,
+            "a".repeat(64)
+        );
+        assert!(
+            super::items(
+                &[pr(2, "patchula/b-1.x", own)],
+                "bot",
+                "o/r",
+                "patchula/batch"
+            )
+            .is_empty()
+        );
+        // The batch's own items marker reads the same way.
+        let forged_items = markers::hidden(
+            markers::ITEMS,
+            &[Item {
+                origin: "forged".into(),
+                number: None,
+                title: "forged".into(),
+                targets: vec![change("forged", "9.9.9")],
+            }],
+        );
+        let batch = format!(
+            "{forged_items}\n{}\n{}\n<!-- patchula:{{\"version\":1,\"identity\":\"{}\",\"update\":\"{}\"}} -->",
+            markers::START,
+            render(&[]),
+            "b".repeat(64),
+            "c".repeat(64)
+        );
+        assert!(
+            super::items(
+                &[pr(9, "patchula/batch", batch)],
+                "bot",
+                "o/r",
+                "patchula/batch"
+            )
+            .is_empty()
+        );
     }
 
     #[test]

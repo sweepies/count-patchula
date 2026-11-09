@@ -196,17 +196,26 @@ pub(crate) fn closed(body: &str, marker: &str) -> bool {
     body.lines().next_back() == Some(marker)
 }
 
-/// The server URL his marker advertises: the body's only
-/// `<!-- patchula-server:` occurrence, up to the next ` -->`, nonempty and
-/// free of whitespace. The CLI still validates it as a URL.
+/// The server URL his marker advertises: exactly one whole line of the
+/// body equal to `<!-- patchula-server:URL -->`, the URL nonempty and free
+/// of whitespace. He always writes it alone on its line; a copy quoted
+/// into foreign prose is not a line and a second marker line is ambiguous,
+/// so neither can select the server. The CLI still validates it as a URL.
 pub(crate) fn server(body: &str) -> Option<&str> {
-    let start = body.find(SERVER)?;
-    let rest = &body[start + SERVER.len()..];
-    if rest.contains(SERVER) {
-        return None;
+    let mut found = None;
+    for line in body.lines() {
+        let Some(url) = line
+            .strip_prefix(SERVER)
+            .and_then(|l| l.strip_suffix(" -->"))
+        else {
+            continue;
+        };
+        if found.is_some() || url.is_empty() || url.contains(char::is_whitespace) {
+            return None;
+        }
+        found = Some(url);
     }
-    let (url, _) = rest.split_once(" -->")?;
-    (!url.is_empty() && !url.contains(char::is_whitespace)).then_some(url)
+    found
 }
 
 /// Every checkbox line outside fenced code: whether it is ticked, and its
@@ -452,16 +461,29 @@ mod tests {
     }
 
     #[test]
-    fn server_reads_one_clean_url() {
+    fn server_reads_one_whole_line() {
         let text = format!("run there\n{SERVER}https://count.example -->\n");
         assert_eq!(server(&text), Some("https://count.example"));
         assert_eq!(server("none"), None);
-        assert_eq!(server(&format!("{SERVER} -->")), None);
-        assert_eq!(server(&format!("{SERVER}has space -->")), None);
+        // Quoted inline in prose it is not a marker line.
         assert_eq!(
-            server(&format!("{SERVER}https://a --> {SERVER}https://b -->")),
+            server(&format!("see {SERVER}https://evil --> inline")),
             None
         );
+        // Text after the marker on its line breaks the whole-line form.
+        assert_eq!(server(&format!("{SERVER}https://a --> trailing")), None);
+        assert_eq!(server(&format!("x {SERVER}https://a -->")), None);
+        // Two marker lines are ambiguous, good or bad.
+        assert_eq!(
+            server(&format!("{SERVER}https://a -->\n{SERVER}https://b -->")),
+            None
+        );
+        assert_eq!(
+            server(&format!("{SERVER} -->\n{SERVER}https://a -->")),
+            None
+        );
+        assert_eq!(server(&format!("{SERVER}has space -->")), None);
+        assert_eq!(server(&format!("{SERVER} -->")), None);
     }
 
     #[test]
