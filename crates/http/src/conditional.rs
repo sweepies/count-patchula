@@ -89,7 +89,7 @@ pub fn entry(response: &Response, now: i64) -> HttpEntry {
                 .ok()
                 .map(|value| value.as_secs() as i64)
         });
-    // Store only metadata needed to reconstitute a GET, never cookies or bodies in logs.
+    // Only the headers needed to rebuild the response; never cookies or credentials.
     let headers = [
         "etag",
         "last-modified",
