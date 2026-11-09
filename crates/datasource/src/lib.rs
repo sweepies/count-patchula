@@ -190,14 +190,13 @@ enum Stale {
 impl StaleKey {
     /// The package's tag catalog.
     pub const CATALOG: Self = Self(Stale::Catalog);
-    /// The key a tag's manifest read is recorded under. OCI tags cannot hold
-    /// `+`, which a catalog of OCI versions writes as `_`.
+    /// The key a tag's manifest read is recorded under.
     pub fn digest(tag: &str) -> Self {
-        Self(Stale::Digest(tag.replace('+', "_")))
+        Self(Stale::Digest(oci_tag(tag)))
     }
     /// Whether this key is the manifest `reference` was read through.
     pub fn is_manifest_of(&self, reference: &str) -> bool {
-        matches!(&self.0, Stale::Digest(tag) if *tag == reference.replace('+', "_"))
+        matches!(&self.0, Stale::Digest(tag) if *tag == oci_tag(reference))
     }
 }
 impl std::fmt::Display for StaleKey {
@@ -207,6 +206,20 @@ impl std::fmt::Display for StaleKey {
             Stale::Digest(tag) => write!(f, "digest:{tag}"),
         }
     }
+}
+
+/// The tag an OCI catalog writes for `tag`: OCI tags cannot hold `+`, so
+/// the catalog writes `_` where the reference has `+`.
+fn oci_tag(tag: &str) -> String {
+    tag.replace('+', "_")
+}
+
+/// A package name that cannot escape its place in a registry URL path: no
+/// query, fragment or backslash, and no `.` or `..` path segment.
+pub fn package_name_safe(package: &str) -> bool {
+    !package.is_empty()
+        && !package.contains(['?', '#', '\\'])
+        && !package.split('/').any(|part| matches!(part, "." | ".."))
 }
 
 /// The URL of `package`'s packument in `registry`, or in npm's public one.
@@ -313,11 +326,7 @@ impl Client {
             return Err(Error::Invalid);
         }
         // A flake reference is a URL with a query; the runner checks its scheme.
-        if source != Source::Nix
-            && (package.is_empty()
-                || package.contains(['?', '#', '\\'])
-                || package.split('/').any(|s| s == ".." || s == "."))
-        {
+        if source != Source::Nix && !package_name_safe(package) {
             return Err(Error::Invalid);
         }
         match source {
@@ -334,14 +343,7 @@ impl Client {
             Source::Mise => self.mise(package).await,
             Source::GithubRunners => runners(package),
             Source::Docker => self.docker(package).await,
-            Source::Oci => {
-                let mut catalog = self.docker(package).await?;
-                for version in &mut catalog.versions {
-                    version.version = version.version.replace('_', "+");
-                }
-                sort(&mut catalog.versions, Ecosystem::Npm);
-                Ok(catalog)
-            }
+            Source::Oci => self.oci(package).await,
             Source::Terraform => self.terraform(package).await,
             Source::Helm => self.helm(package).await,
             Source::ForgeTags => self.forge_tags(package).await,

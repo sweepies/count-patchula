@@ -996,8 +996,8 @@ mod tests {
             ("sub/dir/pyproject.toml", true, true, Some("sub/dir/pyproject.toml"), true, CredentialCheck::Scan, true, "mise,pyproject"),
             ("uv.toml", true, true, Some("uv.toml"), true, CredentialCheck::Scan, true, "mise,pyproject"),
             ("sub/dir/uv.toml", true, true, Some("sub/dir/uv.toml"), true, CredentialCheck::Scan, true, "mise,pyproject"),
-            ("poetry.toml", false, false, None, true, CredentialCheck::Scan, true, ""),
-            ("sub/dir/poetry.toml", false, false, None, true, CredentialCheck::Scan, true, ""),
+            ("poetry.toml", true, true, Some("poetry.toml"), true, CredentialCheck::Scan, true, "pyproject"),
+            ("sub/dir/poetry.toml", true, true, Some("sub/dir/poetry.toml"), true, CredentialCheck::Scan, true, "pyproject"),
             ("pdm.toml", true, true, Some("pdm.toml"), false, CredentialCheck::Undecided, true, "pyproject"),
             ("sub/dir/pdm.toml", true, true, Some("sub/dir/pdm.toml"), false, CredentialCheck::Undecided, true, "pyproject"),
             ("pixi.toml", true, true, Some("pixi.toml"), false, CredentialCheck::Undecided, true, "pyproject"),
@@ -1351,15 +1351,6 @@ pub mod known {
         POETRY_DEPENDENCY_KEYS, POETRY_SOURCE_KEYS, UV_IRRELEVANT, UV_PIP_IRRELEVANT, UV_PIP_READ,
         UV_READ, UV_SOURCE_KEYS,
     };
-}
-
-/// A file that can name a Python package index.
-pub(crate) fn python_settings(path: &str) -> bool {
-    let leaf = path.rsplit('/').next().unwrap_or(path);
-    matches!(
-        leaf,
-        "pyproject.toml" | "uv.toml" | "pdm.toml" | "pixi.toml" | "hatch.toml"
-    )
 }
 
 /// Bundler's settings for a project.

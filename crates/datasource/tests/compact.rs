@@ -120,15 +120,18 @@ async fn fresh_reopen_304_changed_200_and_invalid_200_preserve_catalog_semantics
         BTreeMap::from([("accept".into(), "application/json".into())]),
     )
     .unwrap()
-    .representation(&patchula_http::representation("npm-catalog"));
+    .representation(&patchula_http::representation("npm-catalog-v2"));
     let mut entry = cache.http_get(&key).await.unwrap().unwrap();
     assert!(
         entry.body.len() < 500,
         "README and integrity must not survive compaction"
     );
-    assert_eq!(
-        serde_json::from_slice::<Value>(&entry.body).unwrap()["modified"],
-        "2026-10-15T00:00:00Z"
+    assert!(
+        serde_json::from_slice::<Value>(&entry.body)
+            .unwrap()
+            .get("modified")
+            .is_none(),
+        "the catalog stores no write-only fields"
     );
     entry.expires_at = Some(0);
     cache.http_put(&key, &entry).await.unwrap();

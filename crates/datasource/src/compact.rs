@@ -3,18 +3,11 @@
 use super::{Catalog, Version, sort};
 use patchula_http::{CacheError, Derived};
 use patchula_versioning::Ecosystem;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::BTreeMap;
 
-#[derive(Serialize)]
-struct StoredCatalog {
-    #[serde(flatten)]
-    catalog: Catalog,
-    modified: Option<String>,
-}
-
-fn encode(catalog: Catalog, modified: Option<String>) -> Result<Vec<u8>, CacheError> {
-    serde_json::to_vec(&StoredCatalog { catalog, modified }).map_err(|_| CacheError::Document)
+fn encode(catalog: Catalog) -> Result<Vec<u8>, CacheError> {
+    serde_json::to_vec(&catalog).map_err(|_| CacheError::Document)
 }
 
 #[derive(Deserialize)]
@@ -64,9 +57,9 @@ pub(super) fn npm(body: &[u8]) -> Result<Vec<u8>, CacheError> {
             .collect(),
     };
     sort(&mut catalog.versions, Ecosystem::Npm);
-    encode(catalog, document.time.remove("modified"))
+    encode(catalog)
 }
-pub(super) const NPM_CATALOG: Derived<CacheError> = Derived::new("npm-catalog", npm);
+pub(super) const NPM_CATALOG: Derived<CacheError> = Derived::new("npm-catalog-v2", npm);
 
 #[derive(Deserialize)]
 struct CrateVersion {
@@ -88,9 +81,9 @@ pub(super) fn crates(body: &[u8]) -> Result<Vec<u8>, CacheError> {
         });
     }
     catalog.versions.reverse(); // Sparse index is append-only publication order.
-    encode(catalog, None)
+    encode(catalog)
 }
-pub(super) const CRATES_CATALOG: Derived<CacheError> = Derived::new("crates-catalog", crates);
+pub(super) const CRATES_CATALOG: Derived<CacheError> = Derived::new("crates-catalog-v2", crates);
 
 #[derive(Deserialize)]
 struct Pypi {
@@ -122,9 +115,9 @@ pub(super) fn pypi(body: &[u8]) -> Result<Vec<u8>, CacheError> {
         });
     }
     sort(&mut catalog.versions, Ecosystem::Pep440);
-    encode(catalog, None)
+    encode(catalog)
 }
-pub(super) const PYPI_CATALOG: Derived<CacheError> = Derived::new("pypi-catalog", pypi);
+pub(super) const PYPI_CATALOG: Derived<CacheError> = Derived::new("pypi-catalog-v2", pypi);
 
 #[cfg(test)]
 mod tests {

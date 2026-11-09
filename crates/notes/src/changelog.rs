@@ -1,5 +1,4 @@
 use super::*;
-use base64::{Engine, engine::general_purpose::STANDARD};
 use std::{collections::BTreeMap, sync::LazyLock};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -218,21 +217,7 @@ pub(super) fn relevant(file: &File, directory: Option<&str>, low: u64, high: u64
 }
 
 pub(super) fn compact_blob(bytes: &[u8]) -> std::result::Result<Vec<u8>, serde_json::Error> {
-    #[derive(Deserialize)]
-    struct Blob {
-        content: String,
-    }
-    let blob: Blob = serde_json::from_slice(bytes)?;
-    let decoded = STANDARD
-        .decode(
-            blob.content
-                .bytes()
-                .filter(|b| !b.is_ascii_whitespace())
-                .collect::<Vec<_>>(),
-        )
-        .map_err(serde::de::Error::custom)?;
-    let text = std::str::from_utf8(&decoded).map_err(serde::de::Error::custom)?;
-    serde_json::to_vec(&parse_changelog(text))
+    serde_json::to_vec(&parse_changelog(&blob_text(bytes)?))
 }
 pub(super) const PARSED_CHANGELOG: patchula_http::Derived<serde_json::Error> =
     patchula_http::Derived::new("parsed-changelog", compact_blob);
