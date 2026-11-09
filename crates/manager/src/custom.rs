@@ -27,6 +27,7 @@ pub(super) fn extract(
     path: &str,
     text: &str,
     extractors: &[Extractor],
+    npmrcs: &BTreeMap<&str, npm::Npmrc>,
 ) -> Result<Vec<Dependency>, String> {
     let mut out = Vec::new();
     for extractor in extractors {
@@ -63,11 +64,12 @@ pub(super) fn extract(
                     extract: extractor.extract.clone(),
                     included_by: None,
                     // An optional capture that did not take part, or is empty,
-                    // means the source's public registry. A value the Count
-                    // cannot read from is kept as written, so that one lookup
-                    // fails instead of reading the public package of the name.
-                    // Without a template an npm package follows `.npmrc`,
-                    // assigned with the node ecosystem's in the finishing step.
+                    // means the source's public registry — an explicit public
+                    // answer the `.npmrc` fallback must not override. A value
+                    // the Count cannot read from is kept as written, so that
+                    // one lookup fails instead of reading the public package
+                    // of the name. Without a template, npm packages follow
+                    // `.npmrc`.
                     registry: match &extractor.registry {
                         Some(registry) => match template(registry, &captures) {
                             Ok(raw) if raw.is_empty() => None,
@@ -80,6 +82,9 @@ pub(super) fn extract(
                             Err(error) if error.starts_with("unmatched template capture") => None,
                             Err(error) => return Err(error),
                         },
+                        None if source == Source::Npm => {
+                            npm::named_for(path, &package, npmrcs).registry()
+                        }
                         None => None,
                     },
                 });
@@ -111,17 +116,11 @@ impl crate::Ecosystem for Descriptor {
         Ok(Prepared {
             extract: Some(Box::new(move |path, text, out| {
                 // A bad extractor fails the whole extraction, as before.
-                let dependencies = extract(path, text, extractors)?;
+                let dependencies = extract(path, text, extractors, npmrcs)?;
                 out.dependencies.extend(dependencies);
                 Ok(())
             })),
-            // npm-source packages an extractor leaves on the public registry
-            // still follow `.npmrc`, the same decision the node ecosystem's
-            // packages get.
-            finish: Some(Box::new(move |out| {
-                npm::assign_registries(&mut out.dependencies, &mut out.locked, npmrcs);
-                Ok(())
-            })),
+            finish: None,
         })
     }
 }

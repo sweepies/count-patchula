@@ -1260,4 +1260,40 @@ mod frozen_bytes {
             }
         }
     }
+
+    /// `registry` was `Option<String>` and sorted as one: a plan's changes,
+    /// the PR body rows and the `patchula-targets` marker order by the
+    /// recorded string, not the enum's variant order. `None`, then
+    /// `${NPM_REGISTRY}`, `ambiguous: …` and `https://…` is that order.
+    #[test]
+    fn mixed_registry_changes_keep_their_recorded_order() {
+        use std::collections::BTreeSet;
+        let registries: [Option<&str>; 4] = [
+            None,
+            Some("${NPM_REGISTRY}"),
+            Some("ambiguous: https://a.acme.dev, https://b.acme.dev"),
+            Some("https://npm.acme.dev"),
+        ];
+        let changes: BTreeSet<Change> = registries
+            .iter()
+            .map(|registry| change(&dep(*registry, "lodash")))
+            .collect();
+        let order: Vec<Option<String>> = changes
+            .iter()
+            .map(|c| c.registry.as_ref().map(|r| r.recorded().to_owned()))
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                None,
+                Some("${NPM_REGISTRY}".to_owned()),
+                Some("ambiguous: https://a.acme.dev, https://b.acme.dev".to_owned()),
+                Some("https://npm.acme.dev".to_owned()),
+            ]
+        );
+        assert_eq!(
+            serde_json::to_string(&changes).unwrap(),
+            r#"[{"source":"npm","package":"lodash","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]},{"source":"npm","package":"lodash","registry":"${NPM_REGISTRY}","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]},{"source":"npm","package":"lodash","registry":"ambiguous: https://a.acme.dev, https://b.acme.dev","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]},{"source":"npm","package":"lodash","registry":"https://npm.acme.dev","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]}]"#
+        );
+    }
 }

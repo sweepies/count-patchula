@@ -22,7 +22,7 @@ pub struct PackageId {
 /// registry, in the form it is recorded: an https URL, the set of registries
 /// it could come from when the Count cannot choose, or a value kept as
 /// written so its lookup fails.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Registry {
     /// An https URL standing in for the source's public registry.
     Url(String),
@@ -97,6 +97,18 @@ impl Registry {
     }
 }
 
+impl PartialOrd for Registry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+/// The recorded string is what ordered `Option<String>` before the enum:
+/// changes, PR rows and markers keep the order they had.
+impl Ord for Registry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.recorded().cmp(other.recorded())
+    }
+}
 impl From<&str> for Registry {
     fn from(value: &str) -> Self {
         Self::from_recorded(value)

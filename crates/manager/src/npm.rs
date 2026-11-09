@@ -548,7 +548,7 @@ pub(super) fn npmrcs(files: &crate::Files) -> BTreeMap<&str, Npmrc> {
 /// The registry `package` in `file` names: the nearest setting for its
 /// scope at or above the file, else the nearest `registry=` there, else the
 /// public registry.
-fn named_for(file: &str, package: &str, npmrcs: &BTreeMap<&str, Npmrc>) -> Named {
+pub(super) fn named_for(file: &str, package: &str, npmrcs: &BTreeMap<&str, Npmrc>) -> Named {
     let mut directories = Vec::new();
     let mut directory = file.rsplit_once('/').map_or("", |(d, _)| d);
     loop {
@@ -590,7 +590,11 @@ pub(super) fn assign_registries(
     let mut origins = Origins::default();
     for (file, package) in deps
         .iter()
-        .filter(|dep| dep.source == Source::Npm && dep.location.pointer != "/packageManager")
+        .filter(|dep| {
+            dep.source == Source::Npm
+                && matches!(dep.manager, Manager::Npm | Manager::Bun)
+                && dep.location.pointer != "/packageManager"
+        })
         .map(|dep| (dep.file.as_str(), dep.package.as_str()))
         .chain(
             locked

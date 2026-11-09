@@ -2451,6 +2451,59 @@ fn extractors_can_name_a_registry_from_a_capture() {
     );
 }
 
+/// A registry template that resolves to the public registry is an explicit
+/// public answer: `.npmrc` does not apply to it. Only an extractor that
+/// names no registry follows `.npmrc`.
+#[test]
+fn extractor_registries_that_name_the_public_registry_stay_public() {
+    let mut config = config();
+    config.extractors.push(patchula_config::Extractor {
+        note: String::new(),
+        paths: vec!["deploy/versions.txt".into()],
+        patterns: vec![
+            r"(?<dependency>@[\w./-]+)=(?<current>\S+)(?: registry=(?<registry>\S+))?".into(),
+        ],
+        source: "npm".into(),
+        dependency: "{dependency}".into(),
+        package: "{dependency}".into(),
+        scheme: "semver".into(),
+        extract: None,
+        registry: Some("{registry}".into()),
+    });
+    let files = read_files([
+        (
+            ".npmrc".into(),
+            "@acme:registry=https://npm.acme.dev\n".into(),
+        ),
+        (
+            "deploy/versions.txt".into(),
+            "@acme/ui=1.2.3 registry=https://registry.npmjs.org\n@acme/cli=2.0.0\n@acme/priv=3.0.0 registry=https://priv.acme.dev\n".into(),
+        ),
+    ]);
+    let deps = Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies;
+    let registry = |name: &str| {
+        deps.iter()
+            .find(|d| d.name == name)
+            .unwrap()
+            .registry
+            .as_ref()
+            .map(|r| r.recorded().to_owned())
+    };
+    // The template resolved to the public registry.
+    assert_eq!(registry("@acme/ui"), None);
+    // An unmatched optional capture is the same explicit public answer.
+    assert_eq!(registry("@acme/cli"), None);
+    // A template naming another registry keeps it, whatever `.npmrc` says.
+    assert_eq!(
+        registry("@acme/priv").as_deref(),
+        Some("https://priv.acme.dev")
+    );
+}
+
 #[test]
 fn npm_registry_files_are_read_whatever_files_and_exclude_select() {
     let mut config = config();
