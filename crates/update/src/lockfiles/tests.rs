@@ -1320,8 +1320,7 @@ async fn scheduled_refresh_uses_stable_name_windows_weekly_cadence_and_wait_hour
         .await
         .unwrap();
     p.lockfiles_ready = true;
-    p.action.status = ActionStatus::Skipped;
-    p.action.reason = Some("lockfiles already current".into());
+    p.hold(crate::plan::Hold::LockfilesCurrent);
     record_refresh(&cache, &[p], &[], monday()).await.unwrap();
     for days in [0, 7] {
         config.lockfiles.wait_hours = 200;

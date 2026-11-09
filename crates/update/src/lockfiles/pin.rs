@@ -7,7 +7,8 @@ use super::*;
 use patchula_manager::{Edit, Scanner};
 use patchula_versioning::Versioning;
 
-/// Manifests as they were before a transient pin.
+/// Manifests as they were before a transient pin. Dropping it puts back any
+/// not yet restored, so no exit path, an error included, leaves a pin behind.
 pub(super) struct Pinned {
     root: PathBuf,
     originals: BTreeMap<String, String>,
@@ -73,8 +74,10 @@ impl Pinned {
         }
         for (path, edits) in edits {
             let original = &files[path];
-            write(root, path, &patchula_manager::apply(original, edits)?)?;
+            let content = patchula_manager::apply(original, edits)?;
+            // Recorded first, so a write that fails partway is restored too.
             pinned.originals.insert(path.into(), original.clone());
+            write(root, path, &content)?;
         }
         Ok(pinned)
     }
@@ -87,10 +90,21 @@ impl Pinned {
     pub(super) fn is_empty(&self) -> bool {
         self.originals.is_empty()
     }
-    /// Put the manifests back as they were.
-    pub(super) fn restore(&self) -> Result<(), String> {
-        self.originals
-            .iter()
-            .try_for_each(|(path, content)| write(&self.root, path, content))
+    /// Put the manifests back as they were. Each is forgotten only once it is
+    /// written back, so a failure leaves the rest for `Drop` to retry.
+    pub(super) fn restore(&mut self) -> Result<(), String> {
+        while let Some((path, content)) = self.originals.first_key_value() {
+            write(&self.root, path, content)?;
+            let path = path.clone();
+            self.originals.remove(&path);
+        }
+        Ok(())
+    }
+}
+impl Drop for Pinned {
+    fn drop(&mut self) {
+        for (path, content) in std::mem::take(&mut self.originals) {
+            let _ = write(&self.root, &path, &content);
+        }
     }
 }

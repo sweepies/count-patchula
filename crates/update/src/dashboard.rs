@@ -111,28 +111,7 @@ pub struct Controls {
 }
 fn checked_actions(body: &str) -> BTreeSet<Action> {
     let mut counts = BTreeMap::<Action, (usize, bool)>::new();
-    let mut fence = None;
-    for line in body.lines() {
-        let line = line.trim();
-        if line.starts_with("```") || line.starts_with("~~~") {
-            let kind = &line[..3];
-            if fence == Some(kind) {
-                fence = None;
-            } else if fence.is_none() {
-                fence = Some(kind);
-            }
-            continue;
-        }
-        if fence.is_some() {
-            continue;
-        }
-        let Some((state, rest)) = line.strip_prefix("- [").and_then(|s| s.split_once("] ")) else {
-            continue;
-        };
-        let checked = state == "x" || state == "X";
-        if !checked && state != " " {
-            continue;
-        }
+    for (checked, rest) in crate::pull_requests::checkboxes(body) {
         let Some((_, marker)) = rest.split_once("<!-- patchula-action:") else {
             continue;
         };
@@ -223,10 +202,9 @@ impl Controls {
             if (self.create.contains(&key)
                 || self.recreate.contains(&key)
                 || self.branches.contains(&plan.action.branch))
-                && plan.action.reason.as_deref() == Some("outside the configured update windows")
+                && plan.held(&crate::plan::Hold::Window)
             {
-                plan.action.status = patchula_report::ActionStatus::Planned;
-                plan.action.reason = None;
+                plan.lift();
             }
             if self.recheck
                 || self.branches.contains(&plan.action.branch)
@@ -455,13 +433,13 @@ pub fn render(
                         ),
                     ));
             }
-        } else if plan.action.reason.as_deref() == Some(crate::batch::BATCHED_REASON) {
+        } else if plan.held(&crate::plan::Hold::Batched) {
             // The batch PR is listed with the open PRs; these are its items.
             sections
                 .entry("Batched".into())
                 .or_default()
                 .insert((None, format!("- {}\n", titled(plan))));
-        } else if plan.action.reason.as_deref() == Some(crate::pull_requests::CLOSED_BY_OWNER) {
+        } else if plan.held(&crate::plan::Hold::ClosedByOwner) {
             sections
                 .entry("Updates you closed".into())
                 .or_default()
@@ -473,8 +451,10 @@ pub fn render(
                     ),
                 ));
         } else if let Some(reason) = &plan.action.reason {
-            let row = if reason.starts_with("prs.")
-                || reason == "outside the configured update windows"
+            let row = if plan
+                .hold
+                .as_ref()
+                .is_some_and(crate::plan::Hold::overridable)
             {
                 checkbox(
                     &format!("Create it now anyway: {} ({})", titled(plan), safe(reason)),
@@ -931,6 +911,8 @@ enum Fix {
     Pr(u64),
     Update(String),
     NotProposed(String),
+    /// Proposed, but its owner closed the PR.
+    Closed(String),
     None,
 }
 impl Fix {
@@ -939,6 +921,7 @@ impl Fix {
             Self::Pr(number) => format!("fixed by #{number}"),
             Self::Update(version) => format!("fixed by the update to {}", code(version)),
             Self::NotProposed(version) => format!("fixed in {}, not proposed", code(version)),
+            Self::Closed(version) => format!("fixed in {}, whose PR was closed", code(version)),
             Self::None => "no fixed release yet".into(),
         }
     }
@@ -957,7 +940,7 @@ fn fix_status(
             .clone()
             .map_or(Fix::None, Fix::NotProposed);
     };
-    let number = plans
+    let matching: Vec<&Plan> = plans
         .iter()
         .filter(|plan| {
             plan.changes.iter().any(|c| {
@@ -968,16 +951,41 @@ fn fix_status(
                         || (update.new_value.is_some() && c.value == update.new_value))
             })
         })
-        .find_map(|plan| {
-            prs.iter()
-                .find(|p| p["state"] == "open" && p["head"]["ref"] == plan.action.branch)
-                .and_then(|p| p["number"].as_u64())
-        });
+        .collect();
+    let open = |branch: &str| {
+        prs.iter()
+            .find(|p| p["state"] == "open" && p["head"]["ref"] == branch)
+            .and_then(|p| p["number"].as_u64())
+    };
+    // A batched update is fixed by the batch PR, if that PR carries it.
+    let batch = |key: &str| {
+        plans
+            .iter()
+            .find(|plan| {
+                plan.batch
+                    .as_ref()
+                    .is_some_and(|items| items.iter().any(|item| item.origin == key))
+            })
+            .and_then(|plan| open(&plan.action.branch))
+    };
+    let number = matching.iter().find_map(|plan| {
+        if plan.held(&crate::plan::Hold::Batched) {
+            batch(&crate::pull_requests::update_key(plan))
+        } else {
+            open(&plan.action.branch)
+        }
+    });
+    // Closed only when no matching plan is still on its way to a PR.
+    let closed = !matching.is_empty()
+        && matching
+            .iter()
+            .all(|plan| plan.held(&crate::plan::Hold::ClosedByOwner));
     match (
         number,
         update.new_version.as_ref().or(update.new_value.as_ref()),
     ) {
         (Some(number), _) => Fix::Pr(number),
+        (None, Some(version)) if closed => Fix::Closed(version.clone()),
         (None, Some(version)) => Fix::Update(version.clone()),
         (None, None) => Fix::None,
     }

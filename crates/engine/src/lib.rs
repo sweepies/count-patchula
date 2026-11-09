@@ -387,8 +387,7 @@ impl Engine {
             let mut plans = match plans {
                 Ok(plans) => plans,
                 Err(error) => {
-                    repo.status = Status::Error;
-                    repo.reason = Some(error);
+                    fail(repo, error);
                     continue;
                 }
             };
@@ -423,8 +422,7 @@ impl Engine {
                 ) {
                     Ok(batched) => work.controls.batched = batched,
                     Err(error) => {
-                        repo.status = Status::Error;
-                        repo.reason = Some(error);
+                        fail(repo, error);
                         continue;
                     }
                 }
@@ -463,9 +461,7 @@ impl Engine {
                                     | patchula_report::ActionStatus::Protected
                             )
                         }) {
-                            repo.status = Status::Error;
-                            repo.reason =
-                                Some("auto-merge failed or was protected; inspect actions".into());
+                            fail(repo, "auto-merge failed or was protected; inspect actions");
                         }
                         if let Err(error) = patchula_update::dashboard::reconcile(
                             &self.github,
@@ -487,8 +483,7 @@ impl Engine {
                         )
                         .await
                         {
-                            repo.status = Status::Error;
-                            repo.reason = Some(format!("dependency dashboard: {error}"));
+                            fail(repo, format!("dependency dashboard: {error}"));
                         }
                         pull_requests.extend(
                             plans
@@ -515,8 +510,7 @@ impl Engine {
                     }
                     Ok(false) => {}
                     Err(error) => {
-                        repo.status = Status::Error;
-                        repo.reason = Some(error);
+                        fail(repo, error);
                         continue;
                     }
                 }
@@ -562,8 +556,7 @@ impl Engine {
                         Some(state)
                     }
                     Err(error) => {
-                        repo.status = Status::Error;
-                        repo.reason = Some(error);
+                        fail(repo, error);
                         continue;
                     }
                 }
@@ -610,8 +603,7 @@ impl Engine {
             match cleanup {
                 Ok(actions) => branches.extend(actions),
                 Err(error) => {
-                    repo.status = Status::Error;
-                    repo.reason = Some(error);
+                    fail(repo, error);
                     continue;
                 }
             }
@@ -669,8 +661,7 @@ impl Engine {
                 )
                 .await
                 {
-                    repo.status = Status::Error;
-                    repo.reason = Some(format!("dependency dashboard: {error}"));
+                    fail(repo, format!("dependency dashboard: {error}"));
                 }
                 if let Err(error) = patchula_update::lockfiles::record_refresh(
                     &self.cache,
@@ -694,8 +685,10 @@ impl Engine {
                             | patchula_report::ActionStatus::Protected
                     )
                 }) {
-                    repo.status = Status::Error;
-                    repo.reason = Some("one or more pull request actions failed or were protected; inspect actions".into());
+                    fail(
+                        repo,
+                        "one or more pull request actions failed or were protected; inspect actions",
+                    );
                 }
                 pull_requests.append(&mut state.actions);
             }
@@ -704,11 +697,10 @@ impl Engine {
                     plan.action.status,
                     patchula_report::ActionStatus::Error | patchula_report::ActionStatus::Protected
                 ) {
-                    repo.status = Status::Error;
-                    repo.reason.get_or_insert_with(|| {
-                        "one or more branch actions failed or were protected; inspect actions"
-                            .into()
-                    });
+                    fail(
+                        repo,
+                        "one or more branch actions failed or were protected; inspect actions",
+                    );
                 }
             }
             branches.extend(plans.into_iter().map(|p| p.action));
@@ -1123,10 +1115,15 @@ impl Engine {
         let started = Instant::now();
         let phase = PhaseTrace::new("policy.evaluate");
         let mut proposals: Vec<Vec<Evaluation>> = Vec::with_capacity(work.len());
+        // Per repository, the targets held back this run, or `None` when a
+        // lookup failed and the set may be missing some: saved age permits
+        // are pruned to these, so a permit lasts while its version is held.
+        let mut held_targets: Vec<Option<BTreeSet<String>>> = Vec::with_capacity(work.len());
         let mut digest_keys = BTreeSet::new();
         let mut image_keys = BTreeSet::new();
         for (repo, eval) in work.iter_mut().zip(&evaluators) {
             let mut deps = Vec::with_capacity(repo.dependencies.len());
+            let mut held = Some(BTreeSet::new());
             for dep in &repo.dependencies {
                 let mut evaluation = Evaluation::default();
                 if let Some(eval) = eval
@@ -1142,6 +1139,20 @@ impl Engine {
                             match eval.evaluate_with(dep, catalog, now, &BTreeSet::new(), found) {
                                 Ok(p) => {
                                     let dep_key = patchula_update::dashboard::extracted_key(dep);
+                                    if let Some(held) = &mut held {
+                                        held.extend(p.held_back.iter().flat_map(|h| {
+                                            h.versions
+                                                .iter()
+                                                .chain(std::iter::once(&h.version))
+                                                .map(|v| {
+                                                    patchula_update::dashboard::held_target(
+                                                        &dep_key,
+                                                        v,
+                                                        &h.update_type,
+                                                    )
+                                                })
+                                        }));
+                                    }
                                     let overrides: BTreeSet<_> = p
                                         .held_back
                                         .iter()
@@ -1175,21 +1186,30 @@ impl Engine {
                                                 }
                                                 evaluation = p;
                                             }
-                                            Err(e) => repo
-                                                .report
-                                                .warnings
-                                                .push(format!("{}: {e}", dep.name)),
+                                            Err(e) => {
+                                                held = None;
+                                                repo.report
+                                                    .warnings
+                                                    .push(format!("{}: {e}", dep.name));
+                                            }
                                         }
                                     }
                                 }
-                                Err(e) => repo.report.warnings.push(format!("{}: {e}", dep.name)),
+                                Err(e) => {
+                                    held = None;
+                                    repo.report.warnings.push(format!("{}: {e}", dep.name));
+                                }
                             }
                         }
-                        Some(Err(error)) => repo.report.lookup_failures.push(lookup_failure(
-                            dep,
-                            error,
-                            error.message.clone(),
-                        )),
+                        Some(Err(error)) => {
+                            held = None;
+                            repo.report.lookup_failures.push(lookup_failure(
+                                dep,
+                                error,
+                                error.message.clone(),
+                            ));
+                        }
+                        // A dependency that needs no lookup holds nothing back.
                         None => {}
                     }
                     if matches!(dep.source, Source::Docker | Source::Oci) {
@@ -1234,15 +1254,25 @@ impl Engine {
                 deps.push(evaluation);
             }
             proposals.push(deps);
+            held_targets.push(held);
         }
         let proposal_cpu_time = micros(started);
-        for repo in &work {
+        for (repo, held) in work.iter().zip(&held_targets) {
             if let Some(inventory) = &repo.inventory {
+                let permits = match held {
+                    Some(held) => repo
+                        .controls
+                        .age_permits
+                        .intersection(held)
+                        .cloned()
+                        .collect(),
+                    None => repo.controls.age_permits.clone(),
+                };
                 patchula_update::dashboard::save_permits(
                     &self.cache,
                     &repo.report.repository,
                     &inventory.actor,
-                    repo.controls.age_permits.clone(),
+                    permits,
                 )
                 .await
                 .map_err(Error::Invalid)?;
@@ -2804,6 +2834,15 @@ fn hash(bytes: &[u8]) -> String {
         .map(|b| format!("{b:02x}"))
         .collect()
 }
+/// Mark a repository failed. The first failure of a run names the reason;
+/// later ones add nothing, so the cause is never replaced by a consequence.
+fn fail(repo: &mut patchula_report::Repository, reason: impl Into<String>) {
+    if repo.status != Status::Error {
+        repo.status = Status::Error;
+        repo.reason = Some(reason.into());
+    }
+}
+
 fn micros(start: Instant) -> u64 {
     start.elapsed().as_micros().min(u64::MAX as u128) as u64
 }

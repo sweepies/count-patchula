@@ -197,6 +197,7 @@ fn plan(
         maintenance: false,
         batch: None,
         tooling: Vec::new(),
+        hold: None,
     }
 }
 
