@@ -33,10 +33,9 @@ impl Locked {
             current: self.version.clone(),
             resolved: Some(self.version.clone()),
             digest: None,
-            source: if self.manager == Manager::Cargo {
-                Source::Crates
-            } else {
-                Source::Npm
+            source: match ecosystem(self.manager).locked_source() {
+                Some(source) => source,
+                None => unreachable!("{} records no locked packages", self.manager),
             },
             scheme: Scheme::Semver,
             extract: None,
@@ -83,10 +82,7 @@ pub(crate) fn cargo(
             let registry = package
                 .get("source")
                 .and_then(Item::as_str)
-                .is_some_and(|s| {
-                    s.starts_with("registry+https://github.com/rust-lang/crates.io-index")
-                        || s.starts_with("sparse+https://index.crates.io/")
-                });
+                .is_some_and(crate::cargo::crates_io);
             let (Some(text), Some(span)) = (version.as_str(), version.span()) else {
                 continue;
             };

@@ -666,6 +666,9 @@ impl crate::Ecosystem for Descriptor {
     fn backend_settings(&self, path: &str) -> bool {
         self.registry_file(path)
     }
+    fn locked_source(&self) -> Option<Source> {
+        Some(Source::Npm)
+    }
     fn declared_form(
         &self,
         dep: &Dependency,

@@ -215,16 +215,14 @@ fn registry_edge<'a>(
         .filter(|p| source.is_none_or(|s| p.get("source").and_then(Item::as_str) == Some(s)))
         .find_map(|p| p.get("version")?.as_str())
 }
-/// A lock entry's crate name.
 fn named(p: &toml_edit::Table) -> Option<&str> {
     p.get("name").and_then(Item::as_str)
 }
 /// Whether a lock entry comes from the crates.io registry.
 fn registry(p: &toml_edit::Table) -> bool {
-    p.get("source").and_then(Item::as_str).is_some_and(|s| {
-        s.starts_with("registry+https://github.com/rust-lang/crates.io-index")
-            || s.starts_with("sparse+https://index.crates.io/")
-    })
+    p.get("source")
+        .and_then(Item::as_str)
+        .is_some_and(crates_io)
 }
 fn walk(
     path: &str,
@@ -350,6 +348,21 @@ pub(crate) fn config_file(path: &str) -> bool {
         .any(|name| path == *name || path.ends_with(&format!("/{name}")))
 }
 
+/// Whether `value` — a `Cargo.lock` `source` or a registry `index` — names
+/// crates.io: its git index, its sparse index, or a URL on the index or
+/// site host. The one answer `locked`, `nonpublic_registry` and `CRATES`
+/// share; a lookalike host or a `registry+`/`sparse+` prefix on anything
+/// else does not count.
+pub(crate) fn crates_io(value: &str) -> bool {
+    let value = value
+        .strip_prefix("registry+")
+        .or_else(|| value.strip_prefix("sparse+"))
+        .unwrap_or(value);
+    value.trim_end_matches('/') == "https://github.com/rust-lang/crates.io-index"
+        || crate::web_host(value)
+            .is_some_and(|host| matches!(host.as_str(), "index.crates.io" | "crates.io"))
+}
+
 /// Whether a Cargo configuration could send a bare `cargo install` to a
 /// registry besides crates.io: a `[registries]` entry naming a non-public
 /// index or one with other settings the Count does not read, or a
@@ -364,13 +377,10 @@ pub(crate) fn nonpublic_registry(text: &str) -> bool {
             let Some(entry) = entry.as_table_like() else {
                 return true;
             };
-            // The sparse and the git index alike, by host and by exact
-            // URL — never a substring, so a lookalike host counts.
-            let public = entry.get("index").and_then(Item::as_str).is_some_and(|i| {
-                crate::web_host(i.strip_prefix("sparse+").unwrap_or(i))
-                    .is_some_and(|host| host == "index.crates.io")
-                    || i.trim_end_matches('/') == "https://github.com/rust-lang/crates.io-index"
-            });
+            let public = entry
+                .get("index")
+                .and_then(Item::as_str)
+                .is_some_and(crates_io);
             let benign = entry
                 .iter()
                 .all(|(key, _)| matches!(key, "index" | "token"));
@@ -562,10 +572,7 @@ pub(crate) fn replaced(files: &Files, parsed: &Parsed, path: &str) -> Option<Str
 pub(crate) const CRATES: crate::origins::Public = crate::origins::Public {
     source: Source::Crates,
     label: "crates.io",
-    is_public: |url| {
-        crate::web_host(url)
-            .is_some_and(|host| matches!(host.as_str(), "index.crates.io" | "crates.io"))
-    },
+    is_public: crates_io,
 };
 
 /// The parsed manifests, lock docs and configs extraction shares.
@@ -594,6 +601,9 @@ impl crate::Ecosystem for Descriptor {
     }
     fn movable_lockfile(&self, dep: &Dependency) -> bool {
         dep.source == Source::Crates
+    }
+    fn locked_source(&self) -> Option<Source> {
+        Some(Source::Crates)
     }
     fn inventory_only(&self, _dep: &Dependency, raw: &str) -> bool {
         // workspace=true is inventory; the root declaration owns its version.

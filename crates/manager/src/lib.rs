@@ -482,6 +482,11 @@ pub(crate) trait Ecosystem {
     fn movable_lockfile(&self, _dep: &Dependency) -> bool {
         false
     }
+    /// The source a package only a lockfile records is looked up in, when
+    /// this ecosystem's lockfile readers emit `Locked` entries.
+    fn locked_source(&self) -> Option<Source> {
+        None
+    }
     /// Why `dep` refuses edits outright, when it does.
     fn edit_refusal(&self, _dep: &Dependency) -> Option<String> {
         None
