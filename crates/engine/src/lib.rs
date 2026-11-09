@@ -1094,7 +1094,7 @@ impl Engine {
                     if dep.tagged_action()
                         && dep.source == Source::GithubTags
                         && !(dep.digest.is_some() && dep.resolved.is_none())
-                        && eval.digest_proposal(dep, "probe").is_some()
+                        && eval.digest_policy_applies(dep)
                         && !eval.needs_lookup(dep)
                     {
                         current_refs.insert((
@@ -1350,7 +1350,7 @@ impl Engine {
                                 image_keys.insert((dep.package.clone(), tag.clone()));
                             }
                         }
-                        if eval.digest_proposal(dep, "probe").is_some() {
+                        if eval.digest_policy_applies(dep) {
                             image_keys.insert((dep.package.clone(), dep.current.clone()));
                         }
                     }
@@ -1375,7 +1375,7 @@ impl Engine {
                             // A forge resolves only tags, which its catalog
                             // already carries; branch refs stay unpinned.
                             let reference = dep.resolved.as_deref().unwrap_or(&dep.current);
-                            if eval.digest_proposal(dep, "probe").is_some() {
+                            if eval.digest_policy_applies(dep) {
                                 digest_keys.insert((dep.package.clone(), reference.to_owned()));
                             }
                         }
@@ -1522,7 +1522,7 @@ impl Engine {
                 let current = image_digests
                     .get(&(dep.package.clone(), dep.current.clone()))
                     .and_then(|r| r.as_ref().ok())
-                    .filter(|new| eval.digest_proposal(dep, new).is_some());
+                    .filter(|new| eval.digest_proposal(dep, new).is_ok_and(|p| p.is_some()));
                 let tagged = evaluation
                     .updates
                     .iter()
@@ -1747,11 +1747,11 @@ impl Engine {
                         image_digests.get(&(dep.package.clone(), dep.current.clone()))
                     {
                         match result {
-                            Ok(digest) => {
-                                if let Some(p) = eval.digest_proposal(dep, digest) {
-                                    proposals.push(p);
-                                }
-                            }
+                            Ok(digest) => match eval.digest_proposal(dep, digest) {
+                                Ok(Some(p)) => proposals.push(p),
+                                Err(e) => repo.report.warnings.push(format!("{}: {e}", dep.name)),
+                                Ok(None) => {}
+                            },
                             Err(e) => repo.report.lookup_failures.push(lookup_failure(
                                 dep,
                                 e,
@@ -1789,17 +1789,17 @@ impl Engine {
                     if let Some(result) = digests.get(&(dep.package.clone(), reference.to_owned()))
                     {
                         match result {
-                            Ok(sha) => {
-                                if let Some(proposal) = eval.digest_proposal_with_catalog(
-                                    dep,
-                                    sha,
-                                    catalogs
-                                        .get(&self.catalog_key(dep, repo.config.as_ref()))
-                                        .and_then(|c| c.as_ref().ok()),
-                                ) {
-                                    proposals.push(proposal);
-                                }
-                            }
+                            Ok(sha) => match eval.digest_proposal_with_catalog(
+                                dep,
+                                sha,
+                                catalogs
+                                    .get(&self.catalog_key(dep, repo.config.as_ref()))
+                                    .and_then(|c| c.as_ref().ok()),
+                            ) {
+                                Ok(Some(proposal)) => proposals.push(proposal),
+                                Err(e) => repo.report.warnings.push(format!("{}: {e}", dep.name)),
+                                Ok(None) => {}
+                            },
                             Err(e) => repo.report.lookup_failures.push(lookup_failure(
                                 dep,
                                 e,
@@ -1871,7 +1871,14 @@ impl Engine {
                         if check.state != patchula_report::ImageState::Unreadable
                             && !verified.is_empty()
                         {
-                            if eval.secure(dep, proposal) {
+                            let secured = match eval.secure(dep, proposal) {
+                                Ok(secured) => secured,
+                                Err(e) => {
+                                    repo.report.warnings.push(format!("{}: {e}", dep.name));
+                                    false
+                                }
+                            };
+                            if secured {
                                 proposal.fixes = check.fixed.iter().map(|f| f.id.clone()).collect();
                                 proposal.fixes.dedup();
                                 let label = &config.security.label;
@@ -1896,10 +1903,12 @@ impl Engine {
                 let advisory = patchula_lookup::advisory_query(dep)
                     .and_then(|query| advisories.get(&query).map(|found| (query, found)))
                     .filter(|(_, found)| !found.is_empty());
-                if let (Some(eval), Some((query, found))) = (eval, &advisory)
-                    && let Some(fix) = eval.transitive_fix(dep, (query, found))
-                {
-                    proposals.push(fix);
+                if let (Some(eval), Some((query, found))) = (eval, &advisory) {
+                    match eval.transitive_fix(dep, (query, found)) {
+                        Ok(Some(fix)) => proposals.push(fix),
+                        Err(e) => repo.report.warnings.push(format!("{}: {e}", dep.name)),
+                        Ok(None) => {}
+                    }
                 }
                 if let Some((query, found)) = &advisory {
                     let label = repo
@@ -2019,8 +2028,10 @@ impl Engine {
                         dep.name
                     ));
                 }
-                let resolved =
-                    catalog.and_then(|c| patchula_lookup::resolved_current_version(dep, c));
+                let resolved = catalog.and_then(|c| {
+                    eval.as_ref()
+                        .and_then(|eval| eval.resolved_current_version(dep, c).ok().flatten())
+                });
                 let resolution = resolved.as_ref().or(dep.resolved.as_ref()).map(|version| {
                     let kind = if dep.tagged_action() {
                         if dep.digest.is_some() {
@@ -2060,16 +2071,24 @@ impl Engine {
                         version: catalogs
                             .get(&self.catalog_key(dep, repo.config.as_ref()))
                             .and_then(|c| c.as_ref().ok())
-                            .and_then(|c| patchula_lookup::resolved_current_version(dep, c))
+                            .and_then(|c| {
+                                eval.as_ref().and_then(|eval| {
+                                    eval.resolved_current_version(dep, c).ok().flatten()
+                                })
+                            })
                             .or_else(|| dep.resolved.clone())
                             .or_else(|| {
-                                patchula_lookup::scheme(dep)
-                                    .ok()
-                                    .filter(|_| dep.kind != patchula_words::DependencyKind::Runner)
-                                    .and_then(|s| {
-                                        patchula_versioning::Versioning::parse(&s, &dep.current)
-                                            .ok()
+                                let scheme =
+                                    patchula_versioning::Ecosystem::of(dep.scheme, dep.source);
+                                (dep.kind != patchula_words::DependencyKind::Runner)
+                                    .then(|| {
+                                        patchula_versioning::Versioning::parse(
+                                            &scheme,
+                                            &dep.current,
+                                        )
+                                        .ok()
                                     })
+                                    .flatten()
                                     .map(|v| v.0.to_string())
                             }),
                         digest: dep.digest.clone(),
@@ -2101,12 +2120,19 @@ impl Engine {
                         }],
                         held_back,
                         stale,
-                        lookup: eval.as_ref().map(|eval| {
-                            let mut evidence = eval.lookup_evidence(dep, catalog, now);
-                            evidence.catalog = catalog_evidence
-                                .get(&self.catalog_key(dep, repo.config.as_ref()))
-                                .cloned();
-                            evidence
+                        lookup: eval.as_ref().and_then(|eval| {
+                            match eval.lookup_evidence(dep, catalog, now) {
+                                Ok(mut evidence) => {
+                                    evidence.catalog = catalog_evidence
+                                        .get(&self.catalog_key(dep, repo.config.as_ref()))
+                                        .cloned();
+                                    Some(evidence)
+                                }
+                                Err(e) => {
+                                    repo.report.warnings.push(format!("{}: {e}", dep.name));
+                                    None
+                                }
+                            }
                         }),
                         resolution,
                         advisories: advisory

@@ -231,7 +231,7 @@ fn invalid_values_have_actionable_diagnostics() {
             "typo",
         ),
         (
-            "rules = new Listing { new Rule { apply { permitted = \"semver:>??\" } } }",
+            "rules = new Listing { new Rule { apply { permitted = \"semver:\" } } }",
             "semver",
         ),
         (

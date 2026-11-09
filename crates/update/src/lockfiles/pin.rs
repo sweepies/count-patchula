@@ -53,7 +53,7 @@ impl Pinned {
             {
                 continue;
             }
-            let pin = patchula_lookup::scheme(dep)?
+            let pin = patchula_versioning::Ecosystem::of(dep.scheme, dep.source)
                 .new_range(&dep.current, target, patchula_words::VersionPolicy::Exact)
                 .map_err(|e| e.to_string())?;
             edits

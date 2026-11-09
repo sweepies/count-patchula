@@ -163,7 +163,7 @@ See [version policies](/guide/versioning/#version-policies).
 - **The Count:** Proposes the newest eligible stable version the policy allows
 - **Why:** A hidden LTS restriction should not be inferred from a package name
 
-For an opt-in Node LTS rule, see [lookup policy](/guide/lookup-policy/#node-release-channels).
+For an opt-in LTS rule, see [lookup policy](/guide/lookup-policy/#release-channels).
 
 ### Warnings when auto-merge has nothing behind it {#tooling-warnings}
 

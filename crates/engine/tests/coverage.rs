@@ -40,7 +40,7 @@ fn every_example_has_implemented_dispatch_for_the_twelve_repo_matrix() {
         assert!(extraction.warnings.is_empty());
         let evaluator = patchula_lookup::Evaluator::new(&config).unwrap();
         for dep in &extraction.dependencies {
-            patchula_lookup::scheme(dep).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            patchula_versioning::Ecosystem::of(dep.scheme, dep.source);
             if evaluator.needs_lookup(dep) {
                 let mut catalog = patchula_datasource::Catalog::default();
                 catalog.versions.push(patchula_datasource::Version {

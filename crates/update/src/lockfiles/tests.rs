@@ -4784,7 +4784,7 @@ fn an_in_range_release_is_a_lock_only_plan_for_bundler_composer_and_pyproject() 
         {
             use patchula_versioning::Versioning;
             let dep = &dependencies[0];
-            let scheme = patchula_lookup::scheme(dep).unwrap();
+            let scheme = patchula_versioning::Ecosystem::of(dep.scheme, dep.source);
             assert!(
                 scheme
                     .matches(&dep.current, &scheme.parse(target).unwrap())
